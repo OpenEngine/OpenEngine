@@ -91,7 +91,7 @@ state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/openengine
 cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/openengine
 bin_dir=${XDG_BIN_HOME:-$HOME/.local/bin}
 config="$config_dir/engine.toml"
-shim="$bin_dir/openengine"
+legacy_shim="$bin_dir/openengine"
 engine_shim="$bin_dir/engine"
 
 mkdir -p "$prefix/bin" "$prefix/versions"
@@ -186,8 +186,7 @@ ln -sfn "versions/$release" "$prefix/current"
 # The shim: single-quoted paths, with any quote in them closed and escaped.
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 mkdir -p "$bin_dir"
-# `openengine` runs the web service in the foreground; `engine` is the terminal
-# client, and `engine daemon` runs that service in the background.
+# `engine` is the terminal client; `engine daemon` manages the web service.
 write_shim() {
   if [ -e "$1" ] && ! grep -q '^# Written by the OpenEngine installer' "$1"; then
     die "$1 exists and was not written by this installer; move it aside and rerun"
@@ -202,8 +201,11 @@ EOF
   chmod 755 "$work/shim"
   mv -f "$work/shim" "$1"
 }
-write_shim "$shim" engine-web
 write_shim "$engine_shim" engine
+# Remove the obsolete launcher on upgrades, but leave unrelated files alone.
+if [ -f "$legacy_shim" ] && grep -q '^# Written by the OpenEngine installer' "$legacy_shim"; then
+  rm -f "$legacy_shim"
+fi
 
 # The state directory holds conversations, graph state and logs: owner-only,
 # including one an earlier run or a source checkout created world-readable.
@@ -229,10 +231,10 @@ else
   say "wrote $config"
 fi
 
-say "installed OpenEngine $release: $shim"
+say "installed OpenEngine $release: $engine_shim"
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
-  *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine and openengine" ;;
+  *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine" ;;
 esac
 
 [ "$start" = 1 ] || exit 0

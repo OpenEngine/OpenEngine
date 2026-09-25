@@ -49,8 +49,9 @@ uv configuration on the machine, fetches the latest release (or `--version
 X.Y.Z`), checks the archive against the `archive_sha256` in the published
 `release-manifest.json` before extracting it to `versions/<version>`, and
 installs it into a venv on uv's own Python 3.12 with `--require-hashes`. A
-`current` symlink points at that version; `~/.local/bin/openengine` runs the
-web service and `~/.local/bin/engine` runs the terminal client. `~/.config/openengine/engine.toml` is written from the bundled default,
+`current` symlink points at that version; `~/.local/bin/engine` runs the
+terminal client and manages the web service through `engine daemon`. Upgrades
+remove the old `~/.local/bin/openengine` launcher if it was written by the installer. `~/.config/openengine/engine.toml` is written from the bundled default,
 keeping state in `~/.local/state/openengine`, only when it does not already
 exist. The `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
 `XDG_CACHE_HOME`, and `XDG_BIN_HOME` directories are honoured, and `--prefix DIR`
