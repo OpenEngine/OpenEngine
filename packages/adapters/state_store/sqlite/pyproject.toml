@@ -1,6 +1,6 @@
 [project]
 name = "engine-adapter-state-store-sqlite"
-version = "0.1.0"
+version = "0.2.0"
 description = "State Store capability backed by SQLite."
 requires-python = ">=3.11"
 # SQLite ships with Python. Alembic and SQLAlchemy manage its schema at startup.

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/OpenEngine/OpenEngine/compare/v0.1.0...v0.2.0) (2026-09-25)
+
+
+### Features
+
+* admit operators and any-repository writers, and recheck access ([#541](https://github.com/OpenEngine/OpenEngine/issues/541)) ([c27d00e](https://github.com/OpenEngine/OpenEngine/commit/c27d00e041db5b1f879eb2aa5ce236d24f60ae21))
+* measure node usage in approximate dollars and roll it up to the WorkOrder ([#550](https://github.com/OpenEngine/OpenEngine/issues/550)) ([7718fa7](https://github.com/OpenEngine/OpenEngine/commit/7718fa7b141c9d723fcc2324b4ae0f571482637d))
+* run OpenEngine outside a source checkout ([#549](https://github.com/OpenEngine/OpenEngine/issues/549)) ([19ff3a9](https://github.com/OpenEngine/OpenEngine/commit/19ff3a9d0162dafc845b85fd65e9fe98a0d1c0cd))
+
 ## 0.1.0 (2026-09-24)
 
 
