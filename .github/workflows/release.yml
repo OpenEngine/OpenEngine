@@ -100,11 +100,11 @@ jobs:
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
         run: sh scripts/install.sh --no-browser
-      - name: openengine and engine are on PATH and healthy
+      - name: engine is on PATH and healthy
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
-          command -v openengine
+          [ ! -e "$HOME/.local/bin/openengine" ]
           command -v engine
           status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4364/api/health)
           [ "$status" = 200 ] || { engine daemon logs; exit 1; }

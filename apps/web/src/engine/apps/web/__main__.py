@@ -64,7 +64,7 @@ def report_wiring(settings: Settings) -> None:
             LoadedEngineConfig(config=settings.engine_config, path=settings.config_path)
         )
     )
-    print(f"openengine web -- http://{settings.host}:{settings.port}, capabilities wired:")
+    print(f"engine-web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
     cli = gh_cli_status()

@@ -16,7 +16,7 @@ set -eu
 
 REPOSITORY="OpenEngine/OpenEngine"
 PYTHON_VERSION="3.12"
-UV_VERSION="0.9.28"
+installer_uv_version="0.9.28"
 
 usage() {
   cat <<EOF
@@ -91,7 +91,6 @@ state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/openengine
 cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/openengine
 bin_dir=${XDG_BIN_HOME:-$HOME/.local/bin}
 config="$config_dir/engine.toml"
-shim="$bin_dir/openengine"
 engine_shim="$bin_dir/engine"
 
 mkdir -p "$prefix/bin" "$prefix/versions"
@@ -126,10 +125,10 @@ export UV_CACHE_DIR="$cache_dir/uv"
 
 uv="$prefix/bin/uv"
 case $("$uv" --version 2>/dev/null || true) in
-  "uv $UV_VERSION" | "uv $UV_VERSION "*) ;;
+  "uv $installer_uv_version" | "uv $installer_uv_version "*) ;;
   *)
-    say "downloading uv $UV_VERSION"
-    fetch "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$uv_target.tar.gz" "$work/uv.tar.gz"
+    say "downloading uv $installer_uv_version"
+    fetch "https://github.com/astral-sh/uv/releases/download/$installer_uv_version/uv-$uv_target.tar.gz" "$work/uv.tar.gz"
     verify "$work/uv.tar.gz" "$uv_sha256"
     tar -xzf "$work/uv.tar.gz" -C "$work"
     mv -f "$work/uv-$uv_target/uv" "$uv"
@@ -186,8 +185,7 @@ ln -sfn "versions/$release" "$prefix/current"
 # The shim: single-quoted paths, with any quote in them closed and escaped.
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 mkdir -p "$bin_dir"
-# `openengine` runs the web service in the foreground; `engine` is the terminal
-# client, and `engine daemon` runs that service in the background.
+# `engine` is the terminal client; `engine daemon` manages the web service.
 write_shim() {
   if [ -e "$1" ] && ! grep -q '^# Written by the OpenEngine installer' "$1"; then
     die "$1 exists and was not written by this installer; move it aside and rerun"
@@ -202,7 +200,6 @@ EOF
   chmod 755 "$work/shim"
   mv -f "$work/shim" "$1"
 }
-write_shim "$shim" engine-web
 write_shim "$engine_shim" engine
 
 # The state directory holds conversations, graph state and logs: owner-only,
@@ -229,10 +226,10 @@ else
   say "wrote $config"
 fi
 
-say "installed OpenEngine $release: $shim"
+say "installed OpenEngine $release: $engine_shim"
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
-  *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine and openengine" ;;
+  *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine" ;;
 esac
 
 [ "$start" = 1 ] || exit 0
