@@ -949,6 +949,16 @@ def _graph_workorder_name(values: object) -> str:
 #: would read them is not in the room when a server starts.
 log = logging.getLogger(__name__)
 
+#: The only graph events a WorkOrder's originating GitHub issue hears about,
+#: keyed by kind and node id ("" for run-level events), with what it is told.
+#: Node ids are the implementation-review-rerank workflow's. A run finishes
+#: once its human review is answered, which the pull request's merge does.
+GITHUB_ISSUE_MILESTONES: Mapping[tuple[EventKind, str], str] = {
+    (EventKind.NODE_STARTED, "implementation"): "Implementation started.",
+    (EventKind.NODE_FINISHED, "reranker"): "Review finished.",
+    (EventKind.RUN_FINISHED, ""): "Work order finished.",
+}
+
 #: How long the forge lookups that authorize a GitHub comment may take before
 #: the comment is abandoned. The ingress behind them has one worker, so this is
 #: not only that comment's latency: whatever it waits, every comment queued
@@ -1158,21 +1168,26 @@ def create_app(
         )
         node = topology.node(event.node_id) if topology and event.node_id else None
         label = node.name if node else str(event.node_id or "Workflow")
-        # A GitHub issue is public. Errors, tool-supplied approval reasons and
-        # agent transcript text can hold local paths, command output, or
-        # secrets, and arbitrary Markdown, so they stay behind the work order link.
+        # A GitHub issue is public, and watched by people who want milestones
+        # rather than a running log: the work starting, its review settling,
+        # and the run finishing once the merge answers its human review.
+        # Everything else -- including errors, approval reasons and agent
+        # text, which can hold paths, output or secrets -- stays behind the
+        # work order link.
         public = state.origin.channel.startswith(GITHUB_CHANNEL_PREFIX)
-        if event.kind is EventKind.RUN_FORKED:
-            graph_agent_reports.discard(state.run_id)
-            if not public:
+        if public:
+            milestone = GITHUB_ISSUE_MILESTONES.get((event.kind, str(event.node_id or "")))
+            if milestone is None:
                 return
-            # Chat surfaces answer the resume request themselves; the issue
-            # timeline has no other record that the run picked back up.
-            text = "Work order resumed."
+            text = milestone
+        elif event.kind is EventKind.RUN_FORKED:
+            # Chat surfaces answer the resume request themselves.
+            graph_agent_reports.discard(state.run_id)
+            return
         elif event.kind is EventKind.TRANSCRIPT:
             # Assistant role alone is not authorship: human/tool nodes also
             # narrate their work in the UI. Their notifications are lifecycle-owned.
-            if public or node is None or node.kind != "agent":
+            if node is None or node.kind != "agent":
                 return
             if event.payload.get("role", "assistant") != "assistant":
                 return
@@ -1197,17 +1212,11 @@ def create_app(
                 if isinstance(pr_url, str) and pr_url.strip():
                     links.append(MessageLink("View pull request", pr_url))
             else:
-                text = (
-                    f"*{label}* needs your approval." if public
-                    else f"*{label}* needs your approval: {event.payload.get('reason', '')}"
-                )
+                text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
             mention = True
         elif event.kind is EventKind.RUN_FAILED:
             graph_agent_reports.discard(state.run_id)
-            text = (
-                "Work order failed." if public
-                else f"Work order failed: {event.payload.get('error', 'Unknown error')}"
-            )
+            text = f"Work order failed: {event.payload.get('error', 'Unknown error')}"
             mention = True
         elif event.kind is EventKind.RUN_FINISHED:
             if state.run_id in graph_agent_reports:
@@ -1236,7 +1245,7 @@ def create_app(
                 await run_notifier.deliver(
                     state, text, links=links, mention=mention,
                     progress=event.kind in (
-                        EventKind.NODE_STARTED, EventKind.RUN_FINISHED, EventKind.RUN_FORKED,
+                        EventKind.NODE_STARTED, EventKind.NODE_FINISHED, EventKind.RUN_FINISHED,
                     ),
                 )
             except Exception:
@@ -1252,7 +1261,7 @@ def create_app(
 
     async def graph_notifications(event: RuntimeEvent) -> None:
         if event.kind not in (
-            EventKind.NODE_STARTED, EventKind.APPROVAL_REQUESTED,
+            EventKind.NODE_STARTED, EventKind.NODE_FINISHED, EventKind.APPROVAL_REQUESTED,
             EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
             EventKind.TRANSCRIPT, EventKind.RUN_FORKED,
         ):

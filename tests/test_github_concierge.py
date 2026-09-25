@@ -1312,16 +1312,19 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
     assert not communications.posts
 
 
-def test_issue_progress_withholds_run_details_and_reports_a_resume(tmp_path, monkeypatch):
-    """The issue is public: a failure's error and an approval's reason can hold
-    paths, command output, or secrets, so they stay behind the work order link,
-    as does an agent's transcript text, whose run still reports finishing.
-    A resume is an update too, and is reported there like the others."""
+def test_issue_progress_posts_only_milestones(tmp_path, monkeypatch):
+    """The issue hears that implementation started, that review finished, and
+    that the run finished. Other nodes, approvals, failures, resumes and agent
+    text stay behind the work order link: they are noise to an issue watcher,
+    and errors, reasons and transcripts can hold paths or secrets."""
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
 
     from engine.apps.web.github_communications import GithubCommunications
     from engine.graph_runtime import EventKind, NodeId, RuntimeEvent
+    from engine.graph_runtime_langgraph.components.human_review import (
+        TOOL_NAME as HUMAN_REVIEW_TOOL,
+    )
 
     posted = AsyncMock(return_value="41")
     monkeypatch.setattr(GithubCommunications, "post", posted)
@@ -1342,28 +1345,27 @@ def test_issue_progress_withholds_run_details_and_reports_a_resume(tmp_path, mon
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         observe = runtime.observe.call_args.args[0]
-        for kind, payload in (
-            (EventKind.APPROVAL_REQUESTED, {"toolName": "bash", "reason": "run [x](https://evil) @team"}),
-            (EventKind.RUN_FAILED, {"error": "token ghp_secret in /Users/me/.env"}),
-            (EventKind.RUN_FORKED, {}),
+        for kind, node, payload in (
+            (EventKind.NODE_STARTED, "naming", {}),
+            (EventKind.NODE_STARTED, "implementation", {}),
+            (EventKind.TRANSCRIPT, "implementation", {"text": "found ghp_secret in .env"}),
+            (EventKind.NODE_FINISHED, "implementation", {}),
+            (EventKind.NODE_STARTED, "reranker", {}),
+            (EventKind.APPROVAL_REQUESTED, "reranker",
+             {"approvalId": "a1", "toolName": "bash", "reason": "run [x](https://evil) @team"}),
+            (EventKind.NODE_FINISHED, "reranker", {}),
+            (EventKind.APPROVAL_REQUESTED, None, {"approvalId": "a2", "toolName": HUMAN_REVIEW_TOOL}),
+            (EventKind.RUN_FAILED, None, {"error": "token ghp_secret in /Users/me/.env"}),
+            (EventKind.RUN_FORKED, None, {}),
+            (EventKind.RUN_FINISHED, None, {}),
         ):
             client.portal.call(observe, RuntimeEvent(
-                run_id=RunId(STARTED_RUN), kind=kind, payload=payload,
+                run_id=RunId(STARTED_RUN), kind=kind,
+                node_id=NodeId(node) if node else None, payload=payload,
             ))
-        client.portal.call(observe, RuntimeEvent(
-            run_id=RunId(STARTED_RUN), kind=EventKind.TRANSCRIPT,
-            node_id=NodeId("implementation"), payload={"text": "found ghp_secret in .env"},
-        ))
-        client.portal.call(observe, RuntimeEvent(
-            run_id=RunId(STARTED_RUN), kind=EventKind.RUN_FINISHED, payload={},
-        ))
 
     texts = [call.args[1].text for call in posted.await_args_list]
-    assert "*Workflow* needs your approval." in texts
-    assert "Work order failed." in texts
-    assert "Work order resumed." in texts
-    assert "Work order finished." in texts
-    assert not any("secret" in text or "evil" in text or "@team" in text for text in texts)
+    assert texts == ["Implementation started.", "Review finished.", "Work order finished."]
     assert all(call.args[0] == "github:acme/api" for call in posted.await_args_list)
 
 

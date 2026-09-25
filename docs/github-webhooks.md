@@ -119,14 +119,13 @@ Ordinary issue comments, other assignees, and closed issues do not start work.
 The run uses the issue's repository, without claiming a pull request. No
 concierge model turn is needed: assignment itself requests implementation.
 
-Progress is reported on the issue rather than in Slack: each stage start,
-approval request, failure, resume, and finish posts a new comment, so the issue
-timeline reads as the work order's history. Because the issue may be public,
-failure errors, approval reasons, and agent transcript text are not copied
-into it; they stay on the work order. Each comment links to the work order when
+Progress is reported on the issue rather than in Slack, as three milestones
+only: implementation starting (again, if review sends the work back), review
+finishing, and the work order finishing, which follows the pull request's merge
+answering its human review. Other stages, approvals, failures, resumes, and
+agent transcript text stay on the work order, both to keep the issue quiet and
+because the issue may be public. Each comment links to the work order when
 `public_url` is set, and to the pull request once the run has opened one.
-Comments asking for a decision or reporting a failure mention the user who
-assigned the issue.
 
 Repeated assignments and redeliveries for the same issue are deduplicated in
 the bounded ingress memory. Failed handling can be retried by redelivery. As
