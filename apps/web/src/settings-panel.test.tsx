@@ -67,6 +67,56 @@ describe("SettingsPanel Slack connection", () => {
     expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
   });
 
+  it.each(["initial status", "saved OAuth error", "connect", "poll", "OAuth callback"])(
+    "allows credential correction and reconnection after a failed %s",
+    async (failure) => {
+      const message = "Slack authorization failed: invalid_client_id";
+      const disconnected = { configured: true, connected: false };
+      if (failure === "initial status") {
+        vi.mocked(api.getSlackStatus).mockRejectedValueOnce(new Error(message));
+      } else if (failure === "saved OAuth error") {
+        vi.mocked(api.getSlackStatus).mockResolvedValueOnce({ ...disconnected, error: message });
+      } else {
+        vi.mocked(api.getSlackStatus).mockResolvedValueOnce(disconnected);
+        if (failure === "connect") {
+          vi.mocked(api.connectSlack).mockRejectedValueOnce(new Error(message));
+        } else if (failure === "poll") {
+          vi.mocked(api.getSlackStatus).mockRejectedValueOnce(new Error(message));
+        } else {
+          vi.mocked(api.getSlackStatus).mockResolvedValueOnce({ ...disconnected, error: message });
+        }
+      }
+      vi.mocked(api.setSlackCredentials).mockResolvedValue();
+
+      render(<SettingsPanel onClose={vi.fn()} />);
+      const user = userEvent.setup();
+      if (failure !== "initial status" && failure !== "saved OAuth error") {
+        await user.click(await screen.findByRole("button", { name: "Connect Slack" }));
+      }
+      expect(await screen.findByRole("alert")).toHaveTextContent(message);
+      expect(screen.getByRole("alert")).toHaveTextContent("Check your Slack app’s OAuth credentials and redirect URL");
+      expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
+      if (failure !== "initial status") {
+        expect(screen.getByRole("button", { name: "Connect Slack" })).toBeEnabled();
+        await user.click(screen.getByRole("button", { name: "Change credentials" }));
+      }
+      await user.type(screen.getByLabelText("Slack OAuth Client ID"), "corrected-client");
+      await user.type(screen.getByLabelText("Slack OAuth Client Secret"), "corrected-secret");
+      await user.click(screen.getByRole("button", { name: "Save credentials" }));
+      await waitFor(() => expect(api.setSlackCredentials).toHaveBeenCalledWith(
+        "corrected-client", "corrected-secret", undefined,
+      ));
+      vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: true, connected: true });
+      await user.click(await screen.findByRole("button", { name: "Connect Slack" }));
+      expect(await screen.findByText("Connected")).toBeVisible();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
+      expect(window.open).toHaveBeenCalledWith(
+        "https://slack.example/oauth", "slack-oauth", "popup,width=720,height=800",
+      );
+    },
+  );
+
   it("shows an error when Slack token revocation fails", async () => {
     vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: true, connected: true });
     vi.mocked(api.disconnectSlack).mockRejectedValue(new Error("Slack revocation failed"));

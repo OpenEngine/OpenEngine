@@ -2950,6 +2950,7 @@ def create_app(
     # --- Slack connection endpoints ------------------------------------------
 
     _slack_store = slack_credential_store or SlackCredentialStore()
+    _slack_error: str | None = None
     _slack_state: str | None = None
     _slack_redirect_uri: str | None = None
     # Concierge replies and graph progress share the same Slack transport.
@@ -2964,6 +2965,7 @@ def create_app(
         connected = bool(_slack_store.token())
         return JSONResponse(
             {
+                **({"error": _slack_error} if _slack_error else {}),
                 "configured": credentials is not None,
                 "connected": connected,
                 # Whether a mention could actually start something, and which
@@ -2979,7 +2981,7 @@ def create_app(
         )
 
     async def slack_set_credentials(request: Request) -> Response:
-        nonlocal _slack_state, _slack_redirect_uri
+        nonlocal _slack_state, _slack_redirect_uri, _slack_error
         if not _is_local_request(request):
             return _error("forbidden", 403)
         body = await request.json()
@@ -3016,17 +3018,19 @@ def create_app(
                 _slack_store.set_signing_secret(signing_secret)
         except SlackAuthError as error:
             return _error(str(error), 500)
+        _slack_error = None
         _slack_state = None
         _slack_redirect_uri = None
         return Response(status_code=204)
 
     async def slack_connect(request: Request) -> JSONResponse:
-        nonlocal _slack_state, _slack_redirect_uri
+        nonlocal _slack_state, _slack_redirect_uri, _slack_error
         if not _is_local_request(request):
             return _error("forbidden", 403)
         credentials = _slack_store.credentials()
         if credentials is None:
             return _error("Slack OAuth credentials are not configured", 503)
+        _slack_error = None
         _slack_state = uuid4().hex
         _slack_redirect_uri = str(request.url_for("slack_callback"))
         return JSONResponse(
@@ -3034,18 +3038,22 @@ def create_app(
         )
 
     async def slack_callback(request: Request) -> Response:
-        nonlocal _slack_state, _slack_redirect_uri
+        nonlocal _slack_state, _slack_redirect_uri, _slack_error
         if not _slack_state or request.query_params.get("state") != _slack_state:
             return _error("invalid OAuth state", 400)
         code = request.query_params.get("code")
         credentials = _slack_store.credentials()
         if not code or credentials is None or _slack_redirect_uri is None:
-            return _error(request.query_params.get("error", "authorization was not completed"), 400)
+            _slack_error = request.query_params.get("error", "authorization was not completed")
+            _slack_state = None
+            _slack_redirect_uri = None
+            return _error(_slack_error, 400)
         try:
             token = await exchange_slack_code(credentials, code, _slack_redirect_uri)
             _slack_store.set_token(token)
         except SlackAuthError as error:
-            return _error(str(error), 502)
+            _slack_error = str(error)
+            return _error(_slack_error, 502)
         finally:
             _slack_state = None
             _slack_redirect_uri = None
@@ -3056,7 +3064,7 @@ def create_app(
         )
 
     async def slack_disconnect(request: Request) -> Response:
-        nonlocal _slack_state, _slack_redirect_uri
+        nonlocal _slack_state, _slack_redirect_uri, _slack_error
         if not _is_local_request(request):
             return _error("forbidden", 403)
         token = _slack_store.token()
@@ -3066,6 +3074,7 @@ def create_app(
             except SlackAuthError as error:
                 return _error(str(error), 502)
         _slack_store.disconnect()
+        _slack_error = None
         _slack_state = None
         _slack_redirect_uri = None
         return Response(status_code=204)

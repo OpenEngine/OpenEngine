@@ -717,6 +717,7 @@ export function disconnectGitLab(origin: string): Promise<void> {
  * `signingSecret` is which of its two halves this server already has.
  */
 export type SlackStatus = {
+  error?: string;
   configured: boolean;
   connected: boolean;
   events?: boolean;

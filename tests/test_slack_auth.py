@@ -285,6 +285,43 @@ def test_slack_oauth_endpoints_complete_connection(tmp_path) -> None:
     }
 
 
+@pytest.mark.parametrize("callback_error", ["invalid_client_secret", "access_denied"])
+def test_slack_callback_error_reaches_status_and_clears_on_retry(tmp_path, callback_error) -> None:
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.apps.web.api import create_app
+    from engine.runtime import AgentSession, Capabilities
+
+    stub = object()
+    capabilities = Capabilities(stub, stub, stub, stub, stub, SQLiteStateStore(str(tmp_path / "s.sqlite3")))
+    runners = {"default": stub}
+    store = MagicMock(spec=SlackCredentialStore)
+    store.credentials.return_value = SlackCredentials("client", "secret")
+    store.token.return_value = None
+    app = create_app(AgentSession(capabilities, profiles={}, runners=runners), runners,
+                     workflow_catalog=MagicMock(), slack_credential_store=store)
+    exchange = AsyncMock(side_effect=[SlackAuthError(callback_error), "xoxb-token"])
+    with (
+        patch("engine.apps.web.api.uuid4", return_value=MagicMock(hex="nonce")),
+        patch("engine.apps.web.api.exchange_slack_code", new=exchange),
+        TestClient(app) as client,
+    ):
+        client.post("/api/slack/connect")
+        if callback_error == "access_denied":
+            response = client.get("/api/slack/callback?error=access_denied&state=nonce")
+            exchange.side_effect = None
+            exchange.return_value = "xoxb-token"
+        else:
+            response = client.get("/api/slack/callback?code=code&state=nonce")
+        assert response.status_code in (400, 502)
+        assert client.get("/api/slack/status").json()["error"] == callback_error
+        store.set_token.assert_not_called()
+        client.post("/api/slack/connect")
+        assert "error" not in client.get("/api/slack/status").json()
+        assert client.get("/api/slack/callback?code=retry&state=nonce").status_code == 200
+        store.set_token.assert_called_once_with("xoxb-token")
+        assert "error" not in client.get("/api/slack/status").json()
+
+
 def test_slack_callback_rejects_wrong_state(tmp_path) -> None:
     from engine.adapters.state_store.sqlite import SQLiteStateStore
     from engine.apps.web.api import create_app
