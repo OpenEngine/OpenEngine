@@ -885,7 +885,10 @@ describe("RunDetailPage", () => {
     if (expectedUrl) {
       expect(step.getByRole("link", { name: `${prUrl} ↗` })).toHaveAttribute("href", expectedUrl);
       expect(screen.getByRole("link", { name: "View pull request ↗" })).toHaveAttribute("href", expectedUrl);
+      const stat = screen.getByText("Pull request").closest(".stat")!;
+      expect(within(stat as HTMLElement).getByRole("link")).toHaveAttribute("href", expectedUrl);
     } else {
+      expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
       expect(step.getByText(prUrl!)).toBeVisible();
       expect(step.queryByRole("link")).not.toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "View pull request ↗" })).not.toBeInTheDocument();

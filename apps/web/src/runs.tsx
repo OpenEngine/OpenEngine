@@ -848,6 +848,25 @@ function WorkOrderPrompt({ prompt }: { prompt: string }) {
   );
 }
 
+/** `#123` for a GitHub pull request URL, the URL itself for anything else. */
+function pullRequestLabel(url: string): string {
+  const number = /\/pull\/(\d+)/.exec(url)?.[1];
+  return number ? `#${number}` : url;
+}
+
+/** The first http(s) `pr_url` any node reported, so a link is never built
+ *  from a `javascript:` or other unsafe scheme an output happened to carry. */
+function graphPullRequestUrl(graph: ApiGraphRun | undefined): string | null {
+  if (!graph) return null;
+  for (const val of Object.values(graph.values)) {
+    if (val != null && typeof val === "object" && !Array.isArray(val)) {
+      const obj = val as Record<string, unknown>;
+      if (typeof obj.pr_url === "string" && /^https?:\/\//.test(obj.pr_url)) return obj.pr_url;
+    }
+  }
+  return null;
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
   // Read here rather than inside the panel so the strip's link and the panel
   // it scrolls to are two views of one answer: the link is only offered when
@@ -967,18 +986,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
       pendingHumanReview: graph.pendingApprovals[0] ? {
         stepId: graph.pendingApprovals[0].nodeId,
         title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
-        prUrl: Object.values(graph.values).reduce<string | null>((found, val) => {
-          if (found) return found;
-          if (val != null && typeof val === "object" && !Array.isArray(val)) {
-            const obj = val as Record<string, unknown>;
-            if (typeof obj.pr_url === "string" && /^https?:\/\//.test(obj.pr_url)) return obj.pr_url;
-          }
-          return null;
-        }, null),
+        prUrl: graphPullRequestUrl(graph),
       } : null,
     } satisfies RunView;
   }, [baseRun, graph, topology, graphEvents, runId]);
   const run = shownRun;
+  const prUrl = graphPullRequestUrl(graph);
 
   return (
     <main className="panel-scroll">
@@ -1026,6 +1039,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 the work lands minutes later -- so without something in the
                 strip saying they exist, the panel below is only found by
                 scrolling past everything else on the page. */}
+            {prUrl && (
+              <Stat
+                label="Pull request"
+                value={
+                  <a href={prUrl} target="_blank" rel="noreferrer">
+                    {pullRequestLabel(prUrl)} ↗
+                  </a>
+                }
+              />
+            )}
             {comments.visible && (
               <Stat
                 label="GitHub comments"
