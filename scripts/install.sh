@@ -91,7 +91,6 @@ state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/openengine
 cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/openengine
 bin_dir=${XDG_BIN_HOME:-$HOME/.local/bin}
 config="$config_dir/engine.toml"
-legacy_shim="$bin_dir/openengine"
 engine_shim="$bin_dir/engine"
 
 mkdir -p "$prefix/bin" "$prefix/versions"
@@ -202,10 +201,6 @@ EOF
   mv -f "$work/shim" "$1"
 }
 write_shim "$engine_shim" engine
-# Remove the obsolete launcher on upgrades, but leave unrelated files alone.
-if [ -f "$legacy_shim" ] && grep -q '^# Written by the OpenEngine installer' "$legacy_shim"; then
-  rm -f "$legacy_shim"
-fi
 
 # The state directory holds conversations, graph state and logs: owner-only,
 # including one an earlier run or a source checkout created world-readable.
