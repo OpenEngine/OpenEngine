@@ -86,7 +86,11 @@ def build(commit: str, output: Path = ROOT / "dist") -> Path:
         archive_path = output / f"openengine-{version}.tar.gz"
         with tarfile.open(archive_path, "w:gz") as archive:
             archive.add(bundle, arcname=bundle.name)
-        shutil.copy2(bundle / "release-manifest.json", output / "release-manifest.json")
+        # The published copy also names the archive's digest, which the copy
+        # inside the archive cannot, so an installer can check it before
+        # extracting anything.
+        manifest["archive_sha256"] = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        (output / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return archive_path
 
 

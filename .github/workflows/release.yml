@@ -75,6 +75,49 @@ jobs:
             dist/release-manifest.json
           if-no-files-found: error
 
+  # The one-line installer on a clean runner of each supported OS, installing
+  # the bundle this run built instead of a published release.
+  install:
+    needs: [release-please, bundle]
+    if: ${{ always() && !cancelled() && needs.bundle.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/release
+      - name: Install and start OpenEngine
+        env:
+          OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
+        run: sh scripts/install.sh --no-browser
+      - name: openengine is on PATH and healthy
+        run: |
+          set -eu
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v openengine
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4364/api/health)
+          [ "$status" = 200 ] || { cat "$HOME/.local/state/openengine/openengine.log"; exit 1; }
+      - name: Running it again keeps the config
+        env:
+          OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
+        run: |
+          set -eu
+          config="$HOME/.config/openengine/engine.toml"
+          echo "# edited by hand" >> "$config"
+          before=$(cksum < "$config")
+          sh scripts/install.sh --no-start
+          [ "$(cksum < "$config")" = "$before" ]
+
   upload-release:
     needs: [release-please, bundle]
     if: github.event_name == 'push' && needs.release-please.outputs.created == 'true'
@@ -82,6 +125,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/install.sh
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v8
         with:
           name: release-bundle
@@ -92,7 +141,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
-        run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json --clobber
+        run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json scripts/install.sh --clobber
 
   # Built without the PyPI credential: the build backend is third-party code, so
   # it is hash-locked and runs in a job that cannot request the OIDC token. The
