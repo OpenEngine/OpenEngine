@@ -46,7 +46,9 @@ from langgraph_acp import (
     ACPPermissionRequest,
     ClaudeACPProvider,
     CodexACPProvider,
+    OpenCodeACPProvider,
 )
+from langgraph_acp.providers.opencode import OPENCODE_VERSION
 
 pytestmark = pytest.mark.compatibility
 
@@ -108,6 +110,32 @@ def test_the_codex_adapter_completes_the_acp_handshake() -> None:
             # Codex has continued sessions, taken images, and offered a way to
             # log in since long before the move. Reading `False` here means the
             # capability shape changed, not that the agent lost the feature.
+            assert capabilities.load_session
+            assert capabilities.prompt_image
+            assert capabilities.auth_methods
+        finally:
+            await client.close()
+
+    asyncio.run(handshake())
+
+
+def test_opencode_completes_the_acp_handshake() -> None:
+    """The same three failures for OpenCode, which is its own ACP server.
+
+    There is no adapter package to name, so the version is the check that the
+    pinned `opencode-ai` is what `npx` actually ran.
+    """
+
+    async def handshake() -> None:
+        client = await OpenCodeACPProvider().connect()
+        try:
+            capabilities = client.capabilities
+
+            assert capabilities.protocol_version == PROTOCOL_VERSION
+            assert capabilities.raw.get("agentInfo") == {
+                "name": "OpenCode",
+                "version": OPENCODE_VERSION,
+            }
             assert capabilities.load_session
             assert capabilities.prompt_image
             assert capabilities.auth_methods

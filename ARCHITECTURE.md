@@ -119,7 +119,7 @@ Executes a configured agent.
 
 Implementations might include:
 
-ACP agents -- Codex and Claude Code, reached through langgraph-acp and the pinned ACP adapters (what chat and the workflows use)
+ACP agents -- Codex and Claude Code, reached through langgraph-acp and the pinned ACP adapters, and OpenCode, which speaks ACP itself (what chat and the workflows use)
 Other agents that speak ACP
 Source Control
 
