@@ -16,7 +16,7 @@ set -eu
 
 REPOSITORY="OpenEngine/OpenEngine"
 PYTHON_VERSION="3.12"
-UV_VERSION="0.9.28"
+installer_uv_version="0.9.28"
 
 usage() {
   cat <<EOF
@@ -126,10 +126,10 @@ export UV_CACHE_DIR="$cache_dir/uv"
 
 uv="$prefix/bin/uv"
 case $("$uv" --version 2>/dev/null || true) in
-  "uv $UV_VERSION" | "uv $UV_VERSION "*) ;;
+  "uv $installer_uv_version" | "uv $installer_uv_version "*) ;;
   *)
-    say "downloading uv $UV_VERSION"
-    fetch "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$uv_target.tar.gz" "$work/uv.tar.gz"
+    say "downloading uv $installer_uv_version"
+    fetch "https://github.com/astral-sh/uv/releases/download/$installer_uv_version/uv-$uv_target.tar.gz" "$work/uv.tar.gz"
     verify "$work/uv.tar.gz" "$uv_sha256"
     tar -xzf "$work/uv.tar.gz" -C "$work"
     mv -f "$work/uv-$uv_target/uv" "$uv"

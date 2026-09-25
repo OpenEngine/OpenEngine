@@ -54,6 +54,8 @@ class InstallerTests(unittest.TestCase):
                     "XDG_CACHE_HOME": str(root / "cache"),
                     "XDG_BIN_HOME": str(bin_dir),
                     "OPENENGINE_RELEASE_URL": release.as_uri(),
+                    # CI exports this; clearing UV_* must preserve the installer pin.
+                    "UV_VERSION": "0.0.0",
                 }
                 environment.pop("ENGINE_CONFIG", None)
                 # A second install must preserve the same single launcher.
