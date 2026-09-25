@@ -326,6 +326,28 @@ async def test_a_refused_prompt_names_the_session_that_was_refused() -> None:
 
 
 @asyncio_test
+async def test_a_rate_limit_explains_account_switching_without_retrying(tmp_path: Path) -> None:
+    log = tmp_path / "sent.jsonl"
+    async with connected("--rate-limit", log=log) as client:
+        session = await client.new_session()
+
+        with pytest.raises(ACPSessionError) as caught:
+            async for _ in session.prompt("hello"):
+                pass
+
+    rendered = str(caught.value)
+    assert "provider reported a usage limit" in rendered
+    assert "login in another terminal does not update its inherited environment" in rendered
+    assert "Restart the host with the intended credentials" in rendered
+    assert "resets 6pm (America/Denver)" in rendered
+    assert "code -32603" in rendered
+    assert '"errorKind": "rate_limit"' in rendered
+    assert caught.value.operation == "session/prompt"
+    assert caught.value.session_id == "sess_fake_1"
+    assert methods(log).count("session/prompt") == 1
+
+
+@asyncio_test
 async def test_a_refusal_keeps_the_parts_of_it_that_explain_it() -> None:
     """`message` is the one field a refusal is allowed to be useless in.
 
@@ -343,6 +365,7 @@ async def test_a_refusal_keeps_the_parts_of_it_that_explain_it() -> None:
     rendered = str(caught.value)
     assert "code -32000" in rendered
     assert "quota exhausted" in rendered
+    assert "Restart the host" not in rendered
 
 
 @asyncio_test

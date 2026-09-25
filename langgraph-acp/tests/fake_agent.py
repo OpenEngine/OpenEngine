@@ -413,7 +413,14 @@ def main() -> int:
             )
             respond(message_id, None)
         elif method == "session/prompt":
-            if "--refuse-prompt" in options:
+            if "--rate-limit" in options:
+                fail(
+                    message_id,
+                    -32603,
+                    "Internal error: You've hit your session limit · resets 6pm (America/Denver)",
+                    {"errorKind": "rate_limit"},
+                )
+            elif "--refuse-prompt" in options:
                 # `data` carries the cause and a body the size real ones come
                 # in -- an agent that puts an entire HTTP response in a refusal
                 # is what the client's cap is for.

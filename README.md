@@ -14,6 +14,20 @@ Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
 OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. Make sure you are logged in to Codex or Claude on this machine. 
 
+If Claude still reports a session limit after switching accounts, check the
+environment of the running Engine service. Its agent subprocesses inherit that
+environment: `CLAUDE_CODE_OAUTH_TOKEN` can select a different account from your
+interactive login, and `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` can supply
+separate credentials. A different OS user, `HOME`, or `CLAUDE_CONFIG_DIR` can also
+point the service at a different login store. See
+[Claude's authentication documentation](https://code.claude.com/docs/en/authentication).
+Update or remove unintended overrides in the service's launch configuration,
+verify the intended Claude login under that same user and environment, then
+restart Engine and retry the failed work. Changing a shell variable elsewhere
+does not update an already running server or agent. An ACP error with
+`errorKind: rate_limit` is a provider usage limit even when labeled `Internal
+error`; if the intended account is also at its limit, wait for the reported reset.
+
 First, clone the repo:
 ```bash
 cd OpenEngine
