@@ -937,6 +937,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runId]);
+  const prUrl = useMemo(() => graphPullRequestUrl(graph), [graph]);
   const shownRun = useMemo<RunView | undefined>(() => {
     if (!baseRun) return undefined;
     const empty: RunView = {
@@ -986,12 +987,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
       pendingHumanReview: graph.pendingApprovals[0] ? {
         stepId: graph.pendingApprovals[0].nodeId,
         title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
-        prUrl: graphPullRequestUrl(graph),
+        prUrl,
       } : null,
     } satisfies RunView;
-  }, [baseRun, graph, topology, graphEvents, runId]);
+  }, [baseRun, graph, topology, graphEvents, runId, prUrl]);
   const run = shownRun;
-  const prUrl = graphPullRequestUrl(graph);
 
   return (
     <main className="panel-scroll">
@@ -1034,11 +1034,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
             {run.usage && <Stat label="Usage" value={usageLabel(run.usage)} />}
-            {/* Where the comments are. Steering by comment happens entirely
-                off screen -- the webhook answers GitHub in milliseconds and
-                the work lands minutes later -- so without something in the
-                strip saying they exist, the panel below is only found by
-                scrolling past everything else on the page. */}
             {prUrl && (
               <Stat
                 label="Pull request"
@@ -1049,6 +1044,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 }
               />
             )}
+            {/* Where the comments are. Steering by comment happens entirely
+                off screen -- the webhook answers GitHub in milliseconds and
+                the work lands minutes later -- so without something in the
+                strip saying they exist, the panel below is only found by
+                scrolling past everything else on the page. */}
             {comments.visible && (
               <Stat
                 label="GitHub comments"
