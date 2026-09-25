@@ -30,8 +30,8 @@ opencode on the engine host (the mac mini):
   is `~/.config/opencode/opencode.jsonc`, and it has the `@opencode-ai/plugin`
   `1.18.30` package.
 - **Provider:** one, `bazzite` ("Bazzite (llama.cpp)"). It uses
-  `@ai-sdk/openai-compatible` at `http://bazzite.tailb88f8a.ts.net:8000/v1`,
-  reached over Tailscale.
+  `@ai-sdk/openai-compatible` at
+  `http://YOUR-BAZZITE.YOUR-TAILNET.ts.net:8000/v1`, reached over Tailscale.
 - **Model:** one, `qwen3.8` ("Qwen 3.8 (27B Q4_K_M)"). It has
   `tool_call: true`, a 131072-token context and 16384 output tokens. The
   default model is `bazzite/qwen3.8`.
@@ -40,7 +40,7 @@ opencode on the engine host (the mac mini):
   `bazzite/qwen3.8`.
 - **ACP:** `opencode acp` is built in and serves ACP over stdio. Unlike Codex
   and Claude, no `npx` adapter is needed.
-- **Hygiene:** the llama.cpp API key is written inline in `opencode.jsonc`.
+- **Hygiene:** the provider's API key is currently stored in the config file.
   It should move to `"apiKey": "{env:BAZZITE_API_KEY}"` before a service
   account runs opencode unattended.
 
@@ -111,6 +111,11 @@ A Project is created and edited in the UI, so it lives in the state store:
 | `priority` | Order in the rotation. Ties break by the least recently served project. |
 | `enabled` | Pause switch. A paused project is never started. |
 | `cooldown_seconds` | Wait after a run that opened no PR (default 1 hour). |
+| `created_by` | Who created the project. |
+| `prompt_updated_by` | Who last set `prompt`. Starts as `created_by`. Runs are requested by this user. |
+| `last_served_at` | When a Resource last started a run for this project. Nullable. Orders the rotation. |
+| `consecutive_failures` | Runs that failed in a row. Reset by any run that succeeds. |
+| `cooldown_until` | No run starts before this time. Nullable. Set when a run ends without a PR or fails. |
 
 `run_states` gets a nullable `project_id` and `resource`, so each run knows the
 project and Resource it was started for.
@@ -137,8 +142,12 @@ free slot:
 3. Start a WorkOrder on it through `start_graph_run`, with these settings:
    - **Workflow and runner:** the project's workflow, with this Resource's
      runner and model.
-   - **Origin and requester:** origin `project:<id>`, and the requester is
-     whoever created the project.
+   - **Origin and requester:** origin `project:<id>`, and the requester (and
+     commit co-author) is `prompt_updated_by`, the user who wrote the prompt
+     being run. Editing someone else's prompt makes the editor answerable for
+     the work it produces.
+   - **Approvals:** the project approval policy below, never the deployment's
+     `[approvals]`.
    - **Prompt:** the project prompt, followed by an engine-written preamble.
      The preamble lists the project's open PRs (titles, branches and changed
      paths) and says: "do not redo these; if nothing worthwhile remains, stop
@@ -146,10 +155,36 @@ free slot:
 4. Update `last_served_at`. The next free slot then takes the next project,
    which gives round-robin across projects of equal priority.
 
-A run that ends without a PR, or fails, puts that project into cooldown.
-Without the cooldown, a project whose work is used up would keep an idle
-Resource spinning forever. Two failures in a row pause the project
-(`enabled = false`) and post to the communications channel.
+A run that ends without a PR, or fails, sets `cooldown_until` to now plus
+`cooldown_seconds`. Without the cooldown, a project whose work is used up would
+keep an idle Resource spinning forever. A failure increments
+`consecutive_failures` and a success resets it. At two, the project is paused
+(`enabled = false`) and a notice goes to the communications channel.
+
+### Approvals for unattended runs
+
+Nobody is watching a project run, so it cannot use the deployment's
+`[approvals]`. `start_graph_run` turns on auto-approve for every node when
+`[approvals] auto_approve = true`, which would give an unattended run blanket
+approval. With it off, the run would wait on a permission request nobody
+answers and hold the Resource's slot.
+
+Project runs get their own policy, `[projects.approvals]`, with the same shape
+as `[approvals]`, and `start_graph_run` takes the policy as a parameter:
+
+```toml
+[projects.approvals]
+allow = ["read", "edit"]     # capabilities granted without asking
+
+[projects.approvals.bash]
+allow = ["uv run pytest **"] # explicit allowlist; `[approvals.bash].deny` also applies
+```
+
+- `auto_approve` is not accepted here. Config validation rejects it.
+- Node-level auto-approve is never set for a project run.
+- Any request the policy does not allow is **rejected**, not asked. The agent
+  sees the refusal and can carry on or stop. A project run never waits on a
+  human.
 
 There is also a global switch, `[projects] enabled = true | false`, in
 `engine.toml`.
@@ -207,6 +242,9 @@ are listed in dependency order, and 1 and 2 can run in parallel.
    - Add `GET/POST/PATCH/DELETE /api/projects`, and a `POST
      /api/projects/{id}/run` that starts one run on a chosen Resource by hand.
      This proves the whole path before any automation.
+   - `POST` and `PATCH` check that the caller may use the `repository` and
+     every named Resource, and reject the request otherwise. A `PATCH` that
+     changes `prompt` sets `prompt_updated_by` to the caller.
 5. **Open PR accounting.**
    - Add `state` and `closed_at` to `github_pull_requests` in
      `migrations/sqlite_graph`.
@@ -216,9 +254,15 @@ are listed in dependency order, and 1 and 2 can run in parallel.
 6. **Idle dispatcher.**
    - Add `dispatch_idle_resources` with the selection rules, cooldowns,
      failure pause, global switch, preamble and communications notice above.
+   - Add `[projects.approvals]` and pass it to `start_graph_run` for project
+     runs.
    - Tests use the in-memory store and a fake runner. They must cover the
      max-PR cap, rotation, cooldown, interactive work going first, and two
      wakeups racing without taking the same slot twice.
+   - Approval tests: with `[approvals] auto_approve = true`, a project run has
+     no auto-approved nodes; a request outside `[projects.approvals]` is
+     rejected rather than left pending; an allowlisted bash command runs.
+   - A test that the requester and co-author follow `prompt_updated_by`.
 7. **Projects UI and Resource health.**
    - Add a Projects page (list, create/edit, pause, open PR count out of the
      max) and a Resources panel (busy/idle/unreachable).
