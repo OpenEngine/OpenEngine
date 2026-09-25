@@ -191,7 +191,11 @@ EOF
 chmod 755 "$work/shim"
 mv -f "$work/shim" "$shim"
 
-mkdir -p "$state_dir"
+# The state directory holds conversations, graph state and logs: owner-only,
+# including one an earlier run or a source checkout created world-readable.
+mkdir -p "${state_dir%/*}"
+mkdir -m 700 "$state_dir" 2>/dev/null || [ -d "$state_dir" ] || die "could not create $state_dir"
+chmod 700 "$state_dir"
 if [ -e "$config" ]; then
   say "keeping the existing $config"
 else
@@ -225,7 +229,8 @@ if curl --fail --silent --output /dev/null "$url/api/health"; then
 else
   log="$state_dir/openengine.log"
   say "starting OpenEngine (log: $log)"
-  nohup "$shim" </dev/null >>"$log" 2>&1 &
+  # umask 077: the log and anything the server creates stay owner-only.
+  (umask 077 && exec nohup "$shim" </dev/null >>"$log" 2>&1) &
   server=$!
   tries=0
   until curl --fail --silent --output /dev/null "$url/api/health"; do
