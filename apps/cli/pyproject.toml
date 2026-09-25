@@ -7,6 +7,7 @@ dependencies = ["platformdirs>=4"]
 
 [project.scripts]
 engine = "engine.apps.cli.__main__:main"
+oe = "engine.apps.cli.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
