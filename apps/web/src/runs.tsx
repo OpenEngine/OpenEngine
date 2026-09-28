@@ -27,6 +27,7 @@ import { Stat, StatStrip } from "./brand";
 import {
   GITHUB_COMMENTS_ANCHOR,
   GithubActivityPanel,
+  linkable,
   useRunGithubComments,
 } from "./github-activity";
 import { useProjectMilestones } from "./milestone-timeline";
@@ -861,7 +862,7 @@ function graphPullRequestUrl(graph: ApiGraphRun | undefined): string | null {
   for (const val of Object.values(graph.values)) {
     if (val != null && typeof val === "object" && !Array.isArray(val)) {
       const obj = val as Record<string, unknown>;
-      if (typeof obj.pr_url === "string" && /^https?:\/\//.test(obj.pr_url)) return obj.pr_url;
+      if (typeof obj.pr_url === "string" && linkable(obj.pr_url)) return obj.pr_url;
     }
   }
   return null;
@@ -987,10 +988,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
       pendingHumanReview: graph.pendingApprovals[0] ? {
         stepId: graph.pendingApprovals[0].nodeId,
         title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
-        prUrl,
       } : null,
     } satisfies RunView;
-  }, [baseRun, graph, topology, graphEvents, runId, prUrl]);
+  }, [baseRun, graph, topology, graphEvents, runId]);
   const run = shownRun;
 
   return (
@@ -1102,9 +1102,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
               <h2>{run.pendingHumanReview.title}</h2>
-              {run.pendingHumanReview.prUrl && (
+              {prUrl && (
                 <p>
-                  <a href={run.pendingHumanReview.prUrl} target="_blank" rel="noreferrer">
+                  <a href={prUrl} target="_blank" rel="noreferrer">
                     View pull request ↗
                   </a>
                 </p>
