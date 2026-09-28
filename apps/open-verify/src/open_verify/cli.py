@@ -1,0 +1,149 @@
+"""The terminal is Open Verify's only user interface."""
+
+import argparse
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+from platformdirs import user_data_path
+
+from open_verify import __version__
+from open_verify.agent import ACPDecisionAgent, provider_for
+from open_verify.artifacts import Artifacts
+from open_verify.tools import LocalTools, project_root
+from open_verify.workflow import Verification, exit_code
+
+
+def positive_int(value):
+    number = int(value)
+    if not 1 <= number <= 1000:
+        raise argparse.ArgumentTypeError("must be between 1 and 1000")
+    return number
+
+
+def parser():
+    cli = argparse.ArgumentParser(
+        description="Explore and verify a feature in the current Git project."
+    )
+    cli.add_argument("request", nargs="?", help="Feature and expected behavior to verify")
+    cli.add_argument("--version", action="version", version=__version__)
+    cli.add_argument(
+        "--project", type=Path, default=Path.cwd(), help="Target directory (default: cwd)"
+    )
+    cli.add_argument(
+        "--agent", default="codex", help="ACP provider: codex, claude, or a custom name"
+    )
+    cli.add_argument(
+        "--agent-command", help='Custom ACP launch command as JSON, e.g. ["my-agent", "--acp"]'
+    )
+    cli.add_argument("--model", help="Provider-specific model ID; omission uses its default")
+    cli.add_argument(
+        "--plan-only", action="store_true", help="Discover and plan without executing QA actions"
+    )
+    cli.add_argument(
+        "--allow-exec",
+        action="store_true",
+        help="Allow agent-selected local commands in the target project",
+    )
+    cli.add_argument(
+        "--allow-origin",
+        action="append",
+        default=[],
+        help="Additional browser/HTTP origin; repeatable. Localhost is allowed.",
+    )
+    cli.add_argument("--headless", action="store_true", help="Hide the browser window")
+    cli.add_argument(
+        "--max-steps", type=positive_int, default=60, help="Maximum agent decisions (default: 60)"
+    )
+    cli.add_argument(
+        "--agent-timeout", type=positive_int, default=180, help="Seconds per agent decision"
+    )
+    cli.add_argument(
+        "--output",
+        type=Path,
+        default=user_data_path("open-verify") / "runs",
+        help="Parent directory for a fresh run's artifacts",
+    )
+    return cli
+
+
+async def run(args):
+    project = project_root(args.project)
+    command = json.loads(args.agent_command) if args.agent_command else None
+    if command is not None and (
+        not isinstance(command, list)
+        or not command
+        or not all(isinstance(part, str) and part for part in command)
+    ):
+        raise ValueError("--agent-command must be a nonempty JSON array of strings")
+    provider = provider_for(args.agent, command)
+    for origin in args.allow_origin:
+        LocalTools.origin(origin)
+    artifacts = Artifacts(args.output.resolve())
+    artifacts.write(
+        "session.json",
+        {
+            "project": str(project),
+            "request": args.request,
+            "agent": args.agent,
+            "model": args.model,
+            "plan_only": args.plan_only,
+            "allow_exec": args.allow_exec,
+        },
+    )
+    # Agent-side cwd is the run folder. Repository inspection and execution are
+    # routed through host adapters, not the provider's native workspace tools.
+    agent = ACPDecisionAgent(provider, artifacts.path, model=args.model, timeout=args.agent_timeout)
+    tools = LocalTools(
+        project,
+        artifacts,
+        allow_exec=args.allow_exec,
+        allow_origins=args.allow_origin,
+        headless=args.headless,
+    )
+    print(f"Project: {project}\nArtifacts: {artifacts.path}", flush=True)
+    verification = Verification(
+        agent,
+        tools,
+        artifacts,
+        plan_only=args.plan_only,
+        max_steps=args.max_steps,
+        progress=lambda text: print(text, flush=True),
+    )
+    cleanup_errors = []
+    try:
+        report = await verification.run(args.request)
+    finally:
+        cleanup_errors = await tools.close()
+        try:
+            await agent.close()
+        except Exception as exc:
+            cleanup_errors.append(f"agent: {exc}")
+        if cleanup_errors:
+            artifacts.write("cleanup-errors.json", cleanup_errors)
+            print("Cleanup needs attention: " + "; ".join(cleanup_errors), file=sys.stderr)
+    print(f"Report: {artifacts.path / 'report.md'}")
+    return 2 if cleanup_errors else exit_code(report)
+
+
+def main(argv=None):
+    cli = parser()
+    args = cli.parse_args(argv)
+    if not args.request:
+        if not sys.stdin.isatty():
+            cli.error("provide a verification request when stdin is not interactive")
+        try:
+            args.request = input("What should Open Verify test? ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return 130
+    if not args.request.strip():
+        cli.error("the verification request cannot be empty")
+    try:
+        return asyncio.run(run(args))
+    except KeyboardInterrupt:
+        print("Verification interrupted. Partial evidence is saved.", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        print(f"Open Verify: {exc}", file=sys.stderr)
+        return 2
