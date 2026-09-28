@@ -1234,6 +1234,27 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
             return EXIT_OK
 
 
+def workbench(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    """The full-screen WorkOrder workbench `engine` opens with no command."""
+    from engine.apps.cli.tui import App, ServiceClient, run_workbench
+
+    try:
+        server, check = read_service(arguments, preferences)
+    except ValueError as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_USAGE
+    if not check.ok:
+        print(f"engine: {check.detail}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+    app = App(
+        ServiceClient(server, fetch_json, request_json),
+        disconnected=bool(getattr(arguments, "disconnected", False)),
+        # As `engine run` does: only a local service shares this filesystem.
+        local_repository=str(Path.cwd().resolve()) if is_local_server(server) else "",
+    )
+    return run_workbench(app)
+
+
 def doctor(arguments: argparse.Namespace, preferences: Preferences) -> int:
     try:
         server = selected_server(arguments, preferences)
@@ -1257,6 +1278,11 @@ def doctor(arguments: argparse.Namespace, preferences: Preferences) -> int:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="engine", description=__doc__)
     result.add_argument("--version", action="version", version=version("engine-cli"))
+    result.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    result.add_argument(
+        "--disconnected", action="store_true",
+        help="start new WorkOrders in disconnected mode: no push, pull request, or comments",
+    )
     commands = result.add_subparsers(dest="command")
     for name, help_text in (("status", "show OpenEngine service identity and readiness"), ("doctor", "diagnose local prerequisites and service access")):
         command = commands.add_parser(name, help=help_text)
@@ -1268,17 +1294,21 @@ def parser() -> argparse.ArgumentParser:
     connection.add_argument("--origin", default="https://gitlab.com")
     connection.add_argument("--open", action="store_true")
     daemon.add_parser(commands)
+    palette_command = commands.add_parser("palette", help="the line-based command palette")
+    palette_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
-    if argv is None and len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
-        return interactive(argparse.Namespace(server=None), load_preferences())
     arguments = parser().parse_args(argv)
+    preferences = load_preferences()
     if arguments.command is None:
+        if argv is None and sys.stdin.isatty() and sys.stdout.isatty():
+            return workbench(arguments, preferences)
         parser().print_help()
         return EXIT_USAGE
-    preferences = load_preferences()
+    if arguments.command == "palette":
+        return interactive(arguments, preferences)
     if arguments.command == "status":
         return status(arguments, preferences)
     if arguments.command == "doctor":

@@ -236,3 +236,39 @@ and edits the same override. Returning to the workflow's original runner clears
 the override, and retry uses that runner even when the original creation input
 was different. Nodes can implement `_for_runner` to configure models and MCP
 bindings for the resolved runner, including approval recovery.
+
+## From a terminal: `engine`
+
+Running `engine` with no command opens the workbench against the configured
+service (`--server URL` to pick another):
+
+```
+work orders | graph                     highlight a WorkOrder, or "New workorder"
+graph       | in progress + its stream  Enter on a WorkOrder
+orders | graph | conversation           Enter on a node
+```
+
+The graph is a chronologue: every time a node started, in order, grouped under
+its state (Planning, Implementation, Review) and followed by the nodes not yet
+reached. A run that went back to implementation shows it twice, and Enter on
+either opens its conversation. Enter sends, Shift/Option+Enter (Ctrl+Enter on
+Windows) adds a line, and Esc goes back and keeps what you typed. A working
+node can be messaged; implementation can be messaged after it finished, which
+sends the run back to it. `/approve` and `/reject`, with an optional note,
+answer a node that is waiting, including the final human review. Enter on a
+Review header shows what the reviewers found.
+
+The mouse is left to the terminal, so selecting and copying text works as
+usual. The wheel scrolls: the workbench asks for "alternate scroll", which has
+the terminal send the wheel as ↑/↓ -- moving the selection in a list, and
+scrolling a conversation once past the first line of what you are typing.
+PgUp/PgDn scroll a run's detail pane and a conversation too.
+
+## Disconnected mode
+
+The **Mode** input runs a WorkOrder without the forge: nothing is pushed, no
+pull request is opened, CI is skipped, and no comments are posted. The change
+is committed in the run's own checkout and the findings are kept in the run,
+where the WorkOrder page and `engine` show them. `engine --disconnected`
+defaults new WorkOrders to it, and so does a service with no source control
+connected.
