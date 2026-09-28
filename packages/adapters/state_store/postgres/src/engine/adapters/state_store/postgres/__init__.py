@@ -15,13 +15,10 @@ from engine.domain.ids import (
     AgentRunId,
     ApprovalId,
     ConversationId,
-    MilestoneId,
-    ProjectId,
     RunId,
     TaskId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunState
 
 
@@ -42,9 +39,7 @@ class PostgresStateStore:
     async def save(self, state: RunState) -> None:
         raise NotImplementedError("Postgres writes land with the state-store ticket")
 
-    async def list_runs(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[RunState]:
+    async def list_runs(self) -> Sequence[RunState]:
         raise NotImplementedError("Postgres reads land with the state-store ticket")
 
     async def list_runs_for_origin(
@@ -55,31 +50,6 @@ class PostgresStateStore:
     async def delete_run(self, run_id: RunId) -> bool:
         raise NotImplementedError("Postgres writes land with the state-store ticket")
 
-    async def save_project(self, project: Project) -> None:
-        raise NotImplementedError("Project writes land with the state-store ticket")
-
-    async def load_project(self, project_id: ProjectId) -> Project | None:
-        raise NotImplementedError("Project reads land with the state-store ticket")
-
-    async def list_projects(self) -> Sequence[Project]:
-        raise NotImplementedError("Project reads land with the state-store ticket")
-
-    async def save_milestone(self, milestone: Milestone) -> None:
-        raise NotImplementedError("Milestone writes land with the state-store ticket")
-
-    async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
-        raise NotImplementedError("Milestone reads land with the state-store ticket")
-
-    async def list_milestones(
-        self, project_id: ProjectId | None = None
-    ) -> Sequence[Milestone]:
-        raise NotImplementedError("Milestone reads land with the state-store ticket")
-
-    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
-        raise NotImplementedError("Milestone reads land with the state-store ticket")
-
-    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
-        raise NotImplementedError("Milestone writes land with the state-store ticket")
 
     async def create_instance(
         self,

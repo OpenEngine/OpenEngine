@@ -228,3 +228,10 @@ def test_the_gate_waits_on_the_change_request_the_reader_names(
         call.kwargs["change_request_number"]
         for call in execution.runtime.source_control.list_pipeline_status.await_args_list
     ] == [found.number]
+
+
+def test_a_disconnected_run_skips_ci_without_asking_the_forge(execution):
+    result = asyncio.run(CICheck()({"inputs": {"mode": "disconnected"}}))["ci_check"]
+    assert result["passed"] is True and result["skipped"] is True
+    execution.runtime.source_control.list_pipeline_status.assert_not_awaited()
+    execution.say.assert_awaited_once()

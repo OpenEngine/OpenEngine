@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from langgraph_acp import ACPPrompt
 
+from engine.domain import WorkState
 from engine.graph_runtime_langgraph.acp import ACPNode
 from engine.graph_runtime_langgraph.executions import current_execution
 
@@ -49,6 +50,7 @@ class NameNode(ACPNode):
     graph_node_name: str = "Naming"
     graph_node_description: str = "Gives the WorkOrder a concise display name."
     graph_node_show_in_sidebar: bool = False
+    graph_node_group: str = WorkState.PLANNING
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         try:

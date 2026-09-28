@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from engine.domain.ids import (
-    MilestoneId,
     RunId,
     TaskId,
     WorkflowId,
@@ -55,7 +54,6 @@ class RunState:
     run_id: RunId
     task_id: TaskId
     workflow_id: WorkflowId
-    milestone_id: MilestoneId | None = None
     phase: RunPhase = RunPhase.PENDING
     repository: str = ""
     prompt: str = ""

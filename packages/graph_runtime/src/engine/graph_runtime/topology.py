@@ -73,6 +73,18 @@ class GraphNode:
     """The node's default runner, empty when it cannot be overridden."""
     runners: tuple[str, ...] = ()
     """Runner names supported by this node."""
+    findings_key: str = ""
+    """The run-state key this node keeps its review findings under, if any.
+
+    Declared by the node so a client showing a review's findings reads them
+    where the node put them, rather than knowing a workflow's state keys.
+    """
+    runner_input: str = ""
+    """The creation input that chooses this node's runner, empty when none does.
+
+    What lets a creation form say which of its fields decides which stage --
+    "auto-select (round robin)" drawn under the nodes that input places.
+    """
 
 
 @dataclass(frozen=True, slots=True)

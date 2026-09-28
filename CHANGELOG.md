@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.0](https://github.com/OpenEngine/OpenEngine/compare/v0.3.0...v0.4.0) (2026-09-28)
+
+
+### Features
+
+* add an OpenCode ACP runner ([#561](https://github.com/OpenEngine/OpenEngine/issues/561)) ([7e2b62b](https://github.com/OpenEngine/OpenEngine/commit/7e2b62bd1800be214c3a299a62a87f10701d3436))
+* **cli:** improve interactive work order experience ([#551](https://github.com/OpenEngine/OpenEngine/issues/551)) ([07171f2](https://github.com/OpenEngine/OpenEngine/commit/07171f2df1c032e27e8f1ef8df8dcd0f13cfdb23))
+* post WorkOrder progress as comments on the originating GitHub issue ([#559](https://github.com/OpenEngine/OpenEngine/issues/559)) ([8aa9da9](https://github.com/OpenEngine/OpenEngine/commit/8aa9da9eca5e69b8a0102afbbdf1c3a007124932))
+
+
+### Documentation
+
+* propose Ongoing Projects on idle Resources ([#560](https://github.com/OpenEngine/OpenEngine/issues/560)) ([d0d7a8a](https://github.com/OpenEngine/OpenEngine/commit/d0d7a8ac6486811adfe1771d0b0563dd138a404e))
+
+## [0.3.0](https://github.com/OpenEngine/OpenEngine/compare/v0.2.0...v0.3.0) (2026-09-25)
+
+
+### Features
+
+* add one-line installer for macOS and Linux ([#553](https://github.com/OpenEngine/OpenEngine/issues/553)) ([bd798b6](https://github.com/OpenEngine/OpenEngine/commit/bd798b6528787640e1633795023c0cde5d8a99d0))
+* credit the work order's requester as co-author on agent commits ([#526](https://github.com/OpenEngine/OpenEngine/issues/526)) ([c4d28a9](https://github.com/OpenEngine/OpenEngine/commit/c4d28a9bed9cbfe14dfeeb6e842a2d8f0a4779e8))
+* run OpenEngine as a background service with engine daemon ([#555](https://github.com/OpenEngine/OpenEngine/issues/555)) ([0f1c56c](https://github.com/OpenEngine/OpenEngine/commit/0f1c56ccbe206512c907d9492ce81262d582427a))
+
+
+### Bug Fixes
+
+* replace openengine launcher with engine ([#557](https://github.com/OpenEngine/OpenEngine/issues/557)) ([aba6780](https://github.com/OpenEngine/OpenEngine/commit/aba678059129fad24aba3a22c2bdc2aaaf6a0472))
+
 ## [0.2.0](https://github.com/OpenEngine/OpenEngine/compare/v0.1.0...v0.2.0) (2026-09-25)
 
 

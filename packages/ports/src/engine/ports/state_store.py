@@ -22,13 +22,10 @@ from engine.domain.ids import (
     AgentRunId,
     ApprovalId,
     ConversationId,
-    MilestoneId,
-    ProjectId,
     RunId,
     TaskId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunState
 
 
@@ -43,10 +40,8 @@ class StateStore(Protocol):
     async def save(self, state: RunState) -> None:
         ...
 
-    async def list_runs(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[RunState]:
-        """Return persisted workflow runs, newest first, optionally by milestone."""
+    async def list_runs(self) -> Sequence[RunState]:
+        """Return persisted workflow runs, newest first."""
         ...
 
     async def list_runs_for_origin(
@@ -59,49 +54,6 @@ class StateStore(Protocol):
         """Forget one run, returning whether it existed."""
         ...
 
-    # --- planning hierarchy ---------------------------------------------
-
-    async def save_project(self, project: Project) -> None:
-        ...
-
-    async def load_project(self, project_id: ProjectId) -> Project | None:
-        ...
-
-    async def list_projects(self) -> Sequence[Project]:
-        """Return projects newest first."""
-        ...
-
-    async def save_milestone(self, milestone: Milestone) -> None:
-        ...
-
-    async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
-        ...
-
-    async def list_milestones(
-        self, project_id: ProjectId | None = None
-    ) -> Sequence[Milestone]:
-        """Return milestones newest first, optionally for one project."""
-        ...
-
-    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
-        """Return how many milestones each project has, projects with none omitted.
-
-        Separate from `list_milestones` because the caller that wants this wants
-        integers: a projects list says which rows have a plan to offer, and it
-        is polled. Reading every milestone to count them would make that poll
-        cost the total size of every plan in the store, forever, to produce a
-        handful of numbers.
-        """
-        ...
-
-    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
-        """Delete one milestone, returning whether it existed.
-
-        Refused while runs still point at it: the run is the record of work
-        done under this heading, and a run whose milestone is gone cannot say
-        what it was part of.
-        """
-        ...
 
     # --- agent identity and conversation ---------------------------------
 

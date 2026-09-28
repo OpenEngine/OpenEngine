@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from engine.domain import WorkState
 from engine.graph_runtime_langgraph.acp import NoWorkingDirectoryError
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import WorkspaceProvider
@@ -57,6 +58,7 @@ class WorkspaceNode:
     graph_node_kind: str = "workspace"
     graph_node_description: str = "Checks the repository out for this run."
     graph_node_show_in_sidebar: bool = False
+    graph_node_group: str = WorkState.PLANNING
     """Not a conversation, so it is not offered as one.
 
     A checkout says what it did -- the run's page prints the directory, and the

@@ -116,9 +116,16 @@ including an instruction to close the issue in the resulting PR body.
 Only `assigned` events targeting the resolved account are accepted; matching
 is case-insensitive. The assigning user must have repository write access.
 Ordinary issue comments, other assignees, and closed issues do not start work.
-The run uses the issue's repository, without claiming a pull request or sending
-progress to Slack. No concierge model turn is needed: assignment itself requests
-implementation.
+The run uses the issue's repository, without claiming a pull request. No
+concierge model turn is needed: assignment itself requests implementation.
+
+Progress is reported on the issue rather than in Slack, as three milestones
+only: implementation starting (again, if review sends the work back), review
+finishing, and the work order finishing, which follows the pull request's merge
+answering its human review. Other stages, approvals, failures, resumes, and
+agent transcript text stay on the work order, both to keep the issue quiet and
+because the issue may be public. Each comment links to the work order when
+`public_url` is set, and to the pull request once the run has opened one.
 
 Repeated assignments and redeliveries for the same issue are deduplicated in
 the bounded ingress memory. Failed handling can be retried by redelivery. As

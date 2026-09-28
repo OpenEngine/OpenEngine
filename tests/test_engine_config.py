@@ -22,7 +22,6 @@ def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     loaded = load_engine_config(environ={}, cwd=tmp_path)
 
     assert loaded.path is None
-    assert loaded.config.show_projects is True
     assert loaded.config.attribution is True
     assert loaded.config.default_branch == "main"
     assert loaded.config.public_url == ""
@@ -195,10 +194,9 @@ def test_selection_is_explicit_then_environment_then_working_directory(
     "document,message",
     [
         ({"approval": {}}, "unknown key in configuration: approval"),
+        ({"show_projects": False}, "unknown key in configuration: show_projects"),
         ({"approvals": {"automatic": True}}, "unknown key in approvals: automatic"),
         ({"approvals": {"auto_approve": "yes"}}, "must be a boolean"),
-        ({"show_projects": "false"}, "show_projects must be a boolean"),
-        ({"show_projects": 0}, "show_projects must be a boolean"),
         ({"attribution": "no"}, "attribution must be a boolean"),
         ({"default_branch": ""}, "default_branch must be a non-empty string"),
         ({"default_branch": 1}, "default_branch must be a non-empty string"),

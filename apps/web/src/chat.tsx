@@ -266,7 +266,7 @@ export function QueuedMessagePersistence({ draftRestored }: { draftRestored: boo
   return null;
 }
 
-export function Composer({ project = false }: { project?: boolean } = {}) {
+export function Composer() {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const canSend = useAuiState((state) => state.composer.canSend);
@@ -367,9 +367,7 @@ export function Composer({ project = false }: { project?: boolean } = {}) {
           placeholder={
             isRunning
               ? "Queue a message for when the agent is done…"
-              : project
-                ? "Tell the agent about the project you're working on.."
-                : "Ask the agent about this repository…"
+              : "Ask the agent about this repository…"
           }
           aria-label="Message the agent"
           rows={1}
@@ -974,11 +972,9 @@ export function ConversationStats({
  *  a WorkOrder's agent reads as the conversation it is rather than as a second
  *  rendering of one. */
 export function ChatThread({
-  project = false,
   empty,
   dock,
 }: {
-  project?: boolean;
   empty?: ReactNode;
   dock?: ReactNode;
 }) {
@@ -987,23 +983,22 @@ export function ChatThread({
       <ThreadPrimitive.Viewport className="stream">
         <WorkflowBacklink />
         <ThreadPrimitive.Empty>
-          {empty ??
-            (!project && (
-              <div className="welcome">
-                <div className="welcome-copy">
-                  <p className="eyebrow">OpenEngine / Chat</p>
-                  <h1>Start a conversation.</h1>
-                  <p className="lede">Each chat has its own agent history and Git worktree.</p>
-                </div>
+          {empty ?? (
+            <div className="welcome">
+              <div className="welcome-copy">
+                <p className="eyebrow">OpenEngine / Chat</p>
+                <h1>Start a conversation.</h1>
+                <p className="lede">Each chat has its own agent history and Git worktree.</p>
               </div>
-            ))}
+            </div>
+          )}
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages>
           {({ message }) =>
             message.role === "user" ? <UserMessage /> : <AssistantMessage />
           }
         </ThreadPrimitive.Messages>
-        {dock ?? <Dock project={project} />}
+        {dock ?? <Dock />}
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
   );
@@ -1012,7 +1007,7 @@ export function ChatThread({
 export const READ_ONLY_WORKORDER_NOTE =
   "This transcript belongs to a WorkOrder step. Return to the WorkOrder for status and actions.";
 
-function Dock({ project }: { project: boolean }) {
+function Dock() {
   const custom = useAuiState((state) => state.threadListItem.custom) as
     | WorkspaceCustom
     | undefined;
@@ -1026,7 +1021,7 @@ function Dock({ project }: { project: boolean }) {
       {!editable ? (
         <p className="step-note">{READ_ONLY_WORKORDER_NOTE}</p>
       ) : (
-        <Composer project={project} />
+        <Composer />
       )}
       <div className="dock-foot">
         {/* Under the composer or workflow note rather than in the heading: a

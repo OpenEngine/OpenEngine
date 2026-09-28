@@ -1,6 +1,6 @@
 [project]
 name = "engine-web"
-version = "0.2.0"
+version = "0.4.0"
 description = "Web control interface: an assistant-ui client for chatting with engine agents."
 requires-python = ">=3.11"
 # Composition root: the only layer allowed to depend on concrete adapters.
@@ -8,7 +8,6 @@ requires-python = ">=3.11"
 # dependencies live in this directory's package.json.
 dependencies = [
     "engine-runtime",
-    "engine-scoper",
     "engine-github-concierge",
     "engine-slack-concierge",
     # The engine that runs the graph workflows, and the contract it
@@ -58,7 +57,6 @@ path = "hatch_build.py"
 
 [tool.uv.sources]
 engine-runtime = { workspace = true }
-engine-scoper = { workspace = true }
 engine-github-concierge = { workspace = true }
 engine-slack-concierge = { workspace = true }
 engine-graph-runtime = { workspace = true }

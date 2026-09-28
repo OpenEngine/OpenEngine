@@ -352,6 +352,8 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 "group": "",
                 "runner": "",
                 "runners": [],
+                "runnerInput": "",
+                "findingsKey": "",
             },
             {
                 "nodeId": str(REVIEW),
@@ -363,6 +365,8 @@ def test_topology_describes_every_node_and_edge(build: Backend) -> None:
                 "group": "",
                 "runner": "",
                 "runners": [],
+                "runnerInput": "",
+                "findingsKey": "",
             },
         ],
         "edges": [

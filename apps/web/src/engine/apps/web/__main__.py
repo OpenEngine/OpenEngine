@@ -25,7 +25,6 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_graph_runtime,
-    build_milestone_scoper,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -64,7 +63,7 @@ def report_wiring(settings: Settings) -> None:
             LoadedEngineConfig(config=settings.engine_config, path=settings.config_path)
         )
     )
-    print(f"openengine web -- http://{settings.host}:{settings.port}, capabilities wired:")
+    print(f"engine-web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
     cli = gh_cli_status()
@@ -341,9 +340,7 @@ def compose_app(
         github_repository=settings.github_webhook.repository if settings.github_webhook else "",
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
-        milestone_scoper=build_milestone_scoper(settings),
         work_orders=loaded.config.work_orders,
-        show_projects=loaded.config.show_projects,
         repos=loaded.config.repos,
         login_repositories=_login_repositories(loaded) if github_login_config else (),
         login_operators=loaded.config.access.operators,

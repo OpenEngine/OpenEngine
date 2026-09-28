@@ -52,7 +52,7 @@ function statusLabel(status: string): string {
  *  rather than this engine's, and a `javascript:` URL in an anchor runs on
  *  click. The same guard the WorkOrder page applies to every other
  *  externally-sourced link. */
-function linkable(url: string): boolean {
+export function linkable(url: string): boolean {
   return /^https?:\/\//.test(url);
 }
 

@@ -108,12 +108,9 @@ test("a WorkOrder page reaches every server it reads, through the dev proxy", as
   // reporting `Unexpected token '<'` where the run should be.
   await expect(page.locator(".stages .stage")).toHaveText([
     "Workspace",
-    "Naming",
+    "Planning",
     "Implementation",
-    "CI check",
     "Review",
-    "Impact analysis",
-    "Human review",
   ]);
   await expect(page.getByRole("heading", { name: TITLE, level: 1 })).toBeVisible();
   // Named because it is the report this exists for, and because the page polls:
