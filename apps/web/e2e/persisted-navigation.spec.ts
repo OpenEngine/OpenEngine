@@ -151,6 +151,7 @@ async function verifyPersistedNavigation({
   await page.getByLabel("Task prompt").fill("Start a fresh workflow beside history.");
   await page.getByRole("button", { name: "Create WorkOrder" }).click();
   await expect(page).toHaveURL(/\/runs\/run-/);
+  await page.locator(".step-group-summary").filter({ hasText: "Implementation" }).click();
   await expect(step(page, "Implementation")).toContainText(
     "Started from the populated SQLite database.",
     { timeout: 60_000 },
