@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   answerQuestion,
   api,
-  createProject,
-  getProjectMilestones,
   messageText,
   newChatAgent,
   type EngineConfig,
@@ -76,65 +74,16 @@ describe("newChatAgent", () => {
     agents: [],
     runners: [],
     defaultAgent: "coder",
-    planAgent: "planner",
-    showProjects: true,
     repositories: [{ name: ". (/srv/engine)", path: "." }],
     defaultRunner: "claude",
     workflows: [],
   } satisfies EngineConfig;
 
-  it("starts a plan on the planning agent and a chat on the default", () => {
-    expect(newChatAgent(config, true)).toBe("planner");
-    expect(newChatAgent(config, false)).toBe("coder");
+  it("starts a chat on the default agent", () => {
+    expect(newChatAgent(config)).toBe("coder");
   });
 
-  /** The id is the server's to name, so a deployment composing no planner says
-   *  so with an empty one -- and the page still opens on something. */
-  it("falls back to the default agent when no planner is composed", () => {
-    expect(newChatAgent({ ...config, planAgent: "" }, true)).toBe("coder");
-  });
-});
 
-describe("createProject", () => {
-  it("creates a project with the generated name", async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ projectId: "project-1", name: "Engine roadmap" }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetch);
-
-    await expect(createProject("Engine roadmap")).resolves.toEqual({
-      projectId: "project-1",
-      name: "Engine roadmap",
-    });
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/projects",
-      expect.objectContaining({ method: "POST", body: '{"name":"Engine roadmap"}' }),
-    );
-  });
-});
-
-describe("getProjectMilestones", () => {
-  it("reads the selected project's timeline data", async () => {
-    const response = {
-      project: { projectId: "project/one", name: "Engine roadmap" },
-      milestones: [],
-    };
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(response), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetch);
-
-    await expect(getProjectMilestones("project/one")).resolves.toEqual(response);
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/projects/project%2Fone/milestones",
-      expect.objectContaining({}),
-    );
-  });
 });
 
 describe("answerQuestion", () => {

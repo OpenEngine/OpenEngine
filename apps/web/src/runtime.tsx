@@ -37,8 +37,6 @@ import { publishApproval } from "./approvals";
 type NewChatDefaults = {
   agentId: string;
   runner: string;
-  /** The first message starts a project named by the same agent-generated title. */
-  createProject?: boolean;
 };
 
 type ThreadInitializer = {
@@ -301,12 +299,7 @@ function HistoryProvider({ children }: PropsWithChildren) {
  *  page with no transcript on it has no business restoring the last chat --
  *  still less naming a different one as the chat to come back to.
  *
- *  `restoreActiveThread` is the reading half of that on its own, for the one
- *  page that owns a transcript and still opens on a new one: the plan page
- *  starts a conversation rather than resuming one, but the conversation it
- *  starts is the chat to come back to like any other. Off for both would freeze
- *  the memory rather than skip it, and leave whatever you were in before as
- *  the chat the rail returns you to. */
+ *  `restoreActiveThread` controls whether the last active chat is reopened. */
 export function EngineRuntimeProvider({
   defaults,
   children,

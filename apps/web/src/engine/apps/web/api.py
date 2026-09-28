@@ -33,7 +33,6 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
-    Container,
     Iterable,
     Mapping,
     Sequence,
@@ -45,7 +44,7 @@ from importlib.metadata import version
 from html import escape
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
@@ -105,27 +104,14 @@ from engine.domain import (
     ApprovalKind,
     ApprovalRecord,
     Message,
-    Milestone,
-    MilestoneId,
-    MilestoneScope,
-    Project,
-    ProjectId,
     Role,
     RunId,
     RunOrigin,
     RunPhase,
     RunState,
-    ScopingPlan,
-    ScopingPolicy,
     TaskId,
     WorkflowId,
     WorkspaceId,
-    WorkOrder,
-    WorkOrderId,
-    WorkOrderSpec,
-    WorkOrderStatus,
-    instance_id_for_project,
-    project_id_for_instance,
 )
 from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, resolve_inputs
 from engine.graph_runtime import (
@@ -160,7 +146,6 @@ from engine.ports import (
 )
 from engine.runtime.change_requests import change_request, pull_request_url
 from engine.runtime import (
-    PLANNER,
     AgentSession,
     ApprovalBroker,
     ApprovalConfig,
@@ -769,16 +754,13 @@ class ThreadService:
     ) -> str:
         """Ask the thread's agent for a title without changing its transcript."""
         thread = await self._require(instance_id)
-        project_id = project_id_for_instance(instance_id)
-        project = await self.session.state_store.load_project(project_id)
-        names_project = thread.title == "New project" and project is not None
-        if thread.title != "New chat" and not names_project:
+        if thread.title != "New chat":
             return thread.title
         selected_runner = runner or thread.runner
         if selected_runner not in self.session.runners:
             raise ValueError(f"unknown runner {selected_runner!r}")
         async with self._locks[instance_id]:
-            if thread.title not in {"New chat", "New project"}:
+            if thread.title != "New chat":
                 return thread.title
             history = await self.session.history(instance_id)
             title_context = (
@@ -799,16 +781,6 @@ class ThreadService:
             )
         title = _clean_title(turn.message.content)
         if title:
-            # Project creation is part of thread initialization, before the
-            # client receives the permalink. Rename that durable placeholder
-            # before consuming the sentinel title so an interrupted request is
-            # always safe to retry after a reload.
-            if project is not None and names_project:
-                # Renamed rather than rewritten, so a project put away while it
-                # was still being named comes back still put away.
-                await self.session.state_store.save_project(
-                    replace(project, name=title)
-                )
             thread.title = title
             await self._persist_metadata(thread)
         return thread.title
@@ -1001,18 +973,6 @@ class _GraphSurface:
     app: Starlette | None = None
 
 
-class MilestoneScoping(Protocol):
-    """The configured in-process scoper supplied by the composition root."""
-
-    async def run(
-        self,
-        *,
-        workorders: Sequence[WorkOrder],
-        milestone: MilestoneScope,
-        policy: ScopingPolicy,
-    ) -> ScopingPlan: ...
-
-
 class GithubProvenance(Protocol):
     """The half of the runtime's store that says who owns a pull request.
 
@@ -1078,12 +1038,10 @@ def create_app(
     communications_channel: str = "",
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
-    show_projects: bool = True,
     repos: Mapping[str, str] | None = None,
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
     utilization: UtilizationService | None = None,
-    milestone_scoper: MilestoneScoping | None = None,
     concierge_provider: ACPAgentProvider | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
@@ -1712,17 +1670,7 @@ def create_app(
                     for name, runner in runners.items()
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
-                # Which agent the New Project button starts a conversation with, named
-                # here rather than in the client so the id stays one thing this
-                # process owns. Empty when no such profile is composed, which is
-                # the client's cue that there is nothing to plan with.
-                "planAgent": (
-                    str(PLANNER.agent_id)
-                    if PLANNER.agent_id in session.profiles
-                    else ""
-                ),
                 "defaultRunner": session.default_runner,
-                "showProjects": show_projects,
                 "repositories": [
                     {"name": name, "path": str(Path(path).expanduser().resolve())}
                     for name, path in (repos or {}).items()
@@ -1765,166 +1713,6 @@ def create_app(
             runs.append(row)
         return JSONResponse({"runs": runs})
 
-    async def open_conversations() -> set[AgentInstanceId]:
-        """The plans a project row can be linked to.
-
-        A project is reached through the planning conversation it was named
-        after. Resolved against the threads that can be opened rather than
-        spelled from the id alone: a project recorded some other way has the
-        same shape and no conversation, and an archived plan's page is a blank
-        new chat rather than the plan.
-        """
-        return {
-            thread.instance_id for thread in await service.list() if not thread.archived
-        }
-
-    async def list_projects(_request: Request) -> JSONResponse:
-        projects = await session.state_store.list_projects()
-        conversations = await open_conversations()
-        # A project's milestones are offered in the rail only by the projects
-        # that have some, so the list says how many. Counted by the store, in
-        # one grouped query: the shell polls this route every second, and both
-        # a query per row and a read of every milestone would make that cost
-        # grow -- with the list, or with the size of every plan in it.
-        milestones = await session.state_store.count_milestones_by_project()
-        return JSONResponse(
-            {
-                "projects": [
-                    _project_json(
-                        project,
-                        conversations,
-                        milestones=milestones.get(project.project_id, 0),
-                    )
-                    for project in projects
-                ]
-            }
-        )
-
-    async def create_project(request: Request) -> JSONResponse:
-        body = await _json_body(request)
-        try:
-            name = _required_string(body, "name")
-        except ValueError as error:
-            return _error(str(error), 400)
-        project = Project(ProjectId(f"project-{uuid4().hex[:12]}"), name[:80])
-        await session.state_store.save_project(project)
-        # Recorded rather than planned, so it owns no conversation to link to
-        # and nothing has been planned under it yet.
-        return JSONResponse(_project_json(project, (), milestones=0), status_code=201)
-
-    async def archive_project(request: Request) -> JSONResponse:
-        """Put a project away, or take it back out, from one pair of routes.
-
-        Which one was asked for is read from the path, the way archiving a chat
-        already is: the two differ only in the flag they record.
-        """
-        project_id = ProjectId(request.path_params["project_id"])
-        project = await session.state_store.load_project(project_id)
-        if project is None:
-            return _error("project not found", 404)
-        archived = request.url.path.rsplit("/", 1)[-1] == "archive"
-        project = replace(project, archived=archived)
-        await session.state_store.save_project(project)
-        # An archived project keeps its plan: restoring puts the link and the
-        # milestones back rather than leaving a row that has forgotten where it
-        # went. The answer is the whole row the list would send -- counted the
-        # same way, so the two cannot drift -- and a client that redraws from it
-        # is not left with a project missing half itself.
-        counts = await session.state_store.count_milestones_by_project()
-        return JSONResponse(
-            _project_json(
-                project,
-                await open_conversations(),
-                milestones=counts.get(project_id, 0),
-            )
-        )
-
-    async def list_project_milestones(request: Request) -> JSONResponse:
-        project_id = ProjectId(request.path_params["project_id"])
-        project = await session.state_store.load_project(project_id)
-        if project is None:
-            return _error("project not found", 404)
-        milestones = await session.state_store.list_milestones(project_id)
-        return JSONResponse(
-            {
-                # Linked to its plan like any other row: the milestones page
-                # this answers is where the way back to the conversation is.
-                "project": _project_json(project, await open_conversations()),
-                "milestones": [_milestone_json(milestone) for milestone in milestones],
-            }
-        )
-
-    async def scope_milestone(request: Request) -> JSONResponse:
-        """Run the configured ACP scoper and return its structured plan."""
-        project_id = ProjectId(request.path_params["project_id"])
-        milestone_id = MilestoneId(request.path_params["milestone_id"])
-        project = await session.state_store.load_project(project_id)
-        milestone = await session.state_store.load_milestone(milestone_id)
-        if project is None:
-            return _error("project not found", 404)
-        if milestone is None or milestone.project_id != project_id:
-            return _error("milestone not found", 404)
-        body = await _json_body(request)
-        try:
-            message = _required_string(body, "message")
-        except ValueError as error:
-            return _error(str(error), 400)
-
-        current = tuple(
-            _workorder_for_run(run, milestone_id)
-            for run in await session.state_store.list_runs(milestone_id)
-        )
-        if milestone_scoper is None:
-            return _error("milestone scoping is not configured", 503)
-        plan = await milestone_scoper.run(
-            workorders=current,
-            milestone=MilestoneScope(
-                milestone_id=milestone.milestone_id,
-                requirements=(milestone.description,) if milestone.description else (),
-                dependencies=milestone.dependencies,
-                name=milestone.name,
-            ),
-            policy=ScopingPolicy(rules=(message,)),
-        )
-        requester = _web_requester(request)
-        # Independent proposals wait for explicit dispatch; dependent proposals
-        # start when their prerequisite succeeds.
-        definition = _mentioned_workflow()
-        workflow_id = WorkflowId(
-            work_orders.workflow or (str(definition.graph_id) if definition else "")
-        )
-        async with dependency_lock:
-            for spec in plan.create:
-                if spec.milestone_id != milestone_id:
-                    return _error("scoper proposed work for another milestone", 400)
-                if len(spec.dependencies) > 1:
-                    return _error("workorders support one prerequisite", 400)
-                if spec.dependencies and (
-                    RunId(str(spec.dependencies[0])) in deleting_runs
-                    or await session.state_store.load(RunId(str(spec.dependencies[0]))) is None
-                ):
-                    return _error("unknown prerequisite workorder", 400)
-            for spec in plan.create:
-                prompt = spec.objective
-                if spec.evidence_requirements:
-                    prompt += "\n\nEvidence requirements:\n" + "\n".join(spec.evidence_requirements)
-                if spec.dependencies:
-                    prompt += "\n\nDepends on: " + ", ".join(spec.dependencies)
-                await session.state_store.save(RunState(
-                    run_id=RunId(f"run-{uuid4().hex[:12]}"),
-                    task_id=TaskId(f"task-{uuid4().hex[:12]}"),
-                    workflow_id=workflow_id,
-                    milestone_id=milestone_id,
-                    phase=RunPhase.SCHEDULED,
-                    name=spec.name,
-                    prompt=prompt,
-                    repository=work_orders.repository,
-                    depends_on_run_id=RunId(str(spec.dependencies[0])) if spec.dependencies else None,
-                    requester=requester,
-                ))
-        dependencies_changed.set()
-        return JSONResponse(_scoping_plan_json(plan))
-
     round_robin_turns: dict[str, int] = {}
 
     async def start_graph_run(
@@ -1934,7 +1722,6 @@ def create_app(
         inputs: dict[str, str],
         prompt: str,
         repository: str,
-        milestone_id: MilestoneId | None,
         origin: RunOrigin | None = None,
         scheduled: RunState | None = None,
         defer_notifications: bool = False,
@@ -2001,7 +1788,7 @@ def create_app(
                         run_id=RunId(f"run-{uuid4().hex[:12]}"),
                         task_id=TaskId(f"task-{uuid4().hex[:12]}"),
                         workflow_id=WorkflowId(str(graph.graph_id)),
-                        milestone_id=milestone_id, phase=RunPhase.SCHEDULED,
+                        phase=RunPhase.SCHEDULED,
                         prompt=prompt, repository=repository, origin=origin,
                         parent_run_id=parent_run_id, depends_on_run_id=depends_on_run_id,
                         inputs=inputs, requester=requester,
@@ -2042,7 +1829,6 @@ def create_app(
                 task_id=scheduled.task_id if scheduled else TaskId(f"task-{uuid4().hex[:12]}"),
                 name=scheduled.name if scheduled else "",
                 workflow_id=WorkflowId(str(graph.graph_id)),
-                milestone_id=milestone_id,
                 # Working, as the engine has just reported it. `graph_event` above
                 # moves this when the run ends.
                 phase=GRAPH_PHASES[snapshot.status],
@@ -2097,7 +1883,7 @@ def create_app(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=parent.repository,
-            milestone_id=parent.milestone_id, parent_run_id=parent.run_id,
+            parent_run_id=parent.run_id,
             depends_on_run_id=depends_on_run_id, requester=parent.requester,
         )
         link = run_notifier.work_order_link(state)
@@ -2132,7 +1918,7 @@ def create_app(
                             inputs=resolve_inputs(getattr(graph, "inputs", ()), state.inputs),
                             prompt=state.prompt,
                             repository=state.repository or work_orders.repository,
-                            milestone_id=state.milestone_id, origin=state.origin,
+                            origin=state.origin,
                             scheduled=state,
                         )
                     except Exception:
@@ -2161,7 +1947,7 @@ def create_app(
                 return _error(str(error), 400)
             state = await start_graph_run(
                 surface.runtime, graph, inputs=inputs, prompt=state.prompt,
-                repository=repository, milestone_id=state.milestone_id,
+                repository=repository,
                 scheduled=state, origin=state.origin,
                 # The proposer stays the requester; whoever clicks Start only
                 # names a row that recorded nobody.
@@ -2178,20 +1964,12 @@ def create_app(
             prompt = _required_string(body, "prompt")
             repository = _required_string(body, "repository")
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
-            milestone_value = _optional_string(body, "milestoneId")
             dependency_value = _optional_string(body, "dependsOnRunId")
         except ValueError as error:
             return _error(str(error), 400)
         graph = offered_graphs().get(str(workflow_id))
         if graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
-        milestone_id = (
-            MilestoneId(milestone_value) if milestone_value is not None else None
-        )
-        if milestone_id is not None:
-            milestone = await session.state_store.load_milestone(milestone_id)
-            if milestone is None:
-                return _error(f"unknown milestone: {milestone_id}", 400)
 
         # `offered_graphs` only answers with a graph while the engine is
         # running, so this cannot be `None` here.
@@ -2209,7 +1987,6 @@ def create_app(
                 inputs=inputs,
                 prompt=prompt,
                 repository=repository,
-                milestone_id=milestone_id,
                 depends_on_run_id=RunId(dependency_value) if dependency_value else None,
                 requester=_web_requester(request),
             )
@@ -2380,9 +2157,6 @@ def create_app(
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
-        create_project = body.get("createProject", False)
-        if not isinstance(create_project, bool):
-            return _error("createProject must be a boolean", 400)
         try:
             thread = await service.create(
                 AgentId(_required_string(body, "agentId")),
@@ -2390,17 +2164,6 @@ def create_app(
             )
         except (KeyError, ValueError) as error:
             return _error(str(error), 400)
-        if create_project:
-            # Finish the durable intent before returning the thread id. The
-            # client cannot replace /plan with its permalink until this request
-            # resolves, so closing or reloading during the slower title request
-            # cannot strand an ordinary chat without its project.
-            thread = await service.update_metadata(
-                thread.instance_id, title="New project"
-            )
-            await session.state_store.save_project(
-                Project(project_id_for_instance(thread.instance_id), thread.title)
-            )
         return JSONResponse(_thread_json(thread), status_code=201)
 
     async def get_thread(request: Request) -> JSONResponse:
@@ -3169,7 +2932,7 @@ def create_app(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            milestone_id=None, origin=origin, defer_notifications=True,
+            origin=origin, defer_notifications=True,
             requester=origin.requester or None,
         )
         link = run_notifier.work_order_link(state)
@@ -3399,7 +3162,7 @@ def create_app(
             runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=prompt, repository=repository,
-            milestone_id=None, requester=requester,
+            requester=requester,
         )
         url = pull_request_url(repository, number)
         try:
@@ -3595,7 +3358,7 @@ def create_app(
             prompt=(f"Implement issue #{assignment.number}: {assignment.title}\n\n"
                     f"{assignment.body}\n\nIssue: {assignment.url}\n"
                     f"Include Fixes #{assignment.number} in the pull request body."),
-            repository=repository, milestone_id=None,
+            repository=repository,
             origin=RunOrigin(
                 channel=f"{GITHUB_CHANNEL_PREFIX}{repository}",
                 thread_id=f"issue/{assignment.number}",
@@ -3953,26 +3716,6 @@ def create_app(
         Route("/api/slack/events", slack_ingress.webhook, methods=["POST"]),
         Route("/api/utilization", read_utilization),
         Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
-        Route("/api/projects", list_projects),
-        Route("/api/projects", create_project, methods=["POST"]),
-        Route(
-            "/api/projects/{project_id}/archive",
-            archive_project,
-            methods=["POST"],
-            name="archive_project",
-        ),
-        Route(
-            "/api/projects/{project_id}/unarchive",
-            archive_project,
-            methods=["POST"],
-            name="unarchive_project",
-        ),
-        Route("/api/projects/{project_id}/milestones", list_project_milestones),
-        Route(
-            "/api/projects/{project_id}/milestones/{milestone_id}/scope",
-            scope_milestone,
-            methods=["POST"],
-        ),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),
@@ -4040,18 +3783,7 @@ def create_app(
                 Route("/runs/{run_id}", spa_page),
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),
-                Route("/plan", spa_page),
                 Route("/utilization", spa_page),
-                Route("/projects/{project_id}/milestones", spa_page),
-                Route("/projects/{project_id}/milestones/{milestone_id}", spa_page),
-                Route(
-                    "/projects/{project_id}/milestones/{milestone_id}/scope",
-                    spa_page,
-                ),
-                Route(
-                    "/projects/{project_id}/milestones/{milestone_id}/tasks/new",
-                    spa_page,
-                ),
             ]
         )
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
@@ -4063,7 +3795,6 @@ def create_app(
         middleware=[Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5)],
     )
     app.state.thread_service = service
-    app.state.milestone_scoper = milestone_scoper
     app.state.slack_ingress = slack_ingress
     app.state.github_ingress = github_ingress
     # Enforce session auth on API routes when GitHub login is configured.
@@ -4097,96 +3828,6 @@ def _thread_json(thread: ChatThread) -> dict[str, object]:
     return result
 
 
-def _project_json(
-    project: Project,
-    conversations: Container[AgentInstanceId],
-    *,
-    milestones: int | None = None,
-) -> dict[str, object]:
-    """Render a project, linked to its plan when that conversation is open.
-
-    `conversations` is required rather than defaulted: a caller that forgot it
-    would quietly emit the linkless rows this link exists to replace.
-
-    `milestones` is how many the project has, for the callers that counted
-    them. Left out rather than reported as none by the ones that did not: a
-    zero here is a project with no plan, which is a thing the rail acts on.
-    """
-
-    result: dict[str, object] = {
-        "projectId": str(project.project_id),
-        "name": project.name,
-        "archived": project.archived,
-    }
-    if milestones is not None:
-        result["milestoneCount"] = milestones
-    instance_id = instance_id_for_project(project.project_id)
-    if instance_id is not None and instance_id in conversations:
-        result["conversationUrl"] = f"/conversations/{quote(str(instance_id), safe='')}"
-    return result
-
-
-def _milestone_json(milestone: Milestone) -> dict[str, object]:
-    return {
-        "milestoneId": str(milestone.milestone_id),
-        "name": milestone.name,
-        "description": milestone.description,
-        "dependencies": [str(dependency) for dependency in milestone.dependencies],
-    }
-
-
-def _workorder_for_run(run: RunState, milestone_id: MilestoneId) -> WorkOrder:
-    """Present scheduled and active milestone work to the scoper."""
-    if run.phase is RunPhase.SCHEDULED:
-        status = WorkOrderStatus.SCHEDULED
-    elif run.phase is RunPhase.SUCCEEDED:
-        status = WorkOrderStatus.COMPLETE
-    elif run.phase is RunPhase.FAILED:
-        status = WorkOrderStatus.CANCELLED
-    elif run.phase is RunPhase.PENDING:
-        status = WorkOrderStatus.PENDING
-    else:
-        status = WorkOrderStatus.IN_PROGRESS
-    return WorkOrder(
-        workorder_id=WorkOrderId(str(run.run_id)),
-        spec=WorkOrderSpec(
-            milestone_id=milestone_id,
-            name=run.name or str(run.task_id),
-            objective=run.prompt,
-            dependencies=(WorkOrderId(str(run.depends_on_run_id)),) if run.depends_on_run_id else (),
-        ),
-        status=status,
-    )
-
-
-def _workorder_spec_json(spec: WorkOrderSpec) -> dict[str, object]:
-    return {
-        "milestoneId": spec.milestone_id,
-        "name": spec.name,
-        "objective": spec.objective,
-        "evidenceRequirements": list(spec.evidence_requirements),
-        "dependencies": list(spec.dependencies),
-    }
-
-
-def _scoping_plan_json(plan: ScopingPlan) -> dict[str, object]:
-    """Translate the domain result without flattening its three operations."""
-    return {
-        "create": [_workorder_spec_json(spec) for spec in plan.create],
-        "cancel": list(plan.cancel),
-        "supersede": [
-            {
-                "workorderId": item.workorder_id,
-                "replacements": [
-                    _workorder_spec_json(spec) for spec in item.replacements
-                ],
-            }
-            for item in plan.supersede
-        ],
-        "reasons": list(plan.reasons),
-    }
-
-
 def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, object]:
     """One WorkOrder, as a client is shown it.
 
@@ -4202,7 +3843,6 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "workflowId": run.workflow_id,
         "workflowName": run.workflow_name,
         "taskId": run.task_id,
-        "milestoneId": str(run.milestone_id) if run.milestone_id else None,
         "repository": run.repository,
         "repositoryContext": {"repository": run.repository},
         "parentRunId": str(run.parent_run_id) if run.parent_run_id else None,

@@ -53,7 +53,7 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
         ).fetchone()
 
     assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("473bfdc7cd0d",)
+    assert revision == ("d487944fbd15",)
 
 
 def test_slack_thread_lookup_migration_backfills_and_indexes_runs(tmp_path: Path) -> None:
@@ -188,7 +188,7 @@ def test_milestone_details_migration_preserves_existing_records(tmp_path: Path) 
         )
         connection.commit()
 
-    upgrade(url)
+    upgrade(url, "sqlite_0002")
 
     with sqlite3.connect(database) as connection:
         row = connection.execute(
@@ -216,7 +216,7 @@ def test_project_archive_migration_leaves_existing_projects_listed(
         )
         connection.commit()
 
-    upgrade(url)
+    upgrade(url, "sqlite_0003")
 
     with sqlite3.connect(database) as connection:
         row = connection.execute(
@@ -276,7 +276,7 @@ def test_removing_workstreams_rehomes_their_runs_on_the_milestone(
         )
         connection.commit()
 
-    upgrade(url)
+    upgrade(url, "sqlite_0008")
 
     with sqlite3.connect(database) as connection:
         tables = {
@@ -565,3 +565,56 @@ def test_github_pull_requests_migration_names_one_owner_and_downgrades(
 def test_graph_history_rejects_postgres() -> None:
     with pytest.raises(ValueError, match="unsupported migration store/backend: graph/postgres"):
         alembic_config("postgresql://localhost/engine", store="graph")
+
+
+def test_retiring_milestone_projects_preserves_runs_and_conversations(tmp_path: Path) -> None:
+    from migrations.migration import upgrade_connection
+
+    database = tmp_path / "retirement.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "473bfdc7cd0d")
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("INSERT INTO projects (project_id, name) VALUES ('project', 'Old plan')")
+        connection.execute(
+            "INSERT INTO milestones (milestone_id, project_id, name) VALUES ('goal', 'project', 'Goal')"
+        )
+        payload = {
+            "run_id": "run", "task_id": "task", "workflow_id": "workflow",
+            "milestone_id": "goal", "phase": "succeeded", "prompt": "Keep this work",
+            "inputs": {"runner": "codex"}, "parent_run_id": "parent",
+        }
+        connection.execute(
+            "INSERT INTO run_states (run_id, state_json, milestone_id, origin_channel, origin_thread_id, requester) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("run", json.dumps(payload), "goal", "slack", "thread", "slack:T:U"),
+        )
+        connection.execute(
+            "INSERT INTO run_states (run_id, state_json) VALUES ('legacy', 'invalid legacy payload')"
+        )
+        connection.execute(
+            "INSERT INTO agent_instances (instance_id, agent_id, conversation_id, title) "
+            "VALUES ('chat', 'planner', 'conversation', 'Keep this conversation')"
+        )
+        connection.commit()
+        upgrade_connection(connection)
+        assert not connection.execute("PRAGMA foreign_key_check").fetchall()
+        assert "milestone_id" not in {row[1] for row in connection.execute("PRAGMA table_info(run_states)")}
+        assert connection.execute("SELECT COUNT(*) FROM projects").fetchone() == (0,)
+        assert not connection.execute("SELECT name FROM sqlite_master WHERE name = 'milestones'").fetchall()
+        row = connection.execute(
+            "SELECT state_json, origin_channel, origin_thread_id, requester FROM run_states WHERE run_id = 'run'"
+        ).fetchone()
+        assert json.loads(row[0]) == {key: value for key, value in payload.items() if key != "milestone_id"}
+        assert row[1:] == ("slack", "thread", "slack:T:U")
+        assert connection.execute("SELECT state_json FROM run_states WHERE run_id = 'legacy'").fetchone() == ("invalid legacy payload",)
+        assert connection.execute("SELECT title FROM agent_instances").fetchone() == ("Keep this conversation",)
+        assert {row[1] for row in connection.execute("PRAGMA index_list(run_states)")} >= {"runs_by_origin_thread"}
+
+    # Reopening at head is idempotent; downgrade restores schema, not lost plans.
+    upgrade(url)
+    command.downgrade(alembic_config(url), "473bfdc7cd0d")
+    with sqlite3.connect(database) as connection:
+        assert "milestone_id" in {row[1] for row in connection.execute("PRAGMA table_info(run_states)")}
+        assert connection.execute("SELECT COUNT(*) FROM milestones").fetchone() == (0,)
+    upgrade(url)

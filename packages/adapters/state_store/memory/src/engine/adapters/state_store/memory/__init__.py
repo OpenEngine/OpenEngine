@@ -13,7 +13,6 @@ things Postgres will do.
 Implements `engine.ports.StateStore`.
 """
 
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from itertools import count
@@ -30,14 +29,11 @@ from engine.domain.ids import (
     ApprovalId,
     ConversationId,
     MessageId,
-    MilestoneId,
-    ProjectId,
     RunId,
     SessionGrantId,
     TaskId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunState
 
 
@@ -53,8 +49,6 @@ class InMemoryStateStore:
     def __init__(self) -> None:
         self._lock = Lock()
         self._states: dict[RunId, RunState] = {}
-        self._projects: dict[ProjectId, Project] = {}
-        self._milestones: dict[MilestoneId, Milestone] = {}
         self._instances: dict[AgentInstanceId, AgentInstance] = {}
         self._conversations: dict[AgentInstanceId, Conversation] = {}
         self._agent_runs: dict[AgentRunId, AgentRun] = {}
@@ -70,20 +64,11 @@ class InMemoryStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock:
-            if (
-                state.milestone_id is not None
-                and state.milestone_id not in self._milestones
-            ):
-                raise KeyError(f"no milestone {state.milestone_id!r}")
             self._states[state.run_id] = state
 
-    async def list_runs(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[RunState]:
+    async def list_runs(self) -> Sequence[RunState]:
         with self._lock:
             states = list(self._states.values())
-        if milestone_id is not None:
-            states = [state for state in states if state.milestone_id == milestone_id]
         return tuple(reversed(states))
 
     async def list_runs_for_origin(
@@ -102,52 +87,6 @@ class InMemoryStateStore:
         with self._lock:
             return self._states.pop(run_id, None) is not None
 
-    # --- planning hierarchy ---------------------------------------------
-
-    async def save_project(self, project: Project) -> None:
-        with self._lock:
-            self._projects[project.project_id] = project
-
-    async def load_project(self, project_id: ProjectId) -> Project | None:
-        with self._lock:
-            return self._projects.get(project_id)
-
-    async def list_projects(self) -> Sequence[Project]:
-        with self._lock:
-            return tuple(reversed(self._projects.values()))
-
-    async def save_milestone(self, milestone: Milestone) -> None:
-        with self._lock:
-            if milestone.project_id not in self._projects:
-                raise KeyError(f"no project {milestone.project_id!r}")
-            self._milestones[milestone.milestone_id] = milestone
-
-    async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
-        with self._lock:
-            return self._milestones.get(milestone_id)
-
-    async def list_milestones(
-        self, project_id: ProjectId | None = None
-    ) -> Sequence[Milestone]:
-        with self._lock:
-            milestones = list(self._milestones.values())
-        if project_id is not None:
-            milestones = [item for item in milestones if item.project_id == project_id]
-        return tuple(reversed(milestones))
-
-    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
-        with self._lock:
-            return Counter(
-                milestone.project_id for milestone in self._milestones.values()
-            )
-
-    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
-        with self._lock:
-            if any(
-                state.milestone_id == milestone_id for state in self._states.values()
-            ):
-                raise ValueError(f"milestone {milestone_id!r} still has runs")
-            return self._milestones.pop(milestone_id, None) is not None
 
     # --- agent identity and conversation ---------------------------------
 

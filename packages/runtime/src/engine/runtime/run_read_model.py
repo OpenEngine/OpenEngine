@@ -9,7 +9,6 @@ nothing that would have to be kept in step with a running graph.
 from dataclasses import dataclass
 
 from engine.domain import (
-    MilestoneId,
     RunId,
     RunPhase,
     RunState,
@@ -25,7 +24,6 @@ class WorkflowRunView:
     workflow_id: str
     workflow_name: str
     task_id: str
-    milestone_id: MilestoneId | None
     task_prompt: str
     repository: str
     phase: str
@@ -74,7 +72,6 @@ class RunReader:
                 str(state.workflow_id), str(state.workflow_id)
             ),
             task_id=str(state.task_id),
-            milestone_id=state.milestone_id,
             task_prompt=state.prompt,
             repository=state.repository,
             phase=state.phase.value,
