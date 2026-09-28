@@ -11,6 +11,8 @@ import psutil
 from pydantic import Field
 
 from open_verify.artifacts import Artifacts
+from open_verify.browser_guard import BrowserGuard
+from open_verify.browser_proxy import BrowserProxy
 from open_verify.models import Contract
 
 OMIT = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build", ".cache"}
@@ -134,6 +136,10 @@ class LocalTools:
         self.headless = headless
         self.processes: dict[str, tuple] = {}
         self.browser = self.context = self.page = self.playwright = None
+        self._tracing = False
+        self._browser_ready = False
+        self._browser_guard = None
+        self._browser_proxy = None
         self.browser_events: list[dict] = []
 
     def catalog(self, stage: str) -> dict:
@@ -168,7 +174,10 @@ class LocalTools:
         ):
             raise ValueError("Use an HTTP(S) URL without embedded credentials")
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        return f"{parsed.scheme}://{parsed.hostname.lower()}:{port}"
+        host = parsed.hostname.lower()
+        if ":" in host:
+            host = f"[{host}]"
+        return f"{parsed.scheme}://{host}:{port}"
 
     def check_url(self, url: str):
         origin = self.origin(url)
@@ -177,6 +186,15 @@ class LocalTools:
             and origin not in self.origins
         ):
             raise ValueError("External origin requires --allow-origin: " + origin)
+
+    def check_websocket_url(self, url: str):
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"ws", "wss"}:
+            raise ValueError("Use a WS(S) URL")
+        # WebSockets share their HTTP(S) origin's allowance, including its port.
+        self.check_url(
+            parsed._replace(scheme={"ws": "http", "wss": "https"}[parsed.scheme]).geturl()
+        )
 
     async def execute(self, name: str, arguments: dict, *, stage="execute") -> dict:
         try:
@@ -298,6 +316,15 @@ class LocalTools:
 
     async def http_request(self, args: RequestArgs):
         self.check_url(args.url)
+        try:
+            async with asyncio.timeout(args.timeout):
+                return await self._http_request(args)
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"HTTP action exceeded its {args.timeout:g}s overall deadline"
+            ) from exc
+
+    async def _http_request(self, args: RequestArgs):
         async with httpx.AsyncClient(
             follow_redirects=False, trust_env=False, timeout=args.timeout
         ) as client:
@@ -317,17 +344,37 @@ class LocalTools:
                 }
 
     async def _ensure_browser(self):
-        if self.page is not None:
+        if self._browser_ready:
             return
+        # Retain ownership after cleanup errors; never overwrite a live driver.
+        errors = await self._close_browser()
+        if errors:
+            raise RuntimeError("Cannot retry browser initialization: " + "; ".join(errors))
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
             raise RuntimeError(
                 "Install open-verify[browser], then run: playwright install chromium"
             ) from exc
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=self.headless)
-        self.context = await self.browser.new_context(service_workers="block")
+        try:
+            self._browser_proxy = BrowserProxy(self.check_url, self.browser_events)
+            proxy_url = await self._browser_proxy.start()
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=self.headless,
+                proxy={"server": proxy_url, "bypass": "<-loopback>"},
+            )
+            self.context = await self.browser.new_context(service_workers="block")
+            await self._configure_browser()
+            self._browser_ready = True
+        except BaseException as exc:
+            # Includes cancellation during launch, context creation or tracing.
+            errors = await self._close_browser()
+            if errors:
+                exc.add_note("Browser cleanup: " + "; ".join(errors))
+            raise
+
+    async def _configure_browser(self):
 
         async def route(request_route):
             try:
@@ -339,8 +386,26 @@ class LocalTools:
                 await request_route.continue_()
 
         await self.context.route("**/*", route)
+
+        async def websocket_route(websocket):
+            try:
+                self.check_websocket_url(websocket.url)
+            except ValueError:
+                self.browser_events.append({"blocked_websocket_url": websocket.url})
+                await websocket.close(code=1008, reason="Origin not allowed")
+            else:
+                # No server connection exists until this explicit call.
+                websocket.connect_to_server()
+
+        await self.context.route_web_socket("**/*", websocket_route)
         await self.context.tracing.start(screenshots=True, snapshots=True)
+        self._tracing = True
         self.page = await self.context.new_page()
+        # CDP checks page/frame redirects. The proxy is installed before launch
+        # so workers are covered even when Playwright resumes them first.
+        cdp = await self.context.new_cdp_session(self.page)
+        self._browser_guard = BrowserGuard(self.check_url, self.browser_events, self.context)
+        await self._browser_guard.install(cdp)
         self.page.set_default_timeout(10000)
         self.page.on(
             "console",
@@ -412,22 +477,41 @@ class LocalTools:
                 await self.stop_process(ProcessArgs(process_id=process_id))
             except Exception as exc:
                 errors.append(f"{process_id}: {exc}")
+        errors.extend(await self._close_browser())
+        return errors
+
+    async def _close_browser(self):
+        errors = []
+        self._browser_ready = False
+        if self._browser_guard is not None:
+            await self._browser_guard.close()
+            self._browser_guard = None
         for name, operation in [
             (
                 "trace",
                 lambda: (
                     self.context.tracing.stop(path=str(self.artifacts.path / "browser-trace.zip"))
-                    if self.context
+                    if self.context and self._tracing
                     else None
                 ),
             ),
             ("browser", lambda: self.browser.close() if self.browser else None),
             ("playwright", lambda: self.playwright.stop() if self.playwright else None),
+            ("proxy", lambda: self._browser_proxy.close() if self._browser_proxy else None),
         ]:
             try:
                 pending = operation()
                 if pending is not None:
                     await pending
+                if name == "trace":
+                    self._tracing = False
+                elif name == "browser":
+                    self.browser = self.context = self.page = None
+                elif name == "playwright":
+                    self.playwright = self.browser = self.context = self.page = None
+                    self._tracing = False
+                elif name == "proxy":
+                    self._browser_proxy = None
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
         return errors

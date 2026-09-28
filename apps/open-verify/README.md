@@ -47,10 +47,16 @@ Useful options:
   are not supported yet. Commands run with the current user's environment and privileges.
 - `--allow-origin https://test.example.com`: permit an additional HTTP/browser origin.
   Only localhost origins are allowed by default; redirects must remain in allowed origins.
+  WebSocket connections use the corresponding HTTP(S) allowance (`ws` → `http`,
+  `wss` → `https`), with the same host and port, and are checked before connecting.
 - `--headless`: hide the Chromium window; the default is visible.
 - `--max-steps 60`: bound agent decisions, including rejected decisions and findings.
 - `--output PATH`: save a new run below this directory. The default is the user's
   application data directory, outside the project being tested.
+
+Browser HTTP and WebSocket traffic passes through a local origin-checking proxy,
+including worker requests. HTTPS/WSS tunnels preserve end-to-end TLS.
+Service workers remain disabled.
 
 Open Verify can test an already-running app without `--allow-exec`. A missing tool,
 dependency or credential is a blocker, never a passing result. Blocking questions
