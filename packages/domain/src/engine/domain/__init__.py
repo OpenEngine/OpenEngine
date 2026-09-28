@@ -24,6 +24,7 @@ from engine.domain.commands import (
     StartAgentRun,
 )
 from engine.domain.events import Event, RunFailed, StepCompleted
+from engine.domain.forge import MODE_INPUT, ForgeMode, forge_mode
 from engine.domain.ids import (
     AgentId,
     AgentInstanceId,
@@ -42,6 +43,7 @@ from engine.domain.ids import (
     WorkspaceId,
 )
 from engine.domain.state import RunOrigin, RunPhase, RunState
+from engine.domain.states import WorkState
 from engine.domain.scoping import (
     MilestoneScope,
     ScopingPlan,
@@ -72,6 +74,9 @@ __all__ = [
     "Conversation",
     "ConversationId",
     "Event",
+    "ForgeMode",
+    "MODE_INPUT",
+    "forge_mode",
     "Message",
     "MessageId",
     "MilestoneId",
@@ -108,5 +113,6 @@ __all__ = [
     "WorkOrderId",
     "WorkOrderSpec",
     "WorkOrderStatus",
+    "WorkState",
     "WorkspaceId",
 ]

@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any
 
-from engine.domain import StepCompleted
+from engine.domain import StepCompleted, WorkState
 from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
 
 
@@ -195,7 +195,12 @@ class ReviewNode(ACPNode):
     """Store validated findings under this facet's own key for parallel writes."""
 
     facet: str
-    graph_node_group: str = "Review"
+    graph_node_group: str = WorkState.REVIEW
+
+    @property
+    def graph_node_findings_key(self) -> str:
+        """Where this reviewer's findings are kept in run state."""
+        return self.output_key
 
     @staticmethod
     def validate_completion(event: StepCompleted) -> None:
@@ -217,7 +222,12 @@ class ReviewNode(ACPNode):
 class RerankerNode(ACPNode):
     """Keep the reranker's accepted findings as structured checkpoint state."""
 
-    graph_node_group: str = "Review"
+    graph_node_group: str = WorkState.REVIEW
+
+    @property
+    def graph_node_findings_key(self) -> str:
+        """Where the findings that survived reranking are kept in run state."""
+        return self.output_key
 
     @staticmethod
     def validate_completion(event: StepCompleted) -> None:
