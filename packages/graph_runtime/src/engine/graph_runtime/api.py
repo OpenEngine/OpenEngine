@@ -187,17 +187,25 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         try:
             node = _optional_string(body, "node")
             named = _optional_string(body, "checkpoint")
+            message = _optional_string(body, "message") or None
         except ValueError as error:
             return _error(str(error), 400)
         if bool(node) == bool(named):
             return _error("give exactly one of node or checkpoint", 400)
+        if message is not None and not node:
+            return _error("message requires a node", 400)
         try:
             checkpoint = (
                 CheckpointId(named)
                 if named
                 else await _position_for_node(runtime, run_id, NodeId(node))
             )
-            run = await runtime.resume_from(run_id, checkpoint)
+            if message is None:
+                run = await runtime.resume_from(run_id, checkpoint)
+            else:
+                run = await runtime.resume_from(
+                    run_id, checkpoint, node_id=NodeId(node), message=message,
+                )
         except Exception as error:
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))

@@ -1,5 +1,6 @@
 """A deliberately narrow, authenticated Streamable HTTP surface."""
 
+from collections import deque
 from dataclasses import dataclass, field
 import re
 import secrets
@@ -247,14 +248,28 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     async def workorder_status(run_id: str) -> dict[str, object]:
         """Return status, current nodes, topology, recent transcript and PR URL.
 
-        Each current node includes its last five transcript messages. Parallel
-        executions are reported individually; an idle frontier uses nextNodes.
+        Each current node includes its last five transcript messages.
+        active_executions lists execution_id, node_id and separate messages for
+        each parallel task; an idle frontier uses nextNodes.
         """
         key, run = await workorder(run_id)
         snapshot, topology = await graph_state(key, run)
         nodes = list(dict.fromkeys(
             item["nodeId"] for item in snapshot["activeExecutions"]
         )) or snapshot["nextNodes"]
+        # Download and partition the feed once, keeping only bounded snippets.
+        by_node = {node: deque(maxlen=5) for node in nodes}
+        by_execution = {
+            item["executionId"]: deque(maxlen=5) for item in snapshot["activeExecutions"]
+        }
+        if nodes:
+            events = await request_engine("GET", f"/api/runs/{key}/graph-events")
+            for event in events["events"]:
+                if event.get("type") == "transcript":
+                    if event.get("nodeId") in by_node:
+                        by_node[event["nodeId"]].append(event["payload"])
+                    if event.get("executionId") in by_execution:
+                        by_execution[event["executionId"]].append(event["payload"])
         values = snapshot.get("values", {})
         pr_url = values.get("pr_url") or next((
             value["pr_url"] for value in values.values()
@@ -263,7 +278,12 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         return {
             "run_id": run["runId"], "status": snapshot["status"],
             "current_nodes": nodes, "topology": topology, "pr_url": pr_url,
-            "transcript": {node: await transcript(key, node, 5) for node in nodes},
+            "transcript": {node: list(by_node[node]) for node in nodes},
+            "active_executions": [
+                {"node_id": item["nodeId"], "execution_id": item["executionId"],
+                 "messages": list(by_execution[item["executionId"]])}
+                for item in snapshot["activeExecutions"]
+            ],
         }
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
@@ -288,15 +308,24 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     @mcp.tool(annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True,
     ))
-    async def steer_workorder(run_id: str, instruction: str, nodename: str | None = None) -> dict[str, object]:
+    async def steer_workorder(
+        run_id: str, instruction: str, nodename: str | None = None,
+        execution_id: str | None = None,
+    ) -> dict[str, object]:
         """Send an instruction to an active node without resetting it.
 
-        Specify a nodeId when multiple nodes are active. To revisit an earlier
-        node, first call node_steer, then send an instruction once it is active.
+        Select either a nodeId or an execution_id from workorder_status.
+        Use execution_id when multiple tasks run the same node. To revisit an
+        earlier node, use node_steer with the instruction in the same call.
         """
         if not instruction.strip() or len(instruction) > 100_000:
             raise ValueError("instruction must contain 1–100000 characters and not be blank")
+        if nodename is not None and execution_id is not None:
+            raise ValueError("give at most one of nodename or execution_id")
         payload = {"message": instruction.strip()}
+        if execution_id is not None:
+            identifier(execution_id)
+            payload["execution"] = execution_id.strip()
         if nodename is not None:
             identifier(nodename)
             payload["node"] = nodename.strip()
@@ -306,17 +335,19 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     @mcp.tool(annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True,
     ))
-    async def node_steer(run_id: str, nodename: str) -> dict[str, object]:
+    async def node_steer(run_id: str, nodename: str, instruction: str) -> dict[str, object]:
         """Stop current execution and reset to the latest checkpoint before this node.
 
-        Execution restarts from that point. Use steer_workorder to send a
-        steering instruction to the node once active. Earlier attempts remain
-        in the transcript. The node must have been reached previously.
+        Queue the instruction before restarting execution from that point.
+        Earlier attempts remain in the transcript. The node must have been
+        reached previously.
         """
         identifier(nodename)
+        if not instruction.strip() or len(instruction) > 100_000:
+            raise ValueError("instruction must contain 1–100000 characters and not be blank")
         key, _ = await workorder(run_id)
         return await request_engine(
-            "POST", f"/graph/api/runs/{key}/transitions", {"node": nodename.strip()},
+            "POST", f"/graph/api/runs/{key}/transitions", {"node": nodename.strip(), "message": instruction.strip()},
         )
 
     app = mcp.streamable_http_app(

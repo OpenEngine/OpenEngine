@@ -13,15 +13,17 @@ Inspect and steer work orders in the configured repository with:
 
 - `workorder_status(run_id)`: returns status, current node IDs (including parallel
   nodes), node topology, the last five transcript messages per current node, and
-  `pr_url` when available. Scheduled and finished runs can have no current node.
+  `pr_url` when available. `active_executions` includes each task's `execution_id`,
+  `node_id`, and its own last five messages. Scheduled and finished runs can have no current node.
 - `node_status(run_id, nodename, last_n=10)`: returns the last 1–1000 transcript
   messages for the selected node, oldest first. Use a `nodeId` from the topology.
-- `steer_workorder(run_id, instruction, nodename?)`: sends an instruction to an
-  active execution. Select a node when several are active.
-- `node_steer(run_id, nodename)`: stops current execution and restarts from the
-  latest checkpoint before the named node. Once the node is active, send an
-  instruction with `steer_workorder`. The node must have been reached previously;
-  earlier attempts remain in the transcript.
+- `steer_workorder(run_id, instruction, nodename?, execution_id?)`: sends an instruction to an
+  active execution. Select either a node or an execution ID; use the execution
+  ID when multiple tasks run the same node.
+- `node_steer(run_id, nodename, instruction)`: stops current execution, queues
+  the instruction, and restarts from the latest checkpoint before the named node.
+  The instruction is queued before the node starts. The node must have been
+  reached previously; earlier attempts remain in the transcript.
 
 Reset and steering calls are never automatically retried. After an uncertain
 response, check status before repeating a mutation.
