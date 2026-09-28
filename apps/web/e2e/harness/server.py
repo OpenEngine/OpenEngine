@@ -186,7 +186,12 @@ def main(argv: list[str] | None = None) -> int:
     GitHubSourceControl._repo_coords = _fake_repo_coords  # type: ignore[method-assign]
 
     print(describe_loaded_config(loaded), flush=True)
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
+    config = uvicorn.Config(app, host=settings.host, port=settings.port, log_level="warning")
+    # Keep the OS-assigned port bound until the server takes it over. Probing a
+    # free port in the parent and releasing it races other parallel fixtures.
+    with config.bind_socket() as sock:
+        print(f"ENGINE_E2E_URL=http://{settings.host}:{sock.getsockname()[1]}", flush=True)
+        uvicorn.Server(config).run(sockets=[sock])
     return 0
 
 

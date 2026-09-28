@@ -97,25 +97,18 @@ export const test = base.extend<{
     if (seededDatabase === "current") seedState(state, repository);
     if (seededDatabase === "v0.0.0") restoreV0Database(state);
     const scriptPath = path.join(root, "script.json");
-    const engine = new Engine(
-      `http://127.0.0.1:${await freePort()}`,
-      repository,
-      origin,
-      path.join(state, "gh.jsonl"),
-      scriptPath,
-    );
-    engine.script({
-      scenarios: [{ steps: [{ type: "say", text: "This turn was not scripted." }] }],
-    });
-
     const server = startServer(
-      engine.url,
+      "http://127.0.0.1:0",
       repository,
       state,
       scriptPath,
     );
     try {
-      await waitUntilServing(engine.url, server);
+      const url = await waitUntilServing(undefined, server);
+      const engine = new Engine(url, repository, origin, path.join(state, "gh.jsonl"), scriptPath);
+      engine.script({
+        scenarios: [{ steps: [{ type: "say", text: "This turn was not scripted." }] }],
+      });
       await use(engine);
     } finally {
       await stop(server);
@@ -312,7 +305,7 @@ function restoreV0Database(state: string): void {
   copyFileSync(V0_DATABASE, path.join(state, "conversations.sqlite3"));
 }
 
-async function waitUntilServing(url: string, server: Server) {
+async function waitUntilServing(url: string | undefined, server: Server): Promise<string> {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (server.failure) throw new Error(server.failure);
@@ -320,9 +313,10 @@ async function waitUntilServing(url: string, server: Server) {
       throw new Error(
         `the server exited ${server.process.exitCode}:\n${server.log.join("")}`,
       );
+    url ??= server.log.join("").match(/ENGINE_E2E_URL=(http:\/\/127\.0\.0\.1:\d+)\r?\n/)?.[1];
     try {
-      const response = await fetch(`${url}/api/config`);
-      if (response.ok) return;
+      const response = url ? await fetch(`${url}/api/config`) : undefined;
+      if (url && response?.ok) return url;
     } catch {
       // Not listening yet.
     }
