@@ -18,6 +18,8 @@ from engine.ports.permissions import ApprovalCapability
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
+DEFAULT_CONFIG_TEMPLATE = Path(__file__).with_name("default-engine.toml")
+"""A distributable `engine.toml`: loopback only, nothing machine-specific."""
 
 
 class EngineConfigError(ValueError):
@@ -47,6 +49,27 @@ class WorkflowsConfig:
     """Where trusted repository-owned Python workflow definitions live."""
 
     directory: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ServerConfig:
+    """Where the web interface listens."""
+
+    host: str = "localhost"
+    port: int = 4364
+
+
+@dataclass(frozen=True, slots=True)
+class StateConfig:
+    """Where the web interface keeps its databases.
+
+    `directory` resolves against the configuration file's directory, and the
+    two paths inside it against `directory`, so one setting moves them all.
+    """
+
+    directory: str = "."
+    sqlite_path: str = "conversations.sqlite3"
+    graph_state_directory: str = "graph-state"
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +129,19 @@ class GitHubConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AccessConfig:
+    """Who may use the web interface beyond what repository access grants."""
+
+    operators: tuple[int, ...] = ()
+    """GitHub user IDs admitted without a repository permission check.
+
+    IDs rather than logins, because a login can be renamed and then claimed by
+    somebody else. Operators can sign in before they have write access anywhere,
+    and while the server's own `gh` login cannot answer permission checks.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class WorkOrdersConfig:
     """What a work order gets when nobody filled in a form to ask for one.
 
@@ -135,7 +171,10 @@ class EngineConfig:
     github_login_redirect_uri: str = ""
     github_token: str = ""
     public_url: str = ""
+    server: ServerConfig = ServerConfig()
+    state: StateConfig = StateConfig()
     github: GitHubConfig = GitHubConfig()
+    access: AccessConfig = AccessConfig()
     communications: CommunicationsConfig = CommunicationsConfig()
     work_orders: WorkOrdersConfig = WorkOrdersConfig()
     approvals: ApprovalConfig = ApprovalConfig()
@@ -218,6 +257,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     _reject_unknown(
         document,
         {
+            "access",
             "attribution",
             "approvals",
             "claude",
@@ -232,6 +272,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "public_url",
             "show_projects",
             "repos",
+            "server",
+            "state",
             "work_orders",
             "workflows",
         },
@@ -261,6 +303,34 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     _reject_unknown(github, {"repository", "host_aliases"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
+    )
+
+    access = _table(document.get("access", {}), "access")
+    _reject_unknown(access, {"operators"}, "access")
+    operators = _user_ids(access.get("operators", ()), "access.operators")
+
+    server = _table(document.get("server", {}), "server")
+    _reject_unknown(server, {"host", "port"}, "server")
+    server_host = _nonblank_string(server.get("host", "localhost"), "server.host")
+    server_port = server.get("port", 4364)
+    if (
+        not isinstance(server_port, int)
+        or isinstance(server_port, bool)
+        or not 0 <= server_port <= 65535
+    ):
+        raise EngineConfigError("server.port must be an integer from 0 to 65535")
+
+    state = _table(document.get("state", {}), "state")
+    _reject_unknown(state, {"directory", "sqlite_path", "graph_state_directory"}, "state")
+    state_config = StateConfig(
+        directory=_nonblank_string(state.get("directory", "."), "state.directory"),
+        sqlite_path=_nonblank_string(
+            state.get("sqlite_path", "conversations.sqlite3"), "state.sqlite_path"
+        ),
+        graph_state_directory=_nonblank_string(
+            state.get("graph_state_directory", "graph-state"),
+            "state.graph_state_directory",
+        ),
     )
 
     communications = _table(document.get("communications", {}), "communications")
@@ -367,6 +437,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         github_token=github_token,
         public_url=public_url.rstrip("/"),
+        server=ServerConfig(host=server_host, port=server_port),
+        state=state_config,
         github=GitHubConfig(
             repository=github_repository,
             host_aliases={
@@ -377,6 +449,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                 ).items()
             },
         ),
+        access=AccessConfig(operators=operators),
         communications=CommunicationsConfig(
             provider=communications_provider,
             channel=communications_channel,
@@ -509,6 +582,19 @@ def _strings(value: object, location: str) -> tuple[str, ...]:
     return strings
 
 
+def _user_ids(value: object, location: str) -> tuple[int, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise EngineConfigError(f"{location} must be an array of GitHub user IDs")
+    ids = tuple(value)
+    if not all(type(item) is int and item > 0 for item in ids):
+        raise EngineConfigError(
+            f"{location} must contain numeric GitHub user IDs, not logins"
+        )
+    if len(set(ids)) != len(ids):
+        raise EngineConfigError(f"{location} must not contain duplicates")
+    return ids
+
+
 def _patterns(value: object, location: str) -> tuple[str, ...]:
     patterns = _strings(value, location)
     if any(not pattern.strip() for pattern in patterns):
@@ -524,17 +610,21 @@ def _reject_unknown(
 
 
 __all__ = [
+    "AccessConfig",
     "ApprovalCapability",
     "ApprovalConfig",
     "BashApprovalConfig",
     "CONFIG_ENVIRONMENT_VARIABLE",
     "ClaudeConfig",
     "DEFAULT_CONFIG_NAME",
+    "DEFAULT_CONFIG_TEMPLATE",
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
     "LoadedEngineConfig",
     "ResponseStyle",
+    "ServerConfig",
+    "StateConfig",
     "WorkOrdersConfig",
     "WorkflowsConfig",
     "describe_loaded_config",

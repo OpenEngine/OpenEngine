@@ -9,7 +9,9 @@ which constructs the same application again in every fresh child process.
 """
 
 import argparse
+import ipaddress
 import os
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -43,6 +45,7 @@ from engine.runtime import (
     load_workflow_catalog,
     WorkflowLoadError,
 )
+from engine.runtime.change_requests import remote_project
 
 #: Vite's production output, served by the same process as the API.
 STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
@@ -61,7 +64,7 @@ def report_wiring(settings: Settings) -> None:
             LoadedEngineConfig(config=settings.engine_config, path=settings.config_path)
         )
     )
-    print(f"openengine web -- http://{settings.host}:{settings.port}, capabilities wired:")
+    print(f"engine-web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
     cli = gh_cli_status()
@@ -96,12 +99,47 @@ def report_wiring(settings: Settings) -> None:
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
+def _port(loaded: LoadedEngineConfig) -> int:
+    configured = os.environ.get("ENGINE_PORT")
+    if configured is None:
+        return loaded.config.server.port
+    try:
+        port = int(configured)
+    except ValueError:
+        port = -1
+    if not 0 <= port <= 65535:
+        raise EngineConfigError("ENGINE_PORT must be an integer from 0 to 65535")
+    return port
+
+
+def _state_paths(loaded: LoadedEngineConfig) -> tuple[str, str]:
+    """The conversation database and graph state folder, as absolute paths.
+
+    The state directory resolves against the configuration file's directory,
+    like every other path in it, and both locations resolve inside that.
+    """
+
+    state = loaded.config.state
+    base = loaded.path.parent if loaded.path else Path.cwd()
+    directory = base / os.environ.get("ENGINE_STATE_DIRECTORY", state.directory)
+    sqlite_path = directory / os.environ.get("ENGINE_SQLITE_PATH", state.sqlite_path)
+    graph_state = directory / os.environ.get(
+        "ENGINE_GRAPH_STATE_DIRECTORY", state.graph_state_directory
+    )
+    return str(sqlite_path), str(graph_state)
+
+
 def _settings(loaded: LoadedEngineConfig) -> Settings:
     """Apply deployment overrides to the immutable TOML configuration."""
 
+    sqlite_path, graph_state_directory = _state_paths(loaded)
     return Settings(
         engine_config=loaded.config,
         config_path=loaded.path,
+        host=os.environ.get("ENGINE_HOST", loaded.config.server.host),
+        port=_port(loaded),
+        sqlite_path=sqlite_path,
+        graph_state_directory=graph_state_directory,
         github_client_id=os.environ.get(
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
@@ -143,13 +181,71 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
         config = GitHubLoginConfig(client_id, secret, redirect_uri, secret_file)
     except ValueError as error:
         raise EngineConfigError(str(error)) from error
-    if not loaded.config.github.repository:
-        # Sessions go only to accounts that can write to this repository, so
-        # without one every login would be refused as if the user lacked access.
+    if not (
+        loaded.config.github.repository
+        or _login_repositories(loaded)
+        or loaded.config.access.operators
+    ):
+        # Sessions go only to operators and accounts that can write to one of
+        # these repositories, so without any every login would be refused as
+        # if the user lacked access.
         raise EngineConfigError(
-            "GitHub login requires [github] repository to check write access against"
+            "GitHub login requires [github] repository, a GitHub checkout in [repos], "
+            "or [access] operators to decide who may sign in"
         )
     return config
+
+
+def _login_repositories(loaded: LoadedEngineConfig) -> tuple[str, ...]:
+    """The GitHub repositories behind the `[repos]` checkouts, keyed `owner/name`.
+
+    Read from each checkout's `origin` remote, because `[repos]` names a local
+    path. A checkout on another forge, or one whose remote cannot be read, is
+    left out: its permissions are not something GitHub can answer.
+    """
+    hosts = set(loaded.config.github.host_aliases)
+    projects: list[str] = []
+    for path in loaded.config.repos.values():
+        try:
+            remote = subprocess.run(
+                ["git", "-C", str(Path(path).expanduser()), "remote", "get-url", "origin"],
+                capture_output=True, text=True, timeout=10, check=True,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        project = remote_project(remote)
+        if project is None:
+            continue
+        host, _, rest = project.partition("/")
+        if "/" not in rest or host in hosts:
+            projects.append(project)
+    return tuple(dict.fromkeys(projects))
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def _require_login_off_loopback(
+    settings: Settings, github_login_config: GitHubLoginConfig | None
+) -> None:
+    """Refuse to serve an unauthenticated interface beyond this machine.
+
+    Without GitHub login the session middleware admits every request, and the
+    service token alone does not switch it on, so binding anywhere but loopback
+    would let anyone who reaches the port run agents and change credentials.
+    """
+
+    if github_login_config is None and not _is_loopback(settings.host):
+        raise EngineConfigError(
+            f"server host {settings.host!r} is not loopback, and GitHub login is "
+            "not configured; configure GitHub login or bind to 127.0.0.1"
+        )
 
 
 def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
@@ -209,6 +305,7 @@ def compose_app(
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
     github_login_config = _github_login_config(loaded)
+    _require_login_off_loopback(settings, github_login_config)
     credential_store = GitHubCredentialStore()
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
@@ -248,6 +345,8 @@ def compose_app(
         work_orders=loaded.config.work_orders,
         show_projects=loaded.config.show_projects,
         repos=loaded.config.repos,
+        login_repositories=_login_repositories(loaded) if github_login_config else (),
+        login_operators=loaded.config.access.operators,
     )
 
 
@@ -270,7 +369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         loaded, workflow_catalog = read_configuration(args.config)
         settings = _settings(loaded)
         if args.check:
-            _github_login_config(loaded)
+            _require_login_off_loopback(settings, _github_login_config(loaded))
             _service_token_reader(loaded)
             report_wiring(settings)
             return 0

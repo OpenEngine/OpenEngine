@@ -56,7 +56,9 @@ class RecordingWorkspaceProvider:
     which provider a node holds, never what it produced.
     """
 
-    async def provision(self, repository: str, base_ref: str) -> Workspace:
+    async def provision(
+        self, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
         return Workspace(
             workspace_id=WorkspaceId("ws-recorded"),
             root_path="/checkouts/ws-recorded",

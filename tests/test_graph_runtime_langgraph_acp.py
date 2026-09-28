@@ -248,7 +248,7 @@ class RecordingSourceControl:
     async def publish(self, _workspace_id: WorkspaceId, _branch: str) -> None:
         pass
 
-    async def can_write_repository(self, pr_url: str, username: str) -> bool:
+    async def can_write_repository(self, pr_url: str, username: str, *, user_id: int | None = None) -> bool:
         return False
 
     async def authenticated_login(self, repository_url: str) -> str:

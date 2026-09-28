@@ -29,6 +29,7 @@ _UPDATE_MESSAGE_URL = "https://slack.com/api/chat.update"
 _POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 _REACTIONS_ADD_URL = "https://slack.com/api/reactions.add"
 _LIST_CONVERSATIONS_URL = "https://slack.com/api/conversations.list"
+_USERS_INFO_URL = "https://slack.com/api/users.info"
 _MAX_PROGRESS_MESSAGES = 256
 
 
@@ -267,6 +268,32 @@ class SlackCommunications:
                 f"Slack reaction failed: {body.get('error', 'reaction was not added')}"
             )
 
+    async def user_identity(self, user: str) -> tuple[str, str] | None:
+        """A Slack user's real name and profile email, or None without an email.
+
+        Best effort: the email needs the `users:read.email` scope, which a
+        workspace connected before it was asked for does not have.
+        """
+        token = self._credential_store.token()
+        if not token:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    _USERS_INFO_URL,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"user": user},
+                )
+            body = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        if response.is_error or not body.get("ok"):
+            return None
+        profile = body.get("user", {}).get("profile", {})
+        email = str(profile.get("email") or "")
+        name = str(profile.get("real_name") or body["user"].get("name") or email)
+        return (name, email) if email else None
+
     async def reply(self, message_id: str, message: str) -> str:
         raise NotImplementedError("Slack notification threads are not supported")
 
@@ -373,7 +400,9 @@ def authorization_url(client_id: str, redirect_uri: str, state: str) -> str:
             # which is not how a thread reads.
             "scope": (
                 "app_mentions:read,chat:write,chat:write.public,channels:read,"
-                "channels:history,groups:history,reactions:write"
+                "channels:history,groups:history,reactions:write,"
+                # For crediting a requester as co-author on the commits.
+                "users:read,users:read.email"
             ),
             "redirect_uri": redirect_uri,
             "state": state,

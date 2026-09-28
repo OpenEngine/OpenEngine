@@ -32,6 +32,7 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Collection,
     Container,
     Iterable,
     Mapping,
@@ -50,8 +51,14 @@ from uuid import uuid4
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
+from engine.apps.web.github_communications import (
+    GITHUB_CHANNEL_PREFIX,
+    ChannelRoutedCommunications,
+    GithubCommunications,
+)
 from engine.apps.web.github_ingress import (
-    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_requester,
+    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_co_author,
+    github_requester,
 )
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -136,6 +143,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
 )
@@ -941,6 +949,16 @@ def _graph_workorder_name(values: object) -> str:
 #: would read them is not in the room when a server starts.
 log = logging.getLogger(__name__)
 
+#: The only graph events a WorkOrder's originating GitHub issue hears about,
+#: keyed by kind and node id ("" for run-level events), with what it is told.
+#: Node ids are the implementation-review-rerank workflow's. A run finishes
+#: once its human review is answered, which the pull request's merge does.
+GITHUB_ISSUE_MILESTONES: Mapping[tuple[EventKind, str], str] = {
+    (EventKind.NODE_STARTED, "implementation"): "Implementation started.",
+    (EventKind.NODE_FINISHED, "reranker"): "Review finished.",
+    (EventKind.RUN_FINISHED, ""): "Work order finished.",
+}
+
 #: How long the forge lookups that authorize a GitHub comment may take before
 #: the comment is abandoned. The ingress behind them has one worker, so this is
 #: not only that comment's latency: whatever it waits, every comment queued
@@ -955,6 +973,11 @@ UTILIZATION_REFRESH_TIMEOUT_SECONDS = 10
 #: How old utilization may be before a least-utilized WorkOrder scrapes again;
 #: every scrape reads the runners' stored credentials, so starts share one.
 UTILIZATION_MAX_AGE_SECONDS = 60 * 60
+
+#: How long a browser sign-in, or a signed-in request's access recheck, waits
+#: on GitHub. Someone is watching a page load, so a hung lookup should fail
+#: quickly and be retried rather than hold them for the webhook budget above.
+GITHUB_LOGIN_TIMEOUT_SECONDS = 10
 
 
 @dataclass(slots=True)
@@ -1057,6 +1080,8 @@ def create_app(
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     show_projects: bool = True,
     repos: Mapping[str, str] | None = None,
+    login_repositories: Sequence[str] = (),
+    login_operators: Collection[int] = (),
     utilization: UtilizationService | None = None,
     milestone_scoper: MilestoneScoping | None = None,
     concierge_provider: ACPAgentProvider | None = None,
@@ -1143,10 +1168,23 @@ def create_app(
         )
         node = topology.node(event.node_id) if topology and event.node_id else None
         label = node.name if node else str(event.node_id or "Workflow")
-        if event.kind is EventKind.RUN_FORKED:
+        # A GitHub issue is public, and watched by people who want milestones
+        # rather than a running log: the work starting, its review settling,
+        # and the run finishing once the merge answers its human review.
+        # Everything else -- including errors, approval reasons and agent
+        # text, which can hold paths, output or secrets -- stays behind the
+        # work order link.
+        public = state.origin.channel.startswith(GITHUB_CHANNEL_PREFIX)
+        if public:
+            milestone = GITHUB_ISSUE_MILESTONES.get((event.kind, str(event.node_id or "")))
+            if milestone is None:
+                return
+            text = milestone
+        elif event.kind is EventKind.RUN_FORKED:
+            # Chat surfaces answer the resume request themselves.
             graph_agent_reports.discard(state.run_id)
             return
-        if event.kind is EventKind.TRANSCRIPT:
+        elif event.kind is EventKind.TRANSCRIPT:
             # Assistant role alone is not authorship: human/tool nodes also
             # narrate their work in the UI. Their notifications are lifecycle-owned.
             if node is None or node.kind != "agent":
@@ -1189,10 +1227,26 @@ def create_app(
             link = run_notifier.work_order_link(state)
             if link:
                 links.append(link)
+            if public and not any(
+                existing.label == "View pull request" for existing in links
+            ):
+                # The issue timeline is the run's history, so every update
+                # carries the pull request once the run has opened one. The
+                # link is optional: a failed lookup must not fail the run or
+                # drop the update, since this observer runs inside the graph.
+                try:
+                    opened = await github_pull_request_for_run(str(state.run_id))
+                except Exception:
+                    log.exception("could not look up the pull request for run %s", state.run_id)
+                    opened = None
+                if opened is not None:
+                    links.append(MessageLink("View pull request", pull_request_url(*opened)))
             try:
                 await run_notifier.deliver(
                     state, text, links=links, mention=mention,
-                    progress=event.kind in (EventKind.NODE_STARTED, EventKind.RUN_FINISHED),
+                    progress=event.kind in (
+                        EventKind.NODE_STARTED, EventKind.NODE_FINISHED, EventKind.RUN_FINISHED,
+                    ),
                 )
             except Exception:
                 # Exceptions may contain credentials or request bodies. Record
@@ -1200,13 +1254,14 @@ def create_app(
                 await graph_events.append(RuntimeEvent(
                     run_id=state.run_id, kind=EventKind.NOTIFICATION_FAILED,
                     node_id=event.node_id, execution_id=event.execution_id,
-                    payload={"error": "Slack notification could not be delivered.",
+                    payload={"error": "GitHub issue comment could not be posted." if public
+                             else "Slack notification could not be delivered.",
                              "eventKind": event.kind.value},
                 ))
 
     async def graph_notifications(event: RuntimeEvent) -> None:
         if event.kind not in (
-            EventKind.NODE_STARTED, EventKind.APPROVAL_REQUESTED,
+            EventKind.NODE_STARTED, EventKind.NODE_FINISHED, EventKind.APPROVAL_REQUESTED,
             EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
             EventKind.TRANSCRIPT, EventKind.RUN_FORKED,
         ):
@@ -1934,6 +1989,8 @@ def create_app(
         # Read before taking the lock, so a slow scrape does not hold up every
         # other WorkOrder being created, deleted or scoped meanwhile.
         usage = await runner_usage() if LEAST_UTILIZED in (inputs or {}).values() else {}
+        # Resolved before the lock: a Slack requester costs a Slack request.
+        co_author = await _co_author(requester)
         async with dependency_lock:
             if depends_on_run_id is not None:
                 prerequisite = await session.state_store.load(depends_on_run_id)
@@ -1966,6 +2023,7 @@ def create_app(
                     "task": prompt,
                     "repository": repository,
                     **({"inputs": inputs} if inputs else {}),
+                    **({"coAuthor": co_author} if co_author else {}),
                 },
                 run_id=scheduled.run_id if scheduled else None,
             )
@@ -2166,7 +2224,11 @@ def create_app(
         run = await run_reader.get(run_id)
         if run is None:
             return _error("run not found", 404)
-        return JSONResponse(_run_json(run))
+        # The WorkOrder's usage is its run's: summed from what each node's
+        # agent reported, so it is read here rather than stored on the row.
+        return JSONResponse({
+            **_run_json(run), "usage": usage_rollup(graph_events.since(run_id)).json(),
+        })
 
     async def delete_run(request: Request) -> Response:
         """Throw a WorkOrder away unless scheduled work still depends on it.
@@ -2609,6 +2671,21 @@ def create_app(
         user = github_login._read_session(request) if github_login.configured else None
         return github_requester(int(user["id"]), str(user["login"])) if user else None
 
+    async def _co_author(requester: str | None) -> str:
+        """Who the WorkOrder's commits credit as co-author, or empty for nobody.
+
+        A Slack requester is credited only when their profile email can be
+        read; GitHub shows the commit as theirs only if they verified it.
+        """
+        provider, _, rest = (requester or "").partition(":")
+        if provider != "slack":
+            return github_co_author(requester)
+        identity = await _slack_comms.user_identity(rest.partition(":")[2])
+        if identity is None:
+            return ""
+        name, email = (re.sub(r"[<>\s]+", " ", part).strip() for part in identity)
+        return f"{name} <{email}>" if name and email and " " not in email else ""
+
     def _is_local_request(request: Request) -> bool:
         """True when the request originates from the UI served by this process.
 
@@ -2939,8 +3016,15 @@ def create_app(
     _slack_store = slack_credential_store or SlackCredentialStore()
     _slack_state: str | None = None
     _slack_redirect_uri: str | None = None
-    # Concierge replies and graph progress share the same Slack transport.
-    run_notifier = RunNotifier(session.capabilities.communications, public_url)
+    # Concierge replies and graph progress share the same Slack transport;
+    # runs started from a GitHub issue report back there as comments instead.
+    run_notifier = RunNotifier(
+        ChannelRoutedCommunications(
+            session.capabilities.communications,
+            GithubCommunications(session.capabilities.source_control),
+        ),
+        public_url,
+    )
 
     def _signing_secret() -> str:
         return _slack_store.signing_secret() or ""
@@ -3504,8 +3588,7 @@ def create_app(
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
         if surface.runtime is None:
             raise RuntimeError("could not start a work order: graph runtime unavailable")
-        # Like PR-started runs, omit the chat origin: GitHub channels cannot
-        # receive progress through the Slack communications adapter.
+        # Progress is reported back to the issue, mentioning whoever assigned it.
         await start_graph_run(
             surface.runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
@@ -3513,6 +3596,12 @@ def create_app(
                     f"{assignment.body}\n\nIssue: {assignment.url}\n"
                     f"Include Fixes #{assignment.number} in the pull request body."),
             repository=repository, milestone_id=None,
+            origin=RunOrigin(
+                channel=f"{GITHUB_CHANNEL_PREFIX}{repository}",
+                thread_id=f"issue/{assignment.number}",
+                author=assignment.sender,
+                requester=github_requester(assignment.sender_id, assignment.sender) or "",
+            ),
             requester=github_requester(assignment.sender_id, assignment.sender),
         )
 
@@ -3783,20 +3872,52 @@ def create_app(
         readings = await _utilization.refresh(tuple(runners))
         return JSONResponse(utilization_json(readings))
 
-    async def github_login_allowed(login: str) -> bool:
-        """Only people who can push to this deployment's repository see its WorkOrders."""
-        if not github_repository:
-            # Startup refuses login without a repository; kept as a fallback
+    # Anyone who can push to one of the repositories this deployment works on
+    # may see its WorkOrders: the webhook repository and the configured checkouts.
+    access_repositories = tuple(dict.fromkeys(
+        project for project in (github_repository, *login_repositories) if project
+    ))
+
+    async def github_login_allowed(user_id: int, login: str) -> bool:
+        """Only people who can push to one of this deployment's repositories see its WorkOrders.
+
+        Write access to any one repository admits. A lookup that fails counts
+        only when no other repository admitted: then the answer is unknown,
+        and the error is raised rather than read as a no.
+        """
+        if not access_repositories:
+            # Startup refuses login with nothing to check; kept as a fallback
             # for apps built directly.
             return False
-        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+
+        async def check(project: str) -> bool:
             # The check reads the repository from a pull request URL; the
             # number names no particular one.
             return await session.capabilities.source_control.can_write_repository(
-                pull_request_url(github_repository, 1), login,
+                pull_request_url(project, 1), login, user_id=user_id,
             )
 
-    github_login = GitHubLogin(github_login_config, service_token, github_login_allowed)
+        async with asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS):
+            checks = [asyncio.ensure_future(check(project)) for project in access_repositories]
+            failure: Exception | None = None
+            try:
+                for answer in asyncio.as_completed(checks):
+                    try:
+                        if await answer:
+                            return True
+                    except Exception as error:
+                        failure = failure or error
+            finally:
+                for pending in checks:
+                    pending.cancel()
+        if failure is not None:
+            raise failure
+        return False
+
+    github_login = GitHubLogin(
+        github_login_config, service_token, github_login_allowed,
+        operators=frozenset(login_operators),
+    )
     routes = [
         Route("/api/health", health),
         *github_login.routes(),

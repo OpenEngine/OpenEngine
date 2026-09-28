@@ -614,6 +614,16 @@ def test_requesters_carry_the_github_account_id():
     assert github_requester(0, "someone") is None
 
 
+def test_github_requesters_are_credited_by_noreply_address():
+    from engine.apps.web.github_ingress import github_co_author
+
+    assert github_co_author("github:42:alice") == (
+        "alice <42+alice@users.noreply.github.com>"
+    )
+    assert github_co_author("slack:T1:U1") == ""
+    assert github_co_author(None) == ""
+
+
 @pytest.mark.parametrize("change", [
     {"action": "opened"}, {"action": "unassigned"},
     {"assignee": {"login": "someone"}}, {"assignee": None}, {"sender": {}},

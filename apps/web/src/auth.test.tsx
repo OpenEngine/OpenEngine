@@ -88,6 +88,14 @@ describe("AuthGate", () => {
     expect(await screen.findByText("Protected application")).toBeVisible();
     expect(screen.getByRole("group", { name: "Signed in as octocat" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("tells an operator when repository access checks are failing", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...signedIn, accessCheckFailing: true });
+    renderGate();
+    expect(await screen.findByRole("alert"))
+      .toHaveTextContent("Repository access checks are failing, so only operators can sign in.");
   });
 
   it("opens the app without a user badge when login is not configured", async () => {
@@ -187,8 +195,8 @@ describe("AuthGate", () => {
   it.each([
     ["expired", "Login expired. Please try again."],
     ["denied", "GitHub authorization was not completed."],
-    ["forbidden", "Your GitHub account does not have write access to this deployment's repository. Ask an administrator for access."],
-    ["unverified", "Could not check your repository access. Please try again, or contact the administrator if this continues."],
+    ["forbidden", "Your GitHub account does not have write access to any of this deployment's repositories. Ask an administrator for access."],
+    ["unverified", "Could not check your repository access. Please try again, or contact an operator if this continues: the server's GitHub login may have expired."],
     ["failed", "Could not verify your GitHub identity. Please try again."],
     ["unknown", "Could not verify your GitHub identity. Please try again."],
   ])("explains the %s login error", async (error, message) => {

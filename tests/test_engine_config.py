@@ -8,6 +8,7 @@ import engine.apps.control_server.__main__ as control_server_main
 import engine.apps.web.__main__ as web_main
 import engine.apps.worker.__main__ as worker_main
 from engine.runtime import (
+    LoadedEngineConfig,
     ApprovalCapability,
     EngineConfigError,
     ResponseStyle,
@@ -508,3 +509,179 @@ def test_repository_choices_load_from_toml(tmp_path: Path) -> None:
 def test_invalid_repository_choices_are_rejected(repos) -> None:
     with pytest.raises(EngineConfigError, match="repos"):
         parse_engine_config({"repos": repos})
+
+
+def test_access_operators_are_github_user_ids() -> None:
+    assert parse_engine_config({"access": {"operators": [583231, 42]}}).access.operators == (583231, 42)
+    assert parse_engine_config({}).access.operators == ()
+
+
+@pytest.mark.parametrize("operators", [["octocat"], [0], [True], [1, 1], "42"])
+def test_access_operators_reject_logins_and_bad_ids(operators) -> None:
+    with pytest.raises(EngineConfigError, match="access.operators"):
+        parse_engine_config({"access": {"operators": operators}})
+
+
+def test_login_repositories_are_read_from_the_checkouts_remotes(tmp_path) -> None:
+    """`[repos]` names local paths; login asks GitHub about the repository
+    each one pushes to, and skips what GitHub cannot answer for."""
+    import subprocess
+
+    remotes = {
+        "api": "git@github.com:Acme/API.git",
+        "web": "https://github.com/acme/web.git",
+        "same": "https://github.com/acme/web",
+        "gitlab": "https://gitlab.example/acme/tools.git",
+        "enterprise": "https://github-web.example/acme/core.git",
+    }
+    repos = {}
+    for name, remote in remotes.items():
+        subprocess.run(["git", "init", "-q", str(tmp_path / name)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path / name), "remote", "add", "origin", remote], check=True)
+        repos[name] = str(tmp_path / name)
+    repos["missing"] = str(tmp_path / "missing")
+    loaded = LoadedEngineConfig(config=parse_engine_config({
+        "repos": repos,
+        "github": {"host_aliases": {"github-web.example": "github-api.example"}},
+    }))
+
+    assert web_main._login_repositories(loaded) == (
+        "acme/api", "acme/web", "github-web.example/acme/core",
+    )
+
+
+def test_web_starts_login_with_only_operators(tmp_path, monkeypatch):
+    path = tmp_path / "engine.toml"
+    path.write_text("[access]\noperators = [42]\n")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "client")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "private-secret")
+    monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "https://engine.test/api/auth/github/callback")
+
+    assert web_main._github_login_config(load_engine_config(path)) is not None
+
+
+
+def test_web_bind_address_and_state_paths_default_to_the_source_checkout_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "ENGINE_HOST", "ENGINE_PORT", "ENGINE_STATE_DIRECTORY",
+        "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    settings = web_main._settings(load_engine_config(environ={}, cwd=tmp_path))
+
+    assert (settings.host, settings.port) == ("localhost", 4364)
+    assert Path(settings.sqlite_path) == tmp_path / "conversations.sqlite3"
+    assert Path(settings.graph_state_directory) == tmp_path / "graph-state"
+
+
+def test_web_state_paths_resolve_against_the_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "ENGINE_HOST", "ENGINE_PORT", "ENGINE_STATE_DIRECTORY",
+        "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config = tmp_path / "etc" / "engine.toml"
+    config.parent.mkdir()
+    config.write_text(
+        '[server]\nhost = "127.0.0.1"\nport = 5000\n'
+        '[state]\ndirectory = "state"\nsqlite_path = "chat.db"\n'
+        'graph_state_directory = "graphs"\n'
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    settings = web_main._settings(load_engine_config(config))
+
+    assert (settings.host, settings.port) == ("127.0.0.1", 5000)
+    assert Path(settings.sqlite_path) == config.parent / "state" / "chat.db"
+    assert Path(settings.graph_state_directory) == config.parent / "state" / "graphs"
+
+    monkeypatch.setenv("ENGINE_HOST", "0.0.0.0")
+    monkeypatch.setenv("ENGINE_PORT", "6000")
+    monkeypatch.setenv("ENGINE_STATE_DIRECTORY", str(tmp_path / "var"))
+    monkeypatch.setenv("ENGINE_SQLITE_PATH", "other.db")
+    settings = web_main._settings(load_engine_config(config))
+
+    assert (settings.host, settings.port) == ("0.0.0.0", 6000)
+    assert Path(settings.sqlite_path) == tmp_path / "var" / "other.db"
+    assert Path(settings.graph_state_directory) == tmp_path / "var" / "graphs"
+
+    monkeypatch.setenv("ENGINE_PORT", "http")
+    with pytest.raises(EngineConfigError, match="ENGINE_PORT"):
+        web_main._settings(load_engine_config(config))
+
+
+@pytest.mark.parametrize(
+    ("host", "refused"),
+    [
+        ("localhost", False),
+        ("127.0.0.1", False),
+        ("::1", False),
+        ("0.0.0.0", True),
+        ("::", True),
+        ("engine.example.com", True),
+    ],
+)
+def test_web_refuses_a_non_loopback_host_without_github_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, refused: bool
+) -> None:
+    for name in (
+        "ENGINE_PORT", "ENGINE_STATE_DIRECTORY", "ENGINE_SQLITE_PATH",
+        "ENGINE_GRAPH_STATE_DIRECTORY", "ENGINE_GITHUB_LOGIN_CLIENT_ID",
+        "ENGINE_GITHUB_LOGIN_REDIRECT_URI", "ENGINE_GITHUB_LOGIN_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ENGINE_HOST", host)
+    # A service token does not switch the session middleware on by itself.
+    monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "s" * 32)
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    loaded = load_engine_config(config)
+    settings = web_main._settings(loaded)
+
+    if refused:
+        with pytest.raises(EngineConfigError, match="GitHub login"):
+            web_main._require_login_off_loopback(settings, None)
+        assert web_main.main(["--config", str(config), "--check"]) == 2
+    else:
+        web_main._require_login_off_loopback(settings, None)
+    web_main._require_login_off_loopback(settings, object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ({"server": {"port": "4364"}}, "server.port"),
+        ({"server": {"port": 70000}}, "server.port"),
+        ({"server": {"host": " "}}, "server.host"),
+        ({"server": {"address": "x"}}, "unknown key in server"),
+        ({"state": {"directory": ""}}, "state.directory"),
+        ({"state": {"path": "x"}}, "unknown key in state"),
+    ],
+)
+def test_server_and_state_settings_are_validated(document, message) -> None:
+    with pytest.raises(EngineConfigError, match=message):
+        parse_engine_config(document)
+
+
+def test_the_distributable_default_config_is_loopback_and_machine_neutral() -> None:
+    from engine.runtime.config import DEFAULT_CONFIG_TEMPLATE
+
+    loaded = load_engine_config(DEFAULT_CONFIG_TEMPLATE)
+    config = loaded.config
+
+    assert config.server.host == "127.0.0.1"
+    assert config.public_url == ""
+    assert config.repos == {}
+    assert config.github.repository == ""
+    assert config.communications.channel == ""
+    assert config.communications.provider == "slack"
+    assert config.workflows.directory == "workflows"
+    assert "[orchestrator]" not in DEFAULT_CONFIG_TEMPLATE.read_text()

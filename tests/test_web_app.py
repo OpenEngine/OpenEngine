@@ -853,10 +853,12 @@ def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
     assert prose <= set(body)
     # What the rail and the WorkOrder cards do read, which is how far the
     # listing can be trimmed before a screen loses something it draws.
+    # Usage is summed from the run's events, so only the page about it pays.
     assert run == {
-        key: value for key, value in body.items() if key not in prose
+        key: value for key, value in body.items() if key not in prose | {"usage"}
     }
     assert body["failureReason"] == "the reviewer gave up"
+    assert body["usage"]["costUsd"] is None and body["usage"]["nodes"] == {}
 
 def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
     store = InMemoryStateStore()
@@ -1008,11 +1010,14 @@ def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ):
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)):
         created = asyncio.run(scenario())
 
     assert created.status_code == 201, created.text
     assert created.json()["requester"] == "github:42:alice"
+    # Handed to the graph, whose workspace credits them on every commit.
+    started = asyncio.run(runtime.snapshot(RunId(created.json()["runId"])))
+    assert started.values["coAuthor"] == "alice <42+alice@users.noreply.github.com>"
     store.close()
     reopened = SQLiteStateStore(path)
     try:
@@ -1141,7 +1146,9 @@ class ConversationWorkspaces:
         self.detached: set[str] = set()
         self.attachments: list[tuple[str, str, str]] = []
 
-    async def provision(self, repository: str, base_ref: str) -> Workspace:
+    async def provision(
+        self, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
         self.count += 1
         return self._workspace(f"ws-{self.count}", repository, base_ref)
 
@@ -1159,7 +1166,9 @@ class ConversationWorkspaces:
             ),
         )
 
-    async def attach(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+    async def attach(
+        self, workspace_id: str, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
         self.attachments.append((workspace_id, repository, base_ref))
         self.detached.discard(workspace_id)
         return self._workspace(workspace_id, repository, base_ref)
@@ -3857,7 +3866,7 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) 
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ):
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)):
         started = asyncio.run(scenario())
 
     assert started.status_code == 200, started.text
@@ -4171,7 +4180,7 @@ def test_production_port_default_preserves_explicit_settings():
     assert Settings(port=8123).port == 8123
 
 
-def _login_gate(repository: str, source_control: object):
+def _login_gate(repository: str, source_control: object, login_repositories=()):
     """The check the app hands its GitHub login, over `source_control`."""
     unused = object()
     session = AgentSession(
@@ -4190,6 +4199,7 @@ def _login_gate(repository: str, source_control: object):
             "client", "secret", "https://engine.test/api/auth/github/callback"
         ),
         github_repository=repository,
+        login_repositories=login_repositories,
     )
     callback = next(
         route.endpoint for route in app.app.routes
@@ -4204,11 +4214,13 @@ def test_signing_in_requires_write_access_to_the_configured_repository() -> None
     source_control = MagicMock(can_write_repository=AsyncMock(side_effect=[True, False]))
     authorize = _login_gate("acme/api", source_control)
 
-    assert asyncio.run(authorize("maintainer")) is True
-    assert asyncio.run(authorize("stranger")) is False
-    assert [call.args for call in source_control.can_write_repository.await_args_list] == [
-        ("https://github.com/acme/api/pull/1", "maintainer"),
-        ("https://github.com/acme/api/pull/1", "stranger"),
+    assert asyncio.run(authorize(1, "maintainer")) is True
+    assert asyncio.run(authorize(2, "stranger")) is False
+    assert [
+        (call.args, call.kwargs) for call in source_control.can_write_repository.await_args_list
+    ] == [
+        (("https://github.com/acme/api/pull/1", "maintainer"), {"user_id": 1}),
+        (("https://github.com/acme/api/pull/1", "stranger"), {"user_id": 2}),
     ]
 
 
@@ -4216,5 +4228,39 @@ def test_signing_in_is_refused_without_a_repository_to_check() -> None:
     source_control = MagicMock(can_write_repository=AsyncMock(return_value=True))
     authorize = _login_gate("", source_control)
 
-    assert asyncio.run(authorize("maintainer")) is False
+    assert asyncio.run(authorize(1, "maintainer")) is False
     source_control.can_write_repository.assert_not_awaited()
+
+
+def test_write_access_to_any_configured_repository_admits() -> None:
+    """Someone who can push to only one of the checkouts in `[repos]` is let in,
+    even when the webhook repository's lookup fails."""
+    async def can_write(pr_url, login, *, user_id):
+        if "acme/api" in pr_url:
+            raise RuntimeError("GitHub is down")
+        return "acme/web" in pr_url
+
+    source_control = MagicMock(can_write_repository=AsyncMock(side_effect=can_write))
+    authorize = _login_gate("acme/api", source_control, ("acme/docs", "acme/web", "acme/api"))
+
+    assert asyncio.run(authorize(1, "maintainer")) is True
+    assert sorted(
+        call.args[0] for call in source_control.can_write_repository.await_args_list
+    ) == [
+        "https://github.com/acme/api/pull/1",
+        "https://github.com/acme/docs/pull/1",
+        "https://github.com/acme/web/pull/1",
+    ]
+
+
+def test_access_is_unknown_when_no_repository_admits_and_one_lookup_failed() -> None:
+    async def can_write(pr_url, login, *, user_id):
+        if "acme/api" in pr_url:
+            raise RuntimeError("GitHub is down")
+        return False
+
+    source_control = MagicMock(can_write_repository=AsyncMock(side_effect=can_write))
+    authorize = _login_gate("acme/api", source_control, ("acme/web",))
+
+    with pytest.raises(RuntimeError, match="GitHub is down"):
+        asyncio.run(authorize(1, "maintainer"))

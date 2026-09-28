@@ -464,6 +464,23 @@ def test_effective_repository_write_permission(monkeypatch, permission, allowed)
     api.assert_awaited_once_with("GET", "/repos/acme/api/collaborators/someone/permission")
 
 
+@pytest.mark.parametrize("user, allowed", [
+    ({"id": 42, "login": "someone"}, True),
+    ({"id": 7, "login": "someone"}, False),
+    ({"id": "42"}, False),
+    (None, False),
+])
+def test_repository_permission_is_bound_to_the_user_id(monkeypatch, user, allowed):
+    """A login may have been renamed and claimed by someone else since it was
+    verified, so a user ID is checked against the account GitHub answered for."""
+    from unittest.mock import AsyncMock
+
+    source = GitHubSourceControl("")
+    monkeypatch.setattr(source, "_api", AsyncMock(return_value={"permission": "write", "user": user}))
+    assert asyncio.run(source.can_write_repository(
+        "https://github.com/acme/api/pull/42", "someone", user_id=42)) is allowed
+
+
 def test_repository_permission_lookup_failure_propagates(monkeypatch):
     from unittest.mock import AsyncMock
 

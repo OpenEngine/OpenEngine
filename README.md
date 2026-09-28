@@ -61,7 +61,9 @@ profiles. This first CLI release is diagnostic-only: local service startup and
 interactive task workflows arrive in later stages. When the selected server is
 the default local address and no compatible service is responding, `engine
 status` starts one `engine-web` process and waits for its health endpoint. An
-explicit `--server` is always probe-only.
+explicit `--server` is always probe-only. `engine daemon` runs the local
+service in the background instead; see
+[Background service](docs/releases.md#background-service).
 
 In an interactive terminal, running `engine` opens the read-only workbench.
 Type `/` to search the palette, then choose `/status`, `/connections`, `/threads`,

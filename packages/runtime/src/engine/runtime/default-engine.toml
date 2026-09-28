@@ -1,0 +1,30 @@
+# OpenEngine configuration for an installed release.
+#
+# Relative paths resolve against this file's directory. ENGINE_HOST,
+# ENGINE_PORT, ENGINE_STATE_DIRECTORY, ENGINE_SQLITE_PATH, and
+# ENGINE_GRAPH_STATE_DIRECTORY override the matching settings below.
+
+default_branch = "main"
+
+# Loopback only. Put a reverse proxy in front before exposing it further.
+[server]
+host = "127.0.0.1"
+port = 4364
+
+# Every database the web interface creates is kept under this directory.
+[state]
+directory = "state"
+sqlite_path = "conversations.sqlite3"
+graph_state_directory = "graph-state"
+
+# Slack needs no settings to start; connect a workspace from Settings later.
+[communications]
+provider = "slack"
+
+[approvals]
+auto_approve = false
+allow = ["read"]
+
+# The workflow definitions shipped beside this file in the release bundle.
+[workflows]
+directory = "workflows"

@@ -337,3 +337,80 @@ def test_a_non_repository_is_reported_as_a_workspace_error(tmp_path: Path) -> No
 
     with pytest.raises(GitWorktreeError):
         asyncio.run(provider.provision(str(tmp_path), "HEAD"))
+
+
+_CO_AUTHOR = "Ada Lovelace <ada@example.test>"
+
+
+def _commit(checkout: Path, *arguments: str) -> str:
+    _git(checkout, *_IDENTITY, "commit", "--allow-empty", *arguments)
+    return _git(checkout, "log", "-1", "--format=%B")
+
+
+def test_commits_credit_the_co_author_once(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    hooks = repository / ".git" / "hooks"
+    # The repository's own hooks keep running in the credited checkout.
+    (hooks / "commit-msg").write_text('#!/bin/sh\necho "Checked-by: repo" >> "$1"\n')
+    (hooks / "pre-commit").write_text('#!/bin/sh\ntouch "$(git rev-parse --git-dir)/pre-commit-ran"\n')
+    for hook in hooks.iterdir():
+        hook.chmod(0o755)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(
+        provider.provision(str(repository), "HEAD", co_author=_CO_AUTHOR)
+    )
+    checkout = Path(workspace.root_path)
+
+    first = _commit(checkout, "-m", "feat: work")
+    amended = _commit(checkout, "--amend", "--no-edit")
+
+    assert first.count(f"Co-authored-by: {_CO_AUTHOR}") == 1
+    assert "Checked-by: repo" in first
+    assert Path(_git(checkout, "rev-parse", "--absolute-git-dir"), "pre-commit-ran").exists()
+    assert amended.count(f"Co-authored-by: {_CO_AUTHOR}") == 1
+    # Only the workspace's checkout credits anyone.
+    assert "Co-authored-by" not in _commit(repository, "-m", "chore: mine")
+
+
+def test_reattaching_keeps_crediting_the_co_author(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(
+        provider.provision(str(repository), "HEAD", co_author=_CO_AUTHOR)
+    )
+    asyncio.run(provider.detach(workspace.workspace_id))
+
+    reattached = asyncio.run(
+        provider.attach(
+            workspace.workspace_id, str(repository), "HEAD", co_author=_CO_AUTHOR
+        )
+    )
+
+    message = _commit(Path(reattached.root_path), "-m", "feat: more")
+    assert f"Co-authored-by: {_CO_AUTHOR}" in message
+
+
+def test_the_detach_snapshot_credits_the_co_author(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(
+        provider.provision(str(repository), "HEAD", co_author=_CO_AUTHOR)
+    )
+    Path(workspace.root_path, "agent.md").write_text("what the agent did\n")
+
+    asyncio.run(provider.detach(workspace.workspace_id))
+
+    message = _git(repository, "log", "-1", "--format=%B", workspace.ref)
+    assert message.count(f"Co-authored-by: {_CO_AUTHOR}") == 1
+
+
+def test_no_co_author_adds_no_trailer(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
+
+    assert "Co-authored-by" not in _commit(Path(workspace.root_path), "-m", "feat: x")

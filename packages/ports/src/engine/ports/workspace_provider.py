@@ -53,8 +53,14 @@ class WorkspaceState:
 class WorkspaceProvider(Protocol):
     """Creates and destroys isolated working environments."""
 
-    async def provision(self, repository: str, base_ref: str) -> Workspace:
-        """Mint a new workspace, with a checkout ready to work in."""
+    async def provision(
+        self, repository: str, base_ref: str, *, co_author: str = ""
+    ) -> Workspace:
+        """Mint a new workspace, with a checkout ready to work in.
+
+        ``co_author`` -- `Name <email>` -- is credited as a co-author on every
+        commit made in the checkout, and nobody is when it is empty.
+        """
         ...
 
     async def root_path(self, workspace_id: WorkspaceId) -> str:
@@ -72,14 +78,19 @@ class WorkspaceProvider(Protocol):
         ...
 
     async def attach(
-        self, workspace_id: WorkspaceId, repository: str, base_ref: str
+        self,
+        workspace_id: WorkspaceId,
+        repository: str,
+        base_ref: str,
+        *,
+        co_author: str = "",
     ) -> Workspace:
         """Give this workspace a checkout again, carrying its work back in.
 
         Idempotent -- an attached workspace is returned as it stands. A
         workspace whose work is gone (or which never had any) is checked out
         fresh at `base_ref` under the same id, so the caller's reference to it
-        stays valid either way.
+        stays valid either way. ``co_author`` is as for `provision`.
         """
         ...
 

@@ -23,9 +23,9 @@ function LoginPage() {
               : error === "denied"
                 ? "GitHub authorization was not completed."
                 : error === "forbidden"
-                  ? "Your GitHub account does not have write access to this deployment's repository. Ask an administrator for access."
+                  ? "Your GitHub account does not have write access to any of this deployment's repositories. Ask an administrator for access."
                   : error === "unverified"
-                    ? "Could not check your repository access. Please try again, or contact the administrator if this continues."
+                    ? "Could not check your repository access. Please try again, or contact an operator if this continues: the server's GitHub login may have expired."
                     : "Could not verify your GitHub identity. Please try again."}
           </p>
         )}
@@ -67,6 +67,12 @@ function UserBadge({ auth }: { auth: AuthStatus }) {
         Sign out
       </button>
       {error && <p role="alert">Could not sign out. Please try again.</p>}
+      {auth.accessCheckFailing && (
+        <p role="alert">
+          Repository access checks are failing, so only operators can sign in.
+          Check the server's GitHub CLI login with <code>gh auth status</code>.
+        </p>
+      )}
     </div>
   );
 }

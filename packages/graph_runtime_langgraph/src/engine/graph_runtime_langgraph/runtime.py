@@ -74,6 +74,7 @@ from engine.graph_runtime.events import EventKind, EventObserver, RuntimeEvent
 from engine.graph_runtime.executions import ExecutionRegistry
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
+from engine.graph_runtime_langgraph.components.workspace import CO_AUTHOR
 from engine.graph_runtime_langgraph.executions import NodeExecution, driving
 from engine.graph_runtime_langgraph.graphs import START, LangGraphDefinition
 from engine.graph_runtime_langgraph.store import (
@@ -258,6 +259,7 @@ class LangGraphRuntime:
                         workspace.workspace_id,
                         node.repository or str(snapshot.values.get("repository") or "."),
                         node.base_ref,
+                        co_author=str(snapshot.values.get(CO_AUTHOR) or ""),
                     )
                 else:
                     await node.provider.detach(workspace.workspace_id)

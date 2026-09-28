@@ -56,7 +56,8 @@ def _output_instructions(attribution: bool, output_style: ResponseStyle | None) 
         instructions.append(
             "Do not add AI attribution to commits, pull requests, or merge requests, "
             "including Co-authored-by trailers or Generated with Claude Code notices. "
-            "This also applies to titles and descriptions sent through tools."
+            "This also applies to titles and descriptions sent through tools. "
+            "Keep any Co-authored-by trailer naming a person; the host adds it."
         )
     if output_style is ResponseStyle.CONCISE:
         instructions.append(
