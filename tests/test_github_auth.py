@@ -333,7 +333,7 @@ def test_agent_pr_uses_only_the_gh_cli_login(tmp_path, monkeypatch, caplog, prov
         async def communicate(self, _input):
             return (
                 b'{"html_url": "https://github.com/acme/api/pull/42",'
-                b' "user": {"login": "openengine-worker"}}',
+                b' "user": {"login": "openengine[bot]"}}',
                 b"",
             )
 
@@ -372,7 +372,7 @@ def test_agent_pr_uses_only_the_gh_cli_login(tmp_path, monkeypatch, caplog, prov
         assert "GITHUB_ENTERPRISE_TOKEN" not in env
         assert not any("token" in argument.lower() for argument in argv)
     assert "composition=web github_identity=gh-cli" in caplog.text
-    assert "author=openengine-worker" in caplog.text
+    assert "author=openengine[bot]" in caplog.text
     assert "engine-token" not in caplog.text
     assert "personal-token" not in caplog.text
 

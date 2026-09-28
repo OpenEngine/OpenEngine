@@ -10,6 +10,7 @@ human, whether or not a worktree is currently sitting on it.
 
 import asyncio
 import shlex
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
@@ -40,8 +41,13 @@ class GitWorktreeWorkspaceProvider:
     Implements `engine.ports.WorkspaceProvider`.
     """
 
-    def __init__(self, root_directory: str) -> None:
+    def __init__(
+        self, root_directory: str, *,
+        configure_worktree: Callable[[str, Callable[..., Awaitable[str]]], Awaitable[None]] | None = None,
+    ) -> None:
         self._root_directory = Path(root_directory).resolve()
+        self._configure_worktree = configure_worktree
+        self._configured_paths: set[Path] = set()
 
     async def provision(
         self, repository: str, base_ref: str, *, co_author: str = ""
@@ -61,6 +67,8 @@ class GitWorktreeWorkspaceProvider:
         root_path = self._path_for(workspace_id)
         if not root_path.is_dir():
             raise KeyError(f"no workspace {workspace_id!r}")
+        if root_path not in self._configured_paths:
+            await self._configure(root_path)
         return str(root_path)
 
     async def state(self, workspace_id: WorkspaceId) -> WorkspaceState:
@@ -82,6 +90,7 @@ class GitWorktreeWorkspaceProvider:
         repository_root = await _repository_root(repository)
         root_path = self._path_for(workspace_id)
         if root_path.is_dir():
+            await self._configure(root_path)
             return Workspace(
                 workspace_id=workspace_id,
                 root_path=str(root_path),
@@ -97,6 +106,8 @@ class GitWorktreeWorkspaceProvider:
         root_path = self._path_for(workspace_id)
         if not root_path.is_dir():
             return
+        if root_path not in self._configured_paths:
+            await self._configure(root_path)
         await _snapshot(root_path)
         # Agents publish from a descriptive branch. Keep that work on the
         # workspace's durable ref too, since attach restores that ref.
@@ -158,6 +169,7 @@ class GitWorktreeWorkspaceProvider:
                 str(root_path),
                 resolved_base or base_ref,
             )
+        await self._configure(root_path)
         if co_author:
             await _credit(root_path, co_author)
         return Workspace(
@@ -167,6 +179,12 @@ class GitWorktreeWorkspaceProvider:
             base_ref=base_ref,
             ref=branch,
         )
+
+    async def _configure(self, root_path: Path) -> None:
+        if self._configure_worktree is not None:
+            await _git(str(root_path), "config", "extensions.worktreeConfig", "true")
+            await self._configure_worktree(str(root_path), _git)
+            self._configured_paths.add(root_path)
 
     def _path_for(self, workspace_id: WorkspaceId) -> Path:
         name = str(workspace_id)

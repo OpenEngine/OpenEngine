@@ -408,10 +408,10 @@ def test_authenticated_login_uses_a_github_provider_despite_gitlab(tmp_path, mon
         lambda: GhCliStatus(True, True),
     )
     router = RoutingSourceControl(preferences, cli, oauth, gitlab)
-    cli.authenticated_login.return_value = "OpenEngine-worker"
+    cli.authenticated_login.return_value = "openengine[bot]"
     assert asyncio.run(
         router.authenticated_login("https://github.com/acme/api")
-    ) == "OpenEngine-worker"
+    ) == "openengine[bot]"
     cli.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
     assert not oauth.mock_calls
     assert not gitlab.mock_calls

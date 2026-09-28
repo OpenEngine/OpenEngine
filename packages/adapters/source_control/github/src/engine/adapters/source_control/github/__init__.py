@@ -22,6 +22,7 @@ from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.github.transports import (
     GitHubApiTransport,
+    GitHubAppTransport,
     GitHubOAuthTransport,
     GitHubTransportError,
     normalized_authority,
@@ -228,6 +229,8 @@ class GitHubSourceControl:
         API who is calling is the only way to tell Engine's own replies apart
         from everybody else's.
         """
+        if isinstance(self._transport, GitHubAppTransport):
+            return await self._transport.bot_login()
         login = _string(_object(await self._api("GET", "/user")), "login")
         if not login:
             raise GitHubSourceControlError("GitHub API returned no authenticated login")

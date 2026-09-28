@@ -210,7 +210,8 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
 To receive comments and merges from GitHub, see the
-[GitHub webhooks guide](docs/github-webhooks.md).
+[GitHub webhooks guide](docs/github-webhooks.md). Configure the server bot identity
+with the [GitHub App guide](docs/github-app.md).
 
 ## What is it.
 

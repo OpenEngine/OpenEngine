@@ -24,6 +24,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from langgraph_acp.providers import (
@@ -46,8 +47,10 @@ from engine.adapters.communications.slack import (
 )
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
-    GitHubCliTransport,
+    GitHubAppTransport,
+    server_github_transport,
 )
+from engine.adapters.source_control.github.worktree import configure_worktree
 from engine.adapters.source_control.gitlab import GitLabSourceControl
 from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport
 from engine.adapters.state_store.sqlite import SQLiteStateStore
@@ -172,18 +175,21 @@ def build_capabilities(
     gitlab_credential_store: GitLabCredentialStore | None = None,
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
-    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    # The host's `gh auth` login is the only credential for agent GitHub
-    # actions. Browser login identifies the UI user and never reaches here;
-    # neither do Settings device-flow tokens or GITHUB_TOKEN.
+    transport = server_github_transport(settings.config_path)
+    workspace_provider = GitWorktreeWorkspaceProvider(
+        settings.workspace_root,
+        configure_worktree=partial(configure_worktree, transport)
+        if isinstance(transport, GitHubAppTransport) else None,
+    )
     logging.getLogger(__name__).info(
-        "source_control composition=web github_identity=gh-cli credential=gh auth"
+        "source_control composition=web github_identity=%s",
+        "github-app" if isinstance(transport, GitHubAppTransport) else "gh-cli",
     )
     github = GitHubSourceControl(
         "",
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
-        transport=GitHubCliTransport(),
+        transport=transport,
     )
 
     def _gitlab_origin() -> str:

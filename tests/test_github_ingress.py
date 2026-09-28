@@ -119,13 +119,13 @@ def test_the_people_who_can_write_to_a_repository_can_direct_engine(association)
 def test_engine_does_not_answer_its_own_comments() -> None:
     """Engine posts as a machine user, not a GitHub app: that account is an
     ordinary `User` and a collaborator, so only its login distinguishes it."""
-    payload = _issue_comment(user={"login": "OpenEngine-worker", "type": "User"})
+    payload = _issue_comment(user={"login": "openengine[bot]", "type": "User"})
     assert comment_from_payload("issue_comment", payload) is not None
-    assert comment_from_payload("issue_comment", payload, self_login="OpenEngine-worker") is None
+    assert comment_from_payload("issue_comment", payload, self_login="openengine[bot]") is None
     # GitHub logins are case-insensitive, so the comparison has to be too.
-    assert comment_from_payload("issue_comment", payload, self_login="openengine-worker") is None
+    assert comment_from_payload("issue_comment", payload, self_login="openengine[bot]") is None
     # Somebody else's comment is still answered.
-    assert comment_from_payload("issue_comment", _issue_comment(), self_login="OpenEngine-worker")
+    assert comment_from_payload("issue_comment", _issue_comment(), self_login="openengine[bot]")
 
 
 def test_a_github_app_is_still_recognised_by_its_user_type() -> None:
@@ -735,3 +735,36 @@ def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
             client.portal.call(ingress.drain)
             assert len(handled) == 1
         client.portal.call(ingress.close)
+
+
+@pytest.mark.parametrize("label,configured,expected", [
+    ("openengine", "openengine", True), ("build", "build", True),
+    ("other", "openengine", False),
+])
+def test_label_trigger_uses_assignment_queue(label, configured, expected):
+    async def exercise():
+        handled = []
+        ingress = GithubIngress(repository="acme/api", trigger_label=configured,
+                                handle_assignment=_record(handled))
+        payload = dict(_assigned_issue(), action="labeled", label={"name": label})
+        payload.pop("assignee")
+        payload["sender"]["id"] = 7
+        try:
+            assert ingress.accept("issues", payload)
+            assert ingress.accept("issues", payload)
+            await ingress.drain()
+            assert len(handled) == int(expected)
+            if handled:
+                assert handled[0].sender == "maintainer"
+                assert handled[0].sender_id == 7
+        finally:
+            await ingress.close()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("issue", [{"state": "closed"}, {"pull_request": {}}, {"number": False}])
+def test_label_trigger_ignores_invalid_issues(issue):
+    from engine.apps.web.github_ingress import assignment_from_payload
+    payload = dict(_assigned_issue(), action="labeled", label={"name": "openengine"})
+    payload["issue"].update(issue)
+    assert assignment_from_payload("issues", payload) is None

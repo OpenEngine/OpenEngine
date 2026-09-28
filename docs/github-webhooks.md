@@ -1,7 +1,7 @@
 # GitHub webhooks
 
-Engine reads comments, issue assignments, and merges from GitHub over a signed
-webhook. Comments and assignments request work; merges accept it. The route only exists once something is wired to act on a delivery, so
+Engine reads comments, issue labels and assignments, and merges from GitHub over a signed
+webhook. Comments, labels and assignments request work; merges accept it. The route only exists once something is wired to act on a delivery, so
 configure the webhook after that is in place: an endpoint that accepted
 deliveries it could never act on would collect failures until GitHub disabled
 the hook.
@@ -17,6 +17,7 @@ Name the repository whose deliveries this deployment answers in `engine.toml`:
 ```toml
 [github]
 repository = "owner/name"
+trigger_label = "openengine"
 ```
 
 The slug format is validated at startup. Comments from other repositories are
@@ -41,6 +42,15 @@ in TOML.
 `engine-web --check` reports both halves — the repository and whether a secret
 is readable — so a half-finished setup is visible before the first delivery
 arrives.
+
+## Request work with an issue label
+
+With a [GitHub App](github-app.md), apply the configured `trigger_label`
+(default `openengine`) to an open issue. The app webhook must subscribe to
+**Issues** events. A `labeled` delivery uses the same repository write-access
+authorization and WorkOrder requester credit as assignment. Other labels,
+closed issues and pull requests are ignored. Assignments remain supported for
+deployments using the `gh auth` fallback; GitHub Apps cannot be assignees.
 
 ## The account Engine posts as
 

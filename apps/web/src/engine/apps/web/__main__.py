@@ -18,6 +18,7 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import dotenv_values
+from engine.adapters.source_control.github.transports import GitHubAppTransport, server_github_transport
 from starlette.applications import Starlette
 
 from engine.apps.web.api import create_app
@@ -66,12 +67,17 @@ def report_wiring(settings: Settings) -> None:
     print(f"engine-web -- http://{settings.host}:{settings.port}, capabilities wired:")
     for field in type(capabilities).__dataclass_fields__:
         print(f"  {field}: {type(getattr(capabilities, field)).__name__}")
-    cli = gh_cli_status()
-    print(
-        "  source_control GitHub identity: gh auth; "
-        f"authenticated={cli.authenticated} account={cli.account or 'unknown'}"
-        + ("" if cli.authenticated else f" ({cli.message})")
-    )
+    transport = server_github_transport(settings.config_path)
+    if isinstance(transport, GitHubAppTransport):
+        app_id, key_path = transport.configuration()
+        print(f"  source_control GitHub identity: github-app; app_id={app_id or 'missing'} private_key={'configured' if key_path else 'missing'}")
+    else:
+        cli = gh_cli_status()
+        print(
+            "  source_control GitHub identity: gh auth; "
+            f"authenticated={cli.authenticated} account={cli.account or 'unknown'}"
+            + ("" if cli.authenticated else f" ({cli.message})")
+        )
     print(f"agents: {', '.join(sorted(session.profiles))}")
     print(f"runners: {', '.join(f'{n} ({type(r).__name__})' for n, r in runners.items())}")
     print(
@@ -337,6 +343,7 @@ def compose_app(
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
         github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
+        github_trigger_label=settings.engine_config.github.trigger_label,
         github_repository=settings.github_webhook.repository if settings.github_webhook else "",
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,

@@ -15,6 +15,7 @@ github_login_redirect_uri = "https://sheas-mac-mini.taileb7fdb.ts.net/api/auth/g
 # deliveries is not written here -- engine.toml is committed -- it lives in a
 # server-local `.env` beside it. See docs/github-webhooks.md.
 [github]
+trigger_label = "openengine"
 repository = "OpenEngine/OpenEngine"
 # Explicit aliases of the SAME forge, mapped to its transport authority (host and optional port).
 # Example: { "github-web.example" = "github-api.example" }
@@ -66,7 +67,6 @@ deny = [
   "git checkout **",
   "git switch **",
   "git push **",
-  "gh pr create **",
 ]
 
 [workflows]

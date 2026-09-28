@@ -414,3 +414,39 @@ def test_no_co_author_adds_no_trailer(tmp_path: Path) -> None:
     workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
 
     assert "Co-authored-by" not in _commit(Path(workspace.root_path), "-m", "feat: x")
+
+
+def test_app_worktree_identity_and_snapshot_preserve_requester(tmp_path):
+    from functools import partial
+    from unittest.mock import AsyncMock
+    from engine.adapters.source_control.github.transports import GitHubAppTransport
+    from engine.adapters.source_control.github.worktree import configure_worktree
+
+    repository = tmp_path / "repository"
+    _repository(repository)
+    _git(repository, "remote", "add", "origin", "git@github.com:acme/api.git")
+    _git(repository, "config", "user.name", "Host User")
+    _git(repository, "config", "user.email", "host@example.test")
+    transport = GitHubAppTransport(tmp_path / ".env")
+    transport.bot_identity = AsyncMock(return_value=("openengine[bot]", "42+openengine[bot]@users.noreply.github.com"))
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"),
+        configure_worktree=partial(configure_worktree, transport))
+
+    async def exercise():
+        workspace = await provider.provision(str(repository), "main", co_author="requester <7+requester@users.noreply.github.com>")
+        root = Path(workspace.root_path)
+        assert _git(root, "config", "--worktree", "user.name") == "openengine[bot]"
+        assert _git(root, "remote", "get-url", "origin") == "https://github.com/acme/api.git"
+        assert _git(repository, "remote", "get-url", "origin") == "git@github.com:acme/api.git"
+        assert _git(repository, "config", "user.name") == "Host User"
+        helpers = _git(root, "config", "--worktree", "--get-all", "credential.helper")
+        assert "engine.adapters.source_control.github.credentials" in helpers
+        (root / "new.txt").write_text("snapshot me")
+        await provider.detach(workspace.workspace_id)
+        recorded = _git(repository, "show", "-s", "--format=%an|%ae|%cn|%ce%n%B", workspace.ref)
+        assert recorded.count("openengine[bot]") == 4
+        assert "Co-authored-by: requester <7+requester@users.noreply.github.com>" in recorded
+        assert "Host User" not in recorded
+        await provider.attach(workspace.workspace_id, str(repository), "main")
+        assert _git(root, "config", "--worktree", "user.name") == "openengine[bot]"
+    asyncio.run(exercise())
