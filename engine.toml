@@ -67,6 +67,7 @@ deny = [
   "git checkout **",
   "git switch **",
   "git push **",
+  "gh pr create **",
 ]
 
 [workflows]

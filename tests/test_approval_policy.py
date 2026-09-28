@@ -7,6 +7,8 @@ two rules could both apply: a capability list beside a shell pattern, a blanket
 resolving it the other way is how a policy comes to allow what nobody meant.
 """
 
+from pathlib import Path
+
 import pytest
 
 from engine.ports import ApprovalCapability, PermissionScope
@@ -14,6 +16,7 @@ from engine.runtime import (
     ApprovalConfig,
     BashApprovalConfig,
     PolicyDecision,
+    load_engine_config,
     policy_decision_for,
 )
 
@@ -23,6 +26,16 @@ EDIT = PermissionScope(ApprovalCapability.EDIT)
 
 def _bash(command: str) -> PermissionScope:
     return PermissionScope(ApprovalCapability.BASH, command)
+
+
+@pytest.mark.parametrize("command", ["gh pr create", "gh pr create --fill"])
+def test_repository_policy_denies_shell_pull_request_creation(command: str) -> None:
+    policy = load_engine_config(
+        Path(__file__).resolve().parents[1] / "engine.toml"
+    ).config.approvals
+
+    assert policy.auto_approve
+    assert policy_decision_for(policy, _bash(command)) is PolicyDecision.DENY
 
 
 def test_a_capability_that_was_not_granted_is_asked_about_rather_than_refused() -> None:
