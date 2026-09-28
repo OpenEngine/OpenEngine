@@ -36,7 +36,6 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import uvicorn  # noqa: E402
-from langgraph_acp import ACPAgentRegistry, StdioACPProvider  # noqa: E402
 
 from engine.apps.web.__main__ import STATIC_DIRECTORY  # noqa: E402
 from engine.apps.web.api import create_app  # noqa: E402
@@ -54,7 +53,6 @@ from engine.runtime import (  # noqa: E402
     describe_loaded_config,
     load_engine_config,
 )
-from engine.scoper import MilestoneScoper, Scoper  # noqa: E402
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
 from graph_workflow_fakes import scripted_catalog  # noqa: E402
 from provider_fakes import fake_acp  # noqa: E402
@@ -118,23 +116,6 @@ def main(argv: list[str] | None = None) -> int:
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     catalog = scripted_catalog(settings.workspace_root, binaries)
-    scoper_registry = ACPAgentRegistry(
-        (
-            StdioACPProvider(
-                name="codex",
-                command=(
-                    sys.executable,
-                    str(REPO_ROOT / "langgraph-acp" / "tests" / "fake_agent.py"),
-                ),
-                env={
-                    "FAKE_AGENT_LOG": str(state / "scoper-acp.jsonl"),
-                    "FAKE_AGENT_RESPONSE_FILE": str(
-                        Path(os.environ["ENGINE_FAKE_SCOPER_RESPONSE"])
-                    ),
-                },
-            ),
-        )
-    )
     app = create_app(
         build_session(
             capabilities, runners, args.repository, read_only_runners=read_only_runners
@@ -149,9 +130,6 @@ def main(argv: list[str] | None = None) -> int:
             source_control=capabilities.source_control,
         ),
         approval_policy=loaded.config.approvals,
-        milestone_scoper=MilestoneScoper(
-            Scoper(agent="codex", registry=scoper_registry)
-        ),
     )
     # Stub out real GitHub API calls so e2e tests work without a token.
     # Opening a pull request answers acme/repository#7, the URL scripts report,
@@ -208,7 +186,12 @@ def main(argv: list[str] | None = None) -> int:
     GitHubSourceControl._repo_coords = _fake_repo_coords  # type: ignore[method-assign]
 
     print(describe_loaded_config(loaded), flush=True)
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
+    config = uvicorn.Config(app, host=settings.host, port=settings.port, log_level="warning")
+    # Keep the OS-assigned port bound until the server takes it over. Probing a
+    # free port in the parent and releasing it races other parallel fixtures.
+    with config.bind_socket() as sock:
+        print(f"ENGINE_E2E_URL=http://{settings.host}:{sock.getsockname()[1]}", flush=True)
+        uvicorn.Server(config).run(sockets=[sock])
     return 0
 
 

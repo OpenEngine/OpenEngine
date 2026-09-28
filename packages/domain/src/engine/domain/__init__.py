@@ -41,12 +41,6 @@ from engine.domain.ids import (
     WorkOrderId,
     WorkspaceId,
 )
-from engine.domain.planning import (
-    Milestone,
-    Project,
-    instance_id_for_project,
-    project_id_for_instance,
-)
 from engine.domain.state import RunOrigin, RunPhase, RunState
 from engine.domain.scoping import (
     MilestoneScope,
@@ -80,16 +74,12 @@ __all__ = [
     "Event",
     "Message",
     "MessageId",
-    "Milestone",
     "MilestoneId",
     "MilestoneScope",
     "Notify",
     "PersistRun",
     "ProvisionWorkspace",
-    "Project",
     "ProjectId",
-    "instance_id_for_project",
-    "project_id_for_instance",
     "PublishChanges",
     "Role",
     "RunFailed",

@@ -73,14 +73,10 @@ from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.ports import AgentRunner, Communications, SourceControl
 from engine.runtime import (
-    PLANNING_TOOL_NAMES,
     AgentSession,
     Capabilities,
     EngineConfig,
-    PlanningMcpBroker,
-    project_chat_capabilities,
 )
-from engine.scoper import MilestoneScoper, codex_milestone_scoper
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,15 +327,6 @@ def claude_session_config_for(settings: Settings) -> dict[str, object] | None:
     )
 
 
-def build_milestone_scoper(settings: Settings) -> MilestoneScoper:
-    """Build scoping from the configured Codex executable and workspace."""
-    return codex_milestone_scoper(
-        binary_path=settings.codex_binary,
-        working_directory=settings.codex_working_directory,
-        timeout_seconds=settings.codex_timeout_seconds,
-        model=settings.codex_model,
-    )
-
 
 def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
     """Every agent runner this process offers, by the name the interface shows.
@@ -473,8 +460,6 @@ def build_session(
         runners=runners,
         workspace_repository=repository,
         read_only_runners=read_only_runners,
-        mcp_brokers={name: PlanningMcpBroker for name in PLANNING_TOOL_NAMES},
-        capability_resolver=project_chat_capabilities,
     )
 
 

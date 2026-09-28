@@ -2,7 +2,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@te
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ApiMilestone, ApiProject, ApiWorkflowRun, EngineConfig } from "./api";
+import type { ApiWorkflowRun, EngineConfig } from "./api";
 import {
   NewWorkflowPage,
   phaseAccent,
@@ -20,8 +20,6 @@ const config: EngineConfig = {
   agents: [],
   runners: [],
   defaultAgent: "agent",
-  planAgent: "planner",
-  showProjects: true,
   repositories: [{ name: ". (/srv/engine)", path: "." }],
   defaultRunner: "runner",
   workflows: [
@@ -40,18 +38,6 @@ const withGraph: EngineConfig = {
     },
   ],
 };
-const project: ApiProject = {
-  projectId: "project-1",
-  name: "Engine roadmap",
-  archived: false,
-};
-const milestone: ApiMilestone = {
-  milestoneId: "milestone-foundation",
-  name: "Foundation",
-  description: "Build the shared model.",
-  dependencies: [],
-};
-
 function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
   return {
     runId: "run-1",
@@ -59,7 +45,6 @@ function run(overrides: Partial<ApiWorkflowRun> = {}): ApiWorkflowRun {
     workflowId: "work-v1",
     workflowName: "Work",
     taskId: "task-1",
-    milestoneId: null,
     taskPrompt: "Do the work",
     repository: ".",
     repositoryContext: { repository: "." },
@@ -346,25 +331,7 @@ describe("NewWorkflowPage", () => {
     );
   });
 
-  it("creates a task under the milestone it was opened from", async () => {
-    const fetch = stubPageApi();
-    vi.stubGlobal("fetch", fetch);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const user = userEvent.setup();
-    render(<NewWorkflowPage config={config} project={project} milestone={milestone} />);
 
-    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Persist it");
-    await user.click(screen.getByRole("button", { name: "Create task" }));
-
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
-    const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
-    expect(JSON.parse(String(request.body))).toMatchObject({
-      milestoneId: "milestone-foundation",
-    });
-  });
-});
-
-describe("useRuns", () => {
   it("reads the runs the shell hands to both the page and the rail", async () => {
     vi.stubGlobal("fetch", stubPageApi([run()]));
 

@@ -142,7 +142,8 @@ async function verifyPersistedNavigation({
     ],
   };
   engine.script(workflowScript);
-  await page.getByRole("button", { name: "WorkOrders", exact: true }).click();
+  await expect(page.getByRole("button", { name: "WorkOrders", exact: true }))
+    .toHaveAttribute("aria-expanded", "true");
   await page.getByRole("link", { name: "+ New WorkOrder", exact: true }).click();
   await expect(page).toHaveURL("/runs/new");
   await expect(page.getByRole("heading", { name: "Create a WorkOrder" })).toBeVisible();

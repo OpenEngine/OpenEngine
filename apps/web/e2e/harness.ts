@@ -68,10 +68,7 @@ export class Engine {
     readonly origin: string,
     /** Every `gh` invocation the server made, one `{argv, stdin}` per line. */
     readonly ghLog: string,
-    /** Every ACP request made by the milestone scoper. */
-    readonly scoperLog: string,
     private readonly scriptPath: string,
-    private readonly scoperResponsePath: string,
   ) {}
 
   /** What the agent will say and do on its next turn.
@@ -80,11 +77,6 @@ export class Engine {
    *  without restarting anything. */
   script(script: Script): void {
     writeFileSync(this.scriptPath, JSON.stringify(script, null, 2), "utf-8");
-  }
-
-  /** Set the structured answer returned by the next real ACP scoper process. */
-  scopingPlan(plan: object): void {
-    writeFileSync(this.scoperResponsePath, JSON.stringify(plan), "utf-8");
   }
 }
 
@@ -105,30 +97,18 @@ export const test = base.extend<{
     if (seededDatabase === "current") seedState(state, repository);
     if (seededDatabase === "v0.0.0") restoreV0Database(state);
     const scriptPath = path.join(root, "script.json");
-    const scoperResponsePath = path.join(root, "scoping-plan.json");
-    const engine = new Engine(
-      `http://127.0.0.1:${await freePort()}`,
-      repository,
-      origin,
-      path.join(state, "gh.jsonl"),
-      path.join(state, "scoper-acp.jsonl"),
-      scriptPath,
-      scoperResponsePath,
-    );
-    engine.script({
-      scenarios: [{ steps: [{ type: "say", text: "This turn was not scripted." }] }],
-    });
-    engine.scopingPlan({ create: [], cancel: [], supersede: [], reasons: [] });
-
     const server = startServer(
-      engine.url,
+      "http://127.0.0.1:0",
       repository,
       state,
       scriptPath,
-      scoperResponsePath,
     );
     try {
-      await waitUntilServing(engine.url, server);
+      const url = await waitUntilServing(undefined, server);
+      const engine = new Engine(url, repository, origin, path.join(state, "gh.jsonl"), scriptPath);
+      engine.script({
+        scenarios: [{ steps: [{ type: "say", text: "This turn was not scripted." }] }],
+      });
       await use(engine);
     } finally {
       await stop(server);
@@ -256,7 +236,6 @@ function startServer(
   repository: string,
   state: string,
   scriptPath: string,
-  scoperResponsePath: string,
 ): Server {
   // `uv run` composes the workspace the way every other entry point does. A
   // prepared interpreter is offered as an override for anyone who would rather
@@ -281,7 +260,6 @@ function startServer(
       env: {
         ...process.env,
         ENGINE_FAKE_SCRIPT: scriptPath,
-        ENGINE_FAKE_SCOPER_RESPONSE: scoperResponsePath,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -327,7 +305,7 @@ function restoreV0Database(state: string): void {
   copyFileSync(V0_DATABASE, path.join(state, "conversations.sqlite3"));
 }
 
-async function waitUntilServing(url: string, server: Server) {
+async function waitUntilServing(url: string | undefined, server: Server): Promise<string> {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (server.failure) throw new Error(server.failure);
@@ -335,9 +313,10 @@ async function waitUntilServing(url: string, server: Server) {
       throw new Error(
         `the server exited ${server.process.exitCode}:\n${server.log.join("")}`,
       );
+    url ??= server.log.join("").match(/ENGINE_E2E_URL=(http:\/\/127\.0\.0\.1:\d+)\r?\n/)?.[1];
     try {
-      const response = await fetch(`${url}/api/config`);
-      if (response.ok) return;
+      const response = url ? await fetch(`${url}/api/config`) : undefined;
+      if (url && response?.ok) return url;
     } catch {
       // Not listening yet.
     }

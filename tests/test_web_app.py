@@ -33,7 +33,6 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_communications,
-    build_milestone_scoper,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -41,40 +40,28 @@ from engine.apps.web.composition import (
 )
 from engine.domain import (
     AgentId,
-    AgentInstanceId,
     AgentProfile,
     AgentRunId,
     ApprovalDecision,
     ApprovalId,
     ApprovalKind,
     Message,
-    Milestone,
-    MilestoneId,
-    Project,
-    ProjectId,
     Role,
     RunId,
     RunPhase,
     RunState,
-    ScopingPlan,
     TaskId,
     ToolCall,
     WorkflowId,
-    WorkOrderId,
-    WorkOrderSpec,
-    WorkOrderStatus,
-    project_id_for_instance,
 )
 from engine.ports import (
     AgentTurn,
     ApprovalRequest,
     InteractiveAgentRunner,
-    McpServerConfig,
     Workspace,
     WorkspaceState,
 )
 from engine.runtime import (
-    BUILT_IN,
     PLANNER,
     AgentSession,
     ApprovalBroker,
@@ -161,9 +148,8 @@ def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
     ]
 
 
-@pytest.mark.parametrize("show_projects", [None, True, False])
 def test_the_application_can_be_built_from_configuration_alone(
-    tmp_path, monkeypatch, show_projects
+    tmp_path, monkeypatch
 ) -> None:
     """The contract the development server's reloader depends on.
 
@@ -174,12 +160,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     monkeypatch.chdir(tmp_path)
 
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
-    if show_projects is not None:
-        (tmp_path / "engine.toml").write_text(
-            f"show_projects = {str(show_projects).lower()}\n"
-        )
     app = build_app()
-
     async def ask() -> httpx.Response:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -188,7 +169,7 @@ def test_the_application_can_be_built_from_configuration_alone(
 
     answered = asyncio.run(ask())
     assert answered.status_code == 200
-    assert answered.json()["showProjects"] is (show_projects is not False)
+    assert "showProjects" not in answered.json()
     assert answered.json()["repositories"] == [{"name": f". ({tmp_path})", "path": "."}]
     assert answered.json()["runners"] == [
         {"id": "codex", "implementation": "ACPAgentRunner"},
@@ -197,27 +178,6 @@ def test_the_application_can_be_built_from_configuration_alone(
     ]
     # Composed from the working directory, exactly as `engine-web` composes it.
     assert (tmp_path / "conversations.sqlite3").exists()
-    assert app.state.milestone_scoper is not None
-
-
-def test_milestone_scoper_uses_the_configured_codex_provider() -> None:
-    settings = Settings(
-        codex_binary="/opt/openengine/codex",
-        codex_working_directory="/srv/openengine/repository",
-        codex_timeout_seconds=42,
-        codex_model="gpt-scoper",
-    )
-
-    milestone_scoper = build_milestone_scoper(settings)
-    provider = milestone_scoper.scoper.registry.resolve("codex")
-
-    assert provider.env == {
-        "CODEX_PATH": "/opt/openengine/codex",
-        "CODEX_CONFIG": '{"model": "gpt-scoper"}',
-    }
-    assert provider.cwd == "/srv/openengine/repository"
-    assert milestone_scoper.scoper.working_directory == "/srv/openengine/repository"
-    assert milestone_scoper.scoper.timeout_seconds == 42
 
 
 def _claude_options(runner: ACPAgentRunner) -> dict:
@@ -405,76 +365,6 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
     opencode = session.runner_for(PLANNER.agent_id, "opencode")
     permissions = _opencode_permissions(opencode)
     assert permissions["*"] == permissions["external_directory"] == "deny"
-
-
-def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:
-    class CapturingRunner:
-        permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
-
-        def __init__(self) -> None:
-            self.mcp_servers: list[McpServerConfig] = []
-            self.direct_turns = 0
-
-        async def run_turn(
-            self, agent_run_id, profile, messages, tools=(), workspace_id=None
-        ):
-            self.direct_turns += 1
-            return AgentTurn(Message.assistant("ordinary chat"))
-
-        async def run_turn_with_mcp(
-            self,
-            agent_run_id,
-            profile,
-            messages,
-            mcp_server,
-            workspace_id=None,
-        ):
-            self.mcp_servers.append(mcp_server)
-            return AgentTurn(Message.assistant("project chat"))
-
-        async def cancel(self, agent_run_id) -> None:
-            pass
-
-    async def scenario() -> tuple[CapturingRunner, AgentProfile]:
-        store = InMemoryStateStore()
-        runner = CapturingRunner()
-        session = build_session(
-            Capabilities(
-                workflow_runtime=None,
-                source_control=None,
-                agent_runner=runner,
-                communications=None,
-                workspace_provider=ConversationWorkspaces(),
-                state_store=store,
-            ),
-            {"test": runner},
-        )
-        project_chat = await session.start(CODER, runner="test")
-        await store.save_project(
-            Project(project_id_for_instance(project_chat.instance_id), "OpenEngine")
-        )
-        await session.say(project_chat.instance_id, "Plan this.", runner="test")
-
-        ordinary_planner = await session.start(PLANNER.agent_id, runner="test")
-        await session.say(ordinary_planner.instance_id, "Plan this.", runner="test")
-        return runner, session.profiles[PLANNER.agent_id]
-
-    runner, planner_profile = asyncio.run(scenario())
-    config = runner.mcp_servers[0]
-    advertised = tuple(
-        config.args[index + 1]
-        for index, argument in enumerate(config.args)
-        if argument == "--capability"
-    )
-
-    assert advertised == (
-        "add_milestone",
-        "list_milestones",
-        "update_milestone",
-        "delete_milestone",
-    )
-    assert runner.direct_turns == 1
-    assert planner_profile.capabilities == ()
 
 
 def test_review_comments_reach_the_github_api(tmp_path) -> None:
@@ -931,12 +821,6 @@ def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
             "repository": ".",
             "runner": "unknown",
         },
-        {
-            "workflowId": "implementation-review-v1",
-            "prompt": "Task",
-            "repository": ".",
-            "milestoneId": "unknown",
-        },
     ],
 )
 def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> None:
@@ -952,40 +836,6 @@ def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> N
 
     assert response.status_code == 400
     assert asyncio.run(store.list_runs()) == ()
-
-
-def test_create_workflow_run_records_its_milestone() -> None:
-    store = InMemoryStateStore()
-    project = Project(ProjectId("project-engine"), "Engine")
-    milestone = Milestone(
-        MilestoneId("milestone-foundation"), project.project_id, "Foundation"
-    )
-    asyncio.run(store.save_project(project))
-    asyncio.run(store.save_milestone(milestone))
-    app, _runtime = _graph_app(store, _review_graph())
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            async with app.router.lifespan_context(app):
-                return await client.post(
-                    "/api/runs",
-                    json={
-                        "workflowId": "implementation-review-codex",
-                        "prompt": "Document the milestone.",
-                        "repository": ".",
-                        "milestoneId": milestone.milestone_id,
-                    },
-                )
-
-    created = asyncio.run(scenario())
-
-    assert created.status_code == 201
-    assert created.json()["milestoneId"] == milestone.milestone_id
-    # Without GitHub login there is nobody to name.
-    assert created.json()["requester"] is None
 
 
 def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
@@ -1117,34 +967,6 @@ def test_new_workflow_frontend_route_serves_the_application(tmp_path) -> None:
 
     assert response.status_code == 200
     assert "workflow application" in response.text
-
-
-def test_milestone_frontend_routes_serve_the_application(tmp_path) -> None:
-    """A plan's pages are reached by URL as well as by click.
-
-    Both are deep links the client routes itself: the plan, and one goal off it
-    opened from the timeline. Without a route apiece, a refresh or a pasted
-    link falls through to the static mount and 404s.
-    """
-    static = tmp_path / "dist"
-    static.mkdir()
-    (static / "index.html").write_text("<main>workflow application</main>")
-    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return (
-                await client.get("/projects/project-42/milestones"),
-                await client.get("/projects/project-42/milestones/milestone-7"),
-            )
-
-    plan, milestone = asyncio.run(scenario())
-
-    assert plan.status_code == 200
-    assert "workflow application" in plan.text
-    assert milestone.status_code == 200
-    assert "workflow application" in milestone.text
 
 
 class ConversationWorkspaces:
@@ -1488,26 +1310,6 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
     ]
 
 
-def test_the_config_names_the_agent_the_plan_button_talks_to() -> None:
-    """The client asks which agent plans rather than knowing an id of its own,
-    and is told nothing when a composition has no planner to offer."""
-    runner = ConcurrentRunner()
-    shipped = create_app(_session_with({"test": runner}, BUILT_IN), {"test": runner})
-    coders_only = create_app(_session(runner), {"test": runner})
-
-    async def config(app) -> dict:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return (await client.get("/api/config")).json()
-
-    shipped_config, narrow_config = asyncio.run(config(shipped)), asyncio.run(config(coders_only))
-
-    assert shipped_config["planAgent"] == "planner"
-    assert "planner" in [agent["id"] for agent in shipped_config["agents"]]
-    assert shipped_config["defaultAgent"] == "coder"
-    assert narrow_config["planAgent"] == ""
-
-
 def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None:
     """The conversation remembers its runner; a turn need not repeat it.
 
@@ -1593,501 +1395,6 @@ def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
     ] == [
         ("user", "Why are chats missing after restart?"),
         ("assistant", "The answer."),
-    ]
-
-
-def test_projects_api_creates_and_lists_projects_newest_first() -> None:
-    runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            missing = await client.post("/api/projects", json={})
-            first = await client.post(
-                "/api/projects", json={"name": "First project"}
-            )
-            second = await client.post(
-                "/api/projects", json={"name": "Second project"}
-            )
-            listed = await client.get("/api/projects")
-            return missing, first, second, listed
-
-    missing, first, second, listed = asyncio.run(scenario())
-
-    assert missing.status_code == 400
-    assert first.status_code == 201
-    assert first.json()["projectId"].startswith("project-")
-    assert first.json()["name"] == "First project"
-    assert second.status_code == 201
-    assert [project["name"] for project in listed.json()["projects"]] == [
-        "Second project",
-        "First project",
-    ]
-    # Recorded directly rather than by planning, so there is no conversation to
-    # open and the rail has nowhere to send a click.
-    assert all(
-        "conversationUrl" not in project
-        for project in listed.json()["projects"]
-    )
-
-
-def test_a_project_is_archived_and_restored_the_way_a_chat_is() -> None:
-    """Archiving puts a project away rather than deleting it: it stays listed,
-    marked so the rail can file it under its own heading, and restoring is the
-    same click back. The plan it was named after is untouched by either."""
-
-    runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={"agentId": "coder", "runner": "test", "createProject": True},
-            )
-            project_id = f"project-{created.json()['id']}"
-            archived = await client.post(f"/api/projects/{project_id}/archive")
-            listed = await client.get("/api/projects")
-            restored = await client.post(f"/api/projects/{project_id}/unarchive")
-            missing = await client.post("/api/projects/project-missing/archive")
-            return created, archived, listed, restored, missing
-
-    created, archived, listed, restored, missing = asyncio.run(scenario())
-
-    thread_id = created.json()["id"]
-    assert archived.status_code == 200
-    assert archived.json() == {
-        "projectId": f"project-{thread_id}",
-        "name": "New project",
-        "archived": True,
-        "milestoneCount": 0,
-        # The plan is still open, and restoring has to give the link back.
-        "conversationUrl": f"/conversations/{thread_id}",
-    }
-    assert listed.json()["projects"] == [archived.json()]
-    assert restored.json()["archived"] is False
-    assert missing.status_code == 404
-
-
-def test_project_milestones_api_lists_the_active_projects_dependency_data() -> None:
-    runner = ConcurrentRunner()
-    session = _session(runner)
-    project = Project(project_id_for_instance(AgentInstanceId("agi-plan")), "Engine")
-    foundation = Milestone(
-        MilestoneId("milestone-foundation"),
-        project.project_id,
-        "Foundation",
-        "Build the shared planning model.",
-    )
-    launch = Milestone(
-        MilestoneId("milestone-launch"),
-        project.project_id,
-        "Launch",
-        "Put the project in users' hands.",
-        (foundation.milestone_id,),
-    )
-
-    async def scenario():
-        await session.state_store.save_project(project)
-        await session.state_store.save_milestone(foundation)
-        await session.state_store.save_milestone(launch)
-        app = create_app(session, {"test": runner})
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            listed = await client.get(
-                f"/api/projects/{project.project_id}/milestones"
-            )
-            missing = await client.get("/api/projects/project-missing/milestones")
-            return listed, missing
-
-    listed, missing = asyncio.run(scenario())
-
-    assert listed.json() == {
-        "project": {
-            "projectId": project.project_id,
-            "name": "Engine",
-            "archived": False,
-        },
-        "milestones": [
-            {
-                "milestoneId": "milestone-launch",
-                "name": "Launch",
-                "description": "Put the project in users' hands.",
-                "dependencies": ["milestone-foundation"],
-            },
-            {
-                "milestoneId": "milestone-foundation",
-                "name": "Foundation",
-                "description": "Build the shared planning model.",
-                "dependencies": [],
-            },
-        ],
-    }
-    assert missing.status_code == 404
-
-
-def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
-    """The milestones page is reached from the rail rather than from the plan,
-    so the way back to the conversation has to come with the answer."""
-
-    runner = ConcurrentRunner()
-    session = _session(runner)
-    app = create_app(session, {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={"agentId": "coder", "runner": "test", "createProject": True},
-            )
-            thread_id = created.json()["id"]
-            project_id = ProjectId(f"project-{thread_id}")
-            await session.state_store.save_milestone(
-                Milestone(MilestoneId("milestone-1"), project_id, "Foundation")
-            )
-            listed = await client.get(f"/api/projects/{project_id}/milestones")
-            return thread_id, listed
-
-    thread_id, listed = asyncio.run(scenario())
-
-    assert listed.json()["project"]["conversationUrl"] == f"/conversations/{thread_id}"
-    assert [milestone["name"] for milestone in listed.json()["milestones"]] == [
-        "Foundation"
-    ]
-
-
-def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_work() -> None:
-    class RecordingMilestoneScoper:
-        request = None
-
-        async def run(self, **request):
-            self.request = request
-            milestone_id = request["milestone"].milestone_id
-            return ScopingPlan(
-                create=(
-                    WorkOrderSpec(
-                        milestone_id,
-                        "Render the plan",
-                        "Draw the proposed work orders.",
-                    ),
-                ),
-                cancel=(WorkOrderId("run-obsolete"),),
-                reasons=("The milestone needs a dedicated scoping view.",),
-            )
-
-    store = InMemoryStateStore()
-    session = _session_with({"test": ConcurrentRunner()}, state_store=store)
-    scoper = RecordingMilestoneScoper()
-    project = Project(ProjectId("project-engine"), "Engine")
-    milestone = Milestone(
-        MilestoneId("milestone-scoping"),
-        project.project_id,
-        "Milestone scoping",
-        "Break milestone requirements into reviewable work orders.",
-    )
-    existing = RunState(
-        run_id=RunId("run-existing"),
-        task_id=TaskId("task-existing"),
-        workflow_id=WorkflowId("implementation-review-rerank"),
-        milestone_id=milestone.milestone_id,
-        phase=RunPhase.RUNNING_AGENT,
-        name="Existing implementation",
-        prompt="Implement the existing portion.",
-    )
-
-    async def scenario():
-        await store.save_project(project)
-        await store.save_milestone(milestone)
-        await store.save(existing)
-        app = create_app(
-            session,
-            {"test": ConcurrentRunner()},
-            milestone_scoper=scoper,  # type: ignore[arg-type]
-        )
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            return await client.post(
-                f"/api/projects/{project.project_id}/milestones/"
-                f"{milestone.milestone_id}/scope",
-                json={"message": "Prefer changes under 1,000 lines."},
-            )
-
-    response = asyncio.run(scenario())
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "create": [
-            {
-                "milestoneId": "milestone-scoping",
-                "name": "Render the plan",
-                "objective": "Draw the proposed work orders.",
-                "evidenceRequirements": [],
-                "dependencies": [],
-            }
-        ],
-        "cancel": ["run-obsolete"],
-        "supersede": [],
-        "reasons": ["The milestone needs a dedicated scoping view."],
-    }
-    scheduled = [run for run in asyncio.run(store.list_runs()) if run.run_id != existing.run_id]
-    assert len(scheduled) == 1
-    assert scheduled[0].phase is RunPhase.SCHEDULED
-    assert scheduled[0].name == "Render the plan"
-    assert scheduled[0].milestone_id == milestone.milestone_id
-    assert scoper.request["milestone"].name == "Milestone scoping"
-    assert scoper.request["milestone"].requirements == (
-        "Break milestone requirements into reviewable work orders.",
-    )
-    assert scoper.request["policy"].rules == (
-        "Prefer changes under 1,000 lines.",
-    )
-    assert scoper.request["workorders"][0].status is WorkOrderStatus.IN_PROGRESS
-    assert scoper.request["workorders"][0].spec.objective == (
-        "Implement the existing portion."
-    )
-
-
-def test_projects_api_says_how_many_milestones_each_project_has() -> None:
-    """The rail offers a project's plan only where there is one to offer.
-
-    Counted by the store rather than in the handler: the shell polls this route
-    every second, so neither a query per project nor a read of every milestone
-    row will do -- one grows with the list, the other with the total size of
-    every plan in the store. Reading a milestone at all is the failure, which is
-    why the double refuses rather than counts.
-    """
-
-    class ForbidsMilestoneReads(InMemoryStateStore):
-        async def list_milestones(self, project_id=None):
-            raise AssertionError("counting must not hydrate milestone rows")
-
-    runner = ConcurrentRunner()
-    store = ForbidsMilestoneReads()
-    session = _session_with({"test": runner}, state_store=store)
-    planned = Project(ProjectId("project-planned"), "Engine roadmap")
-    empty = Project(ProjectId("project-empty"), "Nothing planned yet")
-
-    async def scenario():
-        await store.save_project(planned)
-        await store.save_project(empty)
-        for index in range(3):
-            await store.save_milestone(
-                Milestone(
-                    MilestoneId(f"milestone-{index}"),
-                    planned.project_id,
-                    f"Goal {index}",
-                )
-            )
-        app = create_app(session, {"test": runner})
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            return await client.get("/api/projects")
-
-    listed = asyncio.run(scenario())
-
-    assert {
-        project["name"]: project["milestoneCount"]
-        for project in listed.json()["projects"]
-    } == {"Engine roadmap": 3, "Nothing planned yet": 0}
-
-
-def test_archiving_a_project_answers_with_the_plan_it_keeps() -> None:
-    """Archiving is not deleting, and the answer has to say so.
-
-    The route sends the whole row the list would, so a client that redraws from
-    it is not left with a project missing half itself -- and restoring gives the
-    milestones back rather than reporting a plan of none.
-    """
-
-    runner = ConcurrentRunner()
-    store = InMemoryStateStore()
-    session = _session_with({"test": runner}, state_store=store)
-    app = create_app(session, {"test": runner})
-    project = Project(ProjectId("project-planned"), "Engine roadmap")
-
-    async def scenario():
-        await store.save_project(project)
-        for index in range(2):
-            await store.save_milestone(
-                Milestone(
-                    MilestoneId(f"milestone-{index}"),
-                    project.project_id,
-                    f"Goal {index}",
-                )
-            )
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            archived = await client.post("/api/projects/project-planned/archive")
-            restored = await client.post("/api/projects/project-planned/unarchive")
-            return archived, restored
-
-    archived, restored = asyncio.run(scenario())
-
-    assert archived.json() == {
-        "projectId": "project-planned",
-        "name": "Engine roadmap",
-        "archived": True,
-        "milestoneCount": 2,
-    }
-    assert restored.json() == {**archived.json(), "archived": False}
-
-
-def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() -> None:
-    """The timeline polls this route every second, per open project.
-
-    A read per milestone would make each poll cost the length of the plan, and
-    the SQLite store serializes every query behind one connection, so the plan
-    is read whole instead.
-    """
-
-    class CountingStore(InMemoryStateStore):
-        def __init__(self) -> None:
-            super().__init__()
-            self.milestone_reads = 0
-
-        async def list_milestones(self, project_id=None):
-            self.milestone_reads += 1
-            return await super().list_milestones(project_id)
-
-    runner = ConcurrentRunner()
-    store = CountingStore()
-    session = _session_with({"test": runner}, state_store=store)
-    project = Project(project_id_for_instance(AgentInstanceId("agi-long")), "Engine")
-
-    async def scenario():
-        await store.save_project(project)
-        for index in range(12):
-            milestone = Milestone(
-                MilestoneId(f"milestone-{index}"), project.project_id, f"Goal {index}"
-            )
-            await store.save_milestone(milestone)
-        store.milestone_reads = 0
-        app = create_app(session, {"test": runner})
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            return await client.get(f"/api/projects/{project.project_id}/milestones")
-
-    listed = asyncio.run(scenario())
-
-    assert store.milestone_reads == 1
-    milestones = listed.json()["milestones"]
-    assert [milestone["name"] for milestone in milestones] == [
-        f"Goal {index}" for index in reversed(range(12))
-    ]
-
-
-def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
-    runner = ConcurrentRunner(('"Durable project intent"',))
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={
-                    "agentId": "coder",
-                    "runner": "test",
-                    "createProject": True,
-                },
-            )
-            before_title = await client.get("/api/projects")
-            titled = await client.post(
-                f"/api/threads/{created.json()['id']}/title",
-                json={"text": "Keep this intent across a reload"},
-            )
-            after_title = await client.get("/api/projects")
-            return created, before_title, titled, after_title
-
-    created, before_title, titled, after_title = asyncio.run(scenario())
-
-    assert created.status_code == 201
-    assert created.json()["title"] == "New project"
-    assert before_title.json()["projects"] == [
-        {
-            "projectId": f"project-{created.json()['id']}",
-            "name": "New project",
-            "archived": False,
-            "milestoneCount": 0,
-            "conversationUrl": f"/conversations/{created.json()['id']}",
-        }
-    ]
-    assert titled.json() == {"title": "Durable project intent"}
-    assert after_title.json()["projects"] == [
-        {
-            "projectId": f"project-{created.json()['id']}",
-            "name": "Durable project intent",
-            "archived": False,
-            "milestoneCount": 0,
-            "conversationUrl": f"/conversations/{created.json()['id']}",
-        }
-    ]
-
-
-def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
-    """Archiving is one click away in the rail, and the archived conversation
-    opens as a blank new chat. The project is still listed -- it exists -- but
-    without a link, which is the row a project with no conversation already
-    gets. Restoring the chat gives the link back."""
-
-    runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={"agentId": "coder", "runner": "test", "createProject": True},
-            )
-            thread_id = created.json()["id"]
-            await client.post(f"/api/threads/{thread_id}/archive")
-            archived = await client.get("/api/projects")
-            await client.post(f"/api/threads/{thread_id}/unarchive")
-            restored = await client.get("/api/projects")
-            return thread_id, archived, restored
-
-    thread_id, archived, restored = asyncio.run(scenario())
-
-    assert archived.json()["projects"] == [
-        {
-            "projectId": f"project-{thread_id}",
-            "name": "New project",
-            "archived": False,
-            "milestoneCount": 0,
-        }
-    ]
-    assert restored.json()["projects"] == [
-        {
-            "projectId": f"project-{thread_id}",
-            "name": "New project",
-            "archived": False,
-            "milestoneCount": 0,
-            "conversationUrl": f"/conversations/{thread_id}",
-        }
     ]
 
 
@@ -2973,7 +2280,6 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> 
     assert deleted.status_code == 204
     assert asyncio.run(store.load(stranded.run_id)) is None
     assert driving == []
-
 
 
 def test_graph_events_cursor_replays_only_unseen_events() -> None:
@@ -4000,7 +3306,7 @@ def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisit
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("creation", ["api", "agent", "scope"])
+@pytest.mark.parametrize("creation", ["api", "agent"])
 def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creation) -> None:
     async def scenario():
         store = InMemoryStateStore()
@@ -4021,25 +3327,12 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
         async def running(_app=None):
             yield runtime
 
-        project = Project(ProjectId("project"), "Project")
-        milestone = Milestone(MilestoneId("milestone"), project.project_id, "Milestone")
-
-        class Scoper:
-            async def run(self, **kwargs):
-                return ScopingPlan(create=(WorkOrderSpec(
-                    milestone.milestone_id, "Dependent", "Follow up",
-                    dependencies=(WorkOrderId("prerequisite"),),
-                ),))
-
         app = create_app(
             _session_with({"test": ConcurrentRunner()}, state_store=store),
             {"test": ConcurrentRunner()},
             workflow_catalog=WorkflowCatalog.from_graphs((graph,)),
             graph_runtime=running(),
-            milestone_scoper=Scoper(),
         )
-        await store.save_project(project)
-        await store.save_milestone(milestone)
         async with app.router.lifespan_context(app):
             prerequisite = RunState(
                 run_id=RunId("prerequisite"), task_id=TaskId("task"),
@@ -4063,12 +3356,6 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
                         elif creation == "agent":
                             with pytest.raises(ValueError, match="prerequisite"):
                                 await callbacks[0](prerequisite.run_id, "Follow up", prerequisite.run_id)
-                        else:
-                            result = await client.post(
-                                "/api/projects/project/milestones/milestone/scope",
-                                json={"message": "Plan work"},
-                            )
-                            assert result.status_code == 400
                     assert await store.list_runs() == (prerequisite,)
                 finally:
                     release.set()
@@ -4273,3 +3560,33 @@ def test_access_is_unknown_when_no_repository_admits_and_one_lookup_failed() -> 
 
     with pytest.raises(RuntimeError, match="GitHub is down"):
         asyncio.run(authorize(1, "maintainer"))
+
+
+def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
+    runner = ConcurrentRunner()
+    store = InMemoryStateStore()
+    app = create_app(_session_with({"test": runner}, state_store=store), {"test": runner})
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for method, path in (
+                ("GET", "/api/projects"),
+                ("POST", "/api/projects"),
+                ("GET", "/api/projects/old/milestones"),
+                ("POST", "/api/projects/old/milestones/goal/scope"),
+            ):
+                assert (await client.request(method, path)).status_code == 404
+            config = (await client.get("/api/config")).json()
+            assert "showProjects" not in config
+            assert "planAgent" not in config
+            # Old clients cannot create a conversation-owned project anymore.
+            response = await client.post("/api/threads", json={
+                "agentId": "coder", "runner": "test", "createProject": True,
+            })
+            assert response.status_code == 201
+            assert response.json()["title"] == "New chat"
+            assert not hasattr(store, "save_project")
+
+    asyncio.run(scenario())

@@ -182,7 +182,6 @@ class EngineConfig:
     orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
     attribution: bool = True
-    show_projects: bool = True
     repos: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -270,7 +269,6 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_token",
             "orchestrator",
             "public_url",
-            "show_projects",
             "repos",
             "server",
             "state",
@@ -279,10 +277,6 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         },
         "configuration",
     )
-    show_projects = document.get("show_projects", True)
-    if not isinstance(show_projects, bool):
-        raise EngineConfigError("show_projects must be a boolean")
-
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
         raise EngineConfigError("attribution must be a boolean")
@@ -422,7 +416,6 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     return EngineConfig(
         attribution=attribution,
-        show_projects=show_projects,
         repos={
             _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
             for name, path in _table(document.get("repos", {}), "repos").items()
