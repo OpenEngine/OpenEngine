@@ -8,10 +8,13 @@ whatever compatibility behaviour that particular CLI turns out to need.
 
 from langgraph_acp.providers.claude import CLAUDE_ACP_COMMAND, ClaudeACPProvider
 from langgraph_acp.providers.codex import CODEX_ACP_COMMAND, CodexACPProvider
+from langgraph_acp.providers.opencode import OPENCODE_ACP_COMMAND, OpenCodeACPProvider
 
 __all__ = [
     "CLAUDE_ACP_COMMAND",
     "CODEX_ACP_COMMAND",
+    "OPENCODE_ACP_COMMAND",
     "ClaudeACPProvider",
     "CodexACPProvider",
+    "OpenCodeACPProvider",
 ]

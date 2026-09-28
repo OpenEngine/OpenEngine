@@ -22,12 +22,14 @@ from pathlib import Path
 import pytest
 
 from engine.adapters.agent_runner.acp import (
+    ACP_PERMISSION_TRANSLATOR,
     CODEX_SANDBOXES,
     READ_ONLY_TOOLS,
     ACPAgentRunner,
     ACPToolsUnsupportedError,
     claude_acp_runner,
     codex_acp_runner,
+    opencode_acp_runner,
 )
 from engine.domain import (
     AgentId,
@@ -73,6 +75,9 @@ RUNNERS = {
         command=FAKE_COMMAND, working_directory=str(workspace)
     ),
     "claude": lambda workspace: claude_acp_runner(
+        command=FAKE_COMMAND, working_directory=str(workspace)
+    ),
+    "opencode": lambda workspace: opencode_acp_runner(
         command=FAKE_COMMAND, working_directory=str(workspace)
     ),
 }
@@ -469,6 +474,123 @@ def test_a_read_only_claude_has_only_the_read_only_tools() -> None:
 
     assert options["tools"] == list(READ_ONLY_TOOLS)
     assert options["allowedTools"] == list(READ_ONLY_TOOLS)
+
+
+def test_opencode_asks_before_every_change() -> None:
+    """OpenCode's own default runs every tool unasked."""
+    runner = opencode_acp_runner(model="provider/picked")
+
+    config = json.loads(runner.provider.env["OPENCODE_CONFIG_CONTENT"])
+    permission = config["permission"]
+    # OpenCode takes the last matching rule, so `*` has to come first.
+    assert next(iter(permission)) == "*"
+    assert permission["*"] == permission["external_directory"] == "ask"
+    assert permission["read"]["*"] == "allow"
+    assert permission["read"]["*.env"] == "ask"
+    assert {name: permission[name] for name in ("glob", "grep", "list")} == {
+        "glob": "allow", "grep": "allow", "list": "allow",
+    }
+    assert config["agent"] == {
+        name: {"permission": permission} for name in ("build", "general", "explore")
+    }
+    assert "instructions" not in config
+    assert runner.session_config_for(PROFILE) == {"model": "provider/picked"}
+
+
+def test_a_read_only_opencode_cannot_change_anything() -> None:
+    config = json.loads(
+        opencode_acp_runner(read_only=True).provider.env["OPENCODE_CONFIG_CONTENT"]
+    )
+
+    permission = config["permission"]
+    assert permission["*"] == permission["external_directory"] == "deny"
+    assert permission["read"]["*.env"] == "deny"
+
+
+def test_opencode_ignores_the_repository_s_own_configuration() -> None:
+    """A worktree's `opencode.json` could grant itself what Engine asks about."""
+    env = opencode_acp_runner().provider.env
+
+    assert env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
+
+
+def test_opencode_attribution_reaches_it_as_an_instructions_file() -> None:
+    config = json.loads(
+        opencode_acp_runner(attribution=False).provider.env["OPENCODE_CONFIG_CONTENT"]
+    )
+
+    [instructions] = config["instructions"]
+    assert "AI attribution" in Path(instructions).read_text(encoding="utf-8")
+    if os.name != "nt":
+        assert Path(instructions).parent.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize(
+    ("streamed", "kind", "scope"),
+    [
+        ("execute", ApprovalKind.COMMAND_EXECUTION, ApprovalCapability.BASH),
+        # A read only asks outside the workspace, so it must not pass as one.
+        ("read", ApprovalKind.TOOL_USE, None),
+        ("search", ApprovalKind.TOOL_USE, None),
+    ],
+)
+def test_opencode_s_permission_request_is_classified_by_what_it_streamed(
+    streamed: str, kind: ApprovalKind, scope: ApprovalCapability | None
+) -> None:
+    """OpenCode asks with `kind: other` for every tool; its stream says which."""
+    from langgraph_acp import ACPEvent, ACPEventType, ACPPermissionRequest
+
+    from engine.adapters.agent_runner.acp import _Turn
+
+    asked: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalDecision:
+        asked.append(request)
+        return ApprovalDecision.CANCEL
+
+    async def run() -> None:
+        turn = _Turn(
+            agent="opencode",
+            agent_run_id=AgentRunId("run-1"),
+            working_directory="/work",
+            on_message=lambda _message: None,
+            on_approval=approve,
+            mcp_server=None,
+        )
+        await turn.observe(
+            ACPEvent(
+                agent="opencode",
+                type=ACPEventType.TOOL_STARTED,
+                data={"toolCallId": "call-1", "kind": streamed, "title": streamed},
+            )
+        )
+        await turn.observe(
+            ACPEvent(agent="opencode", type=ACPEventType.PERMISSION_REQUESTED)
+        )
+        await turn.answer(
+            ACPPermissionRequest.from_params(
+                "opencode",
+                {
+                    "sessionId": "s",
+                    "toolCall": {
+                        "toolCallId": "call-1",
+                        "kind": "other",
+                        "title": "touch made.txt",
+                        "rawInput": {"command": "touch made.txt"},
+                    },
+                    "options": [
+                        {"optionId": "once", "kind": "allow_once"},
+                        {"optionId": "reject", "kind": "reject_once"},
+                    ],
+                },
+            )
+        )
+
+    asyncio.run(run())
+    [request] = asked
+    assert request.kind is kind
+    classified = ACP_PERMISSION_TRANSLATOR.scope_for(request)
+    assert (classified and classified.capability) == scope
 
 
 def test_the_bound_mcp_server_is_attached_to_the_session(tmp_path) -> None:

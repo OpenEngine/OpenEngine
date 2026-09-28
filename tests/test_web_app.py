@@ -193,6 +193,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     assert answered.json()["runners"] == [
         {"id": "codex", "implementation": "ACPAgentRunner"},
         {"id": "claude", "implementation": "ACPAgentRunner"},
+        {"id": "opencode", "implementation": "ACPAgentRunner"},
     ]
     # Composed from the working directory, exactly as `engine-web` composes it.
     assert (tmp_path / "conversations.sqlite3").exists()
@@ -226,15 +227,13 @@ def _claude_options(runner: ACPAgentRunner) -> dict:
 def test_web_offers_one_interactive_runner_per_agent() -> None:
     runners = build_runners(Settings())
 
-    assert tuple(runners) == ("codex", "claude")
-    assert isinstance(runners["codex"], ACPAgentRunner)
-    assert isinstance(runners["claude"], ACPAgentRunner)
-    assert runners["codex"].provider.name == "codex"
-    assert runners["claude"].provider.name == "claude"
-    # Which of them pause is what decides whether a run brokers approvals, so
-    # it is read off the port rather than off the class name.
-    assert isinstance(runners["codex"], InteractiveAgentRunner)
-    assert isinstance(runners["claude"], InteractiveAgentRunner)
+    assert tuple(runners) == ("codex", "claude", "opencode")
+    for name, runner in runners.items():
+        assert isinstance(runner, ACPAgentRunner)
+        assert runner.provider.name == name
+        # Which of them pause is what decides whether a run brokers approvals,
+        # so it is read off the port rather than off the class name.
+        assert isinstance(runner, InteractiveAgentRunner)
 
 
 def test_no_composition_root_builds_a_cli_runner(tmp_path) -> None:
@@ -290,6 +289,13 @@ def test_interactive_runners_may_do_what_the_user_approves() -> None:
     options = _claude_options(runners["claude"])
     assert options["allowedTools"] == ["Read", "Glob", "Grep"]
     assert "tools" not in options
+    # OpenCode: asks before any change, where by default it would not.
+    permissions = _opencode_permissions(runners["opencode"])
+    assert permissions["*"] == permissions["external_directory"] == "ask"
+
+
+def _opencode_permissions(runner: ACPAgentRunner) -> dict:
+    return json.loads(runner.provider.env["OPENCODE_CONFIG_CONTENT"])["permission"]
 
 
 def test_the_configured_policy_builds_the_interactive_claude_runner() -> None:
@@ -396,6 +402,9 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
     assert codex is not session.runner_for(CODER, "codex")
     assert codex.provider.env["INITIAL_AGENT_MODE"] == "read-only"
     assert codex.provider.env["ENGINE_CODEX_SANDBOX"] == "read-only"
+    opencode = session.runner_for(PLANNER.agent_id, "opencode")
+    permissions = _opencode_permissions(opencode)
+    assert permissions["*"] == permissions["external_directory"] == "deny"
 
 
 def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:
