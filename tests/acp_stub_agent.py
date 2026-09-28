@@ -373,6 +373,19 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
             return
         session["granted"] = True
         save(session_id, session)
+        # Keep working after the grant until told to stop, the way an agent
+        # carries on with the command it was just allowed to run.
+        if os.environ.get("STUB_ACP_WAIT_AFTER_GRANT") and not session.get("cancelled"):
+            while message := receive():
+                params = message.get("params") or {}
+                if (
+                    message.get("method") == "session/cancel"
+                    and params.get("sessionId") == session_id
+                ):
+                    session["cancelled"] = True
+                    save(session_id, session)
+                    respond(message_id, {"stopReason": "cancelled"})
+                    return
         say(session_id, DONE)
         respond(message_id, {"stopReason": "end_turn"})
         return

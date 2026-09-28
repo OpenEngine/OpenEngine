@@ -97,6 +97,7 @@ def registry(
     response: str = DONE,
     narrates: bool = False,
     waits_for_cancel: bool = False,
+    waits_after_grant: bool = False,
     uses_mcp: bool = False,
     mcp_git: bool = False,
     mcp_terminal: str = "",
@@ -124,6 +125,7 @@ def registry(
                     **({"STUB_ACP_ASK_EVERY": "1"} if asks_every else {}),
                     **({"STUB_ACP_NARRATE": "1"} if narrates else {}),
                     **({"STUB_ACP_WAIT_FOR_CANCEL": "1"} if waits_for_cancel else {}),
+                    **({"STUB_ACP_WAIT_AFTER_GRANT": "1"} if waits_after_grant else {}),
                     **({"STUB_ACP_USE_MCP": "1"} if uses_mcp else {}),
                     **({"STUB_ACP_MCP_GIT": "1"} if mcp_git else {}),
                     **(
@@ -1225,6 +1227,58 @@ def test_steering_interrupts_the_turn_in_flight(tmp_path: Path) -> None:
     assert prompts(tmp_path) == [PROMPT, "Use the fast suite."]
     assert len(sent(tmp_path, "session/new")) == 1
     assert len(sent(tmp_path, "session/cancel")) == 1
+
+
+@pytest.mark.parametrize("auto_approve", [True, False])
+def test_only_a_person_s_answer_holds_steering_until_the_turn_ends(
+    tmp_path: Path, auto_approve: bool,
+) -> None:
+    """Auto-approved requests are formalities; steering still interrupts the turn.
+
+    A turn a person answered finishes with that answer first, so the answer is
+    not thrown away. Under auto-approve almost every turn raises a request, and
+    counting those left steering queued until the agent had finished its work.
+    """
+    steer = "Use the fast suite."
+
+    async def seen(log: EventLog, run_id: RunId, found) -> list[RuntimeEvent]:
+        async with asyncio.timeout(PATIENCE):
+            while not any(found(event) for event in log.since(run_id)):
+                await asyncio.sleep(0.01)
+        return list(log.since(run_id))
+
+    async def scenario() -> tuple[list[RuntimeEvent], int]:
+        async with runtime_over(
+            tmp_path, registry(tmp_path, asks=True, waits_after_grant=True),
+        ) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            if auto_approve:
+                await runtime.set_auto_approve(run.run_id, IMPLEMENTATION, True)
+            else:
+                requested = await until(log, run.run_id, "approval.requested")
+                approval = requested[-1].payload["approvalId"]
+                await runtime.decide(run.run_id, ApprovalId(approval), ApprovalDecision.ACCEPT)
+            await seen(log, run.run_id, lambda event: event.kind.value == "approval.resolved")
+            await runtime.steer(run.run_id, steer)
+            if auto_approve:
+                events = await seen(log, run.run_id, lambda event: (
+                    event.kind.value == "transcript" and event.payload.get("role") == "user"
+                    and event.payload.get("text") == steer
+                ))
+            else:
+                await asyncio.sleep(1.0)
+                events = list(log.since(run.run_id))
+            # Counted before the runtime closes, which cancels whatever is left.
+            return events, len(sent(tmp_path, "session/cancel"))
+
+    events, cancels = asyncio.run(scenario())
+
+    if auto_approve:
+        assert cancels == 1
+        assert ("user", steer) in transcript(events)
+    else:
+        assert cancels == 0
+        assert ("user", steer) not in transcript(events)
 
 
 def test_steering_does_not_send_a_terminal_correction(tmp_path: Path) -> None:

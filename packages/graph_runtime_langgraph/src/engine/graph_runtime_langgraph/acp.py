@@ -242,7 +242,16 @@ class _Turn:
         tool_call_id: str,
     ) -> ApprovalDecision:
         """Ask once, leaving enough behind to reconnect after process loss."""
-        self.approval_requested = True
+        # Only a question somebody answers holds steering back: an answer a
+        # person gave is not thrown away by cancelling the turn it unblocked.
+        # A request auto-approve answers is a formality -- under auto-approve
+        # nearly every turn raises one -- and counting it would mean steering
+        # never interrupted anything.
+        auto_approves = getattr(self.execution.runtime, "auto_approves", None)
+        if auto_approves is None or not await auto_approves(
+            self.execution.run_id, self.execution.node_id, kind,
+        ):
+            self.approval_requested = True
         # Whatever the agent said on its way to asking, published before
         # anything about the question is. See `narrating`.
         if self.narrating is not None:
@@ -975,8 +984,9 @@ class ACPNode:
         """One ACP turn, with what happens in it republished as runtime events.
 
         Steering cancels a turn that is doing ordinary work so the instruction
-        can become the next turn immediately. A turn that asked for permission
-        is allowed to finish with its answer before queued steering is sent.
+        can become the next turn immediately. A turn that asked a person for
+        permission is allowed to finish with its answer before queued steering
+        is sent; one whose requests auto-approve answered is ordinary work.
 
         Message deltas are gathered rather than published one by one -- a
         transcript event per token would be unreadable -- but they are gathered

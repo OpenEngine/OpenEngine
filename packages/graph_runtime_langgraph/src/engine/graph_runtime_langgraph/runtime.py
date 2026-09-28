@@ -604,10 +604,7 @@ class LangGraphRuntime:
         await self._store.remember_approval(record)
         waiting = execution.expect(chosen)
         try:
-            run = await self._require(execution.run_id)
-            automatic = (
-                execution.node_id in run.auto_approve_nodes and _auto_approvable(kind)
-            )
+            automatic = await self.auto_approves(execution.run_id, execution.node_id, kind)
             await self.publish(
                 execution.run_id,
                 EventKind.APPROVAL_REQUESTED,
@@ -630,6 +627,11 @@ class LangGraphRuntime:
             return await waiting
         finally:
             execution.forget(chosen)
+
+    async def auto_approves(self, run_id: RunId, node_id: NodeId, kind: ApprovalKind) -> bool:
+        """Whether a request of `kind` from this node is answered by policy, unasked."""
+        run = await self._require(run_id)
+        return node_id in run.auto_approve_nodes and _auto_approvable(kind)
 
     async def recorded_decision(
         self, approval_id: ApprovalId
