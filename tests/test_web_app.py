@@ -3004,6 +3004,15 @@ def test_graph_events_cursor_replays_only_unseen_events() -> None:
                         break
                     await asyncio.sleep(0.01)
                 assert len(full) > 1
+                snapshot = (await client.get(
+                    f"/graph/api/runs/{created.json()['runId']}"
+                )).json()
+                execution_id = snapshot["activeExecutions"][0]["executionId"]
+                messages = [event for event in full if event["type"] == "transcript"]
+                assert messages
+                assert all(event["executionId"] == execution_id for event in messages)
+                assert all(event["executionId"] is None for event in full
+                           if event["type"] == "run.started")
                 for cursor in ("0", "", " "):
                     response = await client.get(url, params={"cursor": cursor})
                     assert response.status_code == 200

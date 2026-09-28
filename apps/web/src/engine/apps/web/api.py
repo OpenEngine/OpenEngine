@@ -2334,6 +2334,7 @@ def create_app(
                         "sequence": event.sequence,
                         "type": event.kind.value,
                         "nodeId": str(event.node_id) if event.node_id else None,
+                        "executionId": str(event.execution_id) if event.execution_id else None,
                         "payload": dict(event.payload),
                     }
                     for event in graph_events.since(run_id, cursor)
