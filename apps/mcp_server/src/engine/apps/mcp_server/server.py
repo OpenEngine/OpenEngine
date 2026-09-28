@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 import re
 import secrets
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from mcp.server.auth.settings import AuthSettings
@@ -192,6 +192,132 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         except (ValueError, KeyError, TypeError) as error:
             raise RuntimeError("OE returned an invalid result. Check the work-order list before retrying.") from error
         return {"run_id": run_id}
+
+    async def request_engine(method: str, path: str, payload: dict | None = None) -> dict:
+        headers = {"Authorization": f"Bearer {settings.engine_token}"} if settings.engine_token else {}
+        async with httpx.AsyncClient(
+            base_url=settings.engine_url, transport=transport, timeout=60, trust_env=False,
+        ) as client:
+            try:
+                response = await client.request(method, path, json=payload, headers=headers)
+            except httpx.RequestError as error:
+                raise RuntimeError(
+                    "OE could not confirm the request. Check workorder_status before retrying."
+                ) from error
+        if not response.is_success:
+            raise RuntimeError(f"OE rejected the request (HTTP {response.status_code}).")
+        try:
+            result = response.json()
+            if not isinstance(result, dict):
+                raise ValueError("expected an object")
+        except ValueError as error:
+            raise RuntimeError("OE returned an invalid result. Check OE before retrying.") from error
+        return result
+
+    def identifier(value: str) -> str:
+        if not value.strip() or value.strip() in {".", ".."} or "/" in value or "\\" in value:
+            raise ValueError("identifier must be non-blank and contain no path separators")
+        return quote(value.strip(), safe="")
+
+    async def workorder(run_id: str) -> tuple[str, dict]:
+        key = identifier(run_id)
+        run = await request_engine("GET", f"/api/runs/{key}")
+        if run.get("repository") != settings.repository:
+            raise ValueError("work order is outside the configured repository")
+        return key, run
+
+    async def graph_state(key: str, run: dict) -> tuple[dict, dict]:
+        if run.get("phase") == "scheduled":
+            snapshot = {"status": "scheduled", "activeExecutions": [], "nextNodes": [], "values": {}}
+            graph_id = run["workflowId"]
+        else:
+            snapshot = await request_engine("GET", f"/graph/api/runs/{key}")
+            graph_id = snapshot["graphId"]
+        topology = await request_engine("GET", f"/graph/api/graphs/{identifier(graph_id)}")
+        return snapshot, topology
+
+    async def transcript(key: str, node: str, last_n: int) -> list[dict]:
+        events = await request_engine("GET", f"/api/runs/{key}/graph-events")
+        return [
+            event["payload"] for event in events["events"]
+            if event.get("nodeId") == node and event.get("type") == "transcript"
+        ][-last_n:]
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def workorder_status(run_id: str) -> dict[str, object]:
+        """Return status, current nodes, topology, recent transcript and PR URL.
+
+        Each current node includes its last five transcript messages. Parallel
+        executions are reported individually; an idle frontier uses nextNodes.
+        """
+        key, run = await workorder(run_id)
+        snapshot, topology = await graph_state(key, run)
+        nodes = list(dict.fromkeys(
+            item["nodeId"] for item in snapshot["activeExecutions"]
+        )) or snapshot["nextNodes"]
+        values = snapshot.get("values", {})
+        pr_url = values.get("pr_url") or next((
+            value["pr_url"] for value in values.values()
+            if isinstance(value, dict) and value.get("pr_url")
+        ), None)
+        return {
+            "run_id": run["runId"], "status": snapshot["status"],
+            "current_nodes": nodes, "topology": topology, "pr_url": pr_url,
+            "transcript": {node: await transcript(key, node, 5) for node in nodes},
+        }
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def node_status(run_id: str, nodename: str, last_n: int = 10) -> dict[str, object]:
+        """Return the last n transcript messages from the selected node, oldest first.
+
+        Use a nodeId from workorder_status's topology. last_n must be 1–1000.
+        """
+        identifier(nodename)
+        if not 1 <= last_n <= 1000:
+            raise ValueError("last_n must be between 1 and 1000")
+        key, run = await workorder(run_id)
+        snapshot, topology = await graph_state(key, run)
+        node = nodename.strip()
+        if not any(item["nodeId"] == node for item in topology["nodes"]):
+            raise ValueError("unknown node")
+        return {
+            "run_id": run["runId"], "node": node, "status": snapshot["status"],
+            "messages": await transcript(key, node, last_n),
+        }
+
+    @mcp.tool(annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True,
+    ))
+    async def steer_workorder(run_id: str, instruction: str, nodename: str | None = None) -> dict[str, object]:
+        """Send an instruction to an active node without resetting it.
+
+        Specify a nodeId when multiple nodes are active. To revisit an earlier
+        node, first call node_steer, then send an instruction once it is active.
+        """
+        if not instruction.strip() or len(instruction) > 100_000:
+            raise ValueError("instruction must contain 1–100000 characters and not be blank")
+        payload = {"message": instruction.strip()}
+        if nodename is not None:
+            identifier(nodename)
+            payload["node"] = nodename.strip()
+        key, _ = await workorder(run_id)
+        return await request_engine("POST", f"/graph/api/runs/{key}/steering", payload)
+
+    @mcp.tool(annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True,
+    ))
+    async def node_steer(run_id: str, nodename: str) -> dict[str, object]:
+        """Stop current execution and reset to the latest checkpoint before this node.
+
+        Execution restarts from that point. Use steer_workorder to send a
+        steering instruction to the node once active. Earlier attempts remain
+        in the transcript. The node must have been reached previously.
+        """
+        identifier(nodename)
+        key, _ = await workorder(run_id)
+        return await request_engine(
+            "POST", f"/graph/api/runs/{key}/transitions", {"node": nodename.strip()},
+        )
 
     app = mcp.streamable_http_app(
         stateless_http=True, json_response=True,
