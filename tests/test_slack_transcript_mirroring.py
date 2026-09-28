@@ -141,7 +141,20 @@ def test_agent_transcript_is_mirrored(
                if message.text in expected)
     assert all(not message.links for _, message, _ in communications.posts
                if message.text in expected or message.text == "*agent* started.")
-    assert ("Work order finished." in posted) == (blank_report and ending == "finished")
+    assert posted.count("Work order finished.") == int(ending == "finished")
+    work_order_links = [
+        (message, link)
+        for _, message, _ in communications.posts
+        for link in message.links
+        if link.label == "View work order"
+    ]
+    assert len(work_order_links) == 1
+    completion, link = work_order_links[0]
+    assert completion.text == (
+        "Work order finished." if ending == "finished"
+        else "Work order failed: unexpected service failure"
+    )
+    assert link.url.endswith(f"/runs/{run_id}")
     assert posted.count("Work order failed: unexpected service failure") == int(ending == "failed")
     assert posted.count("*agent* started.") == 1
     assert not any(word in text for text in posted for word in (
@@ -221,7 +234,7 @@ def test_human_review_slack_sequence(tmp_path, decision, agent_report):
     expected.extend(["*Human review* started.", "Review complete and ready for your decision."])
     if decision == "cancel":
         expected.append("Work order failed: approval of this run was not allowed")
-    elif not agent_report:
+    else:
         expected.append("Work order finished.")
     assert [message.text for _, message, _ in communications.posts] == expected
     assert all((channel, thread) == ("CSOURCE", "1") for channel, _, thread in communications.posts)
