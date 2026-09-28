@@ -477,7 +477,8 @@ class ScriptedGraphRuntime:
         return tuple(self._require(run_id).checkpoints)
 
     async def resume_from(
-        self, run_id: RunId, checkpoint_id: CheckpointId
+        self, run_id: RunId, checkpoint_id: CheckpointId,
+        *, node_id: NodeId | None = None, message: str | None = None,
     ) -> RunSnapshot:
         run = self._require(run_id)
         origin = run.by_id.get(checkpoint_id)
@@ -488,6 +489,10 @@ class ScriptedGraphRuntime:
         # request would otherwise arrive in -- and it would find nothing in
         # flight to stop, because the first caller had already let go of it.
         async with run.control:
+            if (node_id is None) != (message is None):
+                raise ValueError("give both node_id and message")
+            if message is not None and (not message.strip() or node_id not in origin.next_nodes):
+                raise ValueError("message requires a node in the checkpoint frontier")
             await self._stop(run)
             # The state that position held, not whatever a later node concluded
             # -- and appended as a child of it, so the attempt being replaced is
@@ -512,6 +517,12 @@ class ScriptedGraphRuntime:
                     "values": dict(run.values),
                 },
             )
+            self._pending_steers[run_id] = {}
+            if message is not None:
+                await self.emit(
+                    run, EventKind.STEERING_RECEIVED, {"message": message}, node_id=node_id,
+                )
+                self._pending_steers[run_id][node_id] = [message]
             # No await between here and the return, so the snapshot the caller
             # is answered with is the forked position rather than whatever the
             # restarted superstep has already got to.
@@ -879,17 +890,9 @@ class ScriptedGraphRuntime:
             raise NoSuchPositionError(
                 f"this run has never been about to run {node_id}"
             )
-        # Store the message so _run_node can pick it up after the resume.
-        self._pending_steers.setdefault(run.run_id, {}).setdefault(node_id, []).append(
-            message
+        return await self.resume_from(
+            run.run_id, checkpoint_id, node_id=node_id, message=message,
         )
-        await self.emit(
-            run,
-            EventKind.STEERING_RECEIVED,
-            {"message": message},
-            node_id=node_id,
-        )
-        return await self.resume_from(run.run_id, checkpoint_id)
 
     # --- internal ----------------------------------------------------------
 

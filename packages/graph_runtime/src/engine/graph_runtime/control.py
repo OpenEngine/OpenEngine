@@ -275,7 +275,8 @@ class GraphRuntime(Protocol):
         ...
 
     async def resume_from(
-        self, run_id: RunId, checkpoint_id: CheckpointId
+        self, run_id: RunId, checkpoint_id: CheckpointId,
+        *, node_id: NodeId | None = None, message: str | None = None,
     ) -> RunSnapshot:
         """Fork from `checkpoint_id` and execute forward.
 
@@ -293,6 +294,10 @@ class GraphRuntime(Protocol):
         endings for it. Control operations on a run are therefore serialised: a
         second resume waits for the first and then forks from wherever that one
         left the run, rather than racing it.
+
+        Optional `node_id` and `message` must be supplied together. Queue the
+        message for that node after stopping the old attempt and before launch.
+        The node must be in the checkpoint frontier.
 
         Raises `UnknownCheckpointError`.
         """

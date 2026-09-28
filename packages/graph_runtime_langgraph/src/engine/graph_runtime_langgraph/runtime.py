@@ -268,7 +268,8 @@ class LangGraphRuntime:
             return await self.workspace(run_id)
 
     async def resume_from(
-        self, run_id: RunId, checkpoint_id: CheckpointId
+        self, run_id: RunId, checkpoint_id: CheckpointId,
+        *, node_id: NodeId | None = None, message: str | None = None,
     ) -> RunSnapshot:
         definition = await self._definition_for(run_id)
         at = self._config(run_id, checkpoint_id)
@@ -283,6 +284,10 @@ class LangGraphRuntime:
         # second one's first act is stopping the driver the first one started.
         async with live.control:
             position = await definition.graph.aget_state(at)
+            if (node_id is None) != (message is None):
+                raise ValueError("give both node_id and message")
+            if message is not None and (not message.strip() or str(node_id) not in position.next):
+                raise ValueError("message requires a node in the checkpoint frontier")
             workspace_id = position.values.get("workspaceId")
             if workspace_id and definition.workspace_node is not None:
                 workspace = await definition.workspace_node.provider.state(
@@ -328,6 +333,12 @@ class LangGraphRuntime:
             # position it asked for rather than about whatever the restarted
             # superstep has already got to.
             answer = await self._snapshot(run_id)
+            live.pending_steers.clear()
+            if message is not None:
+                await self.publish(
+                    run_id, EventKind.STEERING_RECEIVED, {"message": message}, node_id,
+                )
+                live.pending_steers[node_id] = [message]
             self._launch(live, definition, forked)
             return answer
 
@@ -368,17 +379,9 @@ class LangGraphRuntime:
         node's coroutine runs a line, so nothing is missed.
         """
         checkpoint_id = await self._position_for_node(run_id, node_id)
-        live = self._live.setdefault(
-            run_id, _Live(run_id, (await self._require(run_id)).graph_id)
+        return await self.resume_from(
+            run_id, checkpoint_id, node_id=node_id, message=message,
         )
-        live.pending_steers.setdefault(node_id, []).append(message)
-        await self.publish(
-            run_id,
-            EventKind.STEERING_RECEIVED,
-            {"message": message},
-            node_id,
-        )
-        return await self.resume_from(run_id, checkpoint_id)
 
     async def set_runner(
         self, run_id: RunId, node_id: NodeId, runner: str

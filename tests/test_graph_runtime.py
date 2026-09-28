@@ -1949,3 +1949,42 @@ def test_polling_projects_display_values_and_full_state_is_explicit(build: Backe
     assert len(poll["pendingApprovals"]) == 1
     assert poll["activeExecutions"] == full["activeExecutions"]
     assert poll["nextNodes"] == full["nextNodes"]
+
+
+def test_transition_queues_instruction_before_restarted_node_runs(build: Backend) -> None:
+    async def scenario() -> None:
+        async with _server(build(_pipeline(Say("Done immediately.")))) as surface:
+            run_id = str((await _start(surface))["runId"])
+            first = await surface.read(run_id, "run.finished")
+            response = await surface.client.post(
+                f"/api/runs/{run_id}/transitions",
+                json={"node": str(IMPLEMENTATION), "message": "New instruction"},
+            )
+            assert response.status_code == 200, response.text
+            events = await surface.read(run_id, "run.finished", cursor=first[-1]["sequence"])
+            messages = [event for event in _of_kind(events, "transcript")
+                        if event["nodeId"] == str(IMPLEMENTATION)]
+            assert [event["payload"]["text"] for event in messages] == [
+                "New instruction", "Done immediately.",
+            ]
+            assert messages[0]["executionId"] == messages[1]["executionId"]
+            assert not any(event["nodeId"] == str(REVIEW) and
+                           event["payload"].get("text") == "New instruction"
+                           for event in _of_kind(events, "transcript"))
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("payload", [{"node": "implementation", "message": " "},
+                                      {"checkpoint": "unknown", "message": "Fix it"}])
+def test_invalid_transition_message_does_not_fork(build: Backend, payload: dict) -> None:
+    async def scenario() -> None:
+        async with _server(build(_pipeline(Say("Done.")))) as surface:
+            run_id = str((await _start(surface))["runId"])
+            await surface.read(run_id, "run.finished")
+            before = await _checkpoints(surface, run_id)
+            response = await surface.client.post(f"/api/runs/{run_id}/transitions", json=payload)
+            assert response.status_code == 400
+            assert await _checkpoints(surface, run_id) == before
+
+    asyncio.run(scenario())

@@ -1,6 +1,6 @@
-# Create work orders through remote MCP
+# Manage work orders through remote MCP
 
-`engine-mcp-server` exposes one Streamable HTTP tool at `/mcp`:
+`engine-mcp-server` exposes Streamable HTTP tools at `/mcp`. Create work with:
 `create_workorder(prompt: string, depends_on_run_id?: string) -> {"run_id": "..."}`.
 It calls OE's `POST /api/runs`. Without a dependency, the graph workflow starts
 before returning. To chain work orders, pass a previous call's `run_id` as
@@ -9,13 +9,32 @@ The call returns the new run ID even while it is waiting. Existing workflow
 review and approval rules still apply. Time-based scheduling is not exposed.
 Each call creates a new work order; after a timeout, check OE before retrying.
 
-The gateway is a separate loopback process that exposes only its MCP tool.
+Inspect and steer work orders in the configured repository with:
+
+- `workorder_status(run_id)`: returns status, current node IDs (including parallel
+  nodes), node topology, the last five transcript messages per current node, and
+  `pr_url` when available. `active_executions` includes each task's `execution_id`,
+  `node_id`, and its own last five messages. Scheduled and finished runs can have no current node.
+- `node_status(run_id, nodename, last_n=10)`: returns the last 1–1000 transcript
+  messages for the selected node, oldest first. Use a `nodeId` from the topology.
+- `steer_workorder(run_id, instruction, nodename?, execution_id?)`: sends an instruction to an
+  active execution. Select either a node or an execution ID; use the execution
+  ID when multiple tasks run the same node.
+- `node_steer(run_id, nodename, instruction)`: stops current execution, queues
+  the instruction, and restarts from the latest checkpoint before the named node.
+  The instruction is queued before the node starts. The node must have been
+  reached previously; earlier attempts remain in the transcript.
+
+Reset and steering calls are never automatically retried. After an uncertain
+response, check status before repeating a mutation.
+
+The gateway is a separate loopback process that exposes only its MCP tools.
 Funnel visibility applies to the entire HTTPS port, not individual paths: sharing
 an origin with OE's interface also publishes its UI, settings, and other APIs,
 even if the interface was previously tailnet-only. The gateway's bearer token
 does not protect those routes. See [Tailscale's port visibility rules](https://tailscale.com/docs/features/tailscale-serve#limitations).
 Repository and workflow are chosen by the host, not the caller. Any holder of the bearer token
-can start work in that repository. Keep it out of prompts, URLs, and source
+can start, inspect, reset, and steer work in that repository. Keep it out of prompts, URLs, and source
 control. Rotate it by changing the private env file and restarting the gateway.
 
 ## Host on the Mac mini
