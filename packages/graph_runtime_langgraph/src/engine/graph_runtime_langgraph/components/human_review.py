@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from engine.domain import ApprovalDecision, ApprovalKind
+from engine.domain import ApprovalDecision, ApprovalKind, WorkState
 from engine.graph_runtime import EventKind
 from engine.graph_runtime_langgraph.executions import current_execution
 
@@ -52,6 +52,7 @@ class HumanReviewNode:
     graph_node_name: str = "Human review"
     graph_node_kind: str = "human"
     graph_node_description: str = "A person accepts or rejects the run."
+    graph_node_group: str = WorkState.REVIEW
     graph_node_show_in_sidebar: bool = False
     """Not one of the run's conversations, so it is not offered as one.
 

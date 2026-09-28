@@ -383,6 +383,8 @@ def _topology_json(graph: GraphTopology) -> dict[str, object]:
                 "group": node.group,
                 "runner": node.runner,
                 "runners": list(node.runners),
+                "runnerInput": node.runner_input,
+                "findingsKey": node.findings_key,
             }
             for node in graph.nodes
         ],

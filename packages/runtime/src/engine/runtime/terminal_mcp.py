@@ -127,6 +127,12 @@ READ_ONLY_REPOSITORY_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+#: The repository tools that work in the step's own checkout and nothing else,
+#: which is all a disconnected run is served. `git_subcommand` is here though a
+#: subcommand could push: without a pull request or a forge credential in play
+#: a push has nowhere it is expected to go, and a local commit needs it.
+LOCAL_REPOSITORY_TOOLS: frozenset[str] = frozenset({"git_subcommand"})
+
 #: What `open_pull_request` proposes against when the agent names no base.
 DEFAULT_BASE_REF = "main"
 
@@ -1609,6 +1615,7 @@ __all__ = [
     "PullRequestLookup",
     "PullRequestRecorder",
     "READ_ONLY_REPOSITORY_TOOLS",
+    "LOCAL_REPOSITORY_TOOLS",
     "REPOSITORY_TOOL_METHODS",
     "REPOSITORY_TOOL_NAMES",
     "StatusReporter",

@@ -3,6 +3,8 @@
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 
+from engine.domain import MODE_INPUT, ForgeMode
+
 #: Runner choices that stand for a policy rather than a runner, and are replaced
 #: by a concrete runner from the same input's choices when a run starts.
 LEAST_UTILIZED = "least-utilized"
@@ -25,6 +27,18 @@ class WorkflowInput:
             raise ValueError("workflow inputs need a name and label")
         if self.default and self.choices and self.default not in self.choices:
             raise ValueError(f"invalid default for workflow input {self.name!r}")
+
+
+def mode_input(default: ForgeMode = ForgeMode.CONNECTED) -> WorkflowInput:
+    """The creation field that chooses whether a run may reach the forge.
+
+    A workflow declares it to offer both modes; the components that behave
+    differently read the choice from the run's inputs themselves.
+    """
+    return WorkflowInput(
+        MODE_INPUT, "Mode", default=str(default), required=True,
+        choices=tuple(str(mode) for mode in ForgeMode),
+    )
 
 
 def resolve_inputs(

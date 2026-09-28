@@ -9,6 +9,11 @@ conciseness, DRYness & code duplication). Their findings are collected by a
 comments with lineage.
 Surviving findings go back to implementation for one automatic fix-and-review
 cycle before impact analysis and human review.
+
+The workflow offers both forge modes (`engine.domain.forge`) through
+`mode_input`. Nothing here branches on the mode: the components narrow the
+tools and skip CI themselves, and the prompts are filled from the shared
+`components.forge` snippets that say where the work goes.
 """
 
 import json
@@ -39,8 +44,17 @@ from engine.graph_runtime_langgraph.components import (
     WorkspaceNode,
     checkout,
 )
-from engine.domain import StepCompleted
-from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN
+from engine.graph_runtime_langgraph.components.forge import (
+    ANSWER_REVIEW,
+    CHANGE_UNDER_REVIEW,
+    PUBLISH_CHANGE,
+    PUBLISH_FINDINGS,
+    PUBLISH_SUMMARY,
+    THE_CHANGE,
+    UPDATE_CHANGE,
+)
+from engine.domain import StepCompleted, WorkState
+from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN, mode_input
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -89,12 +103,8 @@ IMPLEMENTATION_PROMPT = (
     "before editing. The workspace is already based on the current remote main "
     "commit; do not fetch, pull, or merge main before editing. Make the "
     "smallest complete change and report the result.\n\n"
-    "Every git operation goes through the git_subcommand tool. When the change "
-    "is ready, create a descriptive agent/<description> branch, commit only this "
-    "change, push that branch, then call open_pull_request. Finish by calling "
-    "complete_step with the URL open_pull_request returned as the pr_url output. "
-    "Report that URL, not a pull request number read from an issue, a diff or CI "
-    "output. Use fail_step "
+    "{publish}"
+    "Use fail_step "
     "if the work cannot be completed, or clarify only when answering a question "
     "without changing the implementation.\n\n"
     "The task:\n{task}"
@@ -131,25 +141,14 @@ RERANKER_PROMPT = (
     "- Already handled by existing code the reviewer missed\n\n"
     "Keep only findings a senior engineer would genuinely want fixed before "
     "merging. When in doubt, remove the finding.\n\n"
-    "For each surviving finding, post it as a PR comment using add_comment. "
-    "Format each comment as:\n\n"
-    "**<tagline>**\n\n"
-    "<description>\n\n"
-    "_Produced by {runner} reviewing <facet>_\n\n"
-    "Use the file and line from the finding for inline comments where "
-    "available; use a general comment otherwise. If no findings survive, "
-    "leave one general comment saying the change looks clean.\n\n"
-    "After posting comments, call complete_step with the filtered findings "
-    "as a JSON array (same schema as the inputs). Preserve each finding's "
-    "agent and facet fields unchanged.\n\n"
+    "{publishing}"
     "{findings_sections}"
-    "Pull request: {pr_url}\n\n"
+    "{change}"
     "Original task:\n{task}"
 )
 
-
 IMPACT_ANALYSIS_PROMPT = (
-    "Assess the impact of the final change on pull request {pr_url}. Read the "
+    "Assess the impact of the final change {change}. Read the "
     "diff and surrounding code, tests, CI results, and review findings. Inspect "
     "only: do not edit, commit, merge, or deploy anything.\n\n"
     "Rank the change at exactly one level:\n"
@@ -170,17 +169,14 @@ IMPACT_ANALYSIS_PROMPT = (
     "untested behavior is safe. Give evidence for UI/product and architectural "
     "scope, complexity, sensitive components, test coverage and blind spots, "
     "and human setup or deployment work.\n\n"
-    "Before completing, use add_comment to post one general comment on pull "
-    "request {pr_url} with your impact analysis results. Include the color "
-    "label and emoji, your rationale and evidence, testing gaps, and required "
-    "human actions. Then call complete_step with impact_level set to exactly "
+    "{publishing}"
+    "call complete_step with impact_level set to exactly "
     "Green, Orange, or Red "
     "and impact_rationale containing your evidence and required human actions. "
     "Include the color label and emoji and the rationale in the summary.\n\n"
     "Original task:\n{task}\n\nImplementation report:\n{implementation}\n\n"
     "CI results:\n{ci}\n\nFinal review findings:\n{findings}"
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -259,26 +255,25 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
     ci = state.get("ci_check")
     if isinstance(ci, dict) and ci.get("passed") is False:
         return (
-            f"Fix the CI failures on the existing pull request {state.get('pr_url')}. "
+            f"Fix the CI failures on {THE_CHANGE(state, pr_url=state.get('pr_url'))}. "
             "Read the failed job logs and relevant code, make the smallest fix, "
-            "test it, commit and push to the same PR branch using git_subcommand. "
-            "Do not open another pull request. Finish with complete_step and the "
-            "same pr_url output. Use fail_step if the failures cannot be fixed.\n\n"
+            f"test it, {UPDATE_CHANGE(state)}"
+            "Use fail_step if the failures cannot be fixed.\n\n"
             f"{ci.get('summary', '')}\n\nOriginal task:\n{state.get('task', '')}"
         )
     if state.get(REVIEW) and state.get("review_rounds") == 1:
         return (
-            f"Address the review findings on the existing pull request {state.get('pr_url')}. "
+            "Address the review findings on "
+            f"{THE_CHANGE(state, pr_url=state.get('pr_url'))}. "
             "Read the relevant code, make the smallest complete fix, test it, "
-            "commit and push to the same PR branch using git_subcommand. "
-            "Reply to each review comment you addressed, explaining the fix, "
-            "and resolve its review thread where applicable. "
-            "Do not open another pull request. Finish with complete_step and the "
-            "same pr_url output. Use fail_step if the findings cannot be addressed.\n\n"
+            f"{UPDATE_CHANGE(state)}{ANSWER_REVIEW(state)}"
+            "Use fail_step if the findings cannot be addressed.\n\n"
             f"Review findings:\n{json.dumps(state[REVIEW])}\n\n"
             f"Original task:\n{state.get('task', '')}"
         )
-    return IMPLEMENTATION_PROMPT.format(task=state.get("task", ""))
+    return IMPLEMENTATION_PROMPT.format(
+        publish=PUBLISH_CHANGE(state), task=state.get("task", ""),
+    )
 
 
 def _after_reranker(state: dict[str, Any]) -> str:
@@ -356,6 +351,7 @@ def pipeline(
             graph_node_name="Implementation",
             graph_node_always_open=True,
             graph_node_description="Makes the requested change.",
+            graph_node_group=WorkState.IMPLEMENTATION,
             session_config=session_config,
         ),
     )
@@ -416,9 +412,11 @@ def pipeline(
             )
         return RERANKER_PROMPT.format(
             reviewer_count=len(REVIEW_FACETS),
-            runner=state.get("inputs", {}).get("review_runner", reviewer),
+            publishing=PUBLISH_FINDINGS(
+                state, runner=state.get("inputs", {}).get("review_runner", reviewer),
+            ),
             findings_sections="".join(sections),
-            pr_url=state.get("pr_url", ""),
+            change=f"The change is {CHANGE_UNDER_REVIEW(state, pr_url=state.get('pr_url', ''))}.\n\n",
             task=state.get("task", ""),
         )
 
@@ -459,7 +457,8 @@ def pipeline(
             agent=reviewer,
             registry=agents,
             prompt=lambda state: IMPACT_ANALYSIS_PROMPT.format(
-                pr_url=state.get("pr_url", ""),
+                change=CHANGE_UNDER_REVIEW(state, pr_url=state.get("pr_url", "")),
+                publishing=PUBLISH_SUMMARY(state, pr_url=state.get("pr_url", "")),
                 task=state.get("task", ""),
                 implementation=state.get(IMPLEMENTATION, ""),
                 ci=json.dumps(state.get("ci_check", {})),
@@ -481,6 +480,7 @@ def pipeline(
             output_key=IMPACT_ANALYSIS,
             graph_node_name="Impact analysis",
             graph_node_description="Ranks change impact as Green 🟢, Orange 🟠, or Red 🔴.",
+            graph_node_group=WorkState.REVIEW,
             session_config=session_config,
         ),
     )
@@ -550,6 +550,7 @@ def graph_for(
                 default={"codex": "claude", "claude": "codex"}[runner],
                 required=True, choices=RUNNER_INPUT_CHOICES,
             ),
+            mode_input(),
         ),
     )
 

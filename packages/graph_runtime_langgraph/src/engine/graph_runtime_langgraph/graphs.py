@@ -186,6 +186,12 @@ class LangGraphDefinition:
                     group=_group_of(node),
                     runner=getattr(_described(node), "graph_node_runner", ""),
                     runners=getattr(_described(node), "graph_node_runners", ()),
+                    findings_key=str(
+                        getattr(_described(node), "graph_node_findings_key", "") or ""
+                    ),
+                    runner_input=str(
+                        getattr(_described(node), "graph_node_runner_input", "") or ""
+                    ),
                 )
                 for node in drawn.nodes.values()
                 if node.id not in (START, END)

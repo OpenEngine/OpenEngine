@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from engine.domain import WorkspaceId
+from engine.domain import ForgeMode, WorkState, WorkspaceId, forge_mode
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import SourceControl
 from engine.runtime.change_requests import change_request
@@ -39,9 +39,16 @@ class CICheck:
     graph_node_kind: str = "tool"
     graph_node_description: str = "Waits for CI and returns failures to implementation."
     graph_node_show_in_sidebar: bool = False
+    graph_node_group: str = WorkState.IMPLEMENTATION
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
+        if forge_mode(state.get("inputs")) is ForgeMode.DISCONNECTED:
+            # There is no pull request to run CI on. Passed, so the graph goes
+            # on to review, and said to be skipped, so nobody reads it as green.
+            summary = "CI skipped: this run is disconnected from the forge."
+            await execution.say(summary)
+            return {self.output_key: {"passed": True, "skipped": True, "summary": summary}}
         source_control = self.source_control or execution.runtime.source_control
         if source_control is None:
             raise RuntimeError("CICheck needs a SourceControl bound to its runtime")
