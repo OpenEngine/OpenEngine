@@ -212,6 +212,13 @@ For browser-based login setup, see the [GitHub login guide](docs/github-login.md
 To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
 
+## MCP integration
+
+Remote MCP clients can create work orders, inspect progress and transcripts,
+send instructions to active tasks, and restart work from a previously reached
+node. The [remote MCP guide](docs/remote-mcp.md) covers hosting the gateway,
+authentication, client setup, and a status-and-steering walkthrough.
+
 ## What is it.
 
 We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.
@@ -226,5 +233,3 @@ The key concepts are:
 Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine drives Codex and Claude over ACP with your local logins. 
 
 ![sdlc](docs/images/oe_sdlc.png)
-
-Remote clients can [create and immediately execute work orders through MCP](docs/remote-mcp.md), hosted on a Mac mini behind Tailscale Funnel.
