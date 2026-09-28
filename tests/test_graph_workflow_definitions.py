@@ -449,7 +449,7 @@ def test_review_feedback_returns_to_implementation_at_most_once(
 def test_a_disconnected_run_is_told_to_stay_off_the_forge(
     monkeypatch, has_findings,
 ) -> None:
-    """Every prompt is worded for a run that commits locally and posts nothing."""
+    """Every prompt is worded for a run that keeps changes locally and posts nothing."""
     from langchain_core.runnables import RunnableLambda
     from engine.graph_runtime_langgraph.components import RerankerNode
 
@@ -519,8 +519,11 @@ def test_a_disconnected_run_is_served_no_forge_tools(monkeypatch) -> None:
     monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
     served = {}
 
+    original_enable = TerminalMcpBroker.enable_repository_tools
+
     def enable(self, source_control, names, workspace, approve):
         served[self._step.step_id] = (tuple(names), self._step.required_outputs)
+        original_enable(self, source_control, names, workspace, approve)
 
     monkeypatch.setattr(TerminalMcpBroker, "enable_repository_tools", enable)
     source_control = SimpleNamespace(**{
@@ -542,12 +545,19 @@ def test_a_disconnected_run_is_served_no_forge_tools(monkeypatch) -> None:
                      module.IMPACT_ANALYSIS):
             binding, = nodes[name].mcp_server_bindings
             async with binding(state, execution, None):
-                pass
+                broker = brokers[-1]
+                result = await broker._submit({
+                    "token": broker._token, "request_id": "push", "name": "git_subcommand",
+                    "arguments": {"arguments": ["push", "origin", "agent/example"]},
+                })
+                assert result == {
+                    "ok": False, "error": "git_subcommand is not enabled for this step",
+                }
 
     asyncio.run(scenario())
 
     assert served == {
-        module.IMPLEMENTATION: (("git_subcommand",), ()),
+        module.IMPLEMENTATION: ((), ()),
         "review-security": ((), ("findings",)),
         module.RERANKER: ((), ("findings",)),
         module.IMPACT_ANALYSIS: ((), ("impact_level", "impact_rationale")),

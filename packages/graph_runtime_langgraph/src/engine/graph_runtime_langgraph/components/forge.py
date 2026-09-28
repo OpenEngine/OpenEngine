@@ -2,7 +2,7 @@
 
 A workflow's prompts say what to do; *where the result goes* is the part that
 changes with the run's mode (see `engine.domain.forge`), and it is the same
-part in every workflow: publish the change or commit it here, post the
+part in every workflow: publish the change or keep it here, post the
 findings or keep them, name the pull request or the checkout. So those
 sentences live here, once, as `ByMode` snippets a prompt template is filled
 from, and a workflow never branches on the mode itself.
@@ -64,10 +64,9 @@ PUBLISH_CHANGE = ByMode(
     ),
     disconnected=(
         OFFLINE
-        + "Every git operation goes through the git_subcommand tool. When the "
-        "change is ready, create a descriptive agent/<description> branch and "
-        "commit only this change to it in this checkout. Finish by calling "
-        "complete_step with a summary of the change and the branch it is on. "
+        + "Keep the changes in this checkout. The git_subcommand tool is unavailable "
+        "in disconnected mode. Finish by calling complete_step with a summary "
+        "of the change and its checkout path. "
     ),
 )
 
@@ -85,7 +84,7 @@ UPDATE_CHANGE = ByMode(
         "same pr_url output. "
     ),
     disconnected=(
-        "commit it to the same branch in this checkout using git_subcommand. "
+        "keep the changes in this checkout. "
         + OFFLINE
         + "Finish with complete_step summarising what you changed. "
     ),
@@ -141,7 +140,7 @@ PUBLISH_SUMMARY = ByMode(
 #: How a prompt names the change under review: `{pr_url}` when connected.
 CHANGE_UNDER_REVIEW = ByMode(
     connected="on pull request {pr_url}",
-    disconnected="committed in this checkout",
+    disconnected="in this checkout",
 )
 
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from engine.domain import WorkState
+from engine.domain import ForgeMode, WorkState, forge_mode
 from engine.graph_runtime_langgraph.acp import NoWorkingDirectoryError
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import WorkspaceProvider
@@ -69,9 +69,14 @@ class WorkspaceNode:
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
         repository = self.repository or str(state.get(REPOSITORY) or ".")
-        await execution.say(f"Checking {repository} out at {self.base_ref}.")
+        # A local ref avoids the worktree provider fetching origin before work starts.
+        base_ref = (
+            "HEAD" if forge_mode(state.get("inputs")) is ForgeMode.DISCONNECTED
+            else self.base_ref
+        )
+        await execution.say(f"Checking {repository} out at {base_ref}.")
         workspace = await self.provider.provision(
-            repository, self.base_ref, co_author=str(state.get(CO_AUTHOR) or "")
+            repository, base_ref, co_author=str(state.get(CO_AUTHOR) or "")
         )
         # Checked here rather than left for whoever reads the state, so the
         # complaint names the provider that answered rather than the node three
@@ -88,7 +93,7 @@ class WorkspaceNode:
         await execution.tool(
             "provision",
             "provision_workspace",
-            {"repository": repository, "baseRef": self.base_ref},
+            {"repository": repository, "baseRef": base_ref},
             workspace.root_path,
         )
         return {

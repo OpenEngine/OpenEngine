@@ -414,3 +414,32 @@ def test_no_co_author_adds_no_trailer(tmp_path: Path) -> None:
     workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
 
     assert "Co-authored-by" not in _commit(Path(workspace.root_path), "-m", "feat: x")
+
+
+@pytest.mark.parametrize("mode", ["connected", "disconnected"])
+def test_workspace_mode_controls_remote_access(tmp_path: Path, monkeypatch, mode: str) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from engine.graph_runtime_langgraph.components import workspace as component
+
+    repository = tmp_path / "repository"
+    _repository(repository)
+    # There is deliberately no reachable origin and no cached origin/main ref.
+    _git(repository, "remote", "add", "origin", str(tmp_path / "missing.git"))
+    execution = SimpleNamespace(say=AsyncMock(), tool=AsyncMock())
+    monkeypatch.setattr(component, "current_execution", lambda: execution)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    node = component.WorkspaceNode(provider=provider, base_ref="origin/main")
+    state = {"repository": str(repository), "inputs": {"mode": mode}}
+
+    if mode == "connected":
+        with pytest.raises(GitWorktreeError):
+            asyncio.run(node(state))
+        return
+
+    result = asyncio.run(node(state))
+    assert _git(Path(result["workspace"]), "rev-parse", "HEAD") == _git(
+        repository, "rev-parse", "HEAD"
+    )
+    assert execution.tool.call_args.args[2]["baseRef"] == "HEAD"
+    assert "HEAD" in execution.say.call_args.args[0]
