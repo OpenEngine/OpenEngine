@@ -43,6 +43,10 @@ _SERVICE_ROUTE = ("POST", "/api/runs")
 # How often a response still streaming asks whether its user may keep it, so an
 # open event stream ends about when a new request would be refused.
 _STREAM_RECHECK = 30
+# Where a handler serving one repository's data puts an async check of whether
+# the request may still see it, so a stream is rechecked for that repository
+# and not only for access to any of them.
+STREAM_ACCESS = "engine.stream_access"
 
 
 def valid_service_token(token: str) -> bool:
@@ -588,7 +592,12 @@ class _SessionAuthMiddleware:
             while True:
                 await anyio.sleep(_STREAM_RECHECK)
                 user = self.login._read_session(request)
-                if user is None or not await self.login.has_access(user):
+                still_visible = scope.get(STREAM_ACCESS)
+                if (
+                    user is None
+                    or not await self.login.has_access(user)
+                    or (still_visible is not None and not await still_visible())
+                ):
                     revoked = True
                     group.cancel_scope.cancel()
                     break

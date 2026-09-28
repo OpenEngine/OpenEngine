@@ -3837,6 +3837,19 @@ def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> No
                     "repository": str(Path(repos["web"]).resolve()),
                 })
                 assert refused.status_code == 403
+                # Another repository's run is as unknown a prerequisite as one
+                # that does not exist, whatever state it is in.
+                for prerequisite in ("run-web", "run-missing"):
+                    hidden = await client.post("/api/runs", json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Follow up.",
+                        "repository": str(Path(repos["api"]).resolve()),
+                        "dependsOnRunId": prerequisite,
+                    })
+                    assert hidden.status_code == 400, hidden.text
+                    assert hidden.json() == {
+                        "error": f"unknown prerequisite workorder: {prerequisite}",
+                    }
                 config = (await client.get("/api/config")).json()
                 assert [repo["name"] for repo in config["repositories"]] == ["api"]
 
@@ -3844,6 +3857,38 @@ def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> No
         asyncio.run(scenario())
     assert asyncio.run(store.load(RunId("run-web"))) is not None
     assert asyncio.run(store.load(RunId("run-web-scheduled"))).phase is RunPhase.SCHEDULED
+
+
+def test_a_graph_run_stream_is_rechecked_against_its_own_repository(tmp_path) -> None:
+    """A stream from `/graph` ends when its run's repository is out of reach,
+    even for someone who can still write to another repository."""
+    from engine.apps.web.github_login import STREAM_ACCESS
+
+    app, _store, _repos = _scoped_app(tmp_path)
+    scopes = []
+
+    async def recording(scope, receive, send):
+        scopes.append(scope)
+        await app(scope, receive, send)
+
+    writable = {"acme/api"}
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=recording)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with app.app.router.lifespan_context(app.app):
+                await client.get("/graph/api/runs/run-api")
+                still_visible = scopes[-1][STREAM_ACCESS]
+                assert await still_visible() is True
+                writable.clear()
+                writable.add("acme/web")
+                assert await still_visible() is False
+
+    with _as_user(()), patch.object(
+        GitHubLogin, "writable_repositories",
+        AsyncMock(side_effect=lambda *_args, **_kwargs: frozenset(writable)),
+    ):
+        asyncio.run(scenario())
 
 
 def test_operators_see_every_run(tmp_path) -> None:

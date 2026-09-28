@@ -740,6 +740,49 @@ def test_an_open_stream_ends_when_access_is_revoked(monkeypatch):
     assert client.get("/api/events").status_code == 401
 
 
+def test_an_open_stream_ends_when_its_own_repository_is_out_of_reach(monkeypatch):
+    """A stream that registers a check of its own ends when that check fails,
+    though the user can still write to some other repository."""
+    import asyncio
+
+    from starlette.responses import StreamingResponse
+
+    from engine.apps.web.github_login import STREAM_ACCESS
+
+    visible = [True]
+
+    async def authorize(user_id, login):
+        return {"acme/api": visible[0], "acme/web": True}
+
+    async def events(request):
+        async def still_visible():
+            return visible[0]
+
+        request.scope[STREAM_ACCESS] = still_visible
+
+        async def body():
+            for n in range(1000):
+                if n == 3:
+                    visible[0] = False
+                yield f"data: {n}\n\n".encode()
+                await asyncio.sleep(0.01)
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    monkeypatch.setattr("engine.apps.web.github_login._STREAM_RECHECK", 0.01)
+    flow = _login_flow(authorize)
+    inner = Starlette(routes=flow.routes() + [Route("/api/events", events)])
+    client = TestClient(flow.middleware(inner), base_url="https://engine.test")
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        callback(client, params["state"][0], code="code")
+
+    response = client.get("/api/events")
+    assert response.status_code == 200
+    assert response.text.startswith("data: 0\n\n")
+    assert "data: 999" not in response.text
+
+
 def test_a_slow_lookup_holds_up_only_its_own_user():
     import asyncio
 

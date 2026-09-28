@@ -59,7 +59,7 @@ from engine.apps.web.github_ingress import (
     GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReviewRequest,
     github_co_author, github_requester,
 )
-from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
+from engine.apps.web.github_login import STREAM_ACCESS, GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
     DeviceFlowState,
@@ -2069,6 +2069,10 @@ def create_app(
             return _error(str(error), 400)
         if not repository_visible(await github_login.visible_repositories(request), repository):
             return _error("you cannot write to this repository", 403)
+        # A prerequisite the requester may not see is refused as if it did not
+        # exist, so neither its existence nor its state is revealed.
+        if dependency_value and await run_hidden(request, RunId(dependency_value)):
+            return _error(f"unknown prerequisite workorder: {dependency_value}", 400)
         graph = offered_graphs().get(str(workflow_id))
         if graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
@@ -2890,8 +2894,16 @@ def create_app(
             parts = path.strip("/").split("/")
             refusal: JSONResponse | None = None
             if parts[:2] == ["api", "runs"] and len(parts) > 2:
-                if await run_hidden(request, RunId(parts[2])):
+                run_id = RunId(parts[2])
+                if await run_hidden(request, run_id):
                     refusal = _error("run not found", 404)
+                else:
+                    # A run's event stream stays open; it ends once the run's
+                    # repository is no longer one this user can see.
+                    async def still_visible() -> bool:
+                        return not await run_hidden(request, run_id)
+
+                    scope[STREAM_ACCESS] = still_visible
             elif parts == ["api", "runs"] and request.method == "POST":
                 if await github_login.visible_repositories(request) is not None:
                     refusal = _error("only operators may start graph runs directly", 403)
