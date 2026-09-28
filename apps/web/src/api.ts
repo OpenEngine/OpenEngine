@@ -137,7 +137,6 @@ export type RunView = ApiWorkflowRun & {
   pendingHumanReview: {
     stepId: string;
     title: string;
-    prUrl: string | null;
   } | null;
 };
 
