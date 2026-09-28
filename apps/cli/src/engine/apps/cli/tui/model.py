@@ -363,13 +363,17 @@ def conversation(events: Sequence[Mapping[str, Any]]) -> list[Item]:
                 continue
             if steered.get(text):
                 steered[text] -= 1
+                # The node has taken up what was sent: no longer queued.
+                sent = next(one for one in items if one.kind == "user"
+                            and one.text == text and one.status == "queued")
+                sent.status = "delivered"
                 continue
             items.append(Item("user", text, sequence=sequence))
         elif kind == "steering.received":
             text = str(payload.get("message") or "")
             if text:
                 steered[text] = steered.get(text, 0) + 1
-                items.append(Item("user", text, sequence=sequence))
+                items.append(Item("user", text, status="queued", sequence=sequence))
         elif kind == "tool.call":
             call_id = str(payload.get("callId") or "")
             arguments = payload.get("arguments") or {}

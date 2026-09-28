@@ -8,17 +8,19 @@ On start the terminal is also asked for bracketed paste and the kitty keyboard
 protocol's "disambiguate" level. A terminal that does not know either ignores
 the request, and the legacy spellings the decoder also accepts still work.
 
-The mouse is deliberately never captured, so selecting and copying text works
-exactly as it does anywhere else in the terminal. The wheel still scrolls:
-"alternate scroll" (`?1007`) has the terminal send ↑/↓ for the wheel while the
-alternate screen is showing, which iTerm2, Terminal.app, kitty, WezTerm,
-Ghostty, VTE terminals and Windows Terminal do -- most of them by default.
+The mouse is reported to the workbench (button presses, drags and the wheel,
+in SGR form), because only the program knows where one pane ends and the next
+begins: a terminal's own selection runs across the whole screen. Dragging
+selects inside one pane and `copy` puts it on the clipboard. Holding Shift
+(Option in iTerm2 and Terminal.app) still gives the terminal's own selection.
 """
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
+import subprocess
 import sys
 import time
 from typing import TextIO
@@ -28,9 +30,18 @@ ENTER = (
     "\x1b[?25l"  # hide the cursor until a text field wants it
     "\x1b[?2004h"  # bracketed paste
     "\x1b[>1u"  # kitty keyboard protocol: disambiguate escape codes
-    "\x1b[?1007h"  # alternate scroll: the wheel sends ↑/↓, the mouse stays free
+    "\x1b[?1002h"  # mouse: presses, releases, drags with a button held, wheel
+    "\x1b[?1006h"  # ... reported as SGR, which has no column limit
 )
-LEAVE = "\x1b[?1007l\x1b[<u\x1b[?2004l\x1b[?25h\x1b[0m\x1b[?1049l"
+LEAVE = "\x1b[?1006l\x1b[?1002l\x1b[<u\x1b[?2004l\x1b[?25h\x1b[0m\x1b[?1049l"
+
+
+#: Local clipboard commands, tried in order.
+_CLIPBOARDS: dict[str, list[list[str]]] = {
+    "darwin": [["pbcopy"]],
+    "win32": [["clip"]],
+    "linux": [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]],
+}
 
 
 class Terminal:
@@ -69,6 +80,23 @@ class Terminal:
         self.stdout.write(data)
         self.stdout.flush()
 
+    def copy(self, text: str) -> None:
+        """Put `text` on the clipboard.
+
+        A local clipboard command when there is one and this is not a remote
+        session; otherwise OSC 52, which asks the terminal itself -- the only
+        clipboard that is the person's over SSH.
+        """
+        if not os.environ.get("SSH_CONNECTION"):
+            for command in _CLIPBOARDS.get(sys.platform, _CLIPBOARDS["linux"]):
+                if shutil.which(command[0]):
+                    try:
+                        subprocess.run(command, input=text.encode(), check=True, timeout=2)
+                        return
+                    except (OSError, subprocess.SubprocessError):
+                        continue
+        self.write(f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07")
+
     def read(self, timeout: float) -> str:
         """Whatever has been typed, waiting at most `timeout` for the first of it."""
         if os.name == "nt":
@@ -93,9 +121,11 @@ def _windows_enter() -> object:
     before_in, before_out = ctypes.c_uint(), ctypes.c_uint()
     kernel.GetConsoleMode(stdin, ctypes.byref(before_in))
     kernel.GetConsoleMode(stdout, ctypes.byref(before_out))
-    # Virtual-terminal input, and none of line editing, echo or Ctrl+C
-    # handling. QuickEdit is left as it was, so the mouse still selects text.
-    kernel.SetConsoleMode(stdin, (before_in.value | 0x0200) & ~(0x0001 | 0x0002 | 0x0004))
+    # Virtual-terminal input, mouse reports included, and none of line
+    # editing, echo, Ctrl+C handling or QuickEdit (which would take the mouse).
+    kernel.SetConsoleMode(
+        stdin, (before_in.value | 0x0200 | 0x0080) & ~(0x0001 | 0x0002 | 0x0004 | 0x0040),
+    )
     kernel.SetConsoleMode(stdout, before_out.value | 0x0004 | 0x0001)
     return (before_in.value, before_out.value)
 

@@ -291,7 +291,8 @@ class FakeService:
 
 def started(**options) -> tuple[App, FakeService]:
     service = FakeService()
-    app = App(service, spawn=lambda work: work(), clock=lambda: 0.0, **options)  # type: ignore[arg-type]
+    app = App(service, spawn=lambda work: work(), clock=lambda: 0.0, slide_seconds=0,  # type: ignore[arg-type]
+              **options)
     app.poll()
     app.drain()
     return app, service
@@ -422,13 +423,127 @@ def test_every_screen_draws_at_any_size(size):
 # --- the wheel ---------------------------------------------------------------
 
 
-def test_the_mouse_is_left_to_the_terminal_and_the_wheel_sends_arrows():
+def test_the_workbench_asks_for_button_drag_and_wheel_reports_and_gives_them_back():
     from engine.apps.cli.tui import terminal
 
-    assert "\x1b[?1007h" in terminal.ENTER and "\x1b[?1007l" in terminal.LEAVE
-    # No mouse reporting of any kind, so selecting and copying text still works.
-    for mode in ("1000", "1002", "1003", "1006", "1015"):
-        assert f"\x1b[?{mode}h" not in terminal.ENTER
+    assert "\x1b[?1002h" in terminal.ENTER and "\x1b[?1006h" in terminal.ENTER
+    assert "\x1b[?1002l" in terminal.LEAVE and "\x1b[?1006l" in terminal.LEAVE
+    # Not every motion: only drags with the button held are reported.
+    assert "\x1b[?1003h" not in terminal.ENTER
+
+
+@pytest.mark.parametrize(("data", "expected"), [
+    ("\x1b[<0;5;3M", Key("press", x=4, y=2)),
+    ("\x1b[<32;9;4M", Key("drag", x=8, y=3)),
+    ("\x1b[<0;9;4m", Key("release", x=8, y=3)),
+    ("\x1b[<64;10;5M", Key("wheelup", x=9, y=4)),
+    ("\x1b[<65;1;1M", Key("wheeldown", x=0, y=0)),
+])
+def test_mouse_reports_decode_to_presses_drags_releases_and_the_wheel(data, expected):
+    assert decode(data) == [expected]
+
+
+@pytest.mark.parametrize("data", ["\x1b[<2;3;7M", "\x1b[<1;3;7M", "\x1b[<66;3;7M"])
+def test_other_buttons_and_sideways_scrolling_are_ignored(data):
+    assert decode(data) == []
+
+
+def drag(app: App, start: tuple[int, int], end: tuple[int, int], width: int = 120, height: int = 40) -> None:
+    app.render(width, height)
+    press(app, Key("press", x=start[0], y=start[1]))
+    press(app, Key("drag", x=end[0], y=end[1]))
+    app.render(width, height)
+    press(app, Key("release", x=end[0], y=end[1]))
+
+
+def test_a_drag_selects_inside_one_pane_and_copies_it():
+    copied: list[str] = []
+    app, _service = started()
+    app.copy = copied.append
+    press(app, "j", Key("enter"))  # the run: orders | graph | detail
+    app.render(120, 40)
+    graph_start, graph_width, rows = app._frame[1]
+    top = next(row for row, text in enumerate(rows) if "Workspace" in text) + 1
+    # Dragged far past the graph's right edge, into the detail pane.
+    drag(app, (graph_start, top), (119, top + 3))
+    assert copied, "nothing was copied"
+    text = copied[-1]
+    assert "Workspace" in text
+    assert "In progress" not in text  # the detail pane beside it
+    assert all(len(line) <= graph_width for line in text.splitlines())
+    # Highlighted until the next key, which clears it.
+    assert app.selection is not None and "Copied" in app.status
+    press(app, "j")
+    assert app.selection is None
+
+
+def test_a_click_without_a_drag_copies_nothing():
+    copied: list[str] = []
+    app, _service = started()
+    app.copy = copied.append
+    drag(app, (5, 5), (5, 5))
+    assert copied == [] and app.selection is None
+
+
+def test_the_wheel_scrolls_the_pane_under_the_pointer_not_the_focused_one():
+    app, service = started()
+    service.events = lambda run_id, cursor: [
+        {"sequence": 1, "type": "node.started", "nodeId": "implementation", "executionId": "e", "payload": {}},
+        *({"sequence": index, "type": "transcript", "nodeId": "implementation", "executionId": "e",
+           "payload": {"role": "assistant", "text": f"line {index}"}} for index in range(2, 80)),
+    ] if cursor == 0 else []
+    service.snapshots["run-1"]["activeExecutions"] = [{"executionId": "e", "nodeId": "implementation"}]
+    press(app, "j", Key("enter"), Key("enter"))
+    app.render(120, 40)
+    conversation_x = app._frame[2][0] + 5
+    press(app, Key("wheelup", x=conversation_x, y=10))
+    assert app.scroll == 3
+    before = app.row_index
+    press(app, Key("wheelup", x=app._frame[1][0] + 2, y=10))
+    assert app.row_index == before - 1 and app.scroll == 3
+
+
+def test_work_orders_stay_on_screen_when_a_run_is_opened():
+    app, _service = started()
+    press(app, "j", Key("enter"))
+    assert app.screen == RUN
+    app.render(120, 40)
+    _start, orders_width, _rows = app._frame[0]
+    assert orders_width > 0 and any("Fix saving" in row for row in app._frame[0][2])
+
+
+def test_the_columns_slide_between_screens():
+    now = [0.0]
+    service = FakeService()
+    app = App(service, spawn=lambda work: work(), clock=lambda: now[0], slide_seconds=0.2)  # type: ignore[arg-type]
+    app.poll()
+    app.drain()
+    app.render(120, 40)
+    home = [width for _start, width, _rows in app._frame]
+    press(app, "j", Key("enter"))
+    app.render(120, 40)
+    assert app.animating
+    now[0] = 0.1
+    app.render(120, 40)
+    halfway = [width for _start, width, _rows in app._frame]
+    now[0] = 0.3
+    app.render(120, 40)
+    settled = [width for _start, width, _rows in app._frame]
+    assert not app.animating
+    assert settled[0] < halfway[0] < home[0]  # the work orders collapse
+    assert settled[2] > 0 and home[2] == 0  # and the detail slides in
+
+
+def test_a_steering_message_is_queued_until_the_node_takes_it_up():
+    items = model.conversation([
+        {"sequence": 1, "type": "steering.received", "payload": {"message": "hi"}},
+    ])
+    assert items[0].status == "queued"
+    items = model.conversation([
+        {"sequence": 1, "type": "steering.received", "payload": {"message": "hi"}},
+        {"sequence": 2, "type": "transcript", "payload": {"role": "user", "text": "hi"}},
+    ])
+    assert [(item.text, item.status) for item in items] == [("hi", "delivered")]
 
 
 def test_the_wheel_scrolls_a_conversation_past_the_composer():

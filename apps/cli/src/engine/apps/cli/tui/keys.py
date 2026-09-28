@@ -10,7 +10,8 @@ every common spelling of the keys the workbench uses rather than one:
 * xterm `modifyOtherKeys` (`CSI 27;2;13~` is Shift+Enter);
 * the kitty keyboard protocol (`CSI 13;2u`), which the terminal is asked for
   on start and which is how Shift+Enter becomes distinguishable at all;
-* bracketed paste, so a pasted newline is text rather than a send.
+* bracketed paste, so a pasted newline is text rather than a send;
+* SGR mouse reports (`CSI < b;x;y M`), for the wheel and dragging.
 
 `Enter` sends. A newline in the text is any of Shift+Enter, Alt/Option+Enter,
 Ctrl+Enter, or Ctrl+J -- the last being what Windows consoles report for
@@ -35,6 +36,9 @@ class Key:
     `backtab`, `backspace`, `delete`, `escape`, `up`, `down`, `left`, `right`,
     `home`, `end`, `pageup`, `pagedown`. Control letters arrive as their
     letter with `ctrl` set. `super` is Cmd on macOS and the Windows key.
+
+    The mouse arrives as `wheelup`, `wheeldown`, and the left button's
+    `press`, `drag` and `release`, at 0-based screen cell `x`, `y`.
     """
 
     name: str
@@ -43,6 +47,12 @@ class Key:
     alt: bool = False
     shift: bool = False
     super: bool = False
+    x: int = 0
+    y: int = 0
+
+    @property
+    def mouse(self) -> bool:
+        return self.name in ("wheelup", "wheeldown", "press", "drag", "release")
 
     @property
     def plain(self) -> bool:
@@ -191,8 +201,10 @@ class KeyDecoder:
         if data[:used] == PASTE_START:
             self._paste = []
             return None, used
+        if params.startswith("<") and final in "Mm":
+            return _mouse(params[1:], final == "M"), used
         if params.startswith(("<", ">", "?", "=")):
-            return None, used  # A report or a mouse event, not a key.
+            return None, used  # A report, not a key.
         fields = [part.split(":")[0] for part in params.split(";")]
         numbers = [int(part) if part.isdigit() else 0 for part in fields]
         if final == "u":
@@ -215,6 +227,27 @@ class KeyDecoder:
             return Key("backtab"), used
         mods = _modifiers(numbers[1] if len(numbers) > 1 else 1)
         return Key(name, **mods), used
+
+
+def _mouse(params: str, pressed: bool) -> Key | None:
+    """One SGR mouse report: button;column;row, 1-based."""
+    try:
+        button, column, row = (int(part) for part in params.split(";"))
+    except ValueError:
+        return None
+    where = {"x": column - 1, "y": row - 1}
+    if button & 64:
+        direction = button & 3
+        return (
+            Key("wheelup", **where) if direction == 0
+            else Key("wheeldown", **where) if direction == 1
+            else None  # Sideways scrolling.
+        )
+    if button & 3 != 0:
+        return None  # Only the left button selects.
+    if not pressed:
+        return Key("release", **where)
+    return Key("drag" if button & 32 else "press", **where)
 
 
 def _single(char: str) -> Key | None:

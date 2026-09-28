@@ -258,11 +258,16 @@ sends the run back to it. `/approve` and `/reject`, with an optional note,
 answer a node that is waiting, including the final human review. Enter on a
 Review header shows what the reviewers found.
 
-The mouse is left to the terminal, so selecting and copying text works as
-usual. The wheel scrolls: the workbench asks for "alternate scroll", which has
-the terminal send the wheel as ↑/↓ -- moving the selection in a list, and
-scrolling a conversation once past the first line of what you are typing.
-PgUp/PgDn scroll a run's detail pane and a conversation too.
+The work orders stay on screen as a narrow column when a run or conversation
+is open, and the columns slide between screens. A message sent to a node shows
+as *queued* until the agent takes it up, which it does at once unless it is
+finishing a turn a person answered a permission request in.
+
+The wheel scrolls the pane under the pointer. Dragging selects text inside the
+pane the drag started in, never across into the panes beside it, and copies it
+to the clipboard when you let go (`pbcopy`, `clip` or `wl-copy`/`xclip`
+locally; OSC 52 over SSH). Hold Shift, or Option in iTerm2 and Terminal.app,
+for the terminal's own selection.
 
 ## Disconnected mode
 

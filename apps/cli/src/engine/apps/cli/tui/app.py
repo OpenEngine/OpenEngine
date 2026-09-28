@@ -2,10 +2,17 @@
 
 Four screens, walked with Enter and Esc:
 
-    home          work orders      | preview (graph, or the new-WorkOrder form)
-    form          work orders      | graph preview over the form, focused
-    run           graph            | what is in progress, and what it is saying
-    conversation  work orders | graph | the node's conversation, focused
+    home          work orders | preview (graph, or the new-WorkOrder form)
+    form          work orders | graph preview over the form, focused
+    run           orders | graph | what is in progress, and what it is saying
+    conversation  orders | graph | the node's conversation, focused
+
+Every screen is the same three columns at different widths, so moving between
+them slides the columns rather than replacing the screen.
+
+The mouse is the workbench's: the wheel scrolls the pane under the pointer,
+and dragging selects text inside the pane the drag started in -- never across
+into its neighbours -- and copies it when the button is let go.
 
 `App` holds the state and draws it; it never touches the terminal or the
 network itself. Service calls go through `spawn` (a background thread in the
@@ -29,7 +36,7 @@ from engine.apps.cli.tui.editor import TextBuffer
 from engine.apps.cli.tui.keys import Key
 from engine.apps.cli.tui.text import (
     BOLD, CYAN, DIM, GREEN, MAGENTA, RED, SELECTED, YELLOW,
-    Line, clip, styled, wrap,
+    Line, char_width, clip, plain, styled, wrap,
 )
 
 HOME, FORM, RUN, CONVERSATION = "home", "form", "run", "conversation"
@@ -46,6 +53,9 @@ GLYPHS = {
     model.PENDING: ("○", DIM),
 }
 SPINNER = "◐◓◑◒"
+
+#: How long the columns take to slide between screens.
+SLIDE_SECONDS = 0.18
 
 PHASE_STATUS = {
     "scheduled": model.PENDING,
@@ -95,10 +105,14 @@ class App:
         local_repository: str = "",
         spawn: Spawn = _thread,
         clock: Callable[[], float] = time.monotonic,
+        slide_seconds: float = SLIDE_SECONDS,
+        copy: Callable[[str], None] | None = None,
     ) -> None:
         self.client = client
         self.spawn = spawn
         self.clock = clock
+        self.slide_seconds = slide_seconds
+        self.copy = copy or (lambda _text: None)
         self.messages: queue.Queue[Callable[[], None]] = queue.Queue()
         self.prefer_disconnected = disconnected
         self.local_repository = local_repository
@@ -130,6 +144,21 @@ class App:
         self.form_error = ""
         self._busy = False
         self._fetching: set[str] = set()
+        # The column widths on screen, and the slide between two layouts.
+        self._shown: list[int] = []
+        self._slide_from: list[int] = []
+        self._slide_to: list[int] = []
+        self._slide_start = 0.0
+        self._layout_width = 0
+        # What was drawn last, per column: where it starts, how wide it is, and
+        # its rows as plain text -- what a drag selects from.
+        self._frame: list[tuple[int, int, list[str]]] = []
+        self.selection: Selection | None = None
+
+    @property
+    def animating(self) -> bool:
+        """Whether the next frames differ without anything else changing."""
+        return self._shown != self._slide_to or bool(self.selection and self.selection.dragging)
 
     # --- data --------------------------------------------------------------
 
@@ -366,6 +395,7 @@ class App:
 
     def _act(self, label: str, call: Callable[[], Any], done: Callable[[Any], None]) -> None:
         if self._busy:
+            self._fail("still sending the last request; try again in a moment")
             return
         self._busy = True
         self._say(f"{label}…")
@@ -373,8 +403,8 @@ class App:
         def work() -> None:
             try:
                 result = call()
-            except RuntimeError as error:
-                self.post(lambda error=error: self._finish(None, str(error)))
+            except Exception as error:  # noqa: BLE001 -- never leave `_busy` set
+                self.post(lambda error=error: self._finish(None, str(error) or type(error).__name__))
             else:
                 self.post(lambda: self._finish(lambda: done(result), ""))
 
@@ -460,8 +490,11 @@ class App:
         if not self.writable():
             self._fail("this node is read-only: it has finished and cannot be reopened")
             return
-        self._act("Sending", lambda: self.client.steer(run_id, node_id, text),
-                  lambda _result: buffer.clear())
+        def sent(_result: object) -> None:
+            buffer.clear()
+            self._say("Sent. It shows as queued until the agent takes it up.")
+
+        self._act("Sending", lambda: self.client.steer(run_id, node_id, text), sent)
 
     # --- keys --------------------------------------------------------------
 
@@ -469,6 +502,10 @@ class App:
         if key.name == "char" and key.ctrl and key.text == "c":
             self.quit = True
             return
+        if key.mouse:
+            self._mouse(key)
+            return
+        self.selection = None
         {HOME: self._home_key, FORM: self._form_key, RUN: self._run_key,
          CONVERSATION: self._conversation_key}[self.screen](key)
 
@@ -612,53 +649,168 @@ class App:
         step = earlier if self._anchors.get(kind, "bottom") == "bottom" else -earlier
         setattr(self, attribute, max(getattr(self, attribute) + step, 0))
 
+    # --- the mouse ---------------------------------------------------------
+
+    def _column_at(self, x: int) -> int | None:
+        return next(
+            (index for index, (start, width, _rows) in enumerate(self._frame)
+             if width and start <= x < start + width),
+            None,
+        )
+
+    def _mouse(self, key: Key) -> None:
+        column = self._column_at(key.x)
+        if key.name in ("wheelup", "wheeldown"):
+            if column is not None:
+                self._wheel(column, up=key.name == "wheelup")
+            return
+        if key.name == "press":
+            self.selection = None
+            if column is None or not 1 <= key.y <= len(self._frame[column][2]):
+                return
+            start = self._frame[column][0]
+            point = (key.y - 1, key.x - start)
+            self.selection = Selection(column, point, point)
+            return
+        selection = self.selection
+        if selection is None or not selection.dragging:
+            return
+        start, width, rows = self._frame[selection.column]
+        # Held to the column the drag began in, whatever the pointer crosses.
+        selection.head = (_clamp(key.y - 1, 0, len(rows) - 1), _clamp(key.x - start, 0, width - 1))
+        if key.name == "release":
+            selection.dragging = False
+            if selection.head == selection.anchor:
+                self.selection = None  # A click, not a selection.
+                return
+            text = self.selected_text()
+            if text.strip():
+                self.copy(text)
+                self._say(f"Copied {len(text)} characters")
+
+    def _wheel(self, column: int, *, up: bool) -> None:
+        """The wheel scrolls the pane under the pointer, not the focused one."""
+        if column == 0:
+            if self.screen in (HOME, FORM):
+                self.screen = HOME
+                self._home_key(Key("up" if up else "down"))
+        elif column == 1:
+            if self.screen in (RUN, CONVERSATION):
+                self._move_row(-1 if up else 1)
+        elif self.screen == RUN:
+            self._scroll("detail", 3 if up else -3)
+        elif self.screen == CONVERSATION:
+            self._scroll("conversation", 3 if up else -3)
+
+    def selected_text(self) -> str:
+        if self.selection is None:
+            return ""
+        _start, width, rows = self._frame[self.selection.column]
+        lines = []
+        for row, first, last in self.selection.spans(width):
+            lines.append(_cells(rows[row], first, last + 1).rstrip())
+        return "\n".join(lines).strip("\n")
+
     # --- drawing -----------------------------------------------------------
+
+    def _targets(self, width: int) -> list[int]:
+        """Where each column settles on this screen."""
+        if self.screen in (HOME, FORM):
+            first = _clamp(width * 34 // 100, 24, 48)
+            return [first, width - first - 1, 0]
+        first = _clamp(width // 7, 12, 22)
+        second = (
+            _clamp(width * 42 // 100, 28, 60) if self.screen == RUN
+            else _clamp(width // 5, 18, 30)
+        )
+        return [first, second, width - first - second - 2]
+
+    def _widths(self, width: int) -> list[int]:
+        """This frame's column widths: the target, or on the way to it."""
+        target = self._targets(width)
+        now = self.clock()
+        if width != self._layout_width or not self._shown:
+            # A resize is not a transition: settle at once.
+            self._layout_width = width
+            self._shown = self._slide_from = self._slide_to = target
+            return target
+        if target != self._slide_to:
+            self._slide_from, self._slide_to, self._slide_start = self._shown, target, now
+        progress = 1.0 if self.slide_seconds <= 0 else (now - self._slide_start) / self.slide_seconds
+        if progress >= 1:
+            self._shown = target
+            return target
+        eased = 1 - (1 - max(progress, 0.0)) ** 3
+        first, second = (
+            round(start + (end - start) * eased)
+            for start, end in zip(self._slide_from[:2], target[:2])
+        )
+        third = width - first - second - 2
+        if third < 4:
+            first, second, third = first, width - first - 1, 0
+        self._shown = [first, second, third]
+        return self._shown
 
     def render(self, width: int, height: int) -> tuple[list[str], tuple[int, int] | None]:
         """The screen as lines of ANSI, and where the text cursor goes (0-based)."""
         self._cursor: tuple[int, int, int] | None = None
         body = height - 2
-        if self.screen in (HOME, FORM):
-            left = _clamp(width * 34 // 100, 24, 48)
-            panes = [(self.draw_workorders(left, body, focused=self.screen == HOME), left)]
-            right = width - left - 1
-            preview = (
-                self.draw_new_workorder(right, body, focused=self.screen == FORM)
-                if self.home_index == 0 else self.draw_run_preview(right, body)
-            )
-            panes.append((preview, right))
-            offsets = [0, left + 1]
-        elif self.screen == RUN:
-            left = _clamp(width * 42 // 100, 28, 60)
-            right = width - left - 1
-            panes = [
-                (self.draw_graph(left, body, selected=self.row_index), left),
-                (self.draw_activity(right, body), right),
-            ]
-            offsets = [0, left + 1]
-        else:
-            first = _clamp(width // 7, 12, 22)
-            second = _clamp(width // 5, 18, 30)
-            third = width - first - second - 2
-            panes = [
-                (self.draw_workorders(first, body, focused=False, collapsed=True), first),
-                (self.draw_graph(second, body, selected=self.row_index, condensed=True), second),
-                (self.draw_conversation(third, body), third),
-            ]
-            offsets = [0, first + 1, first + second + 2]
+        widths = self._widths(width)
+        drawers = [
+            lambda w: self.draw_workorders(w, body, focused=self.screen == HOME, collapsed=w < 26),
+            (
+                (lambda w: self.draw_new_workorder(w, body, focused=self.screen == FORM))
+                if self.screen in (HOME, FORM) and self.home_index == 0
+                else (lambda w: self.draw_run_preview(w, body)) if self.screen in (HOME, FORM)
+                else (lambda w: self.draw_graph(w, body, selected=self.row_index,
+                                                condensed=self.screen == CONVERSATION))
+            ),
+            (
+                (lambda w: self.draw_activity(w, body)) if self.screen == RUN
+                else (lambda w: self.draw_conversation(w, body)) if self.screen == CONVERSATION
+                else (lambda w: [])
+            ),
+        ]
+        columns: list[tuple[int, int, list[Line]]] = []
+        offset = 0
+        for draw, column_width in zip(drawers, widths):
+            if column_width <= 0:
+                columns.append((offset, 0, []))
+                continue
+            if columns and any(one[1] for one in columns):
+                offset += 1  # The separator.
+            pane = [clip(line, column_width) for line in draw(column_width)[:body]]
+            pane += [clip([], column_width) for _ in range(body - len(pane))]
+            columns.append((offset, column_width, pane))
+            offset += column_width
+        self._frame = [
+            (start, column_width, [plain(line) for line in pane])
+            for start, column_width, pane in columns
+        ]
         lines = [styled(clip(self.header_line(width), width, fill=SELECTED), SELECTED)]
+        spans = {
+            (self.selection.column, row): (first, last)
+            for row, first, last in self.selection.spans(columns[self.selection.column][1])
+        } if self.selection and columns[self.selection.column][1] else {}
         for row in range(body):
             line: Line = []
-            for index, (pane, pane_width) in enumerate(panes):
-                if index:
+            for index, (_start, column_width, pane) in enumerate(columns):
+                if not column_width:
+                    continue
+                if line:
                     line.append((DIM, "│"))
-                line.extend(clip(pane[row] if row < len(pane) else [], pane_width))
+                cells = pane[row]
+                if (index, row) in spans:
+                    cells = _highlight(cells, *spans[(index, row)])
+                line.extend(cells)
             lines.append(styled(line))
         lines.append(styled(clip(self.footer_line(), width - 1)))
         cursor = None
         if self._cursor is not None:
             pane_index, row, column = self._cursor
-            cursor = (row + 1, offsets[pane_index] + column)
+            start, column_width, _pane = columns[pane_index]
+            if column_width:
+                cursor = (row + 1, start + min(column, column_width - 1))
         return lines, cursor
 
     def header_line(self, width: int) -> Line:
@@ -965,6 +1117,10 @@ class App:
                 if compact and len(texts) > 3:
                     texts = [*texts[:3], "…"]
                 lines.extend([(CYAN, "› " if not index else "  "), (CYAN, text)] for index, text in enumerate(texts))
+                if item.status == "queued":
+                    lines.append([(DIM, "  queued · the agent reads it when its current step allows")])
+                elif item.status == "delivered" and not compact:
+                    lines.append([(DIM, "  delivered")])
             elif item.kind == "assistant":
                 texts = wrap(item.text, width)
                 if compact and len(texts) > 4:
@@ -1033,6 +1189,49 @@ class App:
         self.scroll = min(self.scroll, max(len(body) - room, 0))
         middle = _scrolled(body, room, self.scroll)
         return header + middle + footer
+
+
+@dataclass
+class Selection:
+    """A drag in one column, in that column's own (row, cell) coordinates."""
+
+    column: int
+    anchor: tuple[int, int]
+    head: tuple[int, int]
+    dragging: bool = True
+
+    def spans(self, width: int) -> list[tuple[int, int, int]]:
+        """(row, first cell, last cell) for every row the selection covers."""
+        (top, left), (bottom, right) = sorted((self.anchor, self.head))
+        if top == bottom:
+            return [(top, left, right)]
+        return [
+            (row, left if row == top else 0, right if row == bottom else width - 1)
+            for row in range(top, bottom + 1)
+        ]
+
+
+def _cells(text: str, first: int, end: int) -> str:
+    """The characters of `text` occupying cells `first` up to `end`."""
+    out, cell = [], 0
+    for char in text:
+        size = char_width(char)
+        if first <= cell < end:
+            out.append(char)
+        cell += size
+    return "".join(out)
+
+
+def _highlight(line: Line, first: int, last: int) -> Line:
+    """`line` with cells `first`..`last` shown reversed, keeping their colours."""
+    out: Line = []
+    cell = 0
+    for style, text in line:
+        for char in text:
+            chosen = f"{style};{SELECTED}" if style else SELECTED
+            out.append((chosen if first <= cell <= last else style, char))
+            cell += char_width(char)
+    return out
 
 
 def _run_title(run: Mapping[str, Any]) -> str:

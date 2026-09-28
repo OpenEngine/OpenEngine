@@ -4,9 +4,8 @@
     graph       | in progress      (enter on a WorkOrder)
     orders | graph | conversation  (enter on a node)
 
-Enter goes in, Esc comes back out, j/k (or the arrows) move. The mouse is left
-to the terminal, so text selects and copies as usual; the wheel arrives as the
-arrow keys. See `app` for the
+Enter goes in, Esc comes back out, j/k (or the arrows) move. The wheel scrolls
+the pane under the pointer; dragging selects inside one pane and copies it. See `app` for the
 screens and `editor` for the text-editing keys.
 """
 
@@ -24,6 +23,7 @@ POLL_SECONDS = 1.0
 
 def run_workbench(app: App, terminal: Terminal | None = None) -> int:
     terminal = terminal or Terminal()
+    app.copy = terminal.copy
     stop = threading.Event()
 
     def poller() -> None:
@@ -58,7 +58,8 @@ def run_workbench(app: App, terminal: Terminal | None = None) -> int:
                     output.append("\x1b[?25l")
                 terminal.write("".join(output))
                 previous = lines
-                data = terminal.read(0.03 if decoder.waiting else 0.2)
+                # Frames come fast while something is moving, slowly otherwise.
+                data = terminal.read(0.016 if app.animating else 0.03 if decoder.waiting else 0.2)
                 keys = decoder.feed(data) if data else decoder.flush()
                 for key in keys:
                     app.handle(key)
