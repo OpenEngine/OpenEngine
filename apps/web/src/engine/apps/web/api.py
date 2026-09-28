@@ -904,6 +904,20 @@ GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
 }
 
 
+def _slack_task_report(text: str) -> str:
+    """Present structured transcript outputs without exposing Slack mentions."""
+    try:
+        outputs = json.loads(text)
+    except ValueError:
+        outputs = None
+    if isinstance(outputs, dict) and outputs:
+        text = "\n".join(
+            f"*{key}*\n\t{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}"
+            for key, value in outputs.items()
+        )
+    return escape(text, quote=False)
+
+
 def _graph_workorder_name(values: object) -> str:
     """The concise name a graph's naming node left in its state."""
     if not isinstance(values, Mapping):
@@ -1153,7 +1167,7 @@ def create_app(
             if not isinstance(report, str) or not report.strip():
                 return
             # Preserve UI redactions and escape Slack mention/link syntax.
-            text = escape(report, quote=False)
+            text = _slack_task_report(report)
             graph_agent_reports.add(state.run_id)
         elif event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
@@ -1183,7 +1197,9 @@ def create_app(
             text = "Work order finished."
         if text:
             link = run_notifier.work_order_link(state)
-            if link:
+            if link and (public or event.kind in (
+                EventKind.APPROVAL_REQUESTED, EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
+            )):
                 links.append(link)
             if public and not any(
                 existing.label == "View pull request" for existing in links
