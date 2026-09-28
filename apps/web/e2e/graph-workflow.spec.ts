@@ -298,6 +298,7 @@ test("a graph workflow accepts independent stage runners", async ({
   }).toEqual([]);
   const run = await graphRun(page, runUrl);
   expect(run.values.inputs).toEqual({
+    mode: "connected",
     implementation_runner: "claude",
     review_runner: "codex",
   });
@@ -370,16 +371,12 @@ test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) =
   const runUrl = await create(page, engine.repository);
   await page.goto(runUrl);
 
-  // Naming is an explicit graph stage even though it is hidden from the
-  // conversation rail.
+  // Nodes sharing a work state appear as one stage.
   await expect(page.locator(".stages .stage")).toHaveText([
     "Workspace",
-    "Naming",
+    "Planning",
     "Implementation",
-    "CI check",
     "Review",
-    "Impact analysis",
-    "Human review",
   ]);
 });
 
@@ -393,14 +390,12 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
   await page.goto(runUrl);
 
   // The nodes a person can read, from the moment the run exists: the
-  // checkout and the human verdict are stages of the run rather than
-  // conversations in it, and say so about themselves. The review agents are
-  // available under their shared group rather than filling the rail at once.
+  // checkout and the human verdict are stages rather than conversations.
+  // Implementation and review conversations start in collapsed groups.
   const conversations = page.getByLabel(/^Conversations for /);
-  await expect(conversations.getByRole("link")).toHaveText([
-    "Implementation",
-    "Impact analysis",
-  ]);
+  await expect(conversations.getByRole("link")).toHaveCount(0);
+  await conversations.locator("summary").filter({ hasText: "Implementation" }).click();
+  await expect(conversations.getByRole("link")).toHaveText(["Implementation"]);
   await conversations.getByText("Review", { exact: true }).click();
   await expect(conversations.getByRole("link")).toHaveText([
     "Implementation",
@@ -424,6 +419,7 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
 /** Open the implementation node's conversation from the WorkOrder page. */
 async function openConversation(page: Page, runUrl: string): Promise<void> {
   await page.goto(runUrl);
+  await page.locator(".step-group-summary").filter({ hasText: "Implementation" }).click();
   await page
     .locator(".step")
     .filter({ has: page.getByRole("heading", { name: "Implementation", exact: true }) })
@@ -539,7 +535,9 @@ test("a graph run waiting on a person says so, and can be answered", async ({
   // What each node reported, on the page rather than only in the graph state.
   // Its *summary*, not the outputs it declared: a graph run's page does not
   // show those yet -- see the note in `README.md` -- and a step run's did.
+  await page.locator(".step-group-summary").filter({ hasText: "Implementation" }).click();
   await expect(step(page, "Implementation")).toContainText(IMPLEMENTED);
+  await page.locator(".step-group-summary").filter({ hasText: "Review" }).click();
   await expect(step(page, "Impact analysis")).toContainText(IMPACT_ASSESSMENT);
 
   // The review and impact comments left the process the way real ones would, through
@@ -568,14 +566,11 @@ test("a graph run waiting on a person says so, and can be answered", async ({
   const stages = page.locator(".stages .stage");
   await expect(stages).toHaveText([
     "Workspace",
-    "Naming",
+    "Planning",
     "Implementation",
-    "CI check",
     "Review",
-    "Impact analysis",
-    "Human review",
   ]);
-  for (const index of [0, 1, 2, 3, 4, 5, 6])
+  for (const index of [0, 1, 2, 3])
     await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
   await expect(page.locator(".callout-action")).toHaveCount(0);
 });
