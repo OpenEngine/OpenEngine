@@ -224,6 +224,7 @@ def _app(
     github_comment_handler=None,
     github_webhook_secret="",
     approval_policy=None,
+    repos=None,
 ):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
@@ -255,6 +256,7 @@ def _app(
         github_login_config=github_login_config,
         public_url="https://engine.example",
         work_orders=work_orders,
+        repos=repos,
         credential_store=MagicMock(),
         concierge_provider=provider or FakeACPProvider(),
         graph_runtime=graph_runtime,
