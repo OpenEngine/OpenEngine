@@ -91,7 +91,7 @@ class Package:
 
     @property
     def rel_root(self) -> str:
-        return str(self.root.relative_to(REPO_ROOT))
+        return self.root.relative_to(REPO_ROOT).as_posix()
 
     def source_files(self) -> list[Path]:
         return sorted(self.src.rglob("*.py"))
@@ -138,7 +138,9 @@ def _modules_in(src: Path) -> tuple[str, ...]:
 
 def capability_names() -> tuple[str, ...]:
     """The capability slots, in declaration order, read off `Capabilities`."""
-    tree = ast.parse(CAPABILITIES_SOURCE.read_text(), filename=str(CAPABILITIES_SOURCE))
+    tree = ast.parse(
+        CAPABILITIES_SOURCE.read_text(encoding="utf-8"), filename=str(CAPABILITIES_SOURCE)
+    )
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "Capabilities":
             return tuple(
@@ -163,9 +165,9 @@ def adapter_path_parts(package: Package) -> tuple[str, ...]:
 
 def discover_packages() -> tuple[Package, ...]:
     """Workspace members selected by the configured member/exclude globs."""
-    workspace = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["tool"]["uv"][
-        "workspace"
-    ]
+    workspace = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "tool"
+    ]["uv"]["workspace"]
     roots = {
         root for pattern in workspace["members"] for root in REPO_ROOT.glob(pattern)
     }
@@ -177,7 +179,7 @@ def discover_packages() -> tuple[Package, ...]:
         pyproject = root / "pyproject.toml"
         if not pyproject.is_file():
             continue
-        config = tomllib.loads(pyproject.read_text())
+        config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         project = config["project"]
         packages.append(
             Package(
@@ -201,7 +203,7 @@ def imported_modules(path: Path) -> set[str]:
     sneaky `from ...adapters.source_control.github import X` cannot slip past the
     check.
     """
-    tree = ast.parse(path.read_text(), filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

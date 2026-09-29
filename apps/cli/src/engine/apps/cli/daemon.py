@@ -261,17 +261,29 @@ class LaunchdBackend(Backend):
             result = _run(["launchctl", "bootstrap", self._domain(), str(launch_agent_path())])
             if result.returncode != 0 and not self.running():
                 raise RuntimeError(f"launchctl bootstrap failed: {result.stderr.strip() or result.returncode}")
-        _run(["launchctl", "kickstart", f"{self._domain()}/{LABEL}"])
+        result = _run(["launchctl", "kickstart", f"{self._domain()}/{LABEL}"])
+        if result.returncode != 0:
+            raise RuntimeError(f"launchctl kickstart failed: {result.stderr.strip() or result.returncode}")
 
     def uninstall(self) -> None:
         self.stop()
         launch_agent_path().unlink(missing_ok=True)
 
     def stop(self) -> None:
-        # bootout sends SIGTERM and waits up to ExitTimeOut before SIGKILL. The
-        # agent stays on disk, so it starts again at the next login.
-        if self.running():
-            _run(["launchctl", "bootout", f"{self._domain()}/{LABEL}"])
+        # bootout requests SIGTERM, with ExitTimeOut before SIGKILL. Its return
+        # does not guarantee the registration has disappeared: a subsequent
+        # start could mistake the departing job for an already loaded service.
+        # The agent stays on disk, so it starts again at the next login.
+        if not self.running():
+            return
+        result = _run(["launchctl", "bootout", f"{self._domain()}/{LABEL}"])
+        deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+        while self.running():
+            if result.returncode != 0:
+                raise RuntimeError(f"launchctl bootout failed: {result.stderr.strip() or result.returncode}")
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"launchctl bootout did not unregister {LABEL} within {STOP_TIMEOUT_SECONDS:g} seconds")
+            time.sleep(0.1)
 
     def running(self) -> bool:
         return _run(["launchctl", "print", f"{self._domain()}/{LABEL}"]).returncode == 0
@@ -618,7 +630,10 @@ def command_setup(arguments: argparse.Namespace) -> int:
     result = command_open(arguments)
     if result != EXIT_OK:
         # Leave nothing restarting in the background after a failed setup.
-        backend.stop()
+        try:
+            backend.stop()
+        except (OSError, RuntimeError) as error:
+            _fail(error)
     return result
 
 
