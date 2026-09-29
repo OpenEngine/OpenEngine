@@ -310,6 +310,16 @@ def ask_permission(session_id: str) -> dict[str, Any] | None:
         reply = receive()
         if reply is None:
             return None
+        if (
+            reply.get("method") == "session/cancel"
+            and (reply.get("params") or {}).get("sessionId") == session_id
+        ):
+            # A cancel can overtake the answer it is racing. Remembered, the
+            # way an agent cancels the turn its question belonged to.
+            session = load(session_id)
+            session["cancelled_while_asking"] = True
+            save(session_id, session)
+            continue
         if reply.get("id") == PERMISSION_REQUEST_ID:
             outcome = (reply.get("result") or {}).get("outcome") or {}
             return outcome if isinstance(outcome, dict) else {}
@@ -375,6 +385,13 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
         save(session_id, session)
         # Keep working after the grant until told to stop, the way an agent
         # carries on with the command it was just allowed to run.
+        if os.environ.get("STUB_ACP_WAIT_AFTER_GRANT") and session.pop(
+            "cancelled_while_asking", False,
+        ):
+            session["cancelled"] = True
+            save(session_id, session)
+            respond(message_id, {"stopReason": "cancelled"})
+            return
         if os.environ.get("STUB_ACP_WAIT_AFTER_GRANT") and not session.get("cancelled"):
             while message := receive():
                 params = message.get("params") or {}
