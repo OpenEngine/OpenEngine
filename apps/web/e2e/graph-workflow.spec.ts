@@ -304,6 +304,7 @@ test("a graph workflow accepts independent stage runners", async ({
     state: "Planning",
     ref: "",
     pr_url: "",
+    branch: "",
   });
   await openConversation(page, runUrl);
   await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("claude");
