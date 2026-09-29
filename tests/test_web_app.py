@@ -2972,6 +2972,49 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_disconnected_repository_is_matched_through_subfolders_and_worktrees(tmp_path):
+    import subprocess
+
+    from engine.graph_runtime.inputs import mode_input
+
+    @dataclass(frozen=True)
+    class ModeGraph(ScriptedGraph):
+        inputs: tuple = (mode_input(),)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], check=True, capture_output=True)
+
+    offline = tmp_path / "offline"
+    (offline / "src").mkdir(parents=True)
+    git("init", "-q", str(offline))
+    git("-C", str(offline), "-c", "user.name=t", "-c", "user.email=t@t",
+        "commit", "-q", "--allow-empty", "-m", "init")
+    other_worktree = tmp_path / "other-worktree"
+    git("-C", str(offline), "worktree", "add", "-q", str(other_worktree))
+    graph = ModeGraph(GraphId("modes"), "Modes", (ScriptedNode(NodeId("work"), (Say("Done"),)),))
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        repos={"acme/offline": str(offline)},
+        repo_modes={"acme/offline": "disconnected"},
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                for path in (offline / "src", other_worktree):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "modes", "repository": str(path), "prompt": "Task",
+                        "inputs": {"mode": "connected"},
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    assert snapshot.values["inputs"]["mode"] == "disconnected"
+
+    asyncio.run(scenario())
+
+
 def _runner_input_graph(*choices: str) -> ScriptedGraph:
     """A graph whose one input is an implementation runner offering `choices`."""
     from engine.graph_runtime.inputs import WorkflowInput

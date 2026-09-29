@@ -22,6 +22,7 @@ import tomllib
 from pathlib import Path
 
 from engine.apps.cli import daemon
+from engine.domain import ForgeMode
 from engine.runtime.change_requests import remote_project
 
 EXIT_OK = 0
@@ -31,7 +32,7 @@ _ANY_HEADER = re.compile(r"^\s*\[")
 
 OAUTH = "oauth"
 CLI = "cli"
-DISCONNECTED = "disconnected"
+DISCONNECTED = str(ForgeMode.DISCONNECTED)
 #: The choices `engine init` offers, in the order it lists them.
 MODES = {
     OAUTH: "Git OAuth (connected, recommended)",
