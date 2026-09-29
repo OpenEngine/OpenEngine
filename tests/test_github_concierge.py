@@ -1365,26 +1365,28 @@ def test_an_assignment_without_a_local_checkout_starts_nothing(tmp_path, caplog)
     assert "no checkout of acme/api is configured" in caplog.text
 
 
-def test_a_stalled_checkout_is_skipped_rather_than_waited_on(tmp_path, monkeypatch):
-    """A checkout whose `git remote get-url` never answers, as on a stalled
-    mount, costs the lookup a timeout rather than the single ingress worker
-    and every delivery queued behind it."""
+def test_stalled_checkouts_are_skipped_rather_than_waited_on(tmp_path, monkeypatch):
+    """Checkouts whose `git remote get-url` never answers, as on stalled
+    mounts, cost the lookup one shared timeout rather than one each, and never
+    the single ingress worker and every delivery queued behind it."""
     import asyncio
+    import time
 
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
 
     import engine.apps.web.api as api
 
-    stalled = _checkout(tmp_path / "stalled", "https://github.com/acme/api.git")
+    stalled = [_checkout(tmp_path / f"stalled-{index}", "https://github.com/acme/api.git")
+               for index in range(3)]
     spawn = asyncio.create_subprocess_exec
 
     async def hanging_for_stalled(*command, **options):
-        if stalled in command:
+        if any(path in command for path in stalled):
             command = ("sleep", "60")
         return await spawn(*command, **options)
 
-    monkeypatch.setattr(api, "GITHUB_CHECKOUT_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(api, "GITHUB_CHECKOUT_TIMEOUT_SECONDS", 0.5)
     monkeypatch.setattr(api.asyncio, "create_subprocess_exec", hanging_for_stalled)
     runtime, opened = _graph_runtime()
     app, capabilities, _ = _app(
@@ -1392,7 +1394,7 @@ def test_a_stalled_checkout_is_skipped_rather_than_waited_on(tmp_path, monkeypat
         WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
         _workflow_catalog(), provider=FakeACPProvider(create=True),
         github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
-        repos={"stalled": stalled,
+        repos={**{f"stalled-{index}": path for index, path in enumerate(stalled)},
                "acme/api": (checkout := _checkout(tmp_path / "api", "https://github.com/acme/api.git"))},
     )
     object.__setattr__(capabilities, "source_control", MagicMock(
@@ -1403,7 +1405,10 @@ def test_a_stalled_checkout_is_skipped_rather_than_waited_on(tmp_path, monkeypat
     headers = dict(github_signed(body), **{"x-github-event": "issues"})
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        started = time.monotonic()
         client.portal.call(app.state.github_ingress.drain)
+        # One deadline for all three, where one each would take 1.5 seconds.
+        assert time.monotonic() - started < 1.2
         runtime.start.assert_awaited_once()
         assert runtime.start.await_args.args[1]["repository"] == checkout
 

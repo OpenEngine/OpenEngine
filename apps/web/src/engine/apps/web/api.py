@@ -965,9 +965,9 @@ UTILIZATION_MAX_AGE_SECONDS = 60 * 60
 #: quickly and be retried rather than hold them for the webhook budget above.
 GITHUB_LOGIN_TIMEOUT_SECONDS = 10
 
-#: How long each configured checkout gets to name its `origin` when a webhook
-#: is matched to one. A local `git remote get-url` answers at once; one that
-#: does not is on a stalled mount, and is skipped rather than waited on.
+#: How long the configured checkouts together get to name their `origin` when
+#: a webhook is matched to one. A local `git remote get-url` answers at once;
+#: one that does not is on a stalled mount, and is skipped rather than waited on.
 GITHUB_CHECKOUT_TIMEOUT_SECONDS = 5
 
 
@@ -3142,26 +3142,37 @@ def create_app(
         """
         authority, _, rest = project.partition("/")
         wanted = f"{authority.partition(':')[0]}/{rest}" if "/" in rest else project
-        for path in dict.fromkeys(
-            path for path in (*(repos or {}).values(), work_orders.repository) if path
-        ):
+
+        async def origin(path: str) -> str | None:
             try:
                 process = await asyncio.create_subprocess_exec(
                     "git", "-C", str(Path(path).expanduser()), "remote", "get-url", "origin",
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 )
             except OSError:
-                continue
+                return None
             try:
-                async with asyncio.timeout(GITHUB_CHECKOUT_TIMEOUT_SECONDS):
-                    stdout, _ = await process.communicate()
-            except TimeoutError:
-                # A checkout on a stalled mount must not hold the one ingress
-                # worker, and every delivery queued behind it, indefinitely.
-                process.kill()
-                await process.wait()
-                continue
-            if process.returncode == 0 and remote_project(stdout.decode(errors="replace")) == wanted:
+                stdout, _ = await process.communicate()
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            return remote_project(stdout.decode(errors="replace")) if process.returncode == 0 else None
+
+        paths = dict.fromkeys(
+            path for path in (*(repos or {}).values(), work_orders.repository) if path
+        )
+        lookups = {path: asyncio.create_task(origin(path)) for path in paths}
+        # The checkouts are asked at once and share one deadline, so stalled
+        # mounts cost a webhook that deadline once rather than once each, and
+        # never hold the one ingress worker, and every delivery queued behind
+        # it, indefinitely.
+        _, stalled = await asyncio.wait(lookups.values(), timeout=GITHUB_CHECKOUT_TIMEOUT_SECONDS)
+        for lookup in stalled:
+            lookup.cancel()
+        await asyncio.gather(*stalled, return_exceptions=True)
+        for path, lookup in lookups.items():
+            if lookup not in stalled and not lookup.exception() and lookup.result() == wanted:
                 return path
         raise RuntimeError(
             f"could not start a work order: no checkout of {project} is configured "
