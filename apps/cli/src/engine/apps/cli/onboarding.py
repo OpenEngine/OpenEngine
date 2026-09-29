@@ -44,16 +44,43 @@ def repository_root(directory: Path) -> Path:
     return Path(output.strip()).resolve()
 
 
-def default_name(root: Path) -> str:
-    """The `origin` remote's project, as the web interface names it, else the directory name."""
+def origin_project(root: Path) -> str | None:
+    """The `origin` remote's project, as the web interface names it."""
     try:
         remote = subprocess.run(
             ["git", "-C", str(root), "remote", "get-url", "origin"],
             capture_output=True, text=True, timeout=10, check=True,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
-        return root.name
-    return remote_project(remote) or root.name
+        return None
+    return remote_project(remote)
+
+
+def login_warning(document: dict, config: Path, project: str | None) -> str | None:
+    """Why onboarding `project` lets more people sign in, when GitHub login is on.
+
+    The service admits anyone who can write to a GitHub repository under
+    `[repos]`, so a new one widens sign-in to its collaborators. Mirrors the
+    web interface's checks: a login setting in the file, its environment
+    override, or the client secret in the `.env` beside it.
+    """
+    if project is None:
+        return None
+    host, _, rest = project.partition("/")
+    aliases = document.get("github", {}).get("host_aliases", {})
+    if "/" in rest and host.lower() not in {alias.lower() for alias in aliases}:
+        return None  # Not on GitHub, so GitHub cannot vouch for its writers.
+    if not (
+        document.get("github_login_client_id")
+        or document.get("github_login_redirect_uri")
+        or any(os.environ.get(f"ENGINE_GITHUB_LOGIN_{key}") for key in ("CLIENT_ID", "REDIRECT_URI", "CLIENT_SECRET"))
+        or _has_login_secret(config.parent / ".env")
+    ):
+        return None
+    return (
+        f"Warning: GitHub sign-in is enabled, so anyone with write access to {project} "
+        "can now sign in to OpenEngine."
+    )
 
 
 def target_config(explicit: str | None) -> Path:
@@ -106,15 +133,17 @@ def restart_service() -> str:
 def main(arguments: argparse.Namespace) -> int:
     try:
         root = repository_root(Path.cwd())
-        name = arguments.name or default_name(root)
+        project = origin_project(root)
+        name = arguments.name or project or root.name
         path = target_config(arguments.config)
         if not path.is_file():
             raise RuntimeError(f"no configuration at {path}; run the installer, or pass --config")
         text = path.read_text(encoding="utf-8")
         try:
-            repos = tomllib.loads(text).get("repos", {})
+            document = tomllib.loads(text)
         except tomllib.TOMLDecodeError as error:
             raise RuntimeError(f"invalid TOML in {path}: {error}") from error
+        repos = document.get("repos", {})
         existing = next(
             (key for key, value in repos.items()
              if isinstance(value, str) and _resolved(value, path.parent) == root),
@@ -140,6 +169,8 @@ def main(arguments: argparse.Namespace) -> int:
         print(f"engine init: {error}", file=sys.stderr)
         return EXIT_FAILED
     print(f"Onboarded {root} as {name!r} in {path}")
+    if (warning := login_warning(document, path, project)) is not None:
+        print(warning, file=sys.stderr)
     if not arguments.no_restart:
         print(restart_service())
     return EXIT_OK
@@ -149,3 +180,15 @@ def _resolved(value: str, base: Path) -> Path:
     """A `[repos]` path as the service resolves it: `~` expanded, relative to the config."""
     candidate = Path(value).expanduser()
     return (candidate if candidate.is_absolute() else base / candidate).resolve()
+
+
+def _has_login_secret(env_file: Path) -> bool:
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        key, separator, value = line.removeprefix("export ").partition("=")
+        if separator and key.strip() == "ENGINE_GITHUB_LOGIN_CLIENT_SECRET":
+            return bool(value.strip().strip("'\""))
+    return False

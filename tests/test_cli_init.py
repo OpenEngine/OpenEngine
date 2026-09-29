@@ -128,3 +128,28 @@ def test_init_names_the_remote_without_its_credentials(monkeypatch, tmp_path):
     assert _init(monkeypatch, checkout, config) == 0
 
     assert tomllib.loads(config.read_text())["repos"] == {"acme/api": str(checkout)}
+
+
+def test_init_warns_that_github_sign_in_widens(monkeypatch, tmp_path, capsys):
+    for key in ("CLIENT_ID", "REDIRECT_URI", "CLIENT_SECRET"):
+        monkeypatch.delenv(f"ENGINE_GITHUB_LOGIN_{key}", raising=False)
+    checkout = _checkout(tmp_path / "api", "git@github.com:acme/api.git")
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    (tmp_path / ".env").write_text("ENGINE_GITHUB_LOGIN_CLIENT_SECRET=s3cret\n")
+
+    assert _init(monkeypatch, checkout, config) == 0
+
+    assert "anyone with write access to acme/api can now sign in" in capsys.readouterr().err
+
+
+def test_init_does_not_warn_without_github_sign_in(monkeypatch, tmp_path, capsys):
+    for key in ("CLIENT_ID", "REDIRECT_URI", "CLIENT_SECRET"):
+        monkeypatch.delenv(f"ENGINE_GITHUB_LOGIN_{key}", raising=False)
+    checkout = _checkout(tmp_path / "api", "git@github.com:acme/api.git")
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+
+    assert _init(monkeypatch, checkout, config) == 0
+
+    assert "sign in" not in capsys.readouterr().err
