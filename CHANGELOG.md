@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0](https://github.com/OpenEngine/OpenEngine/compare/v0.4.0...v0.5.0) (2026-09-29)
+
+
+### Features
+
+* add a disconnected mode for people with no integrations ([#585](https://github.com/OpenEngine/OpenEngine/issues/585)) ([936c136](https://github.com/OpenEngine/OpenEngine/commit/936c136b5afeb6b53cd5a49575bfb4a6e2ee8796))
+* **cli:** add engine init to onboard the current repository ([#601](https://github.com/OpenEngine/OpenEngine/issues/601)) ([409e1d8](https://github.com/OpenEngine/OpenEngine/commit/409e1d852fce462083d5cc04e6a3e22c1b3bf086))
+* **mcp:** add workorder status and node steering tools ([#587](https://github.com/OpenEngine/OpenEngine/issues/587)) ([1112727](https://github.com/OpenEngine/OpenEngine/commit/1112727c02749bcd928e27ec3d6af5c1b482994e))
+* **web:** link the pull request in the WorkOrder overview ([#558](https://github.com/OpenEngine/OpenEngine/issues/558)) ([dbd905c](https://github.com/OpenEngine/OpenEngine/commit/dbd905c0c3a50ed515f5ba0db663478fe2b348e3))
+
+
+### Bug Fixes
+
+* explain agent rate limits after account switches ([#556](https://github.com/OpenEngine/OpenEngine/issues/556)) ([4ea45b1](https://github.com/OpenEngine/OpenEngine/commit/4ea45b1fffbe0f8c2f32e7267e29c9b83ee6b5bc))
+* improve Slack task output and status presentation ([#595](https://github.com/OpenEngine/OpenEngine/issues/595)) ([c945e18](https://github.com/OpenEngine/OpenEngine/commit/c945e188e1d03a81ad81a7c21b9ed6af23de88ee))
+* start GitHub work orders in the repository's local checkout ([#597](https://github.com/OpenEngine/OpenEngine/issues/597)) ([bc3bc8b](https://github.com/OpenEngine/OpenEngine/commit/bc3bc8bcd551525baa699ee81df1a37e2d631cf2))
+* wait for launchd teardown before restarting daemon ([#599](https://github.com/OpenEngine/OpenEngine/issues/599)) ([0e331fb](https://github.com/OpenEngine/OpenEngine/commit/0e331fb1863b5e221cacf8292c9a10039412fdb6))
+
+
+### Documentation
+
+* add OpenEngine installation quickstart ([#594](https://github.com/OpenEngine/OpenEngine/issues/594)) ([0b9e6e2](https://github.com/OpenEngine/OpenEngine/commit/0b9e6e245dab117ee2b7d4748ddf524a3dac629f))
+* **mcp:** add integration guide to docsite ([#593](https://github.com/OpenEngine/OpenEngine/issues/593)) ([05f4acc](https://github.com/OpenEngine/OpenEngine/commit/05f4acc4655d1810f98fb5a10f23a6e080c9ec57))
+* simplify quickstart and README install steps ([#596](https://github.com/OpenEngine/OpenEngine/issues/596)) ([703d6be](https://github.com/OpenEngine/OpenEngine/commit/703d6be497ff8bd19e7055b0e4d12cba603d0802))
+
 ## [0.4.0](https://github.com/OpenEngine/OpenEngine/compare/v0.3.0...v0.4.0) (2026-09-28)
 
 
