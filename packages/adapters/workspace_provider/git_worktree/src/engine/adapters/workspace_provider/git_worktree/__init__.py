@@ -23,6 +23,10 @@ from engine.ports.workspace_provider import Workspace, WorkspaceState
 #: provision checkouts all need the same answer.
 DEFAULT_ROOT_DIRECTORY = "/tmp/engine-workspaces"
 
+#: A base naming whatever branch `origin` calls its default, for workflows that
+#: serve repositories whose default branch they cannot know in advance.
+DEFAULT_BRANCH_REF = "origin/HEAD"
+
 #: Used only when the repository has no committer identity of its own, so that
 #: snapshotting an agent's work cannot fail on an unconfigured machine.
 FALLBACK_IDENTITY = ("engine", "engine@localhost")
@@ -220,6 +224,13 @@ async def _repository_root(repository: str) -> str:
 
 async def _resolve_base(repository_root: str, base_ref: str) -> str:
     """Resolve the workflow base without moving the developer's local branch."""
+    if base_ref == DEFAULT_BRANCH_REF:
+        branch = await _remote_default_branch(repository_root)
+        if branch is None:
+            # Nothing to refresh from: a repository without `origin` is based
+            # on whatever it has checked out.
+            return await _git(repository_root, "rev-parse", "--verify", "HEAD^{commit}")
+        base_ref = f"origin/{branch}"
     if not base_ref.startswith("origin/"):
         return base_ref
 
@@ -247,6 +258,18 @@ async def _resolve_base(repository_root: str, base_ref: str) -> str:
         )
     finally:
         await _git(repository_root, "update-ref", "-d", temporary_ref)
+
+
+async def _remote_default_branch(repository_root: str) -> str | None:
+    """The branch `origin` points its HEAD at, or `None` without an `origin`."""
+    if "origin" not in (await _git(repository_root, "remote")).split():
+        return None
+    listing = await _git(repository_root, "ls-remote", "--symref", "origin", "HEAD")
+    for line in listing.splitlines():
+        target, _, name = line.partition("\t")
+        if name == "HEAD" and target.startswith("ref: refs/heads/"):
+            return target.removeprefix("ref: refs/heads/")
+    raise GitWorktreeError("remote 'origin' has no default branch to base a workspace on")
 
 
 async def _main_worktree(root_path: Path) -> str:
@@ -379,6 +402,7 @@ async def _git(repository: str, *arguments: str) -> str:
 
 
 __all__ = [
+    "DEFAULT_BRANCH_REF",
     "DEFAULT_ROOT_DIRECTORY",
     "BranchInUseError",
     "GitWorktreeError",

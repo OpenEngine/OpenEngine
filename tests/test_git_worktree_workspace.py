@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_BRANCH_REF,
     BranchInUseError,
     GitWorktreeError,
     GitWorktreeWorkspaceProvider,
@@ -128,6 +129,40 @@ def test_missing_origin_branch_explains_how_to_fix_configuration(tmp_path: Path)
         ),
     ):
         asyncio.run(provider.provision(str(repository), "origin/master"))
+
+
+def test_origin_head_follows_the_remote_default_branch(tmp_path: Path) -> None:
+    upstream = tmp_path / "upstream"
+    remote = tmp_path / "remote.git"
+    repository = tmp_path / "repository"
+    _repository(upstream, "trunk")
+    subprocess.run(
+        ["git", "clone", "--bare", str(upstream), str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "clone", str(remote), str(repository)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+
+    workspace = asyncio.run(provider.provision(str(repository), DEFAULT_BRANCH_REF))
+
+    assert _git(Path(workspace.root_path), "rev-parse", "HEAD") == _git(upstream, "rev-parse", "trunk")
+
+
+def test_origin_head_without_an_origin_uses_the_checked_out_commit(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    _repository(repository, "trunk")
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+
+    workspace = asyncio.run(provider.provision(str(repository), DEFAULT_BRANCH_REF))
+
+    assert _git(Path(workspace.root_path), "rev-parse", "HEAD") == _git(repository, "rev-parse", "HEAD")
 
 
 def test_each_workspace_is_a_distinct_worktree(tmp_path: Path) -> None:
