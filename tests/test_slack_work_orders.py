@@ -1546,7 +1546,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     assert messages[0].text == provider.text
     assert messages[1].text == "*work* started."
     assert messages[1].progress
-    assert any(link.label == "View work order" for link in messages[1].links)
+    assert not messages[1].links
     assert not any(m.text.startswith("Started a work order") for m in messages)
 
 

@@ -904,6 +904,20 @@ GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
 }
 
 
+def _slack_task_report(text: str) -> str:
+    """Present structured transcript outputs without exposing Slack mentions."""
+    try:
+        outputs = json.loads(text)
+    except ValueError:
+        outputs = None
+    if isinstance(outputs, dict) and outputs:
+        text = "\n".join(
+            f"*{key}*\n\t{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}"
+            for key, value in outputs.items()
+        )
+    return escape(text, quote=False)
+
+
 def _graph_workorder_name(values: object) -> str:
     """The concise name a graph's naming node left in its state."""
     if not isinstance(values, Mapping):
@@ -1097,7 +1111,6 @@ def create_app(
     run_reader = RunReader(session.state_store, catalog)
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
-    graph_agent_reports: set[RunId] = set()
     deferred_graph_notifications: dict[RunId, RunOrigin] = {}
     # A pull request merged while its work order was still working towards its
     # human review. GitHub sends the merge once, so it is kept until the run
@@ -1112,7 +1125,7 @@ def create_app(
         """Transcript owns agent text; lifecycle owns starts, actions and errors.
 
         Graph agents are not offered update_status: the visible transcript is
-        the single progress/report path. Textless runs get a completion notice.
+        the single progress/report path. Completion notices carry the work-order link.
         Never reconstruct agent text from tool payloads or raw provider output.
         """
         text = ""
@@ -1140,7 +1153,6 @@ def create_app(
             text = milestone
         elif event.kind is EventKind.RUN_FORKED:
             # Chat surfaces answer the resume request themselves.
-            graph_agent_reports.discard(state.run_id)
             return
         elif event.kind is EventKind.TRANSCRIPT:
             # Assistant role alone is not authorship: human/tool nodes also
@@ -1153,8 +1165,7 @@ def create_app(
             if not isinstance(report, str) or not report.strip():
                 return
             # Preserve UI redactions and escape Slack mention/link syntax.
-            text = escape(report, quote=False)
-            graph_agent_reports.add(state.run_id)
+            text = _slack_task_report(report)
         elif event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
         elif event.kind is EventKind.APPROVAL_REQUESTED:
@@ -1173,17 +1184,15 @@ def create_app(
                 text = f"*{label}* needs your approval: {event.payload.get('reason', '')}"
             mention = True
         elif event.kind is EventKind.RUN_FAILED:
-            graph_agent_reports.discard(state.run_id)
             text = f"Work order failed: {event.payload.get('error', 'Unknown error')}"
             mention = True
         elif event.kind is EventKind.RUN_FINISHED:
-            if state.run_id in graph_agent_reports:
-                graph_agent_reports.discard(state.run_id)
-                return
             text = "Work order finished."
         if text:
             link = run_notifier.work_order_link(state)
-            if link:
+            if link and (public or event.kind in (
+                EventKind.APPROVAL_REQUESTED, EventKind.RUN_FAILED, EventKind.RUN_FINISHED,
+            )):
                 links.append(link)
             if public and not any(
                 existing.label == "View pull request" for existing in links
