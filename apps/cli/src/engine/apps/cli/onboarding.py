@@ -17,6 +17,7 @@ import tomllib
 from pathlib import Path
 
 from engine.apps.cli import daemon
+from engine.runtime.change_requests import remote_project
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -44,7 +45,7 @@ def repository_root(directory: Path) -> Path:
 
 
 def default_name(root: Path) -> str:
-    """`owner/name` from the `origin` remote, else the checkout's directory name."""
+    """The `origin` remote's project, as the web interface names it, else the directory name."""
     try:
         remote = subprocess.run(
             ["git", "-C", str(root), "remote", "get-url", "origin"],
@@ -52,9 +53,7 @@ def default_name(root: Path) -> str:
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return root.name
-    # Both `https://host/owner/name.git` and `git@host:owner/name.git`.
-    parts = [part for part in re.split(r"[/:]", remote.removesuffix("/").removesuffix(".git")) if part]
-    return "/".join(parts[-2:]) if len(parts) >= 3 else root.name
+    return remote_project(remote) or root.name
 
 
 def target_config(explicit: str | None) -> Path:
@@ -130,7 +129,12 @@ def main(arguments: argparse.Namespace) -> int:
         if tomllib.loads(updated).get("repos", {}).get(name) != str(root):
             raise RuntimeError(f"could not add {name!r} to {path}; add it under [repos] by hand")
         temporary = path.with_name(f".{path.name}.tmp")
-        temporary.write_text(updated, encoding="utf-8")
+        # Created owner-only and given the original's mode, so replacing the
+        # file never loosens the installer's 0600.
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), path.stat().st_mode & 0o777)
+            handle.write(updated)
         os.replace(temporary, path)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"engine init: {error}", file=sys.stderr)

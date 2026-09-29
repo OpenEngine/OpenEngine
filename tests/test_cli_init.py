@@ -34,7 +34,7 @@ def test_init_adds_the_checkout_to_the_existing_repos_table(monkeypatch, tmp_pat
     assert _init(monkeypatch, checkout / "src", config) == 0
 
     text = config.read_text()
-    assert tomllib.loads(text)["repos"] == {"other": "~/other", "Acme/api": str(checkout)}
+    assert tomllib.loads(text)["repos"] == {"other": "~/other", "acme/api": str(checkout)}
     assert text.startswith("# Deployment.\n") and "\n\n# Next.\n[server]" in text
     assert "Onboarded" in capsys.readouterr().out
 
@@ -107,3 +107,24 @@ def test_restart_restarts_a_running_service(monkeypatch):
 
     assert "Restarted" in onboarding.restart_service()
     assert calls == ["stop", "start"]
+
+
+def test_init_keeps_the_config_owner_only(monkeypatch, tmp_path):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    config.chmod(0o600)
+
+    assert _init(monkeypatch, checkout, config) == 0
+
+    assert config.stat().st_mode & 0o777 == 0o600
+
+
+def test_init_names_the_remote_without_its_credentials(monkeypatch, tmp_path):
+    checkout = _checkout(tmp_path / "api", "https://x-access-token:secret@github.com/acme/api.git")
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+
+    assert _init(monkeypatch, checkout, config) == 0
+
+    assert tomllib.loads(config.read_text())["repos"] == {"acme/api": str(checkout)}

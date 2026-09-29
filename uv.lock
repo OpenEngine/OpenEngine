@@ -584,11 +584,15 @@ name = "engine-cli"
 version = "0.4.0"
 source = { editable = "apps/cli" }
 dependencies = [
+    { name = "engine-runtime" },
     { name = "platformdirs" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "platformdirs", specifier = ">=4" }]
+requires-dist = [
+    { name = "engine-runtime", editable = "packages/runtime" },
+    { name = "platformdirs", specifier = ">=4" },
+]
 
 [[package]]
 name = "engine-control-server"
