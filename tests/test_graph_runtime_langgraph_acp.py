@@ -1251,10 +1251,22 @@ def test_only_a_person_s_answer_holds_steering_until_the_turn_ends(
         async with runtime_over(
             tmp_path, registry(tmp_path, asks=True, waits_after_grant=True),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {})
             if auto_approve:
-                await runtime.set_auto_approve(run.run_id, IMPLEMENTATION, True)
-            else:
+                # On at the run's opening checkpoint, which is published before
+                # the run is launched: turned on after `start` returns, a fast
+                # agent's first request would already be waiting for a person.
+                enabled: set[RunId] = set()
+
+                async def enable(event: RuntimeEvent) -> None:
+                    # `observe` replaces the runtime's one observer, the log.
+                    await log.append(event)
+                    if event.kind.value == "checkpoint" and event.run_id not in enabled:
+                        enabled.add(event.run_id)
+                        await runtime.set_auto_approve(event.run_id, IMPLEMENTATION, True)
+
+                runtime.observe(enable)
+            run = await runtime.start(GRAPH, {})
+            if not auto_approve:
                 requested = await until(log, run.run_id, "approval.requested")
                 approval = requested[-1].payload["approvalId"]
                 await runtime.decide(run.run_id, ApprovalId(approval), ApprovalDecision.ACCEPT)
