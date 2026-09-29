@@ -1365,6 +1365,49 @@ def test_an_assignment_without_a_local_checkout_starts_nothing(tmp_path, caplog)
     assert "no checkout of acme/api is configured" in caplog.text
 
 
+def test_a_stalled_checkout_is_skipped_rather_than_waited_on(tmp_path, monkeypatch):
+    """A checkout whose `git remote get-url` never answers, as on a stalled
+    mount, costs the lookup a timeout rather than the single ingress worker
+    and every delivery queued behind it."""
+    import asyncio
+
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    import engine.apps.web.api as api
+
+    stalled = _checkout(tmp_path / "stalled", "https://github.com/acme/api.git")
+    spawn = asyncio.create_subprocess_exec
+
+    async def hanging_for_stalled(*command, **options):
+        if stalled in command:
+            command = ("sleep", "60")
+        return await spawn(*command, **options)
+
+    monkeypatch.setattr(api, "GITHUB_CHECKOUT_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", hanging_for_stalled)
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+        repos={"stalled": stalled,
+               "acme/api": (checkout := _checkout(tmp_path / "api", "https://github.com/acme/api.git"))},
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    ))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.start.assert_awaited_once()
+        assert runtime.start.await_args.args[1]["repository"] == checkout
+
+
 def test_issue_progress_posts_only_milestones(tmp_path, monkeypatch):
     """The issue hears that implementation started, that review finished, and
     that the run finished. Other nodes, approvals, failures, resumes and agent

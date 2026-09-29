@@ -965,6 +965,11 @@ UTILIZATION_MAX_AGE_SECONDS = 60 * 60
 #: quickly and be retried rather than hold them for the webhook budget above.
 GITHUB_LOGIN_TIMEOUT_SECONDS = 10
 
+#: How long each configured checkout gets to name its `origin` when a webhook
+#: is matched to one. A local `git remote get-url` answers at once; one that
+#: does not is on a stalled mount, and is skipped rather than waited on.
+GITHUB_CHECKOUT_TIMEOUT_SECONDS = 5
+
 
 @dataclass(slots=True)
 class _GraphSurface:
@@ -3147,7 +3152,15 @@ def create_app(
                 )
             except OSError:
                 continue
-            stdout, _ = await process.communicate()
+            try:
+                async with asyncio.timeout(GITHUB_CHECKOUT_TIMEOUT_SECONDS):
+                    stdout, _ = await process.communicate()
+            except TimeoutError:
+                # A checkout on a stalled mount must not hold the one ingress
+                # worker, and every delivery queued behind it, indefinitely.
+                process.kill()
+                await process.wait()
+                continue
             if process.returncode == 0 and remote_project(stdout.decode(errors="replace")) == wanted:
                 return path
         raise RuntimeError(
