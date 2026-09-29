@@ -600,8 +600,9 @@ type StepGroupEntry = {
 function groupedStatus(steps: Pick<ApiRunStep, "status">[]): string {
   for (const status of ["action_required", "in_progress", "failed"])
     if (steps.some((step) => step.status === status)) return status;
-  if (steps.every((step) => step.status === "completed")) return "completed";
-  return "pending";
+  const taken = steps.filter((step) => step.status !== "skipped");
+  if (taken.length && taken.every((step) => step.status === "completed")) return "completed";
+  return taken.length ? "pending" : "skipped";
 }
 
 /** Collapse nodes sharing a group into one item at their first position. */
@@ -939,7 +940,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
           stepId: node.nodeId,
           name: node.name,
           kind: node.kind === "human" ? "human" as const : "agent" as const,
-          status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed" : "pending",
+          status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed"
+            // A finished run's node that never ran was a branch not taken.
+            : graph.status === "completed" ? "skipped" : "pending",
           outcome: completed.has(node.nodeId) ? "completed" : null,
           agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
           conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
