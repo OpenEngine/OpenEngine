@@ -144,7 +144,7 @@ from engine.ports import (
     UserInputAnswer,
     WorkspaceState,
 )
-from engine.runtime.change_requests import change_request, pull_request_url
+from engine.runtime.change_requests import change_request, pull_request_url, remote_project
 from engine.runtime import (
     AgentSession,
     ApprovalBroker,
@@ -3125,6 +3125,36 @@ def create_app(
             return None
         return await store.run_for_pull_request(repository.lower(), number)
 
+    async def github_checkout(project: str) -> str:
+        """The local checkout a forge `project` key is worked on in.
+
+        A webhook names a repository on the forge, but a work order checks one
+        out from disk, and git reads the bare key as a relative directory that
+        does not exist. So the configured checkouts are asked which of them has
+        `project` as its `origin`. A forge on a non-default web port keys its
+        projects by that port, which a remote does not carry, so the comparison
+        ignores it.
+        """
+        authority, _, rest = project.partition("/")
+        wanted = f"{authority.partition(':')[0]}/{rest}" if "/" in rest else project
+        for path in dict.fromkeys(
+            path for path in (*(repos or {}).values(), work_orders.repository) if path
+        ):
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "git", "-C", str(Path(path).expanduser()), "remote", "get-url", "origin",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                )
+            except OSError:
+                continue
+            stdout, _ = await process.communicate()
+            if process.returncode == 0 and remote_project(stdout.decode(errors="replace")) == wanted:
+                return path
+        raise RuntimeError(
+            f"could not start a work order: no checkout of {project} is configured "
+            "under [repos] or work_orders.repository"
+        )
+
     async def github_start_workorder(
         store: GithubProvenance | None, repository: str, number: int, prompt: str,
         *, replacing: RunId | None, requester: str | None = None,
@@ -3171,7 +3201,7 @@ def create_app(
         state = await start_graph_run(
             runtime, graph,
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
-            prompt=prompt, repository=repository,
+            prompt=prompt, repository=await github_checkout(repository),
             requester=requester,
         )
         url = pull_request_url(repository, number)
@@ -3368,7 +3398,7 @@ def create_app(
             prompt=(f"Implement issue #{assignment.number}: {assignment.title}\n\n"
                     f"{assignment.body}\n\nIssue: {assignment.url}\n"
                     f"Include Fixes #{assignment.number} in the pull request body."),
-            repository=repository,
+            repository=await github_checkout(repository),
             origin=RunOrigin(
                 channel=f"{GITHUB_CHANNEL_PREFIX}{repository}",
                 thread_id=f"issue/{assignment.number}",
