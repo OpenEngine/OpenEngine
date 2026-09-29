@@ -2,96 +2,112 @@
 title: MCP
 ---
 
-Connect an MCP client to create WorkOrders, inspect progress and transcripts,
-and send instructions to running tasks. The host chooses the repository and
-workflow; existing review and approval rules still apply.
+Connect Claude Code, or another MCP client, to OpenEngine and let your agent
+start WorkOrders, follow their progress and steer them from the conversation you
+are already in. Work runs in OpenEngine against the repository and workflow the
+host configured; existing review and approval rules still apply.
 
-## Connect a client
+## What you need
 
-The remote gateway exposes Streamable HTTP at `https://YOUR-GATEWAY/mcp`.
-Configure your client with that URL and an `Authorization: Bearer <token>`
-header using the host's `OE_MCP_TOKEN`. Keep the token in private client
-configuration: anyone holding it can create, inspect, reset and steer work in
-the configured repository. Hosts can alternatively configure an external OAuth
-provider. Full hosting and authentication setup:
-[remote MCP guide](https://github.com/OpenEngine/OpenEngine/blob/main/docs/remote-mcp.md).
+Ask whoever runs your OpenEngine host for:
 
-Once connected, tool discovery should list `create_workorder`, `workorder_status`,
-`node_status`, `steer_workorder` and `node_steer`. If your client restricts allowed
-tools, enable the ones you intend to use.
+- **The MCP URL**, for example `https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp`. On
+  the host machine itself, `http://127.0.0.1:8765/mcp` also works.
+- **An access token** (the host's `OE_MCP_TOKEN`), unless the host set up
+  OAuth sign-in, in which case you sign in through your client instead.
 
-## Create a WorkOrder
+Treat the token like a password. Anyone holding it can create, inspect, reset
+and steer work in the configured repository. Keep it in your shell environment
+or a secret manager, never in a prompt or a committed file.
 
-Call `create_workorder` with a description of the change. This example shows MCP
-`tools/call` parameters:
+Hosting the gateway yourself? Follow the
+[remote MCP guide](https://github.com/OpenEngine/OpenEngine/blob/main/docs/remote-mcp.md)
+first, then come back here.
 
-```json
-{"name": "create_workorder", "arguments": {"prompt": "Fix the failing login test and add a regression test."}}
+## Connect Claude Code
+
+Export the token, then register the server in your user configuration so the
+secret stays out of the repository:
+
+```sh
+export OE_MCP_TOKEN=...   # from your host
+claude mcp add --transport http --scope user oe https://YOUR-GATEWAY/mcp \
+  --header "Authorization: Bearer ${OE_MCP_TOKEN}"
 ```
 
-The response contains a `run_id`; work starts before the call returns. To chain
-work, pass a previous run's ID as `depends_on_run_id`. The new WorkOrder returns
-its ID immediately and waits for that prerequisite to succeed. Time-based
-scheduling is not exposed through MCP.
+If the host uses OAuth, leave off `--header`. Then run `/mcp` inside Claude
+Code: `oe` should show as connected (choose it to sign in when using OAuth)
+with five tools: `create_workorder`, `workorder_status`, `node_status`,
+`steer_workorder` and `node_steer`. See
+[Claude Code's MCP documentation](https://code.claude.com/docs/en/mcp) for other
+scopes and options.
 
-Each creation call starts new work. If a request times out, check the WorkOrder
-list before retrying. Steering and reset calls also are not automatically
-retried; check status after an uncertain response before repeating them.
+## Connect Claude on the web or desktop
 
-## Inspect and steer a WorkOrder
+Add OpenEngine as a custom connector with the MCP URL. Custom connectors sign in
+with OAuth rather than a pasted token, so this requires a host with OAuth
+enabled.
 
-After connecting a client, use the `run_id` returned by `create_workorder` to
-follow the work. The examples below show MCP `tools/call` parameters; replace
-the sample run, node, and execution IDs with values returned by your gateway.
+## Connect another CLI or client
 
-1. Read the run's status and available nodes:
+Any client that supports remote MCP over Streamable HTTP works. Point it at the
+MCP URL and send `Authorization: Bearer <token>` on every request. For example,
+in the Codex CLI's `~/.codex/config.toml`:
 
-   ```json
-   {"name": "workorder_status", "arguments": {"run_id": "run-123"}}
-   ```
+```toml
+[mcp_servers.oe]
+url = "https://YOUR-GATEWAY/mcp"
+bearer_token_env_var = "OE_MCP_TOKEN"
+```
 
-   `current_nodes` contains active node IDs, or the next nodes when execution
-   is idle. `transcript` groups recent messages by node. For parallel tasks,
-   inspect `active_executions` to see each execution's separate messages and
-   `execution_id`. `pr_url` is null until a pull request URL is available.
+If your client restricts which tools the model may call, allow the ones you
+intend to use.
 
-2. Read more context for a node using its `nodeId` from `topology.nodes`:
+## Use it
 
-   ```json
-   {"name": "node_status", "arguments": {"run_id": "run-123", "nodename": "implementation", "last_n": 20}}
-   ```
+Ask in plain language; your agent picks the tool:
 
-   The response's `messages` are ordered oldest first and can include earlier
-   attempts at that node. `last_n` defaults to 10 and accepts 1–1000.
+- *"Create an OpenEngine work order to fix the failing login test and add a
+  regression test."* Work starts immediately and you get back a `run_id`. Review
+  the tool call before approving it: it starts real work.
+- *"When that finishes, start another one to update the changelog."* The second
+  WorkOrder is created now and waits until the first succeeds.
+- *"What's the status of run-123? Show me the last 20 messages from the
+  implementation node."* Status includes the current nodes, recent transcript
+  and the pull request URL once there is one.
+- *"Tell the running task to include a test for empty input."* The instruction
+  reaches the active task without losing its progress.
+- *"Go back to the implementation node and rework the fix to preserve the
+  existing API."* This stops the run and restarts from before that node with
+  your instruction queued. It can repeat work; earlier transcript stays visible.
 
-3. Send a correction to an active task without resetting its progress:
+Time-based scheduling is not available through MCP.
 
-   ```json
-   {"name": "steer_workorder", "arguments": {"run_id": "run-123", "execution_id": "exec-2", "instruction": "Include a regression test for an empty input."}}
-   ```
+### Tool reference
 
-   Pass at most one of `execution_id` or `nodename`. Omitting both works when
-   there is exactly one active execution. Use `execution_id` to distinguish
-   parallel tasks at the same node.
+| Tool | Arguments | What it does |
+| --- | --- | --- |
+| `create_workorder` | `prompt`, optional `depends_on_run_id` | Starts a WorkOrder and returns its `run_id`. With a dependency, it waits for that run to succeed. |
+| `workorder_status` | `run_id` | Returns `current_nodes`, `topology`, recent `transcript` per node, `active_executions` (each with an `execution_id`) and `pr_url`. |
+| `node_status` | `run_id`, `nodename`, optional `last_n` (1–1000, default 10) | Returns a node's messages, oldest first. Use a `nodeId` from `topology.nodes`. |
+| `steer_workorder` | `run_id`, `instruction`, optional `nodename` or `execution_id` | Sends an instruction to an active task. Omit both selectors when only one task is running; use `execution_id` for parallel tasks at the same node. |
+| `node_steer` | `run_id`, `nodename`, `instruction` | Resets to the latest checkpoint before a previously reached node and resumes with the instruction queued. |
 
-4. To revisit a previously reached node, reset and supply its instruction in
-   one call:
+Prompts and instructions must be non-blank and at most 100,000 characters.
+Status and steering tools only accept runs from the host's configured repository.
 
-   ```json
-   {"name": "node_steer", "arguments": {"run_id": "run-123", "nodename": "implementation", "instruction": "Rework the fix to preserve the existing API."}}
-   ```
+## Troubleshooting
 
-   This stops current execution and resumes from the latest checkpoint before
-   that node, with the instruction already queued. It can repeat work; earlier
-   transcript entries remain visible. Check `workorder_status` again afterward.
-
-Prompts and steering instructions must be non-blank and at most 100,000
-characters. Status and steering tools reject runs outside the gateway's
-configured repository. If your client limits allowed tools, enable the status
-and steering tools you intend to use as well as `create_workorder`.
-
-**Current GitHub-login limitation:** OE's service token authorizes only
-`POST /api/runs`. When OE enforces GitHub browser login, creation works with
-`OE_MCP_ENGINE_TOKEN`, but the status and steering tools receive an upstream
-401 because they need additional API routes. The gateway does not forward a
-browser session; setting its service token does not enable those routes.
+- **Nothing is retried automatically.** If a create, steer or reset call times
+  out, check the WorkOrder list or `workorder_status` before asking again, or
+  you may start duplicate work.
+- **401 when connecting:** the token is missing or wrong. Check that
+  `OE_MCP_TOKEN` was set when you ran `claude mcp add`.
+- **403 or 421:** the URL doesn't match the host's configured public address.
+  Ask the host for the exact URL.
+- **Error mentioning OE HTTP 400:** the host's workflow is unknown or needs
+  inputs; ask the host to check its configuration.
+- **Status or steering fails with an upstream 401:** the host has GitHub login
+  enabled. Creating WorkOrders still works, but OpenEngine's service token
+  doesn't yet authorize the status and steering routes; follow the run in the
+  OpenEngine UI instead.
