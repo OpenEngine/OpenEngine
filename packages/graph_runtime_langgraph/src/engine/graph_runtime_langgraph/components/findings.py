@@ -18,7 +18,7 @@ from typing import Any
 
 from collections.abc import Mapping
 
-from engine.domain import ApprovalDecision, ApprovalKind, StepCompleted, WorkState
+from engine.domain import ApprovalDecision, ApprovalKind, StepCompleted, WorkState, finding_comment
 from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
 from engine.graph_runtime_langgraph.executions import current_execution
 
@@ -81,15 +81,7 @@ class Finding:
 
     def as_comment(self) -> str:
         """Format for posting as a PR comment, with lineage."""
-        parts = [f"**{self.tagline}**", "", self.description]
-        lineage: list[str] = []
-        if self.agent:
-            lineage.append(f"agent: {self.agent}")
-        if self.facet:
-            lineage.append(f"facet: {self.facet}")
-        if lineage:
-            parts.extend(["", f"_Produced by {', '.join(lineage)}_"])
-        return "\n".join(parts)
+        return finding_comment(self.tagline, self.description, agent=self.agent, facet=self.facet)
 
 
 @dataclass(frozen=True, slots=True)

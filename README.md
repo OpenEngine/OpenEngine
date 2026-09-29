@@ -91,7 +91,9 @@ disconnected. The installer offers to run it on a repository when it finishes.
 review state (`engine.domain.states`), skipping planning and implementation.
 A path (default: the current directory, local service only) reviews its
 committed branch; a GitHub pull request URL provisions a new workspace on the
-pull request's branch in the matching `[repos]` checkout. The surviving
+pull request's branch in the matching `[repos]` checkout, and fixes are pushed
+back to that branch. Pull requests from forks are refused, since their code
+would run the review's agents; check one out and review the path instead. The surviving
 findings are listed with **Fix this** beside each: Enter selects a finding,
 **Fix selected** or **Fix all** sends them back to the implementer, and the fix
 is reviewed again. **Post as comments** posts the findings on the pull request

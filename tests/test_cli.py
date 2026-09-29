@@ -573,7 +573,7 @@ REVIEW_CONFIG = {
     "workflows": [{
         "id": "implementation-review-rerank",
         "inputs": [
-            {"name": "mode"}, {"name": "ref"}, {"name": "pr_url"},
+            {"name": "mode"}, {"name": "ref"}, {"name": "pr_url"}, {"name": "branch"},
             {"name": "state", "choices": ["Planning", "Review"]},
         ],
     }],
@@ -585,18 +585,39 @@ REVIEW_FINDINGS = [
 TRIAGE = {"approvalId": "approval-1", "nodeId": "triage", "toolName": "findings_triage"}
 
 
-def test_review_of_a_fork_pull_request_checks_out_its_head_in_the_configured_repository(monkeypatch):
+def test_review_of_a_pull_request_checks_out_its_branch_in_the_configured_repository(monkeypatch):
     monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {
         "url": "https://github.com/owner/repo/pull/7", "title": "Fix it",
-        "headRefName": "patch-1", "isCrossRepository": True,
+        "headRefName": "patch-1", "isCrossRepository": False,
     })
 
-    target = cli.review_target("https://github.com/owner/repo/pull/7", cli.DEFAULT_SERVER, REVIEW_CONFIG)
+    target = cli.review_target("https://github.com/owner/repo/pull/7/files", cli.DEFAULT_SERVER, REVIEW_CONFIG)
 
     assert target == cli.ReviewTarget(
-        "/code/repo", "origin/pull/7/head", "https://github.com/owner/repo/pull/7",
-        "Review pull request https://github.com/owner/repo/pull/7: Fix it",
+        "/code/repo", "origin/patch-1", "https://github.com/owner/repo/pull/7",
+        "Review pull request https://github.com/owner/repo/pull/7: Fix it", "patch-1",
     )
+
+
+def test_review_of_a_fork_pull_request_is_refused(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {
+        "url": "https://github.com/owner/repo/pull/7", "headRefName": "patch-1", "isCrossRepository": True,
+    })
+
+    with pytest.raises(RuntimeError, match="forks are not reviewed"):
+        cli.review_target("https://github.com/owner/repo/pull/7", cli.DEFAULT_SERVER, REVIEW_CONFIG)
+
+
+def test_review_does_not_take_a_similarly_named_checkout_for_the_pull_requests_repository(monkeypatch):
+    remotes = {"https://github.com/myowner/repo.git": False, "git@github.com:Owner/Repo.git": True}
+    request = cli.pull_request("https://github.com/owner/repo/pull/7")
+    for origin, matches in remotes.items():
+        monkeypatch.setattr(cli, "git_output", lambda _path, *arguments: origin if "get-url" in arguments else "/here")
+        if matches:
+            assert cli.review_repository(request, cli.DEFAULT_SERVER, {}) == "/here"
+        else:
+            with pytest.raises(RuntimeError, match="no checkout of owner/repo"):
+                cli.review_repository(request, cli.DEFAULT_SERVER, {})
 
 
 def test_review_starts_the_workflow_in_the_review_state(monkeypatch):
@@ -609,8 +630,19 @@ def test_review_starts_the_workflow_in_the_review_state(monkeypatch):
     assert posted == [("/api/runs", {
         "prompt": "Review it", "repository": "/code/repo", "workflowId": "implementation-review-rerank",
         # No pull request: nothing to push to, so the run stays off the forge.
-        "inputs": {"state": "Review", "ref": "abc123", "pr_url": "", "mode": "disconnected"},
+        "inputs": {"state": "Review", "ref": "abc123", "pr_url": "", "branch": "", "mode": "disconnected"},
     })]
+
+
+def test_review_of_a_pull_request_is_connected_to_its_branch(monkeypatch):
+    posted = []
+    monkeypatch.setattr(cli, "request_json", lambda _server, _path, body: posted.append(body) or {"runId": "run-1"})
+    target = cli.ReviewTarget("/code/repo", "origin/patch-1", "https://github.com/o/r/pull/1", "Review it", "patch-1")
+
+    cli.start_review(cli.DEFAULT_SERVER, REVIEW_CONFIG, target)
+
+    assert posted[0]["inputs"]["branch"] == "patch-1"
+    assert posted[0]["inputs"]["mode"] == "connected"
 
 
 def test_review_json_waits_for_triage_and_prints_the_surviving_findings(monkeypatch, capsys):
@@ -673,7 +705,7 @@ def test_posting_findings_comments_inline_where_a_finding_has_a_line(monkeypatch
     assert cli.post_findings("https://github.com/o/r/pull/1", REVIEW_FINDINGS) == 0
 
     inline, general = commands
-    assert inline[:5] == ["gh", "api", "--method", "POST", "repos/o/r/pulls/1/comments"]
+    assert inline[:7] == ["gh", "api", "--hostname", "github.com", "--method", "POST", "repos/o/r/pulls/1/comments"]
     assert "path=a.py" in inline and "line=3" in inline and "commit_id=sha" in inline
     assert general[:4] == ["gh", "pr", "comment", "https://github.com/o/r/pull/1"]
     assert general[-1].startswith("**Unused helper**")

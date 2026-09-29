@@ -556,7 +556,7 @@ def test_a_run_started_in_review_triages_before_it_fixes(monkeypatch) -> None:
 
     asyncio.run(builder.compile().ainvoke({
         "task": f"Review pull request {pr_url}",
-        "inputs": {"state": "Review", "ref": "origin/feature", "pr_url": pr_url},
+        "inputs": {"state": "Review", "ref": "origin/feature", "pr_url": pr_url, "branch": "feature"},
     }))
 
     assert visited[0] == module.WORKSPACE
@@ -572,6 +572,8 @@ def test_a_run_started_in_review_triages_before_it_fixes(monkeypatch) -> None:
     fix, = prompts[module.IMPLEMENTATION]
     assert "Fix the bug" in fix and "Rename it" not in fix
     assert pr_url in fix and "same PR branch" in fix
+    # The workspace's own branch is not the pull request's, so the prompt names it.
+    assert "git push origin HEAD:feature" in fix
     assert "Reply to each review comment" not in fix
 
 
@@ -687,7 +689,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     # Every entry declares the inputs the creation form asks for.
     assert [
         [item["name"] for item in one["inputs"]] for one in offered
-    ] == [["implementation_runner", "review_runner", "mode", "state", "ref", "pr_url"]]
+    ] == [["implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch"]]
 
 
 # --- and nothing falls over --------------------------------------------------
@@ -726,7 +728,7 @@ def test_stage_runners_configure_models_and_mcp_identity(
     module = definition_module()
     graph = module.graph_for("codex")
     assert [item.name for item in graph.inputs] == [
-        "implementation_runner", "review_runner", "mode", "state", "ref", "pr_url",
+        "implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch",
     ]
     nodes = nodes_of(graph.builder)
     observed = [

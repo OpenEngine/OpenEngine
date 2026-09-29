@@ -24,6 +24,7 @@ from engine.domain.commands import (
     StartAgentRun,
 )
 from engine.domain.events import Event, RunFailed, StepCompleted
+from engine.domain.findings import finding_comment
 from engine.domain.forge import MODE_INPUT, ForgeMode, forge_mode
 from engine.domain.ids import (
     AgentId,
@@ -77,6 +78,7 @@ __all__ = [
     "ForgeMode",
     "MODE_INPUT",
     "forge_mode",
+    "finding_comment",
     "Message",
     "MessageId",
     "MilestoneId",

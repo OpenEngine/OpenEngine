@@ -64,7 +64,7 @@ from engine.graph_runtime_langgraph.components.forge import (
     THE_CHANGE,
     UPDATE_CHANGE,
 )
-from engine.domain import StepCompleted, WorkState, start_state
+from engine.domain import ForgeMode, StepCompleted, WorkState, forge_mode, start_state
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
 )
@@ -99,6 +99,8 @@ FIX = "fix"
 #: The creation inputs naming the change a run started in review looks at.
 REF_INPUT = "ref"
 PR_INPUT = "pr_url"
+#: The pull request's own branch, which the workspace's local branch is not.
+BRANCH_INPUT = "branch"
 
 #: Codex and Claude, reached through their ACP adapters.  `agent_registry` is
 #: what routes an agent's permission request back to the run that raised it.
@@ -296,13 +298,26 @@ def _pr_url(state: Mapping[str, object]) -> str:
     return str(state.get("pr_url") or given or "")
 
 
+def _push_to(state: Mapping[str, object]) -> str:
+    """Where a fix to a change this run was given goes: that change's branch.
+
+    The workspace is checked out on a branch of its own, so a plain push would
+    land beside the pull request rather than on it.
+    """
+    inputs = state.get("inputs")
+    branch = str(inputs.get(BRANCH_INPUT) or "") if isinstance(inputs, Mapping) else ""
+    if not (_reviewing(state) and branch and forge_mode(inputs) is ForgeMode.CONNECTED):
+        return ""
+    return f"The pull request's branch is {branch}: push to it with `git push origin HEAD:{branch}`. "
+
+
 def _implementation_prompt(state: Mapping[str, object]) -> str:
     ci = state.get("ci_check")
     if isinstance(ci, dict) and ci.get("passed") is False:
         return (
             f"Fix the CI failures on {THE_CHANGE(state, pr_url=_pr_url(state))}. "
             "Read the failed job logs and relevant code, make the smallest fix, "
-            f"test it, {UPDATE_CHANGE(state)}"
+            f"test it, {UPDATE_CHANGE(state)}{_push_to(state)}"
             "Use fail_step if the failures cannot be fixed.\n\n"
             f"{ci.get('summary', '')}\n\nOriginal task:\n{state.get('task', '')}"
         )
@@ -314,7 +329,7 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
             "Address the review findings on "
             f"{THE_CHANGE(state, pr_url=_pr_url(state))}. "
             "Read the relevant code, make the smallest complete fix, test it, "
-            f"{UPDATE_CHANGE(state)}"
+            f"{UPDATE_CHANGE(state)}{_push_to(state)}"
             # Findings a person chose were never posted, so there is nothing to answer.
             f"{'' if _reviewing(state) else ANSWER_REVIEW(state)}"
             "Use fail_step if the findings cannot be addressed.\n\n"
@@ -623,6 +638,7 @@ def graph_for(
             state_input(WorkState.PLANNING, WorkState.REVIEW),
             WorkflowInput(REF_INPUT, "Ref to review"),
             WorkflowInput(PR_INPUT, "Pull request to review"),
+            WorkflowInput(BRANCH_INPUT, "Pull request branch"),
         ),
     )
 

@@ -30,7 +30,8 @@ from urllib.request import Request, urlopen
 from platformdirs import user_config_path, user_data_path, user_state_path
 
 from engine.apps.cli import daemon, onboarding
-from engine.domain import MODE_INPUT, STATE_INPUT, ForgeMode, WorkState
+from engine.domain import MODE_INPUT, STATE_INPUT, ForgeMode, WorkState, finding_comment
+from engine.runtime.change_requests import ChangeRequest, change_request, remote_project
 
 DEFAULT_SERVER = "http://127.0.0.1:4364"
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CLI_CONFIG"
@@ -996,6 +997,7 @@ TRIAGE_TOOL = "findings_triage"
 #: The creation inputs naming the change a run started in review looks at.
 REVIEW_REF_INPUT = "ref"
 REVIEW_PR_INPUT = "pr_url"
+REVIEW_BRANCH_INPUT = "branch"
 REVIEW_POLL_SECONDS = 2.0
 
 
@@ -1007,15 +1009,14 @@ class ReviewTarget:
     ref: str
     pr_url: str
     task: str
+    #: The pull request's branch a fix is pushed to; none when it cannot be.
+    branch: str = ""
 
 
-def pull_request_parts(url: str) -> tuple[str, int] | None:
-    """`owner/repo` and number of a GitHub pull request URL, if it is one."""
-    parsed = urlsplit(url)
-    parts = parsed.path.strip("/").split("/")
-    if parsed.scheme in {"http", "https"} and len(parts) >= 4 and parts[2] == "pull" and parts[3].isdigit():
-        return f"{parts[0]}/{parts[1]}", int(parts[3])
-    return None
+def pull_request(url: str) -> ChangeRequest | None:
+    """The GitHub pull request a URL names, read the way the rest of the engine reads it."""
+    request = change_request(url)
+    return request if request is not None and request.kind == "pull" else None
 
 
 def git_output(path: str | Path, *arguments: str) -> str:
@@ -1037,11 +1038,11 @@ def gh_json(*arguments: str, cwd: str | Path | None = None) -> dict[str, Any]:
     return payload
 
 
-def review_repository(slug: str, server: str, config: dict[str, Any]) -> str:
-    """The service-side checkout of `owner/repo`, from `[repos]` or this directory."""
+def review_repository(request: ChangeRequest, server: str, config: dict[str, Any]) -> str:
+    """The service-side checkout of the pull request's repository, from `[repos]` or this directory."""
     repositories = config.get("repositories") if isinstance(config.get("repositories"), list) else []
     for repository in repositories:
-        if isinstance(repository, dict) and str(repository.get("name", "")).casefold() == slug.casefold():
+        if isinstance(repository, dict) and str(repository.get("name", "")).casefold() == request.path.casefold():
             return str(repository.get("path", ""))
     if is_local_server(server):
         try:
@@ -1049,23 +1050,31 @@ def review_repository(slug: str, server: str, config: dict[str, Any]) -> str:
             origin = git_output(root, "remote", "get-url", "origin")
         except RuntimeError:
             origin = ""
-        if origin.removesuffix(".git").casefold().endswith(slug.casefold()):
+        # The whole project, host included: `myowner/repo` is not `owner/repo`.
+        if remote_project(origin) == request.project:
             return root
-    raise RuntimeError(f"no checkout of {slug} is configured on this service; add it under [repos] in engine.toml")
+    raise RuntimeError(f"no checkout of {request.path} is configured on this service; add it under [repos] in engine.toml")
 
 
 def review_target(target: str, server: str, config: dict[str, Any]) -> ReviewTarget:
     """Resolve a pull request URL or a local path into what the review checks out."""
     if target.startswith(("http://", "https://")):
-        parts = pull_request_parts(target)
-        if parts is None:
+        request = pull_request(target)
+        if request is None:
             raise RuntimeError("expected a GitHub pull request URL such as https://github.com/owner/repo/pull/1")
-        slug, number = parts
         pull = gh_json("pr", "view", target, "--json", "url,title,headRefName,isCrossRepository")
-        # A fork's branch is not on `origin`; its pull request head always is.
-        ref = f"origin/pull/{number}/head" if pull.get("isCrossRepository") else f"origin/{pull['headRefName']}"
+        if pull.get("isCrossRepository"):
+            # A fork's code would run our agents, and a fix has no remote to go back to.
+            raise RuntimeError(
+                "pull requests from forks are not reviewed: their code would run the review's agents, "
+                "and a fix could not be pushed back; check the branch out and run engine review on the path"
+            )
+        branch = str(pull["headRefName"])
         url = str(pull.get("url") or target)
-        return ReviewTarget(review_repository(slug, server, config), ref, url, f"Review pull request {url}: {pull.get('title', '')}")
+        return ReviewTarget(
+            review_repository(request, server, config), f"origin/{branch}", url,
+            f"Review pull request {url}: {pull.get('title', '')}", branch,
+        )
     if not is_local_server(server):
         raise RuntimeError("a remote service cannot see local paths; give a pull request URL instead")
     root = git_output(Path(target).expanduser().resolve(), "rev-parse", "--show-toplevel")
@@ -1074,12 +1083,14 @@ def review_target(target: str, server: str, config: dict[str, Any]) -> ReviewTar
     if git_output(root, "status", "--porcelain"):
         print("engine: uncommitted changes are not reviewed; commit them to include them.", file=sys.stderr)
     try:
-        pr_url = str(gh_json("pr", "view", "--json", "url", cwd=root).get("url") or "")
+        pull = gh_json("pr", "view", "--json", "url,headRefName,isCrossRepository", cwd=root)
     except (RuntimeError, json.JSONDecodeError):
-        pr_url = ""
+        pull = {}
     return ReviewTarget(
-        root, commit, pr_url,
+        root, commit, str(pull.get("url") or ""),
         f"Review the commits on branch {branch} (at {commit[:12]}) that are not on the repository's default branch.",
+        # A fork's branch is not on `origin`, the only remote a workspace has.
+        "" if pull.get("isCrossRepository") else str(pull.get("headRefName") or ""),
     )
 
 
@@ -1100,8 +1111,9 @@ def start_review(server: str, config: dict[str, Any], target: ReviewTarget) -> s
         STATE_INPUT: str(WorkState.REVIEW),
         REVIEW_REF_INPUT: target.ref,
         REVIEW_PR_INPUT: target.pr_url,
-        # Without a pull request there is nothing to push to or wait on CI for.
-        MODE_INPUT: str(ForgeMode.CONNECTED if target.pr_url else ForgeMode.DISCONNECTED),
+        REVIEW_BRANCH_INPUT: target.branch,
+        # Without a pull request branch there is nothing to push to or wait on CI for.
+        MODE_INPUT: str(ForgeMode.CONNECTED if target.pr_url and target.branch else ForgeMode.DISCONNECTED),
     }
     run = request_json(server, "/api/runs", {
         "prompt": target.task, "repository": target.repository, "workflowId": workflow["id"],
@@ -1172,28 +1184,23 @@ def render_findings(findings: list[dict[str, Any]]) -> None:
     print()
 
 
-def finding_comment(finding: dict[str, Any]) -> str:
-    """A finding as a PR comment, worded as the reranker would have posted it."""
-    parts = [f"**{finding.get('tagline', '')}**", "", str(finding.get("description", ""))]
-    lineage = [f"{name}: {finding[name]}" for name in ("agent", "facet") if finding.get(name)]
-    if lineage:
-        parts.extend(["", f"_Produced by {', '.join(lineage)}_"])
-    return "\n".join(parts)
-
-
 def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
     """Post each finding with `gh`, inline where it has a line. Returns failures."""
-    parts = pull_request_parts(pr_url)
-    if parts is None:
+    request = pull_request(pr_url)
+    if request is None:
         raise RuntimeError(f"{pr_url} is not a GitHub pull request URL")
-    slug, number = parts
     head = str(gh_json("pr", "view", pr_url, "--json", "headRefOid").get("headRefOid") or "")
     failures = 0
     for finding in findings:
-        body = finding_comment(finding)
+        # Worded as the reranker would have posted it.
+        body = finding_comment(
+            str(finding.get("tagline", "")), str(finding.get("description", "")),
+            agent=str(finding.get("agent") or ""), facet=str(finding.get("facet") or ""),
+        )
         if head and finding.get("file") and finding.get("line"):
             inline = subprocess.run([
-                "gh", "api", "--method", "POST", f"repos/{slug}/pulls/{number}/comments",
+                "gh", "api", "--hostname", request.host, "--method", "POST",
+                f"repos/{request.path}/pulls/{request.number}/comments",
                 "-f", f"body={body}", "-f", f"commit_id={head}", "-f", f"path={finding['file']}",
                 "-F", f"line={finding['line']}", "-f", "side=RIGHT",
             ], capture_output=True, text=True)
