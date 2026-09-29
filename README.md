@@ -81,6 +81,11 @@ service in the background instead; see
 service's `engine.toml` (named after its `origin`, or `--name`) and restarts a
 running service so the repository appears in the WorkOrder dropdown. With
 GitHub sign-in enabled it warns that the repository's writers can now sign in.
+It asks how the repository's WorkOrders reach GitHub -- Git OAuth (connected,
+recommended), Git CLI (connected) or disconnected, or `--mode oauth|cli|disconnected`
+-- and prints the next step for a connected choice. Disconnected is recorded
+under `[repo_modes]`, and every WorkOrder on that repository then runs
+disconnected. The installer offers to run it on a repository when it finishes.
 
 In an interactive terminal, running `engine` opens the workbench. Type `/` to
 search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,

@@ -342,6 +342,7 @@ def compose_app(
         public_url=loaded.config.public_url,
         work_orders=loaded.config.work_orders,
         repos=loaded.config.repos,
+        repo_modes=loaded.config.repo_modes,
         login_repositories=_login_repositories(loaded) if github_login_config else (),
         login_operators=loaded.config.access.operators,
     )

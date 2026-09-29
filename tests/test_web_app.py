@@ -543,6 +543,8 @@ def _workflow_app(
     public_url: str = "",
     utilization: UtilizationService | None = None,
     github_login_config: GitHubLoginConfig | None = None,
+    repos: dict[str, str] | None = None,
+    repo_modes: dict[str, str] | None = None,
 ):
     """Wire the app the way the composition root does."""
     unused = object()
@@ -573,6 +575,8 @@ def _workflow_app(
         public_url=public_url,
         utilization=utilization,
         github_login_config=github_login_config,
+        repos=repos,
+        repo_modes=repo_modes,
     )
 
 
@@ -1826,6 +1830,7 @@ def _graph_app(
     *graphs: ScriptedGraph,
     approval_policy: ApprovalConfig = ApprovalConfig(),
     utilization: UtilizationService | None = None,
+    **options,
 ):
     """The web app with a scripted graph engine wired in.
 
@@ -1837,7 +1842,7 @@ def _graph_app(
     return (
         _graph_app_over(
             store, runtime, *graphs, approval_policy=approval_policy,
-            utilization=utilization,
+            utilization=utilization, **options,
         ),
         runtime,
     )
@@ -1850,6 +1855,7 @@ def _graph_app_over(
     approval_policy: ApprovalConfig = ApprovalConfig(),
     github_login_config: GitHubLoginConfig | None = None,
     utilization: UtilizationService | None = None,
+    **options,
 ):
     """A web app over an engine that already exists, so a restart can be one.
 
@@ -1870,6 +1876,7 @@ def _graph_app_over(
         approval_policy=approval_policy,
         github_login_config=github_login_config,
         utilization=utilization,
+        **options,
     )
 
 
@@ -2922,6 +2929,45 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, st
                     }
                 else:
                     assert (await client.get("/api/runs")).json()["runs"] == []
+
+    asyncio.run(scenario())
+
+
+def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
+    from engine.graph_runtime.inputs import mode_input
+
+    @dataclass(frozen=True)
+    class ModeGraph(ScriptedGraph):
+        inputs: tuple = (mode_input(),)
+
+    graph = ModeGraph(GraphId("modes"), "Modes", (ScriptedNode(NodeId("work"), (Say("Done"),)),))
+    offline, online = tmp_path / "offline", tmp_path / "online"
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        repos={"acme/offline": str(offline), "acme/online": str(online)},
+        repo_modes={"acme/offline": "disconnected"},
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                config = (await client.get("/api/config")).json()
+                assert config["repositories"] == [
+                    {"name": "acme/offline", "path": str(offline), "mode": "disconnected"},
+                    {"name": "acme/online", "path": str(online)},
+                ]
+                modes = {}
+                for path in (offline, online):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "modes", "repository": str(path), "prompt": "Task",
+                        "inputs": {"mode": "connected"},
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    modes[path.name] = snapshot.values["inputs"]["mode"]
+                assert modes == {"offline": "disconnected", "online": "connected"}
 
     asyncio.run(scenario())
 

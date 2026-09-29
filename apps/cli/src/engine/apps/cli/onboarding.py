@@ -3,6 +3,11 @@
 Onboarding is one `[repos]` entry in the service's `engine.toml` -- the table
 the web interface's repository dropdown is built from -- followed by a restart,
 because the service reads that file once, at startup.
+
+It also asks how WorkOrders on the repository reach its forge. Both connected
+choices only need a GitHub login, so they are answered with the steps to get
+one; disconnected is recorded under `[repo_modes]`, which makes every
+WorkOrder on the repository run disconnected.
 """
 
 from __future__ import annotations
@@ -22,8 +27,35 @@ from engine.runtime.change_requests import remote_project
 EXIT_OK = 0
 EXIT_FAILED = 1
 
-_TABLE_HEADER = re.compile(r"^\s*\[\s*repos\s*\]\s*(#.*)?$")
 _ANY_HEADER = re.compile(r"^\s*\[")
+
+OAUTH = "oauth"
+CLI = "cli"
+DISCONNECTED = "disconnected"
+#: The choices `engine init` offers, in the order it lists them.
+MODES = {
+    OAUTH: "Git OAuth (connected, recommended)",
+    CLI: "Git CLI (connected)",
+    DISCONNECTED: "Disconnected",
+}
+CONNECTED_EXPLAINED = (
+    "Connected WorkOrders push their branch, open a pull request and add "
+    "comments to it automatically; disconnected ones work only in their own checkout."
+)
+NEXT_STEPS = {
+    OAUTH: (
+        "Next: run `engine connect github --open` and approve OpenEngine on GitHub "
+        "(or choose GitHub OAuth under Settings > GitHub in the web interface)."
+    ),
+    CLI: (
+        "Next: install the GitHub CLI (https://cli.github.com), run `gh auth login`, "
+        "then `engine connect gh` (or choose GH CLI under Settings > GitHub)."
+    ),
+    DISCONNECTED: (
+        "WorkOrders on this repository will run disconnected: nothing is pushed, "
+        "no pull request is opened and no comment is posted."
+    ),
+}
 
 
 def add_parser(commands: argparse._SubParsersAction) -> None:
@@ -31,6 +63,35 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     command.add_argument("--name", help="how the repository is listed (default: its origin's owner/name)")
     command.add_argument("--config", metavar="PATH", help="the engine.toml to add it to (default: the service's)")
     command.add_argument("--no-restart", action="store_true", help="do not restart a running service")
+    command.add_argument(
+        "--mode", choices=tuple(MODES),
+        help="how its WorkOrders reach the forge (default: ask, or oauth without a terminal)",
+    )
+
+
+def choose_mode(explicit: str | None) -> str:
+    """The mode given, else the one asked for at a terminal, else OAuth."""
+    if explicit:
+        return explicit
+    if not sys.stdin.isatty():
+        return OAUTH
+    choices = list(MODES)
+    print("How should WorkOrders on this repository reach GitHub?")
+    print(CONNECTED_EXPLAINED)
+    for number, mode in enumerate(choices, 1):
+        print(f"  {number}) {MODES[mode]}")
+    while True:
+        try:
+            answer = input("Mode [1]: ").strip()
+        except EOFError:
+            return OAUTH
+        if not answer:
+            return OAUTH
+        if answer.isdigit() and 1 <= int(answer) <= len(choices):
+            return choices[int(answer) - 1]
+        if answer in MODES:
+            return answer
+        print(f"Choose 1-{len(choices)}.")
 
 
 def repository_root(directory: Path) -> Path:
@@ -93,14 +154,20 @@ def target_config(explicit: str | None) -> Path:
 
 def add_repository(text: str, name: str, root: Path) -> str:
     """`text` with `name = root` added to its `[repos]` table, comments intact."""
-    entry = f"{json.dumps(name)} = {json.dumps(str(root))}"
+    return add_entry(text, "repos", name, str(root))
+
+
+def add_entry(text: str, table: str, key: str, value: str) -> str:
+    """`text` with `key = value` added to its `[table]` table, comments intact."""
+    entry = f"{json.dumps(key)} = {json.dumps(value)}"
     lines = text.splitlines()
-    header = next((index for index, line in enumerate(lines) if _TABLE_HEADER.match(line)), None)
+    table_header = re.compile(rf"^\s*\[\s*{re.escape(table)}\s*\]\s*(#.*)?$")
+    header = next((index for index, line in enumerate(lines) if table_header.match(line)), None)
     if header is None:
-        if "repos" in tomllib.loads(text):
-            raise RuntimeError("repos is not written as a [repos] table; add the entry by hand")
+        if table in tomllib.loads(text):
+            raise RuntimeError(f"{table} is not written as a [{table}] table; add the entry by hand")
         separator = "" if not text.strip() else "\n" if text.endswith("\n") else "\n\n"
-        return f"{text}{separator}[repos]\n{entry}\n"
+        return f"{text}{separator}[{table}]\n{entry}\n"
     end = next(
         (index for index in range(header + 1, len(lines)) if _ANY_HEADER.match(lines[index])),
         len(lines),
@@ -149,13 +216,32 @@ def main(arguments: argparse.Namespace) -> int:
              if isinstance(value, str) and _resolved(value, path.parent) == root),
             None,
         )
-        if existing is not None:
-            print(f"{root} is already onboarded as {existing!r} in {path}")
-            return EXIT_OK
-        if name in repos:
+        if existing is None and name in repos:
             raise RuntimeError(f"{name!r} already names {repos[name]} in {path}; choose another with --name")
-        updated = add_repository(text, name, root)
-        if tomllib.loads(updated).get("repos", {}).get(name) != str(root):
+        mode = choose_mode(arguments.mode)
+        updated = text
+        if existing is None:
+            updated = add_repository(updated, name, root)
+        else:
+            name = existing
+        recorded = document.get("repo_modes", {}).get(name)
+        if mode == DISCONNECTED and recorded != DISCONNECTED:
+            if recorded is not None:
+                raise RuntimeError(f"repo_modes.{name} is {recorded!r} in {path}; set it to \"disconnected\" by hand")
+            updated = add_entry(updated, "repo_modes", name, DISCONNECTED)
+        elif mode != DISCONNECTED and recorded == DISCONNECTED:
+            raise RuntimeError(
+                f"{name!r} is disconnected under [repo_modes] in {path}; remove that entry to connect it"
+            )
+        if updated == text:
+            print(f"{root} is already onboarded as {existing!r} in {path}")
+            print(NEXT_STEPS[mode])
+            return EXIT_OK
+        written = tomllib.loads(updated)
+        if (
+            written.get("repos", {}).get(name) != repos.get(name, str(root))
+            or (mode == DISCONNECTED and written.get("repo_modes", {}).get(name) != DISCONNECTED)
+        ):
             raise RuntimeError(f"could not add {name!r} to {path}; add it under [repos] by hand")
         temporary = path.with_name(f".{path.name}.tmp")
         # Created owner-only and given the original's mode, so replacing the
@@ -168,11 +254,15 @@ def main(arguments: argparse.Namespace) -> int:
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"engine init: {error}", file=sys.stderr)
         return EXIT_FAILED
-    print(f"Onboarded {root} as {name!r} in {path}")
-    if (warning := login_warning(document, path, project)) is not None:
-        print(warning, file=sys.stderr)
+    if existing is None:
+        print(f"Onboarded {root} as {name!r} in {path}")
+        if (warning := login_warning(document, path, project)) is not None:
+            print(warning, file=sys.stderr)
+    else:
+        print(f"Recorded {name!r} as disconnected in {path}")
     if not arguments.no_restart:
         print(restart_service())
+    print(NEXT_STEPS[mode])
     return EXIT_OK
 
 

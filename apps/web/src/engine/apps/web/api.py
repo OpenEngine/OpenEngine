@@ -103,6 +103,8 @@ from engine.domain import (
     ApprovalId,
     ApprovalKind,
     ApprovalRecord,
+    ForgeMode,
+    MODE_INPUT,
     Message,
     Role,
     RunId,
@@ -1058,6 +1060,7 @@ def create_app(
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     repos: Mapping[str, str] | None = None,
+    repo_modes: Mapping[str, str] | None = None,
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
     utilization: UtilizationService | None = None,
@@ -1084,6 +1087,22 @@ def create_app(
         else {}
     )
     surface = _GraphSurface()
+    # The checkouts `engine init` onboarded as disconnected, as the dropdown
+    # sends them back: every WorkOrder on one runs disconnected.
+    disconnected_repositories = frozenset(
+        Path(path).expanduser().resolve()
+        for name, path in (repos or {}).items()
+        if (repo_modes or {}).get(name) == ForgeMode.DISCONNECTED
+    )
+
+    def repository_mode(repository: str) -> ForgeMode | None:
+        """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any."""
+        if not repository or not disconnected_repositories:
+            return None
+        if Path(repository).expanduser().resolve() in disconnected_repositories:
+            return ForgeMode.DISCONNECTED
+        return None
+
     # Filled by the graph engine while a run is going, and read by the feed the
     # graph's own sub-application serves. Built here rather than when the
     # server starts so that the observer below can be written once.
@@ -1686,7 +1705,11 @@ def create_app(
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
                 "repositories": [
-                    {"name": name, "path": str(Path(path).expanduser().resolve())}
+                    {
+                        "name": name,
+                        "path": str(Path(path).expanduser().resolve()),
+                        **({"mode": mode} if (mode := (repo_modes or {}).get(name)) else {}),
+                    }
                     for name, path in (repos or {}).items()
                 ] or [{"name": f". ({Path.cwd()})", "path": "."}],
                 # Only the graphs this process can actually start are here --
@@ -1769,6 +1792,10 @@ def create_app(
         """
         if requester is None and scheduled is not None:
             requester = scheduled.requester
+        # A repository onboarded as disconnected is never reached from, however
+        # the WorkOrder was asked for.
+        if MODE_INPUT in inputs and (mode := repository_mode(repository)) is not None:
+            inputs = {**inputs, MODE_INPUT: str(mode)}
         async def runner_usage() -> dict[str, float]:
             # Scraped here rather than trusting the cache, which otherwise only
             # fills when someone opens the Utilization page, but at most hourly.

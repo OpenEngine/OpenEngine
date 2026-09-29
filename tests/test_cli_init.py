@@ -153,3 +153,60 @@ def test_init_does_not_warn_without_github_sign_in(monkeypatch, tmp_path, capsys
     assert _init(monkeypatch, checkout, config) == 0
 
     assert "sign in" not in capsys.readouterr().err
+
+
+def test_init_records_a_disconnected_repository(monkeypatch, tmp_path, capsys):
+    checkout = _checkout(tmp_path / "api", "https://github.com/acme/api.git")
+    config = tmp_path / "engine.toml"
+    config.write_text('[server]\nport = 4364\n')
+
+    assert _init(monkeypatch, checkout, config, "--mode", "disconnected") == 0
+
+    document = tomllib.loads(config.read_text())
+    assert document["repos"] == {"acme/api": str(checkout)}
+    assert document["repo_modes"] == {"acme/api": "disconnected"}
+    assert "will run disconnected" in capsys.readouterr().out
+
+
+def test_init_asks_for_the_mode_at_a_terminal(monkeypatch, tmp_path, capsys):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter(["9", "3"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    assert _init(monkeypatch, checkout, config) == 0
+
+    out = capsys.readouterr().out
+    assert "1) Git OAuth (connected, recommended)" in out
+    assert "2) Git CLI (connected)" in out
+    assert "3) Disconnected" in out
+    assert "Choose 1-3." in out
+    assert tomllib.loads(config.read_text())["repo_modes"] == {"api": "disconnected"}
+
+
+def test_init_guides_a_connected_choice_without_recording_a_mode(monkeypatch, tmp_path, capsys):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+
+    assert _init(monkeypatch, checkout, config, "--mode", "cli") == 0
+
+    assert "repo_modes" not in tomllib.loads(config.read_text())
+    assert "gh auth login" in capsys.readouterr().out
+
+
+def test_init_disconnects_an_onboarded_repository(monkeypatch, tmp_path, capsys):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    assert _init(monkeypatch, checkout, config) == 0
+
+    assert _init(monkeypatch, checkout, config, "--mode", "disconnected") == 0
+    assert tomllib.loads(config.read_text())["repo_modes"] == {"api": "disconnected"}
+    assert _init(monkeypatch, checkout, config, "--mode", "disconnected") == 0
+    assert "already onboarded" in capsys.readouterr().out
+
+    assert _init(monkeypatch, checkout, config, "--mode", "oauth") == 1
+    assert "remove that entry" in capsys.readouterr().err
