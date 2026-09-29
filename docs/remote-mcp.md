@@ -28,6 +28,16 @@ Inspect and steer work orders in the configured repository with:
 Reset and steering calls are never automatically retried. After an uncertain
 response, check status before repeating a mutation.
 
+For tool-call examples, see [MCP in the docsite](https://openengine.sh/docs/integrations/mcp/).
+
+**Current GitHub-login limitation:** OE's service token authorizes only
+`POST /api/runs`. When OE enforces GitHub browser login, creation works with
+`OE_MCP_ENGINE_TOKEN`, but the status and steering tools receive an upstream
+401 because they need additional API routes. The gateway does not forward a
+browser session; setting its service token does not enable those routes.
+
+## Access and hosting
+
 The gateway is a separate loopback process that exposes only its MCP tools.
 Funnel visibility applies to the entire HTTPS port, not individual paths: sharing
 an origin with OE's interface also publishes its UI, settings, and other APIs,
@@ -182,13 +192,15 @@ A 401 proves the gateway is listening and enforcing its bearer token. A 200
 means authentication is not being applied.
 
 An unauthenticated `curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp` must return
-401. With the bearer header, an MCP client should initialize and list exactly
-`create_workorder`. A successful call returns a run ID which appears immediately
+401. With the bearer header, an MCP client should initialize and list all five
+tools: `create_workorder`, `workorder_status`, `node_status`, `steer_workorder`,
+and `node_steer`. A successful creation returns a run ID which appears immediately
 in OE's work-order list. The gateway itself does not serve that list.
 
-A tool error with OE HTTP 401 means OE requires GitHub login and rejected the
-gateway's service token: check that `OE_MCP_ENGINE_TOKEN` matches OE's
-`ENGINE_SERVICE_TOKEN`. 401 from the gateway itself means the token is missing or incorrect; 403/421 means the configured public
+A creation error with OE HTTP 401 means OE requires GitHub login and rejected
+the gateway's service token: check that `OE_MCP_ENGINE_TOKEN` matches OE's
+`ENGINE_SERVICE_TOKEN`. For status and steering calls, see the GitHub-login
+limitation above. 401 from the gateway itself means the token is missing or incorrect; 403/421 means the configured public
 origin or Host does not match. Tool errors with OE HTTP 400 usually indicate an
 unknown workflow or missing required workflow inputs; use a workflow whose
 inputs have defaults. Connection errors mean OE is unavailable or could not
