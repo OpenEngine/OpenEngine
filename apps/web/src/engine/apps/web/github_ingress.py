@@ -84,7 +84,7 @@ class GithubMerge:
 
 @dataclass(frozen=True)
 class GithubAssignment:
-    """An issue assigned to the authenticated Engine account."""
+    """An issue requesting work through assignment or a configured label."""
 
     repository: str
     number: int
@@ -97,16 +97,27 @@ class GithubAssignment:
 
 
 def assignment_from_payload(
-    event: str, payload: Mapping[str, object], *, self_login: str = ""
+    event: str, payload: Mapping[str, object], *, self_login: str = "",
+    trigger_label: str = "openengine",
 ) -> GithubAssignment | None:
-    if event != "issues" or payload.get("action") != "assigned" or not self_login:
+    if event != "issues":
+        return None
+    action = payload.get("action")
+    if action == "labeled":
+        label = payload.get("label")
+        if not isinstance(label, dict) or label.get("name") != trigger_label:
+            return None
+        login = ""  # Apps cannot be assignees. The sender remains the requester.
+    elif action == "assigned" and self_login:
+        assignee = payload.get("assignee")
+        login = assignee.get("login") if isinstance(assignee, dict) else None
+        if not isinstance(login, str) or login.lower() != self_login.lower():
+            return None
+    else:
         return None
     issue, repository = payload.get("issue"), payload.get("repository")
-    assignee, sender = payload.get("assignee"), payload.get("sender")
-    if not all(isinstance(item, dict) for item in (issue, repository, assignee, sender)):
-        return None
-    login = assignee.get("login")
-    if not isinstance(login, str) or login.lower() != self_login.lower():
+    sender = payload.get("sender")
+    if not all(isinstance(item, dict) for item in (issue, repository, sender)):
         return None
     if "pull_request" in issue or issue.get("state") != "open":
         return None
@@ -288,6 +299,7 @@ class GithubIngress:
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
         authenticated_login: Callable[[str], Awaitable[str]] | None = None,
+        trigger_label: str = "openengine",
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
@@ -295,6 +307,7 @@ class GithubIngress:
     ) -> None:
         self._webhook_secret = webhook_secret
         self._repository = repository
+        self._trigger_label = trigger_label
         self._authenticated_login = authenticated_login
         self._handle = handle
         self._handle_merge = handle_merge
@@ -401,7 +414,7 @@ class GithubIngress:
                 "refusing the delivery rather than acknowledging and dropping it"
             )
             return False
-        assignment = assignment_from_payload(event, payload, self_login=self_login)
+        assignment = assignment_from_payload(event, payload, self_login=self_login, trigger_label=self._trigger_label)
         if assignment is not None:
             return self._enqueue(
                 assignment, "assigned issue",

@@ -10,6 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
+from datetime import datetime
+from pathlib import Path
+
+import jwt
+from dotenv import dotenv_values
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import Protocol
@@ -159,6 +165,109 @@ class GitHubOAuthTransport:
         )
 
 
+class GitHubAppTransport(GitHubOAuthTransport):
+    """Repository installation credentials, reread from server-local secrets."""
+
+    def __init__(self, secret_file: Path) -> None:
+        super().__init__("")
+        self.secret_file = secret_file.resolve()
+        self._installations: dict[str, int] = {}
+        self._tokens: dict[int, tuple[str, float]] = {}
+        self._credentials: tuple[str, bytes] | None = None
+        self._lock = asyncio.Lock()
+
+    def configuration(self) -> tuple[str, str]:
+        values = dotenv_values(self.secret_file, interpolate=False)
+        return tuple(
+            os.environ.get(name, values.get(name) or "").strip()
+            for name in ("ENGINE_GITHUB_APP_ID", "ENGINE_GITHUB_APP_PRIVATE_KEY_PATH")
+        )
+
+    @property
+    def configured(self) -> bool:
+        # Partial configuration must fail closed, never become the host user.
+        return any(self.configuration())
+
+    def _jwt(self) -> str:
+        app_id, key_path = self.configuration()
+        if not app_id or not key_path:
+            raise GitHubTransportError("GitHub App requires an app ID and private key path")
+        path = Path(key_path).expanduser()
+        if not path.is_absolute():
+            path = self.secret_file.parent / path
+        try:
+            key = path.read_bytes()
+            credentials = (app_id, key)
+            if credentials != self._credentials:
+                self._installations.clear()
+                self._tokens.clear()
+                self._credentials = credentials
+            now = int(time.time())
+            return jwt.encode({"iss": app_id, "iat": now - 60, "exp": now + 540}, key, algorithm="RS256")
+        except (OSError, ValueError, jwt.PyJWTError) as error:
+            raise GitHubTransportError("Could not read or sign with the GitHub App private key") from error
+
+    async def installation_token(self, repository: str, *, failed_token: str = "") -> str:
+        async with self._lock:
+            signed = self._jwt()
+            app = GitHubOAuthTransport(signed)
+            installation = self._installations.get(repository)
+            if installation is None:
+                data = await app.request("GET", f"/repos/{repository}/installation")
+                installation = int(data["id"])
+                self._installations[repository] = installation
+            cached = self._tokens.get(installation)
+            if cached and cached[1] > time.time() + 60 and cached[0] != failed_token:
+                return cached[0]
+            data = await app.request("POST", f"/app/installations/{installation}/access_tokens")
+            token = str(data["token"])
+            expires = datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00")).timestamp()
+            self._tokens[installation] = (token, expires)
+            return token
+
+    async def bot_login(self) -> str:
+        data = await GitHubOAuthTransport(self._jwt()).request("GET", "/app")
+        slug = data.get("slug")
+        if not isinstance(slug, str) or not slug:
+            raise GitHubTransportError("GitHub App returned no slug")
+        return f"{slug}[bot]"
+
+    async def bot_identity(self) -> tuple[str, str]:
+        login = await self.bot_login()
+        data = await self.request("GET", f"/users/{login}")
+        return login, f"{int(data['id'])}+{login}@users.noreply.github.com"
+
+    async def _repository_transport(self, path: str) -> GitHubOAuthTransport:
+        parts = path.split("/")
+        if len(parts) < 4 or parts[1] != "repos":
+            # Public user lookup needs no credential; a JWT is not a user token.
+            if path.startswith("/users/"):
+                return GitHubOAuthTransport("")
+            raise GitHubTransportError(f"GitHub App request requires repository context: {path}")
+        repository = "/".join(parts[2:4])
+        token = await self.installation_token(repository)
+
+        async def refresh(failed: str) -> bool:
+            nonlocal token
+            token = await self.installation_token(repository, failed_token=failed)
+            return True
+
+        return GitHubOAuthTransport(lambda: token, on_token_unauthorized=refresh)
+
+    async def request(self, method: str, path: str, **kwargs: object) -> object:
+        if path == "/app":
+            return await GitHubOAuthTransport(self._jwt()).request(method, path, **kwargs)
+        return await (await self._repository_transport(path)).request(method, path, **kwargs)
+
+    async def download(self, path: str) -> bytes:
+        return await (await self._repository_transport(path)).download(path)
+
+
+def server_github_transport(config_path: Path | None = None) -> GitHubApiTransport:
+    app = GitHubAppTransport((config_path.parent if config_path else Path.cwd()) / ".env")
+    return app if app.configured else GitHubCliTransport()
+
+
 #: How long one ``gh api`` call may take before it is abandoned. The OAuth
 #: transport is bounded by httpx's own default; this one shells out, so it is
 #: bounded here or not at all -- and an unbounded API call is not merely slow,
@@ -300,6 +409,8 @@ class GitHubCliTransport:
 __all__ = [
     "CLI_TIMEOUT_SECONDS",
     "GitHubApiTransport",
+    "GitHubAppTransport",
+    "server_github_transport",
     "GitHubCliTransport",
     "GitHubOAuthTransport",
     "GitHubTransportError",

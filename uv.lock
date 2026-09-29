@@ -493,12 +493,16 @@ source = { editable = "packages/adapters/source_control/github" }
 dependencies = [
     { name = "engine-runtime" },
     { name = "httpx" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "engine-runtime", editable = "packages/runtime" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10" },
+    { name = "python-dotenv", specifier = ">=1.0" },
 ]
 
 [[package]]

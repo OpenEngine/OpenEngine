@@ -494,11 +494,11 @@ def test_authenticated_login_identifies_the_posting_account(monkeypatch):
     from unittest.mock import AsyncMock
 
     source = GitHubSourceControl("")
-    api = AsyncMock(return_value={"login": "OpenEngine-worker", "type": "User"})
+    api = AsyncMock(return_value={"login": "openengine[bot]", "type": "User"})
     monkeypatch.setattr(source, "_api", api)
     assert asyncio.run(
         source.authenticated_login("https://github.com/acme/api")
-    ) == "OpenEngine-worker"
+    ) == "openengine[bot]"
     api.assert_awaited_once_with("GET", "/user")
 
 

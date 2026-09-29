@@ -1052,6 +1052,7 @@ def create_app(
     source_control_preferences: SourceControlPreferences | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
+    github_trigger_label: str = "openengine",
     github_repository: str = "",
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
@@ -3636,6 +3637,7 @@ def create_app(
 
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
+        trigger_label=github_trigger_label,
         repository=github_repository,
         authenticated_login=github_posting_login,
         handle=github_comment_handler or github_concierge_turn,

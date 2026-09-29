@@ -124,6 +124,9 @@ class GitHubConfig:
     that never named a repository has nothing to compare a delivery against.
     """
 
+    trigger_label: str = "openengine"
+    """Issue label that requests work; apps cannot be issue assignees."""
+
     host_aliases: Mapping[str, str] = field(default_factory=dict)
     """Web authorities mapped to their GitHub transport authority, including ports."""
 
@@ -294,7 +297,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "host_aliases"}, "github")
+    _reject_unknown(github, {"repository", "host_aliases", "trigger_label"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
@@ -434,6 +437,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         state=state_config,
         github=GitHubConfig(
             repository=github_repository,
+            trigger_label=_nonblank_string(github.get("trigger_label", "openengine"), "github.trigger_label"),
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()

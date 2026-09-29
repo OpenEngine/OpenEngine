@@ -9,11 +9,17 @@ move independently.
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from engine.adapters.agent_runner.acp import codex_acp_runner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.source_control.github import GitHubSourceControl
+from engine.adapters.source_control.github.transports import (
+    GitHubAppTransport,
+    server_github_transport,
+)
+from engine.adapters.source_control.github.worktree import configure_worktree
 from engine.adapters.state_store.postgres import PostgresStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
 from engine.adapters.workspace_provider.git_worktree import (
@@ -47,16 +53,20 @@ class Settings:
 
 def build_capabilities(settings: Settings) -> Capabilities:
     """Wire every port to its concrete implementation."""
-    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    logging.getLogger(__name__).log(
-        logging.INFO if settings.github_token else logging.WARNING,
-        "source_control composition=worker github_identity=service credential=settings.github_token configured=%s",
-        bool(settings.github_token),
+    transport = server_github_transport(settings.config_path)
+    workspace_provider = GitWorktreeWorkspaceProvider(
+        settings.workspace_root,
+        configure_worktree=partial(configure_worktree, transport)
+        if isinstance(transport, GitHubAppTransport) else None,
+    )
+    logging.getLogger(__name__).info(
+        "source_control composition=worker github_identity=%s",
+        "github-app" if isinstance(transport, GitHubAppTransport) else "gh-cli",
     )
     return Capabilities(
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host, task_queue=settings.task_queue),
         source_control=GitHubSourceControl(
-            settings.github_token, workspace_provider=workspace_provider,
+            "", workspace_provider=workspace_provider, transport=transport,
             host_aliases=settings.engine_config.github.host_aliases
         ),
         agent_runner=codex_acp_runner(

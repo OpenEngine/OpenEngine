@@ -1281,7 +1281,8 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
 
 
 @pytest.mark.parametrize("may_write", [True, False])
-def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog):
+@pytest.mark.parametrize("trigger", ["assigned", "labeled"])
+def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog, trigger):
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
 
@@ -1299,14 +1300,21 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
     source = MagicMock(can_write_repository=AsyncMock(return_value=may_write),
                        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source)
-    body = json.dumps(_assigned_issue()).encode()
+    payload = _assigned_issue()
+    if trigger == "labeled":
+        payload.update(action="labeled", label={"name": "openengine"})
+        payload.pop("assignee")
+    body = json.dumps(payload).encode()
     headers = dict(github_signed(body), **{"x-github-event": "issues"})
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
-        source.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
+        if trigger == "assigned":
+            source.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
+        else:
+            source.authenticated_login.assert_not_awaited()
         source.can_write_repository.assert_awaited_once_with(
             "https://github.com/acme/api/pull/7", "maintainer")
         if may_write:
