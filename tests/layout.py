@@ -162,16 +162,21 @@ def adapter_path_parts(package: Package) -> tuple[str, ...]:
 
 
 def discover_packages() -> tuple[Package, ...]:
-    """Every workspace member, found the same way uv finds them."""
-    roots = [
-        *(REPO_ROOT / "packages").glob("*/pyproject.toml"),
-        # Two levels: the capability directory groups, the vendor directory ships.
-        *ADAPTERS_ROOT.glob("*/*/pyproject.toml"),
-        *(REPO_ROOT / "apps").glob("*/pyproject.toml"),
+    """Workspace members selected by the configured member/exclude globs."""
+    workspace = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["tool"]["uv"][
+        "workspace"
     ]
+    roots = {
+        root for pattern in workspace["members"] for root in REPO_ROOT.glob(pattern)
+    }
+    excluded = {
+        root for pattern in workspace.get("exclude", ()) for root in REPO_ROOT.glob(pattern)
+    }
     packages = []
-    for pyproject in roots:
-        root = pyproject.parent
+    for root in roots - excluded:
+        pyproject = root / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
         config = tomllib.loads(pyproject.read_text())
         project = config["project"]
         packages.append(
