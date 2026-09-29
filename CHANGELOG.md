@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/OpenEngine/OpenEngine/compare/v0.5.0...v0.6.0) (2026-09-29)
+
+
+### Features
+
+* **cli:** choose connected or disconnected mode in engine init ([#605](https://github.com/OpenEngine/OpenEngine/issues/605)) ([7ea27d6](https://github.com/OpenEngine/OpenEngine/commit/7ea27d6397f2e69be0327c0394b00f9c03c5d9c3))
+
+
+### Bug Fixes
+
+* **web:** unnest sidebar node groups holding a single conversation ([#602](https://github.com/OpenEngine/OpenEngine/issues/602)) ([17b490e](https://github.com/OpenEngine/OpenEngine/commit/17b490e2b3b858a6e81cb1042a44358d891faa63))
+
 ## [0.5.0](https://github.com/OpenEngine/OpenEngine/compare/v0.4.0...v0.5.0) (2026-09-29)
 
 
