@@ -194,6 +194,11 @@ def test_selection_is_explicit_then_environment_then_working_directory(
     "document,message",
     [
         ({"approval": {}}, "unknown key in configuration: approval"),
+        ({"repo_modes": {"api": "disconnected"}}, "repo_modes.api names no repository"),
+        (
+            {"repos": {"api": "/api"}, "repo_modes": {"api": "offline"}},
+            "repo_modes.api must be one of: connected, disconnected",
+        ),
         ({"show_projects": False}, "unknown key in configuration: show_projects"),
         ({"approvals": {"automatic": True}}, "unknown key in approvals: automatic"),
         ({"approvals": {"auto_approve": "yes"}}, "must be a boolean"),
@@ -683,3 +688,11 @@ def test_the_distributable_default_config_is_loopback_and_machine_neutral() -> N
     assert config.communications.provider == "slack"
     assert config.workflows.directory == "workflows"
     assert "[orchestrator]" not in DEFAULT_CONFIG_TEMPLATE.read_text()
+
+
+def test_repo_modes_name_the_mode_of_onboarded_repositories() -> None:
+    config = parse_engine_config(
+        {"repos": {"api": "/api", "web": "/web"}, "repo_modes": {"api": "disconnected"}}
+    )
+
+    assert config.repo_modes == {"api": "disconnected"}

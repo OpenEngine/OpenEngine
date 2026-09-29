@@ -7,7 +7,8 @@
 # Needs curl, tar, and a SHA-256 tool. Python comes from a pinned uv that is
 # kept apart from any uv, Python, or configuration already on the machine.
 # Running it again is safe: an installed version is reused, and an existing
-# engine.toml or state directory is never touched.
+# engine.toml or state directory is never touched. At a terminal it then
+# offers to run `engine init` on a repository you want to work on.
 #
 # OPENENGINE_RELEASE_URL names a directory holding release-manifest.json and
 # the archive (https:// or file://), in place of the GitHub release.
@@ -232,12 +233,32 @@ case ":$PATH:" in
   *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine" ;;
 esac
 
-[ "$start" = 1 ] || exit 0
-# Registers a LaunchAgent (macOS) or systemd user unit (Linux), or runs a
-# detached process where neither is usable, then waits for /api/health. Run
-# again after an upgrade, it moves the service onto the new version.
-if [ "$browser" = 1 ]; then set -- daemon setup; else set -- daemon setup --no-browser; fi
-if ! "$engine_shim" "$@"; then
-  "$engine_shim" daemon logs -n 20 >&2 || true
-  die "OpenEngine did not start; see $state_dir/logs"
+if [ "$start" = 1 ]; then
+  # Registers a LaunchAgent (macOS) or systemd user unit (Linux), or runs a
+  # detached process where neither is usable, then waits for /api/health. Run
+  # again after an upgrade, it moves the service onto the new version.
+  if [ "$browser" = 1 ]; then set -- daemon setup; else set -- daemon setup --no-browser; fi
+  if ! "$engine_shim" "$@"; then
+    "$engine_shim" daemon logs -n 20 >&2 || true
+    die "OpenEngine did not start; see $state_dir/logs"
+  fi
 fi
+
+# WorkOrders run on the repositories `engine init` onboards, so offer to
+# onboard one now. Piped into sh, stdin is this script: ask the terminal.
+project=""
+if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+  printf 'openengine: path of a repository to work on with OpenEngine (blank to skip): ' >/dev/tty
+  IFS= read -r project </dev/tty || project=""
+fi
+case $project in
+  "~") project=$HOME ;;
+  "~/"*) project=$HOME/${project#"~/"} ;;
+esac
+if [ -n "$project" ]; then
+  if (cd "$project" 2>/dev/null && "$engine_shim" init </dev/tty); then
+    exit 0
+  fi
+  warn "could not onboard $project"
+fi
+say "next: run 'engine init' in each repository you want OpenEngine to work on"

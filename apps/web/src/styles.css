@@ -1558,3 +1558,9 @@ select:disabled { cursor: default; }
   .toolbar { flex-direction: column; align-items: stretch; }
   .toolbar-end { justify-content: space-between; }
 }
+.info-tip {
+  margin-left: 6px;
+  color: var(--ink-soft);
+  font-weight: 400;
+  cursor: help;
+}

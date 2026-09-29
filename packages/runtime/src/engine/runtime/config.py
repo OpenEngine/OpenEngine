@@ -13,12 +13,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from engine.domain import ForgeMode
 from engine.ports.agent_runner import ResponseStyle
 from engine.ports.permissions import ApprovalCapability
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
 DEFAULT_CONFIG_TEMPLATE = Path(__file__).with_name("default-engine.toml")
+#: What `[repo_modes]` may say a repository's WorkOrders run as.
+REPO_MODES = tuple(str(mode) for mode in ForgeMode)
 """A distributable `engine.toml`: loopback only, nothing machine-specific."""
 
 
@@ -183,6 +186,12 @@ class EngineConfig:
     claude: ClaudeConfig = ClaudeConfig()
     attribution: bool = True
     repos: Mapping[str, str] = field(default_factory=dict)
+    repo_modes: Mapping[str, str] = field(default_factory=dict)
+    """`[repos]` names mapped to the mode their WorkOrders run in.
+
+    Written by `engine init`. A repository named `disconnected` here has every
+    WorkOrder on it run disconnected; one not named runs as the workflow says.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +278,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_token",
             "orchestrator",
             "public_url",
+            "repo_modes",
             "repos",
             "server",
             "state",
@@ -414,12 +424,24 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "orchestrator.health_check_interval must be a positive number"
         )
 
+    repos = {
+        _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
+        for name, path in _table(document.get("repos", {}), "repos").items()
+    }
+    repo_modes = {}
+    for name, mode in _table(document.get("repo_modes", {}), "repo_modes").items():
+        if name not in repos:
+            raise EngineConfigError(f"repo_modes.{name} names no repository under [repos]")
+        if mode not in REPO_MODES:
+            raise EngineConfigError(
+                f"repo_modes.{name} must be one of: {', '.join(REPO_MODES)}"
+            )
+        repo_modes[name] = mode
+
     return EngineConfig(
         attribution=attribution,
-        repos={
-            _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
-            for name, path in _table(document.get("repos", {}), "repos").items()
-        },
+        repos=repos,
+        repo_modes=repo_modes,
         default_branch=default_branch,
         github_client_id=github_client_id,
         github_login_client_id=_optional_nonblank_string(

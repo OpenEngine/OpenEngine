@@ -44,6 +44,12 @@ const WORKFLOW_DRAFT_KEY = "engine.workflowDraft";
  *  runners you picked rather than the workflow's defaults. */
 const WORKFLOW_CHOICES_KEY = "engine.workflowChoices";
 
+/** The workflow input that chooses whether a run may reach the forge. */
+const MODE_INPUT = "mode";
+const MODE_TOOLTIP =
+  "Connected: the WorkOrder pushes its branch, opens a pull request and adds comments to it automatically. "
+  + "Disconnected: it works only in its own checkout and reaches nothing outside it.";
+
 function savedChoices(): Record<string, string> {
   try {
     const saved: unknown = JSON.parse(window.localStorage.getItem(WORKFLOW_CHOICES_KEY) ?? "{}");
@@ -377,9 +383,15 @@ export function NewWorkflowPage({
   const [choices] = useState(savedChoices);
   const selected = config.workflows.find((workflow) => workflow.id === workflowId);
   const inputs = selected?.inputs ?? [];
+  // A repository onboarded as disconnected fixes the mode of its WorkOrders.
+  const repositoryMode = config.repositories.find((repo) => repo.path === repository)?.mode;
+  const fixedValue = (input: (typeof inputs)[number]) =>
+    input.name === MODE_INPUT && repositoryMode && input.choices.includes(repositoryMode)
+      ? repositoryMode : undefined;
   // A remembered choice the workflow no longer offers falls back to its default.
   const inputValue = (input: (typeof inputs)[number]) =>
-    inputValues[input.name]
+    fixedValue(input)
+      ?? inputValues[input.name]
       ?? (input.choices.includes(choices[input.name] ?? "") ? choices[input.name] : input.default);
 
   useEffect(() => {
@@ -408,7 +420,7 @@ export function NewWorkflowPage({
       try {
         window.localStorage.setItem(WORKFLOW_CHOICES_KEY, JSON.stringify({
           ...savedChoices(),
-          ...Object.fromEntries(inputs.filter((input) => input.choices.length)
+          ...Object.fromEntries(inputs.filter((input) => input.choices.length && !fixedValue(input))
             .map((input) => [input.name, inputValue(input)])),
         }));
       } catch {
@@ -467,10 +479,17 @@ export function NewWorkflowPage({
             <summary>Workflow inputs</summary>
             {inputs.map((input) => (
               <label key={input.name}>
-                <span>{input.label}</span>
+                <span>
+                  {input.label}
+                  {input.name === MODE_INPUT && (
+                    <span className="info-tip" role="img" aria-label={MODE_TOOLTIP} title={MODE_TOOLTIP}>ⓘ</span>
+                  )}
+                </span>
                 {input.choices.length ? (
                   <select
                     required={input.required}
+                    disabled={!!fixedValue(input)}
+                    title={fixedValue(input) && `${repositoryMode} for this repository (set by engine init)`}
                     value={inputValue(input)}
                     onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
                   >
