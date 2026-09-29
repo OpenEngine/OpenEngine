@@ -469,7 +469,7 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
                             else:
                                 print("Approval sent; continuing stream.")
                     else:
-                        print(f"Run `engine approve {approval['id']}` or `engine reject {approval['id']} --reason …`.")
+                        print("Review it with /approvals in the interactive workbench or in the web UI.")
                 elif event.get("type") == "error":
                     if reply_started:
                         print()
@@ -527,16 +527,6 @@ def status(arguments: argparse.Namespace, preferences: Preferences) -> int:
     check, identity, started = ensure_service(server)
     render([check], arguments.json, {"server": server, "identity": identity, "started": started})
     return EXIT_OK if check.ok else EXIT_UNHEALTHY
-
-
-def connection_snapshot(server: str) -> dict[str, dict[str, Any]]:
-    """Read each integration's existing status endpoint without changing it."""
-    return {
-        "github": fetch_json(server, "/api/github/status"),
-        "sourceControl": fetch_json(server, "/api/source-control/status"),
-        "gitlab": fetch_json(server, "/api/gitlab/status"),
-        "slack": fetch_json(server, "/api/slack/status"),
-    }
 
 
 def _connection_state(connected: object, configured: object = True) -> str:
@@ -620,13 +610,6 @@ def connection_lines(
     return lines
 
 
-def render_connections(snapshot: dict[str, dict[str, Any]], as_json: bool) -> None:
-    if as_json:
-        print(json.dumps({"connections": snapshot}, sort_keys=True))
-        return
-    print("\n".join(connection_lines(snapshot)))
-
-
 def progressive_connection_snapshot(server: str) -> dict[str, dict[str, Any]]:
     """Fetch connection statuses concurrently and update the Settings panel in place."""
     snapshot: dict[str, dict[str, Any]] = {}
@@ -659,19 +642,6 @@ def progressive_connection_snapshot(server: str) -> dict[str, dict[str, Any]]:
     with lock:
         draw_palette(connection_lines(snapshot, errors=errors), rendered_rows)
         return snapshot
-
-
-def connections(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            render([check], arguments.json, {"server": server})
-            return EXIT_UNHEALTHY
-        render_connections(connection_snapshot(server), arguments.json)
-        return EXIT_OK
-    except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_UNHEALTHY
 
 
 def filtered_threads(threads: list[dict[str, Any]], filter_name: str) -> list[dict[str, Any]]:
@@ -777,20 +747,6 @@ def render_startup_dashboard(server: str) -> None:
         print(f"… and {len(active) - 5} more. Use /threads to browse all work orders.")
 
 
-def threads(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            render([check], arguments.json, {"server": server})
-            return EXIT_UNHEALTHY
-        values = load_threads(server, arguments.filter)
-    except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_UNHEALTHY
-    render_threads(values, arguments.json)
-    return EXIT_OK
-
-
 def load_transcript(server: str, thread_id: str) -> list[dict[str, Any]]:
     payload = fetch_json(server, f"/api/threads/{thread_id}/messages")
     messages = payload.get("messages")
@@ -846,19 +802,6 @@ def render_transcript(messages: list[dict[str, Any]], as_json: bool) -> None:
         render_chat_message(message.get("role"), text)
 
 
-def transcript(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            render([check], arguments.json, {"server": server})
-            return EXIT_UNHEALTHY
-        render_transcript(load_transcript(server, arguments.thread_id), arguments.json)
-        return EXIT_OK
-    except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_UNHEALTHY
-
-
 def open_thread(server: str, thread: dict[str, Any], preferences: Preferences) -> None:
     """Open a work order directly into its transcript and continuation prompt."""
     thread_id = str(thread.get("id", ""))
@@ -885,36 +828,6 @@ def remember_thread(preferences: Preferences, thread: dict[str, Any]) -> None:
         str(thread.get("id") or current.last_task),
     )
     save_preferences(Preferences(preferences.selected_profile, profiles))
-
-
-def render_thread(thread: dict[str, Any], as_json: bool) -> None:
-    if as_json:
-        print(json.dumps(thread, sort_keys=True))
-        return
-    print(f"{thread.get('title', 'Untitled')} ({thread.get('id', '?')})")
-    print(f"Repository: {thread.get('workspaceRoot') or 'not attached'}")
-    print(f"Runner: {thread.get('runner', 'unknown')}")
-    print(f"State: {thread.get('phase', 'archived' if thread.get('archived') else 'idle')}")
-    current = thread.get("currentRun")
-    print(f"Current run: {current.get('id') if isinstance(current, dict) else 'none'}")
-    previous = thread.get("previousRuns")
-    print(f"Previous runs: {len(previous) if isinstance(previous, list) else 0}")
-    print(f"Pending approval: {'yes' if thread.get('pendingApproval') else 'no'}")
-
-
-def task(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            render([check], arguments.json, {"server": server})
-            return EXIT_UNHEALTHY
-        thread = fetch_json(server, f"/api/threads/{arguments.thread_id}")
-        remember_thread(preferences, thread)
-    except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_UNHEALTHY
-    render_thread(thread, arguments.json)
-    return EXIT_OK
 
 
 def creation_defaults(server: str, preferences: Preferences, arguments: argparse.Namespace) -> tuple[str, str, str]:
@@ -974,20 +887,6 @@ def run(arguments: argparse.Namespace, preferences: Preferences) -> int:
         return EXIT_UNHEALTHY
 
 
-def resume(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            print(f"engine: {check.detail}", file=sys.stderr)
-            return EXIT_UNHEALTHY
-        thread = fetch_json(server, f"/api/threads/{arguments.thread_id}")
-        remember_thread(preferences, thread)
-    except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_UNHEALTHY
-    return stream_run(server, f"/api/threads/{arguments.thread_id}/runs/current")
-
-
 def pending_approvals(server: str) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     for thread in load_threads(server, "all"):
@@ -1013,19 +912,6 @@ def render_approvals(approvals: list[dict[str, Any]], as_json: bool) -> None:
         print(f"{approval.get('id')}  {approval.get('threadTitle')}\n  {detail}")
 
 
-def approvals(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            print(f"engine: {check.detail}", file=sys.stderr)
-            return EXIT_UNHEALTHY
-        render_approvals(pending_approvals(server), arguments.json)
-        return EXIT_OK
-    except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_UNHEALTHY
-
-
 def decide(arguments: argparse.Namespace, preferences: Preferences, decision: str) -> int:
     try:
         server, check = read_service(arguments, preferences)
@@ -1039,7 +925,6 @@ def decide(arguments: argparse.Namespace, preferences: Preferences, decision: st
             print(f"Rejecting: {arguments.reason}")
         request_json(server, f"/api/threads/{match['threadId']}/runs/current/approvals/{arguments.approval_id}", {"decision": decision})
         print("Approved." if decision == "accept" else "Rejected.")
-        task(argparse.Namespace(server=server, thread_id=match["threadId"], json=False), preferences)
         return EXIT_OK
     except (ValueError, RuntimeError) as error:
         print(f"engine: {error}", file=sys.stderr)
@@ -1102,26 +987,6 @@ def settings(server: str, preferences: Preferences) -> None:
     elif provider == "Open web Settings":
         webbrowser.open(server)
         print(f"Opened {server}; choose Settings in the sidebar.")
-
-
-def repo(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            raise RuntimeError(check.detail)
-        repositories = fetch_json(server, "/api/config").get("repositories", [])
-        selected = next((item for item in repositories if isinstance(item, dict) and arguments.repository in {item.get("name"), item.get("path")}), None)
-        if selected is None:
-            raise RuntimeError("repository is not offered by the service")
-        profiles = dict(preferences.profiles or {})
-        current = profiles.get(preferences.selected_profile, Profile())
-        profiles[preferences.selected_profile] = Profile(current.server, str(selected["path"]), current.last_task)
-        save_preferences(Preferences(preferences.selected_profile, profiles))
-        print(f"Repository: {selected['name']} ({selected['path']})")
-        return EXIT_OK
-    except (ValueError, RuntimeError, KeyError) as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_UNHEALTHY
 
 
 COMMAND_DESCRIPTIONS = {
@@ -1389,38 +1254,6 @@ def doctor(arguments: argparse.Namespace, preferences: Preferences) -> int:
     return EXIT_OK if all(check.ok for check in checks) else EXIT_UNHEALTHY
 
 
-def configure_server(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    try:
-        server = normalize_server(arguments.url)
-    except ValueError as error:
-        print(f"engine: {error}", file=sys.stderr)
-        return EXIT_USAGE
-    profiles = dict(preferences.profiles or {})
-    current = profiles.get(preferences.selected_profile, Profile())
-    profiles[preferences.selected_profile] = Profile(server, current.last_repository, current.last_task)
-    save_preferences(Preferences(preferences.selected_profile, profiles))
-    if arguments.json:
-        print(json.dumps({"profile": preferences.selected_profile, "server": server}, sort_keys=True))
-    else:
-        print(f"server for profile {preferences.selected_profile!r}: {server}")
-    return EXIT_OK
-
-
-def configure_profile(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    name = arguments.name.strip()
-    if not name:
-        print("engine: profile name cannot be empty", file=sys.stderr)
-        return EXIT_USAGE
-    profiles = dict(preferences.profiles or {})
-    profiles.setdefault(name, Profile())
-    save_preferences(Preferences(name, profiles))
-    if arguments.json:
-        print(json.dumps({"profile": name, "server": profiles[name].server}, sort_keys=True))
-    else:
-        print(f"selected profile: {name}")
-    return EXIT_OK
-
-
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="engine", description=__doc__)
     result.add_argument("--version", action="version", version=version("engine-cli"))
@@ -1429,60 +1262,12 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
         command.add_argument("--json", action="store_true", help="emit a stable machine-readable report")
-    thread_list = commands.add_parser("threads", help="list service conversations")
-    thread_list.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
-    thread_list.add_argument("--json", action="store_true")
-    filters = thread_list.add_mutually_exclusive_group()
-    filters.add_argument("--all", dest="filter", action="store_const", const="all", default="active")
-    filters.add_argument("--archived", dest="filter", action="store_const", const="archived")
-    task_command = commands.add_parser("task", help="inspect one service conversation")
-    task_command.add_argument("thread_id")
-    task_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
-    task_command.add_argument("--json", action="store_true")
-    transcript_command = commands.add_parser("transcript", help="show a conversation's message history")
-    transcript_command.add_argument("thread_id")
-    transcript_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
-    transcript_command.add_argument("--json", action="store_true")
-    run_command = commands.add_parser("run", help="create a conversation and stream its task")
-    run_command.add_argument("prompt")
-    run_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
-    run_command.add_argument("--agent")
-    run_command.add_argument("--runner")
-    run_command.add_argument("--repository")
-    resume_command = commands.add_parser("resume", help="reconnect to a conversation's current run")
-    resume_command.add_argument("thread_id")
-    resume_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
-    approval_list = commands.add_parser("approvals", help="list pending terminal decisions")
-    approval_list.add_argument("--server", metavar="URL")
-    approval_list.add_argument("--json", action="store_true")
-    approve = commands.add_parser("approve", help="approve a pending request")
-    approve.add_argument("approval_id")
-    approve.add_argument("--server", metavar="URL")
-    reject = commands.add_parser("reject", help="reject a pending request")
-    reject.add_argument("approval_id")
-    reject.add_argument("--reason", required=True)
-    reject.add_argument("--server", metavar="URL")
-    for name in ("connect", "setup"):
-        connection = commands.add_parser(name, help="connect shared source control or Slack")
-        connection.add_argument("provider", choices=("gh", "github", "gitlab", "slack"))
-        connection.add_argument("--server", metavar="URL")
-        connection.add_argument("--origin", default="https://gitlab.com")
-        connection.add_argument("--open", action="store_true")
-    settings_command = commands.add_parser("settings", help="show integration connection status")
-    settings_command.add_argument("--server", metavar="URL")
-    settings_command.add_argument("--json", action="store_true", help="emit a stable machine-readable report")
+    connection = commands.add_parser("connect", help="connect shared source control or Slack")
+    connection.add_argument("provider", choices=("gh", "github", "gitlab", "slack"))
+    connection.add_argument("--server", metavar="URL")
+    connection.add_argument("--origin", default="https://gitlab.com")
+    connection.add_argument("--open", action="store_true")
     daemon.add_parser(commands)
-    repo_command = commands.add_parser("repo", help="select a service repository for new tasks")
-    repo_command.add_argument("repository")
-    repo_command.add_argument("--server", metavar="URL")
-    config = commands.add_parser("config", help="manage persistent CLI preferences")
-    config_commands = config.add_subparsers(dest="config_command", required=True)
-    server = config_commands.add_parser("server", help="set the selected profile's service URL")
-    server.add_argument("url")
-    server.add_argument("--json", action="store_true")
-    profile = config_commands.add_parser("profile", help="select or create a named profile")
-    profile.add_argument("name")
-    profile.add_argument("--json", action="store_true")
     return result
 
 
@@ -1498,34 +1283,10 @@ def main(argv: list[str] | None = None) -> int:
         return status(arguments, preferences)
     if arguments.command == "doctor":
         return doctor(arguments, preferences)
-    if arguments.command == "threads":
-        return threads(arguments, preferences)
-    if arguments.command == "task":
-        return task(arguments, preferences)
-    if arguments.command == "transcript":
-        return transcript(arguments, preferences)
-    if arguments.command == "run":
-        return run(arguments, preferences)
-    if arguments.command == "resume":
-        return resume(arguments, preferences)
-    if arguments.command == "approvals":
-        return approvals(arguments, preferences)
-    if arguments.command == "approve":
-        return decide(arguments, preferences, "accept")
-    if arguments.command == "reject":
-        return decide(arguments, preferences, "cancel")
     if arguments.command == "connect":
         return connect(arguments, preferences)
-    if arguments.command == "settings":
-        return connections(arguments, preferences)
-    if arguments.command == "repo":
-        return repo(arguments, preferences)
     if arguments.command == "daemon":
         return daemon.main(arguments)
-    if arguments.command == "config" and arguments.config_command == "server":
-        return configure_server(arguments, preferences)
-    if arguments.command == "config" and arguments.config_command == "profile":
-        return configure_profile(arguments, preferences)
     raise AssertionError("unreachable command")
 
 
