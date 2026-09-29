@@ -3146,7 +3146,7 @@ def create_app(
         async def origin(path: str) -> str | None:
             try:
                 process = await asyncio.create_subprocess_exec(
-                    "git", "-C", str(Path(path).expanduser()), "remote", "get-url", "origin",
+                    "git", "-C", path, "remote", "get-url", "origin",
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 )
             except OSError:
@@ -3159,8 +3159,11 @@ def create_app(
                     await process.wait()
             return remote_project(stdout.decode(errors="replace")) if process.returncode == 0 else None
 
+        # Expanded here, not only for the lookup: the path returned is handed
+        # to `git -C` by the worktree provider, which does not expand `~`.
         paths = dict.fromkeys(
-            path for path in (*(repos or {}).values(), work_orders.repository) if path
+            str(Path(path).expanduser())
+            for path in (*(repos or {}).values(), work_orders.repository) if path
         )
         lookups = {path: asyncio.create_task(origin(path)) for path in paths}
         # The checkouts are asked at once and share one deadline, so stalled

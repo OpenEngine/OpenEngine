@@ -1420,6 +1420,36 @@ def test_stalled_checkouts_are_skipped_rather_than_waited_on(tmp_path, monkeypat
         assert runtime.start.await_args.args[1]["repository"] == checkout
 
 
+def test_an_assignment_starts_in_a_home_relative_checkout_expanded(tmp_path, monkeypatch):
+    """`[repos]` may name a checkout as `~/…`, as engine.toml does. The run is
+    started in the expanded path, since git takes a literal `~` as a directory
+    name and fails with `cannot change to '~/…'`."""
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    checkout = _checkout(tmp_path / "code" / "api", "https://github.com/acme/api.git")
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="", workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+        repos={"acme/api": "~/code/api"},
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    ))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.start.assert_awaited_once()
+        assert runtime.start.await_args.args[1]["repository"] == checkout
+
+
 def test_issue_progress_posts_only_milestones(tmp_path, monkeypatch):
     """The issue hears that implementation started, that review finished, and
     that the run finished. Other nodes, approvals, failures, resumes and agent
