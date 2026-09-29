@@ -17,8 +17,8 @@ Ask whoever runs your OpenEngine host for:
   OAuth sign-in, in which case you sign in through your client instead.
 
 Treat the token like a password. Anyone holding it can create, inspect, reset
-and steer work in the configured repository. Keep it in your shell environment
-or a secret manager, never in a prompt or a committed file.
+and steer work in the configured repository. Keep it in a secret manager, never
+in a prompt or a committed file, and ask the host to rotate it if it leaks.
 
 Hosting the gateway yourself? Follow the
 [remote MCP guide](https://github.com/OpenEngine/OpenEngine/blob/main/docs/remote-mcp.md)
@@ -26,14 +26,21 @@ first, then come back here.
 
 ## Connect Claude Code
 
-Export the token, then register the server in your user configuration so the
-secret stays out of the repository:
+Load the token into your shell, then register the server in your user
+configuration so the secret stays out of the repository:
 
 ```sh
-export OE_MCP_TOKEN=...   # from your host
+read -rs OE_MCP_TOKEN && export OE_MCP_TOKEN   # paste the token from your host
 claude mcp add --transport http --scope user oe https://YOUR-GATEWAY/mcp \
   --header "Authorization: Bearer ${OE_MCP_TOKEN}"
 ```
+
+Your shell expands `${OE_MCP_TOKEN}` before Claude Code sees it, so the literal
+token is saved in plain text in `~/.claude.json` and later changes to the
+variable have no effect. Keep that file private (`chmod 600 ~/.claude.json`),
+don't sync or share it, and have the token rotated if it is ever exposed. The
+token is also briefly visible to other local users in the process list while
+the command runs.
 
 If the host uses OAuth, leave off `--header`. Then run `/mcp` inside Claude
 Code: `oe` should show as connected (choose it to sign in when using OAuth)
@@ -101,8 +108,9 @@ Status and steering tools only accept runs from the host's configured repository
 - **Nothing is retried automatically.** If a create, steer or reset call times
   out, check the WorkOrder list or `workorder_status` before asking again, or
   you may start duplicate work.
-- **401 when connecting:** the token is missing or wrong. Check that
-  `OE_MCP_TOKEN` was set when you ran `claude mcp add`.
+- **401 when connecting:** the token is missing, wrong or rotated. Check that
+  `OE_MCP_TOKEN` was set when you ran `claude mcp add`; after a rotation,
+  remove the server with `claude mcp remove --scope user oe` and add it again.
 - **403 or 421:** the URL doesn't match the host's configured public address.
   Ask the host for the exact URL.
 - **Error mentioning OE HTTP 400:** the host's workflow is unknown or needs
