@@ -482,7 +482,18 @@ export function NewWorkflowPage({
                 <span>
                   {input.label}
                   {input.name === MODE_INPUT && (
-                    <span className="info-tip" role="img" aria-label={MODE_TOOLTIP} title={MODE_TOOLTIP}>ⓘ</span>
+                    // Drawn by CSS on hover and focus rather than a `title`,
+                    // which touch devices and some browsers never show. The
+                    // click is kept from the label so a tap opens the tip
+                    // instead of the select.
+                    <span
+                      className="info-tip"
+                      role="img"
+                      tabIndex={0}
+                      aria-label={MODE_TOOLTIP}
+                      data-tip={MODE_TOOLTIP}
+                      onClick={(event) => event.preventDefault()}
+                    >ⓘ</span>
                   )}
                 </span>
                 {input.choices.length ? (

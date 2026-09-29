@@ -109,16 +109,19 @@ reports `loginRequired: false`; starting the OAuth flow returns 503.
 
 ## Agent GitHub identity
 
-Agent GitHub API actions in the web composition use only the host's `gh auth`
-login: the account shown by `gh auth status` for the OS user that runs the web
-process. That account is the PR/comment author. Both GitHub choices in Settings
-(**GH CLI** and **GitHub OAuth**) route agent actions through `gh`; GitLab
-routing is unchanged. Neither the browser login, a Settings device-flow token,
-nor `GITHUB_TOKEN` is used for agent actions. OpenEngine removes
-`GITHUB_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` from the environment it passes to
-`gh`, so an engine setting cannot override the CLI login. `GH_TOKEN` remains
-`gh`'s own setting and is honored. The worker composition still uses its
-configured `GITHUB_TOKEN`.
+Agent GitHub API actions in the web composition follow the GitHub choice in
+Settings. **GH CLI** uses the host's `gh auth` login: the account shown by
+`gh auth status` for the OS user that runs the web process. **GitHub OAuth**
+uses the host's device-flow token saved by `engine connect github` (or by
+Settings while browser login is off), and that account is the PR/comment
+author for every user's WorkOrders. The web process reads that token from
+the OS keychain once and keeps it in memory, so connecting is the only
+keychain prompt until the service restarts. GitLab routing is unchanged.
+Neither the browser login nor `GITHUB_TOKEN` is used for agent actions.
+OpenEngine removes `GITHUB_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` from the
+environment it passes to `gh`, so an engine setting cannot override the CLI
+login. `GH_TOKEN` remains `gh`'s own setting and is honored. The worker
+composition still uses its configured `GITHUB_TOKEN`.
 
 Git commits still use Git's author/committer configuration and configured
 agent attribution; pushes still use the host's Git credential helper or SSH
@@ -131,8 +134,9 @@ the verified session's stable GitHub user ID (for example,
 `github-token:user:123`). Pending device flows are also scoped to that ID.
 Logging out or renaming an account does not transfer its connection to another
 user. Authenticated users never inherit the legacy `github-token` entry: they
-must reconnect. Local mode without browser login retains the legacy entry.
-These UI connection credentials do not authorize agent GitHub API actions.
+must reconnect. Local mode without browser login retains the legacy entry,
+and that entry is the one **GitHub OAuth** agent actions use, so a signed-in
+user's own connection never changes the agents' account; Settings says so.
 
 The web `--check` wiring report shows whether `gh` is authenticated and as
 which account. Successful PR creation logs the returned URL, GitHub's actual

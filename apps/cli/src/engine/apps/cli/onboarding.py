@@ -8,6 +8,10 @@ It also asks how WorkOrders on the repository reach its forge. Both connected
 choices only need a GitHub login, so they are answered with the steps to get
 one; disconnected is recorded under `[repo_modes]`, which makes every
 WorkOrder on the repository run disconnected.
+
+Last it asks how WorkOrders' requests are approved: automatically everywhere
+(`approvals.auto_approve`), automatically only on trusted repositories (named
+under `[trusted_repos]`), or by a person every time.
 """
 
 from __future__ import annotations
@@ -59,6 +63,21 @@ NEXT_STEPS = {
 }
 
 
+AUTO = "auto"
+TRUSTED = "trusted"
+MANUAL = "manual"
+#: The approval modes `engine init` offers, in the order it lists them.
+APPROVALS = {
+    AUTO: "Auto-approve (every repository)",
+    TRUSTED: "Trusted repos (auto-approve only repositories marked trusted, like this one)",
+    MANUAL: "Manual (ask before each change)",
+}
+APPROVALS_EXPLAINED = (
+    "Agents ask before they edit files or run commands; auto-approved WorkOrders "
+    "answer yes for you. Auto-approve and manual apply to every repository."
+)
+
+
 def add_parser(commands: argparse._SubParsersAction) -> None:
     command = commands.add_parser("init", help="offer this repository for WorkOrders")
     command.add_argument("--name", help="how the repository is listed (default: its origin's owner/name)")
@@ -68,6 +87,10 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
         "--mode", choices=tuple(MODES),
         help="how its WorkOrders reach the forge (default: ask, or oauth without a terminal)",
     )
+    command.add_argument(
+        "--approval", choices=tuple(APPROVALS),
+        help="how its WorkOrders' requests are approved (default: ask, or unchanged without a terminal)",
+    )
 
 
 def choose_mode(explicit: str | None) -> str:
@@ -76,23 +99,68 @@ def choose_mode(explicit: str | None) -> str:
         return explicit
     if not sys.stdin.isatty():
         return OAUTH
-    choices = list(MODES)
-    print("How should WorkOrders on this repository reach GitHub?")
-    print(CONNECTED_EXPLAINED)
-    for number, mode in enumerate(choices, 1):
-        print(f"  {number}) {MODES[mode]}")
+    return prompt_choice(
+        "How should WorkOrders on this repository reach GitHub?", CONNECTED_EXPLAINED, "Mode", MODES, OAUTH
+    )
+
+
+def choose_approval(explicit: str | None, current: str) -> str | None:
+    """The approval mode given, else the one asked for at a terminal, else `None`.
+
+    `current`, the mode the configuration is already in, is the default.
+    """
+    if explicit:
+        return explicit
+    if not sys.stdin.isatty():
+        return None
+    return prompt_choice(
+        "How should WorkOrders' requests be approved?", APPROVALS_EXPLAINED, "Approval", APPROVALS, current
+    )
+
+
+def prompt_choice(question: str, explained: str, label: str, choices: dict[str, str], default: str) -> str:
+    """One of `choices` picked by number or name at the terminal, `default` on Enter or EOF."""
+    keys = list(choices)
+    print(question)
+    print(explained)
+    for number, key in enumerate(keys, 1):
+        print(f"  {number}) {choices[key]}")
     while True:
         try:
-            answer = input("Mode [1]: ").strip()
+            answer = input(f"{label} [{keys.index(default) + 1}]: ").strip()
         except EOFError:
-            return OAUTH
+            return default
         if not answer:
-            return OAUTH
-        if answer.isdigit() and 1 <= int(answer) <= len(choices):
-            return choices[int(answer) - 1]
-        if answer in MODES:
+            return default
+        if answer.isdigit() and 1 <= int(answer) <= len(keys):
+            return keys[int(answer) - 1]
+        if answer in choices:
             return answer
-        print(f"Choose 1-{len(choices)}.")
+        print(f"Choose 1-{len(keys)}.")
+
+
+def current_approval(document: dict, name: str) -> str:
+    """The approval mode `document` is in, as repository `name` sees it.
+
+    A repository not yet named under `[trusted_repos]` is manual, however many
+    others are trusted: trust is given one repository at a time.
+    """
+    if document.get("approvals", {}).get("auto_approve") is True:
+        return AUTO
+    trusted = document.get("trusted_repos", {})
+    return TRUSTED if trusted.get(name) is True else MANUAL
+
+
+def set_approval(text: str, document: dict, name: str, approval: str) -> str:
+    """`text` switched to `approval`, touching only the settings that change."""
+    if document.get("approvals", {}).get("auto_approve", False) != (approval == AUTO):
+        text = set_entry(text, "approvals", "auto_approve", approval == AUTO)
+    trusted = document.get("trusted_repos", {}).get(name, False)
+    if approval == TRUSTED and trusted is not True:
+        text = set_entry(text, "trusted_repos", name, True)
+    elif approval == MANUAL and trusted is True:
+        text = set_entry(text, "trusted_repos", name, False)
+    return text
 
 
 def repository_root(directory: Path) -> Path:
@@ -158,9 +226,25 @@ def add_repository(text: str, name: str, root: Path) -> str:
     return add_entry(text, "repos", name, str(root))
 
 
-def add_entry(text: str, table: str, key: str, value: str) -> str:
+def set_entry(text: str, table: str, key: str, value: str | bool) -> str:
+    """`text` with `[table]`'s `key` set to `value`, replacing the line that sets it."""
+    lines = text.splitlines()
+    table_header = re.compile(rf"^\s*\[\s*{re.escape(table)}\s*\]\s*(#.*)?$")
+    header = next((index for index, line in enumerate(lines) if table_header.match(line)), None)
+    if header is not None:
+        setting = re.compile(rf"^\s*({re.escape(key)}|{re.escape(json.dumps(key))})\s*=")
+        for index in range(header + 1, len(lines)):
+            if _ANY_HEADER.match(lines[index]):
+                break
+            if setting.match(lines[index]):
+                lines[index] = _entry(key, value)
+                return "\n".join(lines) + "\n"
+    return add_entry(text, table, key, value)
+
+
+def add_entry(text: str, table: str, key: str, value: str | bool) -> str:
     """`text` with `key = value` added to its `[table]` table, comments intact."""
-    entry = f"{json.dumps(key)} = {json.dumps(value)}"
+    entry = _entry(key, value)
     lines = text.splitlines()
     table_header = re.compile(rf"^\s*\[\s*{re.escape(table)}\s*\]\s*(#.*)?$")
     header = next((index for index, line in enumerate(lines) if table_header.match(line)), None)
@@ -234,6 +318,9 @@ def main(arguments: argparse.Namespace) -> int:
             raise RuntimeError(
                 f"{name!r} is disconnected under [repo_modes] in {path}; remove that entry to connect it"
             )
+        approval = choose_approval(arguments.approval, current_approval(document, name))
+        if approval is not None:
+            updated = set_approval(updated, document, name, approval)
         if updated == text:
             print(f"{root} is already onboarded as {existing!r} in {path}")
             print(NEXT_STEPS[mode])
@@ -242,6 +329,7 @@ def main(arguments: argparse.Namespace) -> int:
         if (
             written.get("repos", {}).get(name) != repos.get(name, str(root))
             or (mode == DISCONNECTED and written.get("repo_modes", {}).get(name) != DISCONNECTED)
+            or (approval is not None and current_approval(written, name) != approval)
         ):
             raise RuntimeError(f"could not add {name!r} to {path}; add it under [repos] by hand")
         temporary = path.with_name(f".{path.name}.tmp")
@@ -260,11 +348,17 @@ def main(arguments: argparse.Namespace) -> int:
         if (warning := login_warning(document, path, project)) is not None:
             print(warning, file=sys.stderr)
     else:
-        print(f"Recorded {name!r} as disconnected in {path}")
+        print(f"Updated {name!r} in {path}")
     if not arguments.no_restart:
         print(restart_service())
     print(NEXT_STEPS[mode])
     return EXIT_OK
+
+
+def _entry(key: str, value: str | bool) -> str:
+    """One TOML line, quoting the key only where TOML needs it."""
+    written = key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
+    return f"{written} = {json.dumps(value)}"
 
 
 def _resolved(value: str, base: Path) -> Path:

@@ -545,6 +545,7 @@ def _workflow_app(
     github_login_config: GitHubLoginConfig | None = None,
     repos: dict[str, str] | None = None,
     repo_modes: dict[str, str] | None = None,
+    trusted_repos: frozenset[str] = frozenset(),
 ):
     """Wire the app the way the composition root does."""
     unused = object()
@@ -577,6 +578,7 @@ def _workflow_app(
         github_login_config=github_login_config,
         repos=repos,
         repo_modes=repo_modes,
+        trusted_repos=trusted_repos,
     )
 
 
@@ -2968,6 +2970,35 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
                     snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
                     modes[path.name] = snapshot.values["inputs"]["mode"]
                 assert modes == {"offline": "disconnected", "online": "connected"}
+
+    asyncio.run(scenario())
+
+
+def test_a_trusted_repository_auto_approves_its_workorders_only(tmp_path):
+    graph = ScriptedGraph(
+        GraphId("trust"), "Trust", (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+    )
+    trusted, other = tmp_path / "trusted", tmp_path / "other"
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        repos={"acme/trusted": str(trusted), "acme/other": str(other)},
+        trusted_repos=frozenset({"acme/trusted"}),
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                approved = {}
+                for path in (trusted, other):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "trust", "repository": str(path), "prompt": "Task",
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    approved[path.name] = snapshot.auto_approve_nodes
+                assert approved == {"trusted": (NodeId("work"),), "other": ()}
 
     asyncio.run(scenario())
 

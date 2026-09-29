@@ -99,6 +99,8 @@ type GitLabState = {
 };
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
+  // Whether agents act as the connection made below; not with sign-in on.
+  const [agentsUseConnection, setAgentsUseConnection] = useState(true);
   const [connection, setConnection] = useState<ConnectionState>({
     phase: "unknown",
   });
@@ -178,8 +180,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   // Load status on mount; cancel any timers on unmount.
   useEffect(() => {
     getGitHubStatus()
-      .then(({ connected }) => {
+      .then(({ connected, agentsUseConnection }) => {
         setConnection({ phase: connected ? "connected" : "disconnected" });
+        setAgentsUseConnection(agentsUseConnection !== false);
       })
       .catch(() => {
         setConnection({ phase: "disconnected" });
@@ -536,9 +539,14 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         <section className="settings-section">
           <h2 className="settings-section-title">GitHub</h2>
           <p className="settings-status settings-status-muted">
-            Agent pull requests and comments use the server’s GitHub CLI login
-            (<code>gh auth status</code>). Signing in to OpenEngine only
-            identifies you, and nothing below changes the agents’ account.
+            Agent pull requests and comments use the choice below: the server’s
+            GitHub CLI login (<code>gh auth status</code>), or the GitHub OAuth
+            connection made{" "}
+            {agentsUseConnection ? "here or " : "on the server "}
+            with <code>engine connect github</code>.{" "}
+            {agentsUseConnection
+              ? "Signing in to OpenEngine only identifies you."
+              : "The connection below is only yours, and agents do not act as it."}
           </p>
 
           <fieldset className="settings-provider-choice">

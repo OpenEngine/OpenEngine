@@ -305,11 +305,14 @@ def compose_app(
     settings = _settings(loaded)
     github_login_config = _github_login_config(loaded)
     _require_login_off_loopback(settings, github_login_config)
-    credential_store = GitHubCredentialStore()
+    # One cached store for Settings and agent actions alike, so the token
+    # `engine connect github` saved is used without reading the keychain again.
+    credential_store = GitHubCredentialStore(cached=True)
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
         settings,
         slack_credential_store=slack_credential_store,
+        github_credential_store=credential_store,
     )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
@@ -343,6 +346,7 @@ def compose_app(
         work_orders=loaded.config.work_orders,
         repos=loaded.config.repos,
         repo_modes=loaded.config.repo_modes,
+        trusted_repos=loaded.config.trusted_repos,
         login_repositories=_login_repositories(loaded) if github_login_config else (),
         login_operators=loaded.config.access.operators,
     )

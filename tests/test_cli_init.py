@@ -173,7 +173,7 @@ def test_init_asks_for_the_mode_at_a_terminal(monkeypatch, tmp_path, capsys):
     config = tmp_path / "engine.toml"
     config.write_text("")
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    answers = iter(["9", "3"])
+    answers = iter(["9", "3", ""])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
     assert _init(monkeypatch, checkout, config) == 0
@@ -210,3 +210,70 @@ def test_init_disconnects_an_onboarded_repository(monkeypatch, tmp_path, capsys)
 
     assert _init(monkeypatch, checkout, config, "--mode", "oauth") == 1
     assert "remove that entry" in capsys.readouterr().err
+
+
+def test_init_asks_for_the_approval_mode_at_a_terminal(monkeypatch, tmp_path, capsys):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("[approvals]\nauto_approve = false\nallow = [\"read\"]\n")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter(["", "2"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    assert _init(monkeypatch, checkout, config) == 0
+
+    out = capsys.readouterr().out
+    assert "1) Auto-approve (every repository)" in out
+    assert "2) Trusted repos" in out
+    assert "3) Manual (ask before each change)" in out
+    document = tomllib.loads(config.read_text())
+    assert document["trusted_repos"] == {"api": True}
+    assert document["approvals"] == {"auto_approve": False, "allow": ["read"]}
+
+
+def test_init_switches_between_approval_modes(monkeypatch, tmp_path):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("[approvals]\n# Ask first.\nauto_approve = false\n")
+
+    assert _init(monkeypatch, checkout, config, "--approval", "auto") == 0
+    text = config.read_text()
+    assert "# Ask first.\nauto_approve = true\n" in text
+    assert "trusted_repos" not in tomllib.loads(text)
+
+    assert _init(monkeypatch, checkout, config, "--approval", "trusted") == 0
+    document = tomllib.loads(config.read_text())
+    assert document["approvals"]["auto_approve"] is False
+    assert document["trusted_repos"] == {"api": True}
+
+    assert _init(monkeypatch, checkout, config, "--approval", "manual") == 0
+    document = tomllib.loads(config.read_text())
+    assert document["approvals"]["auto_approve"] is False
+    assert document["trusted_repos"] == {"api": False}
+
+
+def test_a_new_repository_does_not_inherit_another_ones_trust(monkeypatch, tmp_path):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("[trusted_repos]\nother = true\n")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter(["", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+    assert _init(monkeypatch, checkout, config) == 0
+    assert tomllib.loads(config.read_text())["trusted_repos"] == {"other": True}
+
+    assert _init(monkeypatch, checkout, config, "--mode", "oauth", "--approval", "manual") == 0
+    assert tomllib.loads(config.read_text())["trusted_repos"] == {"other": True}
+
+
+def test_init_leaves_approvals_alone_without_a_terminal(monkeypatch, tmp_path):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("[approvals]\nauto_approve = true\n")
+
+    assert _init(monkeypatch, checkout, config) == 0
+
+    document = tomllib.loads(config.read_text())
+    assert document["approvals"] == {"auto_approve": True}
+    assert "trusted_repos" not in document
