@@ -29,7 +29,7 @@ from urllib.request import Request, urlopen
 
 from platformdirs import user_config_path, user_data_path, user_state_path
 
-from engine.apps.cli import daemon
+from engine.apps.cli import daemon, onboarding
 
 DEFAULT_SERVER = "http://127.0.0.1:4364"
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CLI_CONFIG"
@@ -1267,6 +1267,7 @@ def parser() -> argparse.ArgumentParser:
     connection.add_argument("--server", metavar="URL")
     connection.add_argument("--origin", default="https://gitlab.com")
     connection.add_argument("--open", action="store_true")
+    onboarding.add_parser(commands)
     daemon.add_parser(commands)
     return result
 
@@ -1285,6 +1286,8 @@ def main(argv: list[str] | None = None) -> int:
         return doctor(arguments, preferences)
     if arguments.command == "connect":
         return connect(arguments, preferences)
+    if arguments.command == "init":
+        return onboarding.main(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
     raise AssertionError("unreachable command")

@@ -77,6 +77,10 @@ explicit `--server` is always probe-only. `engine daemon` runs the local
 service in the background instead; see
 [Background service](docs/releases.md#background-service).
 `engine connect gh|github|gitlab|slack` connects shared source control or Slack.
+`engine init`, run inside a git checkout, adds it under `[repos]` in the
+service's `engine.toml` (named after its `origin`, or `--name`) and restarts a
+running service so the repository appears in the WorkOrder dropdown. With
+GitHub sign-in enabled it warns that the repository's writers can now sign in.
 
 In an interactive terminal, running `engine` opens the workbench. Type `/` to
 search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,

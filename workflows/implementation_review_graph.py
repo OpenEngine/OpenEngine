@@ -22,6 +22,7 @@ from dataclasses import replace
 from typing import Any
 
 from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_BRANCH_REF,
     DEFAULT_ROOT_DIRECTORY,
     GitWorktreeWorkspaceProvider,
 )
@@ -66,8 +67,9 @@ from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
 # Graph constants
 # ---------------------------------------------------------------------------
 
-#: What every checkout is based on.
-BASE_REF = "origin/main"
+#: What every checkout is based on: the default branch of the run's repository,
+#: since one workflow serves every repository under `[repos]`.
+BASE_REF = DEFAULT_BRANCH_REF
 
 WORKSPACE = "workspace"
 NAMING = "naming"
@@ -100,8 +102,8 @@ REVIEW_MODELS: dict[str, dict[str, str]] = {
 
 IMPLEMENTATION_PROMPT = (
     "Implement the requested change in the provided workspace. Read the code "
-    "before editing. The workspace is already based on the current remote main "
-    "commit; do not fetch, pull, or merge main before editing. Make the "
+    "before editing. The workspace is already based on the current commit of the "
+    "remote default branch; do not fetch, pull, or merge it before editing. Make the "
     "smallest complete change and report the result.\n\n"
     "{publish}"
     "Use fail_step "
