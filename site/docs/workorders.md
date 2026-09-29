@@ -17,7 +17,7 @@ Each WorkOrder gets its own git worktree and branch, and ends with a pull reques
 | Slack | Mention `@OpenEngineBot` and ask for the change. |
 | GitHub issue | Assign the issue to the OpenEngine bot account. |
 | Pull request | Comment asking for a change. A running WorkOrder is steered; otherwise a new one starts. |
-| MCP | Call `create_workorder(prompt)` on the [remote MCP server](integrations.md#mcp). |
+| MCP | Call `create_workorder(prompt)` on the [remote MCP server](integrations/mcp.md). |
 
 ![The Create a WorkOrder form, with Codex implementing and Claude reviewing](/img/screenshots/workorder-create.png)
 

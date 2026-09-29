@@ -28,7 +28,7 @@ Inspect and steer work orders in the configured repository with:
 Reset and steering calls are never automatically retried. After an uncertain
 response, check status before repeating a mutation.
 
-For tool-call examples, see [MCP in the docsite](https://openengine.sh/docs/integrations/#mcp).
+For tool-call examples, see [MCP in the docsite](https://openengine.sh/docs/integrations/mcp/).
 
 **Current GitHub-login limitation:** OE's service token authorizes only
 `POST /api/runs`. When OE enforces GitHub browser login, creation works with
