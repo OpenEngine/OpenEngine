@@ -52,6 +52,10 @@ def action(tool, **arguments):
     }
 
 
+def question(text="Do you normally start a local dependency before this app?", evidence="E0001"):
+    return {"kind": "question", "question": {"text": text, "evidence": [evidence]}}
+
+
 class ScriptedAgent:
     def __init__(self, decisions):
         self.decisions = iter(decisions)
@@ -62,9 +66,9 @@ class ScriptedAgent:
         return Decision.model_validate(next(self.decisions))
 
 
-def execute(tmp_path, decisions, **options):
+def execute(tmp_path, decisions, *, allow_exec=True, **options):
     artifacts = Artifacts(tmp_path / "runs")
-    tools = LocalTools(tmp_path, artifacts, allow_exec=True)
+    tools = LocalTools(tmp_path, artifacts, allow_exec=allow_exec)
     agent = ScriptedAgent(decisions)
 
     async def run():
@@ -96,6 +100,10 @@ def test_real_graph_rejects_invented_evidence_then_accepts_actual_output(tmp_pat
     assert evidence["result"]["exit_code"] == 0
     assert "hello" in evidence["result"]["output"]
     assert "greeting: passed" in (artifacts.path / "report.md").read_text()
+    assert "actions/E0001.json" in (artifacts.path / "report.md").read_text()
+    case_receipt = json.loads((artifacts.path / "cases" / "greeting.json").read_text())
+    assert case_receipt["finding"]["case_id"] == "greeting"
+    assert case_receipt["evidence"][0]["id"] == "E0001"
 
 
 def test_plan_only_refuses_commands_and_never_executes_cases(tmp_path):
@@ -135,9 +143,88 @@ def test_source_reads_cannot_establish_a_pass(tmp_path):
 def test_budget_and_questions_preserve_untested_cases(tmp_path):
     report, _, _ = execute(tmp_path, [plan()], max_steps=1)
     assert report["findings"][0]["status"] == "inconclusive"
-    report, _, _ = execute(tmp_path, [plan(questions=["Which test account?"])])
+    report, _, _ = execute(
+        tmp_path, [plan(questions=["Which test account?"])], allow_exec=False
+    )
     assert report["status"] == "blocked"
     assert report["findings"][0]["status"] == "blocked"
+
+
+def test_execution_attempts_startup_before_interactively_resolving_setup(tmp_path):
+    answers = []
+
+    async def ask_user(prompt):
+        answers.append(prompt)
+        return "Start the memory-service port forward on localhost:18080."
+
+    artifacts = Artifacts(tmp_path / "runs")
+    tools = LocalTools(tmp_path, artifacts, allow_exec=True)
+    agent = ScriptedAgent(
+        [
+            plan(questions=["How is the app started locally?"]),
+            action("run_command", argv=[sys.executable, "-c", "import sys; sys.exit(1)"]),
+            question(),
+            action("run_command", argv=[sys.executable, "-c", "print('ready')"]),
+            finding(evidence=["E0002"]),
+        ]
+    )
+
+    async def run():
+        try:
+            return await Verification(
+                agent, tools, artifacts, progress=lambda _: None, ask_user=ask_user
+            ).run("Test greeting")
+        finally:
+            await tools.close()
+
+    report = asyncio.run(run())
+    assert report["status"] == "complete"
+    assert answers == ["Do you normally start a local dependency before this app?"]
+    assert report["setup_questions"] == answers
+    assert "Execution is enabled" in agent.prompts[1]
+    assert "Start the memory-service port forward" in agent.prompts[3]
+
+
+def test_progress_reports_a_short_plan_and_meaningful_milestones(tmp_path):
+    messages = []
+    artifacts = Artifacts(tmp_path / "runs")
+    tools = LocalTools(tmp_path, artifacts, allow_exec=True)
+    agent = ScriptedAgent(
+        [
+            {
+                **plan(),
+                "plan": {
+                    **plan()["plan"],
+                    "startup": [
+                        "Port-forward the permissions service.",
+                        "Launch the app with uvicorn.",
+                    ],
+                },
+            },
+            action("start_process", argv=["kubectl", "port-forward", "svc/permissions", "9081:9081"]),
+            action("start_process", argv=["curl", "http://localhost:8080/invoke-stream"]),
+            action("run_command", argv=[sys.executable, "-c", "print('checked')"]),
+            finding(evidence=["E0003"]),
+        ]
+    )
+
+    async def run():
+        try:
+            return await Verification(agent, tools, artifacts, progress=messages.append).run(
+                "Test greeting"
+            )
+        finally:
+            await tools.close()
+
+    asyncio.run(run())
+    assert messages[0] == "Plan:"
+    assert "  Setup: forward permissions service" in messages
+    assert "  Start app: run DEA under rockstg" in messages
+    assert "[1] Setup: start port forward for svc/permissions 9081:9081" in messages
+    assert "    $ kubectl port-forward svc/permissions 9081:9081" in messages
+    assert "[2] Test: send the application request" in messages
+    assert "    $ curl http://localhost:8080/invoke-stream" in messages
+    assert not any("asking agent" in message for message in messages)
 
 
 def test_provider_error_leaves_a_partial_report(tmp_path):

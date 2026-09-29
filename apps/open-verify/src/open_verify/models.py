@@ -46,16 +46,22 @@ class Finding(Contract):
     reproduction: list[str] = Field(default_factory=list)
 
 
+class Question(Contract):
+    text: str = Field(min_length=1)
+    evidence: list[str] = Field(min_length=1, max_length=1)
+
+
 class Decision(Contract):
-    kind: Literal["action", "plan", "finding", "finish"]
+    kind: Literal["action", "plan", "finding", "question", "finish"]
     action: Action | None = None
     plan: Plan | None = None
     finding: Finding | None = None
+    question: Question | None = None
     note: str = ""
 
     @model_validator(mode="after")
     def matching_payload(self):
-        for field in ("action", "plan", "finding"):
+        for field in ("action", "plan", "finding", "question"):
             if (getattr(self, field) is not None) != (self.kind == field):
                 raise ValueError(f"{self.kind} decision has invalid {field} payload")
         return self

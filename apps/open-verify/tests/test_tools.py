@@ -80,6 +80,16 @@ def test_managed_service_is_stopped_on_cleanup(tmp_path):
     asyncio.run(run())
 
 
+def test_bounded_wait_is_recorded(tmp_path):
+    async def run():
+        tools = LocalTools(tmp_path, Artifacts(tmp_path / "runs"))
+        result = await tools.execute("wait", {"seconds": 0.01})
+        assert result["ok"]
+        assert result["result"]["seconds"] == 0.01
+
+    asyncio.run(run())
+
+
 def test_scope_and_execution_controls(tmp_path):
     (tmp_path / ".git").mkdir()
     subdir = tmp_path / "src"
@@ -103,10 +113,16 @@ def test_scope_and_execution_controls(tmp_path):
 
 def test_http_evidence_and_redirect_boundary(tmp_path, web_app):
     async def run():
-        tools = LocalTools(tmp_path, Artifacts(tmp_path / "runs"))
+        artifacts = Artifacts(tmp_path / "runs")
+        tools = LocalTools(tmp_path, artifacts)
         result = await tools.execute("http_request", {"url": web_app + "/api"})
         assert result["result"]["status"] == 200
         assert json.loads(result["result"]["body"]) == {"items": [1, 2]}
+        receipt = artifacts.path / result["artifact"]
+        assert json.loads(receipt.read_text())["arguments"]["url"] == web_app + "/api"
+        assert json.loads((artifacts.path / result["result"]["body_file"]).read_text()) == {
+            "items": [1, 2]
+        }
         result = await tools.execute("http_request", {"url": web_app + "/redirect"})
         assert result["result"]["status"] == 302
 

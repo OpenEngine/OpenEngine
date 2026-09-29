@@ -1,6 +1,7 @@
 """Append-only action evidence and human-readable session reports."""
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -26,6 +27,12 @@ class Artifacts:
             "ok": ok,
             "result": result,
         }
+        if tool in {"http_request", "run_command", "start_process", "process_output"}:
+            relative = Path("actions") / f"{entry['id']}.json"
+            receipt = self.path / relative
+            receipt.parent.mkdir(exist_ok=True)
+            receipt.write_text(json.dumps(entry, indent=2, ensure_ascii=False), encoding="utf-8")
+            entry["artifact"] = relative.as_posix()
         self.observations.append(entry)
         with (self.path / "evidence.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -51,7 +58,12 @@ class Artifacts:
             if plan["questions"] or plan["assumptions"]:
                 lines.extend(["", "## Questions and assumptions", ""])
                 lines.extend(f"- {item}" for item in plan["questions"] + plan["assumptions"])
+        if state.get("setup_questions"):
+            lines.extend(["", "## Setup questions", ""])
+            lines.extend(f"- {question}" for question in state["setup_questions"])
         for result in state.get("findings", []):
+            evidence = ", ".join(self.evidence_link(item) for item in result["evidence"])
+            case_receipt = self.case_receipt(plan, result)
             lines.extend(
                 [
                     "",
@@ -59,7 +71,9 @@ class Artifacts:
                     "",
                     result["actual"],
                     "",
-                    "Evidence: " + (", ".join(result["evidence"]) or "none"),
+                    f"Test-case receipt: [{result['case_id']}]({case_receipt})",
+                    "",
+                    "Evidence: " + (evidence or "none"),
                     "",
                 ]
             )
@@ -67,8 +81,38 @@ class Artifacts:
         lines.extend(
             [
                 "",
-                "Raw observations: evidence.jsonl. Screenshots and process logs are in this folder.",
+                "Raw observations: evidence.jsonl. Executed command and HTTP receipts are in actions/. "
+                "Screenshots and complete process logs are in this folder.",
                 "",
             ]
         )
         (self.path / "report.md").write_text("\n".join(lines), encoding="utf-8")
+
+    def case_receipt(self, plan: dict | None, finding: dict) -> Path:
+        case_id = finding["case_id"]
+        filename = re.sub(r"[^A-Za-z0-9._-]", "_", case_id)
+        receipt = self.path / "cases" / f"{filename}.json"
+        receipt.parent.mkdir(exist_ok=True)
+        case = next((item for item in (plan or {}).get("cases", []) if item["id"] == case_id), None)
+        evidence = [
+            item for item in self.observations if item["id"] in set(finding["evidence"])
+        ]
+        receipt.write_text(
+            json.dumps({"case": case, "finding": finding, "evidence": evidence}, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return receipt
+
+    def evidence_link(self, evidence_id: str) -> str:
+        entry = next((item for item in self.observations if item["id"] == evidence_id), None)
+        if entry is None or "artifact" not in entry:
+            return evidence_id
+        receipt = self.path / entry["artifact"]
+        links = [f"[{evidence_id}]({receipt})"]
+        log = entry["result"].get("log")
+        if log:
+            links.append(f"[complete log]({self.path / log})")
+        body_file = entry["result"].get("body_file")
+        if body_file:
+            links.append(f"[response body]({self.path / body_file})")
+        return " ".join(links)

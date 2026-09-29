@@ -25,17 +25,32 @@ Open Verify delegates authentication to those adapters. It does not manage crede
 
 ## Use
 
-Activate the environment, change into the Git project to test, and run:
+Install the command once from this checkout:
 
 ```shell
-open-verify "Verify login accepts valid credentials and rejects an invalid password" --plan-only
-open-verify "Verify API pagination, including empty and invalid page values" --agent claude --allow-exec
-open-verify "Verify the contact form shows validation errors" --agent codex --allow-exec
+uv tool install --editable \
+  --with-editable /absolute/path/to/OpenEngine/langgraph-acp \
+  /absolute/path/to/OpenEngine/apps/open-verify
 ```
 
-Running `open-verify` without a request prompts for one in an interactive terminal.
-`--project PATH` selects another project's directory. Discovery finds the enclosing
-Git root, including worktrees; it does not invoke Git or change branches.
+Then change into any Git project you want to test and run:
+
+```shell
+ov "Verify login accepts valid credentials and rejects an invalid password" --plan-only
+ov "Verify API pagination, including empty and invalid page values" --agent claude --allow-exec
+ov "Verify the contact form shows validation errors" --agent codex --allow-exec
+```
+
+`ov` is the short command; `open-verify` remains available. Running either without a
+request prompts for one in an interactive terminal. The current directory is the
+default project, so `ov` discovers the enclosing Git root, including worktrees; it
+does not invoke Git or change branches. `--project PATH` selects another directory.
+
+With `--allow-exec`, Open Verify attempts the documented or likely local startup
+command before treating unknown setup as a blocker. If launch or readiness fails, it
+inspects the failure, asks one targeted setup question in an interactive terminal,
+and continues the same run. Non-interactive runs save that question in the report as
+a blocker.
 
 Useful options:
 
@@ -63,8 +78,15 @@ dependency or credential is a blocker, never a passing result. Blocking question
 appear in the plan/report; include their answers in a subsequent request.
 
 Each run saves `session.json`, `plan.json` when planning succeeds, `evidence.jsonl`,
-`report.json`, `report.md`, process logs, and browser screenshots/trace when used.
-Reports cite evidence IDs. These local artifacts can contain application data,
+`report.json`, `report.md`, process logs, browser screenshots/trace when used, and
+`actions/E####.json` receipts for executed commands and HTTP calls. A receipt records
+the exact argv or HTTP request, the captured result, and links to the complete process
+log when applicable. HTTP responses are also written to `responses/http-###.body` up
+to 10 MiB; the receipt marks a response that exceeds that limit. `report.md` links
+cited execution evidence directly to its receipt, process log, and response body.
+Each assessed case also receives `cases/<case-id>.json`, grouping the case definition,
+finding, and every cited request/response receipt.
+These local artifacts can contain application data,
 request bodies and headers; use disposable test accounts and protect the run directory.
 Browser assessment currently uses accessibility snapshots and visible-text checks;
 screenshots are saved for human review, not sent to the model for visual evaluation.

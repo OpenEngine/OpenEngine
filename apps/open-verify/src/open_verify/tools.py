@@ -18,6 +18,7 @@ from open_verify.models import Contract
 OMIT = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build", ".cache"}
 READ_TOOLS = {"list_files", "read_file"}
 MAX_TEXT = 24000
+MAX_RESPONSE_FILE = 10 * 1024 * 1024
 
 
 def project_root(path: Path) -> Path:
@@ -66,6 +67,10 @@ class EmptyArgs(Contract):
     pass
 
 
+class WaitArgs(Contract):
+    seconds: float = Field(default=60, gt=0, le=60)
+
+
 class LocatorArgs(Contract):
     by: Literal["role", "label", "text", "test_id"]
     name: str
@@ -97,6 +102,7 @@ TOOLS = {
     ),
     "process_output": (ProcessArgs, "Read current managed process output and exit code."),
     "stop_process": (ProcessArgs, "Stop a managed process and its descendants."),
+    "wait": (WaitArgs, "Wait for a bounded number of seconds before a documented retry."),
     "http_request": (
         RequestArgs,
         "Send an HTTP request; return status, headers and body. Redirects are not followed.",
@@ -141,6 +147,7 @@ class LocalTools:
         self._browser_guard = None
         self._browser_proxy = None
         self.browser_events: list[dict] = []
+        self._http_response_count = 0
 
     def catalog(self, stage: str) -> dict:
         return {
@@ -258,7 +265,7 @@ class LocalTools:
             tracked = psutil.Process(process.pid)
         except psutil.NoSuchProcess:
             tracked = None  # A short-lived command may already have exited.
-        self.processes[process_id] = (process, log, tracked)
+        self.processes[process_id] = (process, log, tracked, list(argv), cwd)
         return process_id, process
 
     async def run_command(self, args: CommandArgs):
@@ -280,7 +287,7 @@ class LocalTools:
         return {"process_id": process_id, "note": "Started; readiness has not been verified"}
 
     async def process_output(self, args: ProcessArgs):
-        process, log, _ = self.processes[args.process_id]
+        process, log, _, argv, cwd = self.processes[args.process_id]
         with log.open("rb") as stream:
             size = log.stat().st_size
             stream.seek(max(0, size - MAX_TEXT))
@@ -291,10 +298,12 @@ class LocalTools:
             "output": content,
             "truncated": size > MAX_TEXT,
             "log": log.name,
+            "argv": argv,
+            "cwd": cwd,
         }
 
     async def stop_process(self, args: ProcessArgs):
-        process, _, tracked = self.processes[args.process_id]
+        process, _, tracked, _, _ = self.processes[args.process_id]
         try:
             children = tracked.children(recursive=True) if tracked is not None else []
             targets = [*reversed(children), tracked] if tracked is not None else []
@@ -314,6 +323,10 @@ class LocalTools:
         await asyncio.wait_for(process.wait(), 5)
         return {"process_id": args.process_id, "exit_code": process.returncode}
 
+    async def wait(self, args: WaitArgs):
+        await asyncio.sleep(args.seconds)
+        return {"seconds": args.seconds}
+
     async def http_request(self, args: RequestArgs):
         self.check_url(args.url)
         try:
@@ -332,15 +345,33 @@ class LocalTools:
                 args.method, args.url, headers=args.headers, content=args.body
             ) as response:
                 body = bytearray()
-                async for chunk in response.aiter_bytes():
-                    body.extend(chunk[: MAX_TEXT + 1 - len(body)])
-                    if len(body) > MAX_TEXT:
-                        break
+                self._http_response_count += 1
+                relative = Path("responses") / f"http-{self._http_response_count:03d}.body"
+                response_file = self.artifacts.path / relative
+                response_file.parent.mkdir(exist_ok=True)
+                size = 0
+                complete = True
+                with response_file.open("wb") as stream:
+                    async for chunk in response.aiter_bytes():
+                        remaining = MAX_RESPONSE_FILE - size
+                        if remaining <= 0:
+                            complete = False
+                            break
+                        saved = chunk[:remaining]
+                        stream.write(saved)
+                        size += len(saved)
+                        if len(saved) != len(chunk):
+                            complete = False
+                            break
+                        if len(body) <= MAX_TEXT:
+                            body.extend(chunk[: MAX_TEXT + 1 - len(body)])
                 return {
                     "status": response.status_code,
                     "headers": dict(response.headers),
                     "body": body[:MAX_TEXT].decode("utf-8", errors="replace"),
-                    "truncated": len(body) > MAX_TEXT,
+                    "truncated": size > MAX_TEXT,
+                    "body_file": relative.as_posix(),
+                    "body_file_complete": complete,
                 }
 
     async def _ensure_browser(self):

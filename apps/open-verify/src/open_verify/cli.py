@@ -15,6 +15,34 @@ from open_verify.tools import LocalTools, project_root
 from open_verify.workflow import Verification, exit_code
 
 
+class TerminalProgress:
+    """Keep an interactive terminal's current background activity on one line."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.interactive = stream.isatty()
+        self.active = False
+
+    def status(self, message: str):
+        if not self.interactive:
+            return
+        self.stream.write("\r\033[2K" + message)
+        self.stream.flush()
+        self.active = True
+
+    def write(self, message: str):
+        if self.active:
+            self.stream.write("\r\033[2K")
+            self.active = False
+        print(message, file=self.stream, flush=True)
+
+    def clear(self):
+        if self.active:
+            self.stream.write("\r\033[2K")
+            self.stream.flush()
+            self.active = False
+
+
 def positive_int(value):
     number = int(value)
     if not 1 <= number <= 1000:
@@ -103,18 +131,31 @@ async def run(args):
         headless=args.headless,
     )
     print(f"Project: {project}\nArtifacts: {artifacts.path}", flush=True)
+    terminal = TerminalProgress(sys.stdout)
+
+    async def ask_user(question: str) -> str | None:
+        if not sys.stdin.isatty():
+            return None
+        try:
+            return await asyncio.to_thread(input, f"\nOpen Verify needs setup information:\n{question}\n> ")
+        except (EOFError, KeyboardInterrupt):
+            return None
+
     verification = Verification(
         agent,
         tools,
         artifacts,
         plan_only=args.plan_only,
         max_steps=args.max_steps,
-        progress=lambda text: print(text, flush=True),
+        progress=terminal.write,
+        progress_status=terminal.status,
+        ask_user=ask_user,
     )
     cleanup_errors = []
     try:
         report = await verification.run(args.request)
     finally:
+        terminal.clear()
         cleanup_errors = await tools.close()
         try:
             await agent.close()
