@@ -3166,8 +3166,12 @@ def create_app(
         # The checkouts are asked at once and share one deadline, so stalled
         # mounts cost a webhook that deadline once rather than once each, and
         # never hold the one ingress worker, and every delivery queued behind
-        # it, indefinitely.
-        _, stalled = await asyncio.wait(lookups.values(), timeout=GITHUB_CHECKOUT_TIMEOUT_SECONDS)
+        # it, indefinitely. Neither setting is required, and `asyncio.wait`
+        # refuses an empty set, so a deployment with no checkout skips it.
+        stalled = set()
+        if lookups:
+            _, stalled = await asyncio.wait(
+                lookups.values(), timeout=GITHUB_CHECKOUT_TIMEOUT_SECONDS)
         for lookup in stalled:
             lookup.cancel()
         await asyncio.gather(*stalled, return_exceptions=True)

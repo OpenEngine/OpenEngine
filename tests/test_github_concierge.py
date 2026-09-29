@@ -1333,12 +1333,18 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
     assert not communications.posts
 
 
-def test_an_assignment_without_a_local_checkout_starts_nothing(tmp_path, caplog):
+@pytest.mark.parametrize("configured", [
+    pytest.param("other/repo", id="other-checkout"),
+    pytest.param("", id="no-checkout"),
+])
+def test_an_assignment_without_a_local_checkout_starts_nothing(tmp_path, caplog, configured):
     """The webhook names a forge repository, and git cannot check that out.
 
     Without a configured checkout whose `origin` is that repository, the bare
     `owner/name` would reach git as a relative directory and fail the run with
-    `cannot change to 'owner/name'`, so no run is started at all.
+    `cannot change to 'owner/name'`, so no run is started at all. Neither
+    `[repos]` nor `work_orders.repository` is required, so a deployment with
+    no checkout at all is refused the same way.
     """
     from starlette.testclient import TestClient
     from test_github_ingress import _assigned_issue, _signed as github_signed
@@ -1346,10 +1352,11 @@ def test_an_assignment_without_a_local_checkout_starts_nothing(tmp_path, caplog)
     runtime, opened = _graph_runtime()
     app, capabilities, _ = _app(
         tmp_path, RecordingCommunications(),
-        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
+        WorkOrdersConfig(repository=configured, workflow="implementation-review-v1"),
         _workflow_catalog(), provider=FakeACPProvider(create=True),
         github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
-        repos={"other/repo": _checkout(tmp_path / "other", "https://github.com/other/repo.git")},
+        repos={configured: _checkout(tmp_path / "other", "https://github.com/other/repo.git")}
+        if configured else {},
     )
     object.__setattr__(capabilities, "source_control", MagicMock(
         can_write_repository=AsyncMock(return_value=True),
