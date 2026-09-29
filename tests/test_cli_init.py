@@ -252,6 +252,21 @@ def test_init_switches_between_approval_modes(monkeypatch, tmp_path):
     assert document["trusted_repos"] == {"api": False}
 
 
+def test_a_new_repository_does_not_inherit_another_ones_trust(monkeypatch, tmp_path):
+    checkout = _checkout(tmp_path / "api")
+    config = tmp_path / "engine.toml"
+    config.write_text("[trusted_repos]\nother = true\n")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter(["", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+    assert _init(monkeypatch, checkout, config) == 0
+    assert tomllib.loads(config.read_text())["trusted_repos"] == {"other": True}
+
+    assert _init(monkeypatch, checkout, config, "--mode", "oauth", "--approval", "manual") == 0
+    assert tomllib.loads(config.read_text())["trusted_repos"] == {"other": True}
+
+
 def test_init_leaves_approvals_alone_without_a_terminal(monkeypatch, tmp_path):
     checkout = _checkout(tmp_path / "api")
     config = tmp_path / "engine.toml"

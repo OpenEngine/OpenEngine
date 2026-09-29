@@ -2586,6 +2586,10 @@ def create_app(
             {
                 "connected": connected,
                 "clientIdConfigured": bool(_effective_client_id(_request)),
+                # Agents act as the host's `engine connect github` connection.
+                # With sign-in on, the one made here is the user's own and is
+                # not it.
+                "agentsUseConnection": not github_login.configured,
             }
         )
 

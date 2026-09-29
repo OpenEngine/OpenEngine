@@ -849,7 +849,9 @@ def test_browser_users_have_isolated_credentials_and_device_flows(tmp_path, monk
             client.cookies.set("engine_session", login._make_session_cookie(user_id, name))
 
         as_user(1, "alice")
-        assert client.get("/api/github/status").json() == {"connected": False, "clientIdConfigured": False}
+        assert client.get("/api/github/status").json() == {
+            "connected": False, "clientIdConfigured": False, "agentsUseConnection": False
+        }
         assert client.post("/api/github/client-id", json={"clientId": "alice-client"}).status_code == 204
         assert client.post("/api/github/connect").json()["userCode"] == "alice-code"
         as_user(2, "bob")

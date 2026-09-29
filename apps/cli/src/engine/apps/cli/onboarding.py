@@ -99,23 +99,9 @@ def choose_mode(explicit: str | None) -> str:
         return explicit
     if not sys.stdin.isatty():
         return OAUTH
-    choices = list(MODES)
-    print("How should WorkOrders on this repository reach GitHub?")
-    print(CONNECTED_EXPLAINED)
-    for number, mode in enumerate(choices, 1):
-        print(f"  {number}) {MODES[mode]}")
-    while True:
-        try:
-            answer = input("Mode [1]: ").strip()
-        except EOFError:
-            return OAUTH
-        if not answer:
-            return OAUTH
-        if answer.isdigit() and 1 <= int(answer) <= len(choices):
-            return choices[int(answer) - 1]
-        if answer in MODES:
-            return answer
-        print(f"Choose 1-{len(choices)}.")
+    return prompt_choice(
+        "How should WorkOrders on this repository reach GitHub?", CONNECTED_EXPLAINED, "Mode", MODES, OAUTH
+    )
 
 
 def choose_approval(explicit: str | None, current: str) -> str | None:
@@ -127,38 +113,42 @@ def choose_approval(explicit: str | None, current: str) -> str | None:
         return explicit
     if not sys.stdin.isatty():
         return None
-    choices = list(APPROVALS)
-    default = choices.index(current) + 1
-    print("How should WorkOrders' requests be approved?")
-    print(APPROVALS_EXPLAINED)
-    for number, approval in enumerate(choices, 1):
-        print(f"  {number}) {APPROVALS[approval]}")
+    return prompt_choice(
+        "How should WorkOrders' requests be approved?", APPROVALS_EXPLAINED, "Approval", APPROVALS, current
+    )
+
+
+def prompt_choice(question: str, explained: str, label: str, choices: dict[str, str], default: str) -> str:
+    """One of `choices` picked by number or name at the terminal, `default` on Enter or EOF."""
+    keys = list(choices)
+    print(question)
+    print(explained)
+    for number, key in enumerate(keys, 1):
+        print(f"  {number}) {choices[key]}")
     while True:
         try:
-            answer = input(f"Approval [{default}]: ").strip()
+            answer = input(f"{label} [{keys.index(default) + 1}]: ").strip()
         except EOFError:
-            return current
+            return default
         if not answer:
-            return current
-        if answer.isdigit() and 1 <= int(answer) <= len(choices):
-            return choices[int(answer) - 1]
-        if answer in APPROVALS:
+            return default
+        if answer.isdigit() and 1 <= int(answer) <= len(keys):
+            return keys[int(answer) - 1]
+        if answer in choices:
             return answer
-        print(f"Choose 1-{len(choices)}.")
+        print(f"Choose 1-{len(keys)}.")
 
 
 def current_approval(document: dict, name: str) -> str:
     """The approval mode `document` is in, as repository `name` sees it.
 
-    A repository not yet named under `[trusted_repos]` defaults to trusted when
-    others are, since that is the mode the configuration is in.
+    A repository not yet named under `[trusted_repos]` is manual, however many
+    others are trusted: trust is given one repository at a time.
     """
     if document.get("approvals", {}).get("auto_approve") is True:
         return AUTO
     trusted = document.get("trusted_repos", {})
-    if name in trusted:
-        return TRUSTED if trusted[name] is True else MANUAL
-    return TRUSTED if any(value is True for value in trusted.values()) else MANUAL
+    return TRUSTED if trusted.get(name) is True else MANUAL
 
 
 def set_approval(text: str, document: dict, name: str, approval: str) -> str:
