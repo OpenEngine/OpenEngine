@@ -268,10 +268,19 @@ class LaunchdBackend(Backend):
         launch_agent_path().unlink(missing_ok=True)
 
     def stop(self) -> None:
-        # bootout sends SIGTERM and waits up to ExitTimeOut before SIGKILL. The
-        # agent stays on disk, so it starts again at the next login.
+        # bootout returns before teardown finishes. Even after HTTP goes down,
+        # print can still find the old registration and kickstart can succeed
+        # without starting a replacement. Wait for removal before setup/start.
+        # The agent stays on disk, so it starts again at the next login.
         if self.running():
-            _run(["launchctl", "bootout", f"{self._domain()}/{LABEL}"])
+            result = _run(["launchctl", "bootout", f"{self._domain()}/{LABEL}"])
+            deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+            while self.running():
+                if result.returncode != 0:
+                    raise RuntimeError(f"launchctl bootout failed: {result.stderr.strip() or result.returncode}")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"launchd did not remove {LABEL} within {STOP_TIMEOUT_SECONDS:g} seconds")
+                time.sleep(0.2)
 
     def running(self) -> bool:
         return _run(["launchctl", "print", f"{self._domain()}/{LABEL}"]).returncode == 0
