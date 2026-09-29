@@ -1242,9 +1242,16 @@ def test_only_a_person_s_answer_holds_steering_until_the_turn_ends(
     steer = "Use the fast suite."
 
     async def seen(log: EventLog, run_id: RunId, found) -> list[RuntimeEvent]:
-        async with asyncio.timeout(PATIENCE):
-            while not any(found(event) for event in log.since(run_id)):
-                await asyncio.sleep(0.01)
+        try:
+            async with asyncio.timeout(PATIENCE):
+                while not any(found(event) for event in log.since(run_id)):
+                    await asyncio.sleep(0.01)
+        except TimeoutError:
+            raise AssertionError([
+                (event.kind.value, event.payload.get("role"), event.payload.get("text"),
+                 event.payload.get("autoApproved"))
+                for event in log.since(run_id)
+            ]) from None
         return list(log.since(run_id))
 
     async def scenario() -> tuple[list[RuntimeEvent], int]:
