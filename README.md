@@ -70,33 +70,19 @@ engine doctor --json
 engine status --server https://engine.example
 ```
 
-It defaults to `http://127.0.0.1:4364`; `engine config server URL` saves a
-server for the selected profile and `engine config profile NAME` switches
-profiles. This first CLI release is diagnostic-only: local service startup and
-interactive task workflows arrive in later stages. When the selected server is
-the default local address and no compatible service is responding, `engine
+It defaults to `http://127.0.0.1:4364`. When the selected server is the
+default local address and no compatible service is responding, `engine
 status` starts one `engine-web` process and waits for its health endpoint. An
 explicit `--server` is always probe-only. `engine daemon` runs the local
 service in the background instead; see
 [Background service](docs/releases.md#background-service).
+`engine connect gh|github|gitlab|slack` connects shared source control or Slack.
 
-In an interactive terminal, running `engine` opens the read-only workbench.
-Type `/` to search the palette, then choose `/status`, `/connections`, `/threads`,
-`/transcript`, `/web`, or `/quit`. The matching scriptable commands are `engine status`,
-`engine connections`, `engine threads`
-(`--all` or `--archived`), `engine task THREAD_ID`, and `engine transcript THREAD_ID`.
-Task creation, streaming,
-and decisions remain later stages.
-
-Start a terminal task with `engine run "describe the work"`; it creates a
-conversation using the service's default agent and runner, then renders its
-NDJSON progress. For a local service, the directory where you invoke the
-command is attached as the task repository. `--agent`, `--runner`, and
-`--repository` override those defaults; pass `--repository` when targeting a
-remote service. `engine resume
-THREAD_ID` reconnects to a current run.
-Ctrl-C detaches the terminal stream only: it never sends the service a cancel
-request.
+In an interactive terminal, running `engine` opens the workbench. Type `/` to
+search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,
+`/settings`, `/web`, or `/quit`. Typing a message starts a new work order and
+streams its progress; Ctrl-C detaches the terminal stream only and never sends
+the service a cancel request.
 
 While working on OpenEngine itself, run the development server instead:
 ```bash
