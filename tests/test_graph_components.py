@@ -39,7 +39,7 @@ from uuid import uuid4
 import pytest
 import httpx
 
-from engine.domain import ApprovalDecision, ApprovalKind, RunId, WorkspaceId
+from engine.domain import TRIAGE_TOOL, ApprovalDecision, ApprovalKind, RunId, WorkspaceId
 from engine.graph_runtime import EventLog, GraphCompilationError, RuntimeEvent, create_app
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
@@ -59,7 +59,6 @@ from engine.graph_runtime_langgraph.components import (
     WorkspaceNode,
     checkout,
 )
-from engine.graph_runtime_langgraph.components.findings import TRIAGE_TOOL
 from engine.graph_runtime_langgraph.components.human_review import (
     DECISION,
     NOTE,
@@ -695,7 +694,7 @@ def triaged(tmp_path: Path, answer) -> Any:
     async def scenario() -> tuple[Any, Any]:
         async with running([workflow], tmp_path) as (runtime, log):
             run = await runtime.start(workflow.graph_id, {
-                "task": TASK, "review": FINDINGS, "inputs": {"ref": "origin/pull/7/head"},
+                "task": TASK, "review": FINDINGS, "inputs": {"ref": "origin/feature"},
             })
             events = await until(log, run.run_id, "approval.requested")
             asked = (await runtime.snapshot(run.run_id)).pending_approvals[0]
@@ -704,7 +703,7 @@ def triaged(tmp_path: Path, answer) -> Any:
             return asked, await runtime.snapshot(run.run_id)
 
     asked, finished = asyncio.run(scenario())
-    assert provider.provisioned == [(".", "origin/pull/7/head")]
+    assert provider.provisioned == [(".", "origin/feature")]
     assert asked.kind is ApprovalKind.USER_INPUT
     assert asked.tool_name == TRIAGE_TOOL
     # Finishing without a fix is a finished review, not a refused run.

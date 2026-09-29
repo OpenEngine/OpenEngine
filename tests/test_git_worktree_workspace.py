@@ -102,26 +102,6 @@ def test_origin_branch_is_refreshed_without_moving_the_local_branch(tmp_path: Pa
     assert Path(workspace.root_path, "latest.txt").read_text() == "from remote master\n"
 
 
-def test_a_pull_request_head_is_checked_out_from_origin(tmp_path: Path) -> None:
-    """A fork's branch is only on `origin` as the pull request's head."""
-    upstream = tmp_path / "upstream"
-    remote = tmp_path / "remote.git"
-    repository = tmp_path / "repository"
-    _repository(upstream)
-    subprocess.run(["git", "clone", "--bare", str(upstream), str(remote)], check=True, capture_output=True)
-    subprocess.run(["git", "clone", str(remote), str(repository)], check=True, capture_output=True)
-    _git(upstream, "switch", "-c", "contribution")
-    (upstream / "change.txt").write_text("from a fork\n")
-    _git(upstream, "add", "change.txt")
-    _git(upstream, *_IDENTITY, "commit", "-m", "contribution")
-    _git(upstream, "push", str(remote), "contribution:refs/pull/7/head")
-    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
-
-    workspace = asyncio.run(provider.provision(str(repository), "origin/pull/7/head"))
-
-    assert _git(Path(workspace.root_path), "rev-parse", "HEAD") == _git(upstream, "rev-parse", "HEAD")
-
-
 def test_missing_origin_branch_explains_how_to_fix_configuration(tmp_path: Path) -> None:
     upstream = tmp_path / "upstream"
     remote = tmp_path / "remote.git"

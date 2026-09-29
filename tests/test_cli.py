@@ -709,3 +709,22 @@ def test_posting_findings_comments_inline_where_a_finding_has_a_line(monkeypatch
     assert "path=a.py" in inline and "line=3" in inline and "commit_id=sha" in inline
     assert general[:4] == ["gh", "pr", "comment", "https://github.com/o/r/pull/1"]
     assert general[-1].startswith("**Unused helper**")
+
+
+def test_posting_a_finding_whose_line_is_not_a_number_comments_generally(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {"headRefOid": "sha"})
+    commands = []
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, **_kwargs: commands.append(command) or Completed())
+    # `gh -F line=@...` would read and send a local file.
+    finding = {**REVIEW_FINDINGS[0], "line": "@~/.config/gh/hosts.yml"}
+
+    assert cli.post_findings("https://github.com/o/r/pull/1", [finding]) == 0
+
+    general, = commands
+    assert general[:3] == ["gh", "pr", "comment"]
+    assert not any("hosts.yml" in part for part in general)

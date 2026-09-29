@@ -18,7 +18,9 @@ from typing import Any
 
 from collections.abc import Mapping
 
-from engine.domain import ApprovalDecision, ApprovalKind, StepCompleted, WorkState, finding_comment
+from engine.domain import (
+    TRIAGE_TOOL, ApprovalDecision, ApprovalKind, StepCompleted, WorkState, finding_comment,
+)
 from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
 from engine.graph_runtime_langgraph.executions import current_execution
 
@@ -235,11 +237,6 @@ class RerankerNode(ACPNode):
         update = ACPNode._terminal_update(self, event)
         findings = parse_findings(update.get("findings"), require_lineage=True)
         return {self.output_key: [finding.to_dict() for finding in findings]}
-
-
-#: The tool name a triage question is raised under, so a client can tell the
-#: choice of findings to fix from a verdict or an agent's permission request.
-TRIAGE_TOOL = "findings_triage"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

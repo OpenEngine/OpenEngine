@@ -30,7 +30,10 @@ from urllib.request import Request, urlopen
 from platformdirs import user_config_path, user_data_path, user_state_path
 
 from engine.apps.cli import daemon, onboarding
-from engine.domain import MODE_INPUT, STATE_INPUT, ForgeMode, WorkState, finding_comment
+from engine.domain import (
+    MODE_INPUT, REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT, STATE_INPUT, TRIAGE_TOOL,
+    ForgeMode, WorkState, finding_comment,
+)
 from engine.runtime.change_requests import ChangeRequest, change_request, remote_project
 
 DEFAULT_SERVER = "http://127.0.0.1:4364"
@@ -991,13 +994,6 @@ def settings(server: str, preferences: Preferences) -> None:
         print(f"Opened {server}; choose Settings in the sidebar.")
 
 
-#: The tool name a review's triage question is raised under; see
-#: `engine.graph_runtime_langgraph.components.findings.TRIAGE_TOOL`.
-TRIAGE_TOOL = "findings_triage"
-#: The creation inputs naming the change a run started in review looks at.
-REVIEW_REF_INPUT = "ref"
-REVIEW_PR_INPUT = "pr_url"
-REVIEW_BRANCH_INPUT = "branch"
 REVIEW_POLL_SECONDS = 2.0
 
 
@@ -1197,12 +1193,14 @@ def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
             str(finding.get("tagline", "")), str(finding.get("description", "")),
             agent=str(finding.get("agent") or ""), facet=str(finding.get("facet") or ""),
         )
-        if head and finding.get("file") and finding.get("line"):
+        line = finding.get("line")
+        # Only a real line number: `gh -F` reads a value starting with `@` as a file.
+        if head and finding.get("file") and isinstance(line, int) and not isinstance(line, bool) and line > 0:
             inline = subprocess.run([
                 "gh", "api", "--hostname", request.host, "--method", "POST",
                 f"repos/{request.path}/pulls/{request.number}/comments",
                 "-f", f"body={body}", "-f", f"commit_id={head}", "-f", f"path={finding['file']}",
-                "-F", f"line={finding['line']}", "-f", "side=RIGHT",
+                "-F", f"line={line}", "-f", "side=RIGHT",
             ], capture_output=True, text=True)
             if inline.returncode == 0:
                 continue

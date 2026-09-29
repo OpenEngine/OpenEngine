@@ -64,7 +64,10 @@ from engine.graph_runtime_langgraph.components.forge import (
     THE_CHANGE,
     UPDATE_CHANGE,
 )
-from engine.domain import ForgeMode, StepCompleted, WorkState, forge_mode, start_state
+from engine.domain import (
+    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT,
+    ForgeMode, StepCompleted, WorkState, forge_mode, start_state,
+)
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
 )
@@ -97,10 +100,7 @@ TRIAGE = "triage"
 FIX = "fix"
 
 #: The creation inputs naming the change a run started in review looks at.
-REF_INPUT = "ref"
-PR_INPUT = "pr_url"
-#: The pull request's own branch, which the workspace's local branch is not.
-BRANCH_INPUT = "branch"
+REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
 #: Codex and Claude, reached through their ACP adapters.  `agent_registry` is
 #: what routes an agent's permission request back to the run that raised it.
