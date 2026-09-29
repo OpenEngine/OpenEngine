@@ -256,6 +256,31 @@ describe("Sidebar", () => {
     );
   });
 
+  it("shows a node group holding one conversation as that conversation", () => {
+    render(
+      <Sidebar
+        runs={[graphRun]}
+        graphNodes={{
+          [graphRun.workflowId]: [
+            { ...nodes[1], group: "Implementation" },
+            {
+              nodeId: "ci-check",
+              name: "CI check",
+              kind: "agent",
+              group: "Implementation",
+              showInSidebar: false,
+            },
+          ],
+        }}
+        initialSection="workflows"
+      />,
+    );
+
+    const rail = within(body("WorkOrders"));
+    expect(rail.queryByText("Implementation", { selector: "summary" })).not.toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "Implementation" })).toBeVisible();
+  });
+
   /** The checkout and the person's own verdict are stages, not conversations,
    *  and each says so about itself. */
   it("leaves out the nodes that say they do not belong in the rail", () => {
