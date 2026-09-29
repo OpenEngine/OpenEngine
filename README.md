@@ -10,11 +10,24 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ```
 ## Getting started
 
-Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
+On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
+logged in on this machine, run:
 
-OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. Make sure you are logged in to Codex or Claude on this machine. 
+```bash
+curl -LsSf https://openengine.sh/install.sh | sh
+```
+
+This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
+opens [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to
+reopen it and rerun the installer to upgrade.
+
+OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key.
 
 OpenCode is offered too: it speaks ACP itself, so OpenEngine launches the pinned `opencode-ai` package with `npx` and it uses your own `opencode.json` providers and `opencode auth login` credentials. Pick it as a chat's runner; it asks before every edit, shell command, and fetch.
+
+### From source
+
+Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
 First, clone the repo:
 ```bash
