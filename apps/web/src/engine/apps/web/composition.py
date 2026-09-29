@@ -20,6 +20,7 @@ The state store is SQLite rather than Postgres: conversations survive a process
 restart without requiring an external database service.
 """
 
+import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
@@ -47,6 +48,7 @@ from engine.adapters.communications.slack import (
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
+    GitHubOAuthTransport,
 )
 from engine.adapters.source_control.gitlab import GitLabSourceControl
 from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport
@@ -63,6 +65,14 @@ from engine.apps.web.gitlab_auth import (
 )
 from engine.apps.web.gitlab_auth import (
     refresh_access_token as refresh_gitlab_access_token,
+)
+from engine.apps.web.github_auth import (
+    GitHubAuthError,
+    GitHubCredentialStore,
+    GitHubRefreshTokenInvalidError,
+)
+from engine.apps.web.github_auth import (
+    refresh_access_token as refresh_github_access_token,
 )
 from engine.apps.web.github_webhook import GitHubWebhookConfig
 from engine.apps.web.source_control import (
@@ -170,12 +180,15 @@ def build_capabilities(
     settings: Settings,
     slack_credential_store: SlackCredentialStore | None = None,
     gitlab_credential_store: GitLabCredentialStore | None = None,
+    github_credential_store: GitHubCredentialStore | None = None,
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    # The host's `gh auth` login is the only credential for agent GitHub
-    # actions. Browser login identifies the UI user and never reaches here;
-    # neither do Settings device-flow tokens or GITHUB_TOKEN.
+    # GH CLI acts as the host's `gh auth` login. GitHub OAuth acts as the
+    # device-flow token `engine connect github` (or Settings) saved, from the
+    # store the web interface shares so the keychain is read once. Browser
+    # login identifies the UI user and never reaches here; neither does
+    # GITHUB_TOKEN.
     logging.getLogger(__name__).info(
         "source_control composition=web github_identity=gh-cli credential=gh auth"
     )
@@ -184,6 +197,44 @@ def build_capabilities(
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
         transport=GitHubCliTransport(),
+    )
+    github_store = github_credential_store or GitHubCredentialStore(cached=True)
+    github_refresh_lock = asyncio.Lock()
+
+    def _github_token() -> str:
+        credentials = github_store.get_credentials()
+        return credentials.access_token if credentials else ""
+
+    async def _refresh_github_after_unauthorized(failed_token: str) -> bool:
+        async with github_refresh_lock:
+            credentials = github_store.get_credentials()
+            if credentials is None or not credentials.refresh_token:
+                return False
+            if credentials.access_token != failed_token:
+                return True
+            client_id = settings.github_client_id or github_store.get_client_id()
+            if not client_id:
+                return False
+            try:
+                refreshed = await refresh_github_access_token(client_id, credentials.refresh_token)
+            except GitHubRefreshTokenInvalidError:
+                github_store.delete()
+                return False
+            except GitHubAuthError:
+                return False
+            try:
+                github_store.set_credentials(refreshed)
+            except GitHubAuthError:
+                return False
+            return True
+
+    github_oauth = GitHubSourceControl(
+        _github_token,
+        host_aliases=settings.engine_config.github.host_aliases,
+        workspace_provider=workspace_provider,
+        transport=GitHubOAuthTransport(
+            _github_token, on_token_unauthorized=_refresh_github_after_unauthorized
+        ),
     )
 
     def _gitlab_origin() -> str:
@@ -250,9 +301,8 @@ def build_capabilities(
     else:
         source_control = RoutingSourceControl(
             settings.source_control_preferences,
-            # Both GitHub choices use the gh CLI login for agent actions.
             github,
-            github,
+            github_oauth,
             gitlab,
         )
     Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)

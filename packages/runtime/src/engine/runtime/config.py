@@ -192,6 +192,12 @@ class EngineConfig:
     Written by `engine init`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
+    trusted_repos: frozenset[str] = frozenset()
+    """`[repos]` names whose WorkOrders are auto-approved.
+
+    Written by `engine init` when approvals are left to trusted repositories:
+    `approvals.auto_approve` covers every repository, this only the ones named.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +286,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "public_url",
             "repo_modes",
             "repos",
+            "trusted_repos",
             "server",
             "state",
             "work_orders",
@@ -437,11 +444,20 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                 f"repo_modes.{name} must be one of: {', '.join(REPO_MODES)}"
             )
         repo_modes[name] = mode
+    trusted_repos = set()
+    for name, trusted in _table(document.get("trusted_repos", {}), "trusted_repos").items():
+        if name not in repos:
+            raise EngineConfigError(f"trusted_repos.{name} names no repository under [repos]")
+        if not isinstance(trusted, bool):
+            raise EngineConfigError(f"trusted_repos.{name} must be a boolean")
+        if trusted:
+            trusted_repos.add(name)
 
     return EngineConfig(
         attribution=attribution,
         repos=repos,
         repo_modes=repo_modes,
+        trusted_repos=frozenset(trusted_repos),
         default_branch=default_branch,
         github_client_id=github_client_id,
         github_login_client_id=_optional_nonblank_string(

@@ -1084,6 +1084,7 @@ def create_app(
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     repos: Mapping[str, str] | None = None,
     repo_modes: Mapping[str, str] | None = None,
+    trusted_repos: Collection[str] = (),
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
     utilization: UtilizationService | None = None,
@@ -1118,19 +1119,31 @@ def create_app(
         if (repo_modes or {}).get(name) == ForgeMode.DISCONNECTED
     )
 
-    async def repository_mode(repository: str) -> ForgeMode | None:
-        """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any.
+    # And those `[trusted_repos]` names, whose WorkOrders are auto-approved.
+    trusted_repositories = frozenset(
+        Path(path).expanduser().resolve()
+        for name, path in (repos or {}).items()
+        if name in (trusted_repos or ())
+    )
+
+    async def in_repositories(repository: str, checkouts: frozenset[Path]) -> bool:
+        """Whether `repository` is in the same git repository as one of `checkouts`.
 
         Compared by the git repository the path belongs to rather than by the
-        literal path, so a subfolder or another worktree of a disconnected
-        checkout is disconnected too.
+        literal path, so a subfolder or another worktree of a checkout counts too.
         """
-        if not repository or not disconnected_repositories:
-            return None
+        if not repository or not checkouts:
+            return False
         identity = await _repository_identity(Path(repository).expanduser().resolve())
-        for path in disconnected_repositories:
+        for path in checkouts:
             if await _repository_identity(path) == identity:
-                return ForgeMode.DISCONNECTED
+                return True
+        return False
+
+    async def repository_mode(repository: str) -> ForgeMode | None:
+        """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any."""
+        if await in_repositories(repository, disconnected_repositories):
+            return ForgeMode.DISCONNECTED
         return None
 
     # Filled by the graph engine while a run is going, and read by the feed the
@@ -1890,7 +1903,7 @@ def create_app(
             if defer_notifications and origin is not None:
                 deferred_graph_notifications[snapshot.run_id] = origin
             seed_graph_progress(runtime, snapshot)
-            if approval_policy.auto_approve:
+            if approval_policy.auto_approve or await in_repositories(repository, trusted_repositories):
                 topology = runtime.topology(GraphId(str(graph.graph_id)))
                 if topology is not None:
                     for node in topology.nodes:

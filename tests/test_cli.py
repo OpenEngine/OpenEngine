@@ -417,6 +417,29 @@ def test_connect_slack_opens_the_authorization_url_and_waits_for_connection(monk
     assert "Connected." in capsys.readouterr().out
 
 
+def test_connect_github_explains_the_keychain_and_waits_a_minute_for_it(monkeypatch, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))
+    requests = []
+
+    def request(_server, path, _body, timeout=10.0):
+        requests.append((path, timeout))
+        if path == "/api/github/connect":
+            return {"verificationUri": "https://github.com/login/device", "userCode": "CODE", "interval": 0}
+        return {"status": "complete"}
+
+    monkeypatch.setattr(cli, "request_json", request)
+    monkeypatch.setattr(cli, "post_empty", lambda *_args: None)
+
+    assert cli.connect(
+        cli.argparse.Namespace(server=None, provider="github", origin="https://gitlab.com", open=False), cli.Preferences()
+    ) == 0
+
+    assert requests == [("/api/github/connect", 60.0), ("/api/github/connect/poll", 60.0)]
+    out = capsys.readouterr().out
+    assert "system keychain" in out and "login password" in out
+
+
 def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path, capsys):
     ready = cli.Check("service", True, "OpenEngine is ready")
     monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "cli.json"))
