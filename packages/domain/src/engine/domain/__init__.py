@@ -43,7 +43,7 @@ from engine.domain.ids import (
     WorkspaceId,
 )
 from engine.domain.state import RunOrigin, RunPhase, RunState
-from engine.domain.states import WorkState
+from engine.domain.states import STATE_INPUT, WorkState, start_state
 from engine.domain.scoping import (
     MilestoneScope,
     ScopingPlan,
@@ -114,5 +114,7 @@ __all__ = [
     "WorkOrderSpec",
     "WorkOrderStatus",
     "WorkState",
+    "STATE_INPUT",
+    "start_state",
     "WorkspaceId",
 ]

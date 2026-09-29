@@ -234,6 +234,12 @@ async def _resolve_base(repository_root: str, base_ref: str) -> str:
         source, missing = "HEAD", (
             "remote 'origin' has no default branch to base a workspace on"
         )
+    elif base_ref.startswith("origin/pull/"):
+        # A pull request's head, which a fork's branch is only reachable as.
+        change = base_ref.removeprefix("origin/")
+        source, missing = f"refs/{change}", (
+            f"remote 'origin' has no {change!r} to check out"
+        )
     elif base_ref.startswith("origin/"):
         branch = base_ref.removeprefix("origin/")
         source, missing = f"refs/heads/{branch}", (

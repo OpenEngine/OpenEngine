@@ -564,3 +564,116 @@ def test_default_local_service_starts_the_registered_daemon(monkeypatch):
     check, _identity, launched = cli.ensure_service(cli.DEFAULT_SERVER)
 
     assert check.ok and launched
+
+
+# --- engine review -------------------------------------------------------------
+
+REVIEW_CONFIG = {
+    "repositories": [{"name": "Owner/Repo", "path": "/code/repo"}],
+    "workflows": [{
+        "id": "implementation-review-rerank",
+        "inputs": [
+            {"name": "mode"}, {"name": "ref"}, {"name": "pr_url"},
+            {"name": "state", "choices": ["Planning", "Review"]},
+        ],
+    }],
+}
+REVIEW_FINDINGS = [
+    {"tagline": "The loop never ends", "description": "It skips the exit.", "file": "a.py", "line": 3, "facet": "bugs", "agent": "codex"},
+    {"tagline": "Unused helper", "description": "Nothing calls it.", "facet": "conciseness", "agent": "codex"},
+]
+TRIAGE = {"approvalId": "approval-1", "nodeId": "triage", "toolName": "findings_triage"}
+
+
+def test_review_of_a_fork_pull_request_checks_out_its_head_in_the_configured_repository(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {
+        "url": "https://github.com/owner/repo/pull/7", "title": "Fix it",
+        "headRefName": "patch-1", "isCrossRepository": True,
+    })
+
+    target = cli.review_target("https://github.com/owner/repo/pull/7", cli.DEFAULT_SERVER, REVIEW_CONFIG)
+
+    assert target == cli.ReviewTarget(
+        "/code/repo", "origin/pull/7/head", "https://github.com/owner/repo/pull/7",
+        "Review pull request https://github.com/owner/repo/pull/7: Fix it",
+    )
+
+
+def test_review_starts_the_workflow_in_the_review_state(monkeypatch):
+    posted = []
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: posted.append((path, body)) or {"runId": "run-1"})
+
+    run_id = cli.start_review(cli.DEFAULT_SERVER, REVIEW_CONFIG, cli.ReviewTarget("/code/repo", "abc123", "", "Review it"))
+
+    assert run_id == "run-1"
+    assert posted == [("/api/runs", {
+        "prompt": "Review it", "repository": "/code/repo", "workflowId": "implementation-review-rerank",
+        # No pull request: nothing to push to, so the run stays off the forge.
+        "inputs": {"state": "Review", "ref": "abc123", "pr_url": "", "mode": "disconnected"},
+    })]
+
+
+def test_review_json_waits_for_triage_and_prints_the_surviving_findings(monkeypatch, capsys):
+    ready = cli.Check("service", True, "ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, ready))
+    monkeypatch.setattr(cli, "review_target", lambda *_args: cli.ReviewTarget("/code/repo", "abc", "https://github.com/o/r/pull/1", "Review"))
+    monkeypatch.setattr(cli, "request_json", lambda *_args: {"runId": "run-1"})
+    monkeypatch.setattr(cli, "REVIEW_POLL_SECONDS", 0)
+    runs = iter([
+        {"status": "running", "pendingApprovals": []},
+        {"status": "awaiting_approval", "graphId": "g", "pendingApprovals": [TRIAGE], "values": {"review": REVIEW_FINDINGS}},
+    ])
+    monkeypatch.setattr(cli, "fetch_json", lambda _server, path: (
+        REVIEW_CONFIG if path == "/api/config"
+        else {"nodes": [{"nodeId": "triage", "findingsKey": "review"}]} if path == "/graph/api/graphs/g"
+        else next(runs)
+    ))
+
+    assert cli.main(["review", "https://github.com/o/r/pull/1", "--json"]) == cli.EXIT_OK
+
+    printed = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert printed == {"runId": "run-1", "prUrl": "https://github.com/o/r/pull/1", "findings": REVIEW_FINDINGS}
+
+
+def test_enter_selects_a_finding_and_fix_selected_sends_only_it(monkeypatch):
+    offered = []
+
+    def choose(options, _prompt, **kwargs):
+        offered.append(list(options))
+        return options[0] if len(offered) == 1 else next(option for option in options if option.startswith("Fix selected"))
+
+    sent = []
+    monkeypatch.setattr(cli, "palette", choose)
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append((path, body)) or {})
+
+    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
+
+    assert offered[0] == [
+        "○ Fix this · 1. The loop never ends", "○ Fix this · 2. Unused helper",
+        "Fix all", "Post as comments", "Finish",
+    ]
+    assert offered[1][0] == "✓ Fix this · 1. The loop never ends"
+    # The choice is steered first and the decision sent second.
+    assert sent == [
+        ("/graph/api/runs/run-1/steering", {"message": json.dumps([REVIEW_FINDINGS[0]]), "node": "triage"}),
+        ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "accept"}),
+    ]
+
+
+def test_posting_findings_comments_inline_where_a_finding_has_a_line(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {"headRefOid": "sha"})
+    commands = []
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, **_kwargs: commands.append(command) or Completed())
+
+    assert cli.post_findings("https://github.com/o/r/pull/1", REVIEW_FINDINGS) == 0
+
+    inline, general = commands
+    assert inline[:5] == ["gh", "api", "--method", "POST", "repos/o/r/pulls/1/comments"]
+    assert "path=a.py" in inline and "line=3" in inline and "commit_id=sha" in inline
+    assert general[:4] == ["gh", "pr", "comment", "https://github.com/o/r/pull/1"]
+    assert general[-1].startswith("**Unused helper**")

@@ -87,9 +87,19 @@ recommended), Git CLI (connected) or disconnected, or `--mode oauth|cli|disconne
 under `[repo_modes]`, and every WorkOrder on that repository then runs
 disconnected. The installer offers to run it on a repository when it finishes.
 
+`engine review [path | pull-request-url]` starts the WorkOrder workflow in its
+review state (`engine.domain.states`), skipping planning and implementation.
+A path (default: the current directory, local service only) reviews its
+committed branch; a GitHub pull request URL provisions a new workspace on the
+pull request's branch in the matching `[repos]` checkout. The surviving
+findings are listed with **Fix this** beside each: Enter selects a finding,
+**Fix selected** or **Fix all** sends them back to the implementer, and the fix
+is reviewed again. **Post as comments** posts the findings on the pull request
+with `gh`. `--json` prints the findings and leaves the review waiting.
+
 In an interactive terminal, running `engine` opens the workbench. Type `/` to
 search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,
-`/settings`, `/web`, or `/quit`. Typing a message starts a new work order and
+`/review`, `/settings`, `/web`, or `/quit`. Typing a message starts a new work order and
 streams its progress; Ctrl-C detaches the terminal stream only and never sends
 the service a cancel request.
 
