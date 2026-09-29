@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/OpenEngine/OpenEngine/compare/v0.6.0...v0.7.0) (2026-09-29)
+
+
+### Features
+
+* **cli:** ask for the approval mode in engine init and use the GitHub OAuth token for agents ([#606](https://github.com/OpenEngine/OpenEngine/issues/606)) ([b0c799f](https://github.com/OpenEngine/OpenEngine/commit/b0c799f0a31a7cd5c7e7918390ebf9cb6b25969a))
+
+
+### Documentation
+
+* **site:** rewrite MCP integration page around connecting a client ([#607](https://github.com/OpenEngine/OpenEngine/issues/607)) ([896aaf0](https://github.com/OpenEngine/OpenEngine/commit/896aaf0eac0eb74d0673e4fdc141c937bbb7a394))
+
 ## [0.6.0](https://github.com/OpenEngine/OpenEngine/compare/v0.5.0...v0.6.0) (2026-09-29)
 
 
