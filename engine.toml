@@ -22,6 +22,15 @@ repository = "OpenEngine/OpenEngine"
 # Explicitly include the host of OpenEngine/OpenEngine.
 host_aliases = { "github.com" = "github.com" }
 
+# GitHub user IDs that sign in without a repository check, so they can still
+# get in when the server's GitHub login stops answering. See docs/github-login.md.
+[access]
+operators = [
+  6279187,    # dethstrobe
+  237151230,  # SheaHawkins
+  33102427,   # vvasyuk
+]
+
 [communications]
 provider = "slack"
 # #openengine-bot, by id so the post skips the name lookup.

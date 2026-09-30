@@ -85,7 +85,10 @@ It asks how the repository's WorkOrders reach GitHub -- Git OAuth (connected,
 recommended), Git CLI (connected) or disconnected, or `--mode oauth|cli|disconnected`
 -- and prints the next step for a connected choice. Disconnected is recorded
 under `[repo_modes]`, and every WorkOrder on that repository then runs
-disconnected. The installer offers to run it on a repository when it finishes.
+disconnected. It then asks how WorkOrders' requests are approved -- auto-approve
+(every repository), trusted repos (only repositories under `[trusted_repos]`,
+this one included) or manual, or `--approval auto|trusted|manual`. The installer
+offers to run it on a repository when it finishes.
 
 `engine review [path | pull-request-url]` starts the WorkOrder workflow in its
 review state (`engine.domain.states`), skipping planning and implementation.

@@ -163,6 +163,7 @@ from engine.runtime import (
     load_engine_config,
     load_workflow_catalog,
 )
+import httpx
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -1084,6 +1085,7 @@ def create_app(
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     repos: Mapping[str, str] | None = None,
     repo_modes: Mapping[str, str] | None = None,
+    trusted_repos: Collection[str] = (),
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
     utilization: UtilizationService | None = None,
@@ -1118,19 +1120,31 @@ def create_app(
         if (repo_modes or {}).get(name) == ForgeMode.DISCONNECTED
     )
 
-    async def repository_mode(repository: str) -> ForgeMode | None:
-        """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any.
+    # And those `[trusted_repos]` names, whose WorkOrders are auto-approved.
+    trusted_repositories = frozenset(
+        Path(path).expanduser().resolve()
+        for name, path in (repos or {}).items()
+        if name in (trusted_repos or ())
+    )
+
+    async def in_repositories(repository: str, checkouts: frozenset[Path]) -> bool:
+        """Whether `repository` is in the same git repository as one of `checkouts`.
 
         Compared by the git repository the path belongs to rather than by the
-        literal path, so a subfolder or another worktree of a disconnected
-        checkout is disconnected too.
+        literal path, so a subfolder or another worktree of a checkout counts too.
         """
-        if not repository or not disconnected_repositories:
-            return None
+        if not repository or not checkouts:
+            return False
         identity = await _repository_identity(Path(repository).expanduser().resolve())
-        for path in disconnected_repositories:
+        for path in checkouts:
             if await _repository_identity(path) == identity:
-                return ForgeMode.DISCONNECTED
+                return True
+        return False
+
+    async def repository_mode(repository: str) -> ForgeMode | None:
+        """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any."""
+        if await in_repositories(repository, disconnected_repositories):
+            return ForgeMode.DISCONNECTED
         return None
 
     # Filled by the graph engine while a run is going, and read by the feed the
@@ -1890,7 +1904,7 @@ def create_app(
             if defer_notifications and origin is not None:
                 deferred_graph_notifications[snapshot.run_id] = origin
             seed_graph_progress(runtime, snapshot)
-            if approval_policy.auto_approve:
+            if approval_policy.auto_approve or await in_repositories(repository, trusted_repositories):
                 topology = runtime.topology(GraphId(str(graph.graph_id)))
                 if topology is not None:
                     for node in topology.nodes:
@@ -2573,6 +2587,10 @@ def create_app(
             {
                 "connected": connected,
                 "clientIdConfigured": bool(_effective_client_id(_request)),
+                # Agents act as the host's `engine connect github` connection.
+                # With sign-in on, the one made here is the user's own and is
+                # not it.
+                "agentsUseConnection": not github_login.configured,
             }
         )
 
@@ -3805,9 +3823,43 @@ def create_app(
             raise failure
         return False
 
+    async def github_user_can_write(token: str) -> bool:
+        """Whether GitHub says the account holding sign-in `token` can push to one of these repositories.
+
+        Asked with the user's own token, so it answers even when the server's
+        connection does not. The token has only `read:user` scope, so GitHub
+        answers for public github.com repositories; the rest read as unknown.
+        """
+        projects = [project for project in access_repositories if project.count("/") == 1]
+        if not projects:
+            return False
+
+        async def check(client: httpx.AsyncClient, project: str) -> bool:
+            response = await client.get(
+                f"https://api.github.com/repos/{project}",
+                headers={"Accept": "application/vnd.github+json",
+                         "Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            permissions = response.json().get("permissions")
+            return isinstance(permissions, dict) and any(
+                permissions.get(role) is True for role in ("admin", "maintain", "push")
+            )
+
+        async with (
+            asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS),
+            httpx.AsyncClient(timeout=GITHUB_LOGIN_TIMEOUT_SECONDS) as client,
+        ):
+            answers = await asyncio.gather(
+                *(check(client, project) for project in projects), return_exceptions=True
+            )
+        return any(answer is True for answer in answers)
+
     github_login = GitHubLogin(
         github_login_config, service_token, github_login_allowed,
         operators=frozenset(login_operators),
+        authorize_user=github_user_can_write,
+        access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
     )
     routes = [
         Route("/api/health", health),

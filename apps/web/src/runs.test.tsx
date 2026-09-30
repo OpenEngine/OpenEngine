@@ -253,7 +253,7 @@ describe("NewWorkflowPage", () => {
       }],
     };
     render(<NewWorkflowPage config={configured} />);
-    expect(screen.getByRole("img", { name: /push.*pull request.*comments/i })).toHaveAttribute("title");
+    expect(screen.getByRole("img", { name: /push.*pull request.*comments/i })).toHaveAttribute("data-tip");
     const mode = screen.getByRole("combobox", { name: /^Mode/ });
     expect(mode).toHaveValue("connected");
     expect(mode).toBeEnabled();

@@ -351,13 +351,13 @@ def fetch_json(server: str, path: str) -> dict[str, Any]:
     return payload
 
 
-def request_json(server: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+def request_json(server: str, path: str, body: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
     request = Request(
         f"{server}{path}", data=json.dumps(body).encode(), method="POST",
         headers=request_headers({"Accept": "application/json", "Content-Type": "application/json"}),
     )
     try:
-        with urlopen(request, timeout=10.0) as response:
+        with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read())
     except HTTPError as error:
         try:
@@ -936,6 +936,17 @@ def decide(arguments: argparse.Namespace, preferences: Preferences, decision: st
         return EXIT_UNHEALTHY
 
 
+#: How long a connect request may take. The service reads its client ID from,
+#: and saves the token to, the OS keychain, which can stop to ask for the
+#: login password.
+KEYCHAIN_TIMEOUT = 60.0
+KEYCHAIN_EXPLAINED = (
+    "OpenEngine keeps the access token in your system keychain, so it is stored "
+    "encrypted rather than in a file and WorkOrders can push and open pull requests "
+    "without asking you again. Your system may ask for your login password to allow it."
+)
+
+
 def connect(arguments: argparse.Namespace, preferences: Preferences) -> int:
     try:
         server, check = read_service(arguments, preferences)
@@ -961,14 +972,15 @@ def connect(arguments: argparse.Namespace, preferences: Preferences) -> int:
             raise RuntimeError("Slack authorization timed out")
         path = "/api/github/connect" if provider == "github" else "/api/gitlab/connect"
         body = {} if provider == "github" else {"origin": arguments.origin}
-        flow = request_json(server, path, body)
+        print(KEYCHAIN_EXPLAINED)
+        flow = request_json(server, path, body, timeout=KEYCHAIN_TIMEOUT)
         print(f"Open {flow['verificationUri']} and enter code: {flow['userCode']}")
         if arguments.open:
             webbrowser.open(str(flow["verificationUri"]))
         poll_path = "/api/github/connect/poll" if provider == "github" else "/api/gitlab/connect/poll"
         while True:
             time.sleep(float(flow.get("interval", 5)))
-            result = request_json(server, poll_path, body)
+            result = request_json(server, poll_path, body, timeout=KEYCHAIN_TIMEOUT)
             if result.get("status") == "complete":
                 post_empty(server, "/api/source-control/provider", {"provider": "github-oauth" if provider == "github" else "gitlab-oauth", **({"origin": arguments.origin} if provider == "gitlab" else {})})
                 print("Connected.")

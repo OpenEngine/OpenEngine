@@ -296,9 +296,9 @@ class TestRefreshAccessToken:
         }
 
 
-@pytest.mark.parametrize("provider", [None, "github-oauth", "gh-cli"])
+@pytest.mark.parametrize("provider", [None, "gh-cli"])
 def test_agent_pr_uses_only_the_gh_cli_login(tmp_path, monkeypatch, caplog, provider):
-    """Agents act as `gh auth`, never as a UI connection or GITHUB_TOKEN."""
+    """Under GH CLI, agents act as `gh auth`, never as a UI connection or GITHUB_TOKEN."""
     from engine.apps.web.composition import Settings, build_capabilities
     from engine.apps.web.source_control import SourceControlPreferences
 
@@ -375,6 +375,85 @@ def test_agent_pr_uses_only_the_gh_cli_login(tmp_path, monkeypatch, caplog, prov
     assert "author=openengine-worker" in caplog.text
     assert "engine-token" not in caplog.text
     assert "personal-token" not in caplog.text
+
+
+def test_agent_pr_under_github_oauth_uses_the_connected_token_read_once(tmp_path, monkeypatch):
+    """The token `engine connect github` saved opens the PR, with no second keychain read."""
+    from engine.apps.web.composition import Settings, build_capabilities
+    from engine.apps.web.source_control import SourceControlPreferences
+
+    saved = {}
+    reads = []
+
+    def get_password(service, username):
+        reads.append(username)
+        return saved.get((service, username))
+
+    monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
+    monkeypatch.setattr(keyring, "get_password", get_password)
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
+    monkeypatch.setenv("GITHUB_TOKEN", "engine-token")
+    preferences = SourceControlPreferences(tmp_path / "preferences.json")
+    preferences.set("github-oauth")
+    store = GitHubCredentialStore(cached=True)
+    capabilities = build_capabilities(
+        Settings(
+            github_token="engine-token",
+            sqlite_path=str(tmp_path / "state.sqlite3"),
+            source_control_preferences=preferences,
+        ),
+        github_credential_store=store,
+    )
+    source = capabilities.source_control
+    adapter = source._providers["github-oauth"]
+    monkeypatch.setattr(adapter, "_root_path", AsyncMock(return_value=str(tmp_path)))
+    monkeypatch.setattr(adapter, "_repo_coords", AsyncMock(return_value=("acme", "api")))
+
+    from starlette.testclient import TestClient
+    app = _make_github_app(tmp_path, credential_store=store)
+    with TestClient(app) as client, patch(
+        "engine.apps.web.api.start_device_flow",
+        AsyncMock(return_value=DeviceFlowState("device", "code", "https://github.com/login/device", 900, 5)),
+    ), patch(
+        "engine.apps.web.api.poll_device_flow",
+        AsyncMock(return_value=DeviceFlowComplete("personal-token", "personal-refresh")),
+    ):
+        assert client.post("/api/github/connect").status_code == 200
+        assert client.post("/api/github/connect/poll").json() == {"status": "complete"}
+        assert client.get("/api/github/status").json()["connected"] is True
+    reads.clear()
+
+    recorded = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def request(self, method, url, headers=None, **_kwargs):
+            recorded.append((method, url, dict(headers or {})))
+            return httpx.Response(
+                201, json={"html_url": "https://github.com/acme/api/pull/7", "user": {"login": "me"}},
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient",
+        lambda **_: Client(),
+    )
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.asyncio.create_subprocess_exec",
+        AsyncMock(side_effect=AssertionError("GitHub OAuth must not shell out to gh")),
+    )
+
+    url = asyncio.run(source.request_review("workspace", "agent/fix", "main", "fix: bug", "body"))
+
+    assert url == "https://github.com/acme/api/pull/7"
+    assert recorded[0][:2] == ("POST", "https://api.github.com/repos/acme/api/pulls")
+    assert recorded[0][2]["Authorization"] == "Bearer personal-token"
+    assert "github-token" not in reads
 
 
 def test_oauth_lifecycle_log_never_contains_token_material(caplog) -> None:
@@ -498,7 +577,7 @@ def test_credential_store_ignores_boolean_expiry_values(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _make_github_app(tmp_path, client_id: str = "test-client-id", login_config=None):
+def _make_github_app(tmp_path, client_id: str = "test-client-id", login_config=None, credential_store=None):
     """Minimal app wired with stub capabilities (only GitHub auth endpoints under test)."""
     from engine.adapters.state_store.sqlite import SQLiteStateStore
     from engine.apps.web.api import create_app
@@ -518,7 +597,7 @@ def _make_github_app(tmp_path, client_id: str = "test-client-id", login_config=N
     )
     _runner_stub = {"default": _stub}
     session = AgentSession(caps, profiles={}, runners=_runner_stub)
-    credential_store = GitHubCredentialStore()
+    credential_store = credential_store or GitHubCredentialStore()
     app = create_app(
         session,
         _runner_stub,
@@ -770,7 +849,9 @@ def test_browser_users_have_isolated_credentials_and_device_flows(tmp_path, monk
             client.cookies.set("engine_session", login._make_session_cookie(user_id, name))
 
         as_user(1, "alice")
-        assert client.get("/api/github/status").json() == {"connected": False, "clientIdConfigured": False}
+        assert client.get("/api/github/status").json() == {
+            "connected": False, "clientIdConfigured": False, "agentsUseConnection": False
+        }
         assert client.post("/api/github/client-id", json={"clientId": "alice-client"}).status_code == 204
         assert client.post("/api/github/connect").json()["userCode"] == "alice-code"
         as_user(2, "bob")

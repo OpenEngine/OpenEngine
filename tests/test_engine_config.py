@@ -199,6 +199,11 @@ def test_selection_is_explicit_then_environment_then_working_directory(
             {"repos": {"api": "/api"}, "repo_modes": {"api": "offline"}},
             "repo_modes.api must be one of: connected, disconnected",
         ),
+        ({"trusted_repos": {"api": True}}, "trusted_repos.api names no repository"),
+        (
+            {"repos": {"api": "/api"}, "trusted_repos": {"api": "yes"}},
+            "trusted_repos.api must be a boolean",
+        ),
         ({"show_projects": False}, "unknown key in configuration: show_projects"),
         ({"approvals": {"automatic": True}}, "unknown key in approvals: automatic"),
         ({"approvals": {"auto_approve": "yes"}}, "must be a boolean"),
@@ -696,3 +701,11 @@ def test_repo_modes_name_the_mode_of_onboarded_repositories() -> None:
     )
 
     assert config.repo_modes == {"api": "disconnected"}
+
+
+def test_trusted_repos_name_the_repositories_whose_work_orders_are_auto_approved() -> None:
+    config = parse_engine_config(
+        {"repos": {"api": "/api", "web": "/web"}, "trusted_repos": {"api": True, "web": False}}
+    )
+
+    assert config.trusted_repos == frozenset({"api"})

@@ -44,12 +44,32 @@ whether the signed-in account has write access (write, maintain, or admin) to
 any of this deployment's repositories: the `[github] repository` named in
 `engine.toml`, and the GitHub repository behind each `[repos]` checkout (read
 from its `origin` remote). Team and organization grants count. The check uses
-the server's own `gh` login, not the user's token, and binds GitHub's answer to
-the signed-in account's numeric user ID, so a renamed login cannot inherit
-another account's access. An account without write access is sent to
-`/login?error=forbidden` and receives no session. When no repository admits the
-account and a lookup failed or took longer than 10 seconds, login is refused
-with `/login?error=unverified`.
+the server's own GitHub connection, the one selected under **GitHub** in
+Settings: the host's `gh` login for **GH CLI**, or the token saved by
+`engine connect github` for **GitHub OAuth**. It binds GitHub's answer to the
+signed-in account's numeric user ID, so a renamed login cannot inherit another
+account's access. An account without write access is sent to
+`/login?error=forbidden` and receives no session.
+
+The server's connection can fail: an expired OAuth token or `gh` login, or
+GitHub not answering. So that this does not lock out everyone who could fix it,
+the server then asks GitHub with the user's own sign-in token, within what is
+left of the same 10-second budget. That lookup runs only when the server's
+lookup fails, and its answer is used only to let the user in. It cannot overturn the
+server's no. The sign-in token has only `read:user` scope, so it can confirm
+write access to public github.com repositories only. For a private repository
+it gets no answer, and a lookup that gets no answer admits nobody. The token
+was issued for the verified user ID, so the answer stays bound to that ID. The
+server keeps it in memory, never on disk, for rechecks. Each browser session
+keeps its own token, so signing out in one browser leaves the others theirs.
+The user's tokens are asked one at a time, newest first, and any one that
+confirms write access lets the user in, so one browser's revoked token does not
+lock out the others.
+The server drops a session's token when that session signs out or its cookie
+expires, and drops all of a user's tokens when GitHub says the user no longer
+has access. When neither lookup confirms access, login is
+refused with `/login?error=unverified`, and the login page says the server's
+GitHub connection probably needs reconnecting.
 
 Signed-in requests recheck access. `/api/auth/github/status` and protected API
 requests reuse GitHub's answer for up to five minutes per user, then ask
@@ -72,9 +92,28 @@ operators = [583231]
 Use numeric IDs, not logins, because a login can be renamed and then claimed
 by someone else. Find an account's ID with `gh api users/<login> --jq .id`.
 Operators can let in a new person before that person has write access
-anywhere. Operators can also sign in when the server's `gh` login has expired.
-While access checks are failing, operators see a warning beside the Sign out
-button. Run `gh auth status` on the server to diagnose the failure.
+anywhere. Operators can also sign in when the server's GitHub connection has
+failed and the repositories are private.
+
+### When the server's GitHub connection fails
+
+While the server's lookups are failing, everyone signed in sees a warning
+beside the Sign out button. The failing GitHub error is written to the server
+log under `could not check repository access for <login>`. To recover:
+
+- From the web UI, anyone signed in can switch **GitHub** in Settings to a
+  login that works. For example, choose **GH CLI** when the host's `gh` login
+  is valid.
+- On the server, run `engine connect github` to reconnect **GitHub OAuth**, or
+  `gh auth login` to fix **GH CLI**. Run `gh auth status` to diagnose.
+
+While browser login is on, the web UI cannot replace the server's GitHub OAuth
+token. A token connected in Settings belongs to the signed-in user (see
+[Agent GitHub identity](#agent-github-identity)), because the server's token is
+the account every agent acts as. Letting a web session replace it would let
+anyone who gets past the access check change who the agents act as, including
+someone admitted only by their own token's answer. Replacing it takes shell
+access on the server.
 
 Configuring GitHub login with no `[github] repository`, no GitHub checkout in
 `[repos]`, and no operators is a configuration error, and the server does not
@@ -109,16 +148,19 @@ reports `loginRequired: false`; starting the OAuth flow returns 503.
 
 ## Agent GitHub identity
 
-Agent GitHub API actions in the web composition use only the host's `gh auth`
-login: the account shown by `gh auth status` for the OS user that runs the web
-process. That account is the PR/comment author. Both GitHub choices in Settings
-(**GH CLI** and **GitHub OAuth**) route agent actions through `gh`; GitLab
-routing is unchanged. Neither the browser login, a Settings device-flow token,
-nor `GITHUB_TOKEN` is used for agent actions. OpenEngine removes
-`GITHUB_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` from the environment it passes to
-`gh`, so an engine setting cannot override the CLI login. `GH_TOKEN` remains
-`gh`'s own setting and is honored. The worker composition still uses its
-configured `GITHUB_TOKEN`.
+Agent GitHub API actions in the web composition follow the GitHub choice in
+Settings. **GH CLI** uses the host's `gh auth` login: the account shown by
+`gh auth status` for the OS user that runs the web process. **GitHub OAuth**
+uses the host's device-flow token saved by `engine connect github` (or by
+Settings while browser login is off), and that account is the PR/comment
+author for every user's WorkOrders. The web process reads that token from
+the OS keychain once and keeps it in memory, so connecting is the only
+keychain prompt until the service restarts. GitLab routing is unchanged.
+Neither the browser login nor `GITHUB_TOKEN` is used for agent actions.
+OpenEngine removes `GITHUB_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` from the
+environment it passes to `gh`, so an engine setting cannot override the CLI
+login. `GH_TOKEN` remains `gh`'s own setting and is honored. The worker
+composition still uses its configured `GITHUB_TOKEN`.
 
 Git commits still use Git's author/committer configuration and configured
 agent attribution; pushes still use the host's Git credential helper or SSH
@@ -131,8 +173,9 @@ the verified session's stable GitHub user ID (for example,
 `github-token:user:123`). Pending device flows are also scoped to that ID.
 Logging out or renaming an account does not transfer its connection to another
 user. Authenticated users never inherit the legacy `github-token` entry: they
-must reconnect. Local mode without browser login retains the legacy entry.
-These UI connection credentials do not authorize agent GitHub API actions.
+must reconnect. Local mode without browser login retains the legacy entry,
+and that entry is the one **GitHub OAuth** agent actions use, so a signed-in
+user's own connection never changes the agents' account; Settings says so.
 
 The web `--check` wiring report shows whether `gh` is authenticated and as
 which account. Successful PR creation logs the returned URL, GitHub's actual

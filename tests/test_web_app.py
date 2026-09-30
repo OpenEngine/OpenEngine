@@ -545,6 +545,7 @@ def _workflow_app(
     github_login_config: GitHubLoginConfig | None = None,
     repos: dict[str, str] | None = None,
     repo_modes: dict[str, str] | None = None,
+    trusted_repos: frozenset[str] = frozenset(),
 ):
     """Wire the app the way the composition root does."""
     unused = object()
@@ -577,6 +578,7 @@ def _workflow_app(
         github_login_config=github_login_config,
         repos=repos,
         repo_modes=repo_modes,
+        trusted_repos=trusted_repos,
     )
 
 
@@ -2972,6 +2974,35 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
     asyncio.run(scenario())
 
 
+def test_a_trusted_repository_auto_approves_its_workorders_only(tmp_path):
+    graph = ScriptedGraph(
+        GraphId("trust"), "Trust", (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+    )
+    trusted, other = tmp_path / "trusted", tmp_path / "other"
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        repos={"acme/trusted": str(trusted), "acme/other": str(other)},
+        trusted_repos=frozenset({"acme/trusted"}),
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                approved = {}
+                for path in (trusted, other):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "trust", "repository": str(path), "prompt": "Task",
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    approved[path.name] = snapshot.auto_approve_nodes
+                assert approved == {"trusted": (NodeId("work"),), "other": ()}
+
+    asyncio.run(scenario())
+
+
 def test_a_disconnected_repository_is_matched_through_subfolders_and_worktrees(tmp_path):
     import subprocess
 
@@ -3574,8 +3605,8 @@ def test_production_port_default_preserves_explicit_settings():
     assert Settings(port=8123).port == 8123
 
 
-def _login_gate(repository: str, source_control: object, login_repositories=()):
-    """The check the app hands its GitHub login, over `source_control`."""
+def _login_gate(repository: str, source_control: object, login_repositories=(), check="authorize"):
+    """The `check` the app hands its GitHub login, over `source_control`."""
     unused = object()
     session = AgentSession(
         Capabilities(
@@ -3599,7 +3630,7 @@ def _login_gate(repository: str, source_control: object, login_repositories=()):
         route.endpoint for route in app.app.routes
         if getattr(route, "path", "") == "/api/auth/github/callback"
     )
-    return callback.__self__.authorize
+    return getattr(callback.__self__, check)
 
 
 def test_signing_in_requires_write_access_to_the_configured_repository() -> None:
@@ -3658,6 +3689,47 @@ def test_access_is_unknown_when_no_repository_admits_and_one_lookup_failed() -> 
 
     with pytest.raises(RuntimeError, match="GitHub is down"):
         asyncio.run(authorize(1, "maintainer"))
+
+
+def test_the_users_own_token_is_asked_about_public_github_repositories(monkeypatch) -> None:
+    """The stand-in for a failed server lookup asks GitHub with the signed-in
+    user's token, reads only a write role as a yes, and skips other forges."""
+    asked = []
+
+    def github(request):
+        asked.append((request.url.path, request.headers["authorization"]))
+        if request.url.path == "/repos/acme/api":
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json={"permissions": {"admin": False, "push": True}})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.apps.web.api.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(github), **kwargs),
+    )
+    authorize_user = _login_gate(
+        "acme/api", MagicMock(), ("acme/web", "gitlab.example/acme/ops"), "authorize_user"
+    )
+
+    assert asyncio.run(authorize_user("user-token")) is True
+    assert sorted(asked) == [
+        ("/repos/acme/api", "Bearer user-token"),
+        ("/repos/acme/web", "Bearer user-token"),
+    ]
+
+
+def test_the_users_own_token_without_a_write_role_is_no_yes(monkeypatch) -> None:
+    def github(request):
+        return httpx.Response(200, json={"permissions": {"pull": True, "push": False}})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.apps.web.api.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(github), **kwargs),
+    )
+    authorize_user = _login_gate("acme/api", MagicMock(), check="authorize_user")
+
+    assert asyncio.run(authorize_user("user-token")) is False
 
 
 def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:

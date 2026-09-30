@@ -457,7 +457,12 @@ export function logout(): Promise<void> {
   return api<void>("/api/auth/github/logout", { method: "POST" });
 }
 
-export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
+export type GitHubStatus = {
+  connected: boolean;
+  clientIdConfigured: boolean;
+  /** False when sign-in is on: agents then use the server's own connection. */
+  agentsUseConnection?: boolean;
+};
 
 export type SourceControlStatus = {
   provider: "gh-cli" | "github-oauth" | "gitlab-oauth";
