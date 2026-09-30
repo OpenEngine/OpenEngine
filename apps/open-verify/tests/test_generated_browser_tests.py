@@ -26,9 +26,11 @@ def test_spec(url, *, expected="Hello Ada"):
         case_id="greet",
         url=url,
         steps=[
+            {"kind": "screenshot", "name": "initial"},
             {"kind": "fill", "locator": {"by": "label", "name": "Name"}, "value": "Ada"},
             {"kind": "click", "locator": {"by": "role", "role": "button", "name": "Greet"}},
             {"kind": "expect_text", "text": expected},
+            {"kind": "screenshot", "name": "greeting"},
         ],
     )
 
@@ -94,6 +96,10 @@ def test_change_runs_exact_generated_test_and_retains_focused_evidence(
     assert manifest["status"] == status
     assert manifest["tests"][0]["status"] == status
     assert {item["type"] for item in manifest["artifacts"]} >= {"test", "screenshot"}
+    checkpoint_images = list(artifacts.path.rglob("checkpoint-*.png"))
+    assert len(checkpoint_images) == (2 if status == "passed" else 1)
+    for screenshot in checkpoint_images:
+        assert screenshot.read_bytes().startswith(b"\x89PNG")
     recordings = list(artifacts.path.rglob("*.webm"))
     assert recordings and all(path.stat().st_size > 0 for path in recordings)
     for item in manifest["artifacts"]:

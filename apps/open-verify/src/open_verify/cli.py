@@ -178,6 +178,7 @@ async def run(args):
         progress=terminal.write,
         progress_status=terminal.status,
         ask_user=ask_user,
+        interactive_login=sys.stdin.isatty(),
         change=change,
         test_runner=(
             PlaywrightRunner(

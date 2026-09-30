@@ -196,3 +196,25 @@ def test_binary_only_change_cannot_produce_a_skipped_manifest(tmp_path):
     manifest = json.loads((artifacts.path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "blocked"
     assert manifest["change"]["truncated"]
+
+
+def test_discovery_preserves_changed_paths_and_marks_patch_preview(tmp_path):
+    class CaptureAgent:
+        prompt = None
+        async def decide(self, prompt):
+            self.prompt = prompt
+            return Decision.model_validate({'kind': 'finish', 'note': 'Captured context'})
+    artifacts = Artifacts(tmp_path / 'runs')
+    agent = CaptureAgent()
+    files = [f'file-{i}.py' for i in range(90)] + ['login.py']
+    verification = Verification(
+        agent, LocalTools(tmp_path, artifacts), artifacts,
+        change=Change(base='base', head='head', files=files, diff='x' * 50000),
+        progress=lambda _: None,
+    )
+    asyncio.run(verification.run('Check login and validation errors'))
+    context = json.loads(agent.prompt.split('\n')[-1])
+    assert context['change']['files'] == files
+    assert context['change']['truncated'] is True
+    assert len(context['change']['diff']) == 40000
+    assert 'incomplete diff attribution alone does not' in agent.prompt

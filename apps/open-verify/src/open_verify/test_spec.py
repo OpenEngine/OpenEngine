@@ -48,12 +48,18 @@ class ExpectURL(Contract):
     url: str = Field(min_length=1)
 
 
-Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL, Field(discriminator="kind")]
+class Screenshot(Contract):
+    kind: Literal["screenshot"]
+    name: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+
+
+Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL | Screenshot, Field(discriminator="kind")]
 
 
 class BrowserTest(Contract):
     case_id: str = Field(min_length=1, max_length=160)
     url: str = Field(min_length=1)
+    authenticated: bool = False
     steps: list[Step] = Field(min_length=1, max_length=40)
     timeout: float = Field(default=60, gt=0, le=120)
 

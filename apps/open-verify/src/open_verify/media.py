@@ -13,7 +13,12 @@ async def encode_video(source: Path, destination: Path) -> str | None:
     """Return an omission reason on failure; never return a partial/oversized clip."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        return "Video omitted: ffmpeg is not installed or is not on PATH."
+        try:
+            from imageio_ffmpeg import get_ffmpeg_exe
+
+            ffmpeg = get_ffmpeg_exe()
+        except (ImportError, RuntimeError):
+            return "Video omitted: install open-verify[browser] or provide ffmpeg on PATH."
     # A journey is limited to 120 seconds. Cap the encoder's rate conservatively
     # for that full duration, then check real bytes rather than trusting bitrate.
     bitrate = int(TARGET_VIDEO_BYTES * 8 / 125)

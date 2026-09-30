@@ -25,9 +25,37 @@ Implementation references: [Playwright video lifecycle](https://playwright.dev/p
 
 ## Implementation status
 
-The first milestone is implemented: change inputs, impact/skip assessment, generated
-and executed Playwright journeys, focused screenshots, bounded MP4 export, and the
-versioned OE manifest. Generated tests can be replayed without an agent. MP4 export
-requires ffmpeg with libx264; unavailable or oversized video is omitted with a reason.
+## Reliability and evidence acceptance milestone
+
+1. Preserve the existing typed Playwright compiler and OE manifest. Recover one
+   native-tool protocol violation using a fresh agent session and the recorded
+   task context; keep the retry bounded and retain the final blocker.
+2. Add explicit screenshot checkpoints to generated journeys so a bundle can
+   show both the initial UI and the changed state. Print generated artifact paths
+   and omissions as each journey completes.
+3. Run a real local browser acceptance test, including standalone replay. Require
+   an executed test, checkpoint screenshots, a valid MP4 below 10,000,000 bytes,
+   and an internally consistent manifest. Verify failure and skip outcomes too.
+4. Record validation results and limitations here. A scripted planning fixture
+   validates the execution pipeline; it does not prove live model reliability.
+
+Implemented: change inputs, impact/skip assessment, generated and executed
+Playwright journeys, named checkpoint screenshots, bounded MP4 export, and the
+versioned OE manifest. Generated tests can be replayed without an agent. The browser
+extra bundles an encoder; unavailable or oversized video is omitted with a reason.
 See README.md for the CLI and artifact contract. Maestro, Docker, before/after
 environments, and generated backend suites remain follow-up work.
+
+Validation (2026-09-30): 36 focused checks pass, including real Chromium execution,
+standalone replay, passing and failing journeys, cancellation, skipped changes,
+manifest path validation, and strict video size checks. The passing local fixture
+produced an executable test, initial/result screenshots, and a 5,251-byte MP4 using
+the bundled encoder. The failing fixture retained an 8,343-byte MP4 and screenshots.
+These fixtures use scripted planning decisions; live-agent acceptance is tracked
+separately and must not be inferred from their success.
+
+Live-agent acceptance also passed on 2026-09-30: Codex inspected a disposable local
+greeting page, assessed material UI impact, generated and ran a Playwright journey,
+and returned a passed finding with checkpoint screenshots and bounded MP4 evidence.
+The manifest paths and recorded sizes were checked against the actual files. This
+does not establish reliability for every agent run or real OAuth interoperability.

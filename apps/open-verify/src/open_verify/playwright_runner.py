@@ -69,6 +69,8 @@ async def execute_journey(
             if errors:
                 status, detail = "blocked", detail + " Cleanup failed: " + "; ".join(errors)
                 omissions.append("Video omitted because browser cleanup did not complete.")
+    if capture_media:
+        screenshots[:0] = sorted(tools.artifacts.path.rglob("checkpoint-*.png"))
     if capture_media and video is not None and not errors and has_app_page:
         pending = "Video omitted: encoding has not completed."
         omissions.append(pending)
@@ -103,6 +105,7 @@ class PlaywrightRunner:
         self.allow_origins = tuple(allow_origins)
         self.headless = headless
         self.attempt = 0
+        self.authentication = None
 
     async def run(
         self,
@@ -133,7 +136,7 @@ class PlaywrightRunner:
             "URL; explicit URL assertions still check their recorded values. The test_change(page) "
             "function uses ordinary Playwright and can also be adopted into an async test suite. "
             "The standalone entry point keeps Open Verify's origin guards. "
-            "ffmpeg on PATH enables MP4 export; missing encoding support is reported.\n",
+            "The browser extra includes an MP4 encoder; ffmpeg on PATH takes precedence.\n",
             encoding="utf-8",
         )
         execution = Artifacts(self.artifacts.path / "executions" / identity)
@@ -143,12 +146,19 @@ class PlaywrightRunner:
             allow_origins=self.allow_origins,
             headless=self.headless,
             record_video=capture_media,
+            storage_state=(self.authentication.state if test.authenticated and self.authentication else None),
+            trace_browser=not test.authenticated,
         )
 
         # Execute the exact bytes saved for review/replay, produced only by the
         # typed compiler (never accept arbitrary Python from the agent).
         async def journey(page):
             tools.check_url(test.url)
+            if test.authenticated and (
+                self.authentication is None
+                or not await self.authentication.verify(page.context, test.url)
+            ):
+                raise ValueError("Authentication is missing or expired; run assisted_login and retry this case")
             namespace = {"__name__": "generated_journey"}
             exec(compile(source, str(path), "exec"), namespace)
             await namespace["test_change"](page)
@@ -186,13 +196,16 @@ class PlaywrightRunner:
         return result
 
 
-def replay_main(journey, *, url: str, timeout: float):
+def replay_main(journey, *, url: str, timeout: float, authenticated=False):
     """Standalone harness used by generated files; no provider or Git needed."""
     cli = argparse.ArgumentParser(description="Replay a generated Playwright journey")
     cli.add_argument("--allow-origin", action="append", default=[])
     cli.add_argument("--headed", action="store_true")
+    cli.add_argument("--auth-state", type=Path, help="Private Playwright storage-state file for authenticated replay")
     cli.add_argument("--output", type=Path, default=Path.cwd() / "verification-replay")
     args = cli.parse_args()
+    if authenticated and args.auth_state is None:
+        cli.error("This journey requires --auth-state; no session is included in the bundle")
 
     async def run():
         artifacts = Artifacts(args.output.resolve())
@@ -202,6 +215,8 @@ def replay_main(journey, *, url: str, timeout: float):
             allow_origins=args.allow_origin,
             headless=not args.headed,
             record_video=True,
+            storage_state=str(args.auth_state) if authenticated else None,
+            trace_browser=not authenticated,
         )
 
         async def checked_journey(page):

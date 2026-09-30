@@ -1,4 +1,5 @@
 import asyncio
+import sys
 
 import pytest
 
@@ -7,8 +8,9 @@ from open_verify.media import MAX_VIDEO_BYTES, encode_video
 
 def test_missing_encoder_is_an_explicit_omission(tmp_path, monkeypatch):
     monkeypatch.setattr("open_verify.media.shutil.which", lambda _: None)
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
     reason = asyncio.run(encode_video(tmp_path / "input.webm", tmp_path / "out.mp4"))
-    assert "not installed" in reason
+    assert "install open-verify[browser]" in reason
     assert not (tmp_path / "out.mp4").exists()
 
 

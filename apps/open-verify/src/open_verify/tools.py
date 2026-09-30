@@ -135,6 +135,8 @@ class LocalTools:
         allow_origins=(),
         headless=False,
         record_video=False,
+        storage_state=None,
+        trace_browser=True,
     ):
         self.project = project.resolve()
         self.artifacts = artifacts
@@ -142,6 +144,8 @@ class LocalTools:
         self.origins = {self.origin(origin) for origin in allow_origins}
         self.headless = headless
         self.record_video = record_video
+        self.storage_state = storage_state
+        self.trace_browser = trace_browser
         self.processes: dict[str, tuple] = {}
         self.browser = self.context = self.page = self.playwright = None
         self._tracing = False
@@ -402,7 +406,8 @@ class LocalTools:
                 if self.record_video else {}
             )
             self.context = await self.browser.new_context(
-                service_workers="block", viewport={"width": 1280, "height": 720}, **video_options
+                service_workers="block", viewport={"width": 1280, "height": 720},
+                storage_state=self.storage_state, **video_options
             )
             await self._configure_browser()
             self._browser_ready = True
@@ -437,8 +442,9 @@ class LocalTools:
                 websocket.connect_to_server()
 
         await self.context.route_web_socket("**/*", websocket_route)
-        await self.context.tracing.start(screenshots=True, snapshots=True)
-        self._tracing = True
+        if self.trace_browser:
+            await self.context.tracing.start(screenshots=True, snapshots=True)
+            self._tracing = True
         self.page = await self.context.new_page()
         # CDP checks page/frame redirects. The proxy is installed before launch
         # so workers are covered even when Playwright resumes them first.

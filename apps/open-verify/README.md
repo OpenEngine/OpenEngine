@@ -81,13 +81,49 @@ additional origins. Each run starts without existing login state, so necessary U
 setup belongs in the journey. The `test_change(page)` function can also be adopted
 into an existing async Playwright suite.
 
-When impact warrants visual evidence, each journey captures a focused screenshot and
-a short browser recording, including useful failures. MP4 export requires **ffmpeg
-with libx264 on PATH**. Encoding is local and bounded; every published video must be
+When impact warrants visual evidence, journeys can include named `screenshot` steps
+at meaningful UI checkpoints, plus a final screenshot and a short browser recording,
+including useful failures. The browser extra includes a bundled MP4 encoder;
+**ffmpeg with libx264 on PATH** takes precedence. Encoding is local and bounded; every published video must be
 strictly below **10,000,000 bytes**. Missing/failed encoding or a clip that remains too
 large results in an explicit omission, while tests/screenshots remain available.
 Raw WebM recordings and traces stay local diagnostics. No dependency is installed
 automatically. Recording finalization follows [Playwright's context lifecycle](https://playwright.dev/python/docs/videos).
+
+Generated test and media paths are printed after each journey. A native-tool protocol
+violation cancels the agent turn and retries once in a fresh session with the recorded
+task context. Repeated violations remain blockers; they never count as verification.
+
+Each planned case runs in a fresh agent session, reusing the provider process and
+host-managed services. Cases run sequentially; setup established by the first case
+is available to later cases through process handles, setup answers, and recent
+evidence. Related steps such as login and logout belong in one case. Full evidence
+stays in the run bundle; recovery never copies the complete conversation history.
+Individual prompts are capped at 240,000 characters, and long-running case sessions
+rotate after a 600,000-character accumulated input/output budget.
+
+### Assisted sign-in
+
+For protected-page testing, run from an interactive terminal with the application's
+real local OAuth configuration available. The QA agent can call `assisted_login`:
+Open Verify opens a visible browser, clicks the observed sign-in link/button, and
+asks you to complete GitHub login and MFA. It waits up to five minutes by default
+and resumes automatically when the same-origin JSON session endpoint confirms
+`authenticated: true`. Closing the browser or timing out offers retry or skip.
+GitHub and its asset origins are enabled only for this private login browser;
+other browser tests keep their existing origin policy.
+
+The host holds app cookies/local storage in memory for the run. Generated journeys
+with `authenticated: true` receive isolated copies; signed-out cases remain empty.
+The session is checked before each authenticated journey, and an expired session
+blocks that journey pending another assisted login. Login itself records no video,
+screenshots, or traces. State and provider credentials are not included in the bundle.
+This is user-assisted authentication, not evidence of autonomous GitHub login.
+
+To replay an authenticated generated test, supply your own private Playwright
+storage-state file with `--auth-state /path/to/private-state.json`. The bundle does
+not contain that file. Protected-page screenshots/video may show account data;
+use an appropriate test account. Dummy OAuth configuration cannot support live login.
 
 ### OE artifact contract
 

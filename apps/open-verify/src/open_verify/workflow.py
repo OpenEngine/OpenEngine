@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from langgraph.graph import END, START, StateGraph
 
 from open_verify.artifacts import Artifacts
+from open_verify.auth import AssistedLogin, LoginRequest
 from open_verify.changes import Change
 from open_verify.manifest import write_manifest
 from open_verify.models import Decision, Finding
@@ -91,10 +92,27 @@ files and project docs, then return an impact decision BEFORE a plan. Use verify
 behavior changes, skip only for a well-understood change with no behavior needing verification,
 and uncertain if you cannot establish impact. Cite affected file paths and name affected journeys.
 material_ui_change means screenshots/video would demonstrate a material end-user experience change.
+When the user explicitly names behavior to test, incomplete diff attribution alone does not
+prevent verification. Inspect current source/docs for that behavior, choose verify when the
+requested journey is established, and disclose that newly introduced behavior is not fully
+attributed. Choose uncertain only when you cannot establish a meaningful journey, not merely
+because the diff is truncated. Never claim full change coverage from a partial diff.
 Backend behavior may need verification without media. Setup failure is blocked, never skipped.
 For browser/mixed cases, explore as needed, then call run_browser_test with a self-contained journey
+as soon as the local app is ready. Browser interaction MUST use the supplied host actions, never
+native browser tools. Existing unit tests are supporting evidence, not substitutes for this journey.
+Include screenshot steps at meaningful initial and resulting UI states, using short descriptive
+names (letters, digits, underscores or hyphens). Do not navigate to external OAuth providers unless
+explicitly authorized; test local error states and report live-provider coverage as blocked.
+The journey must be
 starting from a fresh unauthenticated browser. Include any required UI setup and meaningful explicit
 assertions derived from the request/diff/docs; do not weaken assertions to make a failing test pass.
+For authenticated coverage use real documented local OAuth configuration, not synthetic credentials.
+Ask for missing setup. Call assisted_login with the local login URL, observed sign-in locator,
+and same-origin JSON status endpoint. The host clicks sign-in and waits for user login/MFA.
+GitHub origins are allowed only in that private browser. Never automate credentials or capture
+provider login. Set authenticated=true on protected tests; leave it false for signed-out tests.
+If the session expires, call assisted_login again. Report authentication as user-assisted.
 The host compiles, saves and executes a Playwright test and records its actual result. Cite that
 result for passed/failed findings and match its status. Use blocked for missing prerequisites.
 Terminal/HTTP cases continue to use host execution evidence. Media capture is selected by impact.
@@ -115,6 +133,7 @@ class Verification:
         ask_user: Callable[[str], Awaitable[str | None]] | None = None,
         change: Change | None = None,
         test_runner: BrowserRunner | None = None,
+        interactive_login=False,
     ):
         self.agent = agent
         self.tools = tools
@@ -127,6 +146,10 @@ class Verification:
         self.change = change
         self.test_runner = test_runner
         self.test_results: list[TestResult] = []
+        self.interactive_login = interactive_login
+        self.authentication = AssistedLogin(tools.project, allow_origins=tools.origins, progress=progress)
+        if test_runner is not None:
+            test_runner.authentication = self.authentication
         self.procedures = Procedures()
         self.state: QAState = {}
         self._discovery_announced = False
@@ -134,6 +157,8 @@ class Verification:
         self._execution_step = 0
         self._process_progress: dict[str, str] = {}
         self._local_app_process_id: str | None = None
+        self._active_case: str | None = None
+        self._setup_answers: list[str] = []
         graph = StateGraph(QAState)
         graph.add_node("decide", self.decide)
         graph.add_node("apply", self.apply)
@@ -160,8 +185,41 @@ class Verification:
         else:
             waiting_status = "Working: asking the QA agent for the next step…"
         node = self.procedures.locate(state["stage"], state.get("observation"))
+        scoped_state = dict(state)
+        scoped_state.pop("decision", None)
+        if state["stage"] == "execute" and state.get("plan"):
+            completed = {item["case_id"] for item in state["findings"]}
+            case = next((c for c in state["plan"]["cases"] if c["id"] not in completed), None)
+            if case is not None:
+                if self._active_case != case["id"]:
+                    reset = getattr(self.agent, "reset_session", None)
+                    if reset is not None:
+                        await reset()
+                    self._active_case = case["id"]
+                    self.progress(f"Case: {case['id']} — fresh agent session")
+                scoped_state["plan"] = {**state["plan"], "cases": [case]}
+                scoped_state["findings"] = []
+        def compact(value, limit=2500):
+            if isinstance(value, str):
+                return value if len(value) <= limit else value[:limit] + " [truncated; reread source if needed]"
+            if isinstance(value, dict):
+                return {k: compact(v, limit) for k, v in value.items()}
+            if isinstance(value, list):
+                return [compact(v, limit) for v in value[:60]]
+            return value
+
         context = {
-            "state": state,
+            "state": compact(scoped_state),
+            "case_instruction": "Complete only the current case. Reuse managed setup; do not stop shared services between cases.",
+            "setup_answers": self._setup_answers[-5:],
+            "authenticated_session_available": self.authentication.state is not None,
+            "recent_evidence": compact(self.artifacts.observations[-6:]),
+            "managed_processes": [
+                {"process_id": pid, "argv": compact(argv), "cwd": cwd,
+                 "exit_code": process.returncode, "log": str(log)}
+                for pid, (process, log, _, argv, cwd) in self.tools.processes.items()
+                if process.returncode is None
+            ],
             "execution_enabled": self.tools.allow_exec,
             "tools": self.tools.catalog(state["stage"]),
             "procedure_node": node,
@@ -172,14 +230,28 @@ class Verification:
             ],
             "decision_schema": Decision.model_json_schema(),
         }
+        # Keep the current tool response intact within the tools' own read bound.
+        # Older evidence is summarized, but shortening a fresh read made later
+        # source inspection incapable of recovering missing discovery context.
+        context["state"]["observation"] = compact(state.get("observation"), 24000)
         if self.change is not None:
             context["change"] = self.change.model_dump(
                 exclude=set() if state["steps"] == 0 else {"diff"}
             )
+            # Preserve all changed paths. Only the patch text is previewed;
+            # dropping paths silently made relevant changes invisible.
+            if "diff" in context["change"]:
+                patch = context["change"]["diff"]
+                context["change"]["diff"] = patch[:40000]
+                context["change"]["truncated"] |= len(patch) > 40000
             if state["stage"] == "execute":
                 context["tools"]["run_browser_test"] = {
                     "description": "Generate and execute an isolated Playwright regression test.",
                     "arguments": BrowserTest.model_json_schema(),
+                }
+                context["tools"]["assisted_login"] = {
+                    "description": "Click sign-in in a private visible browser and wait for user login/MFA. Requires real OAuth config and interactive terminal.",
+                    "arguments": LoginRequest.model_json_schema(),
                 }
         # One live ACP session retains previous file reads and observations. State
         # contains only the latest observation, avoiding repeated full transcripts.
@@ -215,7 +287,23 @@ class Verification:
                 command = self.command_progress(action.tool, action.arguments)
                 if command:
                     self.progress(f"    $ {command}")
-            if action.tool == "run_browser_test":
+            if action.tool == "assisted_login":
+                try:
+                    if state["stage"] != "execute":
+                        raise ValueError("Assisted login is available only after planning")
+                    if not self.interactive_login:
+                        raise ValueError("Assisted login requires an interactive terminal")
+                    request = LoginRequest.model_validate(action.arguments)
+                    self.tools.check_url(request.url)
+                    result = await self.authentication.run(request)
+                    observation = self.artifacts.record(action.tool, action.arguments, result, True)
+                except Exception as exc:
+                    observation = self.artifacts.record(action.tool, action.arguments, {"error": str(exc)}, False)
+                    self.progress("Login: " + str(exc))
+                    if self.ask_user is not None:
+                        answer = await self.ask_user("Login did not complete. Retry or skip authenticated cases?")
+                        return {"observation": observation, "feedback": "Login response: " + (answer or "skip")}
+            elif action.tool == "run_browser_test":
                 observation = await self.run_browser_test(state, action.arguments)
             else:
                 observation = await self.tools.execute(
@@ -307,6 +395,7 @@ class Verification:
             answer = await self.ask_user(question.text)
             if answer is None or not answer.strip():
                 return {"setup_questions": questions, "status": "blocked", "note": question.text}
+            self._setup_answers.append(answer.strip()[:4000])
             return {
                 "setup_questions": questions,
                 "feedback": (
@@ -327,6 +416,8 @@ class Verification:
             return "Finding refers to an unknown case."
         if finding.case_id in {item["case_id"] for item in state["findings"]}:
             return "This case already has a finding."
+        if self._active_case is not None and finding.case_id != self._active_case:
+            return "Report only the current case before proceeding to the next case."
         evidence = {item["id"]: item for item in self.artifacts.observations}
         if any(item not in evidence for item in finding.evidence):
             return "Finding cites unknown evidence. Use IDs from evidence_index."
@@ -355,6 +446,8 @@ class Verification:
             if self.change is None or state["stage"] != "execute" or self.test_runner is None:
                 raise ValueError("Generated tests require a change plan in execution mode")
             test = BrowserTest.model_validate(arguments)
+            if self._active_case is not None and test.case_id != self._active_case:
+                raise ValueError("Execute only the current case")
             cases = {case["id"]: case for case in state["plan"]["cases"]}
             if test.case_id not in cases or cases[test.case_id]["interface"] not in {"browser", "mixed"}:
                 raise ValueError("Test must belong to a planned browser/mixed case")
@@ -377,6 +470,11 @@ class Verification:
                 on_result=checkpoint,
             )
             checkpoint(result)
+            self.progress(f"  {test.case_id}: {result.status} — {result.detail}")
+            for relative in [result.test_file, *result.screenshots, *result.videos]:
+                self.progress(f"  Artifact: {self.artifacts.path / relative}")
+            for omission in result.omissions:
+                self.progress(f"  {omission}")
             return self.artifacts.record("run_browser_test", arguments, result.model_dump(), True)
         except Exception as exc:
             return self.artifacts.record("run_browser_test", arguments, {"error": str(exc)}, False)

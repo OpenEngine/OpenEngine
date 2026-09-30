@@ -15,6 +15,7 @@ def render_test(test: BrowserTest) -> str:
     # Only this compiler supplies Python syntax. All model-provided strings are literals.
     lines = [
         '"""Generated Playwright journey. Start the app before running this file."""',
+        "from pathlib import Path",
         "from playwright.async_api import expect",
         "",
         "",
@@ -22,7 +23,7 @@ def render_test(test: BrowserTest) -> str:
         f"    await page.goto(entry_url or {test.url!r}, "
         "wait_until='domcontentloaded', timeout=30000)",
     ]
-    for step in test.steps:
+    for index, step in enumerate(test.steps):
         if step.kind == "click":
             line = f"await {locator_code(step.locator)}.click()"
         elif step.kind == "fill":
@@ -32,6 +33,13 @@ def render_test(test: BrowserTest) -> str:
         elif step.kind == "expect_text":
             assertion = "to_be_visible" if step.visible else "not_to_be_visible"
             line = f"await expect(page.get_by_text({step.text!r}, exact=True)).{assertion}()"
+        elif step.kind == "screenshot":
+            lines.append("    if page.video is not None:")
+            lines.append("        capture_dir = Path(await page.video.path()).parent")
+            lines.append(
+                f"        await page.screenshot(path=str(capture_dir / 'checkpoint-{index:02d}-{step.name}.png'))"
+            )
+            continue
         else:
             line = f"await expect(page).to_have_url({step.url!r})"
         lines.append("    " + line)
@@ -45,7 +53,7 @@ def render_test(test: BrowserTest) -> str:
             "",
             "if __name__ == '__main__':",
             "    from open_verify.playwright_runner import replay_main",
-            f"    replay_main(test_change, url={test.url!r}, timeout={test.timeout!r})",
+            f"    replay_main(test_change, url={test.url!r}, timeout={test.timeout!r}, authenticated={test.authenticated!r})",
             "",
         ]
     )

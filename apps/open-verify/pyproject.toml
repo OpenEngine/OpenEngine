@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-browser = ["playwright>=1.49,<2"]
+browser = ["playwright>=1.49,<2", "imageio-ffmpeg>=0.6,<1"]
 
 [project.scripts]
 open-verify = "open_verify.cli:main"

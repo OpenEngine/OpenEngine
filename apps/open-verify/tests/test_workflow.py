@@ -318,8 +318,18 @@ def test_native_tool_cancellation_retries_once(tmp_path, repeat):
                 )
 
     agent = ACPDecisionAgent(None, tmp_path)
-    agent.client = object()
+    class Client:
+        async def new_session(self, **kwargs):
+            assert first_session.ended
+            replacement = Session()
+            replacement.calls = first_session.calls
+            replacement.cancellations = first_session.cancellations
+            replacement.ended = True
+            return replacement
+
+    agent.client = Client()
     agent.session = Session()
+    first_session = agent.session
     if repeat:
         with pytest.raises(RuntimeError, match="repeatedly"):
             asyncio.run(agent.decide("original task context"))
@@ -340,3 +350,81 @@ def test_error_summary_prefers_underlying_exception(tmp_path):
     assert verification.error_summary({"output": output}) == (
         "Caused by: TypeError: webidl.util.markAsUncloneable is not a function"
     )
+
+
+def test_cases_use_fresh_sessions_and_keep_host_processes(tmp_path):
+    messages = []
+    class RecordingAgent(ScriptedAgent):
+        resets = 0
+        contexts = []
+
+        async def reset_session(self):
+            self.resets += 1
+
+        async def decide(self, prompt):
+            self.contexts.append(json.loads(prompt.split('\n')[-1]))
+            return await super().decide(prompt)
+
+    definition = plan()
+    second = dict(definition['plan']['cases'][0], id='second', title='Second case')
+    definition['plan']['cases'].append(second)
+    final = finding(evidence=['E0003'])
+    final['finding']['case_id'] = 'second'
+    agent = RecordingAgent([
+        definition,
+        action('start_process', argv=[sys.executable, '-c', 'import time; time.sleep(60)']),
+        action('run_command', argv=[sys.executable, '-c', "print('first')"]),
+        finding(evidence=['E0002']),
+        action('run_command', argv=[sys.executable, '-c', "print('second')"]),
+        final,
+    ])
+    artifacts = Artifacts(tmp_path / 'runs')
+    tools = LocalTools(tmp_path, artifacts, allow_exec=True)
+    async def run():
+        try:
+            report = await Verification(agent, tools, artifacts, progress=messages.append).run('Two cases')
+            assert tools.processes['P001'][0].returncode is None
+            return report
+        finally:
+            await tools.close()
+    assert asyncio.run(run())['status'] == 'complete'
+    assert agent.resets == 2
+    assert [c['id'] for c in agent.contexts[4]['state']['plan']['cases']] == ['second']
+    assert agent.contexts[4]['managed_processes'][0]['process_id'] == 'P001'
+    assert 'decision' not in agent.contexts[4]['state']
+
+
+def test_prompt_budget_rejects_oversize_before_provider_call(tmp_path):
+    from open_verify.agent import MAX_PROMPT_CHARS
+    agent = ACPDecisionAgent(None, tmp_path)
+    with pytest.raises(ValueError, match='budget'):
+        asyncio.run(agent.decide('x' * (MAX_PROMPT_CHARS + 1)))
+
+
+def test_long_case_rotates_session_with_current_context(tmp_path):
+    from types import SimpleNamespace
+
+    from langgraph_acp import ACPEventType
+
+    from open_verify.agent import MAX_SESSION_CHARS
+
+    class Session:
+        closed = False
+        async def close(self):
+            self.closed = True
+        async def prompt(self, prompt):
+            assert prompt == 'current bounded task and observations'
+            yield SimpleNamespace(type=ACPEventType.MESSAGE_DELTA,
+                data={'content': {'type': 'text', 'text': '{"kind":"finish"}'}})
+            yield SimpleNamespace(type=ACPEventType.PROMPT_COMPLETED, data={'stopReason': 'end_turn'})
+    class Client:
+        async def new_session(self, **kwargs):
+            assert old.closed
+            return Session()
+    agent = ACPDecisionAgent(None, tmp_path)
+    old = Session()
+    agent.client, agent.session = Client(), old
+    agent.session_chars = MAX_SESSION_CHARS
+    assert asyncio.run(agent.decide('current bounded task and observations')).kind == 'finish'
+    assert agent.session is not old
+    assert agent.session_chars < MAX_SESSION_CHARS
