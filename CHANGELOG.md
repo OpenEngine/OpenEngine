@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0](https://github.com/OpenEngine/OpenEngine/compare/v0.7.0...v1.0.0) (2026-09-30)
+
+
+### Bug Fixes
+
+* **web:** confirm access with the user's own token when the server's GitHub connection fails ([#612](https://github.com/OpenEngine/OpenEngine/issues/612)) ([73ee0e8](https://github.com/OpenEngine/OpenEngine/commit/73ee0e8aecf7d84414bca699b72cc66f555e933c))
+
+
+### Miscellaneous Chores
+
+* release 1.0.0 ([#615](https://github.com/OpenEngine/OpenEngine/issues/615)) ([c2376a4](https://github.com/OpenEngine/OpenEngine/commit/c2376a42087403f1de30fe21e0d513a4f7396068))
+
 ## [0.7.0](https://github.com/OpenEngine/OpenEngine/compare/v0.6.0...v0.7.0) (2026-09-29)
 
 
