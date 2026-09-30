@@ -179,8 +179,8 @@ def test_init_asks_for_the_mode_at_a_terminal(monkeypatch, tmp_path, capsys):
     assert _init(monkeypatch, checkout, config) == 0
 
     out = capsys.readouterr().out
-    assert "1) GitHub OAuth (connected, recommended)" in out
-    assert "2) GitHub CLI (connected)" in out
+    assert "1) Git OAuth (connected, recommended)" in out
+    assert "2) Git CLI (connected)" in out
     assert "3) Disconnected" in out
     assert "Choose 1-3." in out
     assert tomllib.loads(config.read_text())["repo_modes"] == {"api": "disconnected"}
