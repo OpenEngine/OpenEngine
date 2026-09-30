@@ -14,8 +14,8 @@ from open_verify.artifacts import Artifacts
 from open_verify.browser_guard import BrowserGuard
 from open_verify.browser_proxy import BrowserProxy
 from open_verify.models import Contract
+from open_verify.scope import OMIT, inspectable
 
-OMIT = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build", ".cache"}
 READ_TOOLS = {"list_files", "read_file"}
 MAX_TEXT = 24000
 MAX_RESPONSE_FILE = 10 * 1024 * 1024
@@ -134,12 +134,14 @@ class LocalTools:
         allow_exec=False,
         allow_origins=(),
         headless=False,
+        record_video=False,
     ):
         self.project = project.resolve()
         self.artifacts = artifacts
         self.allow_exec = allow_exec
         self.origins = {self.origin(origin) for origin in allow_origins}
         self.headless = headless
+        self.record_video = record_video
         self.processes: dict[str, tuple] = {}
         self.browser = self.context = self.page = self.playwright = None
         self._tracing = False
@@ -163,10 +165,7 @@ class LocalTools:
         relative = path.relative_to(self.project)
         if any(part in OMIT for part in relative.parts):
             raise ValueError("Path is an excluded dependency or metadata directory")
-        if any(
-            part.startswith(".env") and part not in {".env.example", ".env.sample"}
-            for part in relative.parts
-        ) or path.suffix.lower() in {".pem", ".key", ".p12"}:
+        if not inspectable(relative.as_posix()):
             raise ValueError("Secret files are excluded from discovery")
         return path
 
@@ -395,7 +394,16 @@ class LocalTools:
                 headless=self.headless,
                 proxy={"server": proxy_url, "bypass": "<-loopback>"},
             )
-            self.context = await self.browser.new_context(service_workers="block")
+            video_options = (
+                {
+                    "record_video_dir": str(self.artifacts.path / "raw-video"),
+                    "record_video_size": {"width": 1280, "height": 720},
+                }
+                if self.record_video else {}
+            )
+            self.context = await self.browser.new_context(
+                service_workers="block", viewport={"width": 1280, "height": 720}, **video_options
+            )
             await self._configure_browser()
             self._browser_ready = True
         except BaseException as exc:
@@ -453,6 +461,11 @@ class LocalTools:
         await self._ensure_browser()
         await self.page.goto(args.url, wait_until="domcontentloaded", timeout=30000)
         return await self.browser_snapshot(EmptyArgs())
+
+    async def browser_page(self):
+        """Provide a page with the same network policy to a test runner adapter."""
+        await self._ensure_browser()
+        return self.page
 
     async def browser_snapshot(self, args: EmptyArgs):
         if self.page is None:
@@ -526,6 +539,7 @@ class LocalTools:
                     else None
                 ),
             ),
+            ("context", lambda: self.context.close() if self.context else None),
             ("browser", lambda: self.browser.close() if self.browser else None),
             ("playwright", lambda: self.playwright.stop() if self.playwright else None),
             ("proxy", lambda: self._browser_proxy.close() if self._browser_proxy else None),
@@ -536,6 +550,8 @@ class LocalTools:
                     await pending
                 if name == "trace":
                     self._tracing = False
+                elif name == "context":
+                    self.context = self.page = None
                 elif name == "browser":
                     self.browser = self.context = self.page = None
                 elif name == "playwright":

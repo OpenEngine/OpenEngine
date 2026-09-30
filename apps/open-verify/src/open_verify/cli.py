@@ -11,6 +11,9 @@ from platformdirs import user_data_path
 from open_verify import __version__
 from open_verify.agent import ACPDecisionAgent, provider_for
 from open_verify.artifacts import Artifacts
+from open_verify.changes import read_change
+from open_verify.manifest import write_manifest
+from open_verify.playwright_runner import PlaywrightRunner
 from open_verify.tools import LocalTools, project_root
 from open_verify.workflow import Verification, exit_code
 
@@ -52,7 +55,7 @@ def positive_int(value):
 
 def parser():
     cli = argparse.ArgumentParser(
-        description="Explore and verify a feature in the current Git project."
+        description="Verify a feature or Git change and export tests and evidence."
     )
     cli.add_argument("request", nargs="?", help="Feature and expected behavior to verify")
     cli.add_argument("--version", action="version", version=__version__)
@@ -66,6 +69,12 @@ def parser():
         "--agent-command", help='Custom ACP launch command as JSON, e.g. ["my-agent", "--acp"]'
     )
     cli.add_argument("--model", help="Provider-specific model ID; omission uses its default")
+    cli.add_argument("--base", help="Base revision for change-based verification (no checkout/fetch)")
+    cli.add_argument("--head", help="Changed revision, which must match the checkout (default: HEAD)")
+    cli.add_argument(
+        "--include-working-tree", action="store_true",
+        help="Include staged, unstaged, and untracked files in the change",
+    )
     cli.add_argument(
         "--plan-only", action="store_true", help="Discover and plan without executing QA actions"
     )
@@ -97,7 +106,24 @@ def parser():
 
 
 async def run(args):
-    project = project_root(args.project)
+    artifacts = Artifacts(args.output.resolve())
+    try:
+        project = project_root(args.project)
+        change = (
+            await read_change(
+                project, args.base, args.head or "HEAD",
+                include_working_tree=args.include_working_tree,
+            )
+            if args.base else None
+        )
+    except Exception as exc:
+        report = {"request": args.request, "status": "blocked", "findings": [],
+                  "note": f"Change/project inspection failed: {exc}"}
+        artifacts.report(report)
+        write_manifest(artifacts.path, report, None, [])
+        print(f"Open Verify: {report['note']}", file=sys.stderr)
+        print(f"Manifest: {artifacts.path / 'manifest.json'}", flush=True)
+        return 2
     command = json.loads(args.agent_command) if args.agent_command else None
     if command is not None and (
         not isinstance(command, list)
@@ -108,7 +134,6 @@ async def run(args):
     provider = provider_for(args.agent, command)
     for origin in args.allow_origin:
         LocalTools.origin(origin)
-    artifacts = Artifacts(args.output.resolve())
     artifacts.write(
         "session.json",
         {
@@ -118,8 +143,11 @@ async def run(args):
             "model": args.model,
             "plan_only": args.plan_only,
             "allow_exec": args.allow_exec,
+            "change": change.model_dump(exclude={"diff"}) if change else None,
         },
     )
+    if change is not None:
+        artifacts.write("change.json", change.model_dump())
     # Agent-side cwd is the run folder. Repository inspection and execution are
     # routed through host adapters, not the provider's native workspace tools.
     agent = ACPDecisionAgent(provider, artifacts.path, model=args.model, timeout=args.agent_timeout)
@@ -150,8 +178,15 @@ async def run(args):
         progress=terminal.write,
         progress_status=terminal.status,
         ask_user=ask_user,
+        change=change,
+        test_runner=(
+            PlaywrightRunner(
+                project, artifacts, allow_origins=args.allow_origin, headless=args.headless,
+            ) if change is not None else None
+        ),
     )
     cleanup_errors = []
+    report = None
     try:
         report = await verification.run(args.request)
     finally:
@@ -164,13 +199,24 @@ async def run(args):
         if cleanup_errors:
             artifacts.write("cleanup-errors.json", cleanup_errors)
             print("Cleanup needs attention: " + "; ".join(cleanup_errors), file=sys.stderr)
+        # Refresh the publication contract after all resources have been closed,
+        # including when the graph saved a partial report before raising.
+        saved = artifacts.path / "report.json"
+        final_report = report or (json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else None)
+        if final_report is not None:
+            verification.publish(final_report, cleanup_errors=cleanup_errors)
     print(f"Report: {artifacts.path / 'report.md'}")
+    print(f"Manifest: {artifacts.path / 'manifest.json'}")
     return 2 if cleanup_errors else exit_code(report)
 
 
 def main(argv=None):
     cli = parser()
     args = cli.parse_args(argv)
+    if (args.head or args.include_working_tree) and not args.base:
+        cli.error("--head and --include-working-tree require --base")
+    if not args.request and args.base:
+        args.request = "Verify the meaningful behavior affected by this change."
     if not args.request:
         if not sys.stdin.isatty():
             cli.error("provide a verification request when stdin is not interactive")

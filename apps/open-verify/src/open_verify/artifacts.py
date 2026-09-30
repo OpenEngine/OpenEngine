@@ -27,7 +27,7 @@ class Artifacts:
             "ok": ok,
             "result": result,
         }
-        if tool in {"http_request", "run_command", "start_process", "process_output"}:
+        if tool in {"http_request", "run_command", "start_process", "process_output", "run_browser_test"}:
             relative = Path("actions") / f"{entry['id']}.json"
             receipt = self.path / relative
             receipt.parent.mkdir(exist_ok=True)
@@ -51,6 +51,9 @@ class Artifacts:
             "",
         ]
         plan = state.get("plan")
+        impact = state.get("impact")
+        if impact:
+            lines.extend(["Impact: " + impact["reason"], ""])
         if plan:
             lines.extend([plan["project_summary"], "", "## Plan", ""])
             for case in plan["cases"]:
@@ -88,7 +91,7 @@ class Artifacts:
         )
         (self.path / "report.md").write_text("\n".join(lines), encoding="utf-8")
 
-    def case_receipt(self, plan: dict | None, finding: dict) -> Path:
+    def case_receipt(self, plan: dict | None, finding: dict) -> str:
         case_id = finding["case_id"]
         filename = re.sub(r"[^A-Za-z0-9._-]", "_", case_id)
         receipt = self.path / "cases" / f"{filename}.json"
@@ -101,18 +104,18 @@ class Artifacts:
             json.dumps({"case": case, "finding": finding, "evidence": evidence}, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        return receipt
+        return receipt.relative_to(self.path).as_posix()
 
     def evidence_link(self, evidence_id: str) -> str:
         entry = next((item for item in self.observations if item["id"] == evidence_id), None)
         if entry is None or "artifact" not in entry:
             return evidence_id
-        receipt = self.path / entry["artifact"]
+        receipt = entry["artifact"]
         links = [f"[{evidence_id}]({receipt})"]
         log = entry["result"].get("log")
         if log:
-            links.append(f"[complete log]({self.path / log})")
+            links.append(f"[complete log]({log})")
         body_file = entry["result"].get("body_file")
         if body_file:
-            links.append(f"[response body]({self.path / body_file})")
+            links.append(f"[response body]({body_file})")
         return " ".join(links)

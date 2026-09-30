@@ -51,17 +51,34 @@ class Question(Contract):
     evidence: list[str] = Field(min_length=1, max_length=1)
 
 
+class Impact(Contract):
+    decision: Literal["verify", "skip", "uncertain"]
+    reason: str = Field(min_length=1)
+    material_ui_change: bool
+    affected_files: list[str] = Field(default_factory=list)
+    journeys: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def consistent(self):
+        if self.decision == "skip" and self.material_ui_change:
+            raise ValueError("A material UI change cannot be skipped")
+        if self.decision == "verify" and not self.journeys:
+            raise ValueError("Verification needs at least one affected journey")
+        return self
+
+
 class Decision(Contract):
-    kind: Literal["action", "plan", "finding", "question", "finish"]
+    kind: Literal["action", "impact", "plan", "finding", "question", "finish"]
     action: Action | None = None
     plan: Plan | None = None
     finding: Finding | None = None
     question: Question | None = None
+    impact: Impact | None = None
     note: str = ""
 
     @model_validator(mode="after")
     def matching_payload(self):
-        for field in ("action", "plan", "finding", "question"):
+        for field in ("action", "impact", "plan", "finding", "question"):
             if (getattr(self, field) is not None) != (self.kind == field):
                 raise ValueError(f"{self.kind} decision has invalid {field} payload")
         return self

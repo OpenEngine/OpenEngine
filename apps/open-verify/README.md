@@ -1,8 +1,9 @@
 # Open Verify
 
-A standalone CLI for exploratory QA of a Git project. Describe a feature; Open Verify
-inspects the project, proposes test cases, exercises its browser, terminal or HTTP
-interface, and saves a report with captured evidence. It has no web UI or service.
+A standalone CLI for exploratory QA of a Git project. Describe a feature or point it
+at a change; Open Verify inspects the project, plans and exercises its browser,
+terminal or HTTP behavior, and saves evidence. Change mode exports runnable Playwright
+tests and relevant screenshots/video for OE. It has no web UI or service.
 
 ## Develop inside OpenEngine
 
@@ -43,8 +44,71 @@ ov "Verify the contact form shows validation errors" --agent codex --allow-exec
 
 `ov` is the short command; `open-verify` remains available. Running either without a
 request prompts for one in an interactive terminal. The current directory is the
-default project, so `ov` discovers the enclosing Git root, including worktrees; it
-does not invoke Git or change branches. `--project PATH` selects another directory.
+default project, so `ov` discovers the enclosing Git root, including worktrees.
+`--project PATH` selects another directory. Feature mode does not invoke Git;
+change mode uses read-only Git commands and never fetches or changes branches.
+
+## Verify a change
+
+```shell
+ov --base origin/main --head HEAD --headless --allow-exec --output ../verification
+ov "Focus on validation errors" --base origin/main --plan-only
+ov --base HEAD --include-working-tree --headless
+```
+
+`--base` enables change mode; `--head` defaults to `HEAD` and must resolve to the
+current checkout. The comparison is **base → head**, not an implicit merge-base
+comparison. Dirty checkouts are rejected unless `--include-working-tree` explicitly
+includes staged, unstaged, and untracked files. Ignored files are not included.
+Secret/dependency files are excluded from diff inspection just as in file discovery.
+Diff context is bounded and marked when incomplete; incomplete inspection cannot
+produce a skip. No request text or interactive prompt is required in change mode.
+
+The agent first assesses behavioral impact. A well-understood change with no relevant
+behavior produces `skipped` and no attachments. Uncertain impact and missing setup
+produce blockers. A material UI change requires a browser journey in the plan.
+Browser journeys compile into ordinary Playwright Python tests with explicit assertions;
+the host executes the exact generated code in a fresh, origin-guarded browser. Findings
+must match the generated test's actual result. Terminal/HTTP cases retain exploratory
+execution and receipts; generated suites currently cover browser journeys.
+
+Tests and supporting instructions live in `tests/`. Each exported file runs with
+`python tests/test_<id>_<attempt>.py` from the bundle root and an installed
+`open-verify[browser]` of the recorded version. Start the target app first; startup
+instructions are in `plan.json` and prerequisites in `report.md`. Replay requires no
+agent or Git. `OV_BASE_URL` overrides the entry URL, and `--allow-origin` permits
+additional origins. Each run starts without existing login state, so necessary UI
+setup belongs in the journey. The `test_change(page)` function can also be adopted
+into an existing async Playwright suite.
+
+When impact warrants visual evidence, each journey captures a focused screenshot and
+a short browser recording, including useful failures. MP4 export requires **ffmpeg
+with libx264 on PATH**. Encoding is local and bounded; every published video must be
+strictly below **10,000,000 bytes**. Missing/failed encoding or a clip that remains too
+large results in an explicit omission, while tests/screenshots remain available.
+Raw WebM recordings and traces stay local diagnostics. No dependency is installed
+automatically. Recording finalization follows [Playwright's context lifecycle](https://playwright.dev/python/docs/videos).
+
+### OE artifact contract
+
+After the CLI exits, read `<run>/manifest.json` (`schema_version: 1`):
+
+- `status`: `passed`, `failed`, `blocked`, `incomplete`, `skipped`, or `planned`.
+- `change`, `impact`, `reason`, `environment`: resolved revisions, inspected files,
+  impact assessment, outcome context, and runtime versions. `fingerprint` hashes the
+  inspected diff text; it is not a full working-tree content hash.
+- `tests`: case ID, runner, actual execution status, test path, and `rerun` argv
+  with `cwd: "."` relative to the bundle. Every attempt is retained.
+- `artifacts`: only publishable `test`, `screenshot`, and `video` entries, each with
+  a bundle-relative path, MIME type, byte size, and associated case ID.
+- `findings`, `support_files`, `omissions`: assessments, rerun prerequisites, and
+  explanations for unavailable artifacts. Skipped/planned runs have no attachments.
+
+OE owns MR publication; this CLI has no GitHub/Engine dependency. Consumers should
+attach only the manifest's `artifacts`, not scan the run folder for media. A partial
+or failed run still saves its report/manifest; cleanup errors prevent a success status.
+
+## Execution options
 
 With `--allow-exec`, Open Verify attempts the documented or likely local startup
 command before treating unknown setup as a blocker. If launch or readiness fails, it
@@ -56,7 +120,7 @@ Useful options:
 
 - `--model ID`: select a model supported by the chosen provider.
 - `--agent NAME --agent-command '["executable", "--acp"]'`: another ACP provider.
-- `--plan-only`: file discovery and a plan; no host command, HTTP or browser actions.
+- `--plan-only`: discovery and a plan; no QA command, HTTP or browser actions.
 - `--allow-exec`: authorize agent-selected commands and background services. Commands
   use argv arrays, piped input, bounded waits and captured output. Interactive PTYs
   are not supported yet. Commands run with the current user's environment and privileges.
@@ -91,7 +155,8 @@ request bodies and headers; use disposable test accounts and protect the run dir
 Browser assessment currently uses accessibility snapshots and visible-text checks;
 screenshots are saved for human review, not sent to the model for visual evaluation.
 
-Exit codes: **0** = all cases passed, or a plan-only run completed; **1** = at least
+Exit codes: **0** = all cases passed, a plan-only run completed, or the change was
+skipped with a reason; **1** = at least
 one observed defect; **2** = blocked, incomplete, runtime/cleanup error; **130** = interrupted.
 Partial reports survive errors and interruption. Managed services and browser resources
 are cleaned up on ordinary completion, error or Ctrl-C; forced process termination and
@@ -108,6 +173,19 @@ Python + LangGraph + `langgraph-acp`, matching OpenEngine's agent stack:
 4. `procedures.json` stores a small frozen graph of conditions, guidance and pitfalls.
    The latest action/outcome locates a node; its two-hop neighborhood guides the next decision.
 
+Change verification keeps separate responsibilities:
+
+- `changes.py` and `scope.py`: read-only revision inspection and discovery policy.
+- `models.py` / `test_spec.py`: typed provider-independent decisions and journeys.
+- `test_codegen.py`: deterministic Playwright source generation from typed steps.
+- `playwright_runner.py`: isolated execution and standalone replay through existing guards.
+- `media.py`: bounded MP4 conversion and byte-limit enforcement.
+- `manifest.py`: versioned OE contract and attachment validation.
+- `workflow.py`: impact, planning, execution, and evidence-backed findings in LangGraph.
+
+`BrowserRunner` is the adapter boundary for future runners. No provider-specific
+logic enters test generation, media processing, or publishing.
+
 This is an initial implementation of procedural guidance inspired by
 [Procedural Graphs](https://arxiv.org/abs/2609.09153), not the paper's full learning system.
 There is no automatic refinement, graph database, separate guidance model, or dependency
@@ -119,7 +197,8 @@ actions already performed by that process. Use trusted repositories. Isolation b
 in a future Docker runner. A full run can mutate application test data as normal QA does.
 
 Not implemented yet: durable resume, interactive terminal sessions, popup/multi-tab
-browser workflows, automatic graph evolution, Docker, and generated regression suites.
+browser workflows, automatic graph evolution, Docker, Maestro, generated terminal/HTTP
+suites, and automatic before/after revision environments.
 
 ## Tests
 
