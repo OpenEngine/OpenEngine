@@ -163,6 +163,7 @@ from engine.runtime import (
     load_engine_config,
     load_workflow_catalog,
 )
+import httpx
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -3822,9 +3823,42 @@ def create_app(
             raise failure
         return False
 
+    async def github_user_can_write(token: str) -> bool:
+        """Whether GitHub says the account holding sign-in `token` can push to one of these repositories.
+
+        Asked with the user's own token, so it answers even when the server's
+        connection does not. The token has only `read:user` scope, so GitHub
+        answers for public github.com repositories; the rest read as unknown.
+        """
+        projects = [project for project in access_repositories if project.count("/") == 1]
+        if not projects:
+            return False
+
+        async def check(client: httpx.AsyncClient, project: str) -> bool:
+            response = await client.get(
+                f"https://api.github.com/repos/{project}",
+                headers={"Accept": "application/vnd.github+json",
+                         "Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            permissions = response.json().get("permissions")
+            return isinstance(permissions, dict) and any(
+                permissions.get(role) is True for role in ("admin", "maintain", "push")
+            )
+
+        async with (
+            asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS),
+            httpx.AsyncClient(timeout=GITHUB_LOGIN_TIMEOUT_SECONDS) as client,
+        ):
+            answers = await asyncio.gather(
+                *(check(client, project) for project in projects), return_exceptions=True
+            )
+        return any(answer is True for answer in answers)
+
     github_login = GitHubLogin(
         github_login_config, service_token, github_login_allowed,
         operators=frozenset(login_operators),
+        authorize_user=github_user_can_write,
     )
     routes = [
         Route("/api/health", health),

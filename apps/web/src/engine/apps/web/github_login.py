@@ -97,6 +97,7 @@ class GitHubLogin:
         service_token: Callable[[], str] = lambda: "",
         authorize: Callable[[int, str], Awaitable[bool]] | None = None,
         operators: Collection[int] = frozenset(),
+        authorize_user: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self.config = config
         # Whether a verified GitHub account (id, login) may have a session.
@@ -107,12 +108,21 @@ class GitHubLogin:
         # push anywhere, and everyone who can fix it when the server's own
         # GitHub login stops answering.
         self.operators = frozenset(operators)
+        # Whether the account holding a sign-in token can write to one of the
+        # repositories, asked with that token. Asked alongside `authorize` and
+        # counted only when `authorize` fails, and then only as a yes, so a
+        # broken server connection does not lock out everyone who could fix it.
+        self.authorize_user = authorize_user
+        # user id -> the read:user token GitHub issued at that user's latest
+        # sign-in. Kept in memory only, like the signing key, for rechecks.
+        self._user_tokens: dict[int, str] = {}
         # user id -> (allowed, monotonic expiry). Only GitHub's answers are
         # kept; a failed lookup is retried by the next request.
         self._access: dict[int, tuple[bool, float]] = {}
         # One lock per user, so one slow lookup holds up only that user.
         self._access_locks: dict[int, asyncio.Lock] = {}
-        # Whether the most recent lookup failed, shown to operators.
+        # Whether the most recent lookup through the server's connection
+        # failed, shown to signed-in users.
         self.access_check_failing = False
         # A reader rather than a value, so rotating the secret on disk takes
         # effect on the next request without a restart.
@@ -175,17 +185,45 @@ class GitHubLogin:
             cached = self._access.get(user_id)
             if not fresh and cached is not None and cached[1] > time.monotonic():
                 return cached[0]
+            token = self._user_tokens.get(user_id)
+            # Started at once rather than after a failure, so both lookups
+            # share one timeout budget.
+            fallback = (asyncio.ensure_future(self.authorize_user(token))
+                        if token and self.authorize_user is not None else None)
+            if fallback is not None:
+                # Its answer is unwanted once the server's lookup answers.
+                fallback.add_done_callback(lambda done: done.cancelled() or done.exception())
             try:
                 allowed = await self.authorize(user_id, login)
+                self.access_check_failing = False
             except Exception:
-                # Access that cannot be confirmed is not granted, but neither
-                # is the failure remembered: the next request asks again.
                 log.exception("could not check repository access for %s", login)
                 self.access_check_failing = True
-                return None
-            self.access_check_failing = False
+                if not await self._confirmed_by_user(fallback, login):
+                    # Access that cannot be confirmed is not granted, but
+                    # neither is the failure remembered: the next request
+                    # asks again.
+                    return None
+                allowed = True
+            finally:
+                if fallback is not None:
+                    fallback.cancel()
             self._access[user_id] = (allowed, time.monotonic() + _ACCESS_TTL)
             return allowed
+
+    @staticmethod
+    async def _confirmed_by_user(fallback: asyncio.Future[bool] | None, login: str) -> bool:
+        """Whether the user's own token showed write access; a failure is not a yes."""
+        if fallback is None:
+            return False
+        try:
+            confirmed = await fallback
+        except Exception:
+            log.exception("could not check repository access for %s with their own token", login)
+            return False
+        if confirmed:
+            log.warning("admitted %s on their own token's answer; the server's lookup failed", login)
+        return confirmed is True
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
@@ -301,7 +339,11 @@ class GitHubLogin:
                     raise ValueError("Invalid identity")
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
+        # Bound to the ID GitHub just returned for this token.
+        self._user_tokens[user["id"]] = token
         allowed = await self.has_access(user, fresh=True)
+        if not allowed:
+            self._user_tokens.pop(user["id"], None)
         if allowed is None:
             # The identity is verified; only the permission check failed.
             return RedirectResponse("/login?error=unverified", status_code=302)
@@ -333,8 +375,9 @@ class GitHubLogin:
             "user": user,
             "loginRequired": self.config is not None,
         }
-        if user is not None and user["id"] in self.operators:
-            # Everyone else is refused while this is true, and cannot see why.
+        if user is not None:
+            # Whoever is signed in may be able to fix the server's connection;
+            # anyone it cannot vouch for is refused while this is true.
             body["accessCheckFailing"] = self.access_check_failing
         response = JSONResponse(body, headers=_HEADERS)
         if revoked:
@@ -343,8 +386,10 @@ class GitHubLogin:
         return response
 
     async def logout(self, request: Request) -> Response:
-        if self._read_session(request) is None:
+        user = self._read_session(request)
+        if user is None:
             return JSONResponse({"ok": True}, headers=_HEADERS)
+        self._user_tokens.pop(int(user["id"]), None)
         response = JSONResponse({"ok": True}, headers=_HEADERS)
         response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
                                samesite="lax", secure=self._is_secure())

@@ -625,7 +625,6 @@ def test_an_operator_signs_in_without_a_repository_check():
     assert client.get("/api/data").json() == {"ok": True}
     status = client.get("/api/auth/github/status").json()
     assert status["authenticated"] is True
-    # Only an operator is told that everyone else is being refused.
     assert status["accessCheckFailing"] is False
 
 
@@ -758,5 +757,98 @@ def test_a_slow_lookup_holds_up_only_its_own_user():
         assert not slow.done()
         release.set()
         assert await slow is True
+
+    asyncio.run(scenario())
+
+
+def _fallback_flow(authorize, authorize_user):
+    return GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), authorize=authorize, authorize_user=authorize_user)
+
+
+def _sign_in(flow):
+    client = _app_with_middleware(flow)
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        return client, callback(client, params["state"][0], code="code")
+
+
+def test_the_users_own_token_admits_them_when_the_servers_lookup_fails():
+    """A broken server connection does not lock out the people who can fix it:
+    GitHub, asked with the user's own sign-in token, vouches for them."""
+    tokens = []
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        tokens.append(token)
+        return True
+
+    flow = _fallback_flow(authorize, authorize_user)
+    client, response = _sign_in(flow)
+
+    assert response.headers["location"] == "/"
+    assert tokens == ["private-token"]
+    assert client.get("/api/data").status_code == 200
+    # Signed-in users are told the server's connection is failing.
+    assert client.get("/api/auth/github/status").json()["accessCheckFailing"] is True
+    assert flow._user_tokens == {42: "private-token"}
+    client.post("/api/auth/github/logout")
+    assert flow._user_tokens == {}
+
+
+@pytest.mark.parametrize("fallback", [False, RuntimeError("private repository")])
+def test_the_users_own_token_that_cannot_confirm_access_admits_nobody(fallback):
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        if isinstance(fallback, Exception):
+            raise fallback
+        return fallback
+
+    flow = _fallback_flow(authorize, authorize_user)
+    _, response = _sign_in(flow)
+
+    assert response.headers["location"] == "/login?error=unverified"
+    assert flow._user_tokens == {}
+
+
+def test_the_servers_answer_outranks_the_users_own_token():
+    """The user's token only stands in for a failed lookup; it cannot overturn a no."""
+    async def authorize(user_id, login):
+        return False
+
+    async def authorize_user(token):
+        return True
+
+    flow = _fallback_flow(authorize, authorize_user)
+    _, response = _sign_in(flow)
+
+    assert response.headers["location"] == "/login?error=forbidden"
+    assert flow._user_tokens == {}
+
+
+def test_both_lookups_share_one_time_budget():
+    """The user's token is asked at the same time as the server, not after it."""
+    import asyncio
+
+    async def scenario():
+        started = asyncio.Event()
+
+        async def authorize(user_id, login):
+            await asyncio.wait_for(started.wait(), 1)
+            raise RuntimeError("GitHub OAuth provider failed: timeout")
+
+        async def authorize_user(token):
+            started.set()
+            return True
+
+        flow = _fallback_flow(authorize, authorize_user)
+        flow._user_tokens[42] = "private-token"
+        assert await flow.has_access({"id": 42, "login": "alice"}) is True
 
     asyncio.run(scenario())
