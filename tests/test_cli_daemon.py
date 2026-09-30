@@ -41,7 +41,7 @@ def test_service_environment_uses_recorded_tools_and_loopback(tmp_path: Path):
 
     assert environment["ENGINE_CONFIG"] == str(tmp_path / "config" / "openengine" / "engine.toml")
     assert environment["ENGINE_HOST"] == "127.0.0.1"
-    assert environment["PATH"].split(":")[:2] == ["/usr/bin", "/opt/node/bin"]
+    assert environment["PATH"].split(":")[:2] == ["/opt/node/bin", "/usr/bin"]
     assert "/usr/local/bin" in environment["PATH"].split(":")
 
 
@@ -357,3 +357,55 @@ def test_start_rotates_an_oversized_log(home: Path, monkeypatch):
 
     assert not log.exists()
     assert log.with_name("engine-web.log.1").read_bytes() == b"x" * 11
+
+
+@pytest.mark.parametrize("reported, level, detail", [
+    ("v18.20.8", "warn", "too old"),
+    ("v20.18.9", "warn", "too old"),
+    ("v20.19.0", "ok", "v20.19.0"),
+    ("v22.23.3", "ok", "v22.23.3"),
+    ("invalid", "warn", "unrecognized"),
+])
+def test_doctor_checks_node_version(home, monkeypatch, reported, level, detail):
+    monkeypatch.setattr(daemon, "detect_tools", lambda: {"node": "/tools/node"})
+    monkeypatch.setattr(daemon.subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args, 0, reported + "\n", ""))
+    finding = next(f for f in daemon.diagnose() if f.name == "node")
+    assert finding.level == level
+    assert detail in finding.detail
+    if level == "warn":
+        assert "rerun the installer or install Node.js 20.19+" in finding.detail
+
+
+@pytest.mark.parametrize("recorded", [False, True])
+def test_doctor_reports_missing_node(home, monkeypatch, recorded):
+    monkeypatch.setattr(daemon, "detect_tools", lambda: {})
+    if recorded:
+        daemon.prepare_directories()
+        daemon.write_record(daemon.Record("process", _spec(home, tools={"node": str(home / "missing-node")})))
+    finding = next(f for f in daemon.diagnose() if f.name == "node")
+    assert finding.level == "warn"
+    assert "missing" in finding.detail
+    assert "Node.js 20.19+" in finding.detail
+
+
+def test_bundled_tools_win_over_system_node_and_git_directory(home, monkeypatch):
+    bundled = home / "custom prefix" / "node" / "22.23.3" / "bin"
+    bundled.mkdir(parents=True)
+    system = home / "system"
+    system.mkdir()
+    for directory in (bundled, system):
+        for name in ("node", "npx", "git"):
+            path = directory / name
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
+    monkeypatch.setenv("PATH", str(system))
+    monkeypatch.setenv("ENGINE_NODE_BIN", str(bundled))
+    tools = daemon.detect_tools()
+    assert tools["node"] == str(bundled / "node")
+    assert tools["npx"] == str(bundled / "npx")
+    assert tools["git"] == str(system / "git")
+    environment = _spec(home, tools=tools).environment()
+    assert environment["PATH"].split(os.pathsep)[0] == str(bundled)
+    for name in ("node", "npx"):
+        assert daemon.shutil.which(name, path=environment["PATH"]) == str(bundled / name)

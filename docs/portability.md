@@ -36,14 +36,15 @@ and independently authenticated:
 
 - `git` is required for workspace management.
 - `gh` is required for GitHub-backed source control.
-- Node.js with `npx` is required to run an agent. Every agent runs over ACP,
+- Node.js 20.19+ with `npx` is required to run an agent. Every agent runs over ACP,
   and OpenEngine launches the pinned ACP adapters
   (`@agentclientprotocol/codex-acp` and
   `@agentclientprotocol/claude-agent-acp`) through `npx`. The Codex adapter
   brings its own Codex, so no `codex` executable is needed; each provider still
   needs its own credentials (`codex login`, or a Claude login or API key).
 
-`engine doctor` distinguishes required tools from optional integrations so
+`engine doctor` reports missing or too-old Node.js with installation guidance,
+and distinguishes required tools from optional integrations so
 installation can succeed before the user chooses an agent provider.
 
 ## One artifact, two installers
@@ -51,7 +52,13 @@ installation can succeed before the user chooses an agent provider.
 Each release produces one self-contained archive for every supported OS and
 architecture. The archive contains a standalone OpenEngine executable, the
 built web client, licenses, and release metadata. It does not contain Node.js,
-the ACP adapters, or agent credentials.
+the ACP adapters, or agent credentials. The shell installer separately downloads
+pinned, SHA-256-verified Node.js LTS when PATH has no Node.js 20.19+.
+It reuses `$prefix/node/<version>` on subsequent installs and records the bundled
+Node and npx directory first in the service PATH. macOS and glibc Linux on x64
+and arm64 are supported. On musl Linux it warns and continues without downloading
+Node; install Node.js 20.19+ and npm through the system package manager
+(`apk add nodejs npm` on Alpine). Homebrew behavior is unchanged.
 
 The release archive is the boundary all installers consume:
 

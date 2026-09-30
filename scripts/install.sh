@@ -18,6 +18,7 @@ set -eu
 REPOSITORY="OpenEngine/OpenEngine"
 PYTHON_VERSION="3.12"
 installer_uv_version="0.9.28"
+installer_node_version="22.23.3"
 
 usage() {
   cat <<EOF
@@ -113,6 +114,53 @@ verify() {
   [ "$actual" = "$2" ] || die "SHA-256 mismatch for $(basename "$1"): expected $2, got $actual"
 }
 
+# Official Linux Node builds require glibc; uv's static musl target does not
+# identify the host libc.
+node_supported=1
+case $(uname -s) in
+  Darwin) node_os=darwin ;;
+  Linux)
+    node_os=linux
+    case $(ldd --version 2>&1 || true) in *musl*) node_supported=0 ;; esac
+    for loader in /lib/ld-musl-*; do
+      [ ! -e "$loader" ] || node_supported=0
+    done
+    ;;
+esac
+case $cpu in aarch64) node_cpu=arm64 ;; x86_64) node_cpu=x64 ;; esac
+node_target="$node_os-$node_cpu"
+# https://nodejs.org/dist/v22.23.3/SHASUMS256.txt
+case $node_target in
+  darwin-arm64) node_sha256=23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53 ;;
+  darwin-x64) node_sha256=8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8 ;;
+  linux-arm64) node_sha256=5ced2d48d1d7198739b7f86804de0171aefb6823b684b12341d3321afc3cb0b2 ;;
+  linux-x64) node_sha256=1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af ;;
+esac
+node_suitable() {
+  "$1" --version 2>/dev/null | awk '
+    /^v[0-9]+\.[0-9]+\.[0-9]+$/ {
+      split(substr($0, 2), v, ".")
+      if (v[1] > 20 || (v[1] == 20 && v[2] >= 19)) ok=1
+    }
+    END { exit !ok }
+  '
+}
+node_home="$prefix/node/$installer_node_version"
+if ! node_suitable node; then
+  if [ "$node_supported" = 0 ]; then
+    warn "musl Linux: install Node.js 20.19+ and npm with your system package manager (apk add nodejs npm); agents need npx"
+  elif ! node_suitable "$node_home/bin/node" || [ ! -x "$node_home/bin/npx" ]; then
+    say "downloading Node.js $installer_node_version"
+    fetch "https://nodejs.org/dist/v$installer_node_version/node-v$installer_node_version-$node_target.tar.gz" "$work/node.tar.gz"
+    verify "$work/node.tar.gz" "$node_sha256"
+    tar -xzf "$work/node.tar.gz" -C "$work"
+    node_suitable "$work/node-v$installer_node_version-$node_target/bin/node" || die "downloaded Node.js cannot run on this machine"
+    mkdir -p "$prefix/node"
+    rm -rf "$node_home"
+    mv "$work/node-v$installer_node_version-$node_target" "$node_home"
+  fi
+fi
+
 # Nothing from the caller's uv setup applies: no configuration files, no UV_*
 # variables, no active virtualenv, and only the Python uv downloads itself.
 for name in $(env | sed -n 's/^\(UV_[A-Za-z0-9_]*\)=.*/\1/p'); do
@@ -196,6 +244,12 @@ write_shim() {
 # Written by the OpenEngine installer; rerunning it rewrites this file.
 if [ -z "\${ENGINE_CONFIG:-}" ]; then ENGINE_CONFIG=$(shell_quote "$config"); fi
 export ENGINE_CONFIG
+if [ -x $(shell_quote "$node_home/bin/node") ] && [ $(shell_quote "$node_supported") = 1 ]; then
+  ENGINE_NODE_BIN=$(shell_quote "$node_home/bin")
+  export ENGINE_NODE_BIN
+  PATH="\$ENGINE_NODE_BIN:\$PATH"
+  export PATH
+fi
 exec $(shell_quote "$prefix/current/venv/bin/$2") "\$@"
 EOF
   chmod 755 "$work/shim"

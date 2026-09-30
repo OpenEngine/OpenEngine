@@ -650,3 +650,18 @@ async def test_unavailable_model_fails_instead_of_using_the_default() -> None:
     async with connected() as client:
         with pytest.raises(ACPSessionError, match="Unknown model"):
             await client.new_session(session_config={"model": "unavailable"})
+
+
+@pytest.mark.parametrize("executable", ["npx", "npx.cmd", "other-agent"])
+@asyncio_test
+async def test_missing_adapter_executable_has_actionable_error(tmp_path: Path, executable: str) -> None:
+    provider = StdioACPProvider(name="missing", command=(str(tmp_path / executable), "--yes", "adapter"))
+    with pytest.raises(ACPConnectionError) as raised:
+        await provider.connect()
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+    if executable in {"npx", "npx.cmd"}:
+        assert "Node.js 20.19+" in str(raised.value)
+        assert "rerun the OpenEngine installer" in str(raised.value)
+    else:
+        assert "could not start the ACP agent" in str(raised.value)
+        assert "Node.js" not in str(raised.value)

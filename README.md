@@ -10,7 +10,7 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ```
 ## Getting started
 
-On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
+On macOS or Linux, with Git installed and Codex or Claude
 logged in on this machine, run:
 
 ```bash
@@ -19,7 +19,10 @@ curl -LsSf https://openengine.sh/install.sh | sh
 
 This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
 opens [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to
-reopen it and rerun the installer to upgrade.
+reopen it and rerun the installer to upgrade. The installer uses Node.js 20.19+
+from your PATH when available, otherwise downloads a pinned, SHA-256-verified
+Node.js LTS for agents. On musl Linux (such as Alpine), install Node.js 20.19+
+and npm yourself (`apk add nodejs npm`); the installer warns and continues.
 
 OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key.
 

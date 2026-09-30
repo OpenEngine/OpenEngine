@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import plistlib
+import re
 import shutil
 import signal
 import socket
@@ -123,7 +124,13 @@ def engine_web_executable() -> Path:
 
 
 def detect_tools() -> dict[str, str]:
-    return {name: str(Path(found).absolute()) for name in TOOLS if (found := shutil.which(name))}
+    found_tools = {name: str(Path(found).absolute()) for name in TOOLS if (found := shutil.which(name))}
+    if bundled := os.environ.get("ENGINE_NODE_BIN"):
+        for name in ("node", "npx"):
+            path = Path(bundled) / name
+            if path.is_file() and os.access(path, os.X_OK):
+                found_tools[name] = str(path.absolute())
+    return found_tools
 
 
 @dataclass(frozen=True)
@@ -142,7 +149,9 @@ class ServiceSpec:
 
     def environment(self) -> dict[str, str]:
         directories: list[str] = []
-        for tool in self.tools.values():
+        # npx uses /usr/bin/env node: select its Node before other tool dirs.
+        ordered = [self.tools[name] for name in ("node", "npx") if name in self.tools]
+        for tool in [*ordered, *self.tools.values()]:
             directory = str(Path(tool).parent)
             if directory not in directories:
                 directories.append(directory)
@@ -729,6 +738,25 @@ def _port_finding(port: int) -> Finding:
     return Finding("port", "ok", f"{HOST}:{port} is free")
 
 
+NODE_FIX = "rerun the installer or install Node.js 20.19+ with npm, then rerun engine daemon setup"
+
+
+def _node_finding(path: str) -> Finding:
+    try:
+        result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5, check=True)
+    except FileNotFoundError:
+        return Finding("node", "warn", f"{path} missing; {NODE_FIX}")
+    except (OSError, subprocess.SubprocessError) as error:
+        return Finding("node", "warn", f"cannot check {path}: {error}; {NODE_FIX}")
+    reported = result.stdout.strip()
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", reported)
+    if match is None:
+        return Finding("node", "warn", f"unrecognized Node.js version {reported!r}; {NODE_FIX}")
+    if tuple(map(int, match.groups())) < (20, 19, 0):
+        return Finding("node", "warn", f"{path} {reported} is too old; {NODE_FIX}")
+    return Finding("node", "ok", f"{path} {reported}")
+
+
 def diagnose() -> list[Finding]:
     config = config_path()
     findings: list[Finding] = []
@@ -755,7 +783,13 @@ def diagnose() -> list[Finding]:
         path = recorded.get(name) or found.get(name)
         if path:
             note = "" if record is None or name in recorded else " (on PATH, but not recorded; rerun engine daemon setup)"
-            findings.append(Finding(name, "ok", path + note))
+            if name == "node":
+                finding = _node_finding(path)
+                findings.append(replace(finding, detail=finding.detail + note))
+            else:
+                findings.append(Finding(name, "ok", path + note))
+        elif name in {"node", "npx"}:
+            findings.append(Finding(name, "warn", f"{name} missing; {NODE_FIX}"))
         elif name in REQUIRED_TOOLS:
             findings.append(Finding(name, "warn", f"{name} not found; install it and rerun engine daemon setup"))
         else:

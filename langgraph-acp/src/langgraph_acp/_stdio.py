@@ -147,8 +147,14 @@ async def connect_over_stdio(
             limit=MAX_MESSAGE_BYTES,
         )
     except OSError as exc:
+        hint = ""
+        if isinstance(exc, FileNotFoundError) and os.path.basename(launched[0]) in {"npx", "npx.cmd"}:
+            hint = (
+                "; Node.js 20.19+ with npm is required; rerun the OpenEngine installer "
+                "or install Node.js 20.19+ with your system package manager"
+            )
         raise ACPConnectionError(
-            f"could not start the ACP agent: {' '.join(launched)!r} ({exc})",
+            f"could not start the ACP agent: {' '.join(launched)!r} ({exc}){hint}",
             agent=agent,
             operation="connect",
         ) from exc
