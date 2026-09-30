@@ -60,8 +60,11 @@ server's no. The sign-in token has only `read:user` scope, so it can confirm
 write access to public github.com repositories only. For a private repository
 it gets no answer, and a lookup that gets no answer admits nobody. The token
 was issued for the verified user ID, so the answer stays bound to that ID. The
-server keeps it in memory, never on disk, for rechecks, and drops it when the
-user signs out or is refused. When neither lookup confirms access, login is
+server keeps it in memory, never on disk, for rechecks. Each browser session
+keeps its own token, so signing out in one browser leaves the others theirs.
+The server drops a session's token when that session signs out or its cookie
+expires, and drops all of a user's tokens when GitHub says the user no longer
+has access. When neither lookup confirms access, login is
 refused with `/login?error=unverified`, and the login page says the server's
 GitHub connection probably needs reconnecting.
 

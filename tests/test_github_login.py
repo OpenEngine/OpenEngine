@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import time
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
@@ -795,7 +796,8 @@ def test_the_users_own_token_admits_them_when_the_servers_lookup_fails():
     assert client.get("/api/data").status_code == 200
     # Signed-in users are told the server's connection is failing.
     assert client.get("/api/auth/github/status").json()["accessCheckFailing"] is True
-    assert flow._user_tokens == {42: "private-token"}
+    [(token, _)] = flow._user_tokens[42].values()
+    assert token == "private-token"
     client.post("/api/auth/github/logout")
     assert flow._user_tokens == {}
 
@@ -848,7 +850,59 @@ def test_both_lookups_share_one_time_budget():
             return True
 
         flow = _fallback_flow(authorize, authorize_user)
-        flow._user_tokens[42] = "private-token"
+        flow._user_tokens[42] = {"session": ("private-token", time.time() + 60)}
         assert await flow.has_access({"id": 42, "login": "alice"}) is True
 
     asyncio.run(scenario())
+
+
+def test_signing_out_keeps_the_fallback_for_the_users_other_browsers():
+    """Each session keeps its own sign-in token, so one sign-out does not strand the rest."""
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        return True
+
+    flow = _fallback_flow(authorize, authorize_user)
+    laptop, _ = _sign_in(flow)
+    phone, _ = _sign_in(flow)
+    assert len(flow._user_tokens[42]) == 2
+
+    laptop.post("/api/auth/github/logout")
+    flow._access.clear()  # the five-minute recheck comes due
+
+    assert len(flow._user_tokens[42]) == 1
+    assert phone.get("/api/data").status_code == 200
+
+
+def test_a_sign_in_token_is_dropped_when_its_session_expires():
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        return True
+
+    flow = _fallback_flow(authorize, authorize_user)
+    _sign_in(flow)
+    assert 42 in flow._user_tokens
+
+    with patch("engine.apps.web.github_login.time.time", return_value=time.time() + 86401):
+        assert flow._user_token(7) is None
+    assert flow._user_tokens == {}
+
+
+def test_a_sign_in_token_is_dropped_when_access_is_revoked():
+    answers = [True, False]
+
+    async def authorize(user_id, login):
+        return answers.pop(0)
+
+    flow = _fallback_flow(authorize, None)
+    client, response = _sign_in(flow)
+    assert response.headers["location"] == "/"
+    assert 42 in flow._user_tokens
+
+    flow._access.clear()
+    assert client.get("/api/data").status_code == 401
+    assert flow._user_tokens == {}

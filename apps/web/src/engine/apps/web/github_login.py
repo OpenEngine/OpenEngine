@@ -113,9 +113,11 @@ class GitHubLogin:
         # counted only when `authorize` fails, and then only as a yes, so a
         # broken server connection does not lock out everyone who could fix it.
         self.authorize_user = authorize_user
-        # user id -> the read:user token GitHub issued at that user's latest
-        # sign-in. Kept in memory only, like the signing key, for rechecks.
-        self._user_tokens: dict[int, str] = {}
+        # user id -> session id -> (the read:user token GitHub issued at that
+        # sign-in, when that session's cookie expires). Kept in memory only,
+        # like the signing key, for rechecks, and per session, so signing out
+        # in one browser leaves the others their fallback.
+        self._user_tokens: dict[int, dict[str, tuple[str, float]]] = {}
         # user id -> (allowed, monotonic expiry). Only GitHub's answers are
         # kept; a failed lookup is retried by the next request.
         self._access: dict[int, tuple[bool, float]] = {}
@@ -144,22 +146,30 @@ class GitHubLogin:
     def _sign(self, payload: str) -> str:
         return hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
 
-    def _make_session_cookie(self, user_id: int, login: str) -> str:
-        """Build a signed session value: id|login|expires|signature."""
-        expires = int(time.time()) + _SESSION_TTL
-        payload = f"{user_id}|{login}|{expires}"
+    def _make_session_cookie(
+        self, user_id: int, login: str, session_id: str | None = None, expires: int | None = None
+    ) -> str:
+        """Build a signed session value: id|login|expires|session id|signature."""
+        expires = int(time.time()) + _SESSION_TTL if expires is None else expires
+        session_id = secrets.token_urlsafe(16) if session_id is None else session_id
+        payload = f"{user_id}|{login}|{expires}|{session_id}"
         return f"{payload}|{self._sign(payload)}"
 
     def _read_session(self, request: Request) -> dict[str, object] | None:
         """Verify and decode the session cookie, or None if invalid/expired."""
+        session = self._session(request)
+        return None if session is None else session[0]
+
+    def _session(self, request: Request) -> tuple[dict[str, object], str] | None:
+        """The session cookie's user and session id, or None if invalid/expired."""
         cookie = request.cookies.get(_SESSION_COOKIE, "")
         if not cookie or len(cookie) > 512:
             return None
         parts = cookie.split("|")
-        if len(parts) != 4:
+        if len(parts) != 5:
             return None
-        user_id_str, login, expires_str, signature = parts
-        payload = "|".join(parts[:3])
+        user_id_str, login, expires_str, session_id, signature = parts
+        payload = "|".join(parts[:4])
         if not secrets.compare_digest(signature.encode(), self._sign(payload).encode()):
             return None
         try:
@@ -167,9 +177,27 @@ class GitHubLogin:
             user_id = int(user_id_str)
         except ValueError:
             return None
-        if expires <= time.time() or user_id <= 0 or not login:
+        if expires <= time.time() or user_id <= 0 or not login or not session_id:
             return None
-        return {"id": user_id, "login": login}
+        return {"id": user_id, "login": login}, session_id
+
+    def _user_token(self, user_id: int) -> str | None:
+        """A sign-in token from one of the user's unexpired sessions, dropping expired ones."""
+        now = time.time()
+        for owner in list(self._user_tokens):
+            sessions = self._user_tokens[owner]
+            for session_id in [s for s, (_, expires) in sessions.items() if expires <= now]:
+                del sessions[session_id]
+            if not sessions:
+                del self._user_tokens[owner]
+        sessions = self._user_tokens.get(user_id)
+        return next(iter(sessions.values()))[0] if sessions else None
+
+    def _drop_user_token(self, user_id: int, session_id: str) -> None:
+        sessions = self._user_tokens.get(user_id, {})
+        sessions.pop(session_id, None)
+        if not sessions:
+            self._user_tokens.pop(user_id, None)
 
     async def has_access(self, user: dict[str, object], *, fresh: bool = False) -> bool | None:
         """Whether `user` may use the app: GitHub's answer, or None if it could not be had.
@@ -185,7 +213,7 @@ class GitHubLogin:
             cached = self._access.get(user_id)
             if not fresh and cached is not None and cached[1] > time.monotonic():
                 return cached[0]
-            token = self._user_tokens.get(user_id)
+            token = self._user_token(user_id)
             # Started at once rather than after a failure, so both lookups
             # share one timeout budget.
             fallback = (asyncio.ensure_future(self.authorize_user(token))
@@ -208,6 +236,9 @@ class GitHubLogin:
             finally:
                 if fallback is not None:
                     fallback.cancel()
+            if not allowed:
+                # Access is gone, so no session needs a fallback for it.
+                self._user_tokens.pop(user_id, None)
             self._access[user_id] = (allowed, time.monotonic() + _ACCESS_TTL)
             return allowed
 
@@ -339,11 +370,14 @@ class GitHubLogin:
                     raise ValueError("Invalid identity")
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
-        # Bound to the ID GitHub just returned for this token.
-        self._user_tokens[user["id"]] = token
+        # Bound to the ID GitHub just returned for this token, and kept only
+        # as long as the session cookie issued for it.
+        session_id = secrets.token_urlsafe(16)
+        expires = int(time.time()) + _SESSION_TTL
+        self._user_tokens.setdefault(user["id"], {})[session_id] = (token, expires)
         allowed = await self.has_access(user, fresh=True)
         if not allowed:
-            self._user_tokens.pop(user["id"], None)
+            self._drop_user_token(user["id"], session_id)
         if allowed is None:
             # The identity is verified; only the permission check failed.
             return RedirectResponse("/login?error=unverified", status_code=302)
@@ -352,7 +386,7 @@ class GitHubLogin:
             return RedirectResponse("/login?error=forbidden", status_code=302)
         # Issue a session cookie and redirect to the app.
         response = RedirectResponse(pending[3], status_code=302)
-        session_value = self._make_session_cookie(user["id"], user["login"])
+        session_value = self._make_session_cookie(user["id"], user["login"], session_id, expires)
         response.set_cookie(_SESSION_COOKIE, session_value, max_age=_SESSION_TTL,
                             path="/", secure=self._is_secure(),
                             httponly=True, samesite="lax")
@@ -386,10 +420,10 @@ class GitHubLogin:
         return response
 
     async def logout(self, request: Request) -> Response:
-        user = self._read_session(request)
-        if user is None:
+        session = self._session(request)
+        if session is None:
             return JSONResponse({"ok": True}, headers=_HEADERS)
-        self._user_tokens.pop(int(user["id"]), None)
+        self._drop_user_token(int(session[0]["id"]), session[1])
         response = JSONResponse({"ok": True}, headers=_HEADERS)
         response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
                                samesite="lax", secure=self._is_secure())
