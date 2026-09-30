@@ -888,7 +888,7 @@ def test_a_sign_in_token_is_dropped_when_its_session_expires():
     assert 42 in flow._user_tokens
 
     with patch("engine.apps.web.github_login.time.time", return_value=time.time() + 86401):
-        assert flow._user_token(7) is None
+        assert flow._user_tokens_of(7) == []
     assert flow._user_tokens == {}
 
 
@@ -906,3 +906,47 @@ def test_a_sign_in_token_is_dropped_when_access_is_revoked():
     flow._access.clear()
     assert client.get("/api/data").status_code == 401
     assert flow._user_tokens == {}
+
+
+@pytest.mark.parametrize("first", [False, RuntimeError("token revoked")])
+def test_any_of_the_users_tokens_can_vouch_for_them(first):
+    """One browser's revoked or read-only token does not stop another's from admitting the user."""
+    import asyncio
+
+    asked = []
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        asked.append(token)
+        if token == "revoked-token":
+            if isinstance(first, Exception):
+                raise first
+            return first
+        return True
+
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    flow._user_tokens[42] = {"laptop": ("revoked-token", later), "phone": ("good-token", later)}
+
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is True
+    assert sorted(asked) == ["good-token", "revoked-token"]
+
+
+def test_no_token_that_confirms_access_admits_nobody():
+    import asyncio
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        if token == "a":
+            raise RuntimeError("token revoked")
+        return False
+
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    flow._user_tokens[42] = {"laptop": ("a", later), "phone": ("b", later)}
+
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is None

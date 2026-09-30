@@ -181,8 +181,8 @@ class GitHubLogin:
             return None
         return {"id": user_id, "login": login}, session_id
 
-    def _user_token(self, user_id: int) -> str | None:
-        """A sign-in token from one of the user's unexpired sessions, dropping expired ones."""
+    def _user_tokens_of(self, user_id: int) -> list[str]:
+        """The sign-in tokens of the user's unexpired sessions, dropping expired ones."""
         now = time.time()
         for owner in list(self._user_tokens):
             sessions = self._user_tokens[owner]
@@ -190,8 +190,11 @@ class GitHubLogin:
                 del sessions[session_id]
             if not sessions:
                 del self._user_tokens[owner]
-        sessions = self._user_tokens.get(user_id)
-        return next(iter(sessions.values()))[0] if sessions else None
+        sessions = self._user_tokens.get(user_id, {})
+        # Every token here was issued for this same user ID, so any one of
+        # them may vouch for it; one revoked in another browser must not
+        # stop the rest from being asked.
+        return list(dict.fromkeys(token for token, _ in sessions.values()))
 
     def _drop_user_token(self, user_id: int, session_id: str) -> None:
         sessions = self._user_tokens.get(user_id, {})
@@ -213,12 +216,13 @@ class GitHubLogin:
             cached = self._access.get(user_id)
             if not fresh and cached is not None and cached[1] > time.monotonic():
                 return cached[0]
-            token = self._user_token(user_id)
-            # Started at once rather than after a failure, so both lookups
+            # Started at once rather than after a failure, so all lookups
             # share one timeout budget.
-            fallback = (asyncio.ensure_future(self.authorize_user(token))
-                        if token and self.authorize_user is not None else None)
-            if fallback is not None:
+            fallbacks = [
+                asyncio.ensure_future(self.authorize_user(token))
+                for token in self._user_tokens_of(user_id)
+            ] if self.authorize_user is not None else []
+            for fallback in fallbacks:
                 # Its answer is unwanted once the server's lookup answers.
                 fallback.add_done_callback(lambda done: done.cancelled() or done.exception())
             try:
@@ -227,14 +231,14 @@ class GitHubLogin:
             except Exception:
                 log.exception("could not check repository access for %s", login)
                 self.access_check_failing = True
-                if not await self._confirmed_by_user(fallback, login):
+                if not await self._confirmed_by_user(fallbacks, login):
                     # Access that cannot be confirmed is not granted, but
                     # neither is the failure remembered: the next request
                     # asks again.
                     return None
                 allowed = True
             finally:
-                if fallback is not None:
+                for fallback in fallbacks:
                     fallback.cancel()
             if not allowed:
                 # Access is gone, so no session needs a fallback for it.
@@ -243,18 +247,18 @@ class GitHubLogin:
             return allowed
 
     @staticmethod
-    async def _confirmed_by_user(fallback: asyncio.Future[bool] | None, login: str) -> bool:
-        """Whether the user's own token showed write access; a failure is not a yes."""
-        if fallback is None:
-            return False
-        try:
-            confirmed = await fallback
-        except Exception:
-            log.exception("could not check repository access for %s with their own token", login)
-            return False
-        if confirmed:
-            log.warning("admitted %s on their own token's answer; the server's lookup failed", login)
-        return confirmed is True
+    async def _confirmed_by_user(fallbacks: list[asyncio.Future[bool]], login: str) -> bool:
+        """Whether any of the user's own tokens showed write access; a failure is not a yes."""
+        for answer in asyncio.as_completed(fallbacks):
+            try:
+                confirmed = await answer
+            except Exception:
+                log.exception("could not check repository access for %s with their own token", login)
+                continue
+            if confirmed is True:
+                log.warning("admitted %s on their own token's answer; the server's lookup failed", login)
+                return True
+        return False
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
