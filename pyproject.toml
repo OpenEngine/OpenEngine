@@ -54,12 +54,12 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["apps", "packages", "migrations"]
+source = ["apps", "packages", "migrations", "workflows"]
 
 [tool.coverage.report]
 # Discover unexecuted files across the engine namespace packages as well.
 include_namespace_packages = true
-include = ["*/src/engine/*", "migrations/*"]
+include = ["*/src/engine/*", "migrations/*", "workflows/*"]
 precision = 2
-# Initial full-suite line coverage is 85%; allow a small platform/version margin.
+# Initial full-suite line coverage is 85.12%; allow a small platform/version margin.
 fail_under = 84
