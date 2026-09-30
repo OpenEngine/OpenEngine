@@ -3760,3 +3760,19 @@ def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
             assert not hasattr(store, "save_project")
 
     asyncio.run(scenario())
+
+
+def test_engines_own_info_lines_reach_the_log():
+    """Without a handler Python prints only warnings, so every decision Engine
+    logged at INFO -- a webhook ignored and why -- went nowhere."""
+    import logging
+
+    from engine.apps.web.__main__ import configure_logging
+
+    engine = logging.getLogger("engine")
+    before = engine.level
+    try:
+        configure_logging()
+        assert logging.getLogger("engine.apps.web.github_ingress").isEnabledFor(logging.INFO)
+    finally:
+        engine.setLevel(before)

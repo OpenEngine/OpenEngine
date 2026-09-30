@@ -10,6 +10,7 @@ which constructs the same application again in every fresh child process.
 
 import argparse
 import ipaddress
+import logging
 import os
 import subprocess
 import sys
@@ -352,6 +353,24 @@ def compose_app(
     )
 
 
+#: Timestamped, and named by logger, because the log is read after the fact:
+#: "what happened to that webhook an hour ago" is answered by the time and the
+#: module that said it, and a line without either is one nobody can place.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging() -> None:
+    """Show Engine's own INFO lines; keep libraries at WARNING.
+
+    Without a handler Python prints only warnings, so every decision Engine
+    logs at INFO -- a webhook ignored and why, a merge accepted -- was written
+    to nowhere. Libraries stay at WARNING because some log every HTTP request
+    at INFO, which would bury the lines this is for.
+    """
+    logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
+    logging.getLogger("engine").setLevel(logging.INFO)
+
+
 def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
     """Read the configuration and compose the application from it.
 
@@ -359,6 +378,7 @@ def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
     in each child process it starts, so the configuration file is selected by
     ``ENGINE_CONFIG`` there rather than by a command line the child never saw.
     """
+    configure_logging()
     return compose_app(*read_configuration(config_path))
 
 
@@ -375,6 +395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _service_token_reader(loaded)
             report_wiring(settings)
             return 0
+        configure_logging()
         app = compose_app(loaded, workflow_catalog)
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)
