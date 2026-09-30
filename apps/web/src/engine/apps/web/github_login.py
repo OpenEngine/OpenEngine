@@ -184,8 +184,8 @@ class GitHubLogin:
             return None
         return {"id": user_id, "login": login}, session_id
 
-    def _user_tokens_of(self, user_id: int) -> list[str]:
-        """The sign-in tokens of the user's unexpired sessions, dropping expired ones."""
+    def _drop_expired_user_tokens(self) -> None:
+        """Forget the sign-in tokens of every session whose cookie has expired."""
         now = time.time()
         for owner in list(self._user_tokens):
             sessions = self._user_tokens[owner]
@@ -193,6 +193,10 @@ class GitHubLogin:
                 del sessions[session_id]
             if not sessions:
                 del self._user_tokens[owner]
+
+    def _user_tokens_of(self, user_id: int) -> list[str]:
+        """The sign-in tokens of the user's unexpired sessions, dropping expired ones."""
+        self._drop_expired_user_tokens()
         sessions = self._user_tokens.get(user_id, {})
         # Every token here was issued for this same user ID, so any one of
         # them may vouch for it; one revoked in another browser must not
@@ -212,6 +216,9 @@ class GitHubLogin:
         works at once.
         """
         user_id, login = user["id"], user["login"]
+        # Swept on every check, operators' included, so a token outlives its
+        # session only until the next request from anyone.
+        self._drop_expired_user_tokens()
         if self.authorize is None or user_id in self.operators:
             return True
         lock = self._access_locks.setdefault(user_id, asyncio.Lock())

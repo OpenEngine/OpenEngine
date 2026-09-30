@@ -996,3 +996,20 @@ def test_no_token_that_confirms_access_admits_nobody():
     flow._user_tokens[42] = {"laptop": ("a", later), "phone": ("b", later)}
 
     assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is None
+
+
+def test_every_access_check_drops_expired_sign_in_tokens():
+    """Expired tokens go on the next check by anyone, even one the server answers."""
+    import asyncio
+
+    async def authorize(user_id, login):
+        return True
+
+    flow = _fallback_flow(authorize, None)
+    flow.operators = frozenset({7})
+    flow._user_tokens[42] = {"old": ("expired-token", time.time() - 1),
+                             "new": ("live-token", time.time() + 60)}
+    flow._user_tokens[43] = {"old": ("expired-token", time.time() - 1)}
+
+    assert asyncio.run(flow.has_access({"id": 7, "login": "operator"})) is True
+    assert flow._user_tokens == {42: {"new": ("live-token", flow._user_tokens[42]["new"][1])}}
