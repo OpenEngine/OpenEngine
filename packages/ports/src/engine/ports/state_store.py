@@ -27,11 +27,21 @@ from engine.domain.ids import (
     WorkspaceId,
 )
 from engine.domain.state import RunState
+from engine.domain.projects import Project
 
 
 @runtime_checkable
 class StateStore(Protocol):
     """Persists run state, agent identity, and conversation history."""
+
+    async def list_projects(self) -> Sequence[Project]:
+        ...
+
+    async def save_project(self, project: Project) -> None:
+        ...
+
+    async def delete_project(self, project_id: str) -> bool:
+        ...
 
     async def load(self, run_id: RunId) -> RunState | None:
         """Return the stored state, or None if the run is unknown."""

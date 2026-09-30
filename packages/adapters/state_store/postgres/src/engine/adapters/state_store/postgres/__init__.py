@@ -19,6 +19,7 @@ from engine.domain.ids import (
     TaskId,
     WorkspaceId,
 )
+from engine.domain.projects import Project
 from engine.domain.state import RunState
 
 
@@ -32,6 +33,15 @@ class PostgresStateStore:
         # TODO: Implement PostgreSQL storage when OpenEngine has a need for it.
         self._dsn = dsn
         self._schema = schema
+
+    async def list_projects(self) -> Sequence[Project]:
+        raise NotImplementedError("Postgres reads land with the state-store ticket")
+
+    async def save_project(self, project: Project) -> None:
+        raise NotImplementedError("Postgres writes land with the state-store ticket")
+
+    async def delete_project(self, project_id: str) -> bool:
+        raise NotImplementedError("Postgres writes land with the state-store ticket")
 
     async def load(self, run_id: RunId) -> RunState | None:
         raise NotImplementedError("Postgres reads land with the state-store ticket")

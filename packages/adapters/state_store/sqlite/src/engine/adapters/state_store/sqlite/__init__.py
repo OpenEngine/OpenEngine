@@ -1,7 +1,7 @@
 """Durable workflow-run and conversation persistence backed by SQLite."""
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 import json
 from pathlib import Path
@@ -35,6 +35,7 @@ from engine.domain.ids import (
     WorkflowId,
     WorkspaceId,
 )
+from engine.domain.projects import Project
 from engine.domain.state import RunOrigin, RunPhase, RunState
 
 
@@ -54,6 +55,32 @@ class SQLiteStateStore:
             upgrade_connection(self._connection)
 
     # --- workflow runs ----------------------------------------------------
+
+    async def list_projects(self) -> Sequence[Project]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT project_json FROM autonomous_projects ORDER BY rowid"
+            ).fetchall()
+        projects = []
+        for row in rows:
+            fields = json.loads(row[0])
+            fields["weekdays"] = tuple(fields["weekdays"])
+            projects.append(Project(**fields))
+        return tuple(projects)
+
+    async def save_project(self, project: Project) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT INTO autonomous_projects (project_id, project_json) VALUES (?, ?) "
+                "ON CONFLICT(project_id) DO UPDATE SET project_json = excluded.project_json",
+                (project.project_id, json.dumps(asdict(project))),
+            )
+
+    async def delete_project(self, project_id: str) -> bool:
+        with self._lock, self._connection:
+            return self._connection.execute(
+                "DELETE FROM autonomous_projects WHERE project_id = ?", (project_id,)
+            ).rowcount > 0
 
     async def load(self, run_id: RunId) -> RunState | None:
         with self._lock:

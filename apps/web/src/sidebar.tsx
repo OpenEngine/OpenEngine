@@ -9,9 +9,10 @@ import {
 } from "./api";
 import { RailBrand, RailFoot } from "./brand";
 import { SettingsPanel } from "./settings-panel";
+import { ProjectsSidebar } from "./projects";
 import { runArchived, runFinished, runStatusLabel } from "./runs";
 
-export type RailSection = "workflows";
+export type RailSection = "workflows" | "projects";
 
 /** The nodes of each graph, by the id of the graph they belong to. */
 export type GraphNodes = Record<string, ApiGraphTopology["nodes"]>;
@@ -384,6 +385,9 @@ export function Sidebar({
               );
             })}
           </nav>
+        </Section>
+        <Section id="projects" title="Projects" open={open === "projects"} onToggle={toggle}>
+          {open === "projects" && <ProjectsSidebar />}
         </Section>
       </div>
       {settingsOpen ? (

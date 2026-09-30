@@ -405,10 +405,10 @@ it("hides scheduled workorders and shows them after starting", () => {
   expect(screen.getByText("First run")).toBeInTheDocument();
 });
 
-it("shows WorkOrders without a Projects accordion or creation link", () => {
+it("shows WorkOrders with a collapsed Projects section", () => {
   render(<Sidebar runs={[run]} />);
   expect(screen.getByRole("button", { name: "WorkOrders" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByRole("link", { name: "+ New WorkOrder" })).toHaveAttribute("href", "/runs/new");
-  expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
   expect(screen.queryByRole("link", { name: /New project/i })).not.toBeInTheDocument();
 });

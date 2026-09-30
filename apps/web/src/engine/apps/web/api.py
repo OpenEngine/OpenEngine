@@ -40,6 +40,8 @@ from collections.abc import (
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfoNotFoundError
+
 from importlib.metadata import version
 from html import escape
 from pathlib import Path
@@ -48,6 +50,8 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
+from engine.apps.web.projects import ProjectScheduler
+from engine.domain.projects import Project
 from engine.apps.web.graph_progress import GraphProgress
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_communications import (
@@ -1529,10 +1533,12 @@ def create_app(
                     await restore_graph_runs(surface.runtime)
                     dependency_task = asyncio.create_task(dispatch_dependencies())
                     dependencies_changed.set()
+                    project_task = asyncio.create_task(project_scheduler.run())
 
                     async def stop_dependencies() -> None:
                         dependency_task.cancel()
-                        await asyncio.gather(dependency_task, return_exceptions=True)
+                        project_task.cancel()
+                        await asyncio.gather(dependency_task, project_task, return_exceptions=True)
 
                     opened.push_async_callback(stop_dependencies)
             ready = graph_runtime is None or surface.runtime is not None
@@ -2040,6 +2046,76 @@ def create_app(
             run = await run_reader.get(state.run_id)
             assert run is not None
             return JSONResponse(_run_json(run))
+
+    async def start_project(project: Project) -> RunState:
+        graph = offered_graphs().get(project.workflow)
+        if graph is None or surface.runtime is None:
+            raise ValueError("Project workflow is unavailable")
+        return await start_graph_run(
+            surface.runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=project.instructions, repository=project.repository,
+            requester=project.requester,
+        )
+
+    project_scheduler = ProjectScheduler(session.state_store, start_project)
+
+    def project_json(project: Project) -> dict[str, object]:
+        value = asdict(project)
+        if project.budget_date != project.local_date(datetime.now(UTC)):
+            value["used_budget"] = 0
+        return value
+
+    async def projects(request: Request) -> Response:
+        async with project_scheduler.lock:
+            listed = await session.state_store.list_projects()
+            if request.method == "GET":
+                return JSONResponse([project_json(project) for project in listed])
+            project_id = request.path_params.get("project_id")
+            existing = next((p for p in listed if p.project_id == project_id), None)
+            if project_id and existing is None:
+                return _error("project not found", 404)
+            if request.method == "DELETE":
+                await session.state_store.delete_project(project_id)
+                return Response(status_code=204)
+            body = await _json_body(request)
+            editable = {
+                "name", "repository", "workflow", "instructions", "timezone",
+                "weekdays", "start_time", "end_time", "daily_budget", "enabled",
+            }
+            try:
+                if not isinstance(body, dict) or set(body) - editable:
+                    raise ValueError("unknown project fields")
+                fields = {**(asdict(existing) if existing else {}), **body}
+                fields["project_id"] = project_id or f"project-{uuid4().hex[:12]}"
+                if "weekdays" in fields:
+                    fields["weekdays"] = tuple(fields["weekdays"])
+                fields["requester"] = _web_requester(request)
+                fields["error"] = ""
+                project = Project(**fields)
+                if project.workflow not in offered_graphs():
+                    raise ValueError("unknown workflow definition")
+                # Validate defaults now, before an enabled project can spend budget.
+                resolve_inputs(getattr(offered_graphs()[project.workflow], "inputs", ()), {})
+                configured_repositories = {
+                    str(Path(path).expanduser().resolve())
+                    for path in (*(repos or {}).values(), work_orders.repository) if path
+                }
+                if not repos:
+                    configured_repositories.add(str(Path.cwd()))
+                if str(Path(project.repository).expanduser().resolve()) not in configured_repositories:
+                    raise ValueError("select a configured repository")
+                # Changing timezone must not reset today's persisted allowance.
+                if existing and existing.timezone != project.timezone:
+                    project = replace(project, budget_date=project.local_date(datetime.now(UTC)))
+            except (ValueError, TypeError, ZoneInfoNotFoundError) as error:
+                return _error(str(error), 400)
+            if existing and not existing.enabled and project.enabled and existing.last_run_id:
+                previous = await session.state_store.load(RunId(existing.last_run_id))
+                if previous is not None and previous.phase is RunPhase.FAILED:
+                    project = replace(project, last_run_id="")
+            await session.state_store.save_project(project)
+            return JSONResponse(project_json(project), status_code=200 if existing else 201)
 
     async def create_run(request: Request) -> JSONResponse:
         """Persist a workflow request and start its supported local execution."""
@@ -3830,6 +3906,8 @@ def create_app(
         Route("/api/health", health),
         *github_login.routes(),
         Route("/api/config", config),
+        Route("/api/projects", projects, methods=["GET", "POST"]),
+        Route("/api/projects/{project_id}", projects, methods=["PATCH", "DELETE"]),
         Route("/api/github/status", github_status),
         Route("/api/source-control/status", source_control_status),
         Route("/api/source-control/provider", source_control_provider_status),

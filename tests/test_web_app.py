@@ -3701,8 +3701,6 @@ def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             for method, path in (
-                ("GET", "/api/projects"),
-                ("POST", "/api/projects"),
                 ("GET", "/api/projects/old/milestones"),
                 ("POST", "/api/projects/old/milestones/goal/scope"),
             ):
@@ -3716,6 +3714,67 @@ def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
             })
             assert response.status_code == 201
             assert response.json()["title"] == "New chat"
-            assert not hasattr(store, "save_project")
+            assert not await store.list_projects()
 
+    asyncio.run(scenario())
+
+
+def test_autonomous_project_api_validates_and_preserves_budget() -> None:
+    from datetime import UTC, datetime
+
+    store = InMemoryStateStore()
+    app, _ = _graph_app(store, _review_graph(), repos={"engine": "."})
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                fields = dict(name="Maintenance", repository=str(Path.cwd()), workflow="implementation-review-codex",
+                              instructions="Add useful tests", timezone="UTC")
+                created = await client.post("/api/projects", json=fields)
+                assert created.status_code == 201
+                value = created.json()
+                assert not value["enabled"]
+                url = f'/api/projects/{value["project_id"]}'
+                for invalid in ({"weekdays": []}, {"daily_budget": 0}, {"timezone": "Unknown/Place"},
+                                {"repository": "/unconfigured"}, {"used_budget": 0}):
+                    assert (await client.patch(url, json=invalid)).status_code == 400
+                saved, = await store.list_projects()
+                await store.save_project(replace(saved, used_budget=1, budget_date=datetime.now(UTC).date().isoformat()))
+                edited = await client.patch(url, json={"instructions": "Improve docs", "enabled": True})
+                assert edited.status_code == 200
+                assert edited.json()["used_budget"] == 1
+                assert edited.json()["instructions"] == "Improve docs"
+                assert (await client.get("/api/projects")).json() == [edited.json()]
+                failed = RunState(RunId("failed-project"), TaskId("t"), WorkflowId(saved.workflow), phase=RunPhase.FAILED)
+                await store.save(failed)
+                await store.save_project(replace(saved, enabled=False, last_run_id=str(failed.run_id)))
+                resumed = await client.patch(url, json={"enabled": True})
+                assert resumed.json()["last_run_id"] == ""
+                assert (await client.delete(url)).status_code == 204
+                assert (await client.get("/api/projects")).json() == []
+                assert (await client.patch(url, json={"enabled": True})).status_code == 404
+    asyncio.run(scenario())
+
+
+def test_autonomous_project_starts_on_server_startup(monkeypatch) -> None:
+    from engine.domain.projects import Project
+
+    store = InMemoryStateStore()
+    app, runtime = _graph_app(store, _review_graph())
+    # Scheduling boundaries are tested against explicit clocks in test_projects.
+    monkeypatch.setattr(Project, "eligible", lambda self, now: self.enabled and self.used_budget == 0)
+
+    async def scenario():
+        await store.save_project(Project("p1", "Tests", ".", "implementation-review-codex", "Cover missing tests", enabled=True))
+        async with app.router.lifespan_context(app):
+            for _ in range(100):
+                saved, = await store.list_projects()
+                if saved.last_run_id:
+                    break
+                await asyncio.sleep(0.01)
+            assert saved.last_run_id
+            snapshot = await runtime.snapshot(RunId(saved.last_run_id))
+            assert snapshot.values["task"] == "Cover missing tests"
+            assert snapshot.values["repository"] == "."
+            assert saved.used_budget == 1
     asyncio.run(scenario())

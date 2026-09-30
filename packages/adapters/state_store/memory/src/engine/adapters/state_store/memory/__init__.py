@@ -34,6 +34,7 @@ from engine.domain.ids import (
     TaskId,
     WorkspaceId,
 )
+from engine.domain.projects import Project
 from engine.domain.state import RunState
 
 
@@ -48,6 +49,7 @@ class InMemoryStateStore:
 
     def __init__(self) -> None:
         self._lock = Lock()
+        self._projects: dict[str, Project] = {}
         self._states: dict[RunId, RunState] = {}
         self._instances: dict[AgentInstanceId, AgentInstance] = {}
         self._conversations: dict[AgentInstanceId, Conversation] = {}
@@ -57,6 +59,18 @@ class InMemoryStateStore:
         self._message_numbers = count(1)
 
     # --- runs ------------------------------------------------------------
+
+    async def list_projects(self) -> Sequence[Project]:
+        with self._lock:
+            return tuple(self._projects.values())
+
+    async def save_project(self, project: Project) -> None:
+        with self._lock:
+            self._projects[project.project_id] = project
+
+    async def delete_project(self, project_id: str) -> bool:
+        with self._lock:
+            return self._projects.pop(project_id, None) is not None
 
     async def load(self, run_id: RunId) -> RunState | None:
         with self._lock:

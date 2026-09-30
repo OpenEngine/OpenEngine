@@ -1582,3 +1582,19 @@ select:disabled { cursor: default; }
   pointer-events: none;
 }
 .info-tip:hover::after, .info-tip:focus::after { visibility: visible; }
+
+/* Project scheduling controls live in the same rail as WorkOrders. */
+.projects-panel { padding: 12px; }
+.projects-panel .rail-item-trigger { width: 100%; text-align: left; background: none; border: 0; color: inherit; }
+.project-form h2 { font-size: 16px; }
+.project-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.project-form label { display: grid; gap: 5px; margin-bottom: 12px; font-size: 12px; }
+.project-form input:not([type=checkbox]), .project-form select, .project-form textarea {
+  width: 100%; min-width: 0; box-sizing: border-box; padding: 8px;
+  color: var(--white); background: var(--night); border: 1px solid var(--night-rule); border-radius: 4px;
+}
+.project-form textarea { resize: vertical; }
+.project-form .project-days { display: flex; flex-wrap: wrap; gap: 8px; }
+.project-days legend { margin-bottom: 8px; font-size: 12px; }
+.project-days label, .project-form .project-enabled { display: flex; align-items: center; }
+.projects-panel [role=alert] { font-size: 12px; overflow-wrap: anywhere; }
