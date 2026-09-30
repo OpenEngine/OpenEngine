@@ -100,6 +100,17 @@ export default function Home() {
             </div>
           </div>
 
+          <figure className={styles.video}>
+            <video
+              controls
+              playsInline
+              preload="metadata"
+              poster="/video/openengine-v1-poster.jpg"
+              aria-label="OpenEngine 1.0 release walkthrough">
+              <source src="/video/openengine-v1.mp4" type="video/mp4" />
+            </video>
+          </figure>
+
           <figure className={styles.graph}>
             <div className={styles.graphHead}>
               <span className={styles.eyebrow}>implementation-review-rerank</span>
