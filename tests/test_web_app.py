@@ -3914,6 +3914,42 @@ def test_an_agent_cannot_depend_on_another_repositorys_run(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """A chat cannot be given a checkout of a repository its user cannot push
+    to, whether named or the server's default, attached for the first time or
+    again after a detach."""
+    runner = ConcurrentRunner()
+    store = InMemoryStateStore()
+    repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
+    app = create_app(
+        _workspace_session(runner, ConversationWorkspaces(), store), {"test": runner},
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+        repos=repos,
+        login_repositories=("acme/api", "acme/web"),
+        repository_projects={"api": "acme/api", "web": "acme/web"},
+    )
+
+    async def scenario():
+        instance = await store.create_instance(CODER)
+        path = f"/api/threads/{instance.instance_id}/workspace"
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            for body in ({"repository": str(Path(repos["web"]).resolve())}, {"repository": "web"}, {}):
+                refused = await client.post(path, json=body)
+                assert refused.status_code == 403, (body, refused.text)
+            assert (await store.load_instance(instance.instance_id)).workspace_id is None
+            api = {"repository": str(Path(repos["api"]).resolve())}
+            assert (await client.post(path, json=api)).status_code == 200
+            assert (await client.delete(path)).status_code == 200
+            assert (await client.post(path, json={"repository": "web"})).status_code == 403
+            assert (await client.post(path, json=api)).status_code == 200
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+
+
 def test_operators_see_every_run(tmp_path) -> None:
     """Operators see everything, including runs no GitHub repository maps to."""
     app, _store, _repos = _scoped_app(tmp_path)

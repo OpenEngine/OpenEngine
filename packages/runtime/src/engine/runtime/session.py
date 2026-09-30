@@ -195,6 +195,11 @@ class AgentSession:
         return next(iter(self._runners))
 
     @property
+    def workspace_repository(self) -> str | None:
+        """The checkout a conversation works in when none is named."""
+        return self._workspace_repository
+
+    @property
     def state_store(self) -> StateStore:
         """The durable boundary used by read-side services in the same process."""
         return self._capabilities.state_store

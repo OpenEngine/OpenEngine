@@ -2424,6 +2424,13 @@ def create_app(
         repository = body.get("repository")
         if repository is not None and (not isinstance(repository, str) or not repository.strip()):
             return _error("repository must be a non-empty string", 400)
+        # A checkout, named or the default, is only for those who can write to
+        # its repository: the chat's agent may read and change it.
+        target = repository or session.workspace_repository
+        if target is not None and not repository_visible(
+            await github_login.visible_repositories(request), target
+        ):
+            return _error("you cannot write to this repository", 403)
         try:
             thread = await service.attach_workspace(instance_id, repository)
         except RuntimeError as error:
