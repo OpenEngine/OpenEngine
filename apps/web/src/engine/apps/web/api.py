@@ -56,8 +56,8 @@ from engine.apps.web.github_communications import (
     GithubCommunications,
 )
 from engine.apps.web.github_ingress import (
-    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_co_author,
-    github_requester,
+    GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReviewRequest,
+    github_co_author, github_requester,
 )
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -106,6 +106,11 @@ from engine.domain import (
     ForgeMode,
     MODE_INPUT,
     Message,
+    REVIEW_BRANCH_INPUT,
+    REVIEW_PR_INPUT,
+    REVIEW_REF_INPUT,
+    STATE_INPUT,
+    WorkState,
     Role,
     RunId,
     RunOrigin,
@@ -3264,6 +3269,7 @@ def create_app(
     async def github_start_workorder(
         store: GithubProvenance | None, repository: str, number: int, prompt: str,
         *, replacing: RunId | None, requester: str | None = None,
+        inputs: Mapping[str, str] | None = None,
     ) -> Continuation:
         """Start a work order for a pull request that has no run in flight.
 
@@ -3306,7 +3312,7 @@ def create_app(
         assert runtime is not None  # only reached with a runtime in hand
         state = await start_graph_run(
             runtime, graph,
-            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), inputs or {}),
             prompt=prompt, repository=await github_checkout(repository),
             requester=requester,
         )
@@ -3514,6 +3520,69 @@ def create_app(
             requester=github_requester(assignment.sender_id, assignment.sender),
         )
 
+    async def github_review_pull_request(requested: GithubReviewRequest) -> None:
+        """A review requested from Engine starts a review of the pull request.
+
+        The same run `engine review <PR URL>` starts, in connected mode: checked
+        out at the pull request's branch, reviewed, and stopped at triage. A
+        pull request a work order is still working on is left to it: that run
+        reviews its own change.
+        """
+        delivery = urlsplit(requested.url)
+        found = change_request(delivery._replace(
+            path=f"/{requested.repository}/pull/{requested.number}", query="", fragment="",
+        ).geturl())
+        if found is None:
+            return
+        repository = found.project
+        url = pull_request_url(repository, requested.number)
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            may_write = await session.capabilities.source_control.can_write_repository(
+                url, requested.sender,
+            )
+        if not may_write:
+            log.info(
+                "ignored a review of #%s requested by %s, who cannot write to %s",
+                requested.number, requested.sender, repository,
+            )
+            return
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        declared = {item.name: item for item in getattr(graph, "inputs", ())}
+        state = declared.get(STATE_INPUT)
+        if state is None or WorkState.REVIEW not in state.choices:
+            raise RuntimeError("the configured workflow cannot start in review")
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("could not start a review: graph runtime unavailable")
+        run_id = await github_run_for_pull_request(repository, requested.number)
+        if run_id is not None:
+            try:
+                snapshot = await runtime.snapshot(run_id)
+            except UnknownGraphError:
+                snapshot = None
+            if snapshot is not None and snapshot.status in STEERABLE_RUN_STATUSES:
+                log.info(
+                    "a review of %s#%s was requested, but work order %s is still on it",
+                    repository, requested.number, run_id,
+                )
+                return
+        inputs = {
+            STATE_INPUT: str(WorkState.REVIEW),
+            REVIEW_REF_INPUT: f"origin/{requested.branch}",
+            REVIEW_PR_INPUT: url,
+            REVIEW_BRANCH_INPUT: requested.branch,
+            MODE_INPUT: str(ForgeMode.CONNECTED),
+        }
+        await github_start_workorder(
+            getattr(runtime, "store", None), repository, requested.number,
+            f"Review pull request {url}: {requested.title}",
+            replacing=run_id,
+            requester=github_requester(requested.sender_id, requested.sender),
+            inputs={name: value for name, value in inputs.items() if name in declared},
+        )
+
     async def github_concierge_turn(comment: GithubComment) -> None:
         # Issue comments do not start work; only assignment events do.
         if not comment.is_pull_request:
@@ -3716,6 +3785,7 @@ def create_app(
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
         handle_assignment=github_create_workorder,
+        handle_review_request=github_review_pull_request,
         activity=github_activity,
     )
 
