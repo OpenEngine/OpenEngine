@@ -31,8 +31,7 @@ from platformdirs import user_config_path, user_data_path, user_state_path
 
 from engine.apps.cli import daemon, onboarding
 from engine.domain import (
-    MODE_INPUT, REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT, STATE_INPUT, TRIAGE_TOOL,
-    ForgeMode, WorkState, finding_comment,
+    STATE_INPUT, TRIAGE_TOOL, WorkState, finding_comment, review_inputs,
 )
 from engine.runtime.change_requests import ChangeRequest, change_request, remote_project
 
@@ -1115,17 +1114,9 @@ def review_workflow(config: dict[str, Any]) -> dict[str, Any]:
 def start_review(server: str, config: dict[str, Any], target: ReviewTarget) -> str:
     workflow = review_workflow(config)
     declared = {item.get("name") for item in workflow.get("inputs") or [] if isinstance(item, dict)}
-    inputs = {
-        STATE_INPUT: str(WorkState.REVIEW),
-        REVIEW_REF_INPUT: target.ref,
-        REVIEW_PR_INPUT: target.pr_url,
-        REVIEW_BRANCH_INPUT: target.branch,
-        # Without a pull request branch there is nothing to push to or wait on CI for.
-        MODE_INPUT: str(ForgeMode.CONNECTED if target.pr_url and target.branch else ForgeMode.DISCONNECTED),
-    }
     run = request_json(server, "/api/runs", {
         "prompt": target.task, "repository": target.repository, "workflowId": workflow["id"],
-        "inputs": {name: value for name, value in inputs.items() if name in declared},
+        "inputs": review_inputs(declared, ref=target.ref, pr_url=target.pr_url, branch=target.branch),
     })
     return str(run["runId"])
 

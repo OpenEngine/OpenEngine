@@ -30,6 +30,7 @@ from engine.domain.findings import (
     REVIEW_REF_INPUT,
     TRIAGE_TOOL,
     finding_comment,
+    review_inputs,
 )
 from engine.domain.forge import MODE_INPUT, ForgeMode, forge_mode
 from engine.domain.ids import (
@@ -85,6 +86,7 @@ __all__ = [
     "MODE_INPUT",
     "forge_mode",
     "finding_comment",
+    "review_inputs",
     "REVIEW_BRANCH_INPUT",
     "REVIEW_PR_INPUT",
     "REVIEW_REF_INPUT",

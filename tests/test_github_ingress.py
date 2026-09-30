@@ -735,3 +735,77 @@ def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
             client.portal.call(ingress.drain)
             assert len(handled) == 1
         client.portal.call(ingress.close)
+
+
+def _review_requested(**pull_request) -> dict:
+    return {
+        "action": "review_requested",
+        "repository": {"full_name": "acme/api"},
+        "requested_reviewer": {"login": "OpenEngineBot"},
+        "sender": {"login": "maintainer", "id": 7, "type": "User"},
+        "pull_request": dict(
+            number=12, state="open", title="Add the feature",
+            html_url="https://github.com/acme/api/pull/12",
+            head={"ref": "feature", "sha": "abc123", "repo": {"full_name": "acme/api"}},
+            **pull_request,
+        ),
+    }
+
+
+def test_review_request_reads_pull_request_and_requester():
+    from engine.apps.web.github_ingress import review_request_from_payload
+
+    requested = review_request_from_payload(
+        "pull_request", _review_requested(), self_login="openenginebot",
+    )
+    assert requested is not None
+    assert (requested.repository, requested.number, requested.sender, requested.sender_id) == (
+        "acme/api", 12, "maintainer", 7)
+    assert (requested.branch, requested.head_sha, requested.title) == (
+        "feature", "abc123", "Add the feature")
+
+
+@pytest.mark.parametrize("change", [
+    {"action": "opened"}, {"action": "review_request_removed"},
+    {"requested_reviewer": {"login": "someone"}}, {"requested_reviewer": None},
+    {"sender": {"login": "bot", "type": "Bot"}},
+    {"pull_request": {"number": 12, "state": "closed"}},
+    {"pull_request": {
+        "number": 12, "state": "open",
+        "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "fork/api"}},
+    }},
+])
+def test_other_review_requests_are_ignored(change):
+    from engine.apps.web.github_ingress import review_request_from_payload
+
+    assert review_request_from_payload(
+        "pull_request", dict(_review_requested(), **change), self_login="OpenEngineBot",
+    ) is None
+    assert review_request_from_payload("pull_request", _review_requested()) is None
+
+
+def test_review_request_webhook_queues_one_review_per_commit():
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    handled = []
+    lookup = AsyncMock(return_value="openenginebot")
+    ingress = GithubIngress(
+        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+        authenticated_login=lookup, handle_review_request=_record(handled),
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    pushed = _review_requested()
+    pushed["pull_request"]["head"] = dict(pushed["pull_request"]["head"], sha="def456")
+    with TestClient(app) as client:
+        for payload in (_review_requested(), _review_requested(), pushed):
+            body = json.dumps(payload).encode()
+            response = client.post("/events", content=body, headers=dict(
+                _signed(body), **{"x-github-event": "pull_request"}))
+            assert response.status_code == 200
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert [requested.head_sha for requested in handled] == ["abc123", "def456"]
+    lookup.assert_awaited_with("acme/api")

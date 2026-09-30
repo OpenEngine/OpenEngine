@@ -10,6 +10,11 @@ A finding reads the same whether the reranker posts it or a person does from
 
 from __future__ import annotations
 
+from collections.abc import Container
+
+from engine.domain.forge import MODE_INPUT, ForgeMode
+from engine.domain.states import STATE_INPUT, WorkState
+
 #: The tool name a triage question is raised under, so a client can tell the
 #: choice of findings to fix from a verdict or an agent's permission request.
 TRIAGE_TOOL = "findings_triage"
@@ -20,6 +25,22 @@ TRIAGE_TOOL = "findings_triage"
 REVIEW_REF_INPUT = "ref"
 REVIEW_PR_INPUT = "pr_url"
 REVIEW_BRANCH_INPUT = "branch"
+
+
+def review_inputs(declared: Container[str], *, ref: str, pr_url: str, branch: str) -> dict[str, str]:
+    """The creation inputs of a run started in review, limited to those `declared`.
+
+    Connected only with a pull request branch: without one there is nothing
+    to push a fix to or wait on CI for.
+    """
+    inputs = {
+        STATE_INPUT: str(WorkState.REVIEW),
+        REVIEW_REF_INPUT: ref,
+        REVIEW_PR_INPUT: pr_url,
+        REVIEW_BRANCH_INPUT: branch,
+        MODE_INPUT: str(ForgeMode.CONNECTED if pr_url and branch else ForgeMode.DISCONNECTED),
+    }
+    return {name: value for name, value in inputs.items() if name in declared}
 
 
 def finding_comment(tagline: str, description: str, *, agent: str = "", facet: str = "") -> str:
@@ -37,4 +58,5 @@ __all__ = [
     "REVIEW_REF_INPUT",
     "TRIAGE_TOOL",
     "finding_comment",
+    "review_inputs",
 ]

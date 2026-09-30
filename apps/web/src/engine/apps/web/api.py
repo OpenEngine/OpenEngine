@@ -56,8 +56,8 @@ from engine.apps.web.github_communications import (
     GithubCommunications,
 )
 from engine.apps.web.github_ingress import (
-    GithubAssignment, GithubComment, GithubIngress, GithubMerge, github_co_author,
-    github_requester,
+    GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReviewRequest,
+    github_co_author, github_requester,
 )
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -106,6 +106,8 @@ from engine.domain import (
     ForgeMode,
     MODE_INPUT,
     Message,
+    STATE_INPUT,
+    WorkState,
     Role,
     RunId,
     RunOrigin,
@@ -114,6 +116,7 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkspaceId,
+    review_inputs,
 )
 from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, resolve_inputs
 from engine.graph_runtime import (
@@ -3205,6 +3208,19 @@ def create_app(
             return None
         return await store.run_for_pull_request(repository.lower(), number)
 
+    async def github_active_run(repository: str, number: int) -> tuple[RunId | None, bool]:
+        """The work order recorded for this pull request, and whether it can still be steered."""
+        run_id = await github_run_for_pull_request(repository, number)
+        runtime = surface.runtime
+        if run_id is None or runtime is None:
+            return run_id, False
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except UnknownGraphError:
+            # A saved work order can outlive the graph it was started from.
+            return run_id, False
+        return run_id, snapshot.status in STEERABLE_RUN_STATUSES
+
     async def github_checkout(project: str) -> str:
         """The local checkout a forge `project` key is worked on in.
 
@@ -3264,6 +3280,7 @@ def create_app(
     async def github_start_workorder(
         store: GithubProvenance | None, repository: str, number: int, prompt: str,
         *, replacing: RunId | None, requester: str | None = None,
+        inputs: Mapping[str, str] | None = None,
     ) -> Continuation:
         """Start a work order for a pull request that has no run in flight.
 
@@ -3306,7 +3323,7 @@ def create_app(
         assert runtime is not None  # only reached with a runtime in hand
         state = await start_graph_run(
             runtime, graph,
-            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), inputs or {}),
             prompt=prompt, repository=await github_checkout(repository),
             requester=requester,
         )
@@ -3414,28 +3431,14 @@ def create_app(
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not reach a work order: graph runtime unavailable")
-        # Through the binding that owns the provenance table rather than
-        # through the control surface, which is deliberately forge-agnostic and
-        # has no business growing a method shaped like a pull request.
-        store: GithubProvenance | None = getattr(runtime, "store", None)
-        run_id = (
-            None if store is None
-            else await store.run_for_pull_request(repository.lower(), number)
-        )
-        snapshot = None
-        if run_id is not None:
-            try:
-                snapshot = await runtime.snapshot(run_id)
-            except UnknownGraphError:
-                # A saved work order can outlive the graph it was started from.
-                snapshot = None
-        if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+        run_id, steerable = await github_active_run(repository, number)
+        if not steerable:
             if not allow_start:
                 raise RuntimeError(
                     "no active work order and Engine was not @mentioned"
                 )
             reached = await github_start_workorder(
-                store, repository, number, prompt, replacing=run_id,
+                getattr(runtime, "store", None), repository, number, prompt, replacing=run_id,
                 requester=origin.requester or None,
             )
         else:
@@ -3514,6 +3517,59 @@ def create_app(
             requester=github_requester(assignment.sender_id, assignment.sender),
         )
 
+    async def github_review_pull_request(requested: GithubReviewRequest) -> None:
+        """A review requested from Engine starts a review of the pull request.
+
+        The same run `engine review <PR URL>` starts, in connected mode: checked
+        out at the pull request's branch, reviewed, and stopped at triage. A
+        pull request a work order is still working on is left to it: that run
+        reviews its own change.
+        """
+        delivery = urlsplit(requested.url)
+        found = change_request(delivery._replace(
+            path=f"/{requested.repository}/pull/{requested.number}", query="", fragment="",
+        ).geturl())
+        if found is None:
+            return
+        repository = found.project
+        url = pull_request_url(repository, requested.number)
+        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+            may_write = await session.capabilities.source_control.can_write_repository(
+                url, requested.sender,
+            )
+        if not may_write:
+            log.info(
+                "ignored a review of #%s requested by %s, who cannot write to %s",
+                requested.number, requested.sender, repository,
+            )
+            return
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        declared = {item.name: item for item in getattr(graph, "inputs", ())}
+        state = declared.get(STATE_INPUT)
+        if state is None or WorkState.REVIEW not in state.choices:
+            raise RuntimeError("the configured workflow cannot start in review")
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("could not start a review: graph runtime unavailable")
+        run_id, steerable = await github_active_run(repository, requested.number)
+        if steerable:
+            log.info(
+                "a review of %s#%s was requested, but work order %s is still on it",
+                repository, requested.number, run_id,
+            )
+            return
+        await github_start_workorder(
+            getattr(runtime, "store", None), repository, requested.number,
+            f"Review pull request {url}: {requested.title}",
+            replacing=run_id,
+            requester=github_requester(requested.sender_id, requested.sender),
+            inputs=review_inputs(
+                declared, ref=f"origin/{requested.branch}", pr_url=url, branch=requested.branch,
+            ),
+        )
+
     async def github_concierge_turn(comment: GithubComment) -> None:
         # Issue comments do not start work; only assignment events do.
         if not comment.is_pull_request:
@@ -3570,14 +3626,8 @@ def create_app(
             rf"(?<![\w@-])@{re.escape(login)}(?![\w-])", comment.body, re.IGNORECASE,
         ))
         if not mentioned:
-            run_id = await github_run_for_pull_request(comment.repository, comment.number)
-            snapshot = None
-            if run_id is not None and surface.runtime is not None:
-                try:
-                    snapshot = await surface.runtime.snapshot(run_id)
-                except UnknownGraphError:
-                    pass
-            if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+            _, steerable = await github_active_run(comment.repository, comment.number)
+            if not steerable:
                 github_activity.ignored("no active work order and Engine was not @mentioned")
                 return
         thread_id = str(comment.number)
@@ -3716,6 +3766,7 @@ def create_app(
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
         handle_assignment=github_create_workorder,
+        handle_review_request=github_review_pull_request,
         activity=github_activity,
     )
 
