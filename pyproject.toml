@@ -36,6 +36,7 @@ dev = [
     # in-memory saver shared between the two would not.
     "langgraph-checkpoint-sqlite>=2.0",
     "pytest>=8.0",
+    "pytest-cov>=7.0",
     "watchfiles>=1.0",
 ]
 
@@ -51,3 +52,14 @@ markers = [
     "compatibility: drives a real provider agent; scheduled rather than per-PR",
     "integration: boots a real local dependency and exercises its public interface",
 ]
+
+[tool.coverage.run]
+source = ["apps", "packages", "migrations"]
+
+[tool.coverage.report]
+# Discover unexecuted files across the engine namespace packages as well.
+include_namespace_packages = true
+include = ["*/src/engine/*", "migrations/*"]
+precision = 2
+# Initial full-suite line coverage is 85%; allow a small platform/version margin.
+fail_under = 84
