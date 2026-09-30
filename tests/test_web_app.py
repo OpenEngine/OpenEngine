@@ -3719,7 +3719,8 @@ def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
     asyncio.run(scenario())
 
 
-def test_autonomous_project_api_validates_and_preserves_budget() -> None:
+@pytest.mark.parametrize("origin", [None, "http://test", "http://localhost:3000"])
+def test_autonomous_project_api_validates_and_preserves_budget(origin) -> None:
     from datetime import UTC, datetime
 
     store = InMemoryStateStore()
@@ -3730,6 +3731,8 @@ def test_autonomous_project_api_validates_and_preserves_budget() -> None:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                 fields = dict(name="Maintenance", repository=str(Path.cwd()), workflow="implementation-review-codex",
                               instructions="Add useful tests", timezone="UTC")
+                if origin:
+                    client.headers["origin"] = origin
                 created = await client.post("/api/projects", json=fields)
                 assert created.status_code == 201
                 value = created.json()
@@ -3753,6 +3756,36 @@ def test_autonomous_project_api_validates_and_preserves_budget() -> None:
                 assert (await client.delete(url)).status_code == 204
                 assert (await client.get("/api/projects")).json() == []
                 assert (await client.patch(url, json={"enabled": True})).status_code == 404
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("origin", ["https://elsewhere.example", "http://localhost.evil.example", "null"])
+def test_autonomous_project_mutations_reject_cross_origin_requests(origin) -> None:
+    from engine.domain.projects import Project
+
+    store = InMemoryStateStore()
+    app, _ = _graph_app(store, _review_graph(), repos={"engine": "."})
+    saved = Project("existing", "Maintenance", str(Path.cwd()),
+                    "implementation-review-codex", "Improve tests")
+
+    async def scenario():
+        await store.save_project(saved)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                fields = dict(name="Injected", repository=str(Path.cwd()), workflow=saved.workflow,
+                              instructions="Attacker instructions", enabled=True)
+                for method, url, body in (
+                    ("POST", "/api/projects", fields),
+                    ("PATCH", "/api/projects/existing", {"enabled": True, "instructions": "Injected"}),
+                    ("DELETE", "/api/projects/existing", None),
+                ):
+                    response = await client.request(
+                        method, url, content=json.dumps(body),
+                        headers={"origin": origin, "content-type": "text/plain"},
+                    )
+                    assert response.status_code == 403
+                    assert await store.list_projects() == (saved,)
+                assert (await client.get("/api/projects", headers={"origin": origin})).status_code == 200
     asyncio.run(scenario())
 
 

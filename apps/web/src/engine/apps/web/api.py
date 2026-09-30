@@ -2067,6 +2067,8 @@ def create_app(
         return value
 
     async def projects(request: Request) -> Response:
+        if request.method != "GET" and not _is_local_request(request):
+            return _error("forbidden", 403)
         async with project_scheduler.lock:
             listed = await session.state_store.list_projects()
             if request.method == "GET":
