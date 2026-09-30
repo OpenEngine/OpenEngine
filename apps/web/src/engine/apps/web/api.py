@@ -1975,6 +1975,14 @@ def create_app(
         graph = _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        if depends_on_run_id is not None and github_login_config is not None:
+            # An agent acts for its own WorkOrder's repository, so another
+            # repository's run is as unknown to it as one that does not exist.
+            prerequisite = await session.state_store.load(depends_on_run_id)
+            if prerequisite is None or not same_repository(
+                prerequisite.repository, parent.repository
+            ):
+                raise ValueError(f"unknown prerequisite workorder: {depends_on_run_id}")
         assert surface.runtime is not None
         state = await start_graph_run(
             surface.runtime, graph,
@@ -3931,6 +3939,12 @@ def create_app(
             return True
         project = run_project(repository or work_orders.repository)
         return project is not None and project in visible
+
+    def same_repository(repository: str, other: str) -> bool:
+        """Whether two runs' repositories are the same GitHub repository, or the same checkout."""
+        repository, other = repository or work_orders.repository, other or work_orders.repository
+        project = run_project(repository)
+        return project == run_project(other) if project is not None else repository == other
 
     async def run_hidden(request: Request, run_id: RunId) -> bool:
         """Whether `run_id` is outside what `request` may see.

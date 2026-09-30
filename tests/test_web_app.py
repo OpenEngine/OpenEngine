@@ -3757,13 +3757,13 @@ def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
     asyncio.run(scenario())
 
 
-def _scoped_app(tmp_path):
+def _scoped_app(tmp_path, runtime=None):
     """Two checkouts behind GitHub login, and a run in each place a run can be."""
     graph = _review_graph()
     store = InMemoryStateStore()
     repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
     app = _graph_app_over(
-        store, ScriptedGraphRuntime(graph), graph,
+        store, runtime or ScriptedGraphRuntime(graph), graph,
         github_login_config=GitHubLoginConfig(
             "client", "secret", "https://engine.test/api/auth/github/callback"
         ),
@@ -3889,6 +3889,29 @@ def test_a_graph_run_stream_is_rechecked_against_its_own_repository(tmp_path) ->
         AsyncMock(side_effect=lambda *_args, **_kwargs: frozenset(writable)),
     ):
         asyncio.run(scenario())
+
+
+def test_an_agent_cannot_depend_on_another_repositorys_run(tmp_path) -> None:
+    """An agent's WorkOrder may wait on runs in its own repository only; any
+    other run is as unknown as a missing one, whatever its state."""
+    runtime = ScriptedGraphRuntime(_review_graph())
+    creators = []
+    runtime.bind_workorder_creator = creators.append
+    app, store, _repos = _scoped_app(tmp_path, runtime)
+
+    async def scenario():
+        async with app.app.router.lifespan_context(app.app):
+            create = creators[0]
+            for prerequisite in ("run-web", "run-web-scheduled", "run-elsewhere", "run-missing"):
+                with pytest.raises(ValueError) as refused:
+                    await create(RunId("run-api"), "Follow up", RunId(prerequisite))
+                assert str(refused.value) == f"unknown prerequisite workorder: {prerequisite}"
+            # The same repository, named by its checkout path or GitHub project.
+            for prerequisite in ("run-api-path", "run-github"):
+                _url, child = await create(RunId("run-api"), "Follow up", RunId(prerequisite))
+                assert (await store.load(RunId(child))).depends_on_run_id == prerequisite
+
+    asyncio.run(scenario())
 
 
 def test_operators_see_every_run(tmp_path) -> None:
