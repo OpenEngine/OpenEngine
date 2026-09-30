@@ -50,6 +50,10 @@ requirements; distinguish assumptions from confirmed facts. Ask questions in the
 Plan browser, terminal, HTTP or mixed cases for the feature. Include happy paths and meaningful
 error/boundary cases. Use questions only for missing information that actually blocks testing.
 In execution, start needed services, check readiness, and exercise actual behavior. Set up one
+runtime using the project's declared version requirements before running tests. If a test runner
+fails to initialize, inspect its underlying exception and dependency engine requirements; use an
+already installed compatible runtime when available. Do not call a runner startup failure a failed
+product assertion. Set up one
 dependency at a time: authenticate or verify its context, start it, inspect its output and confirm
 readiness before starting the next dependency or the target app. If a documented shell helper
 selects an AWS account or credential environment, run the dependent port forward in that same shell
@@ -575,8 +579,12 @@ class Verification:
 
     def error_summary(self, result: dict) -> str:
         text = result.get("error") or result.get("output") or "no diagnostic output"
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         for marker in (
+            "caused by:",
+            "typeerror:",
+            "referenceerror:",
             "no such host",
             "unable to connect",
             "expired",

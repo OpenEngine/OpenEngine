@@ -51,6 +51,7 @@ class ACPDecisionAgent:
             for attempt in range(2):
                 parts = []
                 stop_reason = None
+                native_tool_used = False
                 async with aclosing(self.session.prompt(prompt)) as events:
                     async for event in events:
                         if event.type == ACPEventType.MESSAGE_DELTA:
@@ -60,14 +61,25 @@ class ACPDecisionAgent:
                         elif event.type == ACPEventType.TOOL_STARTED:
                             # QA actions must go through host adapters so their observations
                             # are recorded and enforce the same limits for every provider.
-                            await self.session.cancel()
-                            raise RuntimeError(
-                                "Agent used a native tool instead of returning a QA action"
-                            )
+                            if not native_tool_used:
+                                await self.session.cancel()
+                            native_tool_used = True
                         elif event.type == ACPEventType.ERROR:
                             raise RuntimeError(f"ACP agent error: {event.data}")
                         elif event.type == ACPEventType.PROMPT_COMPLETED:
                             stop_reason = event.data.get("stopReason")
+                if native_tool_used:
+                    if attempt:
+                        raise RuntimeError(
+                            "Agent repeatedly used a native tool instead of returning a QA action"
+                        )
+                    prompt = (
+                        "Your previous turn was cancelled because it used a native tool. "
+                        "Return only a JSON decision using the supplied host action schema. "
+                        "Do not call native tools or assume the cancelled tool produced evidence.\n"
+                        + prompt
+                    )
+                    continue
                 if stop_reason != "end_turn":
                     raise RuntimeError(f"Agent did not finish its decision: {stop_reason}")
                 try:

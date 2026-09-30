@@ -280,3 +280,63 @@ def test_strict_decision_contract():
 
 def test_failure_exit_code():
     assert exit_code({"status": "complete", "findings": [{"status": "failed"}]}) == 1
+
+
+@pytest.mark.parametrize("repeat", [False, True])
+def test_native_tool_cancellation_retries_once(tmp_path, repeat):
+    from types import SimpleNamespace
+
+    from langgraph_acp import ACPEventType
+
+    class Session:
+        calls = 0
+        cancellations = 0
+        ended = False
+
+        async def cancel(self):
+            self.cancellations += 1
+
+        async def prompt(self, prompt):
+            self.calls += 1
+            if self.calls == 2:
+                assert self.ended
+                assert "original task context" in prompt
+                assert "cancelled" in prompt
+            if self.calls == 1 or repeat:
+                yield SimpleNamespace(type=ACPEventType.TOOL_STARTED, data={})
+                self.ended = True
+                yield SimpleNamespace(
+                    type=ACPEventType.PROMPT_COMPLETED, data={"stopReason": "cancelled"}
+                )
+            else:
+                yield SimpleNamespace(
+                    type=ACPEventType.MESSAGE_DELTA,
+                    data={"content": {"type": "text", "text": '{"kind":"finish"}'}},
+                )
+                yield SimpleNamespace(
+                    type=ACPEventType.PROMPT_COMPLETED, data={"stopReason": "end_turn"}
+                )
+
+    agent = ACPDecisionAgent(None, tmp_path)
+    agent.client = object()
+    agent.session = Session()
+    if repeat:
+        with pytest.raises(RuntimeError, match="repeatedly"):
+            asyncio.run(agent.decide("original task context"))
+    else:
+        assert asyncio.run(agent.decide("original task context")).kind == "finish"
+    assert agent.session.calls == 2
+    assert agent.session.cancellations == (2 if repeat else 1)
+
+
+def test_error_summary_prefers_underlying_exception(tmp_path):
+    artifacts = Artifacts(tmp_path)
+    verification = Verification(None, LocalTools(tmp_path, artifacts), artifacts)
+    output = (
+        "\x1b[31mUnhandled Errors\x1b[0m\n"
+        "Error: Failed to start forks worker\n"
+        "\x1b[31mCaused by: TypeError: webidl.util.markAsUncloneable is not a function\x1b[0m"
+    )
+    assert verification.error_summary({"output": output}) == (
+        "Caused by: TypeError: webidl.util.markAsUncloneable is not a function"
+    )
