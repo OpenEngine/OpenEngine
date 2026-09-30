@@ -1091,6 +1091,7 @@ def create_app(
     trusted_repos: Collection[str] = (),
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
+    repository_projects: Mapping[str, str] | None = None,
     utilization: UtilizationService | None = None,
     concierge_provider: ACPAgentProvider | None = None,
 ) -> Starlette:
@@ -1734,7 +1735,16 @@ def create_app(
                 yield _json_line({"type": "content", "content": content})
             await asyncio.sleep(0.25)
 
-    async def config(_request: Request) -> JSONResponse:
+    async def config(request: Request) -> JSONResponse:
+        visible = await github_login.visible_repositories(request)
+        repository_choices = [
+            {
+                "name": name,
+                "path": str(Path(path).expanduser().resolve()),
+                **({"mode": mode} if (mode := (repo_modes or {}).get(name)) else {}),
+            }
+            for name, path in (repos or {}).items()
+        ] or [{"name": f". ({Path.cwd()})", "path": "."}]
         return JSONResponse(
             {
                 "agents": [
@@ -1752,13 +1762,9 @@ def create_app(
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
                 "repositories": [
-                    {
-                        "name": name,
-                        "path": str(Path(path).expanduser().resolve()),
-                        **({"mode": mode} if (mode := (repo_modes or {}).get(name)) else {}),
-                    }
-                    for name, path in (repos or {}).items()
-                ] or [{"name": f". ({Path.cwd()})", "path": "."}],
+                    choice for choice in repository_choices
+                    if repository_visible(visible, choice["path"])
+                ],
                 # Only the graphs this process can actually start are here --
                 # see `offered_graphs` -- because an entry nobody could run
                 # would be a choice that fails after it was made. Their
@@ -1782,13 +1788,16 @@ def create_app(
             {"threads": [_thread_json(t) for t in await service.list()]}
         )
 
-    async def list_runs(_request: Request) -> JSONResponse:
+    async def list_runs(request: Request) -> JSONResponse:
+        visible = await github_login.visible_repositories(request)
         available = (
             {graph.graph_id for graph in surface.runtime.graphs()}
             if surface.runtime else set()
         )
         runs = []
         for run in await run_reader.list():
+            if not repository_visible(visible, run.repository):
+                continue
             row = _run_json(run, listing=True)
             if run.phase not in {"scheduled", "succeeded", "failed"}:
                 progress = graph_progress.get(run.run_id)
@@ -2013,8 +2022,11 @@ def create_app(
                         log.exception("could not start dependent workorder %s", state.run_id)
 
     async def start_scheduled_run(request: Request) -> JSONResponse:
+        run_id = RunId(request.path_params["run_id"])
+        if await run_hidden(request, run_id):
+            return _error("run not found", 404)
         async with scheduled_start_lock:
-            state = await session.state_store.load(RunId(request.path_params["run_id"]))
+            state = await session.state_store.load(run_id)
             if state is None:
                 return _error("run not found", 404)
             if state.phase is not RunPhase.SCHEDULED:
@@ -2055,6 +2067,8 @@ def create_app(
             dependency_value = _optional_string(body, "dependsOnRunId")
         except ValueError as error:
             return _error(str(error), 400)
+        if not repository_visible(await github_login.visible_repositories(request), repository):
+            return _error("you cannot write to this repository", 403)
         graph = offered_graphs().get(str(workflow_id))
         if graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
@@ -2087,7 +2101,7 @@ def create_app(
     async def get_run(request: Request) -> JSONResponse:
         run_id = RunId(request.path_params["run_id"])
         run = await run_reader.get(run_id)
-        if run is None:
+        if run is None or await run_hidden(request, run_id):
             return _error("run not found", 404)
         # The WorkOrder's usage is its run's: summed from what each node's
         # agent reported, so it is read here rather than stored on the row.
@@ -2106,6 +2120,8 @@ def create_app(
         cancel the run, and only then is the row forgotten.
         """
         run_id = RunId(request.path_params["run_id"])
+        if await run_hidden(request, run_id):
+            return _error("run not found", 404)
         async with dependency_lock:
             if run_id in deleting_runs:
                 return _error("workorder deletion is already in progress", 409)
@@ -2181,7 +2197,7 @@ def create_app(
         the ability to draw the graph and not the transcripts underneath it.
         """
         run_id = RunId(request.path_params["run_id"])
-        if await session.state_store.load(run_id) is None:
+        if await session.state_store.load(run_id) is None or await run_hidden(request, run_id):
             return _error("run not found", 404)
         raw_cursor = request.query_params.get("cursor")
         if raw_cursor is None:
@@ -2865,6 +2881,23 @@ def create_app(
                 status_code=503,
             )(scope, receive, send)
             return
+        if scope["type"] == "http":
+            # The same runs as `/api/runs`, so scoped the same way: someone
+            # else's run is not found, and starting one without a row to scope
+            # it by is left to those who see everything.
+            request = Request(scope)
+            path = scope["path"].removeprefix(scope.get("root_path", ""))
+            parts = path.strip("/").split("/")
+            refusal: JSONResponse | None = None
+            if parts[:2] == ["api", "runs"] and len(parts) > 2:
+                if await run_hidden(request, RunId(parts[2])):
+                    refusal = _error("run not found", 404)
+            elif parts == ["api", "runs"] and request.method == "POST":
+                if await github_login.visible_repositories(request) is not None:
+                    refusal = _error("only operators may start graph runs directly", 403)
+            if refusal is not None:
+                await refusal(scope, receive, send)
+                return
         await surface.app(scope, receive, send)
 
     # --- Slack connection endpoints ------------------------------------------
@@ -3789,6 +3822,8 @@ def create_app(
         somebody else.
         """
         run_id = request.path_params["run_id"]
+        if await run_hidden(request, RunId(run_id)):
+            return _error("run not found", 404)
         return JSONResponse(activity_json(
             github_activity.recent(),
             run_id=run_id,
@@ -3833,57 +3868,81 @@ def create_app(
         return JSONResponse(utilization_json(readings))
 
     # Anyone who can push to one of the repositories this deployment works on
-    # may see its WorkOrders: the webhook repository and the configured checkouts.
+    # may sign in: the webhook repository and the configured checkouts. What
+    # they see is the WorkOrders of the repositories they can push to.
     access_repositories = tuple(dict.fromkeys(
-        project for project in (github_repository, *login_repositories) if project
+        project.lower() for project in (github_repository, *login_repositories) if project
     ))
 
-    async def github_login_allowed(user_id: int, login: str) -> bool:
-        """Only people who can push to one of this deployment's repositories see its WorkOrders.
+    async def github_repository_access(user_id: int, login: str) -> dict[str, bool | None]:
+        """Whether the user can push to each of this deployment's repositories.
 
-        Write access to any one repository admits. A lookup that fails counts
-        only when no other repository admitted: then the answer is unknown,
-        and the error is raised rather than read as a no.
+        None marks a lookup that failed or timed out: that repository's answer
+        is unknown, and is not read as a no.
         """
-        if not access_repositories:
-            # Startup refuses login with nothing to check; kept as a fallback
-            # for apps built directly.
-            return False
-
-        async def check(project: str) -> bool:
-            # The check reads the repository from a pull request URL; the
-            # number names no particular one.
-            return await session.capabilities.source_control.can_write_repository(
-                pull_request_url(project, 1), login, user_id=user_id,
-            )
-
-        async with asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS):
-            checks = [asyncio.ensure_future(check(project)) for project in access_repositories]
-            failure: Exception | None = None
+        async def check(project: str) -> bool | None:
             try:
-                for answer in asyncio.as_completed(checks):
-                    try:
-                        if await answer:
-                            return True
-                    except Exception as error:
-                        failure = failure or error
-            finally:
-                for pending in checks:
-                    pending.cancel()
-        if failure is not None:
-            raise failure
-        return False
+                # The check reads the repository from a pull request URL; the
+                # number names no particular one.
+                async with asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS):
+                    return await session.capabilities.source_control.can_write_repository(
+                        pull_request_url(project, 1), login, user_id=user_id,
+                    )
+            except Exception:
+                log.exception("could not check whether %s can write to %s", login, project)
+                return None
 
-    async def github_user_can_write(token: str) -> bool:
-        """Whether GitHub says the account holding sign-in `token` can push to one of these repositories.
+        answers = await asyncio.gather(*(check(project) for project in access_repositories))
+        return dict(zip(access_repositories, answers, strict=True))
+
+    # The GitHub repository behind each value a run's `repository` takes: a
+    # `[repos]` name, the checkout path the web form sends, or `.`. A run
+    # started from GitHub already names its `owner/repo`.
+    run_projects: dict[str, str] = {}
+    for name, project in (repository_projects or {}).items():
+        path = str(Path((repos or {}).get(name, name)).expanduser().resolve())
+        run_projects[name] = run_projects[path] = project.lower()
+
+    def run_project(repository: str) -> str | None:
+        project = run_projects.get(repository)
+        if project is None and "/" in repository and not repository.startswith(("/", ".", "~")):
+            project = repository.lower()
+        return project
+
+    def repository_visible(visible: frozenset[str] | None, repository: str) -> bool:
+        """Whether a run in `repository` is among `visible`; None sees everything.
+
+        A run whose repository maps to no GitHub repository is only for
+        operators, who see everything.
+        """
+        if visible is None:
+            return True
+        project = run_project(repository or work_orders.repository)
+        return project is not None and project in visible
+
+    async def run_hidden(request: Request, run_id: RunId) -> bool:
+        """Whether `run_id` is outside what `request` may see.
+
+        Answered as a missing run, 404 rather than 403, so that a run's
+        existence is not revealed to someone who may not see it.
+        """
+        visible = await github_login.visible_repositories(request)
+        if visible is None:
+            return False
+        state = await session.state_store.load(run_id)
+        return state is None or not repository_visible(visible, state.repository)
+
+    async def github_user_repository_access(token: str) -> dict[str, bool | None]:
+        """Whether GitHub says the account holding sign-in `token` can push to each of these repositories.
 
         Asked with the user's own token, so it answers even when the server's
         connection does not. The token has only `read:user` scope, so GitHub
-        answers for public github.com repositories; the rest read as unknown.
+        answers for public github.com repositories; the rest read as unknown
+        (None), as does any lookup that fails.
         """
         projects = [project for project in access_repositories if project.count("/") == 1]
         if not projects:
-            return False
+            return {}
 
         async def check(client: httpx.AsyncClient, project: str) -> bool:
             response = await client.get(
@@ -3904,12 +3963,15 @@ def create_app(
             answers = await asyncio.gather(
                 *(check(client, project) for project in projects), return_exceptions=True
             )
-        return any(answer is True for answer in answers)
+        return {
+            project: answer if isinstance(answer, bool) else None
+            for project, answer in zip(projects, answers, strict=True)
+        }
 
     github_login = GitHubLogin(
-        github_login_config, service_token, github_login_allowed,
+        github_login_config, service_token, github_repository_access,
         operators=frozenset(login_operators),
-        authorize_user=github_user_can_write,
+        authorize_user=github_user_repository_access,
         access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
     )
     routes = [
