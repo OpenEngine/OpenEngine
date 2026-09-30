@@ -101,14 +101,14 @@ export default function Home() {
           </div>
 
           <figure className={styles.video}>
-            <video
-              controls
-              playsInline
-              preload="metadata"
-              poster="/video/openengine-v1-poster.jpg"
-              aria-label="OpenEngine 1.0 release walkthrough">
-              <source src="/video/openengine-v1.mp4" type="video/mp4" />
-            </video>
+            <iframe
+              src="https://www.youtube-nocookie.com/embed/CZYZulDRkSk"
+              title="OpenEngine 1.0 release walkthrough"
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allowFullScreen
+            />
           </figure>
 
           <figure className={styles.graph}>

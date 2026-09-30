@@ -50,7 +50,7 @@
   background: var(--oe-night);
   border: 1px solid var(--oe-rule);
 }
-.video video { display: block; width: 100%; height: auto; aspect-ratio: 1818 / 1080; }
+.video iframe { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border: 0; }
 
 /* The graph: one change travelling the shipped workflow. */
 .graph {
