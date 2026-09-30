@@ -44,6 +44,14 @@
 .hero > :nth-child(4) { animation-delay: .24s; }
 @keyframes rise { to { opacity: 1; transform: none; } }
 
+/* The 1.0 release walkthrough, between the pitch and the graph. */
+.video {
+  margin: 8px 0 clamp(32px, 5vw, 56px);
+  background: var(--oe-night);
+  border: 1px solid var(--oe-rule);
+}
+.video iframe { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border: 0; }
+
 /* The graph: one change travelling the shipped workflow. */
 .graph {
   margin: 8px 0 clamp(48px, 7vw, 88px);
