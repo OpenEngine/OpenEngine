@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0](https://github.com/OpenEngine/OpenEngine/compare/v1.0.0...v1.0.0) (2026-09-30)
+
+
+### Features
+
+* **cli:** add engine review to start the workflow in review and triage findings ([#604](https://github.com/OpenEngine/OpenEngine/issues/604)) ([f29d9d8](https://github.com/OpenEngine/OpenEngine/commit/f29d9d8e9a72910c1dcefb3ab5b1863877a5c6ec))
+
+
+### Documentation
+
+* **site:** feature the 1.0 release video on the homepage ([#619](https://github.com/OpenEngine/OpenEngine/issues/619)) ([e35c8d1](https://github.com/OpenEngine/OpenEngine/commit/e35c8d15fb4cd2d134e73b1276ffc4017f7374e7))
+
 ## [1.0.0](https://github.com/OpenEngine/OpenEngine/compare/v0.7.0...v1.0.0) (2026-09-30)
 
 
