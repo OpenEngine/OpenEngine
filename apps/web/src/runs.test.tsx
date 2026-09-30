@@ -1093,3 +1093,52 @@ it("polls graph events incrementally and retains completed nodes", async () => {
     expect(within(node).getByText("completed", { selector: ".chip" })).toBeVisible();
   }
 });
+
+it("offers the workspace command and points a disconnected WorkOrder at it", async () => {
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/api/runs/run-1") return json(run());
+    if (path === "/graph/api/runs/run-1") return json({
+      runId: "run-1", graphId: "work-v1", status: "running",
+      activeExecutions: [], nextNodes: [], pendingApprovals: [], error: "",
+      values: { workspaceId: "ws-1", inputs: { mode: "disconnected" } },
+    });
+    if (path === "/graph/api/runs/run-1/workspace") return json({
+      workspaceRoot: "/worktrees/ws-1", workspaceRef: "engine/ws-1", workspaceAttached: true,
+    });
+    if (path === "/graph/api/graphs/work-v1") return json({
+      graphId: "work-v1", nodes: [{ nodeId: "work", name: "Work stage", kind: "agent" }],
+    });
+    if (path.includes("/github-comments")) return json(noComments);
+    return json({ events: [] });
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<RunDetailPage runId="run-1" />);
+
+  const workspace = await screen.findByRole("region", { name: "Workspace" });
+  expect(await within(workspace).findByText("cd /worktrees/ws-1")).toBeVisible();
+  expect(within(workspace).getByRole("button", { name: "Detach" })).toBeVisible();
+  expect(screen.getByText("Disconnected")).toBeVisible();
+  expect(screen.getByRole("link", { name: "detach command ↓" })).toHaveAttribute("href", "#workspace");
+});
+
+it("shows no disconnected notice for a connected WorkOrder", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/api/runs/run-1") return json(run());
+    if (path === "/graph/api/runs/run-1") return json({
+      runId: "run-1", graphId: "work-v1", status: "running",
+      activeExecutions: [], nextNodes: [], pendingApprovals: [], error: "",
+      values: { inputs: { mode: "connected" } },
+    });
+    if (path === "/graph/api/graphs/work-v1") return json({
+      graphId: "work-v1", nodes: [{ nodeId: "work", name: "Work stage", kind: "agent" }],
+    });
+    if (path.includes("/github-comments")) return json(noComments);
+    return json({ events: [] });
+  }));
+  render(<RunDetailPage runId="run-1" />);
+  expect(await screen.findByRole("heading", { name: "Work stage" })).toBeVisible();
+  expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Workspace" })).not.toBeInTheDocument();
+});

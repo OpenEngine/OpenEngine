@@ -28,7 +28,7 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 
-from engine.domain import ApprovalDecision, ApprovalId, RunId
+from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, RunId
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -432,7 +432,7 @@ def _snapshot_json(
 def _display_values(
     values: Mapping[str, object], topology: GraphTopology | None,
 ) -> dict[str, object]:
-    """Keep workspace controls, stage summaries/outputs and PR links on polls.
+    """Keep workspace controls, stage summaries/outputs, PR links and mode on polls.
 
     Full channel state remains available via `?includeValues=true`.
     """
@@ -446,6 +446,11 @@ def _display_values(
             result[key] = value
         elif isinstance(value, Mapping) and isinstance(value.get("pr_url"), str):
             result[key] = {"pr_url": value["pr_url"]}
+    # The forge mode alone, so a page can say a disconnected run's work
+    # stays in its checkout without reading every input it was given.
+    inputs = values.get("inputs")
+    if isinstance(inputs, Mapping) and isinstance(inputs.get(MODE_INPUT), str):
+        result["inputs"] = {MODE_INPUT: inputs[MODE_INPUT]}
     return result
 
 

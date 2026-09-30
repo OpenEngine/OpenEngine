@@ -39,8 +39,8 @@ CLI = "cli"
 DISCONNECTED = str(ForgeMode.DISCONNECTED)
 #: The choices `engine init` offers, in the order it lists them.
 MODES = {
-    OAUTH: "Git OAuth (connected, recommended)",
-    CLI: "Git CLI (connected)",
+    OAUTH: "GitHub OAuth (connected, recommended)",
+    CLI: "GitHub CLI (connected)",
     DISCONNECTED: "Disconnected",
 }
 CONNECTED_EXPLAINED = (
