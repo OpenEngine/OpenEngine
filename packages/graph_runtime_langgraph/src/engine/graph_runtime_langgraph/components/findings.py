@@ -16,8 +16,13 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any
 
-from engine.domain import StepCompleted, WorkState
+from collections.abc import Mapping
+
+from engine.domain import (
+    TRIAGE_TOOL, ApprovalDecision, ApprovalKind, StepCompleted, WorkState, finding_comment,
+)
 from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
+from engine.graph_runtime_langgraph.executions import current_execution
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,15 +83,7 @@ class Finding:
 
     def as_comment(self) -> str:
         """Format for posting as a PR comment, with lineage."""
-        parts = [f"**{self.tagline}**", "", self.description]
-        lineage: list[str] = []
-        if self.agent:
-            lineage.append(f"agent: {self.agent}")
-        if self.facet:
-            lineage.append(f"facet: {self.facet}")
-        if lineage:
-            parts.extend(["", f"_Produced by {', '.join(lineage)}_"])
-        return "\n".join(parts)
+        return finding_comment(self.tagline, self.description, agent=self.agent, facet=self.facet)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +172,8 @@ __all__ = [
     "ReviewFacet",
     "ReviewNode",
     "RerankerNode",
+    "TRIAGE_TOOL",
+    "TriageNode",
 ]
 
 
@@ -238,3 +237,55 @@ class RerankerNode(ACPNode):
         update = ACPNode._terminal_update(self, event)
         findings = parse_findings(update.get("findings"), require_lineage=True)
         return {self.output_key: [finding.to_dict() for finding in findings]}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TriageNode:
+    """Wait for a person to choose which surviving findings get fixed.
+
+    The choice arrives the way a human review's note does: as steering sent
+    before the decision, here a JSON array of the chosen findings. Accepting
+    with nothing sent chooses them all; cancelling chooses none and lets the
+    run finish, rather than failing it -- a review nobody wants fixed is a
+    review that is done.
+
+        POST .../steering    [{"tagline": ..., "description": ..., ...}]
+        POST .../approvals   accept
+    """
+
+    findings_key: str
+    """Where the findings to choose from are kept in run state."""
+    output_key: str = "fix"
+    """Where the chosen findings land, for the fixing node to read."""
+    graph_node_name: str = "Triage"
+    graph_node_kind: str = "human"
+    graph_node_description: str = "A person chooses which findings to fix."
+    graph_node_group: str = WorkState.REVIEW
+    graph_node_show_in_sidebar: bool = False
+
+    @property
+    def graph_node_findings_key(self) -> str:
+        """The findings a person is choosing from, for a client to show."""
+        return self.findings_key
+
+    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+        execution = current_execution()
+        await execution.say("The review is done. Choose the findings to fix, or finish.")
+        decision = await execution.ask(
+            reason="a choice of findings to fix",
+            kind=ApprovalKind.USER_INPUT,
+            tool_name=TRIAGE_TOOL,
+            cancel_run=False,
+        )
+        note = "\n".join(execution.pending_messages()).strip()
+        if decision is ApprovalDecision.CANCEL:
+            chosen: list[Finding] = []
+        elif note:
+            chosen = parse_findings(note)
+        else:
+            chosen = parse_findings(state.get(self.findings_key) or [])
+        await execution.say(
+            f"Fixing {len(chosen)} finding{'s' if len(chosen) != 1 else ''}."
+            if chosen else "Finished without fixing anything."
+        )
+        return {self.output_key: [finding.to_dict() for finding in chosen]}

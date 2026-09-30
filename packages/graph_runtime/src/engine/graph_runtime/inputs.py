@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 
-from engine.domain import MODE_INPUT, ForgeMode
+from engine.domain import MODE_INPUT, STATE_INPUT, ForgeMode, WorkState
 
 #: Runner choices that stand for a policy rather than a runner, and are replaced
 #: by a concrete runner from the same input's choices when a run starts.
@@ -38,6 +38,19 @@ def mode_input(default: ForgeMode = ForgeMode.CONNECTED) -> WorkflowInput:
     return WorkflowInput(
         MODE_INPUT, "Mode", default=str(default), required=True,
         choices=tuple(str(mode) for mode in ForgeMode),
+    )
+
+
+def state_input(*states: WorkState) -> WorkflowInput:
+    """The creation field that chooses which state a run starts in.
+
+    Offered with the states the workflow can start in, the first being the
+    default; the nodes that behave differently read the choice through
+    `engine.domain.start_state` themselves.
+    """
+    return WorkflowInput(
+        STATE_INPUT, "Start in", default=str(states[0]), required=True,
+        choices=tuple(str(state) for state in states),
     )
 
 

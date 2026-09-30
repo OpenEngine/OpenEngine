@@ -5,10 +5,19 @@
 The review stage fans out to five parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
 conciseness, DRYness & code duplication). Their findings are collected by a
-*reranker* that aggressively squashes noise and posts the survivors as PR
-comments with lineage.
+*reranker* that somewhat aggressively squashes noise and posts the survivors
+as PR comments with lineage.
 Surviving findings go back to implementation for one automatic fix-and-review
 cycle before impact analysis and human review.
+
+A run can instead start in the review state (`engine.domain.states`), pointed
+at an existing change -- a pull request, or a branch -- through the `ref` and
+`pr_url` inputs. It is checked out at that change and goes straight to review:
+
+    workspace -> [review facets] -> reranker -> triage -> (implementation -> ci-check -> review ...)
+
+Nothing is posted; a person is shown the surviving findings at *triage* and
+chooses which to fix, and each fix is reviewed again before triage asks again.
 
 The workflow offers both forge modes (`engine.domain.forge`) through
 `mode_input`. Nothing here branches on the mode: the components narrow the
@@ -42,6 +51,7 @@ from engine.graph_runtime_langgraph.components import (
     NameNode,
     RerankerNode,
     ReviewNode,
+    TriageNode,
     WorkspaceNode,
     checkout,
 )
@@ -54,8 +64,13 @@ from engine.graph_runtime_langgraph.components.forge import (
     THE_CHANGE,
     UPDATE_CHANGE,
 )
-from engine.domain import StepCompleted, WorkState
-from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN, mode_input
+from engine.domain import (
+    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT,
+    ForgeMode, StepCompleted, WorkState, forge_mode, start_state,
+)
+from engine.graph_runtime.inputs import (
+    LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
+)
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -79,6 +94,13 @@ REVIEW = "review"
 RERANKER = "reranker"
 IMPACT_ANALYSIS = "impact-analysis"
 HUMAN_REVIEW = "human-review"
+TRIAGE = "triage"
+
+#: Where the findings a person chose at triage are kept for implementation.
+FIX = "fix"
+
+#: The creation inputs naming the change a run started in review looks at.
+REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
 #: Codex and Claude, reached through their ACP adapters.  `agent_registry` is
 #: what routes an agent's permission request back to the run that raised it.
@@ -116,6 +138,7 @@ FACET_REVIEW_PROMPT = (
     "Review the implementation in this workspace, focusing exclusively on "
     "**{facet_name}**.\n\n"
     "{facet_focus}\n\n"
+    "The change is {change}. "
     "Read the changed code and the code around it before judging. Inspect "
     "only: do not edit, revert, commit, or modify anything.\n\n"
     "Your acceptance criteria: produce a JSON array of *finding* objects. "
@@ -134,15 +157,16 @@ FACET_REVIEW_PROMPT = (
 RERANKER_PROMPT = (
     "You are a senior reviewer consolidating findings from {reviewer_count} "
     "specialized reviewers who each examined the same code change from a "
-    "different angle. Your job is to **aggressively** squash noise.\n\n"
+    "different angle. Your job is to **somewhat aggressively** squash noise.\n\n"
     "Remove any finding that is:\n"
     "- A nitpick or stylistic preference\n"
     "- A duplicate of another finding (even across facets)\n"
     "- About a hypothetical issue that is extremely unlikely in practice\n"
     "- Not actionable -- the author cannot do anything concrete about it\n"
     "- Already handled by existing code the reviewer missed\n\n"
-    "Keep only findings a senior engineer would genuinely want fixed before "
-    "merging. When in doubt, remove the finding.\n\n"
+    "Keep findings a senior engineer would genuinely want fixed before "
+    "merging, and concrete, actionable findings that are likely real even when "
+    "they are minor. When in doubt about one of those, keep it.\n\n"
     "{publishing}"
     "{findings_sections}"
     "{change}"
@@ -178,6 +202,15 @@ IMPACT_ANALYSIS_PROMPT = (
     "Include the color label and emoji and the rationale in the summary.\n\n"
     "Original task:\n{task}\n\nImplementation report:\n{implementation}\n\n"
     "CI results:\n{ci}\n\nFinal review findings:\n{findings}"
+)
+
+#: How a run started in review publishes its consolidated findings: it does not.
+KEEP_FINDINGS = (
+    "Do not post comments or contact any pull request: the surviving findings "
+    "are shown to a person, who chooses which to fix or post. Call "
+    "complete_step with the filtered findings as a JSON array (same schema as "
+    "the inputs), or [] when none survive. Preserve each finding's agent and "
+    "facet fields unchanged.\n\n"
 )
 
 # ---------------------------------------------------------------------------
@@ -253,24 +286,54 @@ def _review_node_name(facet_id: str) -> str:
     return f"review-{facet_id}"
 
 
+def _reviewing(state: Mapping[str, object]) -> bool:
+    """Whether this run started in review, at a change it did not make."""
+    return start_state(state.get("inputs")) is WorkState.REVIEW
+
+
+def _pr_url(state: Mapping[str, object]) -> str:
+    """The run's pull request: the one it opened, or the one it was given."""
+    inputs = state.get("inputs")
+    given = inputs.get(PR_INPUT, "") if isinstance(inputs, Mapping) else ""
+    return str(state.get("pr_url") or given or "")
+
+
+def _push_to(state: Mapping[str, object]) -> str:
+    """Where a fix to a change this run was given goes: that change's branch.
+
+    The workspace is checked out on a branch of its own, so a plain push would
+    land beside the pull request rather than on it.
+    """
+    inputs = state.get("inputs")
+    branch = str(inputs.get(BRANCH_INPUT) or "") if isinstance(inputs, Mapping) else ""
+    if not (_reviewing(state) and branch and forge_mode(inputs) is ForgeMode.CONNECTED):
+        return ""
+    return f"The pull request's branch is {branch}: push to it with `git push origin HEAD:{branch}`. "
+
+
 def _implementation_prompt(state: Mapping[str, object]) -> str:
     ci = state.get("ci_check")
     if isinstance(ci, dict) and ci.get("passed") is False:
         return (
-            f"Fix the CI failures on {THE_CHANGE(state, pr_url=state.get('pr_url'))}. "
+            f"Fix the CI failures on {THE_CHANGE(state, pr_url=_pr_url(state))}. "
             "Read the failed job logs and relevant code, make the smallest fix, "
-            f"test it, {UPDATE_CHANGE(state)}"
+            f"test it, {UPDATE_CHANGE(state)}{_push_to(state)}"
             "Use fail_step if the failures cannot be fixed.\n\n"
             f"{ci.get('summary', '')}\n\nOriginal task:\n{state.get('task', '')}"
         )
-    if state.get(REVIEW) and state.get("review_rounds") == 1:
+    findings = state.get(FIX) if _reviewing(state) else (
+        state.get(REVIEW) if state.get("review_rounds") == 1 else None
+    )
+    if findings:
         return (
             "Address the review findings on "
-            f"{THE_CHANGE(state, pr_url=state.get('pr_url'))}. "
+            f"{THE_CHANGE(state, pr_url=_pr_url(state))}. "
             "Read the relevant code, make the smallest complete fix, test it, "
-            f"{UPDATE_CHANGE(state)}{ANSWER_REVIEW(state)}"
+            f"{UPDATE_CHANGE(state)}{_push_to(state)}"
+            # Findings a person chose were never posted, so there is nothing to answer.
+            f"{'' if _reviewing(state) else ANSWER_REVIEW(state)}"
             "Use fail_step if the findings cannot be addressed.\n\n"
-            f"Review findings:\n{json.dumps(state[REVIEW])}\n\n"
+            f"Review findings:\n{json.dumps(findings)}\n\n"
             f"Original task:\n{state.get('task', '')}"
         )
     return IMPLEMENTATION_PROMPT.format(
@@ -278,10 +341,22 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
     )
 
 
+def _after_workspace(state: dict[str, Any]) -> str | list[Send]:
+    if _reviewing(state):
+        return _fan_out_reviews(state)
+    return NAMING
+
+
 def _after_reranker(state: dict[str, Any]) -> str:
+    if _reviewing(state):
+        return TRIAGE
     if state.get(REVIEW) and state.get("review_rounds") == 1:
         return IMPLEMENTATION
     return IMPACT_ANALYSIS
+
+
+def _after_triage(state: dict[str, Any]) -> str:
+    return IMPLEMENTATION if state.get(FIX) else END
 
 
 def _after_ci(state: dict[str, Any]) -> str | list[Send]:
@@ -319,6 +394,7 @@ def pipeline(
             provider=workspace_provider
             or GitWorktreeWorkspaceProvider(DEFAULT_ROOT_DIRECTORY),
             base_ref=BASE_REF,
+            ref_input=REF_INPUT,
         ),
     )
     builder.add_node(
@@ -376,6 +452,7 @@ def pipeline(
                 prompt=lambda state, f=facet: FACET_REVIEW_PROMPT.format(
                     facet_name=f.name,
                     facet_focus=f.focus,
+                    change=CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state)),
                     task=state.get("task", ""),
                     implementation=state.get(IMPLEMENTATION, ""),
                 ),
@@ -414,11 +491,11 @@ def pipeline(
             )
         return RERANKER_PROMPT.format(
             reviewer_count=len(REVIEW_FACETS),
-            publishing=PUBLISH_FINDINGS(
+            publishing=KEEP_FINDINGS if _reviewing(state) else PUBLISH_FINDINGS(
                 state, runner=state.get("inputs", {}).get("review_runner", reviewer),
             ),
             findings_sections="".join(sections),
-            change=f"The change is {CHANGE_UNDER_REVIEW(state, pr_url=state.get('pr_url', ''))}.\n\n",
+            change=f"The change is {CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state))}.\n\n",
             task=state.get("task", ""),
         )
 
@@ -459,8 +536,8 @@ def pipeline(
             agent=reviewer,
             registry=agents,
             prompt=lambda state: IMPACT_ANALYSIS_PROMPT.format(
-                change=CHANGE_UNDER_REVIEW(state, pr_url=state.get("pr_url", "")),
-                publishing=PUBLISH_SUMMARY(state, pr_url=state.get("pr_url", "")),
+                change=CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state)),
+                publishing=PUBLISH_SUMMARY(state, pr_url=_pr_url(state)),
                 task=state.get("task", ""),
                 implementation=state.get(IMPLEMENTATION, ""),
                 ci=json.dumps(state.get("ci_check", {})),
@@ -487,11 +564,15 @@ def pipeline(
         ),
     )
     builder.add_node(HUMAN_REVIEW, HumanReviewNode())
+    builder.add_node(TRIAGE, TriageNode(findings_key=REVIEW, output_key=FIX))
 
     # ---- edges --------------------------------------------------------------
 
     builder.add_edge(START, WORKSPACE)
-    builder.add_edge(WORKSPACE, NAMING)
+    builder.add_conditional_edges(
+        WORKSPACE, _after_workspace,
+        [NAMING, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
+    )
     builder.add_edge(NAMING, IMPLEMENTATION)
 
     builder.add_edge(IMPLEMENTATION, CI_CHECK)
@@ -505,8 +586,9 @@ def pipeline(
         builder.add_edge(_review_node_name(facet.id), RERANKER)
 
     builder.add_conditional_edges(
-        RERANKER, _after_reranker, [IMPLEMENTATION, IMPACT_ANALYSIS],
+        RERANKER, _after_reranker, [IMPLEMENTATION, IMPACT_ANALYSIS, TRIAGE],
     )
+    builder.add_conditional_edges(TRIAGE, _after_triage, [IMPLEMENTATION, END])
     builder.add_edge(IMPACT_ANALYSIS, HUMAN_REVIEW)
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
@@ -553,6 +635,10 @@ def graph_for(
                 required=True, choices=RUNNER_INPUT_CHOICES,
             ),
             mode_input(),
+            state_input(WorkState.PLANNING, WorkState.REVIEW),
+            WorkflowInput(REF_INPUT, "Ref to review"),
+            WorkflowInput(PR_INPUT, "Pull request to review"),
+            WorkflowInput(BRANCH_INPUT, "Pull request branch"),
         ),
     )
 
