@@ -933,7 +933,8 @@ def test_a_sign_in_token_is_dropped_when_its_session_expires():
     assert 42 in flow._user_tokens
 
     with patch("engine.apps.web.github_login.time.time", return_value=time.time() + 86401):
-        assert flow._user_tokens_of(7) == []
+        assert flow._user_tokens_of(42) == []
+        flow._drop_expired_user_tokens()
     assert flow._user_tokens == {}
 
 

@@ -195,13 +195,17 @@ class GitHubLogin:
                 del self._user_tokens[owner]
 
     def _user_tokens_of(self, user_id: int) -> list[str]:
-        """The sign-in tokens of the user's unexpired sessions, dropping expired ones."""
-        self._drop_expired_user_tokens()
+        """The sign-in tokens of the user's unexpired sessions.
+
+        `has_access` has already swept expired sessions; this only skips any
+        that expired while the server's lookup was running.
+        """
+        now = time.time()
         sessions = self._user_tokens.get(user_id, {})
         # Every token here was issued for this same user ID, so any one of
         # them may vouch for it; one revoked in another browser must not
         # stop the rest from being asked.
-        return list(dict.fromkeys(token for token, _ in sessions.values()))
+        return list(dict.fromkeys(token for token, expires in sessions.values() if expires > now))
 
     def _drop_user_token(self, user_id: int, session_id: str) -> None:
         sessions = self._user_tokens.get(user_id, {})
