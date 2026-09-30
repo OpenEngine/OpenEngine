@@ -98,6 +98,7 @@ class GitHubLogin:
         authorize: Callable[[int, str], Awaitable[bool]] | None = None,
         operators: Collection[int] = frozenset(),
         authorize_user: Callable[[str], Awaitable[bool]] | None = None,
+        access_timeout: float = 10,
     ) -> None:
         self.config = config
         # Whether a verified GitHub account (id, login) may have a session.
@@ -109,10 +110,12 @@ class GitHubLogin:
         # GitHub login stops answering.
         self.operators = frozenset(operators)
         # Whether the account holding a sign-in token can write to one of the
-        # repositories, asked with that token. Asked alongside `authorize` and
-        # counted only when `authorize` fails, and then only as a yes, so a
-        # broken server connection does not lock out everyone who could fix it.
+        # repositories, asked with that token. Asked only when `authorize`
+        # fails, and then counted only as a yes, so a broken server connection
+        # does not lock out everyone who could fix it.
         self.authorize_user = authorize_user
+        # Seconds one access check may take, server lookup and fallback together.
+        self.access_timeout = access_timeout
         # user id -> session id -> (the read:user token GitHub issued at that
         # sign-in, when that session's cookie expires). Kept in memory only,
         # like the signing key, for rechecks, and per session, so signing out
@@ -216,48 +219,52 @@ class GitHubLogin:
             cached = self._access.get(user_id)
             if not fresh and cached is not None and cached[1] > time.monotonic():
                 return cached[0]
-            # Started at once rather than after a failure, so all lookups
-            # share one timeout budget.
-            fallbacks = [
-                asyncio.ensure_future(self.authorize_user(token))
-                for token in self._user_tokens_of(user_id)
-            ] if self.authorize_user is not None else []
-            for fallback in fallbacks:
-                # Its answer is unwanted once the server's lookup answers.
-                fallback.add_done_callback(lambda done: done.cancelled() or done.exception())
+            # One deadline for the server's lookup and any fallback after it.
+            deadline = asyncio.get_running_loop().time() + self.access_timeout
             try:
-                allowed = await self.authorize(user_id, login)
+                async with asyncio.timeout_at(deadline):
+                    allowed = await self.authorize(user_id, login)
                 self.access_check_failing = False
             except Exception:
                 log.exception("could not check repository access for %s", login)
                 self.access_check_failing = True
-                if not await self._confirmed_by_user(fallbacks, login):
+                if not await self._confirmed_by_user(user_id, login, deadline):
                     # Access that cannot be confirmed is not granted, but
                     # neither is the failure remembered: the next request
                     # asks again.
                     return None
                 allowed = True
-            finally:
-                for fallback in fallbacks:
-                    fallback.cancel()
             if not allowed:
                 # Access is gone, so no session needs a fallback for it.
                 self._user_tokens.pop(user_id, None)
             self._access[user_id] = (allowed, time.monotonic() + _ACCESS_TTL)
             return allowed
 
-    @staticmethod
-    async def _confirmed_by_user(fallbacks: list[asyncio.Future[bool]], login: str) -> bool:
-        """Whether any of the user's own tokens showed write access; a failure is not a yes."""
-        for answer in asyncio.as_completed(fallbacks):
-            try:
-                confirmed = await answer
-            except Exception:
-                log.exception("could not check repository access for %s with their own token", login)
-                continue
-            if confirmed is True:
-                log.warning("admitted %s on their own token's answer; the server's lookup failed", login)
-                return True
+    async def _confirmed_by_user(self, user_id: int, login: str, deadline: float) -> bool:
+        """Whether any of the user's own tokens showed write access; a failure is not a yes.
+
+        Tokens are asked one at a time, newest first, until one says yes or
+        the deadline passes, so a user with many sessions costs no more
+        requests at once than one does.
+        """
+        if self.authorize_user is None:
+            return False
+        try:
+            async with asyncio.timeout_at(deadline):
+                for token in reversed(self._user_tokens_of(user_id)):
+                    if asyncio.get_running_loop().time() >= deadline:
+                        # A lookup that answers without waiting would beat the timeout.
+                        raise TimeoutError
+                    try:
+                        confirmed = await self.authorize_user(token)
+                    except Exception:
+                        log.exception("could not check repository access for %s with their own token", login)
+                        continue
+                    if confirmed is True:
+                        log.warning("admitted %s on their own token's answer; the server's lookup failed", login)
+                        return True
+        except TimeoutError:
+            log.warning("ran out of time checking repository access for %s with their own tokens", login)
         return False
 
     def _has_service_token(self, request: Request) -> bool:

@@ -3859,6 +3859,7 @@ def create_app(
         github_login_config, service_token, github_login_allowed,
         operators=frozenset(login_operators),
         authorize_user=github_user_can_write,
+        access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
     )
     routes = [
         Route("/api/health", health),

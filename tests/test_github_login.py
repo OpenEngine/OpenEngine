@@ -834,26 +834,71 @@ def test_the_servers_answer_outranks_the_users_own_token():
     assert flow._user_tokens == {}
 
 
-def test_both_lookups_share_one_time_budget():
-    """The user's token is asked at the same time as the server, not after it."""
+def test_the_users_own_token_is_not_asked_when_the_server_answers():
+    """A routine check costs one lookup; the fallback waits for a failure."""
     import asyncio
 
-    async def scenario():
-        started = asyncio.Event()
+    asked = []
 
-        async def authorize(user_id, login):
-            await asyncio.wait_for(started.wait(), 1)
-            raise RuntimeError("GitHub OAuth provider failed: timeout")
+    async def authorize(user_id, login):
+        return True
 
-        async def authorize_user(token):
-            started.set()
-            return True
+    async def authorize_user(token):
+        asked.append(token)
+        return True
 
-        flow = _fallback_flow(authorize, authorize_user)
-        flow._user_tokens[42] = {"session": ("private-token", time.time() + 60)}
-        assert await flow.has_access({"id": 42, "login": "alice"}) is True
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    flow._user_tokens[42] = {"laptop": ("a", later), "phone": ("b", later)}
 
-    asyncio.run(scenario())
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is True
+    assert asked == []
+
+
+def test_the_users_tokens_are_asked_one_at_a_time_newest_first():
+    import asyncio
+
+    asked, running = [], []
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        running.append(token)
+        assert len(running) == 1
+        await asyncio.sleep(0)
+        asked.append(token)
+        running.remove(token)
+        return token == "old"
+
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    flow._user_tokens[42] = {"laptop": ("old", later), "phone": ("new", later)}
+
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is True
+    assert asked == ["new", "old"]
+
+
+def test_the_fallback_gets_only_what_is_left_of_the_time_budget():
+    """The server's lookup and the fallback share one deadline, so a check stays bounded."""
+    import asyncio
+
+    async def authorize(user_id, login):
+        await asyncio.sleep(1)
+        return True
+
+    async def authorize_user(token):
+        return True
+
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), authorize=authorize, authorize_user=authorize_user, access_timeout=0.05)
+    flow._user_tokens[42] = {"session": ("private-token", time.time() + 60)}
+
+    started = time.monotonic()
+    # The server's lookup used the whole budget, so nothing is left to confirm access with.
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is None
+    assert time.monotonic() - started < 0.5
 
 
 def test_signing_out_keeps_the_fallback_for_the_users_other_browsers():
@@ -928,10 +973,11 @@ def test_any_of_the_users_tokens_can_vouch_for_them(first):
 
     flow = _fallback_flow(authorize, authorize_user)
     later = time.time() + 60
-    flow._user_tokens[42] = {"laptop": ("revoked-token", later), "phone": ("good-token", later)}
+    # Newest first, so the revoked token is asked before the good one.
+    flow._user_tokens[42] = {"laptop": ("good-token", later), "phone": ("revoked-token", later)}
 
     assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is True
-    assert sorted(asked) == ["good-token", "revoked-token"]
+    assert asked == ["revoked-token", "good-token"]
 
 
 def test_no_token_that_confirms_access_admits_nobody():

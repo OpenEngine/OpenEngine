@@ -53,17 +53,18 @@ account's access. An account without write access is sent to
 
 The server's connection can fail: an expired OAuth token or `gh` login, or
 GitHub not answering. So that this does not lock out everyone who could fix it,
-the server also asks GitHub with the user's own sign-in token, at the same time
-and within the same 10-second budget. That answer is used only when the
-server's lookup fails, and only to let the user in. It cannot overturn the
+the server then asks GitHub with the user's own sign-in token, within what is
+left of the same 10-second budget. That lookup runs only when the server's
+lookup fails, and its answer is used only to let the user in. It cannot overturn the
 server's no. The sign-in token has only `read:user` scope, so it can confirm
 write access to public github.com repositories only. For a private repository
 it gets no answer, and a lookup that gets no answer admits nobody. The token
 was issued for the verified user ID, so the answer stays bound to that ID. The
 server keeps it in memory, never on disk, for rechecks. Each browser session
 keeps its own token, so signing out in one browser leaves the others theirs.
-All of a user's tokens are asked, and any one that confirms write access lets
-the user in, so one browser's revoked token does not lock out the others.
+The user's tokens are asked one at a time, newest first, and any one that
+confirms write access lets the user in, so one browser's revoked token does not
+lock out the others.
 The server drops a session's token when that session signs out or its cookie
 expires, and drops all of a user's tokens when GitHub says the user no longer
 has access. When neither lookup confirms access, login is
