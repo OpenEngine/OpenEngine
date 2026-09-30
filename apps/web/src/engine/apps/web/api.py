@@ -106,9 +106,6 @@ from engine.domain import (
     ForgeMode,
     MODE_INPUT,
     Message,
-    REVIEW_BRANCH_INPUT,
-    REVIEW_PR_INPUT,
-    REVIEW_REF_INPUT,
     STATE_INPUT,
     WorkState,
     Role,
@@ -119,6 +116,7 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkspaceId,
+    review_inputs,
 )
 from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, resolve_inputs
 from engine.graph_runtime import (
@@ -3210,6 +3208,19 @@ def create_app(
             return None
         return await store.run_for_pull_request(repository.lower(), number)
 
+    async def github_active_run(repository: str, number: int) -> tuple[RunId | None, bool]:
+        """The work order recorded for this pull request, and whether it can still be steered."""
+        run_id = await github_run_for_pull_request(repository, number)
+        runtime = surface.runtime
+        if run_id is None or runtime is None:
+            return run_id, False
+        try:
+            snapshot = await runtime.snapshot(run_id)
+        except UnknownGraphError:
+            # A saved work order can outlive the graph it was started from.
+            return run_id, False
+        return run_id, snapshot.status in STEERABLE_RUN_STATUSES
+
     async def github_checkout(project: str) -> str:
         """The local checkout a forge `project` key is worked on in.
 
@@ -3420,28 +3431,14 @@ def create_app(
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not reach a work order: graph runtime unavailable")
-        # Through the binding that owns the provenance table rather than
-        # through the control surface, which is deliberately forge-agnostic and
-        # has no business growing a method shaped like a pull request.
-        store: GithubProvenance | None = getattr(runtime, "store", None)
-        run_id = (
-            None if store is None
-            else await store.run_for_pull_request(repository.lower(), number)
-        )
-        snapshot = None
-        if run_id is not None:
-            try:
-                snapshot = await runtime.snapshot(run_id)
-            except UnknownGraphError:
-                # A saved work order can outlive the graph it was started from.
-                snapshot = None
-        if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+        run_id, steerable = await github_active_run(repository, number)
+        if not steerable:
             if not allow_start:
                 raise RuntimeError(
                     "no active work order and Engine was not @mentioned"
                 )
             reached = await github_start_workorder(
-                store, repository, number, prompt, replacing=run_id,
+                getattr(runtime, "store", None), repository, number, prompt, replacing=run_id,
                 requester=origin.requester or None,
             )
         else:
@@ -3556,31 +3553,21 @@ def create_app(
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not start a review: graph runtime unavailable")
-        run_id = await github_run_for_pull_request(repository, requested.number)
-        if run_id is not None:
-            try:
-                snapshot = await runtime.snapshot(run_id)
-            except UnknownGraphError:
-                snapshot = None
-            if snapshot is not None and snapshot.status in STEERABLE_RUN_STATUSES:
-                log.info(
-                    "a review of %s#%s was requested, but work order %s is still on it",
-                    repository, requested.number, run_id,
-                )
-                return
-        inputs = {
-            STATE_INPUT: str(WorkState.REVIEW),
-            REVIEW_REF_INPUT: f"origin/{requested.branch}",
-            REVIEW_PR_INPUT: url,
-            REVIEW_BRANCH_INPUT: requested.branch,
-            MODE_INPUT: str(ForgeMode.CONNECTED),
-        }
+        run_id, steerable = await github_active_run(repository, requested.number)
+        if steerable:
+            log.info(
+                "a review of %s#%s was requested, but work order %s is still on it",
+                repository, requested.number, run_id,
+            )
+            return
         await github_start_workorder(
             getattr(runtime, "store", None), repository, requested.number,
             f"Review pull request {url}: {requested.title}",
             replacing=run_id,
             requester=github_requester(requested.sender_id, requested.sender),
-            inputs={name: value for name, value in inputs.items() if name in declared},
+            inputs=review_inputs(
+                declared, ref=f"origin/{requested.branch}", pr_url=url, branch=requested.branch,
+            ),
         )
 
     async def github_concierge_turn(comment: GithubComment) -> None:
@@ -3639,14 +3626,8 @@ def create_app(
             rf"(?<![\w@-])@{re.escape(login)}(?![\w-])", comment.body, re.IGNORECASE,
         ))
         if not mentioned:
-            run_id = await github_run_for_pull_request(comment.repository, comment.number)
-            snapshot = None
-            if run_id is not None and surface.runtime is not None:
-                try:
-                    snapshot = await surface.runtime.snapshot(run_id)
-                except UnknownGraphError:
-                    pass
-            if snapshot is None or snapshot.status not in STEERABLE_RUN_STATUSES:
+            _, steerable = await github_active_run(comment.repository, comment.number)
+            if not steerable:
                 github_activity.ignored("no active work order and Engine was not @mentioned")
                 return
         thread_id = str(comment.number)
