@@ -17,7 +17,7 @@ test("WorkOrder filters stay in the viewport with WorkOrders collapsed", async (
   const workorders = page.getByRole("button", { name: "WorkOrders", exact: true });
   await workorders.click();
   await expect(workorders).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByRole("button", { name: "Projects", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Projects", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Filter WorkOrders", exact: true }).click();
 
   const menu = page.getByRole("group", { name: "WorkOrder filters" });
