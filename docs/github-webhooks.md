@@ -166,6 +166,35 @@ usual; the merge that already answered it is recorded as soon as it does. The
 merge is held in memory until then, so a restart in between leaves the review
 for the web UI.
 
+## Reading the log
+
+Every delivery that gets past the signature leaves a timestamped line saying
+what became of it, because GitHub is answered `200` whether a comment was
+queued, ignored, or is still waiting, and its delivery log cannot tell those
+apart:
+
+```text
+queued comment 5918660346 by octocat on owner/name#614 (delivery 4f0c…); 0 ahead of it
+handling comment 5918660346 by octocat on owner/name#614
+handled comment 5918660346 by octocat on owner/name#614 in 12.4s: replied, work order run-…
+```
+
+A comment that is not acted on says why: `ignored … already queued or
+handled`, `ignored … this deployment answers …`, an edit or a bot's comment
+(`not a comment Engine acts on`), or a `handled … : ignored, <reason>` naming
+the concierge's reason. The delivery id matches the one in GitHub's delivery
+log.
+
+One worker handles deliveries in order, so a handler that never returns holds
+up every comment behind it. While one runs past a minute the log repeats
+`still handling … after Ns; N GitHub deliveries are waiting behind it`. If that
+line keeps growing, the process is wedged on that delivery: the comments
+behind it were acknowledged and are held only in memory, so restarting loses
+them and they need redelivering from GitHub's delivery log.
+
+`engine-web` logs Engine's own messages at INFO and everything else at
+WARNING.
+
 ## Watching what arrives
 
 Every comment the route queues is remembered for the web UI, so a delivery can

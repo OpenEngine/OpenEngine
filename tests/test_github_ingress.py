@@ -308,6 +308,70 @@ def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
     asyncio.run(scenario())
 
 
+def test_what_became_of_each_delivery_is_logged(caplog) -> None:
+    """GitHub is answered 200 either way, so the log is where "queued",
+    "already seen" and "handled, and how" are told apart."""
+    from engine.apps.web.github_activity import GithubActivityLog
+
+    async def scenario():
+        activity = GithubActivityLog()
+
+        async def handle(comment):
+            activity.ignored("no active work order and Engine was not @mentioned")
+
+        ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+                                handle=handle, activity=activity)
+        ingress.accept("issue_comment", _issue_comment(comment_id=1), delivery_id="d-1")
+        ingress.accept("issue_comment", _issue_comment(comment_id=1), delivery_id="d-2")
+        ingress.accept("issue_comment", dict(_issue_comment(comment_id=2), action="edited"),
+                       delivery_id="d-3")
+        await ingress.drain()
+        await ingress.close()
+
+    with caplog.at_level("INFO", logger="engine.apps.web.github_ingress"):
+        asyncio.run(scenario())
+    messages = [record.getMessage() for record in caplog.records]
+    assert "queued comment 1 by someone on acme/api#7 (delivery d-1); 0 ahead of it" in messages
+    assert "ignored comment 1 by someone on acme/api#7 (delivery d-2): already queued or handled" in messages
+    assert any(m.startswith("ignored GitHub issue_comment delivery d-3 (action edited")
+               for m in messages)
+    assert any(m.startswith("handled comment 1 by someone on acme/api#7 in ")
+               and m.endswith(": ignored, no active work order and Engine was not @mentioned")
+               for m in messages)
+
+
+def test_a_delivery_that_holds_the_queue_is_reported_while_it_does(caplog) -> None:
+    """One worker serves every delivery, so a handler that never returns
+    silences every comment behind it. The log says so while it lasts."""
+
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def handle(comment):
+            if comment.comment_id == "1":
+                await gate.wait()
+
+        ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+                                handle=handle, stall_warning_seconds=0.01)
+        ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        await asyncio.sleep(0)  # the worker takes the first comment off the queue
+        ingress.accept("issue_comment", _issue_comment(comment_id=2))
+        await asyncio.sleep(0.05)
+        gate.set()
+        await ingress.drain()
+        await ingress.close()
+
+    with caplog.at_level("INFO", logger="engine.apps.web.github_ingress"):
+        asyncio.run(scenario())
+    stalls = [record for record in caplog.records
+              if record.getMessage().startswith("still handling comment 1 ")]
+    assert stalls and all(record.levelname == "WARNING" for record in stalls)
+    assert "1 GitHub deliveries are waiting behind it" in stalls[0].getMessage()
+    # Nothing is reported once the handler has returned.
+    assert not any(record.getMessage().startswith("still handling comment 2 ")
+                   for record in caplog.records)
+
+
 def test_a_merge_is_handled_once_however_often_it_is_delivered() -> None:
     async def scenario():
         merges = []

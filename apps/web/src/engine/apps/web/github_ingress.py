@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -52,6 +53,14 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 
 #: How many delivery identities are remembered for deduplication.
 _SEEN_LIMIT = 4096
+
+#: How long one delivery may hold the worker before the log says so, and how
+#: often it says so again. One worker serves every delivery, so a handler that
+#: never returns silences every comment after it while the route keeps
+#: answering GitHub 200 -- from outside, indistinguishable from comments that
+#: were read and deliberately ignored. A concierge turn is bounded at three
+#: minutes, so a minute is long for anything but a model turn.
+STALL_WARNING_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -158,6 +167,18 @@ def review_request_from_payload(
         url=str(pull_request.get("html_url") or ""),
         branch=branch, head_sha=sha, sender_id=_account_id(sender),
     )
+
+
+def describe(delivery: GithubComment | GithubMerge | GithubAssignment | GithubReviewRequest) -> str:
+    """One delivery as a log line names it: what, who, and where."""
+    if isinstance(delivery, GithubComment):
+        return (f"comment {delivery.comment_id} by {delivery.author} "
+                f"on {delivery.repository}#{delivery.number}")
+    if isinstance(delivery, GithubAssignment):
+        return f"assignment of {delivery.repository}#{delivery.number} by {delivery.sender}"
+    if isinstance(delivery, GithubReviewRequest):
+        return f"review request on {delivery.repository}#{delivery.number} by {delivery.sender}"
+    return f"merge of {delivery.repository}#{delivery.number} by {delivery.merged_by}"
 
 
 def assignment_from_payload(
@@ -368,6 +389,7 @@ class GithubIngress:
         max_body_bytes: int = MAX_BODY_BYTES,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
         activity: GithubActivityLog | None = None,
+        stall_warning_seconds: float = STALL_WARNING_SECONDS,
     ) -> None:
         self._webhook_secret = webhook_secret
         self._repository = repository
@@ -390,6 +412,7 @@ class GithubIngress:
         self._queue: asyncio.Queue[tuple[tuple[str, str], _Delivery]] = asyncio.Queue(maxsize=capacity)
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._worker: asyncio.Task[None] | None = None
+        self._stall_warning_seconds = stall_warning_seconds
 
     async def _read_body(self, request: Request) -> bytes | None:
         """The delivery's body, or ``None`` if it outgrows what one may weigh.
@@ -463,11 +486,15 @@ class GithubIngress:
                 )
                 return Response(status_code=503)
         return Response(
-            status_code=200 if self.accept(event, payload, self_login=self_login) else 503
+            status_code=200 if self.accept(
+                event, payload, self_login=self_login,
+                delivery_id=request.headers.get("x-github-delivery", ""),
+            ) else 503
         )
 
     def accept(
         self, event: str, payload: Mapping[str, object], *, self_login: str = "",
+        delivery_id: str = "",
     ) -> bool:
         """Whether the delivery is settled -- queued, or deliberately ignored.
 
@@ -487,7 +514,7 @@ class GithubIngress:
             return self._enqueue(
                 assignment, "assigned issue",
                 ("issues", f"{assignment.repository.lower()}#{assignment.number}"),
-                wired=self._handle_assignment is not None,
+                wired=self._handle_assignment is not None, delivery_id=delivery_id,
             )
         requested = review_request_from_payload(event, payload, self_login=self_login)
         if requested is not None:
@@ -496,13 +523,13 @@ class GithubIngress:
             return self._enqueue(
                 requested, "review request",
                 (REVIEW_REQUESTED, f"{requested.repository.lower()}#{requested.number}@{requested.head_sha}"),
-                wired=self._handle_review_request is not None,
+                wired=self._handle_review_request is not None, delivery_id=delivery_id,
             )
         comment = comment_from_payload(event, payload, self_login=self_login)
         if comment is not None:
             return self._enqueue(
                 comment, "comment", (comment.event, comment.comment_id),
-                wired=self._handle is not None,
+                wired=self._handle is not None, delivery_id=delivery_id,
             )
         merged = merge_from_payload(event, payload, self_login=self_login)
         if merged is not None:
@@ -512,7 +539,18 @@ class GithubIngress:
             return self._enqueue(
                 merged, "merged pull request",
                 (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}"),
-                wired=self._handle_merge is not None,
+                wired=self._handle_merge is not None, delivery_id=delivery_id,
+            )
+        if event in COMMENT_EVENTS:
+            # A comment is what somebody expects an answer to, so one that is
+            # not read says so: an edit, a bot, Engine's own reply, or an
+            # author without a trusted association.
+            comment = payload.get("comment")
+            user = comment.get("user") if isinstance(comment, dict) else None
+            log.info(
+                "ignored GitHub %s delivery %s (action %s, by %s): not a comment "
+                "Engine acts on", event, delivery_id or "-", payload.get("action"),
+                user.get("login") if isinstance(user, dict) else "unknown",
             )
         # Nothing to do with this delivery, whether or not a handler is
         # wired: settle it, so a webhook subscribed to more events than
@@ -526,8 +564,10 @@ class GithubIngress:
         identity: tuple[str, str],
         *,
         wired: bool,
+        delivery_id: str = "",
     ) -> bool:
         """Queue one read delivery, or say why it is being refused."""
+        named = f"{describe(delivery)} (delivery {delivery_id or '-'})"
         if not self._repository:
             log.warning(
                 "a GitHub %s was delivered but no target repository is configured", subject
@@ -536,6 +576,7 @@ class GithubIngress:
         if delivery.repository.lower() != self._repository.lower():
             # A shared App secret authenticates deliveries from other repos too.
             # Ignore them before queueing or remembering their identities.
+            log.info("ignored %s: this deployment answers %s", named, self._repository)
             return True
         if not wired:
             log.warning(
@@ -544,9 +585,16 @@ class GithubIngress:
             )
             return False
         if identity in self._seen:
+            log.info("ignored %s: already queued or handled", named)
             return True
         if self._queue.full():
+            log.warning(
+                "refused %s: the GitHub queue is full (%d waiting), so GitHub "
+                "will report it failed and it can be redelivered",
+                named, self._queue.qsize(),
+            )
             return False
+        log.info("queued %s; %d ahead of it", named, self._queue.qsize())
         self._queue.put_nowait((identity, delivery))
         if self._activity is not None and isinstance(delivery, GithubComment):
             self._activity.seen(delivery)
@@ -563,6 +611,10 @@ class GithubIngress:
             # Only a comment has a row on the panel; a merge is a verdict this
             # process acts on, not a conversation somebody is following.
             comment = delivery if isinstance(delivery, GithubComment) else None
+            named = describe(delivery)
+            began = time.monotonic()
+            log.info("handling %s", named)
+            watchdog = asyncio.create_task(self._warn_while_stalled(named, began))
             try:
                 if isinstance(delivery, GithubComment):
                     assert self._handle is not None  # nothing is queued without one
@@ -581,6 +633,10 @@ class GithubIngress:
                 else:
                     assert self._handle_merge is not None
                     await self._handle_merge(delivery)
+                log.info(
+                    "handled %s in %.1fs%s", named, time.monotonic() - began,
+                    self._outcome(comment),
+                )
             except Exception as failure:
                 if comment is not None and self._activity is not None:
                     self._activity.failed(str(failure) or type(failure).__name__)
@@ -594,9 +650,34 @@ class GithubIngress:
                     identity[1], delivery.repository, delivery.number,
                 )
             finally:
+                watchdog.cancel()
                 if comment is not None and self._activity is not None:
                     self._activity.finished(comment)
                 self._queue.task_done()
+
+    async def _warn_while_stalled(self, named: str, began: float) -> None:
+        """Say, while it lasts, that one delivery is holding up the rest."""
+        while True:
+            await asyncio.sleep(self._stall_warning_seconds)
+            log.warning(
+                "still handling %s after %.0fs; %d GitHub deliveries are waiting "
+                "behind it", named, time.monotonic() - began, self._queue.qsize(),
+            )
+
+    def _outcome(self, comment: GithubComment | None) -> str:
+        """What the activity log recorded for a comment, as a log suffix."""
+        entry = (
+            None if comment is None or self._activity is None
+            else self._activity.entry(comment)
+        )
+        if entry is None:
+            return ""
+        parts = [entry.status]
+        if entry.detail:
+            parts.append(entry.detail)
+        if entry.run_id:
+            parts.append(f"work order {entry.run_id}")
+        return ": " + ", ".join(parts)
 
     async def drain(self) -> None:
         await self._queue.join()
