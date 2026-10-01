@@ -46,7 +46,90 @@ ov "Verify the contact form shows validation errors" --agent codex --allow-exec
 request prompts for one in an interactive terminal. The current directory is the
 default project, so `ov` discovers the enclosing Git root, including worktrees.
 `--project PATH` selects another directory. Feature mode does not invoke Git;
-change mode uses read-only Git commands and never fetches or changes branches.
+`--base` change mode uses read-only Git commands and never fetches or changes branches.
+
+## Verify and publish a GitHub PR
+
+OV defaults to **one complete journey** within the requested scope. For example,
+“Test GitHub login and access to the app” should verify sign-in, app access, and
+access after reload, without adding unrelated error pages or sign-out. Use
+`--max-cases 3` when you want up to three separate journeys in a broader suite.
+Each case declares completion checks. Its generated test must map every check to
+assertion steps; the host finishes the case immediately on success. A failed or
+blocked test permits one diagnosed retry, then records the result. Passing tests
+are not rerun to collect more evidence. Progress names the journey and its checks.
+
+Generated journeys support reloads, local navigation and structured same-origin
+JSON assertions. They reject clicks on non-interactive role containers, such as
+groups. All checks for a case run in one test and one recording per attempt;
+failed attempts remain available for diagnosis.
+
+```shell
+ov --pr https://github.com/OWNER/REPO/pull/NUMBER --allow-exec --publish
+```
+
+Keep your current checkout on the branch containing the installed `ov`. The target
+PR does not need Open Verify installed or checked in. PR mode resolves GitHub's
+head, base and merge base; fetches those commits into a temporary repository; and
+creates a detached worktree containing the PR head. Your current branch, files,
+and uncommitted changes remain untouched, even when testing another repository.
+The diff is **PR merge base → PR head**, matching the PR's changed behavior.
+
+The same setup, interactive assisted-login, browser execution and artifact
+generation run in that checkout. `--allow-exec` permits commands against the PR's
+code and installation of its declared dependencies into the checkout's own local
+environment. The agent checks runtime requirements and lockfiles, installs missing
+dependencies, then starts the app. Package downloads and caches are allowed; global
+installs, dependency upgrades and lockfile changes are not. Include “do not install
+dependencies” in your request to prohibit installation. Missing runtime, credentials
+or registry access is reported or asked about. Use `--plan-only` without `--publish`
+to inspect first.
+
+Private local files are not copied automatically. Explicitly supply small setup
+files relative to your current directory (or `--project`):
+
+```shell
+ov "Test GitHub sign-in and the authenticated app" \
+  --pr https://github.com/OpenEngine/OpenEngine/pull/NUMBER \
+  --allow-exec --publish \
+  --setup-file engine.local.toml --setup-file .env
+```
+
+If publication fails after testing, retry just publication using the saved run:
+
+```shell
+ov --publish-from "/path/to/open-verify/runs/RUN_ID"
+```
+
+This does not fetch code, start the app, or run tests. It validates the saved PR
+head and base against GitHub, reuses previously uploaded assets, replaces empty
+failed uploads, and avoids duplicate comments. Stale revisions are rejected.
+An incomplete run remains labeled incomplete when published.
+
+Setup files are copied with owner-only permissions after the committed diff is
+recorded. Their paths are supplied to every case's agent session so startup can
+select the supplied configuration explicitly, including its local OAuth callback
+origin. Copying configuration alone does not activate it. Secret values are not
+included in the agent context. Existing PR files are never overwritten. Virtualenvs, node_modules and
+browser profiles are not copied. Another checkout's editable Python environment
+is not reused, because it could execute that checkout's code instead of the PR.
+Paths inside your configuration may still need
+adjusting for the test checkout. The agent can ask for missing setup in the terminal.
+
+`--publish` uses your existing `gh` authentication to create/reuse an evidence
+prerelease and comment on the PR with screenshots and links to videos/tests. It
+does not need an OE installation. It rechecks the head **and base** before posting;
+if either moved, publication is blocked and artifacts remain available locally.
+Skipped changes produce no uploads or comment. Each video stays below 10,000,000
+bytes. Publication uses the same release-asset convention documented below; this
+can trigger configured tag/release workflows. Omit `--publish` to retain evidence
+locally without modifying GitHub.
+
+Managed app processes close before the temporary worktree is removed. Artifacts
+are stored separately in the printed run directory, including `pull-request.json`
+with the revision snapshot and `publication.json` with the comment URL or blocker.
+The current checkout can be dirty, but `--pr` cannot be combined with `--base`,
+`--head`, or `--include-working-tree`: it always tests the PR's committed code.
 
 ## Verify a change
 
@@ -87,8 +170,8 @@ including useful failures. The browser extra includes a bundled MP4 encoder;
 **ffmpeg with libx264 on PATH** takes precedence. Encoding is local and bounded; every published video must be
 strictly below **10,000,000 bytes**. Missing/failed encoding or a clip that remains too
 large results in an explicit omission, while tests/screenshots remain available.
-Raw WebM recordings and traces stay local diagnostics. No dependency is installed
-automatically. Recording finalization follows [Playwright's context lifecycle](https://playwright.dev/python/docs/videos).
+Raw WebM recordings and traces stay local diagnostics. The media encoder does not
+install dependencies automatically. Recording finalization follows [Playwright's context lifecycle](https://playwright.dev/python/docs/videos).
 
 Generated test and media paths are printed after each journey. A native-tool protocol
 violation cancels the agent turn and retries once in a fresh session with the recorded
@@ -102,15 +185,81 @@ stays in the run bundle; recovery never copies the complete conversation history
 Individual prompts are capped at 240,000 characters, and long-running case sessions
 rotate after a 600,000-character accumulated input/output budget.
 
+### OE publication integration
+
+OE can opt into verification after impact analysis and before human review:
+
+```python
+from pathlib import Path
+from engine.adapters.source_control.github.verification import GitHubVerificationUploader
+from engine.graph_runtime_langgraph.components import OpenVerify
+from workflows.implementation_review_graph import graph_for
+
+workflow = graph_for("codex", verification=OpenVerify(
+    command=("/absolute/path/to/ov",),
+    output_directory=Path("/absolute/path/to/verification-runs"),
+    uploader=GitHubVerificationUploader(),
+))
+```
+
+This is an explicit deployment option, not enabled by default. The worker needs
+Open Verify, Chromium, an agent provider, the app's test setup, and existing `gh`
+credentials with repository write access. The node verifies the current PR head
+in its own workspace and runs headless; interactive OAuth is unavailable there.
+Missing setup is reported as blocked. Use an isolated worker with test credentials
+for executing repository code.
+
+The consumer validates the schema, file paths, media types, file sizes and PR
+revision before uploading. It refuses working-tree bundles for PR publication;
+commit and verify the exact PR revision first. It rechecks the PR head before
+commenting, keeps failure evidence, and uploads nothing for skipped changes.
+Only manifest-listed tests/screenshots/videos are uploaded; logs, traces, `.env`
+and login state stay local. Identical artifacts are reused and repeated publication
+of the same evidence reuses the existing comment.
+
+The first uploader supports github.com using documented release asset APIs. It
+creates an `open-verify/pr-<number>/<head>` tag and prerelease for each verified PR
+revision, marked as not latest. This invokes any repository workflows subscribed
+to those tag/release events. Assets inherit repository access; private repository
+assets require GitHub access. PR comments embed screenshot URLs and link to MP4
+videos and Python tests; inline video playback is not guaranteed. Every video is
+strictly smaller than 10,000,000 bytes. Another store can implement
+`VerificationUploader.upload` to return a durable HTTPS URL.
+
+For an existing bundle, OE can call `engine.runtime.verification.publish_verification`
+with its workspace, PR URL, SourceControl and uploader instead of rerunning tests.
+No live PR publication is performed by the integration's local tests.
+
+To publish from this OE checkout using the host's existing `gh` login:
+
+```sh
+uv run --all-packages python -m engine.adapters.source_control.github.verification \
+  --project . \
+  --manifest "/absolute/path/to/run/manifest.json" \
+  --pr "https://github.com/OWNER/REPO/pull/NUMBER"
+```
+
+This command uploads and comments immediately. Run `ov` against the committed,
+pushed PR head without `--include-working-tree` first; working-tree bundles cannot
+be published as evidence for a committed PR revision.
+
 ### Assisted sign-in
+
+Open Verify reuses one Chromium process for exploration, assisted login, and all
+test cases in a run. Each independent test gets a fresh browser context; steps
+within a journey share its page. Authenticated cases receive only the saved app
+session. Contexts close after each test to finalize its video, and Chromium closes
+at the end of the run. Separate contexts may still appear as separate windows.
 
 For protected-page testing, run from an interactive terminal with the application's
 real local OAuth configuration available. The QA agent can call `assisted_login`:
 Open Verify opens a visible browser, clicks the observed sign-in link/button, and
-asks you to complete GitHub login and MFA. It waits up to five minutes by default
+asks you to complete GitHub login and MFA, including GitHub's Google sign-in option.
+It waits up to five minutes by default
 and resumes automatically when the same-origin JSON session endpoint confirms
 `authenticated: true`. Closing the browser or timing out offers retry or skip.
-GitHub and its asset origins are enabled only for this private login browser;
+Assisted sign-in requires a visible run; omit `--headless` when login is needed.
+GitHub, Google Accounts, and their configured asset origins are enabled only for this private login browser;
 other browser tests keep their existing origin policy.
 
 The host holds app cookies/local storage in memory for the run. Generated journeys
@@ -120,8 +269,12 @@ blocks that journey pending another assisted login. Login itself records no vide
 screenshots, or traces. State and provider credentials are not included in the bundle.
 This is user-assisted authentication, not evidence of autonomous GitHub login.
 
-To replay an authenticated generated test, supply your own private Playwright
-storage-state file with `--auth-state /path/to/private-state.json`. The bundle does
+To replay an authenticated generated test, use `--login` in an interactive terminal
+to repeat the recorded assisted sign-in, or supply your own private Playwright
+storage-state file with `--auth-state /path/to/private-state.json`. Recorded login
+instructions contain the app URL, status endpoint and button locator, never cookies
+or credentials. The manifest's replay command includes `--login` when available.
+The bundle does
 not contain that file. Protected-page screenshots/video may show account data;
 use an appropriate test account. Dummy OAuth configuration cannot support live login.
 

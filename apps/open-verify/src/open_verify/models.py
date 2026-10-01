@@ -16,6 +16,8 @@ class Case(Contract):
     prerequisites: list[str] = Field(default_factory=list)
     steps: list[str] = Field(min_length=1)
     expected: str = Field(min_length=1)
+    checks: list[str] = Field(default_factory=list, max_length=10,
+        description="Concrete completion checks for this journey; every check must have a test assertion")
 
 
 class Plan(Contract):

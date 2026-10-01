@@ -15,6 +15,16 @@ from open_verify.tools import LocalTools, LocatorArgs
 
 GITHUB_ORIGINS = ("https://github.com", "https://github.githubassets.com",
                   "https://avatars.githubusercontent.com")
+# GitHub can delegate the user's sign-in to Google. Keep these allowances
+# scoped to the private, user-controlled login browser, not test browsers.
+GOOGLE_LOGIN_ORIGINS = (
+    "https://accounts.google.com",
+    "https://www.gstatic.com",
+    "https://ssl.gstatic.com",
+    "https://fonts.gstatic.com",
+    "https://fonts.googleapis.com",
+    "https://lh3.googleusercontent.com",
+)
 
 
 class LoginRequest(Contract):
@@ -26,23 +36,27 @@ class LoginRequest(Contract):
 
 
 class AssistedLogin:
-    def __init__(self, project, *, allow_origins=(), progress=print):
+    def __init__(self, project, *, allow_origins=(), progress=print, browser_session=None):
         self.project = project
         self.allow_origins = tuple(allow_origins)
         self.progress = progress
+        self.browser_session = browser_session
         self.state = None
         self.request = None
 
     async def run(self, request: LoginRequest):
         self.state = None
         self.request = None
+        if self.browser_session is not None and self.browser_session.headless:
+            raise ValueError("Assisted login needs a visible browser; rerun without --headless")
         if LocalTools.origin(request.url) != LocalTools.origin(request.status_url):
             raise ValueError("Login status endpoint must have the same origin as the app")
         # No trace, video, screenshot, provider cookies or status payload is exported.
         with tempfile.TemporaryDirectory(prefix="ov-login-") as directory:
             tools = LocalTools(self.project, Artifacts(Path(directory)), headless=False,
-                               allow_origins=(*self.allow_origins, *GITHUB_ORIGINS),
-                               trace_browser=False)
+                               allow_origins=(*self.allow_origins, *GITHUB_ORIGINS,
+                                              *GOOGLE_LOGIN_ORIGINS),
+                               trace_browser=False, browser_session=self.browser_session)
             tools.check_url(request.url)
             try:
                 page = await tools.browser_page()
@@ -53,7 +67,14 @@ class AssistedLogin:
                     while True:
                         if page.is_closed():
                             raise ValueError("Login browser was closed; retry assisted_login to reopen it")
-                        if LocalTools.origin(page.url) == LocalTools.origin(request.url):
+                        # Browser-internal pages can appear during redirects or
+                        # sign-in. They are not app callbacks; keep waiting without
+                        # navigating or interrupting the user's interaction.
+                        try:
+                            page_origin = LocalTools.origin(page.url)
+                        except ValueError:
+                            page_origin = None
+                        if page_origin == LocalTools.origin(request.url):
                             if await self.confirm(tools.context, request):
                                 state = await tools.context.storage_state()
                                 host = urlsplit(request.url).hostname

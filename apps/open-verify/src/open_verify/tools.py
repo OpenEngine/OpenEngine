@@ -16,7 +16,7 @@ from open_verify.browser_proxy import BrowserProxy
 from open_verify.models import Contract
 from open_verify.scope import OMIT, inspectable
 
-READ_TOOLS = {"list_files", "read_file"}
+READ_TOOLS = {"list_files", "read_file", "read_change_diff"}
 MAX_TEXT = 24000
 MAX_RESPONSE_FILE = 10 * 1024 * 1024
 
@@ -137,6 +137,7 @@ class LocalTools:
         record_video=False,
         storage_state=None,
         trace_browser=True,
+        browser_session=None,
     ):
         self.project = project.resolve()
         self.artifacts = artifacts
@@ -146,6 +147,7 @@ class LocalTools:
         self.record_video = record_video
         self.storage_state = storage_state
         self.trace_browser = trace_browser
+        self.browser_session = browser_session
         self.processes: dict[str, tuple] = {}
         self.browser = self.context = self.page = self.playwright = None
         self._tracing = False
@@ -393,11 +395,16 @@ class LocalTools:
         try:
             self._browser_proxy = BrowserProxy(self.check_url, self.browser_events)
             proxy_url = await self._browser_proxy.start()
-            self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch(
-                headless=self.headless,
-                proxy={"server": proxy_url, "bypass": "<-loopback>"},
-            )
+            context_options = {}
+            if self.browser_session is not None:
+                self.browser = await self.browser_session.get_browser()
+                context_options["proxy"] = {"server": proxy_url, "bypass": "<-loopback>"}
+            else:
+                self.playwright = await async_playwright().start()
+                self.browser = await self.playwright.chromium.launch(
+                    headless=self.headless,
+                    proxy={"server": proxy_url, "bypass": "<-loopback>"},
+                )
             video_options = (
                 {
                     "record_video_dir": str(self.artifacts.path / "raw-video"),
@@ -407,7 +414,7 @@ class LocalTools:
             )
             self.context = await self.browser.new_context(
                 service_workers="block", viewport={"width": 1280, "height": 720},
-                storage_state=self.storage_state, **video_options
+                storage_state=self.storage_state, **video_options, **context_options
             )
             await self._configure_browser()
             self._browser_ready = True
@@ -546,7 +553,7 @@ class LocalTools:
                 ),
             ),
             ("context", lambda: self.context.close() if self.context else None),
-            ("browser", lambda: self.browser.close() if self.browser else None),
+            ("browser", lambda: self.browser.close() if self.browser and self.browser_session is None else None),
             ("playwright", lambda: self.playwright.stop() if self.playwright else None),
             ("proxy", lambda: self._browser_proxy.close() if self._browser_proxy else None),
         ]:

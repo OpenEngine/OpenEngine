@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Annotated, Literal, Protocol
 
-from pydantic import Field, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from open_verify.models import Contract
 
@@ -23,6 +23,15 @@ class Locator(Contract):
 class Click(Contract):
     kind: Literal["click"]
     locator: Locator
+
+    @model_validator(mode="after")
+    def interactive_role(self):
+        if self.locator.by == "role" and self.locator.role not in {
+            "button", "link", "checkbox", "radio", "tab", "menuitem",
+            "menuitemcheckbox", "menuitemradio", "option", "switch", "combobox",
+        }:
+            raise ValueError("Click an interactive control, not a group or container")
+        return self
 
 
 class Fill(Contract):
@@ -53,7 +62,24 @@ class Screenshot(Contract):
     name: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")
 
 
-Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL | Screenshot, Field(discriminator="kind")]
+class Reload(Contract):
+    kind: Literal["reload"]
+
+
+class Navigate(Contract):
+    kind: Literal["navigate"]
+    path: str = Field(pattern=r"^/([^/\s\\][^\s\\]*)?$")
+
+
+class ExpectJSON(Contract):
+    kind: Literal["expect_json"]
+    path: str = Field(pattern=r"^/([^/\s\\][^\s\\]*)?$")
+    status: int = Field(default=200, ge=100, le=599)
+    field: list[str | int] = Field(default_factory=list)
+    value: JsonValue
+
+
+Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL | Screenshot | Reload | Navigate | ExpectJSON, Field(discriminator="kind")]
 
 
 class BrowserTest(Contract):
@@ -62,11 +88,19 @@ class BrowserTest(Contract):
     authenticated: bool = False
     steps: list[Step] = Field(min_length=1, max_length=40)
     timeout: float = Field(default=60, gt=0, le=120)
+    checks: dict[str, list[int]] = Field(default_factory=dict,
+        description="Map each planned completion check verbatim to zero-based assertion step indexes")
+    retry_reason: str = Field(default="", max_length=2000,
+        description="For a retry, diagnose the prior failure and explain the correction without weakening coverage")
 
     @model_validator(mode="after")
     def assertion_required(self):
-        if not any(isinstance(step, (ExpectText, ExpectURL)) for step in self.steps):
+        assertions = (ExpectText, ExpectURL, ExpectJSON)
+        if not any(isinstance(step, assertions) for step in self.steps):
             raise ValueError("A regression test needs at least one explicit assertion")
+        for indexes in self.checks.values():
+            if not indexes or any(i < 0 or i >= len(self.steps) or not isinstance(self.steps[i], assertions) for i in indexes):
+                raise ValueError("Completion checks must reference assertion steps")
         return self
 
 

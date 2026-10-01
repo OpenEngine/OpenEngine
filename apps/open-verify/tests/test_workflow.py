@@ -354,6 +354,7 @@ def test_error_summary_prefers_underlying_exception(tmp_path):
 
 def test_cases_use_fresh_sessions_and_keep_host_processes(tmp_path):
     messages = []
+    (tmp_path / '.env').write_text('SECRET=setup-secret-must-not-enter-context')
     class RecordingAgent(ScriptedAgent):
         resets = 0
         contexts = []
@@ -382,7 +383,11 @@ def test_cases_use_fresh_sessions_and_keep_host_processes(tmp_path):
     tools = LocalTools(tmp_path, artifacts, allow_exec=True)
     async def run():
         try:
-            report = await Verification(agent, tools, artifacts, progress=messages.append).run('Two cases')
+            report = await Verification(
+                agent, tools, artifacts, progress=messages.append,
+                setup_files=['engine.local.toml', '.env'],
+                max_cases=2,
+            ).run('Two cases')
             assert tools.processes['P001'][0].returncode is None
             return report
         finally:
@@ -392,6 +397,8 @@ def test_cases_use_fresh_sessions_and_keep_host_processes(tmp_path):
     assert [c['id'] for c in agent.contexts[4]['state']['plan']['cases']] == ['second']
     assert agent.contexts[4]['managed_processes'][0]['process_id'] == 'P001'
     assert 'decision' not in agent.contexts[4]['state']
+    assert all(c['setup_files'] == ['engine.local.toml', '.env'] for c in agent.contexts)
+    assert all('setup-secret-must-not-enter-context' not in p for p in agent.prompts)
 
 
 def test_prompt_budget_rejects_oversize_before_provider_call(tmp_path):

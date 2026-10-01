@@ -43,6 +43,7 @@ from engine.graph_runtime_langgraph.components.findings import (
 )
 from engine.graph_runtime_langgraph.components.human_review import HumanReviewNode
 from engine.graph_runtime_langgraph.components.name import NameNode
+from engine.graph_runtime_langgraph.components.open_verify import OpenVerify
 from engine.graph_runtime_langgraph.components.workspace import (
     WorkspaceNode,
     checkout,
@@ -58,6 +59,7 @@ __all__ = [
     "RerankerNode",
     "HumanReviewNode",
     "NameNode",
+    "OpenVerify",
     "NoWorkingDirectoryError",
     "WorkspaceNode",
     "checkout",

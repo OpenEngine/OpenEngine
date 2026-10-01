@@ -130,6 +130,7 @@ def test_host_test_result_controls_findings_and_manifest(tmp_path, status):
                 case_id="greet",
                 url="http://localhost:8000",
                 steps=[{"kind": "expect_text", "text": "Hello Ada"}],
+                checks={"Hello Ada": [0]},
             ),
             # Claiming the opposite cannot change the observed test status.
             result("failed" if status == "passed" else "passed"),
@@ -137,7 +138,10 @@ def test_host_test_result_controls_findings_and_manifest(tmp_path, status):
         ],
         runner_status=status,
     )
-    assert "match its actual status" in agent.prompts[-1]
+    if status == "passed":
+        assert len(agent.prompts) == 3  # Host finishes immediately, without another model call.
+    else:
+        assert "match its actual status" in agent.prompts[-1]
     assert report["findings"][0]["status"] == status
     assert runner.calls[0][1] is True
     assert manifest["tests"][0]["status"] == status
@@ -161,6 +165,57 @@ def test_unknown_case_is_rejected_before_runner(tmp_path):
     )
     assert runner.calls == []
     assert manifest["status"] == "incomplete"
+
+
+def journey(**updates):
+    return action("run_browser_test", **{
+        "case_id": "greet", "url": "http://localhost",
+        "steps": [{"kind": "expect_text", "text": "Hello Ada"}],
+        "checks": {"Hello Ada": [0]}, **updates,
+    })
+
+
+def test_rejects_scope_expansion_and_stops_after_complete_journey(tmp_path):
+    expanded = browser_plan()
+    expanded['plan']['cases'].append(dict(expanded['plan']['cases'][0], id='extra'))
+    report, runner, _, agent = execute(tmp_path, [impact(), expanded, browser_plan(), journey()])
+    assert 'max_cases=1' in agent.prompts[2]
+    assert len(runner.calls) == 1
+    assert report['status'] == 'complete'
+
+
+def test_partial_coverage_and_container_click_do_not_execute(tmp_path):
+    _, runner, _, agent = execute(tmp_path, [
+        impact(), browser_plan(), journey(checks={}),
+        journey(steps=[{'kind': 'click', 'locator': {'by': 'role', 'role': 'group', 'name': 'User'}},
+                       {'kind': 'expect_text', 'text': 'Hello Ada'}], checks={'Hello Ada': [1]}),
+        journey(),
+    ])
+    assert len(runner.calls) == 1
+    assert 'every planned completion check' in agent.prompts[3]
+    assert 'interactive control' in agent.prompts[4]
+
+
+@pytest.mark.parametrize('status', ['failed', 'blocked'])
+def test_only_one_diagnosed_retry_is_allowed(tmp_path, status):
+    report, runner, _, agent = execute(tmp_path, [
+        impact(), browser_plan(), journey(), journey(),
+        journey(retry_reason='The observed label changed; corrected the locator with the same expectation.'),
+    ], runner_status=status)
+    assert 'Retry requires a diagnosis' in agent.prompts[-1]
+    assert len(runner.calls) == 2
+    assert report['status'] == 'complete'
+    assert report['findings'][0]['status'] == status
+
+
+def test_screenshots_cannot_count_as_completion_assertions(tmp_path):
+    _, runner, _, agent = execute(tmp_path, [
+        impact(), browser_plan(),
+        journey(steps=[{'kind': 'screenshot', 'name': 'page'}, {'kind': 'expect_text', 'text': 'Hello Ada'}]),
+        journey(),
+    ])
+    assert 'must reference assertion steps' in agent.prompts[-1]
+    assert len(runner.calls) == 1
 
 
 def test_skipping_material_ui_change_is_invalid():

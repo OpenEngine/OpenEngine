@@ -26,6 +26,48 @@ def test_change_options_require_base(args):
     assert error.value.code == 2
 
 
+@pytest.mark.parametrize('args', [
+    ['--publish'], ['--setup-file', '.env'],
+    ['--pr', 'https://github.com/o/r/pull/1', '--base', 'main'],
+    ['--pr', 'https://github.com/o/r/pull/1', '--publish'],
+    ['--pr', 'https://github.com/o/r/pull/1', '--publish', '--allow-exec', '--plan-only'],
+])
+def test_pr_flag_combinations_are_validated(args):
+    with pytest.raises(SystemExit) as error:
+        main(args)
+    assert error.value.code == 2
+
+
+def test_pr_supplies_default_request_without_prompt(monkeypatch):
+    received = []
+
+    async def run(args):
+        received.append(args)
+        return 0
+
+    monkeypatch.setattr('open_verify.cli.run', run)
+    monkeypatch.setattr('builtins.input', lambda *_: pytest.fail('Must not prompt'))
+    assert main(['--pr', 'https://github.com/o/r/pull/1', '--allow-exec', '--publish']) == 0
+    assert received[0].request and received[0].publish
+    assert received[0].max_cases == 1
+
+
+def test_publication_only_does_not_start_verification(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    publish = AsyncMock(return_value=0)
+    monkeypatch.setattr('open_verify.github.publish_saved', publish)
+    monkeypatch.setattr('open_verify.cli.run_local', lambda *_: pytest.fail('Must not run tests'))
+    monkeypatch.setattr('builtins.input', lambda *_: pytest.fail('Must not prompt'))
+    assert main(['--publish-from', str(tmp_path)]) == 0
+    publish.assert_awaited_once_with(tmp_path)
+
+
+@pytest.mark.parametrize('extra', [['test login'], ['--allow-exec'], ['--pr', 'https://github.com/o/r/pull/1'], ['--plan-only']])
+def test_publication_only_rejects_execution_options(tmp_path, extra):
+    with pytest.raises(SystemExit):
+        main(['--publish-from', str(tmp_path), *extra])
+
+
 def test_change_preflight_failure_saves_blocked_manifest_without_starting_agent(
     tmp_path, monkeypatch
 ):

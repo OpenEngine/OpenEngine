@@ -29,6 +29,41 @@ class Change(ChangeReference):
     diff: str = ""
 
 
+class DiffRequest(Contract):
+    path: str
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=16000, ge=1, le=20000)
+
+
+async def read_file_diff(project: Path, change: Change, request: DiffRequest, *, reader=None):
+    """Read a paginated patch for one changed file, beyond the initial preview."""
+    path = request.path
+    local = project / path
+    if (path not in change.files or not inspectable(path) or local.is_symlink()
+            or not local.resolve().is_relative_to(project.resolve())):
+        raise ValueError("Choose an inspectable file from the change's file list")
+    git = reader or GitReader(project)
+    if (await git.read("rev-parse", "--verify", "HEAD^{commit}")).strip() != change.head:
+        raise ValueError("Checkout changed since verification began")
+    revisions = [change.base] if change.include_working_tree else [change.base, change.head]
+    untracked = change.include_working_tree and path in (
+        await git.read("ls-files", "--others", "--exclude-standard", "-z")
+    ).split("\0")
+    if untracked:
+        with local.open("rb") as stream:
+            data = stream.read(MAX_GIT_OUTPUT + 1)
+        if len(data) > MAX_GIT_OUTPUT or b"\0" in data:
+            raise ValueError("File is binary or too large for patch inspection")
+        patch = "Untracked file: " + path + "\n" + data.decode("utf-8", "replace")
+    else:
+        patch = await git.read("diff", "--no-ext-diff", "--no-textconv", "--no-renames",
+                               "--no-color", "--unified=3", *revisions, "--", ":(literal)" + path)
+    end = request.offset + request.limit
+    return {"path": path, "diff": patch[request.offset:end], "offset": request.offset,
+            "next_offset": end if end < len(patch) else None, "total_chars": len(patch),
+            "working_tree": change.include_working_tree}
+
+
 class GitReader:
     """Fixed argv commands, bounded runtime/output, and no external diff helpers."""
 

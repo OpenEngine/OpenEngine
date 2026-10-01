@@ -54,6 +54,16 @@ the bundled encoder. The failing fixture retained an 8,343-byte MP4 and screensh
 These fixtures use scripted planning decisions; live-agent acceptance is tracked
 separately and must not be inferred from their success.
 
+Implemented (2026-10-01): per-file paginated diff inspection beyond the initial
+preview; authenticated generated-test replay with `--login`; an opt-in OE
+`OpenVerify` workflow node; validated manifest consumption and PR-head checks;
+and a github.com prerelease-asset uploader with PR comments. No credentials,
+diagnostic logs, or browser state are published. Videos retain the strict 10 MB
+limit. Storage is injectable; release publishing is disabled until a deployment
+supplies the node and uploader. Local adapter/consumer tests simulate GitHub
+responses; live release creation, uploads and PR rendering remain a deployment
+acceptance check, not a claimed test result.
+
 Live-agent acceptance also passed on 2026-09-30: Codex inspected a disposable local
 greeting page, assessed material UI impact, generated and ran a Playwright journey,
 and returned a passed finding with checkpoint screenshots and bounded MP4 evidence.

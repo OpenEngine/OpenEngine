@@ -17,7 +17,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-
 #: How long a `gh` that has been asked to stop is given before it is killed.
 _TERMINATION_GRACE_SECONDS = 5
 
@@ -215,6 +214,19 @@ class GitHubCliTransport:
 
     async def download(self, path: str) -> bytes:
         return await self._run("api", path, "--hostname", self._host, "--method", "GET")
+
+    async def upload_release_asset(self, repository: str, release_id: int, name: str,
+                                   data: bytes, media_type: str) -> object:
+        from urllib.parse import quote
+
+        if self.host != "github.com":
+            raise GitHubTransportError("Verification release uploads currently require github.com")
+        path = f"https://uploads.github.com/repos/{repository}/releases/{release_id}/assets?name={quote(name, safe='')}"
+        output = await self._run("api", path, "--hostname", self._host, "--method", "POST",
+                                 "--header", f"Content-Type: {media_type}", "--input", "-",
+                                 "--header", f"Content-Length: {len(data)}",
+                                 input_bytes=data)
+        return json.loads(output)
 
     async def _run(self, *arguments: str, input_bytes: bytes | None = None) -> bytes:
         try:

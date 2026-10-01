@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from open_verify.changes import MAX_DIFF, read_change
+from open_verify.changes import MAX_DIFF, Change, DiffRequest, read_change, read_file_diff
 
 
 class GitFixture:
@@ -106,3 +106,20 @@ def test_binary_notice_in_text_content_does_not_mark_inspection_incomplete(tmp_p
     )
     change = asyncio.run(read_change(tmp_path, "main", reader=git))
     assert not change.truncated
+
+
+def test_can_page_relevant_diff_beyond_initial_preview(tmp_path):
+    git = GitFixture(diff='x' * MAX_DIFF + '\n+important login change')
+    change = Change(base='base-sha', head='head-sha', files=['app.py'], truncated=True)
+    result = asyncio.run(read_file_diff(tmp_path, change,
+        DiffRequest(path='app.py', offset=MAX_DIFF, limit=200), reader=git))
+    assert '+important login change' in result['diff']
+    assert result['next_offset'] is None
+    assert git.calls[-1][-1] == ':(literal)app.py'
+
+
+@pytest.mark.parametrize('path', ['.env', '../secret.py', '/tmp/secret.py', 'other.py'])
+def test_diff_reader_rejects_paths_outside_change(tmp_path, path):
+    change = Change(base='base-sha', head='head-sha', files=['app.py'])
+    with pytest.raises(ValueError, match='inspectable'):
+        asyncio.run(read_file_diff(tmp_path, change, DiffRequest(path=path), reader=GitFixture()))

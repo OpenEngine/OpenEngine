@@ -11,6 +11,7 @@ from platformdirs import user_data_path
 from open_verify import __version__
 from open_verify.agent import ACPDecisionAgent, provider_for
 from open_verify.artifacts import Artifacts
+from open_verify.browser_session import BrowserSession
 from open_verify.changes import read_change
 from open_verify.manifest import write_manifest
 from open_verify.playwright_runner import PlaywrightRunner
@@ -71,6 +72,10 @@ def parser():
     cli.add_argument("--model", help="Provider-specific model ID; omission uses its default")
     cli.add_argument("--base", help="Base revision for change-based verification (no checkout/fetch)")
     cli.add_argument("--head", help="Changed revision, which must match the checkout (default: HEAD)")
+    cli.add_argument("--pr", help="GitHub PR URL to fetch and verify in an isolated worktree")
+    cli.add_argument("--publish", action="store_true", help="Upload PR test evidence and post a GitHub comment")
+    cli.add_argument("--publish-from", type=Path, help="Publish a saved PR run directory without rerunning tests")
+    cli.add_argument("--setup-file", action="append", default=[], help="Explicit local config file to copy into the PR worktree (relative to --project; repeatable)")
     cli.add_argument(
         "--include-working-tree", action="store_true",
         help="Include staged, unstaged, and untracked files in the change",
@@ -81,7 +86,7 @@ def parser():
     cli.add_argument(
         "--allow-exec",
         action="store_true",
-        help="Allow agent-selected local commands in the target project",
+        help="Allow local commands and project-local dependency installation (unless your request forbids it)",
     )
     cli.add_argument(
         "--allow-origin",
@@ -93,6 +98,8 @@ def parser():
     cli.add_argument(
         "--max-steps", type=positive_int, default=60, help="Maximum agent decisions (default: 60)"
     )
+    cli.add_argument("--max-cases", type=positive_int, default=1,
+                     help="Maximum planned journeys (default: 1; increase for a broader suite)")
     cli.add_argument(
         "--agent-timeout", type=positive_int, default=180, help="Seconds per agent decision"
     )
@@ -106,7 +113,17 @@ def parser():
 
 
 async def run(args):
-    artifacts = Artifacts(args.output.resolve())
+    if args.publish_from:
+        from open_verify.github import publish_saved
+        return await publish_saved(args.publish_from)
+    if args.pr:
+        from open_verify.pull_request import run_pull_request
+        return await run_pull_request(args, run_local)
+    return await run_local(args)
+
+
+async def run_local(args, *, artifacts=None, prepare=None):
+    artifacts = artifacts or Artifacts(args.output.resolve())
     try:
         project = project_root(args.project)
         change = (
@@ -116,6 +133,8 @@ async def run(args):
             )
             if args.base else None
         )
+        if prepare is not None:
+            prepare()
     except Exception as exc:
         report = {"request": args.request, "status": "blocked", "findings": [],
                   "note": f"Change/project inspection failed: {exc}"}
@@ -143,6 +162,7 @@ async def run(args):
             "model": args.model,
             "plan_only": args.plan_only,
             "allow_exec": args.allow_exec,
+            "setup_files": args.setup_file,
             "change": change.model_dump(exclude={"diff"}) if change else None,
         },
     )
@@ -151,12 +171,14 @@ async def run(args):
     # Agent-side cwd is the run folder. Repository inspection and execution are
     # routed through host adapters, not the provider's native workspace tools.
     agent = ACPDecisionAgent(provider, artifacts.path, model=args.model, timeout=args.agent_timeout)
+    browser_session = BrowserSession(headless=args.headless)
     tools = LocalTools(
         project,
         artifacts,
         allow_exec=args.allow_exec,
         allow_origins=args.allow_origin,
         headless=args.headless,
+        browser_session=browser_session,
     )
     print(f"Project: {project}\nArtifacts: {artifacts.path}", flush=True)
     terminal = TerminalProgress(sys.stdout)
@@ -179,10 +201,13 @@ async def run(args):
         progress_status=terminal.status,
         ask_user=ask_user,
         interactive_login=sys.stdin.isatty(),
+        setup_files=args.setup_file,
+        max_cases=args.max_cases,
         change=change,
         test_runner=(
             PlaywrightRunner(
                 project, artifacts, allow_origins=args.allow_origin, headless=args.headless,
+                browser_session=browser_session,
             ) if change is not None else None
         ),
     )
@@ -193,6 +218,7 @@ async def run(args):
     finally:
         terminal.clear()
         cleanup_errors = await tools.close()
+        cleanup_errors.extend(await browser_session.close())
         try:
             await agent.close()
         except Exception as exc:
@@ -214,9 +240,21 @@ async def run(args):
 def main(argv=None):
     cli = parser()
     args = cli.parse_args(argv)
+    if args.max_cases > 20:
+        cli.error("--max-cases cannot exceed 20")
+    if args.publish_from:
+        if args.request or args.pr or args.publish or args.base or args.head or args.include_working_tree or args.setup_file or args.plan_only or args.allow_exec:
+            cli.error("--publish-from publishes saved evidence; do not combine it with a verification request or execution options")
+        args.request = "Publish saved evidence"
+    if args.pr and (args.base or args.head or args.include_working_tree):
+        cli.error("--pr resolves its own revisions; do not combine with --base, --head, or --include-working-tree")
+    if (args.publish or args.setup_file) and not args.pr:
+        cli.error("--publish and --setup-file require --pr")
+    if args.publish and (args.plan_only or not args.allow_exec):
+        cli.error("--publish requires --allow-exec and cannot be combined with --plan-only")
     if (args.head or args.include_working_tree) and not args.base:
         cli.error("--head and --include-working-tree require --base")
-    if not args.request and args.base:
+    if not args.request and (args.base or args.pr):
         args.request = "Verify the meaningful behavior affected by this change."
     if not args.request:
         if not sys.stdin.isatty():

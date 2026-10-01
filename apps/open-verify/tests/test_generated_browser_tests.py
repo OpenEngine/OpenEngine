@@ -11,6 +11,7 @@ from test_change_workflow import browser_plan, impact, result
 from test_workflow import ScriptedAgent, action
 
 from open_verify.artifacts import Artifacts
+from open_verify.browser_session import BrowserSession
 from open_verify.changes import Change
 from open_verify.playwright_runner import PlaywrightRunner
 from open_verify.test_codegen import render_test
@@ -25,6 +26,7 @@ def test_spec(url, *, expected="Hello Ada"):
     return BrowserTest(
         case_id="greet",
         url=url,
+        checks={"Hello Ada": [3]},
         steps=[
             {"kind": "screenshot", "name": "initial"},
             {"kind": "fill", "locator": {"by": "label", "name": "Name"}, "value": "Ada"},
@@ -36,6 +38,35 @@ def test_spec(url, *, expected="Hello Ada"):
 
 
 test_spec.__test__ = False
+
+
+@pytest.mark.parametrize('value,status', [(2, 'passed'), (3, 'failed')])
+def test_reload_navigation_and_structured_json_in_one_journey(tmp_path, web_app, value, status):
+    runner = PlaywrightRunner(tmp_path, Artifacts(tmp_path / 'runs'))
+    progress = []
+    runner.progress = progress.append
+    test = BrowserTest(case_id='api', url=web_app, steps=[
+        {'kind': 'reload'},
+        {'kind': 'navigate', 'path': '/other'},
+        {'kind': 'expect_text', 'text': 'Greet'},
+        {'kind': 'expect_json', 'path': '/api', 'field': ['items', 1], 'value': value},
+    ], checks={'App accessible after reload': [2], 'API data is correct': [3]})
+    result = asyncio.run(runner.run(test, capture_media=False))
+    assert result.status == status
+    assert len(progress) == 4
+    assert 'API data is correct' in progress[-1]
+
+
+@pytest.mark.parametrize('path', ['//example.com', '/\\example.com', '/\n/example.com', 'https://example.com'])
+@pytest.mark.parametrize('kind', ['navigate', 'expect_json'])
+def test_new_steps_cannot_escape_app_origin(path, kind):
+    step = {'kind': kind, 'path': path}
+    if kind == 'expect_json':
+        step['value'] = True
+    with pytest.raises(ValueError):
+        BrowserTest(case_id='scope', url='http://localhost', steps=[
+            step, {'kind': 'expect_text', 'text': 'app'},
+        ])
 
 
 def test_compiler_treats_model_strings_as_literals_and_requires_assertions():
@@ -62,8 +93,9 @@ def test_change_runs_exact_generated_test_and_retains_focused_evidence(
 ):
     pytest.importorskip("playwright.async_api")
     artifacts = Artifacts(tmp_path / "runs")
-    tools = LocalTools(tmp_path, artifacts, headless=True)
-    runner = PlaywrightRunner(tmp_path, artifacts)
+    session = BrowserSession(headless=True)
+    tools = LocalTools(tmp_path, artifacts, headless=True, browser_session=session)
+    runner = PlaywrightRunner(tmp_path, artifacts, browser_session=session)
     test = test_spec(web_app, expected=expected)
     # A replay-only override must not silently change the app under verification.
     monkeypatch.setenv("OV_BASE_URL", "file:///not-a-project-path")
@@ -89,6 +121,7 @@ def test_change_runs_exact_generated_test_and_retains_focused_evidence(
             return report
         finally:
             await tools.close()
+            assert await session.close() == []
 
     report = asyncio.run(run())
     assert report["findings"][0]["status"] == status

@@ -11,6 +11,8 @@ from pathlib import Path
 
 from open_verify import __version__
 from open_verify.artifacts import Artifacts
+from open_verify.auth import AssistedLogin, LoginRequest
+from open_verify.browser_session import BrowserSession
 from open_verify.media import encode_video
 from open_verify.test_codegen import render_test
 from open_verify.test_spec import BrowserTest, TestResult
@@ -99,13 +101,15 @@ async def execute_journey(
 
 
 class PlaywrightRunner:
-    def __init__(self, project: Path, artifacts: Artifacts, *, allow_origins=(), headless=True):
+    def __init__(self, project: Path, artifacts: Artifacts, *, allow_origins=(), headless=True,
+                 browser_session=None):
         self.project = project
         self.artifacts = artifacts
         self.allow_origins = tuple(allow_origins)
         self.headless = headless
         self.attempt = 0
         self.authentication = None
+        self.browser_session = browser_session
 
     async def run(
         self,
@@ -119,7 +123,9 @@ class PlaywrightRunner:
         folder = self.artifacts.path / "tests"
         folder.mkdir(exist_ok=True)
         path = folder / f"test_{identity}_{self.attempt:03d}.py"
-        source = render_test(test)
+        login_request = (self.authentication.request.model_dump()
+                         if test.authenticated and self.authentication and self.authentication.request else None)
+        source = render_test(test, login=login_request)
         path.write_text(source, encoding="utf-8")
         path.with_suffix(".json").write_text(test.model_dump_json(indent=2), encoding="utf-8")
         (folder / "requirements.txt").write_text(
@@ -130,8 +136,9 @@ class PlaywrightRunner:
             "Use the same Open Verify version (install from its standalone source if unpublished), "
             "install the browser extra, then run `playwright install chromium`. "
             "Start the app using ../plan.json and the recorded prerequisites in ../report.md. "
-            "Each test starts with a fresh, unauthenticated browser; prerequisite UI steps belong "
-            "in the test. Use disposable test data. No dependencies are installed automatically.\n\n"
+            "Each test starts with an isolated browser context. Authenticated tests use "
+            "--login for assisted sign-in or a private --auth-state file for replay; other tests start signed out. Prerequisite "
+            "UI steps belong in the test. Use disposable test data. No dependencies are installed automatically.\n\n"
             "Run the manifest's argv from the bundle root. Set OV_BASE_URL to override the entry "
             "URL; explicit URL assertions still check their recorded values. The test_change(page) "
             "function uses ordinary Playwright and can also be adopted into an async test suite. "
@@ -148,6 +155,7 @@ class PlaywrightRunner:
             record_video=capture_media,
             storage_state=(self.authentication.state if test.authenticated and self.authentication else None),
             trace_browser=not test.authenticated,
+            browser_session=self.browser_session,
         )
 
         # Execute the exact bytes saved for review/replay, produced only by the
@@ -161,10 +169,12 @@ class PlaywrightRunner:
                 raise ValueError("Authentication is missing or expired; run assisted_login and retry this case")
             namespace = {"__name__": "generated_journey"}
             exec(compile(source, str(path), "exec"), namespace)
-            await namespace["test_change"](page)
+            await namespace["test_change"](page, progress=getattr(self, "progress", print))
 
         relative = path.relative_to(self.artifacts.path).as_posix()
         rerun = ["python", relative]
+        if login_request:
+            rerun.append("--login")
         for origin in self.allow_origins:
             rerun.extend(["--allow-origin", origin])
         result: TestResult
@@ -196,19 +206,25 @@ class PlaywrightRunner:
         return result
 
 
-def replay_main(journey, *, url: str, timeout: float, authenticated=False):
+def replay_main(journey, *, url: str, timeout: float, authenticated=False, login=None):
     """Standalone harness used by generated files; no provider or Git needed."""
     cli = argparse.ArgumentParser(description="Replay a generated Playwright journey")
     cli.add_argument("--allow-origin", action="append", default=[])
     cli.add_argument("--headed", action="store_true")
-    cli.add_argument("--auth-state", type=Path, help="Private Playwright storage-state file for authenticated replay")
+    auth = cli.add_mutually_exclusive_group()
+    auth.add_argument("--auth-state", type=Path, help="Private Playwright storage-state file for authenticated replay")
+    auth.add_argument("--login", action="store_true", help="Sign in interactively before replaying this journey")
     cli.add_argument("--output", type=Path, default=Path.cwd() / "verification-replay")
     args = cli.parse_args()
-    if authenticated and args.auth_state is None:
-        cli.error("This journey requires --auth-state; no session is included in the bundle")
+    if authenticated and args.auth_state is None and not args.login:
+        cli.error("This journey requires --login or --auth-state; no session is included in the bundle")
+    if args.login and (not login or not sys.stdin.isatty()):
+        cli.error("--login requires saved sign-in instructions and an interactive terminal")
 
     async def run():
         artifacts = Artifacts(args.output.resolve())
+        session = BrowserSession(headless=not (args.headed or args.login))
+        authentication = AssistedLogin(Path.cwd(), allow_origins=args.allow_origin, browser_session=session)
         tools = LocalTools(
             Path.cwd(),
             artifacts,
@@ -217,11 +233,14 @@ def replay_main(journey, *, url: str, timeout: float, authenticated=False):
             record_video=True,
             storage_state=str(args.auth_state) if authenticated else None,
             trace_browser=not authenticated,
+            browser_session=session,
         )
 
         async def checked_journey(page):
             entry_url = os.environ.get("OV_BASE_URL", url)
             tools.check_url(entry_url)
+            if args.login and not await authentication.verify(page.context, entry_url):
+                raise ValueError("Login session is missing or expired")
             await journey(page, entry_url=entry_url)
 
         result = {}
@@ -237,13 +256,23 @@ def replay_main(journey, *, url: str, timeout: float, authenticated=False):
             )
             artifacts.write("result.json", result)
 
-        await execute_journey(
-            checked_journey,
-            tools,
-            timeout=timeout,
-            capture_media=True,
-            on_result=checkpoint,
-        )
+        try:
+            if args.login:
+                # Login URLs are explicit, recorded setup; an OV_BASE_URL override
+                # never silently sends credentials to a different application.
+                await authentication.run(LoginRequest.model_validate(login))
+                tools.storage_state = authentication.state
+            await execute_journey(
+                checked_journey,
+                tools,
+                timeout=timeout,
+                capture_media=True,
+                on_result=checkpoint,
+            )
+        finally:
+            errors = await session.close()
+            if errors:
+                raise RuntimeError("Replay browser cleanup failed: " + "; ".join(errors))
         print(json.dumps(result, indent=2))
         return {"passed": 0, "failed": 1, "blocked": 2}[result["status"]]
 
