@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import subprocess
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from typing import Literal, TypeVar
 from urllib.parse import urlsplit
 
 from engine.adapters.source_control.github.transports import gh_cli_environment
+from engine.apps.web.settings_file import atomic_write_json
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
     ChangeRequest,
@@ -59,13 +59,10 @@ class SourceControlPreferences:
     def set(self, provider: SourceControlProvider, gitlab_origin: str | None = None) -> None:
         if provider not in _PROVIDERS:
             raise ValueError(f"unsupported source-control provider: {provider}")
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._path.with_suffix(".tmp")
         value: dict[str, str] = {"sourceControlProvider": provider}
         if gitlab_origin:
             value["gitlabOrigin"] = gitlab_origin
-        temporary.write_text(json.dumps(value) + "\n", encoding="utf-8")
-        os.replace(temporary, self._path)
+        atomic_write_json(self._path, value)
 
     def gitlab_origin(self) -> str | None:
         try:

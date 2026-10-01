@@ -1,5 +1,7 @@
 """The settings the rail's Loops section reads and saves."""
 
+import json
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -58,6 +60,21 @@ def test_rejected_settings_leave_the_saved_ones(tmp_path) -> None:
     assert after == LoopSettings().json()
 
 
+def test_a_spend_limit_that_is_not_a_number_is_refused(tmp_path) -> None:
+    store = LoopSettingsStore(tmp_path / "loops.json")
+    body = json.dumps({**_SETTINGS, "maxDailySpend": 0}).replace(
+        '"maxDailySpend": 0', '"maxDailySpend": NaN'
+    )
+    with TestClient(_app(tmp_path, store)) as client:
+        rejected = client.put(
+            "/api/loops/settings", content=body, headers={"content-type": "application/json"}
+        )
+        after = client.get("/api/loops/settings")
+
+    assert rejected.status_code == 400
+    assert after.status_code == 200
+
+
 def test_only_manual_keeps_its_runners() -> None:
     settings = parse_loop_settings({**_SETTINGS, "runnerStrategy": "round-robin"}, ["codex"])
 
@@ -69,6 +86,8 @@ def test_only_manual_keeps_its_runners() -> None:
     {"maxPrs": 0},
     {"maxPrs": True},
     {"maxDailySpend": -1},
+    {"maxDailySpend": float("nan")},
+    {"maxDailySpend": float("inf")},
     {"runnerStrategy": "random"},
 ])
 def test_invalid_settings_are_refused(change) -> None:

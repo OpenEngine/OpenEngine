@@ -7,7 +7,7 @@ together, how much a day may cost, and how runners are chosen for their nodes.
 """
 
 import json
-import os
+import math
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import asdict, dataclass
@@ -15,6 +15,7 @@ from pathlib import Path
 
 from platformdirs import user_config_path
 
+from engine.apps.web.settings_file import atomic_write_json
 from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN
 
 MANUAL = "manual"
@@ -65,7 +66,10 @@ def parse_loop_settings(body: object, runners: Collection[str]) -> LoopSettings:
     if isinstance(max_prs, bool) or not isinstance(max_prs, int) or max_prs < 1:
         raise ValueError("maxPrs must be a whole number of at least 1")
     spend = body.get("maxDailySpend")
-    if isinstance(spend, bool) or not isinstance(spend, (int, float)) or spend < 0:
+    if (
+        isinstance(spend, bool) or not isinstance(spend, (int, float))
+        or not math.isfinite(spend) or spend < 0
+    ):
         raise ValueError("maxDailySpend must be a number of at least 0")
     strategy = body.get("runnerStrategy")
     if strategy not in RUNNER_STRATEGIES:
@@ -99,7 +103,4 @@ class LoopSettingsStore:
             return LoopSettings()
 
     def set(self, settings: LoopSettings) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(asdict(settings)) + "\n", encoding="utf-8")
-        os.replace(temporary, self._path)
+        atomic_write_json(self._path, asdict(settings))
