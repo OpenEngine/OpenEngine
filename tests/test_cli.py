@@ -944,3 +944,49 @@ def test_posting_a_finding_whose_line_is_not_a_number_comments_generally(monkeyp
     general, = commands
     assert general[:3] == ["gh", "pr", "comment"]
     assert not any("hosts.yml" in part for part in general)
+
+
+@pytest.mark.parametrize("field", ["tagline", "description", "facet", "file", "line"])
+def test_finding_fields_escape_terminal_controls(field, capsys):
+    payload = "\x1b]52;c;clipboard\x07\x9b2K\rhidden\b"
+    finding = {"file": "a.py", field: payload}
+    original = dict(finding)
+    cli.render_findings([finding])
+    output = capsys.readouterr().out
+    assert "\\x1b]52;c;clipboard\\x07\\x9b2K\\x0dhidden\\x08" in output
+    # Only the renderer's own dim/reset sequences may reach the terminal.
+    output = output.replace("\x1b[2m", "").replace("\x1b[0m", "")
+    assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in output if char not in "\t\n")
+    assert finding == original
+
+
+@pytest.mark.parametrize("stage", ["lookup", "posting", "diff", "git"])
+def test_review_errors_escape_command_stderr(monkeypatch, capsys, stage):
+    from types import SimpleNamespace
+
+    payload = "failure\x1b]52;c;clipboard\x07\x9b2K\rhidden\b"
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/bin/gh")
+    monkeypatch.setattr(cli.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stderr=payload))
+    if stage in ("lookup", "posting"):
+        if stage == "posting":
+            monkeypatch.setattr(cli, "gh_json", lambda *_args: {"headRefOid": "sha"})
+        choices = iter(["Post to PR", "Ignore"])
+        monkeypatch.setattr(cli, "palette", lambda *_args, **_kwargs: next(choices))
+        monkeypatch.setattr(cli, "request_json", lambda *_args: {})
+        cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS[:1], "https://github.com/o/r/pull/1")
+    else:
+        monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, cli.Check("service", True, "ready")))
+        monkeypatch.setattr(cli, "fetch_json", lambda *_args: REVIEW_CONFIG)
+        if stage == "git":
+            monkeypatch.setattr(cli, "review_target", lambda *_args: cli.git_output("/repo", "status"))
+        else:
+            monkeypatch.setattr(cli, "review_target", lambda *_args: cli.ReviewTarget("/repo", "abc", "https://github.com/o/r/pull/1", "Review"))
+            monkeypatch.setattr(cli, "start_review", lambda *_args: "run-1")
+            monkeypatch.setattr(cli, "wait_for_triage", lambda *_args: ({}, TRIAGE))
+            monkeypatch.setattr(cli, "triage_findings", lambda *_args: REVIEW_FINDINGS)
+            monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+            monkeypatch.setattr(cli, "choose_fixes", lambda *_args: False)
+        cli.review(SimpleNamespace(target="/repo", json=False), cli.Preferences())
+    error = capsys.readouterr().err
+    assert "failure\\x1b]52;c;clipboard\\x07\\x9b2K\\x0dhidden\\x08" in error
+    assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in error if char not in "\t\n")

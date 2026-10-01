@@ -1209,18 +1209,23 @@ def finding_location(finding: dict[str, Any]) -> str:
     return f"{file}:{finding['line']}" if file and finding.get("line") else str(file or "")
 
 
+def terminal_text(text: str) -> str:
+    """Display untrusted terminal controls literally, preserving tabs and newlines."""
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", text)
+
+
 def render_findings(findings: list[dict[str, Any]]) -> None:
     if not findings:
         print("No findings survived review.")
         return
     print(f"Findings ({len(findings)})")
     for index, finding in enumerate(findings, 1):
-        facet = f"[{finding['facet']}] " if finding.get("facet") else ""
-        print(f"{index}. {facet}{' '.join(str(finding.get('tagline', '')).split())}")
-        for line in str(finding.get("description", "")).splitlines():
+        facet = terminal_text(f"[{finding['facet']}] ") if finding.get("facet") else ""
+        print(f"{index}. {facet}{' '.join(terminal_text(str(finding.get('tagline', ''))).split())}")
+        for line in terminal_text(str(finding.get("description", ""))).splitlines():
             print(f"   {line}")
         if location := finding_location(finding):
-            print(f"   \x1b[2m{location}\x1b[0m")
+            print(f"   \x1b[2m{terminal_text(location)}\x1b[0m")
     print()
 
 
@@ -1252,7 +1257,7 @@ def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
         general = subprocess.run(["gh", "pr", "comment", pr_url, "--body", body], capture_output=True, text=True)
         if general.returncode != 0:
             failures += 1
-            print(f"engine: could not post {finding.get('tagline')!r}: {general.stderr.strip()}", file=sys.stderr)
+            print(f"engine: could not post {finding.get('tagline')!r}: {terminal_text(general.stderr.strip())}", file=sys.stderr)
     return failures
 
 
@@ -1317,8 +1322,7 @@ def finding_diff(patch: str, finding: dict[str, Any]) -> str:
 def render_finding_diff(patch: str) -> None:
     """Use familiar unified-diff colors, while keeping redirected output plain."""
     color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
-    # Keep tabs and patch newlines, but display untrusted terminal controls literally.
-    patch = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", patch)
+    patch = terminal_text(patch)
     for line in patch.splitlines():
         tone = "32" if line.startswith("+") else "31" if line.startswith("-") else "36" if line.startswith("@@") else ""
         print(f"\x1b[{tone}m{line}\x1b[0m" if color and tone else line)
@@ -1352,7 +1356,7 @@ def choose_fixes(
                 try:
                     failures = post_findings(pr_url, [finding])
                 except (OSError, RuntimeError, ValueError) as error:
-                    print(f"engine: could not post finding: {error}", file=sys.stderr)
+                    print(f"engine: could not post finding: {terminal_text(str(error))}", file=sys.stderr)
                     failures = 1
                 if failures:
                     print("Posting failed. Retry or choose another action.")
@@ -1403,7 +1407,7 @@ def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
                 try:
                     patch = review_diff(server, run, target)
                 except (OSError, RuntimeError) as error:
-                    print(f"engine: diff unavailable: {error}", file=sys.stderr)
+                    print(f"engine: diff unavailable: {terminal_text(str(error))}", file=sys.stderr)
             if not choose_fixes(server, run_id, triage, findings, target.pr_url, patch):
                 return EXIT_OK
             print("Fixing; the change is reviewed again when the fix is done.")
@@ -1411,7 +1415,7 @@ def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
         print("\nDetached; the service-side review continues.")
         return EXIT_OK
     except (ValueError, RuntimeError, KeyError, json.JSONDecodeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
+        print(f"engine: {terminal_text(str(error))}", file=sys.stderr)
         return EXIT_UNHEALTHY
 
 
