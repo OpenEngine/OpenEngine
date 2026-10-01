@@ -1125,12 +1125,12 @@ def graph_run(server: str, run_id: str) -> dict[str, Any]:
     return fetch_json(server, f"/graph/api/runs/{run_id}?includeValues=true")
 
 
-def step_names(server: str, graph_id: str) -> dict[str, str]:
-    """Each node's display name, so progress reads `Review (Bugs)` rather than a node id."""
+def step_names(server: str, graph_id: str) -> dict[str, str] | None:
+    """Each node's display name, so progress reads `Review (Bugs)` rather than a node id; None to retry next poll."""
     try:
         graph = fetch_json(server, f"/graph/api/graphs/{graph_id}")
     except RuntimeError:
-        return {}
+        return None
     return {
         str(node["nodeId"]): str(node.get("name") or node["nodeId"])
         for node in graph.get("nodes") or [] if isinstance(node, dict) and node.get("nodeId")

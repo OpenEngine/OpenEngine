@@ -712,6 +712,30 @@ def test_review_says_each_step_as_it_starts_and_finishes(monkeypatch, capsys):
     ]
 
 
+def test_review_retries_step_names_after_a_failed_fetch(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "REVIEW_POLL_SECONDS", 0)
+    runs = iter([
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": []},
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": [{"executionId": "e1", "nodeId": "review_bugs"}]},
+        {"status": "awaiting_approval", "graphId": "g", "pendingApprovals": [TRIAGE], "activeExecutions": []},
+    ])
+    graphs = iter([RuntimeError("blip"), {"nodes": [{"nodeId": "review_bugs", "name": "Review (Bugs)"}]}])
+
+    def fetch(_server, path):
+        if path != "/graph/api/graphs/g":
+            return next(runs)
+        graph = next(graphs)
+        if isinstance(graph, Exception):
+            raise graph
+        return graph
+
+    monkeypatch.setattr(cli, "fetch_json", fetch)
+
+    cli.wait_for_triage(cli.DEFAULT_SERVER, "run-1")
+
+    assert capsys.readouterr().err.splitlines() == ["→ Review (Bugs)", "✓ Review (Bugs)"]
+
+
 def test_enter_selects_a_finding_and_fix_selected_sends_only_it(monkeypatch):
     offered = []
 
