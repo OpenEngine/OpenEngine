@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -153,6 +153,18 @@ describe("New loop form", () => {
     }));
     expect(assign).toHaveBeenCalledWith("/loops/loop-1");
     vi.unstubAllGlobals();
+  });
+
+  it("keeps a field edited before the defaults arrive", async () => {
+    let resolve!: (defaults: Awaited<ReturnType<typeof api.getLoopDefaults>>) => void;
+    vi.mocked(api.getLoopDefaults).mockReturnValue(new Promise((done) => { resolve = done; }));
+    render(<NewLoopPage config={config} />);
+    const most = screen.getByLabelText("Max WorkOrders per day");
+    fireEvent.change(most, { target: { value: "9" } });
+    resolve({ everyMinutes: 60, activeHours: { start: "08:00", end: "18:00" },
+      maxWorkOrders: 4, maxDailySpend: 7.5 });
+    await waitFor(() => expect(screen.getByLabelText("Max spend ($/day)")).toHaveValue(7.5));
+    expect(most).toHaveValue(9);
   });
 });
 

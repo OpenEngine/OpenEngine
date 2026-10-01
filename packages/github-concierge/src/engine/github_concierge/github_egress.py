@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from engine.single_tool_mcp import SingleToolBroker, serve_from_command_line
-from langgraph_acp.permissions import ACPPermissionOutcome, ACPPermissionRequest
+from langgraph_acp.permissions import allow_mcp_tools
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,16 +122,8 @@ def main() -> None:
     )
 
 
-async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
-    """Approve only the one named MCP grant; decline all other operations."""
-
-    names = {f"mcp__concierge__{FEEDBACK_TOOL_NAME}", f"concierge/{FEEDBACK_TOOL_NAME}"}
-    if any(isinstance(value, str) and value in names
-           for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
-        for option in request.options:
-            if option.kind == "allow_once":
-                return ACPPermissionOutcome.selected(option.option_id)
-    return ACPPermissionOutcome.cancelled()
+#: Approve only the one named MCP grant; decline all other operations.
+tool_permission = allow_mcp_tools("concierge", (FEEDBACK_TOOL_NAME,))
 
 
 __all__ = [

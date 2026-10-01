@@ -1,7 +1,7 @@
 /** Loops: the rail's list of them and the settings they share, the new loop
  *  form, and the page about one loop. */
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   createLoop,
@@ -18,6 +18,69 @@ import {
 } from "./api";
 
 const EXIT_CRITERIA_TOOLTIP = "Loops stop working if any one of their exit criteria are met.";
+
+type ActiveHours = LoopSettings["activeHours"];
+
+function ExitCriteriaTip() {
+  // Drawn by CSS like the WorkOrder mode tip; the click is kept from the
+  // legend or summary so a tap opens the tip.
+  return (
+    <span className="info-tip" role="img" tabIndex={0}
+      aria-label={EXIT_CRITERIA_TOOLTIP} data-tip={EXIT_CRITERIA_TOOLTIP}
+      onClick={(event) => event.preventDefault()}>ⓘ</span>
+  );
+}
+
+/** The exit criteria both the rail's loop settings and the new loop form ask
+ *  for, in the rail's dark inputs or the form's. */
+function ExitCriteriaFields({ rail, countLabel, activeHours, maxCount, maxDailySpend, onChange }: {
+  rail?: boolean;
+  countLabel: string;
+  activeHours: ActiveHours;
+  maxCount: number;
+  maxDailySpend: number;
+  onChange: (next: { activeHours?: ActiveHours; maxCount?: number; maxDailySpend?: number }) => void;
+}) {
+  const labelClass = rail ? "settings-label" : undefined;
+  const inputClass = rail ? "settings-input" : undefined;
+  const start = (
+    <input className={inputClass} type="time" aria-label={rail ? "Active from" : undefined} required
+      value={activeHours.start}
+      onChange={(event) => onChange({ activeHours: { ...activeHours, start: event.target.value } })} />
+  );
+  const end = (
+    <input className={inputClass} type="time" aria-label={rail ? "Active until" : undefined} required
+      value={activeHours.end}
+      onChange={(event) => onChange({ activeHours: { ...activeHours, end: event.target.value } })} />
+  );
+  return (
+    <>
+      {rail ? (
+        <fieldset className="rail-loops-hours">
+          <legend className="settings-label">Active hours</legend>
+          {start}
+          <span aria-hidden="true">–</span>
+          {end}
+        </fieldset>
+      ) : (
+        <>
+          <label><span>Active from</span>{start}</label>
+          <label><span>Active until</span>{end}</label>
+        </>
+      )}
+      <label>
+        <span className={labelClass}>{countLabel}</span>
+        <input className={inputClass} type="number" min={1} step={1} required value={maxCount}
+          onChange={(event) => onChange({ maxCount: event.target.valueAsNumber })} />
+      </label>
+      <label>
+        <span className={labelClass}>Max spend ($/day)</span>
+        <input className={inputClass} type="number" min={0} step={0.01} required value={maxDailySpend}
+          onChange={(event) => onChange({ maxDailySpend: event.target.valueAsNumber })} />
+      </label>
+    </>
+  );
+}
 
 const STRATEGIES: { value: LoopSettings["runnerStrategy"]; label: string }[] = [
   { value: "least-utilized", label: "Least utilized" },
@@ -66,36 +129,12 @@ export function LoopSettingsForm({ runners }: { runners: string[] }) {
       <fieldset className="rail-loops-criteria">
         <legend className="rail-loops-heading">
           Exit criteria
-          {/* Drawn by CSS like the WorkOrder mode tip; the click is kept from
-              the legend so a tap opens the tip. */}
-          <span className="info-tip" role="img" tabIndex={0}
-            aria-label={EXIT_CRITERIA_TOOLTIP} data-tip={EXIT_CRITERIA_TOOLTIP}
-            onClick={(event) => event.preventDefault()}>ⓘ</span>
+          <ExitCriteriaTip />
         </legend>
-        <fieldset className="rail-loops-hours">
-          <legend className="settings-label">Active hours</legend>
-          <input className="settings-input" type="time" aria-label="Active from" required
-            value={settings.activeHours.start}
-            onChange={(event) =>
-              change({ activeHours: { ...settings.activeHours, start: event.target.value } })} />
-          <span aria-hidden="true">–</span>
-          <input className="settings-input" type="time" aria-label="Active until" required
-            value={settings.activeHours.end}
-            onChange={(event) =>
-              change({ activeHours: { ...settings.activeHours, end: event.target.value } })} />
-      </fieldset>
-      <label>
-        <span className="settings-label">Max PRs</span>
-        <input className="settings-input" type="number" min={1} step={1} required
-          value={settings.maxPrs}
-          onChange={(event) => change({ maxPrs: event.target.valueAsNumber })} />
-      </label>
-      <label>
-        <span className="settings-label">Max spend ($/day)</span>
-        <input className="settings-input" type="number" min={0} step={0.01} required
-          value={settings.maxDailySpend}
-          onChange={(event) => change({ maxDailySpend: event.target.valueAsNumber })} />
-      </label>
+        <ExitCriteriaFields rail countLabel="Max PRs" activeHours={settings.activeHours}
+          maxCount={settings.maxPrs} maxDailySpend={settings.maxDailySpend}
+          onChange={({ maxCount, ...rest }) =>
+            change({ ...rest, ...(maxCount === undefined ? {} : { maxPrs: maxCount }) })} />
       </fieldset>
       <label>
         <span className="settings-label">Runner strategy</span>
@@ -188,13 +227,21 @@ export function NewLoopPage({ config }: { config: EngineConfig }) {
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // Fields already edited, which defaults arriving late must not overwrite.
+  const edited = useRef(new Set<string>());
   useEffect(() => {
     getLoopDefaults().then(
-      (defaults) => setDraft((current) => ({ ...current, ...defaults })),
+      (defaults) => setDraft((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.entries(defaults).filter(([key]) => !edited.current.has(key))),
+      })),
       () => {},
     );
   }, []);
-  const change = (next: Partial<LoopDraft>) => setDraft({ ...draft, ...next });
+  const change = (next: Partial<LoopDraft>) => {
+    for (const key of Object.keys(next)) edited.current.add(key);
+    setDraft((current) => ({ ...current, ...next }));
+  };
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -240,32 +287,12 @@ export function NewLoopPage({ config }: { config: EngineConfig }) {
         <details className="workflow-inputs" open>
           <summary>
             Exit criteria
-            <span className="info-tip" role="img" tabIndex={0}
-              aria-label={EXIT_CRITERIA_TOOLTIP} data-tip={EXIT_CRITERIA_TOOLTIP}
-              onClick={(event) => event.preventDefault()}>ⓘ</span>
+            <ExitCriteriaTip />
           </summary>
-          <label>
-            <span>Active from</span>
-            <input type="time" required value={draft.activeHours.start}
-              onChange={(event) =>
-                change({ activeHours: { ...draft.activeHours, start: event.target.value } })} />
-          </label>
-          <label>
-            <span>Active until</span>
-            <input type="time" required value={draft.activeHours.end}
-              onChange={(event) =>
-                change({ activeHours: { ...draft.activeHours, end: event.target.value } })} />
-          </label>
-          <label>
-            <span>Max WorkOrders per day</span>
-            <input type="number" min={1} step={1} required value={draft.maxWorkOrders}
-              onChange={(event) => change({ maxWorkOrders: event.target.valueAsNumber })} />
-          </label>
-          <label>
-            <span>Max spend ($/day)</span>
-            <input type="number" min={0} step={0.01} required value={draft.maxDailySpend}
-              onChange={(event) => change({ maxDailySpend: event.target.valueAsNumber })} />
-          </label>
+          <ExitCriteriaFields countLabel="Max WorkOrders per day" activeHours={draft.activeHours}
+            maxCount={draft.maxWorkOrders} maxDailySpend={draft.maxDailySpend}
+            onChange={({ maxCount, ...rest }) =>
+              change({ ...rest, ...(maxCount === undefined ? {} : { maxWorkOrders: maxCount }) })} />
         </details>
         <label>
           <span>Loop prompt</span>

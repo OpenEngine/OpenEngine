@@ -2772,12 +2772,32 @@ def create_app(
     def loop_spend(run_id: str) -> float:
         return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0
 
+    async def loop_may_act(loop: Loop) -> bool:
+        """Whether the loop's creator can still write to its repository, asked
+        again before each run and WorkOrder as their own request would be."""
+        if loop.requester is None or github_login.config is None or github_login.authorize is None:
+            # Created by someone who sees everything: login was off, or the
+            # service credential made it.
+            return True
+        provider, _, rest = loop.requester.partition(":")
+        account, _, login = rest.partition(":")
+        if provider != "github" or not account.isdigit() or not login:
+            return False
+        user: dict[str, object] = {"id": int(account), "login": login}
+        if user["id"] in github_login.operators:
+            return True
+        writable = await github_login.writable_repositories(user)
+        return writable is not None and repository_visible(writable, loop.repository)
+
     _loops = loop_store or LoopStore()
     loop_runner = LoopRunner(
         _loops,
         LoopHost(
             create=loop_create_workorder, load=loop_load, list_runs=loop_list_runs,
             steer=loop_steer, resume=loop_resume, spend=loop_spend,
+            # Defined further down, so looked up when called.
+            same_repository=lambda one, other: same_repository(one, other),
+            may_act=loop_may_act,
         ),
         loop_provider or CodexACPProvider(permissions=loop_tool_permission),
     )
@@ -2794,7 +2814,9 @@ def create_app(
             await asyncio.sleep(loop_tick_seconds)
 
     async def loop_json(loop: Loop) -> dict[str, object]:
-        states = [await loop_load(one.run_id) for one in reversed(loop.workorders)]
+        # The newest first, read together rather than one after another.
+        states = await asyncio.gather(
+            *(loop_load(one.run_id) for one in reversed(loop.workorders)))
         return loop_runner.json(loop, [state for state in states if state is not None])
 
     async def list_loops(request: Request) -> JSONResponse:

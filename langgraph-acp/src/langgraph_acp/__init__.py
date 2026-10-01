@@ -71,6 +71,7 @@ from langgraph_acp.permissions import (
     ACPPermissionOption,
     ACPPermissionOutcome,
     ACPPermissionRequest,
+    allow_mcp_tools,
     deny_permission,
 )
 from langgraph_acp.providers.claude import CLAUDE_ACP_COMMAND, ClaudeACPProvider
@@ -131,6 +132,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "StdioACPProvider",
     "UnsupportedOption",
+    "allow_mcp_tools",
     "default_registry",
     "deny_permission",
     "resume_continuation",

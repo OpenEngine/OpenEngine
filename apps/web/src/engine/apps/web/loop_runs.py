@@ -44,7 +44,7 @@ from engine.slack_concierge.repository import (
     RepositoryReader,
 )
 from langgraph_acp.agent import ACPAgentProvider
-from langgraph_acp.permissions import ACPPermissionOutcome, ACPPermissionRequest
+from langgraph_acp.permissions import allow_mcp_tools
 from platformdirs import user_config_path
 
 from engine.apps.web.loops import LoopSettings
@@ -54,6 +54,11 @@ log = logging.getLogger(__name__)
 
 _TIME = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 _SERVER_NAME = "loop"
+#: The WorkOrders a loop remembers, newest kept: enough for today's caps and
+#: its page, without a long-lived loop's history growing without bound.
+_KEPT_WORKORDERS = 100
+#: The most WorkOrders list_workorders shows the agent, newest first.
+_LISTED_WORKORDERS = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,8 +234,9 @@ _RUN_PROMPT_SCHEMA = {
 TOOL_SPECS: list[dict[str, object]] = [
     {"name": "create_workorder", "inputSchema": _PROMPT_SCHEMA, "description": (
         "Start a new WorkOrder in this loop's repository. The loop waits for it to "
-        "finish before you are prompted again. Refused once the loop has created "
-        "its WorkOrders for today or reached its daily spend.")},
+        "finish before you are prompted again, so only one may be in progress at a "
+        "time. Refused once the loop has created its WorkOrders for today or "
+        "reached its daily spend.")},
     {"name": "list_workorders", "annotations": {"readOnlyHint": True},
      "inputSchema": {"type": "object", "additionalProperties": False}, "description": (
         "List the WorkOrders in this loop's repository with their phase and prompt, "
@@ -240,8 +246,9 @@ TOOL_SPECS: list[dict[str, object]] = [
     {"name": "resume_workorder", "inputSchema": _RUN_PROMPT_SCHEMA, "description": (
         "Continue a WorkOrder this loop created after it finished or failed.")},
     {"name": "defer_until", "inputSchema": _RUN_SCHEMA, "description": (
-        "End this loop run and hold the next one until the given WorkOrder is "
-        "complete. Use when the next piece of work would likely conflict with it.")},
+        "End this loop run and hold the next one until the given WorkOrder in this "
+        "loop's repository is complete. Use when the next piece of work would likely "
+        "conflict with it.")},
     *REPOSITORY_TOOL_SPECS,
 ]
 TOOL_NAMES = frozenset(str(spec["name"]) for spec in TOOL_SPECS)
@@ -304,16 +311,8 @@ def main() -> None:
     asyncio.run(_serve_stdio(arguments.host, arguments.port, Path(arguments.token_file).read_text()))
 
 
-async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
-    """Approve only the loop's own MCP grants."""
-    names = {f"{prefix}{name}" for prefix in (f"mcp__{_SERVER_NAME}__", f"{_SERVER_NAME}/")
-             for name in TOOL_NAMES}
-    if any(isinstance(value, str) and value in names
-           for value in (request.tool_call.get(key) for key in ("name", "toolName", "title"))):
-        for option in request.options:
-            if option.kind == "allow_once":
-                return ACPPermissionOutcome.selected(option.option_id)
-    return ACPPermissionOutcome.cancelled()
+#: Approve only the loop's own MCP grants.
+tool_permission = allow_mcp_tools(_SERVER_NAME, TOOL_NAMES)
 
 
 # --- Running a loop -----------------------------------------------------------
@@ -343,7 +342,20 @@ class LoopHost:
     resume: Callable[[str, str], Awaitable[None]]
     spend: Callable[[str], float]
     """Dollars one WorkOrder has spent so far."""
+    same_repository: Callable[[str, str], bool] = field(default=lambda one, other: one == other)
+    may_act: Callable[[Loop], Awaitable[bool]] = field(default=lambda _loop: _granted())
+    """Whether the loop's requester can still write to its repository."""
     now: Callable[[], datetime] = field(default=lambda: datetime.now().astimezone())
+
+
+async def _granted() -> bool:
+    return True
+
+
+def _hours(loop: Loop) -> str:
+    if loop.active_hours_start == loop.active_hours_end:
+        return "any time of day"
+    return f"active {loop.active_hours_start}-{loop.active_hours_end}"
 
 
 class LoopRunner:
@@ -372,7 +384,13 @@ class LoopRunner:
             if held is not None and not held.is_terminal:
                 return False
         now = self.host.now()
-        return next_run_at(loop, now, capped=self.capped(loop)) <= now
+        if next_run_at(loop, now, capped=self.capped(loop)) > now:
+            return False
+        if not await self.host.may_act(loop):
+            log.warning("loop %s skipped: its requester cannot write to %s",
+                        loop.loop_id, loop.repository)
+            return False
+        return True
 
     def _update(self, loop_id: str, **changes: object) -> Loop | None:
         loop = self.store.get(loop_id)
@@ -410,7 +428,7 @@ class LoopRunner:
         if name in REPOSITORY_TOOL_NAMES:
             return await asyncio.to_thread(RepositoryReader(loop.repository).call, name, arguments)
         if name == "list_workorders":
-            runs = await self.host.list_runs(loop.repository)
+            runs = (await self.host.list_runs(loop.repository))[:_LISTED_WORKORDERS]
             return json.dumps([
                 {"run_id": str(run.run_id), "name": run.name, "phase": run.phase.value,
                  "prompt": run.prompt[:500], "created_by_this_loop": str(run.run_id) in mine}
@@ -424,16 +442,23 @@ class LoopRunner:
                 raise RuntimeError("the loop is outside its active hours")
             if self.capped(loop):
                 raise RuntimeError("the loop has reached an exit criterion for today")
+            for state in [await self.host.load(one) for one in created]:
+                if state is not None and not state.is_terminal:
+                    raise RuntimeError(
+                        f"WorkOrder `{state.run_id}` is still in progress; stop now and "
+                        "you will be prompted again once it is complete")
+            if not await self.host.may_act(loop):
+                raise RuntimeError("the loop's creator can no longer write to its repository")
             run_id = await self.host.create(loop, prompt)
             created.append(run_id)
             record = LoopWorkOrder(run_id, self.host.now().isoformat())
-            self._update(loop_id, workorders=(*loop.workorders, record))
+            self._update(loop_id, workorders=(*loop.workorders, record)[-_KEPT_WORKORDERS:])
             return f"WorkOrder `{run_id}` started. You will be prompted again once it is complete."
         run_id = str(arguments.get("run_id", "")).strip()
         if name == "defer_until":
             held = await self.host.load(run_id)
-            if held is None:
-                raise ValueError(f"unknown WorkOrder: {run_id}")
+            if held is None or not self.host.same_repository(held.repository, loop.repository):
+                raise ValueError(f"no WorkOrder `{run_id}` in this loop's repository")
             self._update(loop_id, deferred_until=run_id)
             return f"The next run of this loop waits until `{run_id}` is complete. Stop now."
         if run_id not in mine:
@@ -446,7 +471,7 @@ class LoopRunner:
 
     async def _wait(self, run_ids: list[str]) -> list[RunState]:
         while True:
-            states = [await self.host.load(run_id) for run_id in run_ids]
+            states = await asyncio.gather(*(self.host.load(run_id) for run_id in run_ids))
             if all(state is None or state.is_terminal for state in states):
                 return [state for state in states if state is not None]
             await asyncio.sleep(self.poll_seconds)
@@ -470,7 +495,7 @@ class LoopRunner:
             message = (
                 f"{INSTRUCTIONS}\nRepository: {loop.repository}\n"
                 f"Exit criteria: at most {loop.max_workorders} WorkOrders a day, "
-                f"daily spend {spend}, active {loop.active_hours_start}-{loop.active_hours_end}.\n"
+                f"daily spend {spend}, {_hours(loop)}.\n"
                 f"Task:\n{loop.prompt}"
             )
             while True:
@@ -478,9 +503,10 @@ class LoopRunner:
                 async for _event in session.prompt(message):
                     pass
                 fresh = created[before:]
-                loop = self.store.get(loop_id)
-                if not fresh or loop is None or loop.deferred_until:
+                if not fresh:
                     return
+                # Waited on even when the turn also deferred, so a WorkOrder
+                # the loop just started never runs on unsupervised.
                 finished = await self._wait(fresh)
                 loop = self.store.get(loop_id)
                 if loop is None or loop.deferred_until or self.capped(loop) \

@@ -35,9 +35,9 @@ FORM = {
 }
 
 
-def _state(run_id: str, phase: RunPhase) -> RunState:
+def _state(run_id: str, phase: RunPhase, repository: str = ".") -> RunState:
     return RunState(RunId(run_id), TaskId(run_id), WorkflowId("graph"), phase=phase,
-                    name=f"WorkOrder {run_id}")
+                    name=f"WorkOrder {run_id}", repository=repository)
 
 
 def test_the_form_is_parsed_and_refused_when_a_loop_could_not_run() -> None:
@@ -69,6 +69,7 @@ class Host:
         self.runs: dict[str, RunState] = {}
         self.created: list[str] = []
         self.costs: dict[str, float] = {}
+        self.allowed = True
 
     async def create(self, loop: Loop, prompt: str) -> str:
         run_id = f"run-{len(self.created) + 1}"
@@ -88,10 +89,14 @@ class Host:
     def finish(self, run_id: str) -> None:
         self.runs[run_id] = _state(run_id, RunPhase.SUCCEEDED)
 
+    async def may_act(self, loop: Loop) -> bool:
+        return self.allowed
+
     def host(self) -> LoopHost:
         return LoopHost(create=self.create, load=self.load, list_runs=self.list_runs,
                         steer=self.steer, resume=self.steer,
-                        spend=lambda run_id: self.costs.get(run_id, 0.0), now=lambda: NOON)
+                        spend=lambda run_id: self.costs.get(run_id, 0.0),
+                        may_act=self.may_act, now=lambda: NOON)
 
 
 async def _call(config: dict, calls: list[tuple[str, dict]]) -> list[dict]:
@@ -231,6 +236,77 @@ def test_defer_until_holds_the_next_run_until_that_workorder_is_complete(tmp_pat
     asyncio.run(scenario())
     assert provider.results[0][0]["content"][0]["text"].startswith(
         "The next run of this loop waits until `other`")
+
+
+def test_a_loop_has_one_workorder_in_progress_at_a_time(tmp_path) -> None:
+    host = Host()
+    provider = ScriptedProvider([[
+        ("create_workorder", {"prompt": "one"}), ("create_workorder", {"prompt": "two"}),
+    ], []])
+    runner, loop = _runner(tmp_path, host, provider, maxWorkOrders=5)
+
+    async def scenario() -> None:
+        running = asyncio.create_task(runner.run(loop.loop_id))
+        await _created(host, "run-1")
+        host.finish("run-1")
+        await asyncio.wait_for(running, 10)
+
+    asyncio.run(scenario())
+    assert host.created == ["run-1"]
+    assert "`run-1` is still in progress" in provider.results[0][1]["content"][0]["text"]
+    assert len(provider.prompts) == 2
+
+
+def test_a_workorder_created_before_deferring_is_still_waited_on(tmp_path) -> None:
+    host = Host()
+    host.runs["other"] = _state("other", RunPhase.RUNNING_AGENT)
+    provider = ScriptedProvider([[
+        ("create_workorder", {"prompt": "one"}), ("defer_until", {"run_id": "other"}),
+    ]])
+    runner, loop = _runner(tmp_path, host, provider)
+
+    async def scenario() -> None:
+        running = asyncio.create_task(runner.run(loop.loop_id))
+        await _created(host, "run-1")
+        await asyncio.sleep(0.1)
+        assert not running.done()
+        host.finish("run-1")
+        await asyncio.wait_for(running, 10)
+
+    asyncio.run(scenario())
+    assert runner.store.get(loop.loop_id).deferred_until == "other"
+    assert len(provider.prompts) == 1
+
+
+def test_defer_until_refuses_a_workorder_in_another_repository(tmp_path) -> None:
+    host = Host()
+    host.runs["elsewhere"] = _state("elsewhere", RunPhase.RUNNING_AGENT, "/elsewhere")
+    provider = ScriptedProvider([[("defer_until", {"run_id": "elsewhere"})]])
+    runner, loop = _runner(tmp_path, host, provider)
+    asyncio.run(runner.run(loop.loop_id))
+    assert provider.results[0][0]["isError"] is True
+    assert "no WorkOrder `elsewhere` in this loop's repository" in (
+        provider.results[0][0]["content"][0]["text"])
+    assert runner.store.get(loop.loop_id).deferred_until == ""
+
+
+def test_a_loop_whose_creator_lost_access_does_not_run(tmp_path) -> None:
+    host = Host()
+    provider = ScriptedProvider([[("create_workorder", {"prompt": "one"})]])
+    runner, loop = _runner(tmp_path, host, provider)
+    host.allowed = False
+    assert not asyncio.run(runner.due(loop))
+    asyncio.run(runner.run(loop.loop_id))
+    assert host.created == []
+    assert "can no longer write" in provider.results[0][0]["content"][0]["text"]
+
+
+def test_a_loop_without_active_hours_is_told_it_may_run_any_time(tmp_path) -> None:
+    provider = ScriptedProvider([])
+    runner, loop = _runner(tmp_path, Host(), provider,
+                           activeHours={"start": "00:00", "end": "00:00"})
+    asyncio.run(runner.run(loop.loop_id))
+    assert "any time of day" in provider.prompts[0] and "00:00-00:00" not in provider.prompts[0]
 
 
 def test_spend_today_counts_only_todays_workorders(tmp_path) -> None:
