@@ -8,7 +8,7 @@ import {
   type ApiWorkflowRunListing,
 } from "./api";
 import { RailBrand, RailFoot } from "./brand";
-import { LoopSettingsForm } from "./loops";
+import { LoopList, LoopSettingsForm } from "./loops";
 import { SettingsPanel } from "./settings-panel";
 import { runArchived, runFinished, runStatusLabel } from "./runs";
 
@@ -240,6 +240,7 @@ export function Sidebar({
   activeRunId,
   activeConversationUrl,
   activeView,
+  activeLoopId,
   onDeleteRun,
 }: {
   runs: ApiWorkflowRunListing[];
@@ -254,7 +255,9 @@ export function Sidebar({
   initialSection?: RailSection;
   activeRunId?: string;
   activeConversationUrl?: string;
-  activeView?: "runs" | "new" | "utilization";
+  activeView?: "runs" | "new" | "new-loop" | "utilization";
+  /** The loop whose page is on screen. */
+  activeLoopId?: string;
   /** Remove a run from the list. */
   onDeleteRun?: (run: ApiWorkflowRunListing) => void;
 }) {
@@ -394,6 +397,13 @@ export function Sidebar({
           </nav>
         </Section>
         <Section id="loops" title="Loops" open={open === "loops"} onToggle={toggle}>
+          <div className="rail-nav">
+            <a className="rail-button rail-button-primary" href="/loops/new"
+              data-active={activeView === "new-loop" || undefined}>
+              + New Loop
+            </a>
+          </div>
+          {loopsOpened && <LoopList activeLoopId={activeLoopId} />}
           {loopsOpened && <LoopSettingsForm runners={runners} />}
         </Section>
       </div>

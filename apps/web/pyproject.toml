@@ -10,6 +10,8 @@ dependencies = [
     "engine-runtime",
     "engine-github-concierge",
     "engine-slack-concierge",
+    # The loopback MCP transport a loop's agent reaches its tools through.
+    "engine-single-tool-mcp",
     # The engine that runs the graph workflows, and the contract it
     # implements. Startup reads every file in the workflow directory and a
     # workflow file imports the binding, so it would have to be installed even
@@ -59,6 +61,7 @@ path = "hatch_build.py"
 engine-runtime = { workspace = true }
 engine-github-concierge = { workspace = true }
 engine-slack-concierge = { workspace = true }
+engine-single-tool-mcp = { workspace = true }
 engine-graph-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-acp = { workspace = true }

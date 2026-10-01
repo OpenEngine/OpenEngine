@@ -49,6 +49,15 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
+from engine.apps.web.loop_runs import (
+    Loop,
+    LoopHost,
+    LoopRunner,
+    LoopStore,
+    loop_defaults,
+    parse_loop,
+    tool_permission as loop_tool_permission,
+)
 from engine.apps.web.loops import LoopSettingsStore, parse_loop_settings
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_communications import (
@@ -1081,6 +1090,9 @@ def create_app(
     service_token: Callable[[], str] = lambda: "",
     source_control_preferences: SourceControlPreferences | None = None,
     loop_settings: LoopSettingsStore | None = None,
+    loop_store: LoopStore | None = None,
+    loop_provider: ACPAgentProvider | None = None,
+    loop_tick_seconds: float = 60,
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
@@ -1542,6 +1554,13 @@ def create_app(
                         await asyncio.gather(dependency_task, return_exceptions=True)
 
                     opened.push_async_callback(stop_dependencies)
+                    loops_task = asyncio.create_task(dispatch_loops())
+
+                    async def stop_loops() -> None:
+                        loops_task.cancel()
+                        await asyncio.gather(loops_task, return_exceptions=True)
+
+                    opened.push_async_callback(stop_loops)
             ready = graph_runtime is None or surface.runtime is not None
             try:
                 yield
@@ -2704,6 +2723,125 @@ def create_app(
             return _error(str(error), 400)
         _loop_settings.set(settings)
         return JSONResponse(settings.json())
+
+    async def loop_create_workorder(loop: Loop, prompt: str) -> str:
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        assert surface.runtime is not None
+        state = await start_graph_run(
+            surface.runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=prompt, repository=loop.repository, requester=loop.requester,
+        )
+        return str(state.run_id)
+
+    async def loop_list_runs(repository: str) -> list[RunState]:
+        return [
+            state for state in await session.state_store.list_runs()
+            if same_repository(state.repository, repository)
+        ]
+
+    async def loop_direct(run_id: str, prompt: str, *, resume: bool) -> None:
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("graph WorkOrders are not running in this process")
+        snapshot = await runtime.snapshot(RunId(run_id))
+        if snapshot is None:
+            raise RuntimeError("the WorkOrder is unavailable")
+        stopped = snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED)
+        if stopped != resume:
+            raise RuntimeError(
+                "this WorkOrder is still running; use steer_workorder" if resume
+                else "this WorkOrder has stopped; use resume_workorder"
+            )
+        node = _reentry_node(runtime, snapshot)
+        if resume and node is None:
+            raise RuntimeError("the workflow has no unique implementation to resume")
+        await runtime.steer(RunId(run_id), f"Loop instruction:\n{prompt}", node_id=node)
+
+    async def loop_steer(run_id: str, prompt: str) -> None:
+        await loop_direct(run_id, prompt, resume=False)
+
+    async def loop_resume(run_id: str, prompt: str) -> None:
+        await loop_direct(run_id, prompt, resume=True)
+
+    async def loop_load(run_id: str) -> RunState | None:
+        return await session.state_store.load(RunId(run_id))
+
+    def loop_spend(run_id: str) -> float:
+        return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0
+
+    _loops = loop_store or LoopStore()
+    loop_runner = LoopRunner(
+        _loops,
+        LoopHost(
+            create=loop_create_workorder, load=loop_load, list_runs=loop_list_runs,
+            steer=loop_steer, resume=loop_resume, spend=loop_spend,
+        ),
+        loop_provider or CodexACPProvider(permissions=loop_tool_permission),
+    )
+    loop_runs: set[asyncio.Task[None]] = set()
+
+    async def dispatch_loops() -> None:
+        while True:
+            try:
+                for task in await loop_runner.tick():
+                    loop_runs.add(task)
+                    task.add_done_callback(loop_runs.discard)
+            except Exception:
+                log.exception("could not start due loops")
+            await asyncio.sleep(loop_tick_seconds)
+
+    async def loop_json(loop: Loop) -> dict[str, object]:
+        states = [await loop_load(one.run_id) for one in reversed(loop.workorders)]
+        return loop_runner.json(loop, [state for state in states if state is not None])
+
+    async def list_loops(request: Request) -> JSONResponse:
+        visible = await github_login.visible_repositories(request)
+        return JSONResponse({"loops": [
+            await loop_json(loop) for loop in _loops.list()
+            if repository_visible(visible, loop.repository)
+        ]})
+
+    async def new_loop_defaults(_request: Request) -> JSONResponse:
+        return JSONResponse(loop_defaults(_loop_settings.get()))
+
+    async def create_loop(request: Request) -> JSONResponse:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        repositories = [
+            str(Path(path).expanduser().resolve()) for path in (repos or {}).values()
+        ] or ["."]
+        try:
+            loop = parse_loop(
+                await request.json(), repositories, datetime.now().astimezone(),
+            )
+        except ValueError as error:
+            return _error(str(error), 400)
+        if not repository_visible(await github_login.visible_repositories(request), loop.repository):
+            return _error("you cannot write to this repository", 403)
+        loop = replace(loop, requester=_web_requester(request))
+        _loops.save(loop)
+        return JSONResponse(await loop_json(loop), status_code=201)
+
+    async def visible_loop(request: Request) -> Loop | None:
+        loop = _loops.get(request.path_params["loop_id"])
+        visible = await github_login.visible_repositories(request)
+        return loop if loop is not None and repository_visible(visible, loop.repository) else None
+
+    async def get_loop(request: Request) -> JSONResponse:
+        loop = await visible_loop(request)
+        return JSONResponse(await loop_json(loop)) if loop else _error("loop not found", 404)
+
+    async def delete_loop(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        loop = await visible_loop(request)
+        if loop is None:
+            return _error("loop not found", 404)
+        _loops.delete(loop.loop_id)
+        return Response(status_code=204)
 
     async def github_get_client_id(_request: Request) -> JSONResponse:
         # Never return the actual value — only whether one is set and its hint.
@@ -4138,6 +4276,11 @@ def create_app(
         Route("/api/slack/events", slack_ingress.webhook, methods=["POST"]),
         Route("/api/loops/settings", get_loop_settings),
         Route("/api/loops/settings", set_loop_settings, methods=["PUT"]),
+        Route("/api/loops/defaults", new_loop_defaults),
+        Route("/api/loops", list_loops),
+        Route("/api/loops", create_loop, methods=["POST"]),
+        Route("/api/loops/{loop_id}", get_loop),
+        Route("/api/loops/{loop_id}", delete_loop, methods=["DELETE"]),
         Route("/api/utilization", read_utilization),
         Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
         Route("/api/runs", list_runs),

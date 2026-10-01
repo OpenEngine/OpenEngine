@@ -1198,6 +1198,17 @@ select:disabled { cursor: default; }
 .form-note { color: var(--faint); font: 400 12px/1.6 var(--mono); }
 .form-actions { display: flex; gap: 16px; align-items: center; justify-content: flex-end; }
 
+/* --- loop page ----------------------------------------------------------- */
+
+.loop-facts { display: flex; flex-wrap: wrap; gap: 14px 36px; }
+.loop-facts dt { color: var(--muted); font: 500 12px/1.6 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.loop-facts dd { font-size: 15px; }
+.loop-workorders { display: grid; gap: 14px; padding: 0 var(--gutter) 56px; }
+.loop-workorders h2 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.loop-workorders ul { display: grid; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
+.loop-workorders li { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid var(--rule); }
+.loop-workorders a { color: inherit; overflow-wrap: anywhere; }
+
 /* --- login page ---------------------------------------------------------- */
 
 .login-page {

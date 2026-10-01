@@ -70,6 +70,7 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.graph_runtime_langgraph",
         "engine.github_concierge",
         "engine.scoper",
+        "engine.single_tool_mcp",
         "engine.slack_concierge",
     ),
 }
