@@ -1052,6 +1052,7 @@ def _workspace_session(
     runner: ConcurrentRunner,
     workspaces: ConversationWorkspaces,
     store: InMemoryStateStore | None = None,
+    workspace_repository: str = "/repository",
 ) -> AgentSession:
     unused = object()
     return AgentSession(
@@ -1065,7 +1066,7 @@ def _workspace_session(
         ),
         profiles=PROFILES,
         runners={"test": runner},
-        workspace_repository="/repository",
+        workspace_repository=workspace_repository,
     )
 
 
@@ -3914,15 +3915,33 @@ def test_an_agent_cannot_depend_on_another_repositorys_run(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
-    """A chat cannot be given a checkout of a repository its user cannot push
-    to, whether named or the server's default, attached for the first time or
-    again after a detach."""
+class BranchingWorkspaces(ConversationWorkspaces):
+    """Checkouts whose branches are made in the repository they came from, as
+    a worktree's are, so which repository a chat is in can be read back."""
+
+    def _workspace(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+        import subprocess
+
+        subprocess.run(["git", "-C", repository, "branch", "--force", f"engine/{workspace_id}"],
+                       check=True, capture_output=True)
+        return super()._workspace(workspace_id, repository, base_ref)
+
+
+def _scoped_chat_app(tmp_path, default="/repository"):
+    """Two real checkouts, `api` and `web`, behind GitHub login."""
+    import subprocess
+
+    repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
+    for path in repos.values():
+        subprocess.run(["git", "init", "-q", path], check=True)
+        subprocess.run(["git", "-C", path, "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-q", "--allow-empty", "-m", "init"], check=True)
     runner = ConcurrentRunner()
     store = InMemoryStateStore()
-    repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
+    workspaces = BranchingWorkspaces()
     app = create_app(
-        _workspace_session(runner, ConversationWorkspaces(), store), {"test": runner},
+        _workspace_session(runner, workspaces, store, repos.get(default, default)),
+        {"test": runner},
         github_login_config=GitHubLoginConfig(
             "client", "secret", "https://engine.test/api/auth/github/callback"
         ),
@@ -3930,6 +3949,92 @@ def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_p
         login_repositories=("acme/api", "acme/web"),
         repository_projects={"api": "acme/api", "web": "acme/web"},
     )
+    return app, store, repos, workspaces
+
+
+def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """A chat whose branch is in a repository its user cannot push to is not
+    listed and answers as missing, attached or detached, so its transcript
+    cannot be read nor its agent prompted, and its checkout cannot be kept by
+    naming another repository."""
+    app, store, repos, workspaces = _scoped_chat_app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            ids = {}
+            for name in ("api", "web", None):
+                instance = await store.create_instance(CODER)
+                ids[name] = str(instance.instance_id)
+                if name is not None:
+                    attached = await client.post(
+                        f"/api/threads/{ids[name]}/workspace", json={"repository": repos[name]},
+                    )
+                    assert attached.status_code == 200, attached.text
+            return ids
+
+    async def as_api_user(ids):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            listed = {t["id"] for t in (await client.get("/api/threads")).json()["threads"]}
+            assert ids["api"] in listed and ids["web"] not in listed
+            # A chat that never had a checkout is in no repository.
+            for name in ("api", None):
+                assert (await client.get(f"/api/threads/{ids[name]}")).status_code == 200
+            for detached in (False, True):
+                hidden = f"/api/threads/{ids['web']}"
+                for method, path, body in (
+                    ("GET", hidden, None),
+                    ("GET", f"{hidden}/messages", None),
+                    ("POST", f"{hidden}/runs", {"text": "hello"}),
+                    ("DELETE", f"{hidden}/runs/current", None),
+                    ("POST", f"{hidden}/workspace", {"repository": repos["api"]}),
+                    ("DELETE", hidden, None),
+                ):
+                    response = await client.request(method, path, json=body)
+                    assert response.status_code == 404, (detached, method, path, response.text)
+                if not detached:
+                    # The branch outlives its checkout, and still says whose it is.
+                    workspace_id = (await store.load_instance(ids["web"])).workspace_id
+                    workspaces.detached.add(workspace_id)
+
+    # Set up by an operator, who can put a chat in either repository.
+    with _as_user(()), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
+        ids = asyncio.run(scenario())
+    with _as_user({"acme/api"}):
+        asyncio.run(as_api_user(ids))
+
+
+def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(tmp_path) -> None:
+    """A new chat gets the default checkout at once, so it is refused before
+    anything is checked out for somebody who cannot write there."""
+    app, store, _repos, _workspaces = _scoped_chat_app(tmp_path, default="web")
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            refused = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
+            assert refused.status_code == 403, refused.text
+            assert await store.list_instances() == ()
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+    with _as_user({"acme/web"}):
+        async def allowed():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+                created = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
+                assert created.status_code == 201, created.text
+        asyncio.run(allowed())
+
+
+def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """A chat cannot be given a checkout of a repository its user cannot push
+    to, whether named or the server's default, attached for the first time or
+    again after a detach."""
+    app, store, repos, _workspaces = _scoped_chat_app(tmp_path)
 
     async def scenario():
         instance = await store.create_instance(CODER)

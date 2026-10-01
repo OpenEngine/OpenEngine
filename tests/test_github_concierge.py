@@ -1326,7 +1326,7 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
             )
         else:
             runtime.start.assert_not_awaited()
-            assert "ignored an assignment of #7 from maintainer, who cannot write to acme/api" \
+            assert "ignored a GitHub delivery on acme/api#7 from maintainer, who cannot write to it" \
                 in caplog.messages
         runtime.store.claim_pull_request.assert_not_awaited()
     assert not provider.clients
@@ -1382,7 +1382,7 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(tmp_path, may_w
             "https://github.com/acme/api/pull/12", "maintainer")
         if not may_write:
             runtime.start.assert_not_awaited()
-            assert "ignored a review of #12 requested by maintainer, who cannot write to acme/api" \
+            assert "ignored a GitHub delivery on acme/api#12 from maintainer, who cannot write to it" \
                 in caplog.messages
             return
         runtime.start.assert_awaited_once()
