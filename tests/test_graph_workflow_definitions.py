@@ -31,7 +31,7 @@ from engine.apps.web.__main__ import build_app
 from engine.apps.web.composition import Settings
 from engine.apps.worker.__main__ import main as worker
 from engine.apps.worker.composition import Settings as WorkerSettings
-from engine.domain import WorkflowId, WorkspaceId
+from engine.domain import STATE_INPUT, WorkflowId, WorkspaceId, WorkState
 from engine.graph_runtime import GraphId, GraphWorkflow
 from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode
 from engine.graph_runtime_langgraph.components.forge import PUBLISH_CHANGE
@@ -358,6 +358,12 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
         "add_comment",
     )
     assert reranker_binding.required_outputs == ("findings",)
+    # A run started in review keeps its findings for a person, so the reranker
+    # is not served add_comment -- whose broker would refuse to complete
+    # without a comment.
+    reviewing = reranker_binding.for_state({"inputs": {STATE_INPUT: WorkState.REVIEW}})
+    assert "add_comment" not in reviewing.repository_tools
+    assert reranker_binding.for_state({"inputs": {}}) is reranker_binding
 
 
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
