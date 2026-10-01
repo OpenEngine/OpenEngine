@@ -59,7 +59,7 @@ from engine.apps.web.github_ingress import (
     GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReviewRequest,
     github_co_author, github_requester,
 )
-from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
+from engine.apps.web.github_login import STREAM_ACCESS, GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
     DeviceFlowComplete,
     DeviceFlowState,
@@ -1091,6 +1091,7 @@ def create_app(
     trusted_repos: Collection[str] = (),
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
+    repository_projects: Mapping[str, str] | None = None,
     utilization: UtilizationService | None = None,
     concierge_provider: ACPAgentProvider | None = None,
 ) -> Starlette:
@@ -1734,7 +1735,16 @@ def create_app(
                 yield _json_line({"type": "content", "content": content})
             await asyncio.sleep(0.25)
 
-    async def config(_request: Request) -> JSONResponse:
+    async def config(request: Request) -> JSONResponse:
+        visible = await github_login.visible_repositories(request)
+        repository_choices = [
+            {
+                "name": name,
+                "path": str(Path(path).expanduser().resolve()),
+                **({"mode": mode} if (mode := (repo_modes or {}).get(name)) else {}),
+            }
+            for name, path in (repos or {}).items()
+        ] or [{"name": f". ({Path.cwd()})", "path": "."}]
         return JSONResponse(
             {
                 "agents": [
@@ -1752,13 +1762,9 @@ def create_app(
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
                 "repositories": [
-                    {
-                        "name": name,
-                        "path": str(Path(path).expanduser().resolve()),
-                        **({"mode": mode} if (mode := (repo_modes or {}).get(name)) else {}),
-                    }
-                    for name, path in (repos or {}).items()
-                ] or [{"name": f". ({Path.cwd()})", "path": "."}],
+                    choice for choice in repository_choices
+                    if repository_visible(visible, choice["path"])
+                ],
                 # Only the graphs this process can actually start are here --
                 # see `offered_graphs` -- because an entry nobody could run
                 # would be a choice that fails after it was made. Their
@@ -1777,18 +1783,22 @@ def create_app(
             }
         )
 
-    async def list_threads(_request: Request) -> JSONResponse:
-        return JSONResponse(
-            {"threads": [_thread_json(t) for t in await service.list()]}
-        )
+    async def list_threads(request: Request) -> JSONResponse:
+        return JSONResponse({"threads": [
+            _thread_json(t) for t in await service.list()
+            if not await thread_hidden(request, t)
+        ]})
 
-    async def list_runs(_request: Request) -> JSONResponse:
+    async def list_runs(request: Request) -> JSONResponse:
+        visible = await github_login.visible_repositories(request)
         available = (
             {graph.graph_id for graph in surface.runtime.graphs()}
             if surface.runtime else set()
         )
         runs = []
         for run in await run_reader.list():
+            if not repository_visible(visible, run.repository):
+                continue
             row = _run_json(run, listing=True)
             if run.phase not in {"scheduled", "succeeded", "failed"}:
                 progress = graph_progress.get(run.run_id)
@@ -1966,6 +1976,14 @@ def create_app(
         graph = _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        if depends_on_run_id is not None and github_login_config is not None:
+            # An agent acts for its own WorkOrder's repository, so another
+            # repository's run is as unknown to it as one that does not exist.
+            prerequisite = await session.state_store.load(depends_on_run_id)
+            if prerequisite is None or not same_repository(
+                prerequisite.repository, parent.repository
+            ):
+                raise ValueError(f"unknown prerequisite workorder: {depends_on_run_id}")
         assert surface.runtime is not None
         state = await start_graph_run(
             surface.runtime, graph,
@@ -2013,8 +2031,11 @@ def create_app(
                         log.exception("could not start dependent workorder %s", state.run_id)
 
     async def start_scheduled_run(request: Request) -> JSONResponse:
+        run_id = RunId(request.path_params["run_id"])
+        if await run_hidden(request, run_id):
+            return _error("run not found", 404)
         async with scheduled_start_lock:
-            state = await session.state_store.load(RunId(request.path_params["run_id"]))
+            state = await session.state_store.load(run_id)
             if state is None:
                 return _error("run not found", 404)
             if state.phase is not RunPhase.SCHEDULED:
@@ -2055,6 +2076,12 @@ def create_app(
             dependency_value = _optional_string(body, "dependsOnRunId")
         except ValueError as error:
             return _error(str(error), 400)
+        if not repository_visible(await github_login.visible_repositories(request), repository):
+            return _error("you cannot write to this repository", 403)
+        # A prerequisite the requester may not see is refused as if it did not
+        # exist, so neither its existence nor its state is revealed.
+        if dependency_value and await run_hidden(request, RunId(dependency_value)):
+            return _error(f"unknown prerequisite workorder: {dependency_value}", 400)
         graph = offered_graphs().get(str(workflow_id))
         if graph is None:
             return _error(f"unknown workflow definition: {workflow_id}", 400)
@@ -2087,7 +2114,7 @@ def create_app(
     async def get_run(request: Request) -> JSONResponse:
         run_id = RunId(request.path_params["run_id"])
         run = await run_reader.get(run_id)
-        if run is None:
+        if run is None or await run_hidden(request, run_id):
             return _error("run not found", 404)
         # The WorkOrder's usage is its run's: summed from what each node's
         # agent reported, so it is read here rather than stored on the row.
@@ -2106,6 +2133,8 @@ def create_app(
         cancel the run, and only then is the row forgotten.
         """
         run_id = RunId(request.path_params["run_id"])
+        if await run_hidden(request, run_id):
+            return _error("run not found", 404)
         async with dependency_lock:
             if run_id in deleting_runs:
                 return _error("workorder deletion is already in progress", 409)
@@ -2181,7 +2210,7 @@ def create_app(
         the ability to draw the graph and not the transcripts underneath it.
         """
         run_id = RunId(request.path_params["run_id"])
-        if await session.state_store.load(run_id) is None:
+        if await session.state_store.load(run_id) is None or await run_hidden(request, run_id):
             return _error("run not found", 404)
         raw_cursor = request.query_params.get("cursor")
         if raw_cursor is None:
@@ -2246,6 +2275,13 @@ def create_app(
 
     async def create_thread(request: Request) -> JSONResponse:
         body = await _json_body(request)
+        # A new chat is given the default checkout at once, so it is only for
+        # those who can write to that repository.
+        default = session.workspace_repository
+        if default is not None and not repository_visible(
+            await github_login.visible_repositories(request), default
+        ):
+            return _error("you cannot write to this repository", 403)
         try:
             thread = await service.create(
                 AgentId(_required_string(body, "agentId")),
@@ -2396,6 +2432,13 @@ def create_app(
         repository = body.get("repository")
         if repository is not None and (not isinstance(repository, str) or not repository.strip()):
             return _error("repository must be a non-empty string", 400)
+        # A checkout, named or the default, is only for those who can write to
+        # its repository: the chat's agent may read and change it.
+        target = repository or session.workspace_repository
+        if target is not None and not repository_visible(
+            await github_login.visible_repositories(request), target
+        ):
+            return _error("you cannot write to this repository", 403)
         try:
             thread = await service.attach_workspace(instance_id, repository)
         except RuntimeError as error:
@@ -2865,6 +2908,31 @@ def create_app(
                 status_code=503,
             )(scope, receive, send)
             return
+        if scope["type"] == "http":
+            # The same runs as `/api/runs`, so scoped the same way: someone
+            # else's run is not found, and starting one without a row to scope
+            # it by is left to those who see everything.
+            request = Request(scope)
+            path = scope["path"].removeprefix(scope.get("root_path", ""))
+            parts = path.strip("/").split("/")
+            refusal: JSONResponse | None = None
+            if parts[:2] == ["api", "runs"] and len(parts) > 2:
+                run_id = RunId(parts[2])
+                if await run_hidden(request, run_id):
+                    refusal = _error("run not found", 404)
+                else:
+                    # A run's event stream stays open; it ends once the run's
+                    # repository is no longer one this user can see.
+                    async def still_visible() -> bool:
+                        return not await run_hidden(request, run_id)
+
+                    scope[STREAM_ACCESS] = still_visible
+            elif parts == ["api", "runs"] and request.method == "POST":
+                if await github_login.visible_repositories(request) is not None:
+                    refusal = _error("only operators may start graph runs directly", 403)
+            if refusal is not None:
+                await refusal(scope, receive, send)
+                return
         await surface.app(scope, receive, send)
 
     # --- Slack connection endpoints ------------------------------------------
@@ -3482,19 +3550,6 @@ def create_app(
         if found is None:
             return
         repository = found.project
-        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-            may_write = await session.capabilities.source_control.can_write_repository(
-                pull_request_url(repository, assignment.number), assignment.sender,
-            )
-        if not may_write:
-            log.info(
-                "ignored an assignment of #%s from %s, who cannot write to %s",
-                assignment.number, assignment.sender, repository,
-            )
-            github_activity.ignored(
-                f"{assignment.sender} cannot write to {repository}"
-            )
-            return
         graph = _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
@@ -3533,16 +3588,8 @@ def create_app(
             return
         repository = found.project
         url = pull_request_url(repository, requested.number)
-        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-            may_write = await session.capabilities.source_control.can_write_repository(
-                url, requested.sender,
-            )
-        if not may_write:
-            log.info(
-                "ignored a review of #%s requested by %s, who cannot write to %s",
-                requested.number, requested.sender, repository,
-            )
-            return
+        # Whether the requester can write to the repository was asked by the
+        # ingress before this was called; see `github_sender_may_act`.
         graph = _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
@@ -3597,31 +3644,8 @@ def create_app(
                 # GitHub logins are case-insensitive, so the comparison is too.
                 github_activity.ignored("posted by Engine itself")
                 return
-            # Before the comment becomes a prompt, not after the model has
-            # acted on one. A comment is untrusted text and the agent that
-            # reads it can read the host it runs on, so whoever writes one is
-            # choosing what this process reads and what it says back in public.
-            # `author_association` does not bound that -- a COLLABORATOR may
-            # hold read access alone -- and gating the outbound tool alone
-            # would still have run the turn. Write access is the line: it is
-            # already the authority to change this repository, so it is no
-            # escalation to reach the agent working on it.
-            may_write = await session.capabilities.source_control.can_write_repository(
-                pull_request_url(comment.repository, comment.number),
-                comment.author,
-            )
-        if not may_write:
-            # Ignored rather than answered, like the association filter above:
-            # a refusal posted back is both noise on the pull request and a way
-            # to make this process talk to somebody it will not act for.
-            log.info(
-                "ignored a GitHub comment from %s, who cannot write to %s",
-                comment.author, comment.repository,
-            )
-            github_activity.ignored(
-                f"{comment.author} cannot write to {comment.repository}"
-            )
-            return
+        # Whether the author can write to the repository was asked by the
+        # ingress before this was called; see `github_sender_may_act`.
         mentioned = bool(login and re.search(
             rf"(?<![\w@-])@{re.escape(login)}(?![\w-])", comment.body, re.IGNORECASE,
         ))
@@ -3759,10 +3783,64 @@ def create_app(
             merged.merged_by, merged.repository, merged.number, run_id,
         )
 
+    async def github_sender_may_act(
+        delivery: GithubComment | GithubAssignment | GithubReviewRequest,
+    ) -> bool:
+        """Whether whoever sent `delivery` can write to its repository.
+
+        Asked by the ingress before any handler runs: before a comment becomes
+        a prompt or is forwarded to a work order, and before an assignment or
+        a review request starts one. A comment is untrusted text and the agent that reads it can
+        read the host it runs on, so whoever writes one is choosing what this
+        process reads and what it says back in public. `author_association`
+        does not bound that -- a COLLABORATOR may hold read access alone. Write
+        access is the line: it is already the authority to change this
+        repository, so it is no escalation to reach the agent working on it.
+
+        Bounded, since the queue behind this has one worker; a timeout raises,
+        which the ingress treats like any other failure, so the delivery can be
+        redelivered.
+        """
+        if isinstance(delivery, GithubComment):
+            sender, sender_id = delivery.author, delivery.author_id
+        else:
+            sender, sender_id = delivery.sender, delivery.sender_id
+        found = change_request(urlsplit(delivery.url)._replace(
+            path=f"/{delivery.repository}/pull/{delivery.number}", query="", fragment="",
+        ).geturl())
+        repository = found.project if found is not None else delivery.repository
+        may_write: bool | None = None
+        if sender_id and repository.lower() in access_repositories:
+            # The same per-user answer, and cache, that scopes the web app:
+            # a sender who was just checked there, or here, is not asked again.
+            async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                writable = await github_login.writable_repositories(
+                    {"id": sender_id, "login": sender}
+                )
+            if writable is not None and repository.lower() in writable:
+                may_write = True
+            elif github_login.access_known(sender_id):
+                may_write = False
+        if may_write is None:
+            # Not one of this deployment's repositories, or its answer is
+            # unknown: ask GitHub about this one directly.
+            async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                may_write = await session.capabilities.source_control.can_write_repository(
+                    pull_request_url(repository, delivery.number), sender,
+                )
+        if not may_write:
+            # Ignored rather than answered: a refusal posted back is both noise
+            # and a way to make this process talk to somebody it will not act for.
+            log.info("ignored a GitHub delivery on %s#%s from %s, who cannot write to it",
+                     repository, delivery.number, sender)
+            github_activity.ignored(f"{sender} cannot write to {repository}")
+        return may_write
+
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         authenticated_login=github_posting_login,
+        may_act=github_sender_may_act,
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
         handle_assignment=github_create_workorder,
@@ -3789,6 +3867,8 @@ def create_app(
         somebody else.
         """
         run_id = request.path_params["run_id"]
+        if await run_hidden(request, RunId(run_id)):
+            return _error("run not found", 404)
         return JSONResponse(activity_json(
             github_activity.recent(),
             run_id=run_id,
@@ -3833,57 +3913,148 @@ def create_app(
         return JSONResponse(utilization_json(readings))
 
     # Anyone who can push to one of the repositories this deployment works on
-    # may see its WorkOrders: the webhook repository and the configured checkouts.
+    # may sign in: the webhook repository and the configured checkouts. What
+    # they see is the WorkOrders of the repositories they can push to.
     access_repositories = tuple(dict.fromkeys(
-        project for project in (github_repository, *login_repositories) if project
+        project.lower() for project in (github_repository, *login_repositories) if project
     ))
 
-    async def github_login_allowed(user_id: int, login: str) -> bool:
-        """Only people who can push to one of this deployment's repositories see its WorkOrders.
+    async def github_repository_access(user_id: int, login: str) -> dict[str, bool | None]:
+        """Whether the user can push to each of this deployment's repositories.
 
-        Write access to any one repository admits. A lookup that fails counts
-        only when no other repository admitted: then the answer is unknown,
-        and the error is raised rather than read as a no.
+        None marks a lookup that failed or timed out: that repository's answer
+        is unknown, and is not read as a no.
         """
-        if not access_repositories:
-            # Startup refuses login with nothing to check; kept as a fallback
-            # for apps built directly.
-            return False
-
-        async def check(project: str) -> bool:
-            # The check reads the repository from a pull request URL; the
-            # number names no particular one.
-            return await session.capabilities.source_control.can_write_repository(
-                pull_request_url(project, 1), login, user_id=user_id,
-            )
-
-        async with asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS):
-            checks = [asyncio.ensure_future(check(project)) for project in access_repositories]
-            failure: Exception | None = None
+        async def check(project: str) -> bool | None:
             try:
-                for answer in asyncio.as_completed(checks):
-                    try:
-                        if await answer:
-                            return True
-                    except Exception as error:
-                        failure = failure or error
-            finally:
-                for pending in checks:
-                    pending.cancel()
-        if failure is not None:
-            raise failure
-        return False
+                # The check reads the repository from a pull request URL; the
+                # number names no particular one.
+                async with asyncio.timeout(GITHUB_LOGIN_TIMEOUT_SECONDS):
+                    return await session.capabilities.source_control.can_write_repository(
+                        pull_request_url(project, 1), login, user_id=user_id,
+                    )
+            except Exception:
+                log.exception("could not check whether %s can write to %s", login, project)
+                return None
 
-    async def github_user_can_write(token: str) -> bool:
-        """Whether GitHub says the account holding sign-in `token` can push to one of these repositories.
+        answers = await asyncio.gather(*(check(project) for project in access_repositories))
+        return dict(zip(access_repositories, answers, strict=True))
+
+    # The GitHub repository behind each value a run's `repository` takes: a
+    # `[repos]` name, the checkout path the web form sends, or `.`. A run
+    # started from GitHub already names its `owner/repo`.
+    run_projects: dict[str, str] = {}
+    for name, project in (repository_projects or {}).items():
+        path = str(Path((repos or {}).get(name, name)).expanduser().resolve())
+        run_projects[name] = run_projects[path] = project.lower()
+
+    def run_project(repository: str) -> str | None:
+        project = run_projects.get(repository)
+        if project is None and "/" in repository and not repository.startswith(("/", ".", "~")):
+            project = repository.lower()
+        return project
+
+    def repository_visible(visible: frozenset[str] | None, repository: str) -> bool:
+        """Whether a run in `repository` is among `visible`; None sees everything.
+
+        A run whose repository maps to no GitHub repository is only for
+        operators, who see everything.
+        """
+        if visible is None:
+            return True
+        project = run_project(repository or work_orders.repository)
+        return project is not None and project in visible
+
+    def same_repository(repository: str, other: str) -> bool:
+        """Whether two runs' repositories are the same GitHub repository, or the same checkout."""
+        repository, other = repository or work_orders.repository, other or work_orders.repository
+        project = run_project(repository)
+        return project == run_project(other) if project is not None else repository == other
+
+    async def run_hidden(request: Request, run_id: RunId) -> bool:
+        """Whether `run_id` is outside what `request` may see.
+
+        Answered as a missing run, 404 rather than 403, so that a run's
+        existence is not revealed to someone who may not see it.
+        """
+        visible = await github_login.visible_repositories(request)
+        if visible is None:
+            return False
+        state = await session.state_store.load(run_id)
+        return state is None or not repository_visible(visible, state.repository)
+
+    # The GitHub repository whose checkout holds each chat's workspace branch,
+    # once found: the branch stays in the repository it was made in, attached
+    # or not, so it is what a chat's transcript and agent are about.
+    branch_projects: dict[str, str] = {}
+
+    async def thread_project(thread: ChatThread) -> str | None:
+        """The GitHub repository a chat's workspace branch lives in, if one holds it."""
+        ref = thread.workspace_ref
+        if ref is None:
+            return None
+        if ref not in branch_projects:
+            for name, path in {".": ".", **(repos or {})}.items():
+                project = run_project(name)
+                if project is None:
+                    continue
+                try:
+                    process = await asyncio.create_subprocess_exec(
+                        "git", "-C", str(Path(path).expanduser()),
+                        "rev-parse", "--verify", "--quiet", f"refs/heads/{ref}",
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                except OSError:
+                    continue
+                if await process.wait() == 0:
+                    branch_projects[ref] = project
+                    break
+        return branch_projects.get(ref)
+
+    async def thread_hidden(request: Request, thread: ChatThread) -> bool:
+        """Whether this chat belongs to a repository `request` may not see.
+
+        A chat that never had a workspace has no repository to be scoped by. One
+        whose branch no configured checkout holds is, like such a run, only for
+        those who see everything.
+        """
+        visible = await github_login.visible_repositories(request)
+        if visible is None or thread.workspace_ref is None:
+            return False
+        project = await thread_project(thread)
+        return project is None or project not in visible
+
+    def thread_scoped(handler: Callable[[Request], Awaitable[Response]]):
+        """`handler`, answering a chat the requester may not see as missing.
+
+        404 rather than 403, as for runs, so its existence is not revealed. A
+        stream it opens is ended once the chat's repository is out of reach.
+        """
+        async def scoped(request: Request) -> Response:
+            thread = await service.get(_thread_id(request))
+            if thread is not None:
+                if await thread_hidden(request, thread):
+                    return _error("thread not found", 404)
+
+                async def still_visible() -> bool:
+                    return not await thread_hidden(request, thread)
+
+                request.scope[STREAM_ACCESS] = still_visible
+            return await handler(request)
+
+        return scoped
+
+    async def github_user_repository_access(token: str) -> dict[str, bool | None]:
+        """Whether GitHub says the account holding sign-in `token` can push to each of these repositories.
 
         Asked with the user's own token, so it answers even when the server's
         connection does not. The token has only `read:user` scope, so GitHub
-        answers for public github.com repositories; the rest read as unknown.
+        answers for public github.com repositories; the rest read as unknown
+        (None), as does any lookup that fails.
         """
         projects = [project for project in access_repositories if project.count("/") == 1]
         if not projects:
-            return False
+            return {}
 
         async def check(client: httpx.AsyncClient, project: str) -> bool:
             response = await client.get(
@@ -3904,12 +4075,15 @@ def create_app(
             answers = await asyncio.gather(
                 *(check(client, project) for project in projects), return_exceptions=True
             )
-        return any(answer is True for answer in answers)
+        return {
+            project: answer if isinstance(answer, bool) else None
+            for project, answer in zip(projects, answers, strict=True)
+        }
 
     github_login = GitHubLogin(
-        github_login_config, service_token, github_login_allowed,
+        github_login_config, service_token, github_repository_access,
         operators=frozenset(login_operators),
-        authorize_user=github_user_can_write,
+        authorize_user=github_user_repository_access,
         access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
     )
     routes = [
@@ -3959,40 +4133,40 @@ def create_app(
         Mount(GRAPH_PREFIX, app=graph_surface),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
-        Route("/api/threads/{thread_id}", get_thread),
-        Route("/api/threads/{thread_id}", update_thread, methods=["PATCH"]),
-        Route("/api/threads/{thread_id}", delete_thread, methods=["DELETE"]),
+        Route("/api/threads/{thread_id}", thread_scoped(get_thread)),
+        Route("/api/threads/{thread_id}", thread_scoped(update_thread), methods=["PATCH"]),
+        Route("/api/threads/{thread_id}", thread_scoped(delete_thread), methods=["DELETE"]),
         Route(
             "/api/threads/{thread_id}/archive",
-            archive_thread,
+            thread_scoped(archive_thread),
             methods=["POST"],
             name="archive",
         ),
         Route(
             "/api/threads/{thread_id}/unarchive",
-            archive_thread,
+            thread_scoped(archive_thread),
             methods=["POST"],
             name="unarchive",
         ),
-        Route("/api/threads/{thread_id}/messages", messages),
-        Route("/api/threads/{thread_id}/approval-events", approval_events),
+        Route("/api/threads/{thread_id}/messages", thread_scoped(messages)),
+        Route("/api/threads/{thread_id}/approval-events", thread_scoped(approval_events)),
         Route(
             "/api/threads/{thread_id}/workspace",
-            attach_workspace,
+            thread_scoped(attach_workspace),
             methods=["POST"],
         ),
         Route(
             "/api/threads/{thread_id}/workspace",
-            detach_workspace,
+            thread_scoped(detach_workspace),
             methods=["DELETE"],
         ),
-        Route("/api/threads/{thread_id}/title", title_thread, methods=["POST"]),
-        Route("/api/threads/{thread_id}/runs", run_thread, methods=["POST"]),
-        Route("/api/threads/{thread_id}/runs/current", resume_run),
-        Route("/api/threads/{thread_id}/runs/current", cancel_run, methods=["DELETE"]),
+        Route("/api/threads/{thread_id}/title", thread_scoped(title_thread), methods=["POST"]),
+        Route("/api/threads/{thread_id}/runs", thread_scoped(run_thread), methods=["POST"]),
+        Route("/api/threads/{thread_id}/runs/current", thread_scoped(resume_run)),
+        Route("/api/threads/{thread_id}/runs/current", thread_scoped(cancel_run), methods=["DELETE"]),
         Route(
             "/api/threads/{thread_id}/runs/current/approvals/{approval_id}",
-            decide_approval,
+            thread_scoped(decide_approval),
             methods=["POST"],
         ),
     ]

@@ -809,3 +809,38 @@ def test_review_request_webhook_queues_one_review_per_commit():
         client.portal.call(ingress.close)
     assert [requested.head_sha for requested in handled] == ["abc123", "def456"]
     lookup.assert_awaited_with("acme/api")
+
+
+def test_nothing_is_handled_for_a_sender_who_cannot_write() -> None:
+    """Write access is asked before any handler runs, so neither a comment
+    (forwarded to a work order, or to another node) nor an assignment (which
+    starts one) reaches its handler for somebody who could not push."""
+
+    async def scenario():
+        comments, assignments, asked = [], [], []
+
+        async def may_act(delivery):
+            asked.append(delivery)
+            return getattr(delivery, "author", "") == "maintainer"
+
+        async def handle_assignment(assignment):
+            assignments.append(assignment)
+
+        ingress = GithubIngress(
+            repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+            handle=_record(comments), handle_assignment=handle_assignment, may_act=may_act,
+        )
+        allowed = _issue_comment(comment_id=1)
+        allowed["comment"]["user"]["login"] = "maintainer"
+        refused = _issue_comment(comment_id=2)
+        refused["comment"]["user"]["login"] = "stranger"
+        assert ingress.accept("issue_comment", allowed)
+        assert ingress.accept("issue_comment", refused)
+        assert ingress.accept("issues", _assigned_issue(), self_login="openenginebot")
+        await ingress.drain()
+        assert [c.comment_id for c in comments] == ["1"]
+        assert assignments == []
+        assert len(asked) == 3
+        await ingress.close()
+
+    asyncio.run(scenario())

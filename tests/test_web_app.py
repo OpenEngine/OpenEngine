@@ -546,6 +546,7 @@ def _workflow_app(
     repos: dict[str, str] | None = None,
     repo_modes: dict[str, str] | None = None,
     trusted_repos: frozenset[str] = frozenset(),
+    **options,
 ):
     """Wire the app the way the composition root does."""
     unused = object()
@@ -579,6 +580,7 @@ def _workflow_app(
         repos=repos,
         repo_modes=repo_modes,
         trusted_repos=trusted_repos,
+        **options,
     )
 
 
@@ -875,7 +877,9 @@ def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)):
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
         created = asyncio.run(scenario())
 
     assert created.status_code == 201, created.text
@@ -1048,6 +1052,7 @@ def _workspace_session(
     runner: ConcurrentRunner,
     workspaces: ConversationWorkspaces,
     store: InMemoryStateStore | None = None,
+    workspace_repository: str = "/repository",
 ) -> AgentSession:
     unused = object()
     return AgentSession(
@@ -1061,7 +1066,7 @@ def _workspace_session(
         ),
         profiles=PROFILES,
         runners={"test": runner},
-        workspace_repository="/repository",
+        workspace_repository=workspace_repository,
     )
 
 
@@ -3310,7 +3315,9 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) 
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)):
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
         started = asyncio.run(scenario())
 
     assert started.status_code == 200, started.text
@@ -3639,8 +3646,8 @@ def test_signing_in_requires_write_access_to_the_configured_repository() -> None
     source_control = MagicMock(can_write_repository=AsyncMock(side_effect=[True, False]))
     authorize = _login_gate("acme/api", source_control)
 
-    assert asyncio.run(authorize(1, "maintainer")) is True
-    assert asyncio.run(authorize(2, "stranger")) is False
+    assert asyncio.run(authorize(1, "maintainer")) == {"acme/api": True}
+    assert asyncio.run(authorize(2, "stranger")) == {"acme/api": False}
     assert [
         (call.args, call.kwargs) for call in source_control.can_write_repository.await_args_list
     ] == [
@@ -3653,22 +3660,24 @@ def test_signing_in_is_refused_without_a_repository_to_check() -> None:
     source_control = MagicMock(can_write_repository=AsyncMock(return_value=True))
     authorize = _login_gate("", source_control)
 
-    assert asyncio.run(authorize(1, "maintainer")) is False
+    assert asyncio.run(authorize(1, "maintainer")) == {}
     source_control.can_write_repository.assert_not_awaited()
 
 
-def test_write_access_to_any_configured_repository_admits() -> None:
-    """Someone who can push to only one of the checkouts in `[repos]` is let in,
-    even when the webhook repository's lookup fails."""
+def test_every_configured_repository_is_asked_and_a_failure_is_unknown() -> None:
+    """Each repository gets its own answer, so what a user sees can be scoped to
+    the ones they can push to; a lookup that fails is unknown, not a no."""
     async def can_write(pr_url, login, *, user_id):
         if "acme/api" in pr_url:
             raise RuntimeError("GitHub is down")
         return "acme/web" in pr_url
 
     source_control = MagicMock(can_write_repository=AsyncMock(side_effect=can_write))
-    authorize = _login_gate("acme/api", source_control, ("acme/docs", "acme/web", "acme/api"))
+    authorize = _login_gate("Acme/API", source_control, ("acme/docs", "acme/web", "acme/api"))
 
-    assert asyncio.run(authorize(1, "maintainer")) is True
+    assert asyncio.run(authorize(1, "maintainer")) == {
+        "acme/api": None, "acme/docs": False, "acme/web": True,
+    }
     assert sorted(
         call.args[0] for call in source_control.can_write_repository.await_args_list
     ) == [
@@ -3676,19 +3685,6 @@ def test_write_access_to_any_configured_repository_admits() -> None:
         "https://github.com/acme/docs/pull/1",
         "https://github.com/acme/web/pull/1",
     ]
-
-
-def test_access_is_unknown_when_no_repository_admits_and_one_lookup_failed() -> None:
-    async def can_write(pr_url, login, *, user_id):
-        if "acme/api" in pr_url:
-            raise RuntimeError("GitHub is down")
-        return False
-
-    source_control = MagicMock(can_write_repository=AsyncMock(side_effect=can_write))
-    authorize = _login_gate("acme/api", source_control, ("acme/web",))
-
-    with pytest.raises(RuntimeError, match="GitHub is down"):
-        asyncio.run(authorize(1, "maintainer"))
 
 
 def test_the_users_own_token_is_asked_about_public_github_repositories(monkeypatch) -> None:
@@ -3711,7 +3707,7 @@ def test_the_users_own_token_is_asked_about_public_github_repositories(monkeypat
         "acme/api", MagicMock(), ("acme/web", "gitlab.example/acme/ops"), "authorize_user"
     )
 
-    assert asyncio.run(authorize_user("user-token")) is True
+    assert asyncio.run(authorize_user("user-token")) == {"acme/api": None, "acme/web": True}
     assert sorted(asked) == [
         ("/repos/acme/api", "Bearer user-token"),
         ("/repos/acme/web", "Bearer user-token"),
@@ -3729,7 +3725,7 @@ def test_the_users_own_token_without_a_write_role_is_no_yes(monkeypatch) -> None
     )
     authorize_user = _login_gate("acme/api", MagicMock(), check="authorize_user")
 
-    assert asyncio.run(authorize_user("user-token")) is False
+    assert asyncio.run(authorize_user("user-token")) == {"acme/api": False}
 
 
 def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
@@ -3760,3 +3756,325 @@ def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
             assert not hasattr(store, "save_project")
 
     asyncio.run(scenario())
+
+
+def _scoped_app(tmp_path, runtime=None):
+    """Two checkouts behind GitHub login, and a run in each place a run can be."""
+    graph = _review_graph()
+    store = InMemoryStateStore()
+    repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
+    app = _graph_app_over(
+        store, runtime or ScriptedGraphRuntime(graph), graph,
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+        repos=repos,
+        login_repositories=("acme/api", "acme/web"),
+        repository_projects={"api": "acme/api", "web": "acme/web"},
+    )
+    for run_id, repository, phase in (
+        ("run-api", "api", RunPhase.SUCCEEDED),
+        ("run-api-path", str((tmp_path / "api").resolve()), RunPhase.SUCCEEDED),
+        # Started from a GitHub comment or assignment, which names the project.
+        ("run-github", "Acme/API", RunPhase.SUCCEEDED),
+        ("run-web", "web", RunPhase.SUCCEEDED),
+        ("run-web-scheduled", "web", RunPhase.SCHEDULED),
+        ("run-elsewhere", "/srv/unknown", RunPhase.SUCCEEDED),
+    ):
+        asyncio.run(store.save(RunState(
+            run_id=RunId(run_id), task_id=TaskId(f"task-{run_id}"),
+            workflow_id=WorkflowId(str(graph.graph_id)), phase=phase,
+            prompt="Do the work", repository=repository,
+        )))
+    return app, store, repos
+
+
+def _as_user(writable):
+    """Requests from a signed-in user who can write to `writable` only."""
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(patch.object(
+        GitHubLogin, "_read_session", return_value={"id": 7, "login": "bob"}
+    ))
+    stack.enter_context(patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)))
+    stack.enter_context(patch.object(
+        GitHubLogin, "writable_repositories", AsyncMock(return_value=frozenset(writable))
+    ))
+    return stack
+
+
+def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """Someone who can push only to `api` sees `api`'s WorkOrders, and every
+    other run answers as if it did not exist."""
+    app, store, repos = _scoped_app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with app.app.router.lifespan_context(app.app):
+                listed = (await client.get("/api/runs")).json()["runs"]
+                assert sorted(run["runId"] for run in listed) == [
+                    "run-api", "run-api-path", "run-github",
+                ]
+                assert (await client.get("/api/runs/run-api")).status_code == 200
+                for method, path in (
+                    ("GET", "/api/runs/run-web"),
+                    ("GET", "/api/runs/run-elsewhere"),
+                    ("POST", "/api/runs/run-web-scheduled/start"),
+                    ("DELETE", "/api/runs/run-web"),
+                    ("GET", "/api/runs/run-web/graph-events"),
+                    ("GET", "/api/runs/run-web/github-comments"),
+                    ("GET", "/graph/api/runs/run-web"),
+                    ("POST", "/graph/api/runs/run-web/cancel"),
+                ):
+                    response = await client.request(method, path)
+                    assert response.status_code == 404, (method, path, response.text)
+                    assert response.json() == {"error": "run not found"}
+                assert (await client.post("/graph/api/runs", json={})).status_code == 403
+                refused = await client.post("/api/runs", json={
+                    "workflowId": "implementation-review-codex",
+                    "prompt": "Change the web app.",
+                    "repository": str(Path(repos["web"]).resolve()),
+                })
+                assert refused.status_code == 403
+                # Another repository's run is as unknown a prerequisite as one
+                # that does not exist, whatever state it is in.
+                for prerequisite in ("run-web", "run-missing"):
+                    hidden = await client.post("/api/runs", json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Follow up.",
+                        "repository": str(Path(repos["api"]).resolve()),
+                        "dependsOnRunId": prerequisite,
+                    })
+                    assert hidden.status_code == 400, hidden.text
+                    assert hidden.json() == {
+                        "error": f"unknown prerequisite workorder: {prerequisite}",
+                    }
+                config = (await client.get("/api/config")).json()
+                assert [repo["name"] for repo in config["repositories"]] == ["api"]
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+    assert asyncio.run(store.load(RunId("run-web"))) is not None
+    assert asyncio.run(store.load(RunId("run-web-scheduled"))).phase is RunPhase.SCHEDULED
+
+
+def test_a_graph_run_stream_is_rechecked_against_its_own_repository(tmp_path) -> None:
+    """A stream from `/graph` ends when its run's repository is out of reach,
+    even for someone who can still write to another repository."""
+    from engine.apps.web.github_login import STREAM_ACCESS
+
+    app, _store, _repos = _scoped_app(tmp_path)
+    scopes = []
+
+    async def recording(scope, receive, send):
+        scopes.append(scope)
+        await app(scope, receive, send)
+
+    writable = {"acme/api"}
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=recording)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with app.app.router.lifespan_context(app.app):
+                await client.get("/graph/api/runs/run-api")
+                still_visible = scopes[-1][STREAM_ACCESS]
+                assert await still_visible() is True
+                writable.clear()
+                writable.add("acme/web")
+                assert await still_visible() is False
+
+    with _as_user(()), patch.object(
+        GitHubLogin, "writable_repositories",
+        AsyncMock(side_effect=lambda *_args, **_kwargs: frozenset(writable)),
+    ):
+        asyncio.run(scenario())
+
+
+def test_an_agent_cannot_depend_on_another_repositorys_run(tmp_path) -> None:
+    """An agent's WorkOrder may wait on runs in its own repository only; any
+    other run is as unknown as a missing one, whatever its state."""
+    runtime = ScriptedGraphRuntime(_review_graph())
+    creators = []
+    runtime.bind_workorder_creator = creators.append
+    app, store, _repos = _scoped_app(tmp_path, runtime)
+
+    async def scenario():
+        async with app.app.router.lifespan_context(app.app):
+            create = creators[0]
+            for prerequisite in ("run-web", "run-web-scheduled", "run-elsewhere", "run-missing"):
+                with pytest.raises(ValueError) as refused:
+                    await create(RunId("run-api"), "Follow up", RunId(prerequisite))
+                assert str(refused.value) == f"unknown prerequisite workorder: {prerequisite}"
+            # The same repository, named by its checkout path or GitHub project.
+            for prerequisite in ("run-api-path", "run-github"):
+                _url, child = await create(RunId("run-api"), "Follow up", RunId(prerequisite))
+                assert (await store.load(RunId(child))).depends_on_run_id == prerequisite
+
+    asyncio.run(scenario())
+
+
+class BranchingWorkspaces(ConversationWorkspaces):
+    """Checkouts whose branches are made in the repository they came from, as
+    a worktree's are, so which repository a chat is in can be read back."""
+
+    def _workspace(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+        import subprocess
+
+        subprocess.run(["git", "-C", repository, "branch", "--force", f"engine/{workspace_id}"],
+                       check=True, capture_output=True)
+        return super()._workspace(workspace_id, repository, base_ref)
+
+
+def _scoped_chat_app(tmp_path, default="/repository"):
+    """Two real checkouts, `api` and `web`, behind GitHub login."""
+    import subprocess
+
+    repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
+    for path in repos.values():
+        subprocess.run(["git", "init", "-q", path], check=True)
+        subprocess.run(["git", "-C", path, "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    runner = ConcurrentRunner()
+    store = InMemoryStateStore()
+    workspaces = BranchingWorkspaces()
+    app = create_app(
+        _workspace_session(runner, workspaces, store, repos.get(default, default)),
+        {"test": runner},
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+        repos=repos,
+        login_repositories=("acme/api", "acme/web"),
+        repository_projects={"api": "acme/api", "web": "acme/web"},
+    )
+    return app, store, repos, workspaces
+
+
+def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """A chat whose branch is in a repository its user cannot push to is not
+    listed and answers as missing, attached or detached, so its transcript
+    cannot be read nor its agent prompted, and its checkout cannot be kept by
+    naming another repository."""
+    app, store, repos, workspaces = _scoped_chat_app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            ids = {}
+            for name in ("api", "web", None):
+                instance = await store.create_instance(CODER)
+                ids[name] = str(instance.instance_id)
+                if name is not None:
+                    attached = await client.post(
+                        f"/api/threads/{ids[name]}/workspace", json={"repository": repos[name]},
+                    )
+                    assert attached.status_code == 200, attached.text
+            return ids
+
+    async def as_api_user(ids):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            listed = {t["id"] for t in (await client.get("/api/threads")).json()["threads"]}
+            assert ids["api"] in listed and ids["web"] not in listed
+            # A chat that never had a checkout is in no repository.
+            for name in ("api", None):
+                assert (await client.get(f"/api/threads/{ids[name]}")).status_code == 200
+            for detached in (False, True):
+                hidden = f"/api/threads/{ids['web']}"
+                for method, path, body in (
+                    ("GET", hidden, None),
+                    ("GET", f"{hidden}/messages", None),
+                    ("POST", f"{hidden}/runs", {"text": "hello"}),
+                    ("DELETE", f"{hidden}/runs/current", None),
+                    ("POST", f"{hidden}/workspace", {"repository": repos["api"]}),
+                    ("DELETE", hidden, None),
+                ):
+                    response = await client.request(method, path, json=body)
+                    assert response.status_code == 404, (detached, method, path, response.text)
+                if not detached:
+                    # The branch outlives its checkout, and still says whose it is.
+                    workspace_id = (await store.load_instance(ids["web"])).workspace_id
+                    workspaces.detached.add(workspace_id)
+
+    # Set up by an operator, who can put a chat in either repository.
+    with _as_user(()), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
+        ids = asyncio.run(scenario())
+    with _as_user({"acme/api"}):
+        asyncio.run(as_api_user(ids))
+
+
+def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(tmp_path) -> None:
+    """A new chat gets the default checkout at once, so it is refused before
+    anything is checked out for somebody who cannot write there."""
+    app, store, _repos, _workspaces = _scoped_chat_app(tmp_path, default="web")
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            refused = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
+            assert refused.status_code == 403, refused.text
+            assert await store.list_instances() == ()
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+    with _as_user({"acme/web"}):
+        async def allowed():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+                created = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
+                assert created.status_code == 201, created.text
+        asyncio.run(allowed())
+
+
+def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """A chat cannot be given a checkout of a repository its user cannot push
+    to, whether named or the server's default, attached for the first time or
+    again after a detach."""
+    app, store, repos, _workspaces = _scoped_chat_app(tmp_path)
+
+    async def scenario():
+        instance = await store.create_instance(CODER)
+        path = f"/api/threads/{instance.instance_id}/workspace"
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            for body in ({"repository": str(Path(repos["web"]).resolve())}, {"repository": "web"}, {}):
+                refused = await client.post(path, json=body)
+                assert refused.status_code == 403, (body, refused.text)
+            assert (await store.load_instance(instance.instance_id)).workspace_id is None
+            api = {"repository": str(Path(repos["api"]).resolve())}
+            assert (await client.post(path, json=api)).status_code == 200
+            assert (await client.delete(path)).status_code == 200
+            assert (await client.post(path, json={"repository": "web"})).status_code == 403
+            assert (await client.post(path, json=api)).status_code == 200
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+
+
+def test_operators_see_every_run(tmp_path) -> None:
+    """Operators see everything, including runs no GitHub repository maps to."""
+    app, _store, _repos = _scoped_app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with app.app.router.lifespan_context(app.app):
+                listed = (await client.get("/api/runs")).json()["runs"]
+                assert (await client.get("/api/runs/run-elsewhere")).status_code == 200
+                config = (await client.get("/api/config")).json()
+                return {run["runId"] for run in listed}, config["repositories"]
+
+    with patch.object(
+        GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
+        runs, repositories = asyncio.run(scenario())
+    assert runs == {
+        "run-api", "run-api-path", "run-github", "run-web", "run-web-scheduled", "run-elsewhere",
+    }
+    assert [repo["name"] for repo in repositories] == ["api", "web"]

@@ -530,7 +530,7 @@ def test_access_operators_reject_logins_and_bad_ids(operators) -> None:
         parse_engine_config({"access": {"operators": operators}})
 
 
-def test_login_repositories_are_read_from_the_checkouts_remotes(tmp_path) -> None:
+def test_repository_projects_are_read_from_the_checkouts_remotes(tmp_path) -> None:
     """`[repos]` names local paths; login asks GitHub about the repository
     each one pushes to, and skips what GitHub cannot answer for."""
     import subprocess
@@ -553,9 +553,30 @@ def test_login_repositories_are_read_from_the_checkouts_remotes(tmp_path) -> Non
         "github": {"host_aliases": {"github-web.example": "github-api.example"}},
     }))
 
-    assert web_main._login_repositories(loaded) == (
+    projects = web_main._repository_projects(loaded)
+    assert {name: projects[name] for name in repos if name in projects} == {
+        "api": "acme/api", "web": "acme/web", "same": "acme/web",
+        "enterprise": "github-web.example/acme/core",
+    }
+    assert web_main._login_repositories(loaded, projects) == (
         "acme/api", "acme/web", "github-web.example/acme/core",
     )
+
+
+def test_the_servers_own_checkout_is_named_dot(tmp_path, monkeypatch) -> None:
+    """A run in `.` is in the server's own checkout, which does not by itself
+    let anyone sign in."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
+                    "https://github.com/acme/server.git"], check=True)
+    monkeypatch.chdir(tmp_path)
+    loaded = LoadedEngineConfig(config=parse_engine_config({}))
+
+    projects = web_main._repository_projects(loaded)
+    assert projects == {".": "acme/server"}
+    assert web_main._login_repositories(loaded, projects) == ()
 
 
 def test_web_starts_login_with_only_operators(tmp_path, monkeypatch):

@@ -361,6 +361,9 @@ class GithubIngress:
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
         handle_review_request: Callable[[GithubReviewRequest], Awaitable[None]] | None = None,
         authenticated_login: Callable[[str], Awaitable[str]] | None = None,
+        may_act: Callable[
+            [GithubComment | GithubAssignment | GithubReviewRequest], Awaitable[bool]
+        ] | None = None,
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
@@ -369,6 +372,11 @@ class GithubIngress:
         self._webhook_secret = webhook_secret
         self._repository = repository
         self._authenticated_login = authenticated_login
+        # Whether whoever sent a comment or assignment can write to its
+        # repository. Asked before any handler sees it, so nothing -- a work
+        # order started, a comment forwarded to one -- happens for somebody
+        # who could not have made that change themselves.
+        self._may_act = may_act
         self._handle = handle
         self._handle_merge = handle_merge
         self._handle_assignment = handle_assignment
@@ -560,13 +568,16 @@ class GithubIngress:
                     assert self._handle is not None  # nothing is queued without one
                     if self._activity is not None:
                         self._activity.started(delivery)
-                    await self._handle(delivery)
+                    if self._may_act is None or await self._may_act(delivery):
+                        await self._handle(delivery)
                 elif isinstance(delivery, GithubAssignment):
                     assert self._handle_assignment is not None
-                    await self._handle_assignment(delivery)
+                    if self._may_act is None or await self._may_act(delivery):
+                        await self._handle_assignment(delivery)
                 elif isinstance(delivery, GithubReviewRequest):
                     assert self._handle_review_request is not None
-                    await self._handle_review_request(delivery)
+                    if self._may_act is None or await self._may_act(delivery):
+                        await self._handle_review_request(delivery)
                 else:
                     assert self._handle_merge is not None
                     await self._handle_merge(delivery)
