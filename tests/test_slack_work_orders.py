@@ -225,7 +225,7 @@ def _app(
     github_webhook_secret="",
     approval_policy=None,
     repos=None,
-    github_review_approval=True,
+    github_review_approval=False,
 ):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog

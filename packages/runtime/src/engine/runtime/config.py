@@ -130,8 +130,8 @@ class GitHubConfig:
     host_aliases: Mapping[str, str] = field(default_factory=dict)
     """Web authorities mapped to their GitHub transport authority, including ports."""
 
-    allow_approval: bool = True
-    """Whether a review requested on GitHub may approve a change it finds clean."""
+    allow_approval: bool = False
+    """Whether a review requested on GitHub may approve a change it finds clean; opt-in."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,7 +318,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
-    allow_approval = github.get("allow_approval", True)
+    allow_approval = github.get("allow_approval", False)
     if not isinstance(allow_approval, bool):
         raise EngineConfigError("github.allow_approval must be a boolean")
 

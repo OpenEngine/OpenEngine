@@ -499,11 +499,11 @@ def test_github_host_aliases_require_nonblank_string_mapping(aliases):
         parse_engine_config({"github": {"host_aliases": aliases}})
 
 
-def test_github_reviews_may_approve_unless_configured_not_to():
-    assert parse_engine_config({}).github.allow_approval is True
+def test_github_reviews_approve_only_when_opted_in():
+    assert parse_engine_config({}).github.allow_approval is False
     assert parse_engine_config(
-        {"github": {"allow_approval": False}}
-    ).github.allow_approval is False
+        {"github": {"allow_approval": True}}
+    ).github.allow_approval is True
     with pytest.raises(EngineConfigError, match="github.allow_approval"):
         parse_engine_config({"github": {"allow_approval": "no"}})
 

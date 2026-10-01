@@ -136,12 +136,12 @@ with comment ingress, this deduplication does not survive a process restart.
 Requesting a review from Engine's account on a pull request starts a review of
 it, connected to that pull request. The reranker posts the surviving findings
 on the pull request as comments, then stops at triage for the fixes to make.
-When no findings survive, it approves the pull request instead. Turn approval
-off to have it leave a comment saying the change looks clean:
+When no findings survive, it leaves a comment saying the change looks clean.
+Opt in to have it approve the pull request instead:
 
 ```toml
 [github]
-allow_approval = false  # default true
+allow_approval = true  # default false
 ```
 
 The approval is Engine's, not the model's: it is submitted only when the

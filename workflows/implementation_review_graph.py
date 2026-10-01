@@ -20,7 +20,7 @@ A person is shown the surviving findings at *triage* and chooses which to
 fix, and each fix is reviewed again before triage asks again. Started by
 `engine review`, nothing is posted. Requested on the pull request itself, the
 `publish_review` input has the reranker post its findings there, and -- where
-`[github] allow_approval` permits -- approve the change when none survive.
+`[github] allow_approval` opts in -- approve the change when none survive.
 
 The workflow offers both forge modes (`engine.domain.forge`) through
 `mode_input`. Nothing here branches on the mode: the components narrow the
