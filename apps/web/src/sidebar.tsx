@@ -8,10 +8,11 @@ import {
   type ApiWorkflowRunListing,
 } from "./api";
 import { RailBrand, RailFoot } from "./brand";
+import { LoopSettingsForm } from "./loops";
 import { SettingsPanel } from "./settings-panel";
 import { runArchived, runFinished, runStatusLabel } from "./runs";
 
-export type RailSection = "workflows";
+export type RailSection = "workflows" | "loops";
 
 /** The nodes of each graph, by the id of the graph they belong to. */
 export type GraphNodes = Record<string, ApiGraphTopology["nodes"]>;
@@ -234,6 +235,7 @@ function Section({
 export function Sidebar({
   runs,
   graphNodes = {},
+  runners = [],
   initialSection = "workflows",
   activeRunId,
   activeConversationUrl,
@@ -245,6 +247,8 @@ export function Sidebar({
    *  conversations are named. Empty until they have been read, and for a rail
    *  whose owner does not follow them. */
   graphNodes?: GraphNodes;
+  /** The runners a loop's manual strategy can choose between. */
+  runners?: string[];
   /** Which section the page on screen belongs to, followed until the reader
    *  opens one themselves. */
   initialSection?: RailSection;
@@ -259,6 +263,10 @@ export function Sidebar({
   const open = selected;
   const toggle = (section: RailSection) => setChosen(section === open ? "closed" : section);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The loop settings are read the first time the section opens, not with
+  // every rail, and kept mounted after so closing it does not lose an edit.
+  const [loopsOpened, setLoopsOpened] = useState(false);
+  if (open === "loops" && !loopsOpened) setLoopsOpened(true);
   // Keep exclusions so newly observed stages are selected without resetting user choices.
   const [excludedFilters, setExcludedFilters] = useState<string[]>([]);
   // The archive is out of the rail until it is asked for. A WorkOrder a person
@@ -384,6 +392,9 @@ export function Sidebar({
               );
             })}
           </nav>
+        </Section>
+        <Section id="loops" title="Loops" open={open === "loops"} onToggle={toggle}>
+          {loopsOpened && <LoopSettingsForm runners={runners} />}
         </Section>
       </div>
       {settingsOpen ? (
