@@ -736,8 +736,9 @@ export function refreshUtilization(
   });
 }
 
-/** The settings every loop runs under. Equal active hours mean any time of
- *  day, and a zero `maxDailySpend` is no limit. The two runners are only set
+/** The settings every loop runs under. Active hours, `maxPrs` and
+ *  `maxDailySpend` are exit criteria each loop is held to on its own: equal
+ *  active hours mean any time of day, and a zero `maxDailySpend` is no limit. The two runners are only set
  *  under the `manual` strategy. */
 export type LoopSettings = {
   activeHours: { start: string; end: string };

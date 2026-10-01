@@ -1470,6 +1470,24 @@ select:disabled { cursor: default; }
   color: var(--night-muted);
 }
 .rail-loops-hours legend { padding: 0; }
+.rail-loops-criteria {
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+.rail-loops-heading {
+  margin-bottom: 10px;
+  padding: 0;
+  color: var(--night-ink);
+  font-weight: 600;
+}
+/* The rail is dark and narrow, so its tip is raised off it and kept inside. */
+.rail-loops .info-tip { color: var(--night-muted); }
+.rail-loops .info-tip::after {
+  max-width: 200px;
+  background: var(--night-active);
+  border: 1px solid var(--night-rule);
+}
 
 .settings-client-id {
   display: flex;

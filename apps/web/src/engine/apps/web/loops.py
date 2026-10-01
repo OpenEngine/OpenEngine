@@ -1,9 +1,10 @@
 """The settings every loop runs under, as the rail's Loops section edits them.
 
 A loop is a standing prompt that idle runners pick up again and again (see
-`docs/plans/ongoing-projects.md`). What is kept here is what bounds all of them
-at once: when they may start, how many of a loop's pull requests may be open
-together, how much a day may cost, and how runners are chosen for their nodes.
+`docs/plans/ongoing-projects.md`). What is kept here are the exit criteria each
+loop is held to on its own (when it may work, how many of its pull requests may
+be open together, how much it may spend in a day), any one of which stops it,
+and the runner strategy shared by all of them.
 """
 
 import json
@@ -34,7 +35,7 @@ class LoopSettings:
     max_prs: int = 3
     """Pull requests one loop may have open at once."""
     max_daily_spend: float = 0.0
-    """Dollars all loops may spend in a day; zero is no limit."""
+    """Dollars one loop may spend in a day; zero is no limit."""
     runner_strategy: str = LEAST_UTILIZED
     implementation_runner: str = ""
     """The implementer group's runner, chosen by hand under `manual`."""

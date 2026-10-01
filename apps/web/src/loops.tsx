@@ -1,9 +1,11 @@
-/** The Loops section of the rail: the limits and runner choice every loop
- *  runs under. */
+/** The Loops section of the rail: the exit criteria each loop is held to, and
+ *  the runner strategy all of them share. */
 
 import { useEffect, useState, type FormEvent } from "react";
 
 import { getLoopSettings, setLoopSettings, type LoopSettings } from "./api";
+
+const EXIT_CRITERIA_TOOLTIP = "Loops stop working if any one of their exit criteria are met.";
 
 const STRATEGIES: { value: LoopSettings["runnerStrategy"]; label: string }[] = [
   { value: "least-utilized", label: "Least utilized" },
@@ -49,17 +51,26 @@ export function LoopSettingsForm({ runners }: { runners: string[] }) {
   };
   return (
     <form className="rail-loops" aria-label="Loop settings" onSubmit={submit}>
-      <fieldset className="rail-loops-hours">
-        <legend className="settings-label">Active hours</legend>
-        <input className="settings-input" type="time" aria-label="Active from" required
-          value={settings.activeHours.start}
-          onChange={(event) =>
-            change({ activeHours: { ...settings.activeHours, start: event.target.value } })} />
-        <span aria-hidden="true">–</span>
-        <input className="settings-input" type="time" aria-label="Active until" required
-          value={settings.activeHours.end}
-          onChange={(event) =>
-            change({ activeHours: { ...settings.activeHours, end: event.target.value } })} />
+      <fieldset className="rail-loops-criteria">
+        <legend className="rail-loops-heading">
+          Exit criteria
+          {/* Drawn by CSS like the WorkOrder mode tip; the click is kept from
+              the legend so a tap opens the tip. */}
+          <span className="info-tip" role="img" tabIndex={0}
+            aria-label={EXIT_CRITERIA_TOOLTIP} data-tip={EXIT_CRITERIA_TOOLTIP}
+            onClick={(event) => event.preventDefault()}>ⓘ</span>
+        </legend>
+        <fieldset className="rail-loops-hours">
+          <legend className="settings-label">Active hours</legend>
+          <input className="settings-input" type="time" aria-label="Active from" required
+            value={settings.activeHours.start}
+            onChange={(event) =>
+              change({ activeHours: { ...settings.activeHours, start: event.target.value } })} />
+          <span aria-hidden="true">–</span>
+          <input className="settings-input" type="time" aria-label="Active until" required
+            value={settings.activeHours.end}
+            onChange={(event) =>
+              change({ activeHours: { ...settings.activeHours, end: event.target.value } })} />
       </fieldset>
       <label>
         <span className="settings-label">Max PRs</span>
@@ -73,6 +84,7 @@ export function LoopSettingsForm({ runners }: { runners: string[] }) {
           value={settings.maxDailySpend}
           onChange={(event) => change({ maxDailySpend: event.target.valueAsNumber })} />
       </label>
+      </fieldset>
       <label>
         <span className="settings-label">Runner strategy</span>
         <select className="settings-input" value={settings.runnerStrategy}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,6 +36,19 @@ describe("Loops section", () => {
 
     expect(await screen.findByLabelText("Max PRs")).toHaveValue(3);
     expect(api.getLoopSettings).toHaveBeenCalledOnce();
+  });
+
+  it("groups the limits under exit criteria with a tip on what they do", async () => {
+    render(<Sidebar runs={[]} runners={["codex"]} initialSection="loops" />);
+    const criteria = await screen.findByRole("group", { name: /Exit criteria/ });
+
+    for (const label of ["Active from", "Max PRs", "Max spend ($/day)"]) {
+      expect(within(criteria).getByLabelText(label)).toBeInTheDocument();
+    }
+    expect(within(criteria).queryByLabelText("Runner strategy")).not.toBeInTheDocument();
+    expect(within(criteria).getByRole("img", {
+      name: "Loops stop working if any one of their exit criteria are met.",
+    })).toHaveAttribute("data-tip");
   });
 
   it("offers the implementer and reviewer groups only under manual", async () => {
