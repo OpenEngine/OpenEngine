@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0](https://github.com/OpenEngine/OpenEngine/compare/v1.1.0...v1.2.0) (2026-10-01)
+
+
+### Features
+
+* **cli:** report each step of engine review as it starts and finishes ([#625](https://github.com/OpenEngine/OpenEngine/issues/625)) ([97e88a9](https://github.com/OpenEngine/OpenEngine/commit/97e88a931518d8de5dffe641b3e66e831d79559c))
+* triage review findings individually with highlighted diffs ([#627](https://github.com/OpenEngine/OpenEngine/issues/627)) ([0cd5dfd](https://github.com/OpenEngine/OpenEngine/commit/0cd5dfd55be6befb61facf9833cf806fe0416201))
+* **web:** log what becomes of each GitHub delivery and warn when one stalls the queue ([#621](https://github.com/OpenEngine/OpenEngine/issues/621)) ([c40be15](https://github.com/OpenEngine/OpenEngine/commit/c40be15a7267e8620a8accec1d8db501a31ed7d6))
+
 ## [1.1.0](https://github.com/OpenEngine/OpenEngine/compare/v1.0.0...v1.1.0) (2026-10-01)
 
 
