@@ -10,10 +10,11 @@ which constructs the same application again in every fresh child process.
 
 import argparse
 import ipaddress
+import logging
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import uvicorn
@@ -182,7 +183,7 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
         raise EngineConfigError(str(error)) from error
     if not (
         loaded.config.github.repository
-        or _login_repositories(loaded)
+        or _login_repositories(loaded, _repository_projects(loaded))
         or loaded.config.access.operators
     ):
         # Sessions go only to operators and accounts that can write to one of
@@ -195,16 +196,18 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
     return config
 
 
-def _login_repositories(loaded: LoadedEngineConfig) -> tuple[str, ...]:
-    """The GitHub repositories behind the `[repos]` checkouts, keyed `owner/name`.
+def _repository_projects(loaded: LoadedEngineConfig) -> dict[str, str]:
+    """The GitHub repository behind each `[repos]` checkout, keyed by name.
 
     Read from each checkout's `origin` remote, because `[repos]` names a local
     path. A checkout on another forge, or one whose remote cannot be read, is
-    left out: its permissions are not something GitHub can answer.
+    left out: its permissions are not something GitHub can answer. The server's
+    own directory is `.`, what a run gets when no `[repos]` entry is named.
     """
     hosts = set(loaded.config.github.host_aliases)
-    projects: list[str] = []
-    for path in loaded.config.repos.values():
+    projects: dict[str, str] = {}
+    checkouts = {".": ".", **loaded.config.repos}
+    for name, path in checkouts.items():
         try:
             remote = subprocess.run(
                 ["git", "-C", str(Path(path).expanduser()), "remote", "get-url", "origin"],
@@ -217,8 +220,15 @@ def _login_repositories(loaded: LoadedEngineConfig) -> tuple[str, ...]:
             continue
         host, _, rest = project.partition("/")
         if "/" not in rest or host in hosts:
-            projects.append(project)
-    return tuple(dict.fromkeys(projects))
+            projects[name] = project
+    return projects
+
+
+def _login_repositories(loaded: LoadedEngineConfig, projects: Mapping[str, str]) -> tuple[str, ...]:
+    """The GitHub repositories whose writers may sign in: those behind `[repos]`."""
+    return tuple(dict.fromkeys(
+        projects[name] for name in loaded.config.repos if name in projects
+    ))
 
 
 def _is_loopback(host: str) -> bool:
@@ -305,11 +315,14 @@ def compose_app(
     settings = _settings(loaded)
     github_login_config = _github_login_config(loaded)
     _require_login_off_loopback(settings, github_login_config)
-    credential_store = GitHubCredentialStore()
+    # One cached store for Settings and agent actions alike, so the token
+    # `engine connect github` saved is used without reading the keychain again.
+    credential_store = GitHubCredentialStore(cached=True)
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
         settings,
         slack_credential_store=slack_credential_store,
+        github_credential_store=credential_store,
     )
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
@@ -322,6 +335,7 @@ def compose_app(
         workflow_catalog.graphs if workflow_catalog is not None else (),
         source_control=capabilities.source_control,
     )
+    projects = _repository_projects(loaded) if github_login_config else {}
     return create_app(
         session,
         runners,
@@ -342,9 +356,30 @@ def compose_app(
         public_url=loaded.config.public_url,
         work_orders=loaded.config.work_orders,
         repos=loaded.config.repos,
-        login_repositories=_login_repositories(loaded) if github_login_config else (),
+        repo_modes=loaded.config.repo_modes,
+        trusted_repos=loaded.config.trusted_repos,
+        login_repositories=_login_repositories(loaded, projects) if github_login_config else (),
+        repository_projects=projects if github_login_config else {},
         login_operators=loaded.config.access.operators,
     )
+
+
+#: Timestamped, and named by logger, because the log is read after the fact:
+#: "what happened to that webhook an hour ago" is answered by the time and the
+#: module that said it, and a line without either is one nobody can place.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging() -> None:
+    """Show Engine's own INFO lines; keep libraries at WARNING.
+
+    Without a handler Python prints only warnings, so every decision Engine
+    logs at INFO -- a webhook ignored and why, a merge accepted -- was written
+    to nowhere. Libraries stay at WARNING because some log every HTTP request
+    at INFO, which would bury the lines this is for.
+    """
+    logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
+    logging.getLogger("engine").setLevel(logging.INFO)
 
 
 def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
@@ -354,6 +389,7 @@ def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
     in each child process it starts, so the configuration file is selected by
     ``ENGINE_CONFIG`` there rather than by a command line the child never saw.
     """
+    configure_logging()
     return compose_app(*read_configuration(config_path))
 
 
@@ -370,6 +406,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _service_token_reader(loaded)
             report_wiring(settings)
             return 0
+        configure_logging()
         app = compose_app(loaded, workflow_catalog)
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)

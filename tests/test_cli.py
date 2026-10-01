@@ -417,6 +417,29 @@ def test_connect_slack_opens_the_authorization_url_and_waits_for_connection(monk
     assert "Connected." in capsys.readouterr().out
 
 
+def test_connect_github_explains_the_keychain_and_waits_a_minute_for_it(monkeypatch, capsys):
+    ready = cli.Check("service", True, "OpenEngine is ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: ("http://engine.test", ready))
+    requests = []
+
+    def request(_server, path, _body, timeout=10.0):
+        requests.append((path, timeout))
+        if path == "/api/github/connect":
+            return {"verificationUri": "https://github.com/login/device", "userCode": "CODE", "interval": 0}
+        return {"status": "complete"}
+
+    monkeypatch.setattr(cli, "request_json", request)
+    monkeypatch.setattr(cli, "post_empty", lambda *_args: None)
+
+    assert cli.connect(
+        cli.argparse.Namespace(server=None, provider="github", origin="https://gitlab.com", open=False), cli.Preferences()
+    ) == 0
+
+    assert requests == [("/api/github/connect", 60.0), ("/api/github/connect/poll", 60.0)]
+    out = capsys.readouterr().out
+    assert "system keychain" in out and "login password" in out
+
+
 def test_run_creates_a_thread_and_streams_the_prompt(monkeypatch, tmp_path: Path, capsys):
     ready = cli.Check("service", True, "OpenEngine is ready")
     monkeypatch.setenv(cli.CONFIG_ENVIRONMENT_VARIABLE, str(tmp_path / "cli.json"))
@@ -564,3 +587,213 @@ def test_default_local_service_starts_the_registered_daemon(monkeypatch):
     check, _identity, launched = cli.ensure_service(cli.DEFAULT_SERVER)
 
     assert check.ok and launched
+
+
+# --- engine review -------------------------------------------------------------
+
+REVIEW_CONFIG = {
+    "repositories": [{"name": "Owner/Repo", "path": "/code/repo"}],
+    "workflows": [{
+        "id": "implementation-review-rerank",
+        "inputs": [
+            {"name": "mode"}, {"name": "ref"}, {"name": "pr_url"}, {"name": "branch"},
+            {"name": "state", "choices": ["Planning", "Review"]},
+        ],
+    }],
+}
+REVIEW_FINDINGS = [
+    {"tagline": "The loop never ends", "description": "It skips the exit.", "file": "a.py", "line": 3, "facet": "bugs", "agent": "codex"},
+    {"tagline": "Unused helper", "description": "Nothing calls it.", "facet": "conciseness", "agent": "codex"},
+]
+TRIAGE = {"approvalId": "approval-1", "nodeId": "triage", "toolName": "findings_triage"}
+
+
+def test_review_of_a_pull_request_checks_out_its_branch_in_the_configured_repository(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {
+        "url": "https://github.com/owner/repo/pull/7", "title": "Fix it",
+        "headRefName": "patch-1", "isCrossRepository": False,
+    })
+
+    target = cli.review_target("https://github.com/owner/repo/pull/7/files", cli.DEFAULT_SERVER, REVIEW_CONFIG)
+
+    assert target == cli.ReviewTarget(
+        "/code/repo", "origin/patch-1", "https://github.com/owner/repo/pull/7",
+        "Review pull request https://github.com/owner/repo/pull/7: Fix it", "patch-1",
+    )
+
+
+def test_review_of_a_fork_pull_request_is_refused(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {
+        "url": "https://github.com/owner/repo/pull/7", "headRefName": "patch-1", "isCrossRepository": True,
+    })
+
+    with pytest.raises(RuntimeError, match="forks are not reviewed"):
+        cli.review_target("https://github.com/owner/repo/pull/7", cli.DEFAULT_SERVER, REVIEW_CONFIG)
+
+
+def test_review_does_not_take_a_similarly_named_checkout_for_the_pull_requests_repository(monkeypatch):
+    remotes = {"https://github.com/myowner/repo.git": False, "git@github.com:Owner/Repo.git": True}
+    request = cli.pull_request("https://github.com/owner/repo/pull/7")
+    for origin, matches in remotes.items():
+        monkeypatch.setattr(cli, "git_output", lambda _path, *arguments: origin if "get-url" in arguments else "/here")
+        if matches:
+            assert cli.review_repository(request, cli.DEFAULT_SERVER, {}) == "/here"
+        else:
+            with pytest.raises(RuntimeError, match="no checkout of owner/repo"):
+                cli.review_repository(request, cli.DEFAULT_SERVER, {})
+
+
+def test_review_starts_the_workflow_in_the_review_state(monkeypatch):
+    posted = []
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: posted.append((path, body)) or {"runId": "run-1"})
+
+    run_id = cli.start_review(cli.DEFAULT_SERVER, REVIEW_CONFIG, cli.ReviewTarget("/code/repo", "abc123", "", "Review it"))
+
+    assert run_id == "run-1"
+    assert posted == [("/api/runs", {
+        "prompt": "Review it", "repository": "/code/repo", "workflowId": "implementation-review-rerank",
+        # No pull request: nothing to push to, so the run stays off the forge.
+        "inputs": {"state": "Review", "ref": "abc123", "pr_url": "", "branch": "", "mode": "disconnected"},
+    })]
+
+
+def test_review_of_a_pull_request_is_connected_to_its_branch(monkeypatch):
+    posted = []
+    monkeypatch.setattr(cli, "request_json", lambda _server, _path, body: posted.append(body) or {"runId": "run-1"})
+    target = cli.ReviewTarget("/code/repo", "origin/patch-1", "https://github.com/o/r/pull/1", "Review it", "patch-1")
+
+    cli.start_review(cli.DEFAULT_SERVER, REVIEW_CONFIG, target)
+
+    assert posted[0]["inputs"]["branch"] == "patch-1"
+    assert posted[0]["inputs"]["mode"] == "connected"
+
+
+def test_review_json_waits_for_triage_and_prints_the_surviving_findings(monkeypatch, capsys):
+    ready = cli.Check("service", True, "ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, ready))
+    monkeypatch.setattr(cli, "review_target", lambda *_args: cli.ReviewTarget("/code/repo", "abc", "https://github.com/o/r/pull/1", "Review"))
+    monkeypatch.setattr(cli, "request_json", lambda *_args: {"runId": "run-1"})
+    monkeypatch.setattr(cli, "REVIEW_POLL_SECONDS", 0)
+    runs = iter([
+        {"status": "running", "pendingApprovals": []},
+        {"status": "awaiting_approval", "graphId": "g", "pendingApprovals": [TRIAGE], "values": {"review": REVIEW_FINDINGS}},
+    ])
+    monkeypatch.setattr(cli, "fetch_json", lambda _server, path: (
+        REVIEW_CONFIG if path == "/api/config"
+        else {"nodes": [{"nodeId": "triage", "findingsKey": "review"}]} if path == "/graph/api/graphs/g"
+        else next(runs)
+    ))
+
+    assert cli.main(["review", "https://github.com/o/r/pull/1", "--json"]) == cli.EXIT_OK
+
+    printed = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert printed == {"runId": "run-1", "prUrl": "https://github.com/o/r/pull/1", "findings": REVIEW_FINDINGS}
+
+
+def test_review_says_each_step_as_it_starts_and_finishes(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "REVIEW_POLL_SECONDS", 0)
+    runs = iter([
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": [{"executionId": "e1", "nodeId": "implementation"}]},
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": [
+            {"executionId": "e2", "nodeId": "review_bugs"}, {"executionId": "e3", "nodeId": "unnamed"},
+        ]},
+        {"status": "awaiting_approval", "graphId": "g", "pendingApprovals": [TRIAGE], "activeExecutions": []},
+    ])
+    monkeypatch.setattr(cli, "fetch_json", lambda _server, path: (
+        {"nodes": [{"nodeId": "implementation", "name": "Implementation"}, {"nodeId": "review_bugs", "name": "Review (Bugs)"}]}
+        if path == "/graph/api/graphs/g" else next(runs)
+    ))
+
+    _run, triage = cli.wait_for_triage(cli.DEFAULT_SERVER, "run-1")
+
+    assert triage == TRIAGE
+    assert capsys.readouterr().err.splitlines() == [
+        "→ Implementation", "✓ Implementation", "→ Review (Bugs)", "→ unnamed", "✓ Review (Bugs)", "✓ unnamed",
+    ]
+
+
+def test_review_retries_step_names_after_a_failed_fetch(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "REVIEW_POLL_SECONDS", 0)
+    runs = iter([
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": []},
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": [{"executionId": "e1", "nodeId": "review_bugs"}]},
+        {"status": "awaiting_approval", "graphId": "g", "pendingApprovals": [TRIAGE], "activeExecutions": []},
+    ])
+    graphs = iter([RuntimeError("blip"), {"nodes": [{"nodeId": "review_bugs", "name": "Review (Bugs)"}]}])
+
+    def fetch(_server, path):
+        if path != "/graph/api/graphs/g":
+            return next(runs)
+        graph = next(graphs)
+        if isinstance(graph, Exception):
+            raise graph
+        return graph
+
+    monkeypatch.setattr(cli, "fetch_json", fetch)
+
+    cli.wait_for_triage(cli.DEFAULT_SERVER, "run-1")
+
+    assert capsys.readouterr().err.splitlines() == ["→ Review (Bugs)", "✓ Review (Bugs)"]
+
+
+def test_enter_selects_a_finding_and_fix_selected_sends_only_it(monkeypatch):
+    offered = []
+
+    def choose(options, _prompt, **kwargs):
+        offered.append(list(options))
+        return options[0] if len(offered) == 1 else next(option for option in options if option.startswith("Fix selected"))
+
+    sent = []
+    monkeypatch.setattr(cli, "palette", choose)
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append((path, body)) or {})
+
+    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
+
+    assert offered[0] == [
+        "○ Fix this · 1. The loop never ends", "○ Fix this · 2. Unused helper",
+        "Fix all", "Post as comments", "Finish",
+    ]
+    assert offered[1][0] == "✓ Fix this · 1. The loop never ends"
+    # The choice is steered first and the decision sent second.
+    assert sent == [
+        ("/graph/api/runs/run-1/steering", {"message": json.dumps([REVIEW_FINDINGS[0]]), "node": "triage"}),
+        ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "accept"}),
+    ]
+
+
+def test_posting_findings_comments_inline_where_a_finding_has_a_line(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {"headRefOid": "sha"})
+    commands = []
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, **_kwargs: commands.append(command) or Completed())
+
+    assert cli.post_findings("https://github.com/o/r/pull/1", REVIEW_FINDINGS) == 0
+
+    inline, general = commands
+    assert inline[:7] == ["gh", "api", "--hostname", "github.com", "--method", "POST", "repos/o/r/pulls/1/comments"]
+    assert "path=a.py" in inline and "line=3" in inline and "commit_id=sha" in inline
+    assert general[:4] == ["gh", "pr", "comment", "https://github.com/o/r/pull/1"]
+    assert general[-1].startswith("**Unused helper**")
+
+
+def test_posting_a_finding_whose_line_is_not_a_number_comments_generally(monkeypatch):
+    monkeypatch.setattr(cli, "gh_json", lambda *_args, **_kwargs: {"headRefOid": "sha"})
+    commands = []
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, **_kwargs: commands.append(command) or Completed())
+    # `gh -F line=@...` would read and send a local file.
+    finding = {**REVIEW_FINDINGS[0], "line": "@~/.config/gh/hosts.yml"}
+
+    assert cli.post_findings("https://github.com/o/r/pull/1", [finding]) == 0
+
+    general, = commands
+    assert general[:3] == ["gh", "pr", "comment"]
+    assert not any("hosts.yml" in part for part in general)

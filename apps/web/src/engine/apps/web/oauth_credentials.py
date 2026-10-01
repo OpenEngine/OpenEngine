@@ -40,9 +40,16 @@ class StoredCredentials:
 class OAuthCredentialStore:
     """A secure keychain entry for one provider and one account identity."""
 
-    def __init__(self, service: str, username: str) -> None:
+    def __init__(self, service: str, username: str, *, cached: bool = False) -> None:
         self._service = service
         self._username = username
+        # A keychain read can stop to ask for the login password, and macOS
+        # asks again for every read unless "Always Allow" was chosen. A cached
+        # store reads the entry once per process and keeps what it writes, so
+        # the one prompt is the write right after connecting.
+        self._cached = cached
+        self._cache: StoredCredentials | None = None
+        self._loaded = False
 
     @property
     def credential_identity(self) -> tuple[str, str]:
@@ -58,6 +65,14 @@ class OAuthCredentialStore:
             raise OAuthCredentialError("no secure keyring backend available on this system; the value cannot be stored safely")
 
     def get_credentials(self) -> StoredCredentials | None:
+        if self._cached and self._loaded:
+            return self._cache
+        credentials = self._read_credentials()
+        if self._cached:
+            self._cache, self._loaded = credentials, True
+        return credentials
+
+    def _read_credentials(self) -> StoredCredentials | None:
         try:
             value = keyring.get_password(self._service, self._username)
         except keyring.errors.KeyringError:
@@ -96,6 +111,8 @@ class OAuthCredentialStore:
                 separators=(",", ":"),
             ),
         )
+        if self._cached:
+            self._cache, self._loaded = credentials, True
 
     def set(self, token: str) -> None:
         self.set_credentials(StoredCredentials(token))
@@ -105,6 +122,8 @@ class OAuthCredentialStore:
             keyring.delete_password(self._service, self._username)
         except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
             pass
+        if self._cached:
+            self._cache, self._loaded = None, True
 
 
 def _optional_string(value: object) -> str | None:

@@ -29,7 +29,11 @@ from urllib.request import Request, urlopen
 
 from platformdirs import user_config_path, user_data_path, user_state_path
 
-from engine.apps.cli import daemon
+from engine.apps.cli import daemon, onboarding
+from engine.domain import (
+    STATE_INPUT, TRIAGE_TOOL, WorkState, finding_comment, review_inputs,
+)
+from engine.runtime.change_requests import ChangeRequest, change_request, remote_project
 
 DEFAULT_SERVER = "http://127.0.0.1:4364"
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CLI_CONFIG"
@@ -346,13 +350,13 @@ def fetch_json(server: str, path: str) -> dict[str, Any]:
     return payload
 
 
-def request_json(server: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+def request_json(server: str, path: str, body: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
     request = Request(
         f"{server}{path}", data=json.dumps(body).encode(), method="POST",
         headers=request_headers({"Accept": "application/json", "Content-Type": "application/json"}),
     )
     try:
-        with urlopen(request, timeout=10.0) as response:
+        with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read())
     except HTTPError as error:
         try:
@@ -931,6 +935,17 @@ def decide(arguments: argparse.Namespace, preferences: Preferences, decision: st
         return EXIT_UNHEALTHY
 
 
+#: How long a connect request may take. The service reads its client ID from,
+#: and saves the token to, the OS keychain, which can stop to ask for the
+#: login password.
+KEYCHAIN_TIMEOUT = 60.0
+KEYCHAIN_EXPLAINED = (
+    "OpenEngine keeps the access token in your system keychain, so it is stored "
+    "encrypted rather than in a file and WorkOrders can push and open pull requests "
+    "without asking you again. Your system may ask for your login password to allow it."
+)
+
+
 def connect(arguments: argparse.Namespace, preferences: Preferences) -> int:
     try:
         server, check = read_service(arguments, preferences)
@@ -956,14 +971,15 @@ def connect(arguments: argparse.Namespace, preferences: Preferences) -> int:
             raise RuntimeError("Slack authorization timed out")
         path = "/api/github/connect" if provider == "github" else "/api/gitlab/connect"
         body = {} if provider == "github" else {"origin": arguments.origin}
-        flow = request_json(server, path, body)
+        print(KEYCHAIN_EXPLAINED)
+        flow = request_json(server, path, body, timeout=KEYCHAIN_TIMEOUT)
         print(f"Open {flow['verificationUri']} and enter code: {flow['userCode']}")
         if arguments.open:
             webbrowser.open(str(flow["verificationUri"]))
         poll_path = "/api/github/connect/poll" if provider == "github" else "/api/gitlab/connect/poll"
         while True:
             time.sleep(float(flow.get("interval", 5)))
-            result = request_json(server, poll_path, body)
+            result = request_json(server, poll_path, body, timeout=KEYCHAIN_TIMEOUT)
             if result.get("status") == "complete":
                 post_empty(server, "/api/source-control/provider", {"provider": "github-oauth" if provider == "github" else "gitlab-oauth", **({"origin": arguments.origin} if provider == "gitlab" else {})})
                 print("Connected.")
@@ -989,31 +1005,379 @@ def settings(server: str, preferences: Preferences) -> None:
         print(f"Opened {server}; choose Settings in the sidebar.")
 
 
+REVIEW_POLL_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class ReviewTarget:
+    """The change `engine review` hands to a workflow started in review."""
+
+    repository: str
+    ref: str
+    pr_url: str
+    task: str
+    #: The pull request's branch a fix is pushed to; none when it cannot be.
+    branch: str = ""
+
+
+def pull_request(url: str) -> ChangeRequest | None:
+    """The GitHub pull request a URL names, read the way the rest of the engine reads it."""
+    request = change_request(url)
+    return request if request is not None and request.kind == "pull" else None
+
+
+def git_output(path: str | Path, *arguments: str) -> str:
+    result = subprocess.run(["git", "-C", str(path), *arguments], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"git {' '.join(arguments)} failed")
+    return result.stdout.strip()
+
+
+def gh_json(*arguments: str, cwd: str | Path | None = None) -> dict[str, Any]:
+    if shutil.which("gh") is None:
+        raise RuntimeError("the GitHub CLI (gh) is not on PATH")
+    result = subprocess.run(["gh", *arguments], capture_output=True, text=True, cwd=cwd)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"gh {' '.join(arguments)} failed")
+    payload = json.loads(result.stdout)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"gh {' '.join(arguments)} did not return a JSON object")
+    return payload
+
+
+def review_repository(request: ChangeRequest, server: str, config: dict[str, Any]) -> str:
+    """The service-side checkout of the pull request's repository, from `[repos]` or this directory."""
+    repositories = config.get("repositories") if isinstance(config.get("repositories"), list) else []
+    for repository in repositories:
+        if isinstance(repository, dict) and str(repository.get("name", "")).casefold() == request.path.casefold():
+            return str(repository.get("path", ""))
+    if is_local_server(server):
+        try:
+            root = git_output(Path.cwd(), "rev-parse", "--show-toplevel")
+            origin = git_output(root, "remote", "get-url", "origin")
+        except RuntimeError:
+            origin = ""
+        # The whole project, host included: `myowner/repo` is not `owner/repo`.
+        if remote_project(origin) == request.project:
+            return root
+    raise RuntimeError(f"no checkout of {request.path} is configured on this service; add it under [repos] in engine.toml")
+
+
+def review_target(target: str, server: str, config: dict[str, Any]) -> ReviewTarget:
+    """Resolve a pull request URL or a local path into what the review checks out."""
+    if target.startswith(("http://", "https://")):
+        request = pull_request(target)
+        if request is None:
+            raise RuntimeError("expected a GitHub pull request URL such as https://github.com/owner/repo/pull/1")
+        pull = gh_json("pr", "view", target, "--json", "url,title,headRefName,isCrossRepository")
+        if pull.get("isCrossRepository"):
+            # A fork's code would run our agents, and a fix has no remote to go back to.
+            raise RuntimeError(
+                "pull requests from forks are not reviewed: their code would run the review's agents, "
+                "and a fix could not be pushed back; check the branch out and run engine review on the path"
+            )
+        branch = str(pull["headRefName"])
+        url = str(pull.get("url") or target)
+        return ReviewTarget(
+            review_repository(request, server, config), f"origin/{branch}", url,
+            f"Review pull request {url}: {pull.get('title', '')}", branch,
+        )
+    if not is_local_server(server):
+        raise RuntimeError("a remote service cannot see local paths; give a pull request URL instead")
+    root = git_output(Path(target).expanduser().resolve(), "rev-parse", "--show-toplevel")
+    branch = git_output(root, "rev-parse", "--abbrev-ref", "HEAD")
+    commit = git_output(root, "rev-parse", "HEAD")
+    if git_output(root, "status", "--porcelain"):
+        print("engine: uncommitted changes are not reviewed; commit them to include them.", file=sys.stderr)
+    try:
+        pull = gh_json("pr", "view", "--json", "url,headRefName,isCrossRepository", cwd=root)
+    except (RuntimeError, json.JSONDecodeError):
+        pull = {}
+    return ReviewTarget(
+        root, commit, str(pull.get("url") or ""),
+        f"Review the commits on branch {branch} (at {commit[:12]}) that are not on the repository's default branch.",
+        # A fork's branch is not on `origin`, the only remote a workspace has.
+        "" if pull.get("isCrossRepository") else str(pull.get("headRefName") or ""),
+    )
+
+
+def review_workflow(config: dict[str, Any]) -> dict[str, Any]:
+    """The first offered workflow that can start in the review state."""
+    for workflow in config.get("workflows") or []:
+        inputs = workflow.get("inputs") if isinstance(workflow, dict) else None
+        for item in inputs or []:
+            if isinstance(item, dict) and item.get("name") == STATE_INPUT and WorkState.REVIEW in (item.get("choices") or []):
+                return workflow
+    raise RuntimeError("no workflow on this service can start in review")
+
+
+def start_review(server: str, config: dict[str, Any], target: ReviewTarget) -> str:
+    workflow = review_workflow(config)
+    declared = {item.get("name") for item in workflow.get("inputs") or [] if isinstance(item, dict)}
+    run = request_json(server, "/api/runs", {
+        "prompt": target.task, "repository": target.repository, "workflowId": workflow["id"],
+        "inputs": review_inputs(declared, ref=target.ref, pr_url=target.pr_url, branch=target.branch),
+    })
+    return str(run["runId"])
+
+
+def graph_run(server: str, run_id: str) -> dict[str, Any]:
+    return fetch_json(server, f"/graph/api/runs/{run_id}?includeValues=true")
+
+
+def step_names(server: str, graph_id: str) -> dict[str, str] | None:
+    """Each node's display name, so progress reads `Review (Bugs)` rather than a node id; None to retry next poll."""
+    try:
+        graph = fetch_json(server, f"/graph/api/graphs/{graph_id}")
+    except RuntimeError:
+        return None
+    return {
+        str(node["nodeId"]): str(node.get("name") or node["nodeId"])
+        for node in graph.get("nodes") or [] if isinstance(node, dict) and node.get("nodeId")
+    }
+
+
+def review_steps(run: dict[str, Any], names: dict[str, str]) -> dict[str, str]:
+    """The run's executing steps, by execution id, with their display names."""
+    return {
+        str(item.get("executionId")): names.get(str(item.get("nodeId")), str(item.get("nodeId")))
+        for item in run.get("activeExecutions") or [] if isinstance(item, dict)
+    }
+
+
+def review_spinner(steps: dict[str, str]) -> TerminalSpinner:
+    return TerminalSpinner(f"Reviewing: {', '.join(steps.values())}" if steps else "Reviewing")
+
+
+def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Watch the run until it asks for findings to fix, or ends, saying each step as it starts and ends."""
+    spinner = review_spinner({})
+    spinner.start()
+    answered: set[str] = set()
+    names: dict[str, str] | None = None
+    steps: dict[str, str] = {}
+    try:
+        while True:
+            run = graph_run(server, run_id)
+            if names is None and run.get("graphId"):
+                names = step_names(server, str(run["graphId"]))
+            current = review_steps(run, names or {})
+            if current != steps:
+                spinner.stop()
+                for execution, name in steps.items():
+                    if execution not in current:
+                        print(f"✓ {name}", file=sys.stderr)
+                for execution, name in current.items():
+                    if execution not in steps:
+                        print(f"→ {name}", file=sys.stderr)
+                steps = current
+                spinner = review_spinner(steps)
+                spinner.start()
+            pending = [item for item in run.get("pendingApprovals") or [] if isinstance(item, dict)]
+            triage = next((item for item in pending if item.get("toolName") == TRIAGE_TOOL), None)
+            if triage is not None or run.get("status") in {"completed", "failed"}:
+                return run, triage
+            for approval in pending:
+                if approval.get("approvalId") in answered:
+                    continue
+                answered.add(str(approval.get("approvalId")))
+                spinner.stop()
+                print(f"Approval required: {approval.get('command') or approval.get('toolName') or approval.get('reason')}")
+                action = palette(["Approve", "Reject", "Defer"], "Decision: ") if sys.stdin.isatty() else None
+                if action in {"Approve", "Reject"}:
+                    request_json(server, f"/graph/api/runs/{run_id}/approvals/{approval['approvalId']}", {"decision": "accept" if action == "Approve" else "cancel"})
+                else:
+                    print("Answer it in the web UI; still watching the review.")
+                spinner = review_spinner(steps)
+                spinner.start()
+            time.sleep(REVIEW_POLL_SECONDS)
+    finally:
+        spinner.stop()
+
+
+def triage_findings(server: str, run: dict[str, Any], triage: dict[str, Any]) -> list[dict[str, Any]]:
+    """The findings the triage node offers, read from where its topology says."""
+    graph = fetch_json(server, f"/graph/api/graphs/{run['graphId']}")
+    node = next((item for item in graph.get("nodes") or [] if item.get("nodeId") == triage.get("nodeId")), {})
+    findings = (run.get("values") or {}).get(node.get("findingsKey") or "")
+    return [item for item in findings if isinstance(item, dict)] if isinstance(findings, list) else []
+
+
+def finding_location(finding: dict[str, Any]) -> str:
+    file = finding.get("file")
+    return f"{file}:{finding['line']}" if file and finding.get("line") else str(file or "")
+
+
+def render_findings(findings: list[dict[str, Any]]) -> None:
+    if not findings:
+        print("No findings survived review.")
+        return
+    print(f"Findings ({len(findings)})")
+    for index, finding in enumerate(findings, 1):
+        facet = f"[{finding['facet']}] " if finding.get("facet") else ""
+        print(f"{index}. {facet}{' '.join(str(finding.get('tagline', '')).split())}")
+        for line in str(finding.get("description", "")).splitlines():
+            print(f"   {line}")
+        if location := finding_location(finding):
+            print(f"   \x1b[2m{location}\x1b[0m")
+    print()
+
+
+def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
+    """Post each finding with `gh`, inline where it has a line. Returns failures."""
+    request = pull_request(pr_url)
+    if request is None:
+        raise RuntimeError(f"{pr_url} is not a GitHub pull request URL")
+    head = str(gh_json("pr", "view", pr_url, "--json", "headRefOid").get("headRefOid") or "")
+    failures = 0
+    for finding in findings:
+        # Worded as the reranker would have posted it.
+        body = finding_comment(
+            str(finding.get("tagline", "")), str(finding.get("description", "")),
+            agent=str(finding.get("agent") or ""), facet=str(finding.get("facet") or ""),
+        )
+        line = finding.get("line")
+        # Only a real line number: `gh -F` reads a value starting with `@` as a file.
+        if head and finding.get("file") and isinstance(line, int) and not isinstance(line, bool) and line > 0:
+            inline = subprocess.run([
+                "gh", "api", "--hostname", request.host, "--method", "POST",
+                f"repos/{request.path}/pulls/{request.number}/comments",
+                "-f", f"body={body}", "-f", f"commit_id={head}", "-f", f"path={finding['file']}",
+                "-F", f"line={line}", "-f", "side=RIGHT",
+            ], capture_output=True, text=True)
+            if inline.returncode == 0:
+                continue
+        # A line outside the diff cannot take an inline comment; say it generally.
+        general = subprocess.run(["gh", "pr", "comment", pr_url, "--body", body], capture_output=True, text=True)
+        if general.returncode != 0:
+            failures += 1
+            print(f"engine: could not post {finding.get('tagline')!r}: {general.stderr.strip()}", file=sys.stderr)
+    return failures
+
+
+def send_fixes(server: str, run_id: str, triage: dict[str, Any], findings: list[dict[str, Any]]) -> None:
+    """Steer the chosen findings to triage, then accept, the way a human review's note is sent."""
+    request_json(server, f"/graph/api/runs/{run_id}/steering", {"message": json.dumps(findings), "node": triage["nodeId"]})
+    request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "accept"})
+
+
+def choose_fixes(server: str, run_id: str, triage: dict[str, Any], findings: list[dict[str, Any]], pr_url: str) -> bool:
+    """Offer Fix this / Fix all / Post as comments. True when fixes were sent."""
+    selected: set[int] = set()
+    cursor = 0
+    while True:
+        labels: dict[str, int] = {}
+        descriptions: dict[str, str] = {}
+        for index, finding in enumerate(findings):
+            label = f"{'✓' if index in selected else '○'} Fix this · {index + 1}. {' '.join(str(finding.get('tagline', '')).split())}"
+            labels[label] = index
+            descriptions[label] = finding_location(finding)
+        actions = [*labels]
+        if selected:
+            actions.append(f"Fix selected ({len(selected)})")
+        if findings:
+            actions.append("Fix all")
+            if pr_url:
+                actions.append("Post as comments")
+        actions.append("Finish")
+        descriptions.update({
+            "Fix all": "Send every finding back to the implementer",
+            "Post as comments": f"Post {'the selected' if selected else 'every'} finding on {pr_url} with gh",
+            "Finish": "End the review without fixing anything",
+        })
+        choice = palette(actions, "Review: ", descriptions=descriptions, selected=cursor)
+        if choice in labels:
+            # Enter picks a finding for fixing, or puts it back, and stays on it.
+            cursor = labels[choice]
+            selected ^= {cursor}
+        elif choice is not None and choice.startswith("Fix selected"):
+            send_fixes(server, run_id, triage, [findings[index] for index in sorted(selected)])
+            return True
+        elif choice == "Fix all":
+            send_fixes(server, run_id, triage, findings)
+            return True
+        elif choice == "Post as comments":
+            chosen = [findings[index] for index in sorted(selected)] or findings
+            failures = post_findings(pr_url, chosen)
+            print(f"Posted {len(chosen) - failures} of {len(chosen)} findings on {pr_url}.")
+        elif choice == "Finish":
+            request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
+            print("Review finished.")
+            return False
+        else:
+            print(f"Detached; the review waits for your choice at {server}/runs/{run_id}.")
+            return False
+
+
+def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    """Start a workflow in review on a local change or a pull request, then triage it."""
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            raise RuntimeError(check.detail)
+        config = fetch_json(server, "/api/config")
+        target = review_target(arguments.target, server, config)
+        run_id = start_review(server, config, target)
+        print(f"Reviewing {target.pr_url or target.repository} ({run_id})")
+        while True:
+            run, triage = wait_for_triage(server, run_id)
+            if triage is None:
+                if run.get("status") == "failed":
+                    raise RuntimeError(f"review failed: {run.get('error')}")
+                print("Review finished.")
+                return EXIT_OK
+            findings = triage_findings(server, run, triage)
+            if arguments.json:
+                print(json.dumps({"runId": run_id, "prUrl": target.pr_url, "findings": findings}, sort_keys=True))
+                return EXIT_OK
+            render_findings(findings)
+            if not sys.stdin.isatty():
+                print(f"Choose findings to fix at {server}/runs/{run_id}.")
+                return EXIT_OK
+            if not choose_fixes(server, run_id, triage, findings, target.pr_url):
+                return EXIT_OK
+            print("Fixing; the change is reviewed again when the fix is done.")
+    except KeyboardInterrupt:
+        print("\nDetached; the service-side review continues.")
+        return EXIT_OK
+    except (ValueError, RuntimeError, KeyError, json.JSONDecodeError) as error:
+        print(f"engine: {error}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+
+
 COMMAND_DESCRIPTIONS = {
     "/help": "Show available commands",
     "/status": "Check whether the OpenEngine service is ready",
     "/threads": "Browse conversations on this service",
     "/new": "Start a new work order",
     "/approvals": "Review pending terminal decisions",
+    "/review": "Review a local change or a pull request",
     "/settings": "Manage GitHub, GitLab, and Slack connections",
     "/web": "Open the OpenEngine web interface",
     "/quit": "Exit the CLI",
 }
 
 
-def palette_lines(options: list[str], prompt: str, query: str, selected: int) -> list[str]:
+def palette_lines(
+    options: list[str], prompt: str, query: str, selected: int,
+    descriptions: dict[str, str] | None = None,
+) -> list[str]:
     """Render one palette frame without taking over the terminal screen."""
     width = shutil.get_terminal_size(fallback=(100, 24)).columns
-    command_width = min(24, max(14, width // 3))
+    command_width = min(24, max(14, width // 3)) if descriptions is None else min(
+        max((len(option) for option in options), default=14), max(14, width * 2 // 3),
+    )
     lines = [f"\x1b[1m{prompt}{query}\x1b[0m", "─" * max(1, width)]
     for index, option in enumerate(options):
-        description = COMMAND_DESCRIPTIONS.get(option, "")
+        description = (COMMAND_DESCRIPTIONS if descriptions is None else descriptions).get(option, "")
         available = max(0, width - command_width - 3)
         if len(description) > available:
             description = description[: max(0, available - 1)] + "…"
         marker = "›" if index == selected else " "
         style = "\x1b[38;5;111m" if index == selected else "\x1b[2m"
-        lines.append(f"{style}{marker} {option:<{command_width}} {description}\x1b[0m")
+        # A wrapped row would throw off the redraw, which counts lines.
+        shown = option if len(option) <= command_width else option[: command_width - 1] + "…"
+        lines.append(f"{style}{marker} {shown:<{command_width}} {description}\x1b[0m")
     if not options:
         lines.append("\x1b[2m  No matching commands\x1b[0m")
     return lines
@@ -1034,10 +1398,12 @@ def dismiss_palette(rows: int, prompt: str, value: str = "") -> None:
     print(f"\x1b[{rows}F\r\x1b[2K{prompt}{value}\n\x1b[J", end="", flush=True)
 
 
-def palette(options: list[str], prompt: str, *, initial_query: str = "") -> str | None:
+def palette(
+    options: list[str], prompt: str, *, initial_query: str = "",
+    descriptions: dict[str, str] | None = None, selected: int = 0,
+) -> str | None:
     """A searchable, inline arrow-key picker without a UI dependency."""
     query = initial_query
-    selected = 0
     rendered_rows = 0
     while True:
         matches = [option for option in options if query.casefold() in option.casefold()]
@@ -1045,7 +1411,7 @@ def palette(options: list[str], prompt: str, *, initial_query: str = "") -> str 
             selected = min(selected, len(matches) - 1)
         else:
             selected = 0
-        rendered_rows = draw_palette(palette_lines(matches, prompt, query, selected), rendered_rows)
+        rendered_rows = draw_palette(palette_lines(matches, prompt, query, selected, descriptions), rendered_rows)
         key = read_key()
         if key == "enter":
             choice = matches[selected] if matches else None
@@ -1145,6 +1511,7 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         "/threads",
         "/new",
         "/approvals",
+        "/review",
         "/settings",
         "/web",
         "/quit",
@@ -1182,7 +1549,7 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
         if command is None:
             continue
         if command == "/help":
-            print("/status  service readiness\n/settings  integration settings\n/threads  inspect work orders\n/new  start a new work order\n/approvals  pending decisions\n/web  open the web UI\n/quit  exit")
+            print("/status  service readiness\n/settings  integration settings\n/threads  inspect work orders\n/new  start a new work order\n/approvals  pending decisions\n/review  review a change or pull request\n/web  open the web UI\n/quit  exit")
         elif command == "/status":
             status(argparse.Namespace(server=server, json=False), preferences)
         elif command == "/threads":
@@ -1225,6 +1592,10 @@ def interactive(arguments: argparse.Namespace, preferences: Preferences) -> int:
                     reason = prompt_line("Reason: ")
                     if reason is not None:
                         decide(argparse.Namespace(server=server, approval_id=approval_id, reason=reason.strip() or "Rejected in terminal"), preferences, "cancel")
+        elif command == "/review":
+            target = prompt_line("Review (path or pull request URL): ", initial=".")
+            if target and target.strip():
+                review(argparse.Namespace(server=server, target=target.strip(), json=False), preferences)
         elif command == "/settings":
             settings(server, preferences)
         elif command == "/web":
@@ -1293,6 +1664,11 @@ def parser() -> argparse.ArgumentParser:
     connection.add_argument("--server", metavar="URL")
     connection.add_argument("--origin", default="https://gitlab.com")
     connection.add_argument("--open", action="store_true")
+    reviewing = commands.add_parser("review", help="review a local change or a pull request, then choose what to fix")
+    reviewing.add_argument("target", nargs="?", default=".", help="a repository path (default: current directory) or a pull request URL")
+    reviewing.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    reviewing.add_argument("--json", action="store_true", help="print the findings as JSON and leave the review waiting")
+    onboarding.add_parser(commands)
     daemon.add_parser(commands)
     palette_command = commands.add_parser("palette", help="the line-based command palette")
     palette_command.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
@@ -1315,6 +1691,10 @@ def main(argv: list[str] | None = None) -> int:
         return doctor(arguments, preferences)
     if arguments.command == "connect":
         return connect(arguments, preferences)
+    if arguments.command == "review":
+        return review(arguments, preferences)
+    if arguments.command == "init":
+        return onboarding.main(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
     raise AssertionError("unreachable command")

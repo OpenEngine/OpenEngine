@@ -266,7 +266,7 @@ jobs:
         # they are `acp-compatibility.yml`, on a schedule, because an
         # authentication or rate-limit failure is not a regression in this
         # repository.
-        run: uv run pytest
+        run: uv run pytest --cov --cov-report=term-missing
 
       - name: Composition roots start
         # Cheap smoke test that the capability graph still wires up: these are

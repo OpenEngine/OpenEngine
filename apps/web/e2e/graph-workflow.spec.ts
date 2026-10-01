@@ -301,6 +301,10 @@ test("a graph workflow accepts independent stage runners", async ({
     mode: "connected",
     implementation_runner: "claude",
     review_runner: "codex",
+    state: "Planning",
+    ref: "",
+    pr_url: "",
+    branch: "",
   });
   await openConversation(page, runUrl);
   await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("claude");
@@ -391,10 +395,9 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
 
   // The nodes a person can read, from the moment the run exists: the
   // checkout and the human verdict are stages rather than conversations.
-  // Implementation and review conversations start in collapsed groups.
+  // The lone implementation conversation stands on its own; the review
+  // conversations start in a collapsed group.
   const conversations = page.getByLabel(/^Conversations for /);
-  await expect(conversations.getByRole("link")).toHaveCount(0);
-  await conversations.locator("summary").filter({ hasText: "Implementation" }).click();
   await expect(conversations.getByRole("link")).toHaveText(["Implementation"]);
   await conversations.getByText("Review", { exact: true }).click();
   await expect(conversations.getByRole("link")).toHaveText([

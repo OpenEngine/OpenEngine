@@ -1,5 +1,85 @@
 # Changelog
 
+## [1.1.0](https://github.com/OpenEngine/OpenEngine/compare/v1.0.0...v1.1.0) (2026-10-01)
+
+
+### Features
+
+* **cli:** add engine review to start the workflow in review and triage findings ([#604](https://github.com/OpenEngine/OpenEngine/issues/604)) ([f29d9d8](https://github.com/OpenEngine/OpenEngine/commit/f29d9d8e9a72910c1dcefb3ab5b1863877a5c6ec))
+* scope work order visibility to the repositories a user can write to ([#590](https://github.com/OpenEngine/OpenEngine/issues/590)) ([3ca4374](https://github.com/OpenEngine/OpenEngine/commit/3ca43742ee38ada44846202c8a6eb8250d0d0f98))
+* **web:** start an engine review when Engine is requested as a pull request reviewer ([#623](https://github.com/OpenEngine/OpenEngine/issues/623)) ([d79821f](https://github.com/OpenEngine/OpenEngine/commit/d79821feab6ee92aa871287c00762dc46cafe35c))
+
+
+### Bug Fixes
+
+* **release:** stop pinning release-please to 1.0.0 ([#622](https://github.com/OpenEngine/OpenEngine/issues/622)) ([4296cf2](https://github.com/OpenEngine/OpenEngine/commit/4296cf28aebdbe83a8f8e0d87a6c12cfc33b5350))
+
+
+### Documentation
+
+* **site:** feature the 1.0 release video on the homepage ([#619](https://github.com/OpenEngine/OpenEngine/issues/619)) ([e35c8d1](https://github.com/OpenEngine/OpenEngine/commit/e35c8d15fb4cd2d134e73b1276ffc4017f7374e7))
+
+## [1.0.0](https://github.com/OpenEngine/OpenEngine/compare/v0.7.0...v1.0.0) (2026-09-30)
+
+
+### Bug Fixes
+
+* **web:** confirm access with the user's own token when the server's GitHub connection fails ([#612](https://github.com/OpenEngine/OpenEngine/issues/612)) ([73ee0e8](https://github.com/OpenEngine/OpenEngine/commit/73ee0e8aecf7d84414bca699b72cc66f555e933c))
+
+
+### Miscellaneous Chores
+
+* release 1.0.0 ([#615](https://github.com/OpenEngine/OpenEngine/issues/615)) ([c2376a4](https://github.com/OpenEngine/OpenEngine/commit/c2376a42087403f1de30fe21e0d513a4f7396068))
+
+## [0.7.0](https://github.com/OpenEngine/OpenEngine/compare/v0.6.0...v0.7.0) (2026-09-29)
+
+
+### Features
+
+* **cli:** ask for the approval mode in engine init and use the GitHub OAuth token for agents ([#606](https://github.com/OpenEngine/OpenEngine/issues/606)) ([b0c799f](https://github.com/OpenEngine/OpenEngine/commit/b0c799f0a31a7cd5c7e7918390ebf9cb6b25969a))
+
+
+### Documentation
+
+* **site:** rewrite MCP integration page around connecting a client ([#607](https://github.com/OpenEngine/OpenEngine/issues/607)) ([896aaf0](https://github.com/OpenEngine/OpenEngine/commit/896aaf0eac0eb74d0673e4fdc141c937bbb7a394))
+
+## [0.6.0](https://github.com/OpenEngine/OpenEngine/compare/v0.5.0...v0.6.0) (2026-09-29)
+
+
+### Features
+
+* **cli:** choose connected or disconnected mode in engine init ([#605](https://github.com/OpenEngine/OpenEngine/issues/605)) ([7ea27d6](https://github.com/OpenEngine/OpenEngine/commit/7ea27d6397f2e69be0327c0394b00f9c03c5d9c3))
+
+
+### Bug Fixes
+
+* **web:** unnest sidebar node groups holding a single conversation ([#602](https://github.com/OpenEngine/OpenEngine/issues/602)) ([17b490e](https://github.com/OpenEngine/OpenEngine/commit/17b490e2b3b858a6e81cb1042a44358d891faa63))
+
+## [0.5.0](https://github.com/OpenEngine/OpenEngine/compare/v0.4.0...v0.5.0) (2026-09-29)
+
+
+### Features
+
+* add a disconnected mode for people with no integrations ([#585](https://github.com/OpenEngine/OpenEngine/issues/585)) ([936c136](https://github.com/OpenEngine/OpenEngine/commit/936c136b5afeb6b53cd5a49575bfb4a6e2ee8796))
+* **cli:** add engine init to onboard the current repository ([#601](https://github.com/OpenEngine/OpenEngine/issues/601)) ([409e1d8](https://github.com/OpenEngine/OpenEngine/commit/409e1d852fce462083d5cc04e6a3e22c1b3bf086))
+* **mcp:** add workorder status and node steering tools ([#587](https://github.com/OpenEngine/OpenEngine/issues/587)) ([1112727](https://github.com/OpenEngine/OpenEngine/commit/1112727c02749bcd928e27ec3d6af5c1b482994e))
+* **web:** link the pull request in the WorkOrder overview ([#558](https://github.com/OpenEngine/OpenEngine/issues/558)) ([dbd905c](https://github.com/OpenEngine/OpenEngine/commit/dbd905c0c3a50ed515f5ba0db663478fe2b348e3))
+
+
+### Bug Fixes
+
+* explain agent rate limits after account switches ([#556](https://github.com/OpenEngine/OpenEngine/issues/556)) ([4ea45b1](https://github.com/OpenEngine/OpenEngine/commit/4ea45b1fffbe0f8c2f32e7267e29c9b83ee6b5bc))
+* improve Slack task output and status presentation ([#595](https://github.com/OpenEngine/OpenEngine/issues/595)) ([c945e18](https://github.com/OpenEngine/OpenEngine/commit/c945e188e1d03a81ad81a7c21b9ed6af23de88ee))
+* start GitHub work orders in the repository's local checkout ([#597](https://github.com/OpenEngine/OpenEngine/issues/597)) ([bc3bc8b](https://github.com/OpenEngine/OpenEngine/commit/bc3bc8bcd551525baa699ee81df1a37e2d631cf2))
+* wait for launchd teardown before restarting daemon ([#599](https://github.com/OpenEngine/OpenEngine/issues/599)) ([0e331fb](https://github.com/OpenEngine/OpenEngine/commit/0e331fb1863b5e221cacf8292c9a10039412fdb6))
+
+
+### Documentation
+
+* add OpenEngine installation quickstart ([#594](https://github.com/OpenEngine/OpenEngine/issues/594)) ([0b9e6e2](https://github.com/OpenEngine/OpenEngine/commit/0b9e6e245dab117ee2b7d4748ddf524a3dac629f))
+* **mcp:** add integration guide to docsite ([#593](https://github.com/OpenEngine/OpenEngine/issues/593)) ([05f4acc](https://github.com/OpenEngine/OpenEngine/commit/05f4acc4655d1810f98fb5a10f23a6e080c9ec57))
+* simplify quickstart and README install steps ([#596](https://github.com/OpenEngine/OpenEngine/issues/596)) ([703d6be](https://github.com/OpenEngine/OpenEngine/commit/703d6be497ff8bd19e7055b0e4d12cba603d0802))
+
 ## [0.4.0](https://github.com/OpenEngine/OpenEngine/compare/v0.3.0...v0.4.0) (2026-09-28)
 
 

@@ -1,5 +1,7 @@
 # OpenEngine
 
+[![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
+
 OpenEngine is a graph execution engine that meets you where you work.
 
 ![](docs/images/oe_land.png)
@@ -21,9 +23,9 @@ This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
 opens [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to
 reopen it and rerun the installer to upgrade.
 
-OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key.
+OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. OpenCode for local inference is offered, too!
 
-OpenCode is offered too: it speaks ACP itself, so OpenEngine launches the pinned `opencode-ai` package with `npx` and it uses your own `opencode.json` providers and `opencode auth login` credentials. Pick it as a chat's runner; it asks before every edit, shell command, and fetch.
+Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
 ### From source
 
@@ -77,6 +79,30 @@ explicit `--server` is always probe-only. `engine daemon` runs the local
 service in the background instead; see
 [Background service](docs/releases.md#background-service).
 `engine connect gh|github|gitlab|slack` connects shared source control or Slack.
+`engine init`, run inside a git checkout, adds it under `[repos]` in the
+service's `engine.toml` (named after its `origin`, or `--name`) and restarts a
+running service so the repository appears in the WorkOrder dropdown. With
+GitHub sign-in enabled it warns that the repository's writers can now sign in.
+It asks how the repository's WorkOrders reach GitHub -- Git OAuth (connected,
+recommended), Git CLI (connected) or disconnected, or `--mode oauth|cli|disconnected`
+-- and prints the next step for a connected choice. Disconnected is recorded
+under `[repo_modes]`, and every WorkOrder on that repository then runs
+disconnected. It then asks how WorkOrders' requests are approved -- auto-approve
+(every repository), trusted repos (only repositories under `[trusted_repos]`,
+this one included) or manual, or `--approval auto|trusted|manual`. The installer
+offers to run it on a repository when it finishes.
+
+`engine review [path | pull-request-url]` starts the WorkOrder workflow in its
+review state (`engine.domain.states`), skipping planning and implementation.
+A path (default: the current directory, local service only) reviews its
+committed branch; a GitHub pull request URL provisions a new workspace on the
+pull request's branch in the matching `[repos]` checkout, and fixes are pushed
+back to that branch. Pull requests from forks are refused, since their code
+would run the review's agents; check one out and review the path instead. The surviving
+findings are listed with **Fix this** beside each: Enter selects a finding,
+**Fix selected** or **Fix all** sends them back to the implementer, and the fix
+is reviewed again. **Post as comments** posts the findings on the pull request
+with `gh`. `--json` prints the findings and leaves the review waiting.
 
 In an interactive terminal, running `engine` opens the workbench: work orders
 beside the selected one's graph, a run's nodes beside what they are doing, and
@@ -95,8 +121,6 @@ While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev
 ```
-
-Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
 ## engine.toml
 The main configuration file for OpenEngine. It's defined [here](./engine.toml).

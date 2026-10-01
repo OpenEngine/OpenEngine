@@ -1201,6 +1201,12 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, fail_after_c
         assert not result.get("isError"), result
         assert result["structuredContent"]["url"].startswith("https://engine.example")
         assert len(provider.clients[0].prompts) == 2
+        # Progress arrives from the graph run in the background.
+        async def wait_for_progress():
+            async with asyncio.timeout(10):
+                while not any(m.progress and m.links for _, m, _ in communications.posts):
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_for_progress)
     announcements = [
         m for _, m, _ in communications.posts
         if m.text.startswith("Started a work order")

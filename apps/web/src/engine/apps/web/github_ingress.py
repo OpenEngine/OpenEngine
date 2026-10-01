@@ -6,7 +6,8 @@ enqueues, and acknowledges rather than waiting for the work: a reply that
 arrived late would otherwise be indistinguishable from a second copy of the
 same comment.
 
-Comments and issue assignments ask for work; merges accept the work.
+Comments, issue assignments, and review requests ask for work; merges accept
+the work.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -51,6 +53,14 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 
 #: How many delivery identities are remembered for deduplication.
 _SEEN_LIMIT = 4096
+
+#: How long one delivery may hold the worker before the log says so, and how
+#: often it says so again. One worker serves every delivery, so a handler that
+#: never returns silences every comment after it while the route keeps
+#: answering GitHub 200 -- from outside, indistinguishable from comments that
+#: were read and deliberately ignored. A concierge turn is bounded at three
+#: minutes, so a minute is long for anything but a model turn.
+STALL_WARNING_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -94,6 +104,81 @@ class GithubAssignment:
     body: str
     url: str
     sender_id: int = 0
+
+
+@dataclass(frozen=True)
+class GithubReviewRequest:
+    """A pull request whose review was requested from the Engine account."""
+
+    repository: str
+    number: int
+    sender: str
+    title: str
+    url: str
+    branch: str
+    """The pull request's head branch, on the repository itself."""
+    head_sha: str
+    sender_id: int = 0
+
+
+#: The action a review request arrives as, on the pull request event.
+REVIEW_REQUESTED = "review_requested"
+
+
+def review_request_from_payload(
+    event: str, payload: Mapping[str, object], *, self_login: str = ""
+) -> GithubReviewRequest | None:
+    """The review asked of Engine in a delivery, or ``None`` for anything else.
+
+    Only a request naming Engine's own account, on an open pull request whose
+    head branch lives on the repository itself: a fork's code would run the
+    review's agents, as `engine review` refuses too.
+    """
+    if event != MERGE_EVENT or payload.get("action") != REVIEW_REQUESTED or not self_login:
+        return None
+    pull_request, repository = payload.get("pull_request"), payload.get("repository")
+    reviewer, sender = payload.get("requested_reviewer"), payload.get("sender")
+    if not all(isinstance(item, dict) for item in (pull_request, repository, reviewer, sender)):
+        return None
+    login = reviewer.get("login")
+    if not isinstance(login, str) or login.lower() != self_login.lower():
+        return None
+    if pull_request.get("state") != "open" or sender.get("type") == "Bot":
+        return None
+    head = pull_request.get("head")
+    head_repository = head.get("repo") if isinstance(head, dict) else None
+    full_name, actor = repository.get("full_name"), sender.get("login")
+    number = pull_request.get("number")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        return None
+    if not isinstance(full_name, str) or not full_name or not isinstance(actor, str) or not actor:
+        return None
+    if not isinstance(head_repository, dict) or not isinstance(head_repository.get("full_name"), str):
+        return None
+    if head_repository["full_name"].lower() != full_name.lower():
+        log.info("ignored a review request on %s#%s, whose branch is on a fork", full_name, number)
+        return None
+    branch, sha = head.get("ref"), head.get("sha")
+    if not isinstance(branch, str) or not branch or not isinstance(sha, str) or not sha:
+        return None
+    return GithubReviewRequest(
+        repository=full_name, number=number, sender=actor,
+        title=str(pull_request.get("title") or ""),
+        url=str(pull_request.get("html_url") or ""),
+        branch=branch, head_sha=sha, sender_id=_account_id(sender),
+    )
+
+
+def describe(delivery: GithubComment | GithubMerge | GithubAssignment | GithubReviewRequest) -> str:
+    """One delivery as a log line names it: what, who, and where."""
+    if isinstance(delivery, GithubComment):
+        return (f"comment {delivery.comment_id} by {delivery.author} "
+                f"on {delivery.repository}#{delivery.number}")
+    if isinstance(delivery, GithubAssignment):
+        return f"assignment of {delivery.repository}#{delivery.number} by {delivery.sender}"
+    if isinstance(delivery, GithubReviewRequest):
+        return f"review request on {delivery.repository}#{delivery.number} by {delivery.sender}"
+    return f"merge of {delivery.repository}#{delivery.number} by {delivery.merged_by}"
 
 
 def assignment_from_payload(
@@ -276,6 +361,14 @@ def merge_from_payload(
     )
 
 
+_Delivery = GithubComment | GithubMerge | GithubAssignment | GithubReviewRequest
+
+
+def _asks_for_self_login(event: str, payload: Mapping[str, object]) -> bool:
+    """Whether a delivery can only be read knowing the account Engine acts as."""
+    return (event, payload.get("action")) in (("issues", "assigned"), (MERGE_EVENT, REVIEW_REQUESTED))
+
+
 class GithubIngress:
     """Bounded background queue, deduplicated by delivery identity."""
 
@@ -287,29 +380,39 @@ class GithubIngress:
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
+        handle_review_request: Callable[[GithubReviewRequest], Awaitable[None]] | None = None,
         authenticated_login: Callable[[str], Awaitable[str]] | None = None,
+        may_act: Callable[
+            [GithubComment | GithubAssignment | GithubReviewRequest], Awaitable[bool]
+        ] | None = None,
         capacity: int = 256,
         max_body_bytes: int = MAX_BODY_BYTES,
         verify_signature: Callable[[str, str, bytes], bool] = verify_signature,
         activity: GithubActivityLog | None = None,
+        stall_warning_seconds: float = STALL_WARNING_SECONDS,
     ) -> None:
         self._webhook_secret = webhook_secret
         self._repository = repository
         self._authenticated_login = authenticated_login
+        # Whether whoever sent a comment or assignment can write to its
+        # repository. Asked before any handler sees it, so nothing -- a work
+        # order started, a comment forwarded to one -- happens for somebody
+        # who could not have made that change themselves.
+        self._may_act = may_act
         self._handle = handle
         self._handle_merge = handle_merge
         self._handle_assignment = handle_assignment
+        self._handle_review_request = handle_review_request
         self._verify_signature = verify_signature
         self._max_body_bytes = max_body_bytes
         # Where a comment's progress is written down for the web UI. Recording
         # is bookkeeping and never a reason to refuse a delivery, so a missing
         # log is a deployment with no panel rather than a failure here.
         self._activity = activity
-        self._queue: asyncio.Queue[tuple[tuple[str, str], GithubComment | GithubMerge | GithubAssignment]] = (
-            asyncio.Queue(maxsize=capacity)
-        )
+        self._queue: asyncio.Queue[tuple[tuple[str, str], _Delivery]] = asyncio.Queue(maxsize=capacity)
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._worker: asyncio.Task[None] | None = None
+        self._stall_warning_seconds = stall_warning_seconds
 
     async def _read_body(self, request: Request) -> bytes | None:
         """The delivery's body, or ``None`` if it outgrows what one may weigh.
@@ -367,7 +470,7 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
         self_login = ""
         if (
-            event == "issues" and payload.get("action") == "assigned"
+            _asks_for_self_login(event, payload)
             and self._authenticated_login is not None
             and self._repository
         ):
@@ -377,17 +480,21 @@ class GithubIngress:
                     self_login = await self._authenticated_login(self._repository)
             except Exception:
                 log.warning(
-                    "a GitHub assigned issue was delivered but the self-login lookup failed; "
-                    "refusing the delivery",
+                    "a GitHub %s delivery needed the self-login, but its lookup failed; "
+                    "refusing the delivery", payload.get("action"),
                     exc_info=True,
                 )
                 return Response(status_code=503)
         return Response(
-            status_code=200 if self.accept(event, payload, self_login=self_login) else 503
+            status_code=200 if self.accept(
+                event, payload, self_login=self_login,
+                delivery_id=request.headers.get("x-github-delivery", ""),
+            ) else 503
         )
 
     def accept(
         self, event: str, payload: Mapping[str, object], *, self_login: str = "",
+        delivery_id: str = "",
     ) -> bool:
         """Whether the delivery is settled -- queued, or deliberately ignored.
 
@@ -395,10 +502,11 @@ class GithubIngress:
         full queue, no handler wired, or an unresolved assignment login. A failed
         delivery GitHub can redeliver beats a 200 that loses the work.
         """
-        if event == "issues" and payload.get("action") == "assigned" and not self_login:
+        if _asks_for_self_login(event, payload) and not self_login:
             log.warning(
-                "a GitHub assigned issue was delivered but no self-login could be resolved; "
-                "refusing the delivery rather than acknowledging and dropping it"
+                "a GitHub %s delivery needed the self-login, but none could be resolved; "
+                "refusing the delivery rather than acknowledging and dropping it",
+                payload.get("action"),
             )
             return False
         assignment = assignment_from_payload(event, payload, self_login=self_login)
@@ -406,13 +514,22 @@ class GithubIngress:
             return self._enqueue(
                 assignment, "assigned issue",
                 ("issues", f"{assignment.repository.lower()}#{assignment.number}"),
-                wired=self._handle_assignment is not None,
+                wired=self._handle_assignment is not None, delivery_id=delivery_id,
+            )
+        requested = review_request_from_payload(event, payload, self_login=self_login)
+        if requested is not None:
+            # By the commit under review: asking again after a push is asking
+            # for a review of new work, asking twice for one commit is not.
+            return self._enqueue(
+                requested, "review request",
+                (REVIEW_REQUESTED, f"{requested.repository.lower()}#{requested.number}@{requested.head_sha}"),
+                wired=self._handle_review_request is not None, delivery_id=delivery_id,
             )
         comment = comment_from_payload(event, payload, self_login=self_login)
         if comment is not None:
             return self._enqueue(
                 comment, "comment", (comment.event, comment.comment_id),
-                wired=self._handle is not None,
+                wired=self._handle is not None, delivery_id=delivery_id,
             )
         merged = merge_from_payload(event, payload, self_login=self_login)
         if merged is not None:
@@ -422,7 +539,18 @@ class GithubIngress:
             return self._enqueue(
                 merged, "merged pull request",
                 (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}"),
-                wired=self._handle_merge is not None,
+                wired=self._handle_merge is not None, delivery_id=delivery_id,
+            )
+        if event in COMMENT_EVENTS:
+            # A comment is what somebody expects an answer to, so one that is
+            # not read says so: an edit, a bot, Engine's own reply, or an
+            # author without a trusted association.
+            comment = payload.get("comment")
+            user = comment.get("user") if isinstance(comment, dict) else None
+            log.info(
+                "ignored GitHub %s delivery %s (action %s, by %s): not a comment "
+                "Engine acts on", event, delivery_id or "-", payload.get("action"),
+                user.get("login") if isinstance(user, dict) else "unknown",
             )
         # Nothing to do with this delivery, whether or not a handler is
         # wired: settle it, so a webhook subscribed to more events than
@@ -431,13 +559,15 @@ class GithubIngress:
 
     def _enqueue(
         self,
-        delivery: GithubComment | GithubMerge | GithubAssignment,
+        delivery: _Delivery,
         subject: str,
         identity: tuple[str, str],
         *,
         wired: bool,
+        delivery_id: str = "",
     ) -> bool:
         """Queue one read delivery, or say why it is being refused."""
+        named = f"{describe(delivery)} (delivery {delivery_id or '-'})"
         if not self._repository:
             log.warning(
                 "a GitHub %s was delivered but no target repository is configured", subject
@@ -446,6 +576,7 @@ class GithubIngress:
         if delivery.repository.lower() != self._repository.lower():
             # A shared App secret authenticates deliveries from other repos too.
             # Ignore them before queueing or remembering their identities.
+            log.info("ignored %s: this deployment answers %s", named, self._repository)
             return True
         if not wired:
             log.warning(
@@ -454,9 +585,16 @@ class GithubIngress:
             )
             return False
         if identity in self._seen:
+            log.info("ignored %s: already queued or handled", named)
             return True
         if self._queue.full():
+            log.warning(
+                "refused %s: the GitHub queue is full (%d waiting), so GitHub "
+                "will report it failed and it can be redelivered",
+                named, self._queue.qsize(),
+            )
             return False
+        log.info("queued %s; %d ahead of it", named, self._queue.qsize())
         self._queue.put_nowait((identity, delivery))
         if self._activity is not None and isinstance(delivery, GithubComment):
             self._activity.seen(delivery)
@@ -473,18 +611,32 @@ class GithubIngress:
             # Only a comment has a row on the panel; a merge is a verdict this
             # process acts on, not a conversation somebody is following.
             comment = delivery if isinstance(delivery, GithubComment) else None
+            named = describe(delivery)
+            began = time.monotonic()
+            log.info("handling %s", named)
+            watchdog = asyncio.create_task(self._warn_while_stalled(named, began))
             try:
                 if isinstance(delivery, GithubComment):
                     assert self._handle is not None  # nothing is queued without one
                     if self._activity is not None:
                         self._activity.started(delivery)
-                    await self._handle(delivery)
+                    if self._may_act is None or await self._may_act(delivery):
+                        await self._handle(delivery)
                 elif isinstance(delivery, GithubAssignment):
                     assert self._handle_assignment is not None
-                    await self._handle_assignment(delivery)
+                    if self._may_act is None or await self._may_act(delivery):
+                        await self._handle_assignment(delivery)
+                elif isinstance(delivery, GithubReviewRequest):
+                    assert self._handle_review_request is not None
+                    if self._may_act is None or await self._may_act(delivery):
+                        await self._handle_review_request(delivery)
                 else:
                     assert self._handle_merge is not None
                     await self._handle_merge(delivery)
+                log.info(
+                    "handled %s in %.1fs%s", named, time.monotonic() - began,
+                    self._outcome(comment),
+                )
             except Exception as failure:
                 if comment is not None and self._activity is not None:
                     self._activity.failed(str(failure) or type(failure).__name__)
@@ -498,9 +650,34 @@ class GithubIngress:
                     identity[1], delivery.repository, delivery.number,
                 )
             finally:
+                watchdog.cancel()
                 if comment is not None and self._activity is not None:
                     self._activity.finished(comment)
                 self._queue.task_done()
+
+    async def _warn_while_stalled(self, named: str, began: float) -> None:
+        """Say, while it lasts, that one delivery is holding up the rest."""
+        while True:
+            await asyncio.sleep(self._stall_warning_seconds)
+            log.warning(
+                "still handling %s after %.0fs; %d GitHub deliveries are waiting "
+                "behind it", named, time.monotonic() - began, self._queue.qsize(),
+            )
+
+    def _outcome(self, comment: GithubComment | None) -> str:
+        """What the activity log recorded for a comment, as a log suffix."""
+        entry = (
+            None if comment is None or self._activity is None
+            else self._activity.entry(comment)
+        )
+        if entry is None:
+            return ""
+        parts = [entry.status]
+        if entry.detail:
+            parts.append(entry.detail)
+        if entry.run_id:
+            parts.append(f"work order {entry.run_id}")
+        return ": " + ", ".join(parts)
 
     async def drain(self) -> None:
         await self._queue.join()

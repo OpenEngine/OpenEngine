@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import time
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
@@ -561,7 +562,7 @@ def test_a_login_without_repository_write_access_gets_no_session(answer, error):
         asked.append((user_id, login))
         if isinstance(answer, Exception):
             raise answer
-        return answer
+        return {"acme/api": answer}
 
     flow = GitHubLogin(GitHubLoginConfig(
         "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
@@ -581,7 +582,7 @@ def test_a_login_without_repository_write_access_gets_no_session(answer, error):
 
 def test_a_login_with_repository_write_access_gets_a_session():
     async def authorize(user_id, login):
-        return (user_id, login) == (42, "alice")
+        return {"acme/api": (user_id, login) == (42, "alice")}
 
     flow = GitHubLogin(GitHubLoginConfig(
         "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
@@ -625,7 +626,6 @@ def test_an_operator_signs_in_without_a_repository_check():
     assert client.get("/api/data").json() == {"ok": True}
     status = client.get("/api/auth/github/status").json()
     assert status["authenticated"] is True
-    # Only an operator is told that everyone else is being refused.
     assert status["accessCheckFailing"] is False
 
 
@@ -635,7 +635,7 @@ def test_revoked_access_ends_the_session_once_the_cache_expires(monkeypatch):
 
     async def authorize(user_id, login):
         asked.append((user_id, login))
-        return answers.pop(0)
+        return {"acme/api": answers.pop(0)}
 
     now = [1000.0]
     monkeypatch.setattr("engine.apps.web.github_login.time.monotonic", lambda: now[0])
@@ -665,7 +665,7 @@ def test_a_failed_recheck_is_retried_rather_than_cached(monkeypatch):
         answer = answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
-        return answer
+        return {"acme/api": answer}
 
     now = [1000.0]
     monkeypatch.setattr("engine.apps.web.github_login.time.monotonic", lambda: now[0])
@@ -689,7 +689,7 @@ def test_a_failed_recheck_does_not_report_the_session_as_signed_in(monkeypatch):
         answer = answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
-        return answer
+        return {"acme/api": answer}
 
     now = [1000.0]
     monkeypatch.setattr("engine.apps.web.github_login.time.monotonic", lambda: now[0])
@@ -712,7 +712,7 @@ def test_an_open_stream_ends_when_access_is_revoked(monkeypatch):
     allowed = [True]
 
     async def authorize(user_id, login):
-        return allowed[0]
+        return {"acme/api": allowed[0]}
 
     async def events(_request):
         async def body():
@@ -740,6 +740,49 @@ def test_an_open_stream_ends_when_access_is_revoked(monkeypatch):
     assert client.get("/api/events").status_code == 401
 
 
+def test_an_open_stream_ends_when_its_own_repository_is_out_of_reach(monkeypatch):
+    """A stream that registers a check of its own ends when that check fails,
+    though the user can still write to some other repository."""
+    import asyncio
+
+    from starlette.responses import StreamingResponse
+
+    from engine.apps.web.github_login import STREAM_ACCESS
+
+    visible = [True]
+
+    async def authorize(user_id, login):
+        return {"acme/api": visible[0], "acme/web": True}
+
+    async def events(request):
+        async def still_visible():
+            return visible[0]
+
+        request.scope[STREAM_ACCESS] = still_visible
+
+        async def body():
+            for n in range(1000):
+                if n == 3:
+                    visible[0] = False
+                yield f"data: {n}\n\n".encode()
+                await asyncio.sleep(0.01)
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    monkeypatch.setattr("engine.apps.web.github_login._STREAM_RECHECK", 0.01)
+    flow = _login_flow(authorize)
+    inner = Starlette(routes=flow.routes() + [Route("/api/events", events)])
+    client = TestClient(flow.middleware(inner), base_url="https://engine.test")
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        callback(client, params["state"][0], code="code")
+
+    response = client.get("/api/events")
+    assert response.status_code == 200
+    assert response.text.startswith("data: 0\n\n")
+    assert "data: 999" not in response.text
+
+
 def test_a_slow_lookup_holds_up_only_its_own_user():
     import asyncio
 
@@ -749,7 +792,7 @@ def test_a_slow_lookup_holds_up_only_its_own_user():
         async def authorize(user_id, login):
             if login == "slow":
                 await release.wait()
-            return True
+            return {"acme/api": True}
 
         flow = _login_flow(authorize)
         slow = asyncio.create_task(flow.has_access({"id": 1, "login": "slow"}))
@@ -760,3 +803,359 @@ def test_a_slow_lookup_holds_up_only_its_own_user():
         assert await slow is True
 
     asyncio.run(scenario())
+
+
+def _fallback_flow(authorize, authorize_user):
+    return GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), authorize=authorize, authorize_user=authorize_user)
+
+
+def _sign_in(flow):
+    client = _app_with_middleware(flow)
+    params = start(client)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(_mock_provider()))
+    with patch("engine.apps.web.github_login.httpx.AsyncClient", return_value=http_client):
+        return client, callback(client, params["state"][0], code="code")
+
+
+def test_the_users_own_token_admits_them_when_the_servers_lookup_fails():
+    """A broken server connection does not lock out the people who can fix it:
+    GitHub, asked with the user's own sign-in token, vouches for them."""
+    tokens = []
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        tokens.append(token)
+        return {"acme/api": True}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    client, response = _sign_in(flow)
+
+    assert response.headers["location"] == "/"
+    assert tokens == ["private-token"]
+    assert client.get("/api/data").status_code == 200
+    # Signed-in users are told the server's connection is failing.
+    assert client.get("/api/auth/github/status").json()["accessCheckFailing"] is True
+    [(token, _)] = flow._user_tokens[42].values()
+    assert token == "private-token"
+    client.post("/api/auth/github/logout")
+    assert flow._user_tokens == {}
+
+
+@pytest.mark.parametrize("fallback", [False, RuntimeError("private repository")])
+def test_the_users_own_token_that_cannot_confirm_access_admits_nobody(fallback):
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        if isinstance(fallback, Exception):
+            raise fallback
+        return {"acme/api": fallback}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    _, response = _sign_in(flow)
+
+    assert response.headers["location"] == "/login?error=unverified"
+    assert flow._user_tokens == {}
+
+
+def test_the_servers_answer_outranks_the_users_own_token():
+    """The user's token only stands in for a failed lookup; it cannot overturn a no."""
+    async def authorize(user_id, login):
+        return {"acme/api": False}
+
+    async def authorize_user(token):
+        return {"acme/api": True}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    _, response = _sign_in(flow)
+
+    assert response.headers["location"] == "/login?error=forbidden"
+    assert flow._user_tokens == {}
+
+
+def test_the_users_own_token_is_not_asked_when_the_server_answers():
+    """A routine check costs one lookup; the fallback waits for a failure."""
+    import asyncio
+
+    asked = []
+
+    async def authorize(user_id, login):
+        return {"acme/api": True}
+
+    async def authorize_user(token):
+        asked.append(token)
+        return {"acme/api": True}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    flow._user_tokens[42] = {"laptop": ("a", later), "phone": ("b", later)}
+
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is True
+    assert asked == []
+
+
+def test_the_users_tokens_are_asked_one_at_a_time_newest_first():
+    import asyncio
+
+    asked, running = [], []
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        running.append(token)
+        assert len(running) == 1
+        await asyncio.sleep(0)
+        asked.append(token)
+        running.remove(token)
+        return {"acme/api": token == "old"}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    flow._user_tokens[42] = {"laptop": ("old", later), "phone": ("new", later)}
+
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is True
+    assert asked == ["new", "old"]
+
+
+def test_the_fallback_gets_only_what_is_left_of_the_time_budget():
+    """The server's lookup and the fallback share one deadline, so a check stays bounded."""
+    import asyncio
+
+    async def authorize(user_id, login):
+        await asyncio.sleep(1)
+        return {"acme/api": True}
+
+    async def authorize_user(token):
+        return {"acme/api": True}
+
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), authorize=authorize, authorize_user=authorize_user, access_timeout=0.05)
+    flow._user_tokens[42] = {"session": ("private-token", time.time() + 60)}
+
+    started = time.monotonic()
+    # The server's lookup used the whole budget, so nothing is left to confirm access with.
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is None
+    assert time.monotonic() - started < 0.5
+
+
+def test_signing_out_keeps_the_fallback_for_the_users_other_browsers():
+    """Each session keeps its own sign-in token, so one sign-out does not strand the rest."""
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        return {"acme/api": True}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    laptop, _ = _sign_in(flow)
+    phone, _ = _sign_in(flow)
+    assert len(flow._user_tokens[42]) == 2
+
+    laptop.post("/api/auth/github/logout")
+    flow._access.clear()  # the five-minute recheck comes due
+
+    assert len(flow._user_tokens[42]) == 1
+    assert phone.get("/api/data").status_code == 200
+
+
+def test_a_sign_in_token_is_dropped_when_its_session_expires():
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        return {"acme/api": True}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    _sign_in(flow)
+    assert 42 in flow._user_tokens
+
+    with patch("engine.apps.web.github_login.time.time", return_value=time.time() + 86401):
+        assert flow._user_tokens_of(42) == []
+        flow._drop_expired_user_tokens()
+    assert flow._user_tokens == {}
+
+
+def test_a_sign_in_token_is_dropped_when_access_is_revoked():
+    answers = [True, False]
+
+    async def authorize(user_id, login):
+        return {"acme/api": answers.pop(0)}
+
+    flow = _fallback_flow(authorize, None)
+    client, response = _sign_in(flow)
+    assert response.headers["location"] == "/"
+    assert 42 in flow._user_tokens
+
+    flow._access.clear()
+    assert client.get("/api/data").status_code == 401
+    assert flow._user_tokens == {}
+
+
+@pytest.mark.parametrize("first", [False, RuntimeError("token revoked")])
+def test_any_of_the_users_tokens_can_vouch_for_them(first):
+    """One browser's revoked or read-only token does not stop another's from admitting the user."""
+    import asyncio
+
+    asked = []
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        asked.append(token)
+        if token == "revoked-token":
+            if isinstance(first, Exception):
+                raise first
+            return {"acme/api": first}
+        return {"acme/api": True}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    # Newest first, so the revoked token is asked before the good one.
+    flow._user_tokens[42] = {"laptop": ("good-token", later), "phone": ("revoked-token", later)}
+
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is True
+    assert asked == ["revoked-token", "good-token"]
+
+
+def test_no_token_that_confirms_access_admits_nobody():
+    import asyncio
+
+    async def authorize(user_id, login):
+        raise RuntimeError("GitHub OAuth provider failed: 401")
+
+    async def authorize_user(token):
+        if token == "a":
+            raise RuntimeError("token revoked")
+        return {"acme/api": False}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    later = time.time() + 60
+    flow._user_tokens[42] = {"laptop": ("a", later), "phone": ("b", later)}
+
+    assert asyncio.run(flow.has_access({"id": 42, "login": "alice"})) is None
+
+
+def test_every_access_check_drops_expired_sign_in_tokens():
+    """Expired tokens go on the next check by anyone, even one the server answers."""
+    import asyncio
+
+    async def authorize(user_id, login):
+        return {"acme/api": True}
+
+    flow = _fallback_flow(authorize, None)
+    flow.operators = frozenset({7})
+    flow._user_tokens[42] = {"old": ("expired-token", time.time() - 1),
+                             "new": ("live-token", time.time() + 60)}
+    flow._user_tokens[43] = {"old": ("expired-token", time.time() - 1)}
+
+    assert asyncio.run(flow.has_access({"id": 7, "login": "operator"})) is True
+    assert flow._user_tokens == {42: {"new": ("live-token", flow._user_tokens[42]["new"][1])}}
+
+
+def test_each_repository_is_answered_and_cached_per_user(monkeypatch):
+    """A user sees the repositories they can write to, not the first one that
+    admitted them, and that answer is kept for the cache lifetime."""
+    import asyncio
+
+    asked = []
+
+    async def authorize(user_id, login):
+        asked.append(user_id)
+        return {"acme/api": True, "acme/web": False, "acme/docs": user_id == 2}
+
+    now = [1000.0]
+    monkeypatch.setattr("engine.apps.web.github_login.time.monotonic", lambda: now[0])
+    flow = _login_flow(authorize)
+    alice, bob = {"id": 1, "login": "alice"}, {"id": 2, "login": "bob"}
+
+    assert asyncio.run(flow.writable_repositories(alice)) == {"acme/api"}
+    assert asyncio.run(flow.writable_repositories(bob)) == {"acme/api", "acme/docs"}
+    assert asyncio.run(flow.writable_repositories(alice)) == {"acme/api"}
+    assert asked == [1, 2]
+    now[0] += 301
+    asyncio.run(flow.writable_repositories(alice))
+    assert asked == [1, 2, 1]
+
+
+def test_a_failed_repository_is_hidden_and_not_cached():
+    """One repository's failed lookup hides that repository for the request
+    without refusing the others, and is asked again next time."""
+    import asyncio
+
+    answers = [
+        {"acme/api": True, "acme/web": None},
+        {"acme/api": True, "acme/web": True},
+    ]
+
+    async def authorize(user_id, login):
+        return answers.pop(0)
+
+    flow = _login_flow(authorize)
+    alice = {"id": 1, "login": "alice"}
+
+    assert asyncio.run(flow.writable_repositories(alice)) == {"acme/api"}
+    assert asyncio.run(flow.has_access(alice)) is True
+    assert asyncio.run(flow.writable_repositories(alice)) == {"acme/api", "acme/web"}
+    assert answers == []
+
+
+def test_access_is_unknown_when_nothing_admits_and_a_lookup_failed():
+    import asyncio
+
+    async def authorize(user_id, login):
+        return {"acme/api": False, "acme/web": None}
+
+    flow = _login_flow(authorize)
+
+    assert asyncio.run(flow.has_access({"id": 1, "login": "alice"})) is None
+    assert flow.access_check_failing is True
+
+
+def test_operators_and_the_service_token_see_every_repository():
+    import asyncio
+
+    from starlette.requests import Request
+
+    async def authorize(user_id, login):
+        return {"acme/api": True}
+
+    flow = GitHubLogin(GitHubLoginConfig(
+        "login-client", "login-secret", "https://engine.test/api/auth/github/callback"
+    ), service_token=lambda: "s" * 40, authorize=authorize, operators={42})
+
+    def request(method="GET", path="/api/runs", headers=()):
+        return Request({"type": "http", "method": method, "path": path, "headers": list(headers)})
+
+    with patch.object(flow, "_read_session", return_value={"id": 42, "login": "alice"}):
+        assert asyncio.run(flow.visible_repositories(request())) is None
+    with patch.object(flow, "_read_session", return_value={"id": 7, "login": "bob"}):
+        assert asyncio.run(flow.visible_repositories(request())) == {"acme/api"}
+    service = request("POST", "/api/runs", [(b"authorization", f"Bearer {'s' * 40}".encode())])
+    assert asyncio.run(flow.visible_repositories(service)) is None
+    assert asyncio.run(GitHubLogin(None).visible_repositories(request())) is None
+
+
+def test_the_users_own_token_fills_in_only_the_repositories_the_server_could_not_answer():
+    """The fallback adds repositories whose lookup failed; the server's no stands."""
+    import asyncio
+
+    async def authorize(user_id, login):
+        return {"acme/api": False, "acme/web": None, "acme/docs": None}
+
+    async def authorize_user(token):
+        return {"acme/api": True, "acme/web": True, "acme/docs": None}
+
+    flow = _fallback_flow(authorize, authorize_user)
+    flow._user_tokens[42] = {"laptop": ("token", time.time() + 60)}
+    alice = {"id": 42, "login": "alice"}
+
+    assert asyncio.run(flow.writable_repositories(alice)) == {"acme/web"}
+    # `acme/docs` is still unknown, so nothing is cached.
+    assert 42 not in flow._access

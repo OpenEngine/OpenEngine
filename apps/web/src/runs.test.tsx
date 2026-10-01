@@ -233,6 +233,40 @@ describe("NewWorkflowPage", () => {
     });
   });
 
+  it("explains the mode and fixes it for a repository onboarded as disconnected", async () => {
+    const user = userEvent.setup();
+    const fetch = stubPageApi();
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const configured: EngineConfig = {
+      ...withGraph,
+      repositories: [
+        { name: "acme/online", path: "/srv/online" },
+        { name: "acme/offline", path: "/srv/offline", mode: "disconnected" },
+      ],
+      workflows: [{
+        id: "implementation-review-codex",
+        name: "Implementation review (codex)",
+        inputs: [
+          { name: "mode", label: "Mode", default: "connected", required: true, choices: ["connected", "disconnected"] },
+        ],
+      }],
+    };
+    render(<NewWorkflowPage config={configured} />);
+    expect(screen.getByRole("img", { name: /push.*pull request.*comments/i })).toHaveAttribute("data-tip");
+    const mode = screen.getByRole("combobox", { name: /^Mode/ });
+    expect(mode).toHaveValue("connected");
+    expect(mode).toBeEnabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "/srv/offline");
+    expect(mode).toHaveValue("disconnected");
+    expect(mode).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "Task prompt" }), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Create WorkOrder" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/runs", expect.anything()));
+    const request = fetch.mock.calls.find(([url]) => url === "/api/runs")?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body)).inputs).toEqual({ mode: "disconnected" });
+  });
+
   it("starts the runner inputs from the last submitted selection", async () => {
     const user = userEvent.setup();
     const fetch = stubPageApi();

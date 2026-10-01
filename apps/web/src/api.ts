@@ -28,7 +28,8 @@ export type EngineConfig = {
   agents: AgentOption[];
   runners: RunnerOption[];
   defaultAgent: string;
-  repositories: { name: string; path: string }[];
+  /** `mode` is set when `engine init` fixed the mode of the repository's WorkOrders. */
+  repositories: { name: string; path: string; mode?: string }[];
   defaultRunner: string;
   /** Each workflow declares the inputs its creation form asks for. */
   workflows: {
@@ -456,7 +457,12 @@ export function logout(): Promise<void> {
   return api<void>("/api/auth/github/logout", { method: "POST" });
 }
 
-export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
+export type GitHubStatus = {
+  connected: boolean;
+  clientIdConfigured: boolean;
+  /** False when sign-in is on: agents then use the server's own connection. */
+  agentsUseConnection?: boolean;
+};
 
 export type SourceControlStatus = {
   provider: "gh-cli" | "github-oauth" | "gitlab-oauth";

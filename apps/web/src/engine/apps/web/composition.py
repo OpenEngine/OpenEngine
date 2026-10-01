@@ -20,8 +20,9 @@ The state store is SQLite rather than Postgres: conversations survive a process
 restart without requiring an external database service.
 """
 
+import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ from engine.adapters.communications.slack import (
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
+    GitHubOAuthTransport,
 )
 from engine.adapters.source_control.gitlab import GitLabSourceControl
 from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport
@@ -64,7 +66,16 @@ from engine.apps.web.gitlab_auth import (
 from engine.apps.web.gitlab_auth import (
     refresh_access_token as refresh_gitlab_access_token,
 )
+from engine.apps.web.github_auth import (
+    GitHubAuthError,
+    GitHubCredentialStore,
+    GitHubRefreshTokenInvalidError,
+)
+from engine.apps.web.github_auth import (
+    refresh_access_token as refresh_github_access_token,
+)
 from engine.apps.web.github_webhook import GitHubWebhookConfig
+from engine.apps.web.oauth_credentials import OAuthCredentialStore, StoredCredentials
 from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
@@ -170,12 +181,15 @@ def build_capabilities(
     settings: Settings,
     slack_credential_store: SlackCredentialStore | None = None,
     gitlab_credential_store: GitLabCredentialStore | None = None,
+    github_credential_store: GitHubCredentialStore | None = None,
 ) -> Capabilities:
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
-    # The host's `gh auth` login is the only credential for agent GitHub
-    # actions. Browser login identifies the UI user and never reaches here;
-    # neither do Settings device-flow tokens or GITHUB_TOKEN.
+    # GH CLI acts as the host's `gh auth` login. GitHub OAuth acts as the
+    # device-flow token `engine connect github` (or Settings) saved, from the
+    # store the web interface shares so the keychain is read once. Browser
+    # login identifies the UI user and never reaches here; neither does
+    # GITHUB_TOKEN.
     logging.getLogger(__name__).info(
         "source_control composition=web github_identity=gh-cli credential=gh auth"
     )
@@ -184,6 +198,32 @@ def build_capabilities(
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
         transport=GitHubCliTransport(),
+    )
+    github_store = github_credential_store or GitHubCredentialStore(cached=True)
+    github_refresh_lock = asyncio.Lock()
+
+    def _github_token() -> str:
+        credentials = github_store.get_credentials()
+        return credentials.access_token if credentials else ""
+
+    async def _refresh_github_after_unauthorized(failed_token: str) -> bool:
+        async with github_refresh_lock:
+            return await _refresh_after_unauthorized(
+                github_store,
+                failed_token,
+                lambda: settings.github_client_id or github_store.get_client_id(),
+                refresh_github_access_token,
+                GitHubRefreshTokenInvalidError,
+                GitHubAuthError,
+            )
+
+    github_oauth = GitHubSourceControl(
+        _github_token,
+        host_aliases=settings.engine_config.github.host_aliases,
+        workspace_provider=workspace_provider,
+        transport=GitHubOAuthTransport(
+            _github_token, on_token_unauthorized=_refresh_github_after_unauthorized
+        ),
     )
 
     def _gitlab_origin() -> str:
@@ -213,29 +253,17 @@ def build_capabilities(
         if store.origin in _gitlab_refresh_persistence_failed:
             return False
         async with store.refresh_lock():
-            credentials = store.get_credentials()
-            if credentials is None or not credentials.refresh_token:
-                return False
-            if credentials.access_token != failed_token:
-                return True
-            client_id = store.get_client_id()
-            if not client_id:
-                return False
-            try:
-                refreshed = await refresh_gitlab_access_token(
-                    store.origin, client_id, credentials.refresh_token
-                )
-            except GitLabRefreshTokenInvalidError:
-                store.delete()
-                return False
-            except GitLabAuthError:
-                return False
-            try:
-                store.set_credentials(refreshed)
-            except GitLabAuthError:
-                _gitlab_refresh_persistence_failed.add(store.origin)
-                return False
-            return True
+            return await _refresh_after_unauthorized(
+                store,
+                failed_token,
+                store.get_client_id,
+                lambda client_id, refresh_token: refresh_gitlab_access_token(
+                    store.origin, client_id, refresh_token
+                ),
+                GitLabRefreshTokenInvalidError,
+                GitLabAuthError,
+                on_persist_failed=lambda: _gitlab_refresh_persistence_failed.add(store.origin),
+            )
 
     gitlab = GitLabSourceControl(
         _gitlab_token,
@@ -250,9 +278,8 @@ def build_capabilities(
     else:
         source_control = RoutingSourceControl(
             settings.source_control_preferences,
-            # Both GitHub choices use the gh CLI login for agent actions.
             github,
-            github,
+            github_oauth,
             gitlab,
         )
     Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +299,45 @@ def build_capabilities(
         workspace_provider=workspace_provider,
         state_store=SQLiteStateStore(settings.sqlite_path),
     )
+
+
+async def _refresh_after_unauthorized(
+    store: OAuthCredentialStore,
+    failed_token: str,
+    client_id: Callable[[], str | None],
+    refresh: Callable[[str, str], Awaitable[StoredCredentials]],
+    invalid_refresh_token: type[Exception],
+    auth_error: type[Exception],
+    *,
+    on_persist_failed: Callable[[], None] = lambda: None,
+) -> bool:
+    """Replace `store`'s rejected `failed_token` by refreshing it; whether to retry.
+
+    Called with the store's refresh lock held. A token another caller already
+    replaced is retried as is; a refresh token the provider refuses is deleted,
+    so the next attempt asks to connect again instead of refreshing forever.
+    """
+    credentials = store.get_credentials()
+    if credentials is None or not credentials.refresh_token:
+        return False
+    if credentials.access_token != failed_token:
+        return True
+    identifier = client_id()
+    if not identifier:
+        return False
+    try:
+        refreshed = await refresh(identifier, credentials.refresh_token)
+    except invalid_refresh_token:
+        store.delete()
+        return False
+    except auth_error:
+        return False
+    try:
+        store.set_credentials(refreshed)
+    except auth_error:
+        on_persist_failed()
+        return False
+    return True
 
 
 def build_communications(

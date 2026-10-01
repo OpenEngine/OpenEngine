@@ -32,7 +32,8 @@ type RailConversationGroup = {
 };
 
 /** Keep ungrouped conversations in place and replace each named group with one
- *  collapsible entry at the position of its first member. */
+ *  collapsible entry at the position of its first member. A group holding only
+ *  one conversation is shown as that conversation, with nothing to unfold. */
 function groupConversations(
   conversations: RailConversation[],
 ): (RailConversation | RailConversationGroup)[] {
@@ -56,7 +57,11 @@ function groupConversations(
     groups.set(conversation.group, group);
     entries.push(group);
   }
-  return entries;
+  return entries.map((entry) =>
+    "conversations" in entry && entry.conversations.length === 1
+      ? entry.conversations[0]
+      : entry,
+  );
 }
 
 function ConversationLink({ conversation, activeUrl }: {
