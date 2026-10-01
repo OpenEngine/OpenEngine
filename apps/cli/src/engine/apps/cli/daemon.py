@@ -270,20 +270,7 @@ class LaunchdBackend(Backend):
         launch_agent_path().unlink(missing_ok=True)
 
     def stop(self) -> None:
-        # bootout requests SIGTERM, with ExitTimeOut before SIGKILL. Its return
-        # does not guarantee the registration has disappeared: a subsequent
-        # start could mistake the departing job for an already loaded service.
-        # The agent stays on disk, so it starts again at the next login.
-        if not self.running():
-            return
-        result = _run(["launchctl", "bootout", f"{self._domain()}/{LABEL}"])
-        deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
-        while self.running():
-            if result.returncode != 0:
-                raise RuntimeError(f"launchctl bootout failed: {result.stderr.strip() or result.returncode}")
-            if time.monotonic() >= deadline:
-                raise RuntimeError(f"launchctl bootout did not unregister {LABEL} within {STOP_TIMEOUT_SECONDS:g} seconds")
-            time.sleep(0.1)
+
 
     def running(self) -> bool:
         return _run(["launchctl", "print", f"{self._domain()}/{LABEL}"]).returncode == 0

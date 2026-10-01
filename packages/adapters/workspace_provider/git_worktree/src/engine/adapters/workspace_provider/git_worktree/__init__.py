@@ -23,6 +23,10 @@ from engine.ports.workspace_provider import Workspace, WorkspaceState
 #: provision checkouts all need the same answer.
 DEFAULT_ROOT_DIRECTORY = "/tmp/engine-workspaces"
 
+#: A base naming whatever branch `origin` calls its default, for workflows that
+#: serve repositories whose default branch they cannot know in advance.
+DEFAULT_BRANCH_REF = "origin/HEAD"
+
 #: Used only when the repository has no committer identity of its own, so that
 #: snapshotting an agent's work cannot fail on an unconfigured machine.
 FALLBACK_IDENTITY = ("engine", "engine@localhost")
@@ -220,10 +224,26 @@ async def _repository_root(repository: str) -> str:
 
 async def _resolve_base(repository_root: str, base_ref: str) -> str:
     """Resolve the workflow base without moving the developer's local branch."""
-    if not base_ref.startswith("origin/"):
+    if base_ref == DEFAULT_BRANCH_REF:
+        if "origin" not in (await _git(repository_root, "remote")).split():
+            # Nothing to refresh from: a repository without `origin` is based
+            # on whatever it has checked out.
+            return await _git(repository_root, "rev-parse", "--verify", "HEAD^{commit}")
+        # Fetching the remote's HEAD follows its default branch in the same
+        # round trip, without first asking which branch that is.
+        source, missing = "HEAD", (
+            "remote 'origin' has no default branch to base a workspace on"
+        )
+    elif base_ref.startswith("origin/"):
+        branch = base_ref.removeprefix("origin/")
+        source, missing = f"refs/heads/{branch}", (
+            f"Configured default branch {branch!r} does not exist on remote "
+            f"'origin'. Create that branch, or set default_branch in engine.toml "
+            "to a branch that exists."
+        )
+    else:
         return base_ref
 
-    branch = base_ref.removeprefix("origin/")
     temporary_ref = f"refs/engine/provisioning/{uuid4().hex}"
     try:
         try:
@@ -232,16 +252,12 @@ async def _resolve_base(repository_root: str, base_ref: str) -> str:
                 "fetch",
                 "--no-tags",
                 "origin",
-                f"+refs/heads/{branch}:{temporary_ref}",
+                f"+{source}:{temporary_ref}",
             )
         except GitWorktreeError as error:
             if "couldn't find remote ref" not in str(error):
                 raise
-            raise GitWorktreeError(
-                f"Configured default branch {branch!r} does not exist on remote "
-                f"'origin'. Create that branch, or set default_branch in engine.toml "
-                "to a branch that exists."
-            ) from error
+            raise GitWorktreeError(missing) from error
         return await _git(
             repository_root, "rev-parse", "--verify", f"{temporary_ref}^{{commit}}"
         )
@@ -379,6 +395,7 @@ async def _git(repository: str, *arguments: str) -> str:
 
 
 __all__ = [
+    "DEFAULT_BRANCH_REF",
     "DEFAULT_ROOT_DIRECTORY",
     "BranchInUseError",
     "GitWorktreeError",

@@ -9,12 +9,9 @@ import {
   getGraphRun,
   getGraphTopology,
   graphConversationUrl,
-  milestoneDetailsUrl,
-  type ApiMilestone,
   type ApiGraphEvent,
   type ApiGraphRun,
   type ApiGraphTopology,
-  type ApiProject,
   type ApiRunStep,
   type ApiWorkflowRun,
   type ApiWorkflowRunListing,
@@ -27,9 +24,9 @@ import { Stat, StatStrip } from "./brand";
 import {
   GITHUB_COMMENTS_ANCHOR,
   GithubActivityPanel,
+  linkable,
   useRunGithubComments,
 } from "./github-activity";
-import { useProjectMilestones } from "./milestone-timeline";
 
 export const IN_PROGRESS_PHASES = new Set([
   "pending",
@@ -46,6 +43,12 @@ const WORKFLOW_DRAFT_KEY = "engine.workflowDraft";
  *  as last submitted, by input name, so the next WorkOrder starts from the
  *  runners you picked rather than the workflow's defaults. */
 const WORKFLOW_CHOICES_KEY = "engine.workflowChoices";
+
+/** The workflow input that chooses whether a run may reach the forge. */
+const MODE_INPUT = "mode";
+const MODE_TOOLTIP =
+  "Connected: the WorkOrder pushes its branch, opens a pull request and adds comments to it automatically. "
+  + "Disconnected: it works only in its own checkout and reaches nothing outside it.";
 
 function savedChoices(): Record<string, string> {
   try {
@@ -366,12 +369,8 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
 
 export function NewWorkflowPage({
   config,
-  project,
-  milestone,
 }: {
   config: EngineConfig;
-  project?: ApiProject;
-  milestone?: ApiMilestone;
 }) {
   const [prompt, setPrompt] = useState(
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
@@ -384,9 +383,15 @@ export function NewWorkflowPage({
   const [choices] = useState(savedChoices);
   const selected = config.workflows.find((workflow) => workflow.id === workflowId);
   const inputs = selected?.inputs ?? [];
+  // A repository onboarded as disconnected fixes the mode of its WorkOrders.
+  const repositoryMode = config.repositories.find((repo) => repo.path === repository)?.mode;
+  const fixedValue = (input: (typeof inputs)[number]) =>
+    input.name === MODE_INPUT && repositoryMode && input.choices.includes(repositoryMode)
+      ? repositoryMode : undefined;
   // A remembered choice the workflow no longer offers falls back to its default.
   const inputValue = (input: (typeof inputs)[number]) =>
-    inputValues[input.name]
+    fixedValue(input)
+      ?? inputValues[input.name]
       ?? (input.choices.includes(choices[input.name] ?? "") ? choices[input.name] : input.default);
 
   useEffect(() => {
@@ -406,7 +411,6 @@ export function NewWorkflowPage({
           prompt,
           repository,
           inputs: Object.fromEntries(inputs.map((input) => [input.name, inputValue(input)])),
-          ...(milestone ? { milestoneId: milestone.milestoneId } : {}),
         }),
       });
       // The run now owns this prompt, so the draft has nothing left to keep.
@@ -416,7 +420,7 @@ export function NewWorkflowPage({
       try {
         window.localStorage.setItem(WORKFLOW_CHOICES_KEY, JSON.stringify({
           ...savedChoices(),
-          ...Object.fromEntries(inputs.filter((input) => input.choices.length)
+          ...Object.fromEntries(inputs.filter((input) => input.choices.length && !fixedValue(input))
             .map((input) => [input.name, inputValue(input)])),
         }));
       } catch {
@@ -433,13 +437,11 @@ export function NewWorkflowPage({
     <main className="panel-scroll">
       <header className="hero hero-narrow">
         <p className="eyebrow">
-          {milestone ? `${project?.name ?? "Project"} / ${milestone.name}` : "OpenEngine / New WorkOrder"}
+          OpenEngine / New WorkOrder
         </p>
-        <h1>{milestone ? "Create a task" : "Create a WorkOrder"}</h1>
+        <h1>Create a WorkOrder</h1>
         <p className="lede">
-          {milestone
-            ? "Start work for this milestone."
-            : "Create one WorkOrder that keeps its stages, agent conversations, outputs, and final human decision together."}
+          Create one WorkOrder that keeps its stages, agent conversations, outputs, and final human decision together.
         </p>
       </header>
       <form className="form" onSubmit={submit}>
@@ -477,10 +479,28 @@ export function NewWorkflowPage({
             <summary>Workflow inputs</summary>
             {inputs.map((input) => (
               <label key={input.name}>
-                <span>{input.label}</span>
+                <span>
+                  {input.label}
+                  {input.name === MODE_INPUT && (
+                    // Drawn by CSS on hover and focus rather than a `title`,
+                    // which touch devices and some browsers never show. The
+                    // click is kept from the label so a tap opens the tip
+                    // instead of the select.
+                    <span
+                      className="info-tip"
+                      role="img"
+                      tabIndex={0}
+                      aria-label={MODE_TOOLTIP}
+                      data-tip={MODE_TOOLTIP}
+                      onClick={(event) => event.preventDefault()}
+                    >ⓘ</span>
+                  )}
+                </span>
                 {input.choices.length ? (
                   <select
                     required={input.required}
+                    disabled={!!fixedValue(input)}
+                    title={fixedValue(input) && `${repositoryMode} for this repository (set by engine init)`}
                     value={inputValue(input)}
                     onChange={(event) => setInputValues((values) => ({ ...values, [input.name]: event.target.value }))}
                   >
@@ -516,11 +536,7 @@ export function NewWorkflowPage({
         <div className="form-actions">
           <a
             className="back-link"
-            href={
-              milestone && project
-                ? milestoneDetailsUrl(project.projectId, milestone.milestoneId)
-                : "/runs"
-            }
+            href="/runs"
           >
             Cancel
           </a>
@@ -529,7 +545,7 @@ export function NewWorkflowPage({
             disabled={submitting || !workflowId}
             type="submit"
           >
-            {submitting ? "Creating…" : milestone ? "Create task" : "Create WorkOrder"}
+            {submitting ? "Creating…" : "Create WorkOrder"}
           </button>
         </div>
         <p className="form-note">
@@ -538,37 +554,6 @@ export function NewWorkflowPage({
       </form>
     </main>
   );
-}
-
-export function NewTaskPage({
-  config,
-  projectId,
-  milestoneId,
-}: {
-  config: EngineConfig;
-  projectId: string;
-  milestoneId: string;
-}) {
-  const { project, milestones, loaded, error } = useProjectMilestones(projectId);
-  const milestone = milestones.find((item) => item.milestoneId === milestoneId);
-
-  if (!loaded)
-    return (
-      <main className="panel-scroll">
-        <p className={error ? "notice notice-block" : "state-inline"}>
-          {error ? `Could not load milestone: ${error}` : "Loading milestone…"}
-        </p>
-      </main>
-    );
-  if (!project || !milestone)
-    return (
-      <main className="panel-scroll">
-        <p className="notice notice-block">
-          This project&rsquo;s plan has no milestone {milestoneId}.
-        </p>
-      </main>
-    );
-  return <NewWorkflowPage config={config} project={project} milestone={milestone} />;
 }
 
 function StageProgress({ run }: { run: RunView }) {
@@ -626,8 +611,9 @@ type StepGroupEntry = {
 function groupedStatus(steps: Pick<ApiRunStep, "status">[]): string {
   for (const status of ["action_required", "in_progress", "failed"])
     if (steps.some((step) => step.status === status)) return status;
-  if (steps.every((step) => step.status === "completed")) return "completed";
-  return "pending";
+  const taken = steps.filter((step) => step.status !== "skipped");
+  if (taken.length && taken.every((step) => step.status === "completed")) return "completed";
+  return taken.length ? "pending" : "skipped";
 }
 
 /** Collapse nodes sharing a group into one item at their first position. */
@@ -848,6 +834,25 @@ function WorkOrderPrompt({ prompt }: { prompt: string }) {
   );
 }
 
+/** `#123` for a GitHub pull request URL, the URL itself for anything else. */
+function pullRequestLabel(url: string): string {
+  const number = /\/pull\/(\d+)/.exec(url)?.[1];
+  return number ? `#${number}` : url;
+}
+
+/** The first http(s) `pr_url` any node reported, so a link is never built
+ *  from a `javascript:` or other unsafe scheme an output happened to carry. */
+function graphPullRequestUrl(graph: ApiGraphRun | undefined): string | null {
+  if (!graph) return null;
+  for (const val of Object.values(graph.values)) {
+    if (val != null && typeof val === "object" && !Array.isArray(val)) {
+      const obj = val as Record<string, unknown>;
+      if (typeof obj.pr_url === "string" && linkable(obj.pr_url)) return obj.pr_url;
+    }
+  }
+  return null;
+}
+
 export function RunDetailPage({ runId }: { runId: string }) {
   // Read here rather than inside the panel so the strip's link and the panel
   // it scrolls to are two views of one answer: the link is only offered when
@@ -918,6 +923,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runId]);
+  const prUrl = useMemo(() => graphPullRequestUrl(graph), [graph]);
   const shownRun = useMemo<RunView | undefined>(() => {
     if (!baseRun) return undefined;
     const empty: RunView = {
@@ -945,7 +951,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
           stepId: node.nodeId,
           name: node.name,
           kind: node.kind === "human" ? "human" as const : "agent" as const,
-          status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed" : "pending",
+          status: waiting.has(node.nodeId) ? "action_required" : active.has(node.nodeId) ? "in_progress" : completed.has(node.nodeId) ? "completed"
+            // A finished run's node that never ran was a branch not taken.
+            : graph.status === "completed" ? "skipped" : "pending",
           outcome: completed.has(node.nodeId) ? "completed" : null,
           agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
           conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
@@ -967,14 +975,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
       pendingHumanReview: graph.pendingApprovals[0] ? {
         stepId: graph.pendingApprovals[0].nodeId,
         title: graph.pendingApprovals[0].reason || "Review this WorkOrder",
-        prUrl: Object.values(graph.values).reduce<string | null>((found, val) => {
-          if (found) return found;
-          if (val != null && typeof val === "object" && !Array.isArray(val)) {
-            const obj = val as Record<string, unknown>;
-            if (typeof obj.pr_url === "string" && /^https?:\/\//.test(obj.pr_url)) return obj.pr_url;
-          }
-          return null;
-        }, null),
       } : null,
     } satisfies RunView;
   }, [baseRun, graph, topology, graphEvents, runId]);
@@ -1021,6 +1021,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
             {run.usage && <Stat label="Usage" value={usageLabel(run.usage)} />}
+            {prUrl && (
+              <Stat
+                label="Pull request"
+                value={
+                  <a href={prUrl} target="_blank" rel="noreferrer">
+                    {pullRequestLabel(prUrl)} ↗
+                  </a>
+                }
+              />
+            )}
             {/* Where the comments are. Steering by comment happens entirely
                 off screen -- the webhook answers GitHub in milliseconds and
                 the work lands minutes later -- so without something in the
@@ -1079,9 +1089,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
               <h2>{run.pendingHumanReview.title}</h2>
-              {run.pendingHumanReview.prUrl && (
+              {prUrl && (
                 <p>
-                  <a href={run.pendingHumanReview.prUrl} target="_blank" rel="noreferrer">
+                  <a href={prUrl} target="_blank" rel="noreferrer">
                     View pull request ↗
                   </a>
                 </p>

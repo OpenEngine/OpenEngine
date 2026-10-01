@@ -29,15 +29,12 @@ from engine.domain.ids import (
     ApprovalId,
     ConversationId,
     MessageId,
-    MilestoneId,
-    ProjectId,
     RunId,
     SessionGrantId,
     TaskId,
     WorkflowId,
     WorkspaceId,
 )
-from engine.domain.planning import Milestone, Project
 from engine.domain.state import RunOrigin, RunPhase, RunState
 
 
@@ -68,23 +65,15 @@ class SQLiteStateStore:
 
     async def save(self, state: RunState) -> None:
         with self._lock, self._connection:
-            if state.milestone_id is not None:
-                exists = self._connection.execute(
-                    "SELECT 1 FROM milestones WHERE milestone_id = ?",
-                    (state.milestone_id,),
-                ).fetchone()
-                if exists is None:
-                    raise KeyError(f"no milestone {state.milestone_id!r}")
             self._connection.execute(
                 """
                 INSERT INTO run_states (
-                    run_id, state_json, milestone_id, origin_channel, origin_thread_id,
+                    run_id, state_json, origin_channel, origin_thread_id,
                     requester
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
-                    milestone_id = excluded.milestone_id,
                     origin_channel = excluded.origin_channel,
                     origin_thread_id = excluded.origin_thread_id,
                     requester = excluded.requester
@@ -92,24 +81,17 @@ class SQLiteStateStore:
                 (
                     state.run_id,
                     json.dumps(_state_to_dict(state)),
-                    state.milestone_id,
                     state.origin.channel if state.origin is not None else None,
                     state.origin.thread_id if state.origin is not None else None,
                     state.requester,
                 ),
             )
 
-    async def list_runs(
-        self, milestone_id: MilestoneId | None = None
-    ) -> Sequence[RunState]:
-        query = "SELECT run_id, state_json, requester FROM run_states"
-        parameters: tuple[object, ...] = ()
-        if milestone_id is not None:
-            query += " WHERE milestone_id = ?"
-            parameters = (milestone_id,)
-        query += " ORDER BY sequence DESC"
+    async def list_runs(self) -> Sequence[RunState]:
         with self._lock:
-            rows = self._connection.execute(query, parameters).fetchall()
+            rows = self._connection.execute(
+                "SELECT run_id, state_json, requester FROM run_states ORDER BY sequence DESC"
+            ).fetchall()
         runs: list[RunState] = []
         for row in rows:
             try:
@@ -150,113 +132,6 @@ class SQLiteStateStore:
         with self._lock, self._connection:
             cursor = self._connection.execute(
                 "DELETE FROM run_states WHERE run_id = ?", (run_id,)
-            )
-        return cursor.rowcount > 0
-
-    # --- planning hierarchy ---------------------------------------------
-
-    async def save_project(self, project: Project) -> None:
-        with self._lock, self._connection:
-            self._connection.execute(
-                """
-                INSERT INTO projects (project_id, name, archived) VALUES (?, ?, ?)
-                ON CONFLICT(project_id) DO UPDATE SET
-                    name = excluded.name,
-                    archived = excluded.archived
-                """,
-                (project.project_id, project.name, int(project.archived)),
-            )
-
-    async def load_project(self, project_id: ProjectId) -> Project | None:
-        with self._lock:
-            row = self._connection.execute(
-                "SELECT project_id, name, archived FROM projects WHERE project_id = ?",
-                (project_id,),
-            ).fetchone()
-        return _project_from_row(row) if row is not None else None
-
-    async def list_projects(self) -> Sequence[Project]:
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT project_id, name, archived FROM projects ORDER BY sequence DESC"
-            ).fetchall()
-        return tuple(_project_from_row(row) for row in rows)
-
-    async def save_milestone(self, milestone: Milestone) -> None:
-        with self._lock, self._connection:
-            exists = self._connection.execute(
-                "SELECT 1 FROM projects WHERE project_id = ?",
-                (milestone.project_id,),
-            ).fetchone()
-            if exists is None:
-                raise KeyError(f"no project {milestone.project_id!r}")
-            self._connection.execute(
-                """
-                INSERT INTO milestones (
-                    milestone_id, project_id, name, description, dependencies
-                )
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(milestone_id) DO UPDATE SET
-                    project_id = excluded.project_id,
-                    name = excluded.name,
-                    description = excluded.description,
-                    dependencies = excluded.dependencies
-                """,
-                (
-                    milestone.milestone_id,
-                    milestone.project_id,
-                    milestone.name,
-                    milestone.description,
-                    json.dumps(milestone.dependencies),
-                ),
-            )
-
-    async def load_milestone(self, milestone_id: MilestoneId) -> Milestone | None:
-        with self._lock:
-            row = self._connection.execute(
-                """
-                SELECT milestone_id, project_id, name, description, dependencies
-                FROM milestones WHERE milestone_id = ?
-                """,
-                (milestone_id,),
-            ).fetchone()
-        return _milestone_from_row(row) if row is not None else None
-
-    async def list_milestones(
-        self, project_id: ProjectId | None = None
-    ) -> Sequence[Milestone]:
-        query = (
-            "SELECT milestone_id, project_id, name, description, dependencies "
-            "FROM milestones"
-        )
-        parameters: tuple[object, ...] = ()
-        if project_id is not None:
-            query += " WHERE project_id = ?"
-            parameters = (project_id,)
-        query += " ORDER BY sequence DESC"
-        with self._lock:
-            rows = self._connection.execute(query, parameters).fetchall()
-        return tuple(_milestone_from_row(row) for row in rows)
-
-    async def count_milestones_by_project(self) -> Mapping[ProjectId, int]:
-        # One row per project rather than one per milestone, and no column the
-        # answer does not need: the caller is a poll that wants integers.
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT project_id, COUNT(*) FROM milestones GROUP BY project_id"
-            ).fetchall()
-        return {ProjectId(row[0]): int(row[1]) for row in rows}
-
-    async def delete_milestone(self, milestone_id: MilestoneId) -> bool:
-        with self._lock, self._connection:
-            has_direct_runs = self._connection.execute(
-                "SELECT 1 FROM run_states WHERE milestone_id = ? LIMIT 1",
-                (milestone_id,),
-            ).fetchone()
-            if has_direct_runs is not None:
-                raise ValueError(f"milestone {milestone_id!r} still has runs")
-            cursor = self._connection.execute(
-                "DELETE FROM milestones WHERE milestone_id = ?", (milestone_id,)
             )
         return cursor.rowcount > 0
 
@@ -652,26 +527,6 @@ class SQLiteStateStore:
             self._connection.close()
 
 
-def _project_from_row(row: sqlite3.Row) -> Project:
-    return Project(
-        project_id=ProjectId(row["project_id"]),
-        name=row["name"],
-        archived=bool(row["archived"]),
-    )
-
-
-def _milestone_from_row(row: sqlite3.Row) -> Milestone:
-    return Milestone(
-        milestone_id=MilestoneId(row["milestone_id"]),
-        project_id=ProjectId(row["project_id"]),
-        name=row["name"],
-        description=row["description"],
-        dependencies=tuple(
-            MilestoneId(dependency) for dependency in json.loads(row["dependencies"])
-        ),
-    )
-
-
 def _instance_from_row(row: sqlite3.Row) -> AgentInstance:
     return AgentInstance(
         instance_id=AgentInstanceId(row["instance_id"]),
@@ -774,7 +629,6 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "run_id": state.run_id,
         "task_id": state.task_id,
         "workflow_id": state.workflow_id,
-        "milestone_id": state.milestone_id,
         "phase": state.phase.value,
         "repository": state.repository,
         "prompt": state.prompt,
@@ -807,11 +661,6 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         run_id=RunId(str(value["run_id"])),
         task_id=TaskId(str(value["task_id"])),
         workflow_id=WorkflowId(str(value["workflow_id"])),
-        milestone_id=(
-            MilestoneId(str(value["milestone_id"]))
-            if value.get("milestone_id") is not None
-            else None
-        ),
         phase=RunPhase(str(value["phase"])),
         repository=str(value.get("repository", "")),
         prompt=str(value.get("prompt", "")),

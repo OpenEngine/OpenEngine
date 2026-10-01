@@ -5,10 +5,24 @@
 The review stage fans out to five parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
 conciseness, DRYness & code duplication). Their findings are collected by a
-*reranker* that aggressively squashes noise and posts the survivors as PR
-comments with lineage.
+*reranker* that somewhat aggressively squashes noise and posts the survivors
+as PR comments with lineage.
 Surviving findings go back to implementation for one automatic fix-and-review
 cycle before impact analysis and human review.
+
+A run can instead start in the review state (`engine.domain.states`), pointed
+at an existing change -- a pull request, or a branch -- through the `ref` and
+`pr_url` inputs. It is checked out at that change and goes straight to review:
+
+    workspace -> [review facets] -> reranker -> triage -> (implementation -> ci-check -> review ...)
+
+Nothing is posted; a person is shown the surviving findings at *triage* and
+chooses which to fix, and each fix is reviewed again before triage asks again.
+
+The workflow offers both forge modes (`engine.domain.forge`) through
+`mode_input`. Nothing here branches on the mode: the components narrow the
+tools and skip CI themselves, and the prompts are filled from the shared
+`components.forge` snippets that say where the work goes.
 """
 
 import json
@@ -17,6 +31,7 @@ from dataclasses import replace
 from typing import Any
 
 from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_BRANCH_REF,
     DEFAULT_ROOT_DIRECTORY,
     GitWorktreeWorkspaceProvider,
 )
@@ -37,12 +52,28 @@ from engine.graph_runtime_langgraph.components import (
     OpenVerify,
     RerankerNode,
     ReviewNode,
+    TriageNode,
     WorkspaceNode,
     checkout,
 )
-from engine.domain import StepCompleted
-from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN
-from engine.ports import WorkspaceProvider
+from engine.graph_runtime_langgraph.components.forge import (
+    ANSWER_REVIEW,
+    CHANGE_UNDER_REVIEW,
+    PUBLISH_CHANGE,
+    PUBLISH_FINDINGS,
+    PUBLISH_SUMMARY,
+    THE_CHANGE,
+    UPDATE_CHANGE,
+)
+from engine.domain import (
+    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT,
+    ForgeMode, StepCompleted, WorkState, forge_mode, start_state,
+)
+from engine.graph_runtime.inputs import (
+    LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
+)
+from engine.graph_runtime_langgraph.executions import NodeExecution
+from engine.ports import ApprovalHandler, WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from langgraph_acp import ACPAgentRegistry
@@ -53,8 +84,9 @@ from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
 # Graph constants
 # ---------------------------------------------------------------------------
 
-#: What every checkout is based on.
-BASE_REF = "origin/main"
+#: What every checkout is based on: the default branch of the run's repository,
+#: since one workflow serves every repository under `[repos]`.
+BASE_REF = DEFAULT_BRANCH_REF
 
 WORKSPACE = "workspace"
 NAMING = "naming"
@@ -65,6 +97,13 @@ RERANKER = "reranker"
 IMPACT_ANALYSIS = "impact-analysis"
 HUMAN_REVIEW = "human-review"
 VERIFICATION = "verification"
+TRIAGE = "triage"
+
+#: Where the findings a person chose at triage are kept for implementation.
+FIX = "fix"
+
+#: The creation inputs naming the change a run started in review looks at.
+REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
 #: Codex and Claude, reached through their ACP adapters.  `agent_registry` is
 #: what routes an agent's permission request back to the run that raised it.
@@ -88,15 +127,11 @@ REVIEW_MODELS: dict[str, dict[str, str]] = {
 
 IMPLEMENTATION_PROMPT = (
     "Implement the requested change in the provided workspace. Read the code "
-    "before editing. The workspace is already based on the current remote main "
-    "commit; do not fetch, pull, or merge main before editing. Make the "
+    "before editing. The workspace is already based on the current commit of the "
+    "remote default branch; do not fetch, pull, or merge it before editing. Make the "
     "smallest complete change and report the result.\n\n"
-    "Every git operation goes through the git_subcommand tool. When the change "
-    "is ready, create a descriptive agent/<description> branch, commit only this "
-    "change, push that branch, then call open_pull_request. Finish by calling "
-    "complete_step with the URL open_pull_request returned as the pr_url output. "
-    "Report that URL, not a pull request number read from an issue, a diff or CI "
-    "output. Use fail_step "
+    "{publish}"
+    "Use fail_step "
     "if the work cannot be completed, or clarify only when answering a question "
     "without changing the implementation.\n\n"
     "The task:\n{task}"
@@ -106,6 +141,7 @@ FACET_REVIEW_PROMPT = (
     "Review the implementation in this workspace, focusing exclusively on "
     "**{facet_name}**.\n\n"
     "{facet_focus}\n\n"
+    "The change is {change}. "
     "Read the changed code and the code around it before judging. Inspect "
     "only: do not edit, revert, commit, or modify anything.\n\n"
     "Your acceptance criteria: produce a JSON array of *finding* objects. "
@@ -124,34 +160,24 @@ FACET_REVIEW_PROMPT = (
 RERANKER_PROMPT = (
     "You are a senior reviewer consolidating findings from {reviewer_count} "
     "specialized reviewers who each examined the same code change from a "
-    "different angle. Your job is to **aggressively** squash noise.\n\n"
+    "different angle. Your job is to **somewhat aggressively** squash noise.\n\n"
     "Remove any finding that is:\n"
     "- A nitpick or stylistic preference\n"
     "- A duplicate of another finding (even across facets)\n"
     "- About a hypothetical issue that is extremely unlikely in practice\n"
     "- Not actionable -- the author cannot do anything concrete about it\n"
     "- Already handled by existing code the reviewer missed\n\n"
-    "Keep only findings a senior engineer would genuinely want fixed before "
-    "merging. When in doubt, remove the finding.\n\n"
-    "For each surviving finding, post it as a PR comment using add_comment. "
-    "Format each comment as:\n\n"
-    "**<tagline>**\n\n"
-    "<description>\n\n"
-    "_Produced by {runner} reviewing <facet>_\n\n"
-    "Use the file and line from the finding for inline comments where "
-    "available; use a general comment otherwise. If no findings survive, "
-    "leave one general comment saying the change looks clean.\n\n"
-    "After posting comments, call complete_step with the filtered findings "
-    "as a JSON array (same schema as the inputs). Preserve each finding's "
-    "agent and facet fields unchanged.\n\n"
+    "Keep findings a senior engineer would genuinely want fixed before "
+    "merging, and concrete, actionable findings that are likely real even when "
+    "they are minor. When in doubt about one of those, keep it.\n\n"
+    "{publishing}"
     "{findings_sections}"
-    "Pull request: {pr_url}\n\n"
+    "{change}"
     "Original task:\n{task}"
 )
 
-
 IMPACT_ANALYSIS_PROMPT = (
-    "Assess the impact of the final change on pull request {pr_url}. Read the "
+    "Assess the impact of the final change {change}. Read the "
     "diff and surrounding code, tests, CI results, and review findings. Inspect "
     "only: do not edit, commit, merge, or deploy anything.\n\n"
     "Rank the change at exactly one level:\n"
@@ -172,10 +198,8 @@ IMPACT_ANALYSIS_PROMPT = (
     "untested behavior is safe. Give evidence for UI/product and architectural "
     "scope, complexity, sensitive components, test coverage and blind spots, "
     "and human setup or deployment work.\n\n"
-    "Before completing, use add_comment to post one general comment on pull "
-    "request {pr_url} with your impact analysis results. Include the color "
-    "label and emoji, your rationale and evidence, testing gaps, and required "
-    "human actions. Then call complete_step with impact_level set to exactly "
+    "{publishing}"
+    "call complete_step with impact_level set to exactly "
     "Green, Orange, or Red "
     "and impact_rationale containing your evidence and required human actions. "
     "Include the color label and emoji and the rationale in the summary.\n\n"
@@ -183,6 +207,14 @@ IMPACT_ANALYSIS_PROMPT = (
     "CI results:\n{ci}\n\nFinal review findings:\n{findings}"
 )
 
+#: How a run started in review publishes its consolidated findings: it does not.
+KEEP_FINDINGS = (
+    "Do not post comments or contact any pull request: the surviving findings "
+    "are shown to a person, who chooses which to fix or post. Call "
+    "complete_step with the filtered findings as a JSON array (same schema as "
+    "the inputs), or [] when none survive. Preserve each finding's agent and "
+    "facet fields unchanged.\n\n"
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -238,6 +270,30 @@ class InputReviewNode(_RunnerInput, ReviewNode):
     graph_node_runner_input = "review_runner"
 
 
+class _RerankerTools(TerminalMcpServer):
+    """The reranker's tools, without `add_comment` in a run started in review.
+
+    `KEEP_FINDINGS` asks it not to post, and the broker refuses `complete_step`
+    from a step granted `add_comment` until it has posted, so the tool is
+    withheld by the server rather than only by the prompt.
+    """
+
+    def __call__(
+        self,
+        state: Mapping[str, object],
+        execution: NodeExecution,
+        approve: ApprovalHandler,
+    ) -> Any:
+        return TerminalMcpServer.__call__(self.for_state(state), state, execution, approve)
+
+    def for_state(self, state: Mapping[str, object]) -> TerminalMcpServer:
+        if not _reviewing(state):
+            return self
+        return replace(self, repository_tools=tuple(
+            name for name in self.repository_tools if name != "add_comment"
+        ))
+
+
 class InputRerankerNode(_RunnerInput, RerankerNode):
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         update = await super().__call__(state)
@@ -257,36 +313,77 @@ def _review_node_name(facet_id: str) -> str:
     return f"review-{facet_id}"
 
 
+def _reviewing(state: Mapping[str, object]) -> bool:
+    """Whether this run started in review, at a change it did not make."""
+    return start_state(state.get("inputs")) is WorkState.REVIEW
+
+
+def _pr_url(state: Mapping[str, object]) -> str:
+    """The run's pull request: the one it opened, or the one it was given."""
+    inputs = state.get("inputs")
+    given = inputs.get(PR_INPUT, "") if isinstance(inputs, Mapping) else ""
+    return str(state.get("pr_url") or given or "")
+
+
+def _push_to(state: Mapping[str, object]) -> str:
+    """Where a fix to a change this run was given goes: that change's branch.
+
+    The workspace is checked out on a branch of its own, so a plain push would
+    land beside the pull request rather than on it.
+    """
+    inputs = state.get("inputs")
+    branch = str(inputs.get(BRANCH_INPUT) or "") if isinstance(inputs, Mapping) else ""
+    if not (_reviewing(state) and branch and forge_mode(inputs) is ForgeMode.CONNECTED):
+        return ""
+    return f"The pull request's branch is {branch}: push to it with `git push origin HEAD:{branch}`. "
+
+
 def _implementation_prompt(state: Mapping[str, object]) -> str:
     ci = state.get("ci_check")
     if isinstance(ci, dict) and ci.get("passed") is False:
         return (
-            f"Fix the CI failures on the existing pull request {state.get('pr_url')}. "
+            f"Fix the CI failures on {THE_CHANGE(state, pr_url=_pr_url(state))}. "
             "Read the failed job logs and relevant code, make the smallest fix, "
-            "test it, commit and push to the same PR branch using git_subcommand. "
-            "Do not open another pull request. Finish with complete_step and the "
-            "same pr_url output. Use fail_step if the failures cannot be fixed.\n\n"
+            f"test it, {UPDATE_CHANGE(state)}{_push_to(state)}"
+            "Use fail_step if the failures cannot be fixed.\n\n"
             f"{ci.get('summary', '')}\n\nOriginal task:\n{state.get('task', '')}"
         )
-    if state.get(REVIEW) and state.get("review_rounds") == 1:
+    findings = state.get(FIX) if _reviewing(state) else (
+        state.get(REVIEW) if state.get("review_rounds") == 1 else None
+    )
+    if findings:
         return (
-            f"Address the review findings on the existing pull request {state.get('pr_url')}. "
+            "Address the review findings on "
+            f"{THE_CHANGE(state, pr_url=_pr_url(state))}. "
             "Read the relevant code, make the smallest complete fix, test it, "
-            "commit and push to the same PR branch using git_subcommand. "
-            "Reply to each review comment you addressed, explaining the fix, "
-            "and resolve its review thread where applicable. "
-            "Do not open another pull request. Finish with complete_step and the "
-            "same pr_url output. Use fail_step if the findings cannot be addressed.\n\n"
-            f"Review findings:\n{json.dumps(state[REVIEW])}\n\n"
+            f"{UPDATE_CHANGE(state)}{_push_to(state)}"
+            # Findings a person chose were never posted, so there is nothing to answer.
+            f"{'' if _reviewing(state) else ANSWER_REVIEW(state)}"
+            "Use fail_step if the findings cannot be addressed.\n\n"
+            f"Review findings:\n{json.dumps(findings)}\n\n"
             f"Original task:\n{state.get('task', '')}"
         )
-    return IMPLEMENTATION_PROMPT.format(task=state.get("task", ""))
+    return IMPLEMENTATION_PROMPT.format(
+        publish=PUBLISH_CHANGE(state), task=state.get("task", ""),
+    )
+
+
+def _after_workspace(state: dict[str, Any]) -> str | list[Send]:
+    if _reviewing(state):
+        return _fan_out_reviews(state)
+    return NAMING
 
 
 def _after_reranker(state: dict[str, Any]) -> str:
+    if _reviewing(state):
+        return TRIAGE
     if state.get(REVIEW) and state.get("review_rounds") == 1:
         return IMPLEMENTATION
     return IMPACT_ANALYSIS
+
+
+def _after_triage(state: dict[str, Any]) -> str:
+    return IMPLEMENTATION if state.get(FIX) else END
 
 
 def _after_ci(state: dict[str, Any]) -> str | list[Send]:
@@ -324,6 +421,7 @@ def pipeline(
             provider=workspace_provider
             or GitWorktreeWorkspaceProvider(DEFAULT_ROOT_DIRECTORY),
             base_ref=BASE_REF,
+            ref_input=REF_INPUT,
         ),
     )
     builder.add_node(
@@ -358,6 +456,7 @@ def pipeline(
             graph_node_name="Implementation",
             graph_node_always_open=True,
             graph_node_description="Makes the requested change.",
+            graph_node_group=WorkState.IMPLEMENTATION,
             session_config=session_config,
         ),
     )
@@ -380,6 +479,7 @@ def pipeline(
                 prompt=lambda state, f=facet: FACET_REVIEW_PROMPT.format(
                     facet_name=f.name,
                     facet_focus=f.focus,
+                    change=CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state)),
                     task=state.get("task", ""),
                     implementation=state.get(IMPLEMENTATION, ""),
                 ),
@@ -418,9 +518,11 @@ def pipeline(
             )
         return RERANKER_PROMPT.format(
             reviewer_count=len(REVIEW_FACETS),
-            runner=state.get("inputs", {}).get("review_runner", reviewer),
+            publishing=KEEP_FINDINGS if _reviewing(state) else PUBLISH_FINDINGS(
+                state, runner=state.get("inputs", {}).get("review_runner", reviewer),
+            ),
             findings_sections="".join(sections),
-            pr_url=state.get("pr_url", ""),
+            change=f"The change is {CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state))}.\n\n",
             task=state.get("task", ""),
         )
 
@@ -432,7 +534,7 @@ def pipeline(
             prompt=_reranker_prompt,
             cwd=checkout,
             mcp_server_bindings=(
-                TerminalMcpServer(
+                _RerankerTools(
                     step_id=RERANKER,
                     create_workorder=True,
                     agent_id=runner,
@@ -461,7 +563,8 @@ def pipeline(
             agent=reviewer,
             registry=agents,
             prompt=lambda state: IMPACT_ANALYSIS_PROMPT.format(
-                pr_url=state.get("pr_url", ""),
+                change=CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state)),
+                publishing=PUBLISH_SUMMARY(state, pr_url=_pr_url(state)),
                 task=state.get("task", ""),
                 implementation=state.get(IMPLEMENTATION, ""),
                 ci=json.dumps(state.get("ci_check", {})),
@@ -483,15 +586,20 @@ def pipeline(
             output_key=IMPACT_ANALYSIS,
             graph_node_name="Impact analysis",
             graph_node_description="Ranks change impact as Green 🟢, Orange 🟠, or Red 🔴.",
+            graph_node_group=WorkState.REVIEW,
             session_config=session_config,
         ),
     )
     builder.add_node(HUMAN_REVIEW, HumanReviewNode())
+    builder.add_node(TRIAGE, TriageNode(findings_key=REVIEW, output_key=FIX))
 
     # ---- edges --------------------------------------------------------------
 
     builder.add_edge(START, WORKSPACE)
-    builder.add_edge(WORKSPACE, NAMING)
+    builder.add_conditional_edges(
+        WORKSPACE, _after_workspace,
+        [NAMING, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
+    )
     builder.add_edge(NAMING, IMPLEMENTATION)
 
     builder.add_edge(IMPLEMENTATION, CI_CHECK)
@@ -505,8 +613,9 @@ def pipeline(
         builder.add_edge(_review_node_name(facet.id), RERANKER)
 
     builder.add_conditional_edges(
-        RERANKER, _after_reranker, [IMPLEMENTATION, IMPACT_ANALYSIS],
+        RERANKER, _after_reranker, [IMPLEMENTATION, IMPACT_ANALYSIS, TRIAGE],
     )
+    builder.add_conditional_edges(TRIAGE, _after_triage, [IMPLEMENTATION, END])
     if verification is not None:
         builder.add_node(VERIFICATION, verification)
         builder.add_edge(IMPACT_ANALYSIS, VERIFICATION)
@@ -559,6 +668,11 @@ def graph_for(
                 default={"codex": "claude", "claude": "codex"}[runner],
                 required=True, choices=RUNNER_INPUT_CHOICES,
             ),
+            mode_input(),
+            state_input(WorkState.PLANNING, WorkState.REVIEW),
+            WorkflowInput(REF_INPUT, "Ref to review"),
+            WorkflowInput(PR_INPUT, "Pull request to review"),
+            WorkflowInput(BRANCH_INPUT, "Pull request branch"),
         ),
     )
 

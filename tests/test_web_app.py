@@ -33,7 +33,6 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_communications,
-    build_milestone_scoper,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -41,40 +40,28 @@ from engine.apps.web.composition import (
 )
 from engine.domain import (
     AgentId,
-    AgentInstanceId,
     AgentProfile,
     AgentRunId,
     ApprovalDecision,
     ApprovalId,
     ApprovalKind,
     Message,
-    Milestone,
-    MilestoneId,
-    Project,
-    ProjectId,
     Role,
     RunId,
     RunPhase,
     RunState,
-    ScopingPlan,
     TaskId,
     ToolCall,
     WorkflowId,
-    WorkOrderId,
-    WorkOrderSpec,
-    WorkOrderStatus,
-    project_id_for_instance,
 )
 from engine.ports import (
     AgentTurn,
     ApprovalRequest,
     InteractiveAgentRunner,
-    McpServerConfig,
     Workspace,
     WorkspaceState,
 )
 from engine.runtime import (
-    BUILT_IN,
     PLANNER,
     AgentSession,
     ApprovalBroker,
@@ -161,9 +148,8 @@ def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
     ]
 
 
-@pytest.mark.parametrize("show_projects", [None, True, False])
 def test_the_application_can_be_built_from_configuration_alone(
-    tmp_path, monkeypatch, show_projects
+    tmp_path, monkeypatch
 ) -> None:
     """The contract the development server's reloader depends on.
 
@@ -174,12 +160,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     monkeypatch.chdir(tmp_path)
 
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
-    if show_projects is not None:
-        (tmp_path / "engine.toml").write_text(
-            f"show_projects = {str(show_projects).lower()}\n"
-        )
     app = build_app()
-
     async def ask() -> httpx.Response:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -188,35 +169,15 @@ def test_the_application_can_be_built_from_configuration_alone(
 
     answered = asyncio.run(ask())
     assert answered.status_code == 200
-    assert answered.json()["showProjects"] is (show_projects is not False)
+    assert "showProjects" not in answered.json()
     assert answered.json()["repositories"] == [{"name": f". ({tmp_path})", "path": "."}]
     assert answered.json()["runners"] == [
         {"id": "codex", "implementation": "ACPAgentRunner"},
         {"id": "claude", "implementation": "ACPAgentRunner"},
+        {"id": "opencode", "implementation": "ACPAgentRunner"},
     ]
     # Composed from the working directory, exactly as `engine-web` composes it.
     assert (tmp_path / "conversations.sqlite3").exists()
-    assert app.state.milestone_scoper is not None
-
-
-def test_milestone_scoper_uses_the_configured_codex_provider() -> None:
-    settings = Settings(
-        codex_binary="/opt/openengine/codex",
-        codex_working_directory="/srv/openengine/repository",
-        codex_timeout_seconds=42,
-        codex_model="gpt-scoper",
-    )
-
-    milestone_scoper = build_milestone_scoper(settings)
-    provider = milestone_scoper.scoper.registry.resolve("codex")
-
-    assert provider.env == {
-        "CODEX_PATH": "/opt/openengine/codex",
-        "CODEX_CONFIG": '{"model": "gpt-scoper"}',
-    }
-    assert provider.cwd == "/srv/openengine/repository"
-    assert milestone_scoper.scoper.working_directory == "/srv/openengine/repository"
-    assert milestone_scoper.scoper.timeout_seconds == 42
 
 
 def _claude_options(runner: ACPAgentRunner) -> dict:
@@ -226,15 +187,13 @@ def _claude_options(runner: ACPAgentRunner) -> dict:
 def test_web_offers_one_interactive_runner_per_agent() -> None:
     runners = build_runners(Settings())
 
-    assert tuple(runners) == ("codex", "claude")
-    assert isinstance(runners["codex"], ACPAgentRunner)
-    assert isinstance(runners["claude"], ACPAgentRunner)
-    assert runners["codex"].provider.name == "codex"
-    assert runners["claude"].provider.name == "claude"
-    # Which of them pause is what decides whether a run brokers approvals, so
-    # it is read off the port rather than off the class name.
-    assert isinstance(runners["codex"], InteractiveAgentRunner)
-    assert isinstance(runners["claude"], InteractiveAgentRunner)
+    assert tuple(runners) == ("codex", "claude", "opencode")
+    for name, runner in runners.items():
+        assert isinstance(runner, ACPAgentRunner)
+        assert runner.provider.name == name
+        # Which of them pause is what decides whether a run brokers approvals,
+        # so it is read off the port rather than off the class name.
+        assert isinstance(runner, InteractiveAgentRunner)
 
 
 def test_no_composition_root_builds_a_cli_runner(tmp_path) -> None:
@@ -290,6 +249,13 @@ def test_interactive_runners_may_do_what_the_user_approves() -> None:
     options = _claude_options(runners["claude"])
     assert options["allowedTools"] == ["Read", "Glob", "Grep"]
     assert "tools" not in options
+    # OpenCode: asks before any change, where by default it would not.
+    permissions = _opencode_permissions(runners["opencode"])
+    assert permissions["*"] == permissions["external_directory"] == "ask"
+
+
+def _opencode_permissions(runner: ACPAgentRunner) -> dict:
+    return json.loads(runner.provider.env["OPENCODE_CONFIG_CONTENT"])["permission"]
 
 
 def test_the_configured_policy_builds_the_interactive_claude_runner() -> None:
@@ -396,76 +362,9 @@ def test_a_planning_chat_is_answered_by_the_runner_that_cannot_write(tmp_path) -
     assert codex is not session.runner_for(CODER, "codex")
     assert codex.provider.env["INITIAL_AGENT_MODE"] == "read-only"
     assert codex.provider.env["ENGINE_CODEX_SANDBOX"] == "read-only"
-
-
-def test_milestone_tools_follow_the_project_chat_not_the_selected_agent() -> None:
-    class CapturingRunner:
-        permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
-
-        def __init__(self) -> None:
-            self.mcp_servers: list[McpServerConfig] = []
-            self.direct_turns = 0
-
-        async def run_turn(
-            self, agent_run_id, profile, messages, tools=(), workspace_id=None
-        ):
-            self.direct_turns += 1
-            return AgentTurn(Message.assistant("ordinary chat"))
-
-        async def run_turn_with_mcp(
-            self,
-            agent_run_id,
-            profile,
-            messages,
-            mcp_server,
-            workspace_id=None,
-        ):
-            self.mcp_servers.append(mcp_server)
-            return AgentTurn(Message.assistant("project chat"))
-
-        async def cancel(self, agent_run_id) -> None:
-            pass
-
-    async def scenario() -> tuple[CapturingRunner, AgentProfile]:
-        store = InMemoryStateStore()
-        runner = CapturingRunner()
-        session = build_session(
-            Capabilities(
-                workflow_runtime=None,
-                source_control=None,
-                agent_runner=runner,
-                communications=None,
-                workspace_provider=ConversationWorkspaces(),
-                state_store=store,
-            ),
-            {"test": runner},
-        )
-        project_chat = await session.start(CODER, runner="test")
-        await store.save_project(
-            Project(project_id_for_instance(project_chat.instance_id), "OpenEngine")
-        )
-        await session.say(project_chat.instance_id, "Plan this.", runner="test")
-
-        ordinary_planner = await session.start(PLANNER.agent_id, runner="test")
-        await session.say(ordinary_planner.instance_id, "Plan this.", runner="test")
-        return runner, session.profiles[PLANNER.agent_id]
-
-    runner, planner_profile = asyncio.run(scenario())
-    config = runner.mcp_servers[0]
-    advertised = tuple(
-        config.args[index + 1]
-        for index, argument in enumerate(config.args)
-        if argument == "--capability"
-    )
-
-    assert advertised == (
-        "add_milestone",
-        "list_milestones",
-        "update_milestone",
-        "delete_milestone",
-    )
-    assert runner.direct_turns == 1
-    assert planner_profile.capabilities == ()
+    opencode = session.runner_for(PLANNER.agent_id, "opencode")
+    permissions = _opencode_permissions(opencode)
+    assert permissions["*"] == permissions["external_directory"] == "deny"
 
 
 def test_review_comments_reach_the_github_api(tmp_path) -> None:
@@ -644,6 +543,10 @@ def _workflow_app(
     public_url: str = "",
     utilization: UtilizationService | None = None,
     github_login_config: GitHubLoginConfig | None = None,
+    repos: dict[str, str] | None = None,
+    repo_modes: dict[str, str] | None = None,
+    trusted_repos: frozenset[str] = frozenset(),
+    **options,
 ):
     """Wire the app the way the composition root does."""
     unused = object()
@@ -674,6 +577,10 @@ def _workflow_app(
         public_url=public_url,
         utilization=utilization,
         github_login_config=github_login_config,
+        repos=repos,
+        repo_modes=repo_modes,
+        trusted_repos=trusted_repos,
+        **options,
     )
 
 
@@ -922,12 +829,6 @@ def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
             "repository": ".",
             "runner": "unknown",
         },
-        {
-            "workflowId": "implementation-review-v1",
-            "prompt": "Task",
-            "repository": ".",
-            "milestoneId": "unknown",
-        },
     ],
 )
 def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> None:
@@ -943,40 +844,6 @@ def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> N
 
     assert response.status_code == 400
     assert asyncio.run(store.list_runs()) == ()
-
-
-def test_create_workflow_run_records_its_milestone() -> None:
-    store = InMemoryStateStore()
-    project = Project(ProjectId("project-engine"), "Engine")
-    milestone = Milestone(
-        MilestoneId("milestone-foundation"), project.project_id, "Foundation"
-    )
-    asyncio.run(store.save_project(project))
-    asyncio.run(store.save_milestone(milestone))
-    app, _runtime = _graph_app(store, _review_graph())
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            async with app.router.lifespan_context(app):
-                return await client.post(
-                    "/api/runs",
-                    json={
-                        "workflowId": "implementation-review-codex",
-                        "prompt": "Document the milestone.",
-                        "repository": ".",
-                        "milestoneId": milestone.milestone_id,
-                    },
-                )
-
-    created = asyncio.run(scenario())
-
-    assert created.status_code == 201
-    assert created.json()["milestoneId"] == milestone.milestone_id
-    # Without GitHub login there is nobody to name.
-    assert created.json()["requester"] is None
 
 
 def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
@@ -1010,7 +877,9 @@ def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)):
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
         created = asyncio.run(scenario())
 
     assert created.status_code == 201, created.text
@@ -1110,34 +979,6 @@ def test_new_workflow_frontend_route_serves_the_application(tmp_path) -> None:
     assert "workflow application" in response.text
 
 
-def test_milestone_frontend_routes_serve_the_application(tmp_path) -> None:
-    """A plan's pages are reached by URL as well as by click.
-
-    Both are deep links the client routes itself: the plan, and one goal off it
-    opened from the timeline. Without a route apiece, a refresh or a pasted
-    link falls through to the static mount and 404s.
-    """
-    static = tmp_path / "dist"
-    static.mkdir()
-    (static / "index.html").write_text("<main>workflow application</main>")
-    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return (
-                await client.get("/projects/project-42/milestones"),
-                await client.get("/projects/project-42/milestones/milestone-7"),
-            )
-
-    plan, milestone = asyncio.run(scenario())
-
-    assert plan.status_code == 200
-    assert "workflow application" in plan.text
-    assert milestone.status_code == 200
-    assert "workflow application" in milestone.text
-
-
 class ConversationWorkspaces:
     """A provider whose checkouts come and go, as real ones do."""
 
@@ -1211,6 +1052,7 @@ def _workspace_session(
     runner: ConcurrentRunner,
     workspaces: ConversationWorkspaces,
     store: InMemoryStateStore | None = None,
+    workspace_repository: str = "/repository",
 ) -> AgentSession:
     unused = object()
     return AgentSession(
@@ -1224,7 +1066,7 @@ def _workspace_session(
         ),
         profiles=PROFILES,
         runners={"test": runner},
-        workspace_repository="/repository",
+        workspace_repository=workspace_repository,
     )
 
 
@@ -1479,26 +1321,6 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
     ]
 
 
-def test_the_config_names_the_agent_the_plan_button_talks_to() -> None:
-    """The client asks which agent plans rather than knowing an id of its own,
-    and is told nothing when a composition has no planner to offer."""
-    runner = ConcurrentRunner()
-    shipped = create_app(_session_with({"test": runner}, BUILT_IN), {"test": runner})
-    coders_only = create_app(_session(runner), {"test": runner})
-
-    async def config(app) -> dict:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return (await client.get("/api/config")).json()
-
-    shipped_config, narrow_config = asyncio.run(config(shipped)), asyncio.run(config(coders_only))
-
-    assert shipped_config["planAgent"] == "planner"
-    assert "planner" in [agent["id"] for agent in shipped_config["agents"]]
-    assert shipped_config["defaultAgent"] == "coder"
-    assert narrow_config["planAgent"] == ""
-
-
 def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None:
     """The conversation remembers its runner; a turn need not repeat it.
 
@@ -1584,501 +1406,6 @@ def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
     ] == [
         ("user", "Why are chats missing after restart?"),
         ("assistant", "The answer."),
-    ]
-
-
-def test_projects_api_creates_and_lists_projects_newest_first() -> None:
-    runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            missing = await client.post("/api/projects", json={})
-            first = await client.post(
-                "/api/projects", json={"name": "First project"}
-            )
-            second = await client.post(
-                "/api/projects", json={"name": "Second project"}
-            )
-            listed = await client.get("/api/projects")
-            return missing, first, second, listed
-
-    missing, first, second, listed = asyncio.run(scenario())
-
-    assert missing.status_code == 400
-    assert first.status_code == 201
-    assert first.json()["projectId"].startswith("project-")
-    assert first.json()["name"] == "First project"
-    assert second.status_code == 201
-    assert [project["name"] for project in listed.json()["projects"]] == [
-        "Second project",
-        "First project",
-    ]
-    # Recorded directly rather than by planning, so there is no conversation to
-    # open and the rail has nowhere to send a click.
-    assert all(
-        "conversationUrl" not in project
-        for project in listed.json()["projects"]
-    )
-
-
-def test_a_project_is_archived_and_restored_the_way_a_chat_is() -> None:
-    """Archiving puts a project away rather than deleting it: it stays listed,
-    marked so the rail can file it under its own heading, and restoring is the
-    same click back. The plan it was named after is untouched by either."""
-
-    runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={"agentId": "coder", "runner": "test", "createProject": True},
-            )
-            project_id = f"project-{created.json()['id']}"
-            archived = await client.post(f"/api/projects/{project_id}/archive")
-            listed = await client.get("/api/projects")
-            restored = await client.post(f"/api/projects/{project_id}/unarchive")
-            missing = await client.post("/api/projects/project-missing/archive")
-            return created, archived, listed, restored, missing
-
-    created, archived, listed, restored, missing = asyncio.run(scenario())
-
-    thread_id = created.json()["id"]
-    assert archived.status_code == 200
-    assert archived.json() == {
-        "projectId": f"project-{thread_id}",
-        "name": "New project",
-        "archived": True,
-        "milestoneCount": 0,
-        # The plan is still open, and restoring has to give the link back.
-        "conversationUrl": f"/conversations/{thread_id}",
-    }
-    assert listed.json()["projects"] == [archived.json()]
-    assert restored.json()["archived"] is False
-    assert missing.status_code == 404
-
-
-def test_project_milestones_api_lists_the_active_projects_dependency_data() -> None:
-    runner = ConcurrentRunner()
-    session = _session(runner)
-    project = Project(project_id_for_instance(AgentInstanceId("agi-plan")), "Engine")
-    foundation = Milestone(
-        MilestoneId("milestone-foundation"),
-        project.project_id,
-        "Foundation",
-        "Build the shared planning model.",
-    )
-    launch = Milestone(
-        MilestoneId("milestone-launch"),
-        project.project_id,
-        "Launch",
-        "Put the project in users' hands.",
-        (foundation.milestone_id,),
-    )
-
-    async def scenario():
-        await session.state_store.save_project(project)
-        await session.state_store.save_milestone(foundation)
-        await session.state_store.save_milestone(launch)
-        app = create_app(session, {"test": runner})
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            listed = await client.get(
-                f"/api/projects/{project.project_id}/milestones"
-            )
-            missing = await client.get("/api/projects/project-missing/milestones")
-            return listed, missing
-
-    listed, missing = asyncio.run(scenario())
-
-    assert listed.json() == {
-        "project": {
-            "projectId": project.project_id,
-            "name": "Engine",
-            "archived": False,
-        },
-        "milestones": [
-            {
-                "milestoneId": "milestone-launch",
-                "name": "Launch",
-                "description": "Put the project in users' hands.",
-                "dependencies": ["milestone-foundation"],
-            },
-            {
-                "milestoneId": "milestone-foundation",
-                "name": "Foundation",
-                "description": "Build the shared planning model.",
-                "dependencies": [],
-            },
-        ],
-    }
-    assert missing.status_code == 404
-
-
-def test_project_milestones_api_links_the_project_back_to_its_plan() -> None:
-    """The milestones page is reached from the rail rather than from the plan,
-    so the way back to the conversation has to come with the answer."""
-
-    runner = ConcurrentRunner()
-    session = _session(runner)
-    app = create_app(session, {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={"agentId": "coder", "runner": "test", "createProject": True},
-            )
-            thread_id = created.json()["id"]
-            project_id = ProjectId(f"project-{thread_id}")
-            await session.state_store.save_milestone(
-                Milestone(MilestoneId("milestone-1"), project_id, "Foundation")
-            )
-            listed = await client.get(f"/api/projects/{project_id}/milestones")
-            return thread_id, listed
-
-    thread_id, listed = asyncio.run(scenario())
-
-    assert listed.json()["project"]["conversationUrl"] == f"/conversations/{thread_id}"
-    assert [milestone["name"] for milestone in listed.json()["milestones"]] == [
-        "Foundation"
-    ]
-
-
-def test_milestone_scope_api_invokes_scoper_with_milestone_context_and_current_work() -> None:
-    class RecordingMilestoneScoper:
-        request = None
-
-        async def run(self, **request):
-            self.request = request
-            milestone_id = request["milestone"].milestone_id
-            return ScopingPlan(
-                create=(
-                    WorkOrderSpec(
-                        milestone_id,
-                        "Render the plan",
-                        "Draw the proposed work orders.",
-                    ),
-                ),
-                cancel=(WorkOrderId("run-obsolete"),),
-                reasons=("The milestone needs a dedicated scoping view.",),
-            )
-
-    store = InMemoryStateStore()
-    session = _session_with({"test": ConcurrentRunner()}, state_store=store)
-    scoper = RecordingMilestoneScoper()
-    project = Project(ProjectId("project-engine"), "Engine")
-    milestone = Milestone(
-        MilestoneId("milestone-scoping"),
-        project.project_id,
-        "Milestone scoping",
-        "Break milestone requirements into reviewable work orders.",
-    )
-    existing = RunState(
-        run_id=RunId("run-existing"),
-        task_id=TaskId("task-existing"),
-        workflow_id=WorkflowId("implementation-review-rerank"),
-        milestone_id=milestone.milestone_id,
-        phase=RunPhase.RUNNING_AGENT,
-        name="Existing implementation",
-        prompt="Implement the existing portion.",
-    )
-
-    async def scenario():
-        await store.save_project(project)
-        await store.save_milestone(milestone)
-        await store.save(existing)
-        app = create_app(
-            session,
-            {"test": ConcurrentRunner()},
-            milestone_scoper=scoper,  # type: ignore[arg-type]
-        )
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            return await client.post(
-                f"/api/projects/{project.project_id}/milestones/"
-                f"{milestone.milestone_id}/scope",
-                json={"message": "Prefer changes under 1,000 lines."},
-            )
-
-    response = asyncio.run(scenario())
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "create": [
-            {
-                "milestoneId": "milestone-scoping",
-                "name": "Render the plan",
-                "objective": "Draw the proposed work orders.",
-                "evidenceRequirements": [],
-                "dependencies": [],
-            }
-        ],
-        "cancel": ["run-obsolete"],
-        "supersede": [],
-        "reasons": ["The milestone needs a dedicated scoping view."],
-    }
-    scheduled = [run for run in asyncio.run(store.list_runs()) if run.run_id != existing.run_id]
-    assert len(scheduled) == 1
-    assert scheduled[0].phase is RunPhase.SCHEDULED
-    assert scheduled[0].name == "Render the plan"
-    assert scheduled[0].milestone_id == milestone.milestone_id
-    assert scoper.request["milestone"].name == "Milestone scoping"
-    assert scoper.request["milestone"].requirements == (
-        "Break milestone requirements into reviewable work orders.",
-    )
-    assert scoper.request["policy"].rules == (
-        "Prefer changes under 1,000 lines.",
-    )
-    assert scoper.request["workorders"][0].status is WorkOrderStatus.IN_PROGRESS
-    assert scoper.request["workorders"][0].spec.objective == (
-        "Implement the existing portion."
-    )
-
-
-def test_projects_api_says_how_many_milestones_each_project_has() -> None:
-    """The rail offers a project's plan only where there is one to offer.
-
-    Counted by the store rather than in the handler: the shell polls this route
-    every second, so neither a query per project nor a read of every milestone
-    row will do -- one grows with the list, the other with the total size of
-    every plan in the store. Reading a milestone at all is the failure, which is
-    why the double refuses rather than counts.
-    """
-
-    class ForbidsMilestoneReads(InMemoryStateStore):
-        async def list_milestones(self, project_id=None):
-            raise AssertionError("counting must not hydrate milestone rows")
-
-    runner = ConcurrentRunner()
-    store = ForbidsMilestoneReads()
-    session = _session_with({"test": runner}, state_store=store)
-    planned = Project(ProjectId("project-planned"), "Engine roadmap")
-    empty = Project(ProjectId("project-empty"), "Nothing planned yet")
-
-    async def scenario():
-        await store.save_project(planned)
-        await store.save_project(empty)
-        for index in range(3):
-            await store.save_milestone(
-                Milestone(
-                    MilestoneId(f"milestone-{index}"),
-                    planned.project_id,
-                    f"Goal {index}",
-                )
-            )
-        app = create_app(session, {"test": runner})
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            return await client.get("/api/projects")
-
-    listed = asyncio.run(scenario())
-
-    assert {
-        project["name"]: project["milestoneCount"]
-        for project in listed.json()["projects"]
-    } == {"Engine roadmap": 3, "Nothing planned yet": 0}
-
-
-def test_archiving_a_project_answers_with_the_plan_it_keeps() -> None:
-    """Archiving is not deleting, and the answer has to say so.
-
-    The route sends the whole row the list would, so a client that redraws from
-    it is not left with a project missing half itself -- and restoring gives the
-    milestones back rather than reporting a plan of none.
-    """
-
-    runner = ConcurrentRunner()
-    store = InMemoryStateStore()
-    session = _session_with({"test": runner}, state_store=store)
-    app = create_app(session, {"test": runner})
-    project = Project(ProjectId("project-planned"), "Engine roadmap")
-
-    async def scenario():
-        await store.save_project(project)
-        for index in range(2):
-            await store.save_milestone(
-                Milestone(
-                    MilestoneId(f"milestone-{index}"),
-                    project.project_id,
-                    f"Goal {index}",
-                )
-            )
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            archived = await client.post("/api/projects/project-planned/archive")
-            restored = await client.post("/api/projects/project-planned/unarchive")
-            return archived, restored
-
-    archived, restored = asyncio.run(scenario())
-
-    assert archived.json() == {
-        "projectId": "project-planned",
-        "name": "Engine roadmap",
-        "archived": True,
-        "milestoneCount": 2,
-    }
-    assert restored.json() == {**archived.json(), "archived": False}
-
-
-def test_project_milestones_api_costs_the_same_reads_however_long_the_plan_is() -> None:
-    """The timeline polls this route every second, per open project.
-
-    A read per milestone would make each poll cost the length of the plan, and
-    the SQLite store serializes every query behind one connection, so the plan
-    is read whole instead.
-    """
-
-    class CountingStore(InMemoryStateStore):
-        def __init__(self) -> None:
-            super().__init__()
-            self.milestone_reads = 0
-
-        async def list_milestones(self, project_id=None):
-            self.milestone_reads += 1
-            return await super().list_milestones(project_id)
-
-    runner = ConcurrentRunner()
-    store = CountingStore()
-    session = _session_with({"test": runner}, state_store=store)
-    project = Project(project_id_for_instance(AgentInstanceId("agi-long")), "Engine")
-
-    async def scenario():
-        await store.save_project(project)
-        for index in range(12):
-            milestone = Milestone(
-                MilestoneId(f"milestone-{index}"), project.project_id, f"Goal {index}"
-            )
-            await store.save_milestone(milestone)
-        store.milestone_reads = 0
-        app = create_app(session, {"test": runner})
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            return await client.get(f"/api/projects/{project.project_id}/milestones")
-
-    listed = asyncio.run(scenario())
-
-    assert store.milestone_reads == 1
-    milestones = listed.json()["milestones"]
-    assert [milestone["name"] for milestone in milestones] == [
-        f"Goal {index}" for index in reversed(range(12))
-    ]
-
-
-def test_new_project_intent_is_durable_before_the_agent_names_it() -> None:
-    runner = ConcurrentRunner(('"Durable project intent"',))
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={
-                    "agentId": "coder",
-                    "runner": "test",
-                    "createProject": True,
-                },
-            )
-            before_title = await client.get("/api/projects")
-            titled = await client.post(
-                f"/api/threads/{created.json()['id']}/title",
-                json={"text": "Keep this intent across a reload"},
-            )
-            after_title = await client.get("/api/projects")
-            return created, before_title, titled, after_title
-
-    created, before_title, titled, after_title = asyncio.run(scenario())
-
-    assert created.status_code == 201
-    assert created.json()["title"] == "New project"
-    assert before_title.json()["projects"] == [
-        {
-            "projectId": f"project-{created.json()['id']}",
-            "name": "New project",
-            "archived": False,
-            "milestoneCount": 0,
-            "conversationUrl": f"/conversations/{created.json()['id']}",
-        }
-    ]
-    assert titled.json() == {"title": "Durable project intent"}
-    assert after_title.json()["projects"] == [
-        {
-            "projectId": f"project-{created.json()['id']}",
-            "name": "Durable project intent",
-            "archived": False,
-            "milestoneCount": 0,
-            "conversationUrl": f"/conversations/{created.json()['id']}",
-        }
-    ]
-
-
-def test_an_archived_plan_leaves_its_project_with_nowhere_to_go() -> None:
-    """Archiving is one click away in the rail, and the archived conversation
-    opens as a blank new chat. The project is still listed -- it exists -- but
-    without a link, which is the row a project with no conversation already
-    gets. Restoring the chat gives the link back."""
-
-    runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
-
-    async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
-            created = await client.post(
-                "/api/threads",
-                json={"agentId": "coder", "runner": "test", "createProject": True},
-            )
-            thread_id = created.json()["id"]
-            await client.post(f"/api/threads/{thread_id}/archive")
-            archived = await client.get("/api/projects")
-            await client.post(f"/api/threads/{thread_id}/unarchive")
-            restored = await client.get("/api/projects")
-            return thread_id, archived, restored
-
-    thread_id, archived, restored = asyncio.run(scenario())
-
-    assert archived.json()["projects"] == [
-        {
-            "projectId": f"project-{thread_id}",
-            "name": "New project",
-            "archived": False,
-            "milestoneCount": 0,
-        }
-    ]
-    assert restored.json()["projects"] == [
-        {
-            "projectId": f"project-{thread_id}",
-            "name": "New project",
-            "archived": False,
-            "milestoneCount": 0,
-            "conversationUrl": f"/conversations/{thread_id}",
-        }
     ]
 
 
@@ -2510,6 +1837,7 @@ def _graph_app(
     *graphs: ScriptedGraph,
     approval_policy: ApprovalConfig = ApprovalConfig(),
     utilization: UtilizationService | None = None,
+    **options,
 ):
     """The web app with a scripted graph engine wired in.
 
@@ -2521,7 +1849,7 @@ def _graph_app(
     return (
         _graph_app_over(
             store, runtime, *graphs, approval_policy=approval_policy,
-            utilization=utilization,
+            utilization=utilization, **options,
         ),
         runtime,
     )
@@ -2534,6 +1862,7 @@ def _graph_app_over(
     approval_policy: ApprovalConfig = ApprovalConfig(),
     github_login_config: GitHubLoginConfig | None = None,
     utilization: UtilizationService | None = None,
+    **options,
 ):
     """A web app over an engine that already exists, so a restart can be one.
 
@@ -2554,6 +1883,7 @@ def _graph_app_over(
         approval_policy=approval_policy,
         github_login_config=github_login_config,
         utilization=utilization,
+        **options,
     )
 
 
@@ -2966,7 +2296,6 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> 
     assert driving == []
 
 
-
 def test_graph_events_cursor_replays_only_unseen_events() -> None:
     store = InMemoryStateStore()
     graph = ScriptedGraph(
@@ -2995,6 +2324,15 @@ def test_graph_events_cursor_replays_only_unseen_events() -> None:
                         break
                     await asyncio.sleep(0.01)
                 assert len(full) > 1
+                snapshot = (await client.get(
+                    f"/graph/api/runs/{created.json()['runId']}"
+                )).json()
+                execution_id = snapshot["activeExecutions"][0]["executionId"]
+                messages = [event for event in full if event["type"] == "transcript"]
+                assert messages
+                assert all(event["executionId"] == execution_id for event in messages)
+                assert all(event["executionId"] is None for event in full
+                           if event["type"] == "run.started")
                 for cursor in ("0", "", " "):
                     response = await client.get(url, params={"cursor": cursor})
                     assert response.status_code == 200
@@ -3602,6 +2940,117 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, st
     asyncio.run(scenario())
 
 
+def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
+    from engine.graph_runtime.inputs import mode_input
+
+    @dataclass(frozen=True)
+    class ModeGraph(ScriptedGraph):
+        inputs: tuple = (mode_input(),)
+
+    graph = ModeGraph(GraphId("modes"), "Modes", (ScriptedNode(NodeId("work"), (Say("Done"),)),))
+    offline, online = tmp_path / "offline", tmp_path / "online"
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        repos={"acme/offline": str(offline), "acme/online": str(online)},
+        repo_modes={"acme/offline": "disconnected"},
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                config = (await client.get("/api/config")).json()
+                assert config["repositories"] == [
+                    {"name": "acme/offline", "path": str(offline), "mode": "disconnected"},
+                    {"name": "acme/online", "path": str(online)},
+                ]
+                modes = {}
+                for path in (offline, online):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "modes", "repository": str(path), "prompt": "Task",
+                        "inputs": {"mode": "connected"},
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    modes[path.name] = snapshot.values["inputs"]["mode"]
+                assert modes == {"offline": "disconnected", "online": "connected"}
+
+    asyncio.run(scenario())
+
+
+def test_a_trusted_repository_auto_approves_its_workorders_only(tmp_path):
+    graph = ScriptedGraph(
+        GraphId("trust"), "Trust", (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+    )
+    trusted, other = tmp_path / "trusted", tmp_path / "other"
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        repos={"acme/trusted": str(trusted), "acme/other": str(other)},
+        trusted_repos=frozenset({"acme/trusted"}),
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                approved = {}
+                for path in (trusted, other):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "trust", "repository": str(path), "prompt": "Task",
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    approved[path.name] = snapshot.auto_approve_nodes
+                assert approved == {"trusted": (NodeId("work"),), "other": ()}
+
+    asyncio.run(scenario())
+
+
+def test_a_disconnected_repository_is_matched_through_subfolders_and_worktrees(tmp_path):
+    import subprocess
+
+    from engine.graph_runtime.inputs import mode_input
+
+    @dataclass(frozen=True)
+    class ModeGraph(ScriptedGraph):
+        inputs: tuple = (mode_input(),)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], check=True, capture_output=True)
+
+    offline = tmp_path / "offline"
+    (offline / "src").mkdir(parents=True)
+    git("init", "-q", str(offline))
+    git("-C", str(offline), "-c", "user.name=t", "-c", "user.email=t@t",
+        "commit", "-q", "--allow-empty", "-m", "init")
+    other_worktree = tmp_path / "other-worktree"
+    git("-C", str(offline), "worktree", "add", "-q", str(other_worktree))
+    graph = ModeGraph(GraphId("modes"), "Modes", (ScriptedNode(NodeId("work"), (Say("Done"),)),))
+    app, runtime = _graph_app(
+        InMemoryStateStore(), graph,
+        repos={"acme/offline": str(offline)},
+        repo_modes={"acme/offline": "disconnected"},
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                for path in (offline / "src", other_worktree):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "modes", "repository": str(path), "prompt": "Task",
+                        "inputs": {"mode": "connected"},
+                    })
+                    assert response.status_code == 201
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    assert snapshot.values["inputs"]["mode"] == "disconnected"
+
+    asyncio.run(scenario())
+
+
 def _runner_input_graph(*choices: str) -> ScriptedGraph:
     """A graph whose one input is an implementation runner offering `choices`."""
     from engine.graph_runtime.inputs import WorkflowInput
@@ -3866,7 +3315,9 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) 
 
     with patch.object(
         GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
-    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)):
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
         started = asyncio.run(scenario())
 
     assert started.status_code == 200, started.text
@@ -3991,7 +3442,7 @@ def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisit
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("creation", ["api", "agent", "scope"])
+@pytest.mark.parametrize("creation", ["api", "agent"])
 def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creation) -> None:
     async def scenario():
         store = InMemoryStateStore()
@@ -4012,25 +3463,12 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
         async def running(_app=None):
             yield runtime
 
-        project = Project(ProjectId("project"), "Project")
-        milestone = Milestone(MilestoneId("milestone"), project.project_id, "Milestone")
-
-        class Scoper:
-            async def run(self, **kwargs):
-                return ScopingPlan(create=(WorkOrderSpec(
-                    milestone.milestone_id, "Dependent", "Follow up",
-                    dependencies=(WorkOrderId("prerequisite"),),
-                ),))
-
         app = create_app(
             _session_with({"test": ConcurrentRunner()}, state_store=store),
             {"test": ConcurrentRunner()},
             workflow_catalog=WorkflowCatalog.from_graphs((graph,)),
             graph_runtime=running(),
-            milestone_scoper=Scoper(),
         )
-        await store.save_project(project)
-        await store.save_milestone(milestone)
         async with app.router.lifespan_context(app):
             prerequisite = RunState(
                 run_id=RunId("prerequisite"), task_id=TaskId("task"),
@@ -4054,12 +3492,6 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
                         elif creation == "agent":
                             with pytest.raises(ValueError, match="prerequisite"):
                                 await callbacks[0](prerequisite.run_id, "Follow up", prerequisite.run_id)
-                        else:
-                            result = await client.post(
-                                "/api/projects/project/milestones/milestone/scope",
-                                json={"message": "Plan work"},
-                            )
-                            assert result.status_code == 400
                     assert await store.list_runs() == (prerequisite,)
                 finally:
                     release.set()
@@ -4180,8 +3612,8 @@ def test_production_port_default_preserves_explicit_settings():
     assert Settings(port=8123).port == 8123
 
 
-def _login_gate(repository: str, source_control: object, login_repositories=()):
-    """The check the app hands its GitHub login, over `source_control`."""
+def _login_gate(repository: str, source_control: object, login_repositories=(), check="authorize"):
+    """The `check` the app hands its GitHub login, over `source_control`."""
     unused = object()
     session = AgentSession(
         Capabilities(
@@ -4205,7 +3637,7 @@ def _login_gate(repository: str, source_control: object, login_repositories=()):
         route.endpoint for route in app.app.routes
         if getattr(route, "path", "") == "/api/auth/github/callback"
     )
-    return callback.__self__.authorize
+    return getattr(callback.__self__, check)
 
 
 def test_signing_in_requires_write_access_to_the_configured_repository() -> None:
@@ -4214,8 +3646,8 @@ def test_signing_in_requires_write_access_to_the_configured_repository() -> None
     source_control = MagicMock(can_write_repository=AsyncMock(side_effect=[True, False]))
     authorize = _login_gate("acme/api", source_control)
 
-    assert asyncio.run(authorize(1, "maintainer")) is True
-    assert asyncio.run(authorize(2, "stranger")) is False
+    assert asyncio.run(authorize(1, "maintainer")) == {"acme/api": True}
+    assert asyncio.run(authorize(2, "stranger")) == {"acme/api": False}
     assert [
         (call.args, call.kwargs) for call in source_control.can_write_repository.await_args_list
     ] == [
@@ -4228,22 +3660,24 @@ def test_signing_in_is_refused_without_a_repository_to_check() -> None:
     source_control = MagicMock(can_write_repository=AsyncMock(return_value=True))
     authorize = _login_gate("", source_control)
 
-    assert asyncio.run(authorize(1, "maintainer")) is False
+    assert asyncio.run(authorize(1, "maintainer")) == {}
     source_control.can_write_repository.assert_not_awaited()
 
 
-def test_write_access_to_any_configured_repository_admits() -> None:
-    """Someone who can push to only one of the checkouts in `[repos]` is let in,
-    even when the webhook repository's lookup fails."""
+def test_every_configured_repository_is_asked_and_a_failure_is_unknown() -> None:
+    """Each repository gets its own answer, so what a user sees can be scoped to
+    the ones they can push to; a lookup that fails is unknown, not a no."""
     async def can_write(pr_url, login, *, user_id):
         if "acme/api" in pr_url:
             raise RuntimeError("GitHub is down")
         return "acme/web" in pr_url
 
     source_control = MagicMock(can_write_repository=AsyncMock(side_effect=can_write))
-    authorize = _login_gate("acme/api", source_control, ("acme/docs", "acme/web", "acme/api"))
+    authorize = _login_gate("Acme/API", source_control, ("acme/docs", "acme/web", "acme/api"))
 
-    assert asyncio.run(authorize(1, "maintainer")) is True
+    assert asyncio.run(authorize(1, "maintainer")) == {
+        "acme/api": None, "acme/docs": False, "acme/web": True,
+    }
     assert sorted(
         call.args[0] for call in source_control.can_write_repository.await_args_list
     ) == [
@@ -4253,14 +3687,394 @@ def test_write_access_to_any_configured_repository_admits() -> None:
     ]
 
 
-def test_access_is_unknown_when_no_repository_admits_and_one_lookup_failed() -> None:
-    async def can_write(pr_url, login, *, user_id):
-        if "acme/api" in pr_url:
-            raise RuntimeError("GitHub is down")
-        return False
+def test_the_users_own_token_is_asked_about_public_github_repositories(monkeypatch) -> None:
+    """The stand-in for a failed server lookup asks GitHub with the signed-in
+    user's token, reads only a write role as a yes, and skips other forges."""
+    asked = []
 
-    source_control = MagicMock(can_write_repository=AsyncMock(side_effect=can_write))
-    authorize = _login_gate("acme/api", source_control, ("acme/web",))
+    def github(request):
+        asked.append((request.url.path, request.headers["authorization"]))
+        if request.url.path == "/repos/acme/api":
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json={"permissions": {"admin": False, "push": True}})
 
-    with pytest.raises(RuntimeError, match="GitHub is down"):
-        asyncio.run(authorize(1, "maintainer"))
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.apps.web.api.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(github), **kwargs),
+    )
+    authorize_user = _login_gate(
+        "acme/api", MagicMock(), ("acme/web", "gitlab.example/acme/ops"), "authorize_user"
+    )
+
+    assert asyncio.run(authorize_user("user-token")) == {"acme/api": None, "acme/web": True}
+    assert sorted(asked) == [
+        ("/repos/acme/api", "Bearer user-token"),
+        ("/repos/acme/web", "Bearer user-token"),
+    ]
+
+
+def test_the_users_own_token_without_a_write_role_is_no_yes(monkeypatch) -> None:
+    def github(request):
+        return httpx.Response(200, json={"permissions": {"pull": True, "push": False}})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.apps.web.api.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(github), **kwargs),
+    )
+    authorize_user = _login_gate("acme/api", MagicMock(), check="authorize_user")
+
+    assert asyncio.run(authorize_user("user-token")) == {"acme/api": False}
+
+
+def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
+    runner = ConcurrentRunner()
+    store = InMemoryStateStore()
+    app = create_app(_session_with({"test": runner}, state_store=store), {"test": runner})
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for method, path in (
+                ("GET", "/api/projects"),
+                ("POST", "/api/projects"),
+                ("GET", "/api/projects/old/milestones"),
+                ("POST", "/api/projects/old/milestones/goal/scope"),
+            ):
+                assert (await client.request(method, path)).status_code == 404
+            config = (await client.get("/api/config")).json()
+            assert "showProjects" not in config
+            assert "planAgent" not in config
+            # Old clients cannot create a conversation-owned project anymore.
+            response = await client.post("/api/threads", json={
+                "agentId": "coder", "runner": "test", "createProject": True,
+            })
+            assert response.status_code == 201
+            assert response.json()["title"] == "New chat"
+            assert not hasattr(store, "save_project")
+
+    asyncio.run(scenario())
+
+
+def _scoped_app(tmp_path, runtime=None):
+    """Two checkouts behind GitHub login, and a run in each place a run can be."""
+    graph = _review_graph()
+    store = InMemoryStateStore()
+    repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
+    app = _graph_app_over(
+        store, runtime or ScriptedGraphRuntime(graph), graph,
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+        repos=repos,
+        login_repositories=("acme/api", "acme/web"),
+        repository_projects={"api": "acme/api", "web": "acme/web"},
+    )
+    for run_id, repository, phase in (
+        ("run-api", "api", RunPhase.SUCCEEDED),
+        ("run-api-path", str((tmp_path / "api").resolve()), RunPhase.SUCCEEDED),
+        # Started from a GitHub comment or assignment, which names the project.
+        ("run-github", "Acme/API", RunPhase.SUCCEEDED),
+        ("run-web", "web", RunPhase.SUCCEEDED),
+        ("run-web-scheduled", "web", RunPhase.SCHEDULED),
+        ("run-elsewhere", "/srv/unknown", RunPhase.SUCCEEDED),
+    ):
+        asyncio.run(store.save(RunState(
+            run_id=RunId(run_id), task_id=TaskId(f"task-{run_id}"),
+            workflow_id=WorkflowId(str(graph.graph_id)), phase=phase,
+            prompt="Do the work", repository=repository,
+        )))
+    return app, store, repos
+
+
+def _as_user(writable):
+    """Requests from a signed-in user who can write to `writable` only."""
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(patch.object(
+        GitHubLogin, "_read_session", return_value={"id": 7, "login": "bob"}
+    ))
+    stack.enter_context(patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)))
+    stack.enter_context(patch.object(
+        GitHubLogin, "writable_repositories", AsyncMock(return_value=frozenset(writable))
+    ))
+    return stack
+
+
+def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """Someone who can push only to `api` sees `api`'s WorkOrders, and every
+    other run answers as if it did not exist."""
+    app, store, repos = _scoped_app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with app.app.router.lifespan_context(app.app):
+                listed = (await client.get("/api/runs")).json()["runs"]
+                assert sorted(run["runId"] for run in listed) == [
+                    "run-api", "run-api-path", "run-github",
+                ]
+                assert (await client.get("/api/runs/run-api")).status_code == 200
+                for method, path in (
+                    ("GET", "/api/runs/run-web"),
+                    ("GET", "/api/runs/run-elsewhere"),
+                    ("POST", "/api/runs/run-web-scheduled/start"),
+                    ("DELETE", "/api/runs/run-web"),
+                    ("GET", "/api/runs/run-web/graph-events"),
+                    ("GET", "/api/runs/run-web/github-comments"),
+                    ("GET", "/graph/api/runs/run-web"),
+                    ("POST", "/graph/api/runs/run-web/cancel"),
+                ):
+                    response = await client.request(method, path)
+                    assert response.status_code == 404, (method, path, response.text)
+                    assert response.json() == {"error": "run not found"}
+                assert (await client.post("/graph/api/runs", json={})).status_code == 403
+                refused = await client.post("/api/runs", json={
+                    "workflowId": "implementation-review-codex",
+                    "prompt": "Change the web app.",
+                    "repository": str(Path(repos["web"]).resolve()),
+                })
+                assert refused.status_code == 403
+                # Another repository's run is as unknown a prerequisite as one
+                # that does not exist, whatever state it is in.
+                for prerequisite in ("run-web", "run-missing"):
+                    hidden = await client.post("/api/runs", json={
+                        "workflowId": "implementation-review-codex",
+                        "prompt": "Follow up.",
+                        "repository": str(Path(repos["api"]).resolve()),
+                        "dependsOnRunId": prerequisite,
+                    })
+                    assert hidden.status_code == 400, hidden.text
+                    assert hidden.json() == {
+                        "error": f"unknown prerequisite workorder: {prerequisite}",
+                    }
+                config = (await client.get("/api/config")).json()
+                assert [repo["name"] for repo in config["repositories"]] == ["api"]
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+    assert asyncio.run(store.load(RunId("run-web"))) is not None
+    assert asyncio.run(store.load(RunId("run-web-scheduled"))).phase is RunPhase.SCHEDULED
+
+
+def test_a_graph_run_stream_is_rechecked_against_its_own_repository(tmp_path) -> None:
+    """A stream from `/graph` ends when its run's repository is out of reach,
+    even for someone who can still write to another repository."""
+    from engine.apps.web.github_login import STREAM_ACCESS
+
+    app, _store, _repos = _scoped_app(tmp_path)
+    scopes = []
+
+    async def recording(scope, receive, send):
+        scopes.append(scope)
+        await app(scope, receive, send)
+
+    writable = {"acme/api"}
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=recording)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with app.app.router.lifespan_context(app.app):
+                await client.get("/graph/api/runs/run-api")
+                still_visible = scopes[-1][STREAM_ACCESS]
+                assert await still_visible() is True
+                writable.clear()
+                writable.add("acme/web")
+                assert await still_visible() is False
+
+    with _as_user(()), patch.object(
+        GitHubLogin, "writable_repositories",
+        AsyncMock(side_effect=lambda *_args, **_kwargs: frozenset(writable)),
+    ):
+        asyncio.run(scenario())
+
+
+def test_an_agent_cannot_depend_on_another_repositorys_run(tmp_path) -> None:
+    """An agent's WorkOrder may wait on runs in its own repository only; any
+    other run is as unknown as a missing one, whatever its state."""
+    runtime = ScriptedGraphRuntime(_review_graph())
+    creators = []
+    runtime.bind_workorder_creator = creators.append
+    app, store, _repos = _scoped_app(tmp_path, runtime)
+
+    async def scenario():
+        async with app.app.router.lifespan_context(app.app):
+            create = creators[0]
+            for prerequisite in ("run-web", "run-web-scheduled", "run-elsewhere", "run-missing"):
+                with pytest.raises(ValueError) as refused:
+                    await create(RunId("run-api"), "Follow up", RunId(prerequisite))
+                assert str(refused.value) == f"unknown prerequisite workorder: {prerequisite}"
+            # The same repository, named by its checkout path or GitHub project.
+            for prerequisite in ("run-api-path", "run-github"):
+                _url, child = await create(RunId("run-api"), "Follow up", RunId(prerequisite))
+                assert (await store.load(RunId(child))).depends_on_run_id == prerequisite
+
+    asyncio.run(scenario())
+
+
+class BranchingWorkspaces(ConversationWorkspaces):
+    """Checkouts whose branches are made in the repository they came from, as
+    a worktree's are, so which repository a chat is in can be read back."""
+
+    def _workspace(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
+        import subprocess
+
+        subprocess.run(["git", "-C", repository, "branch", "--force", f"engine/{workspace_id}"],
+                       check=True, capture_output=True)
+        return super()._workspace(workspace_id, repository, base_ref)
+
+
+def _scoped_chat_app(tmp_path, default="/repository"):
+    """Two real checkouts, `api` and `web`, behind GitHub login."""
+    import subprocess
+
+    repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
+    for path in repos.values():
+        subprocess.run(["git", "init", "-q", path], check=True)
+        subprocess.run(["git", "-C", path, "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    runner = ConcurrentRunner()
+    store = InMemoryStateStore()
+    workspaces = BranchingWorkspaces()
+    app = create_app(
+        _workspace_session(runner, workspaces, store, repos.get(default, default)),
+        {"test": runner},
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback"
+        ),
+        repos=repos,
+        login_repositories=("acme/api", "acme/web"),
+        repository_projects={"api": "acme/api", "web": "acme/web"},
+    )
+    return app, store, repos, workspaces
+
+
+def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """A chat whose branch is in a repository its user cannot push to is not
+    listed and answers as missing, attached or detached, so its transcript
+    cannot be read nor its agent prompted, and its checkout cannot be kept by
+    naming another repository."""
+    app, store, repos, workspaces = _scoped_chat_app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            ids = {}
+            for name in ("api", "web", None):
+                instance = await store.create_instance(CODER)
+                ids[name] = str(instance.instance_id)
+                if name is not None:
+                    attached = await client.post(
+                        f"/api/threads/{ids[name]}/workspace", json={"repository": repos[name]},
+                    )
+                    assert attached.status_code == 200, attached.text
+            return ids
+
+    async def as_api_user(ids):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            listed = {t["id"] for t in (await client.get("/api/threads")).json()["threads"]}
+            assert ids["api"] in listed and ids["web"] not in listed
+            # A chat that never had a checkout is in no repository.
+            for name in ("api", None):
+                assert (await client.get(f"/api/threads/{ids[name]}")).status_code == 200
+            for detached in (False, True):
+                hidden = f"/api/threads/{ids['web']}"
+                for method, path, body in (
+                    ("GET", hidden, None),
+                    ("GET", f"{hidden}/messages", None),
+                    ("POST", f"{hidden}/runs", {"text": "hello"}),
+                    ("DELETE", f"{hidden}/runs/current", None),
+                    ("POST", f"{hidden}/workspace", {"repository": repos["api"]}),
+                    ("DELETE", hidden, None),
+                ):
+                    response = await client.request(method, path, json=body)
+                    assert response.status_code == 404, (detached, method, path, response.text)
+                if not detached:
+                    # The branch outlives its checkout, and still says whose it is.
+                    workspace_id = (await store.load_instance(ids["web"])).workspace_id
+                    workspaces.detached.add(workspace_id)
+
+    # Set up by an operator, who can put a chat in either repository.
+    with _as_user(()), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
+        ids = asyncio.run(scenario())
+    with _as_user({"acme/api"}):
+        asyncio.run(as_api_user(ids))
+
+
+def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(tmp_path) -> None:
+    """A new chat gets the default checkout at once, so it is refused before
+    anything is checked out for somebody who cannot write there."""
+    app, store, _repos, _workspaces = _scoped_chat_app(tmp_path, default="web")
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            refused = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
+            assert refused.status_code == 403, refused.text
+            assert await store.list_instances() == ()
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+    with _as_user({"acme/web"}):
+        async def allowed():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+                created = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
+                assert created.status_code == 201, created.text
+        asyncio.run(allowed())
+
+
+def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+    """A chat cannot be given a checkout of a repository its user cannot push
+    to, whether named or the server's default, attached for the first time or
+    again after a detach."""
+    app, store, repos, _workspaces = _scoped_chat_app(tmp_path)
+
+    async def scenario():
+        instance = await store.create_instance(CODER)
+        path = f"/api/threads/{instance.instance_id}/workspace"
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            for body in ({"repository": str(Path(repos["web"]).resolve())}, {"repository": "web"}, {}):
+                refused = await client.post(path, json=body)
+                assert refused.status_code == 403, (body, refused.text)
+            assert (await store.load_instance(instance.instance_id)).workspace_id is None
+            api = {"repository": str(Path(repos["api"]).resolve())}
+            assert (await client.post(path, json=api)).status_code == 200
+            assert (await client.delete(path)).status_code == 200
+            assert (await client.post(path, json={"repository": "web"})).status_code == 403
+            assert (await client.post(path, json=api)).status_code == 200
+
+    with _as_user({"acme/api"}):
+        asyncio.run(scenario())
+
+
+def test_operators_see_every_run(tmp_path) -> None:
+    """Operators see everything, including runs no GitHub repository maps to."""
+    app, _store, _repos = _scoped_app(tmp_path)
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with app.app.router.lifespan_context(app.app):
+                listed = (await client.get("/api/runs")).json()["runs"]
+                assert (await client.get("/api/runs/run-elsewhere")).status_code == 200
+                config = (await client.get("/api/config")).json()
+                return {run["runId"] for run in listed}, config["repositories"]
+
+    with patch.object(
+        GitHubLogin, "_read_session", return_value={"id": 42, "login": "alice"}
+    ), patch.object(GitHubLogin, "has_access", AsyncMock(return_value=True)), patch.object(
+        GitHubLogin, "visible_repositories", AsyncMock(return_value=None)
+    ):
+        runs, repositories = asyncio.run(scenario())
+    assert runs == {
+        "run-api", "run-api-path", "run-github", "run-web", "run-web-scheduled", "run-elsewhere",
+    }
+    assert [repo["name"] for repo in repositories] == ["api", "web"]

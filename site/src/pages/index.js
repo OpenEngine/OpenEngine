@@ -100,6 +100,17 @@ export default function Home() {
             </div>
           </div>
 
+          <figure className={styles.video}>
+            <iframe
+              src="https://www.youtube-nocookie.com/embed/CZYZulDRkSk"
+              title="OpenEngine 1.0 release walkthrough"
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allowFullScreen
+            />
+          </figure>
+
           <figure className={styles.graph}>
             <div className={styles.graphHead}>
               <span className={styles.eyebrow}>implementation-review-rerank</span>

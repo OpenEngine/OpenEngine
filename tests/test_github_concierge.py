@@ -24,13 +24,30 @@ from test_slack_work_orders import (
     SIGNING_SECRET,
     FakeACPProvider,
     RecordingCommunications,
-    _app,
+    _app as _slack_app,
     _workflow_catalog,
 )
 
 
 #: The run id the fake runtime hands back when it is asked to start one.
 STARTED_RUN = "fresh"
+
+
+def _checkout(path, origin: str) -> str:
+    """A local repository whose `origin` is `origin`, as `[repos]` names one."""
+    import subprocess
+
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", origin], check=True)
+    return str(path)
+
+
+def _app(tmp_path, *arguments, repos=None, **options):
+    """The Slack tests' app, with a checkout of `acme/api` for GitHub to start work in."""
+    if repos is None:
+        repos = {"acme/api": _checkout(tmp_path / "acme-api", "https://github.com/acme/api.git")}
+    return _slack_app(tmp_path, *arguments, repos=repos, **options)
 
 
 def _graph_runtime(
@@ -246,6 +263,38 @@ def test_a_comment_reaches_no_agent_without_write_access(tmp_path, access):
         source_control.add_comment.assert_not_awaited()
         runtime.steer.assert_not_awaited()
     assert not communications.posts
+
+
+def test_a_comment_authors_access_is_answered_from_the_login_cache(tmp_path):
+    """The ingress asks through the same per-user cache that scopes the web app,
+    so a second comment from the same author is not asked about again."""
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    source_control.can_write_repository = AsyncMock(return_value=False)
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    with TestClient(app) as client:
+        for comment_id in (1, 2):
+            payload = _issue_comment(comment_id, "new workorder please")
+            payload["issue"]["pull_request"] = {}
+            payload["comment"]["user"]["id"] = 99
+            body = json.dumps(payload).encode()
+            assert client.post("/api/github/events", content=body, headers=dict(
+                github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+            client.portal.call(app.state.github_ingress.drain)
+        source_control.can_write_repository.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/1", "someone", user_id=99)
+        runtime.steer.assert_not_awaited()
 
 
 @pytest.mark.parametrize("stalls", ["login", "permission"])
@@ -604,6 +653,9 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, h
                          runner="default"),
         _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
         graph_runtime=opened,
+        repos={"other/repo": _checkout(tmp_path / "other", "https://github.com/other/repo.git"),
+               "acme/api": (checkout := _checkout(
+                   tmp_path / "api", f"https://{host.partition(':')[0]}/acme/api.git"))},
     )
     source_control = MagicMock(
         add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
@@ -628,10 +680,10 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, h
             source_control.add_comment.assert_not_awaited()
             assert not client.portal.call(capabilities.state_store.list_runs)
             return
-        # Started on the repository the comment arrived from, which is where
-        # the pull request is, rather than the configured default.
+        # Started in the checkout of the repository the comment arrived from,
+        # which is where the pull request is, rather than the configured default.
         assert runtime.start.await_args.args[1] == {
-            "task": "Implement it", "repository": repository}
+            "task": "Implement it", "repository": checkout}
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
         # No chat origin: this conversation is the pull request, which the
@@ -1274,6 +1326,7 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
         WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
         _workflow_catalog(), provider=provider, github_webhook_secret=SIGNING_SECRET,
         graph_runtime=opened,
+        repos={"acme/api": (checkout := _checkout(tmp_path / "api", "git@github.com:Acme/API.git"))},
     )
     source = MagicMock(can_write_repository=AsyncMock(return_value=may_write),
                        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
@@ -1291,7 +1344,7 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
         if may_write:
             runtime.start.assert_awaited_once()
             inputs = runtime.start.await_args.args[1]
-            assert inputs["repository"] == "acme/api"
+            assert inputs["repository"] == checkout
             assert "Fix the bug" in inputs["task"]
             assert "Reproduction steps" in inputs["task"]
             assert "https://github.com/acme/api/issues/7" in inputs["task"]
@@ -1305,11 +1358,221 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
             )
         else:
             runtime.start.assert_not_awaited()
-            assert "ignored an assignment of #7 from maintainer, who cannot write to acme/api" \
+            assert "ignored a GitHub delivery on acme/api#7 from maintainer, who cannot write to it" \
                 in caplog.messages
         runtime.store.claim_pull_request.assert_not_awaited()
     assert not provider.clients
     assert not communications.posts
+
+
+def _review_catalog():
+    """A catalog whose workflow can start in review, as the shipped one can."""
+    from engine.domain import WorkState
+    from engine.graph_runtime.inputs import WorkflowInput, mode_input, state_input
+    from engine.graph_runtime_langgraph import State, graph_workflow
+    from engine.runtime import WorkflowCatalog
+    from langgraph.graph import END, START, StateGraph
+
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {})
+    builder.add_edge(START, "work")
+    builder.add_edge("work", END)
+    return WorkflowCatalog.from_graphs((graph_workflow(
+        builder, id="implementation-review-v1", name="Implementation review",
+        inputs=(
+            mode_input(), state_input(WorkState.PLANNING, WorkState.REVIEW),
+            WorkflowInput("ref", "Ref"), WorkflowInput("pr_url", "Pull request"),
+            WorkflowInput("branch", "Branch"),
+        ),
+    ),))
+
+
+@pytest.mark.parametrize("may_write", [True, False])
+def test_requesting_a_review_from_engine_starts_an_engine_review(tmp_path, may_write, caplog):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _review_requested, _signed as github_signed
+
+    caplog.set_level(logging.INFO, logger="engine.apps.web.api")
+    # Nothing is working on the pull request yet.
+    runtime, opened = _graph_runtime(pr_number=99)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1"),
+        _review_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+        repos={"acme/api": (checkout := _checkout(tmp_path / "api", "git@github.com:Acme/API.git"))},
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=may_write),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source)
+    body = json.dumps(_review_requested()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "pull_request"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        # Asked through the login cache, which is per user and per repository.
+        source.can_write_repository.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/1", "maintainer", user_id=7)
+        if not may_write:
+            runtime.start.assert_not_awaited()
+            assert "ignored a GitHub delivery on acme/api#12 from maintainer, who cannot write to it" \
+                in caplog.messages
+            return
+        runtime.start.assert_awaited_once()
+        inputs = runtime.start.await_args.args[1]
+        assert inputs["repository"] == checkout
+        assert "https://github.com/acme/api/pull/12" in inputs["task"]
+        assert inputs["inputs"] == {
+            "mode": "connected", "state": "Review", "ref": "origin/feature",
+            "pr_url": "https://github.com/acme/api/pull/12", "branch": "feature",
+        }
+        # Claimed, so the review may comment on the pull request it was given.
+        record = runtime.store.claim_pull_request.await_args.args[0]
+        assert (record.repository, record.number, record.run_id) == (
+            "acme/api", 12, RunId(STARTED_RUN))
+
+
+def test_a_review_request_leaves_a_pull_request_to_its_running_work_order(tmp_path, caplog):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _review_requested, _signed as github_signed
+
+    caplog.set_level(logging.INFO, logger="engine.apps.web.api")
+    runtime, opened = _graph_runtime(pr_number=12)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1"),
+        _review_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+        repos={"acme/api": _checkout(tmp_path / "api", "git@github.com:Acme/API.git")},
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=True),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source)
+    body = json.dumps(_review_requested()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "pull_request"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+    runtime.start.assert_not_awaited()
+    assert "a review of acme/api#12 was requested, but work order existing is still on it" \
+        in caplog.messages
+
+
+@pytest.mark.parametrize("configured", [
+    pytest.param("other/repo", id="other-checkout"),
+    pytest.param("", id="no-checkout"),
+])
+def test_an_assignment_without_a_local_checkout_starts_nothing(tmp_path, caplog, configured):
+    """The webhook names a forge repository, and git cannot check that out.
+
+    Without a configured checkout whose `origin` is that repository, the bare
+    `owner/name` would reach git as a relative directory and fail the run with
+    `cannot change to 'owner/name'`, so no run is started at all. Neither
+    `[repos]` nor `work_orders.repository` is required, so a deployment with
+    no checkout at all is refused the same way.
+    """
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository=configured, workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+        repos={configured: _checkout(tmp_path / "other", "https://github.com/other/repo.git")}
+        if configured else {},
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    ))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.start.assert_not_awaited()
+        assert not client.portal.call(capabilities.state_store.list_runs)
+    assert "no checkout of acme/api is configured" in caplog.text
+
+
+def test_stalled_checkouts_are_skipped_rather_than_waited_on(tmp_path, monkeypatch):
+    """Checkouts whose `git remote get-url` never answers, as on stalled
+    mounts, cost the lookup one shared timeout rather than one each, and never
+    the single ingress worker and every delivery queued behind it."""
+    import asyncio
+    import time
+
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    import engine.apps.web.api as api
+
+    stalled = [_checkout(tmp_path / f"stalled-{index}", "https://github.com/acme/api.git")
+               for index in range(3)]
+    spawn = asyncio.create_subprocess_exec
+
+    async def hanging_for_stalled(*command, **options):
+        if any(path in command for path in stalled):
+            command = ("sleep", "60")
+        return await spawn(*command, **options)
+
+    monkeypatch.setattr(api, "GITHUB_CHECKOUT_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(api.asyncio, "create_subprocess_exec", hanging_for_stalled)
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="other/repo", workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+        repos={**{f"stalled-{index}": path for index, path in enumerate(stalled)},
+               "acme/api": (checkout := _checkout(tmp_path / "api", "https://github.com/acme/api.git"))},
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    ))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        started = time.monotonic()
+        client.portal.call(app.state.github_ingress.drain)
+        # One deadline for all three, where one each would take 1.5 seconds.
+        assert time.monotonic() - started < 1.2
+        runtime.start.assert_awaited_once()
+        assert runtime.start.await_args.args[1]["repository"] == checkout
+
+
+def test_an_assignment_starts_in_a_home_relative_checkout_expanded(tmp_path, monkeypatch):
+    """`[repos]` may name a checkout as `~/…`, as engine.toml does. The run is
+    started in the expanded path, since git takes a literal `~` as a directory
+    name and fails with `cannot change to '~/…'`."""
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    checkout = _checkout(tmp_path / "code" / "api", "https://github.com/acme/api.git")
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="", workflow="implementation-review-v1"),
+        _workflow_catalog(), provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+        repos={"acme/api": "~/code/api"},
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    ))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        runtime.start.assert_awaited_once()
+        assert runtime.start.await_args.args[1]["repository"] == checkout
 
 
 def test_issue_progress_posts_only_milestones(tmp_path, monkeypatch):

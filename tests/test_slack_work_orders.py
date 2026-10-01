@@ -224,6 +224,7 @@ def _app(
     github_comment_handler=None,
     github_webhook_secret="",
     approval_policy=None,
+    repos=None,
 ):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
@@ -255,6 +256,7 @@ def _app(
         github_login_config=github_login_config,
         public_url="https://engine.example",
         work_orders=work_orders,
+        repos=repos,
         credential_store=MagicMock(),
         concierge_provider=provider or FakeACPProvider(),
         graph_runtime=graph_runtime,
@@ -1199,6 +1201,12 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(tmp_path, fail_after_c
         assert not result.get("isError"), result
         assert result["structuredContent"]["url"].startswith("https://engine.example")
         assert len(provider.clients[0].prompts) == 2
+        # Progress arrives from the graph run in the background.
+        async def wait_for_progress():
+            async with asyncio.timeout(10):
+                while not any(m.progress and m.links for _, m, _ in communications.posts):
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_for_progress)
     announcements = [
         m for _, m, _ in communications.posts
         if m.text.startswith("Started a work order")
@@ -1546,7 +1554,7 @@ def test_slack_starts_configured_graph_with_input_defaults(tmp_path, ending, bef
     assert messages[0].text == provider.text
     assert messages[1].text == "*work* started."
     assert messages[1].progress
-    assert any(link.label == "View work order" for link in messages[1].links)
+    assert not messages[1].links
     assert not any(m.text.startswith("Started a work order") for m in messages)
 
 

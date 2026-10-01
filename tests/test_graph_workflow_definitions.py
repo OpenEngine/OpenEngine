@@ -31,9 +31,10 @@ from engine.apps.web.__main__ import build_app
 from engine.apps.web.composition import Settings
 from engine.apps.worker.__main__ import main as worker
 from engine.apps.worker.composition import Settings as WorkerSettings
-from engine.domain import WorkflowId, WorkspaceId
+from engine.domain import STATE_INPUT, WorkflowId, WorkspaceId, WorkState
 from engine.graph_runtime import GraphId, GraphWorkflow
 from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode
+from engine.graph_runtime_langgraph.components.forge import PUBLISH_CHANGE
 from engine.graph_runtime_langgraph.components.name import NAMING_PROMPT
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.ports import Workspace
@@ -174,6 +175,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "reranker",
         "impact-analysis",
         "human-review",
+        "triage",
     ]
     assert [node.name for node in codex.nodes] == [
         "Workspace",
@@ -188,21 +190,34 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Reranker",
         "Impact analysis",
         "Human review",
+        "Triage",
     ]
+    # Every node belongs to one of the shared WorkOrder states.
     assert [node.group for node in codex.nodes] == [
-        "",
-        "",
-        "",
-        "",
+        "Planning",
+        "Planning",
+        "Implementation",
+        "Implementation",
         "Review",
         "Review",
         "Review",
         "Review",
         "Review",
         "Review",
-        "",
-        "",
+        "Review",
+        "Review",
+        "Review",
     ]
+    # Reviewers, the reranker and triage say where their findings are kept.
+    assert {
+        str(node.node_id): node.findings_key for node in codex.nodes if node.findings_key
+    } == {
+        **{f"review-{facet}": f"review-{facet}" for facet in (
+            "security", "bugs", "performance", "conciseness", "dryness",
+        )},
+        "reranker": "review",
+        "triage": "review",
+    }
     # The kinds: a checkout, nine agents (implementation + 5 reviewers +
     # reranker + naming + impact analysis), and the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
@@ -217,6 +232,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "agent",
         "agent",
         "agent",
+        "human",
         "human",
     ]
     # The implementation, review facets, and reranker are conversations a
@@ -234,6 +250,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         True,
         True,
         True,
+        False,
         False,
     ]
     for topology in topologies:
@@ -341,6 +358,12 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
         "add_comment",
     )
     assert reranker_binding.required_outputs == ("findings",)
+    # A run started in review keeps its findings for a person, so the reranker
+    # is not served add_comment -- whose broker would refuse to complete
+    # without a comment.
+    reviewing = reranker_binding.for_state({"inputs": {STATE_INPUT: WorkState.REVIEW}})
+    assert "add_comment" not in reviewing.repository_tools
+    assert reranker_binding.for_state({"inputs": {}}) is reranker_binding
 
 
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
@@ -423,13 +446,194 @@ def test_review_feedback_returns_to_implementation_at_most_once(
     assert visited.count(module.WORKSPACE) == 1
     assert visited.count(module.IMPACT_ANALYSIS) == 1
     assert visited[-2:] == [module.IMPACT_ANALYSIS, module.HUMAN_REVIEW]
-    assert prompts[0] == module.IMPLEMENTATION_PROMPT.format(task="Repair the result")
+    assert prompts[0] == module.IMPLEMENTATION_PROMPT.format(
+        publish=PUBLISH_CHANGE.connected, task="Repair the result",
+    )
     if has_findings:
         assert "Fix the bug" in prompts[1]
         assert "Repair the result" in prompts[1]
         assert pr_url in prompts[1]
         assert "same PR branch" in prompts[1]
         assert "Do not open another pull request" in prompts[1]
+
+
+@pytest.mark.parametrize("has_findings", [False, True])
+def test_a_disconnected_run_is_told_to_stay_off_the_forge(
+    monkeypatch, has_findings,
+) -> None:
+    """Every prompt is worded for a run that commits locally and posts nothing."""
+    from langchain_core.runnables import RunnableLambda
+    from engine.graph_runtime_langgraph.components import RerankerNode
+
+    module = definition_module()
+    builder = module.pipeline("codex")
+    nodes = nodes_of(builder)
+    visited = []
+    prompts = {}
+    findings = [{"tagline": "Fix the bug", "description": "The result is wrong."}]
+
+    async def rerank(self, state):
+        visited.append(module.RERANKER)
+        prompts.setdefault(module.RERANKER, nodes[module.RERANKER].prompt(state))
+        return {module.REVIEW: findings if has_findings else []}
+
+    monkeypatch.setattr(RerankerNode, "__call__", rerank)
+
+    def stub(name):
+        def run(state):
+            visited.append(name)
+            if name in (module.IMPLEMENTATION, module.IMPACT_ANALYSIS):
+                prompts.setdefault(name, []).append(nodes[name].prompt(state))
+            if name == module.CI_CHECK:
+                return {"ci_check": {"passed": True, "skipped": True}}
+            return {}
+        return RunnableLambda(run)
+
+    for name, spec in builder.nodes.items():
+        if name != module.RERANKER:
+            spec.runnable = stub(name)
+
+    asyncio.run(builder.compile().ainvoke({
+        "task": "Repair the result", "inputs": {"mode": "disconnected"},
+    }))
+
+    rounds = 2 if has_findings else 1
+    assert visited.count(module.IMPLEMENTATION) == rounds
+    assert visited.count("review-security") == rounds
+    assert prompts[module.IMPLEMENTATION][0] == module.IMPLEMENTATION_PROMPT.format(
+        publish=PUBLISH_CHANGE.disconnected, task="Repair the result",
+    )
+    for prompt in (*prompts[module.IMPLEMENTATION], *prompts[module.IMPACT_ANALYSIS]):
+        assert "disconnected from the forge" in prompt
+        assert "open_pull_request" not in prompt
+        assert "add_comment" not in prompt
+    if has_findings:
+        assert "Fix the bug" in prompts[module.IMPLEMENTATION][1]
+    assert "add_comment" not in prompts[module.RERANKER]
+    assert "Pull request:" not in prompts[module.RERANKER]
+
+
+def test_a_run_started_in_review_triages_before_it_fixes(monkeypatch) -> None:
+    """Started in review, the run checks out the change, reviews it and asks.
+
+    Nothing is posted by the reranker, and only the findings a person chose at
+    triage are sent to implementation; its fix is reviewed and triaged again.
+    """
+    from langchain_core.runnables import RunnableLambda
+    from engine.graph_runtime_langgraph.components import RerankerNode
+
+    module = definition_module()
+    builder = module.pipeline("codex")
+    nodes = nodes_of(builder)
+    visited = []
+    prompts = {}
+    findings = [
+        {"tagline": "Fix the bug", "description": "The result is wrong.", "agent": "claude", "facet": "bugs"},
+        {"tagline": "Rename it", "description": "The name misleads.", "agent": "claude", "facet": "conciseness"},
+    ]
+    pr_url = "https://github.com/owner/repo/pull/42"
+    choices = iter([[findings[0]], []])
+
+    async def rerank(self, state):
+        visited.append(module.RERANKER)
+        prompts.setdefault(module.RERANKER, nodes[module.RERANKER].prompt(state))
+        return {module.REVIEW: findings}
+
+    monkeypatch.setattr(RerankerNode, "__call__", rerank)
+
+    def stub(name):
+        def run(state):
+            visited.append(name)
+            if name == module.IMPLEMENTATION:
+                prompts.setdefault(name, []).append(nodes[name].prompt(state))
+                return {"pr_url": pr_url}
+            if name == "review-security":
+                prompts.setdefault(name, nodes[name].prompt(state))
+            if name == module.CI_CHECK:
+                return {"ci_check": {"passed": True}}
+            if name == module.TRIAGE:
+                return {module.FIX: next(choices)}
+            return {}
+        return RunnableLambda(run)
+
+    for name, spec in builder.nodes.items():
+        if name != module.RERANKER:
+            spec.runnable = stub(name)
+
+    asyncio.run(builder.compile().ainvoke({
+        "task": f"Review pull request {pr_url}",
+        "inputs": {"state": "Review", "ref": "origin/feature", "pr_url": pr_url, "branch": "feature"},
+    }))
+
+    assert visited[0] == module.WORKSPACE
+    assert module.NAMING not in visited
+    assert visited.count(module.RERANKER) == 2
+    assert visited.count(module.TRIAGE) == 2
+    assert visited.count(module.IMPLEMENTATION) == 1
+    assert module.IMPACT_ANALYSIS not in visited and module.HUMAN_REVIEW not in visited
+    assert visited[-1] == module.TRIAGE
+    assert pr_url in prompts["review-security"]
+    assert "add_comment" not in prompts[module.RERANKER]
+    assert "somewhat aggressively" in prompts[module.RERANKER]
+    fix, = prompts[module.IMPLEMENTATION]
+    assert "Fix the bug" in fix and "Rename it" not in fix
+    assert pr_url in fix and "same PR branch" in fix
+    # The workspace's own branch is not the pull request's, so the prompt names it.
+    assert "git push origin HEAD:feature" in fix
+    assert "Reply to each review comment" not in fix
+
+
+def test_a_disconnected_run_is_served_no_forge_tools(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from engine.domain import RunId
+    from engine.graph_runtime_langgraph import terminal_mcp
+    from engine.runtime.terminal_mcp import TerminalMcpBroker
+
+    module = definition_module()
+    nodes = nodes_of(module.pipeline("codex"))
+    brokers = []
+
+    def capture_broker(**kwargs):
+        broker = TerminalMcpBroker(**kwargs)
+        brokers.append(broker)
+        return broker
+
+    monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
+    served = {}
+
+    def enable(self, source_control, names, workspace, approve):
+        served[self._step.step_id] = (tuple(names), self._step.required_outputs)
+
+    monkeypatch.setattr(TerminalMcpBroker, "enable_repository_tools", enable)
+    source_control = SimpleNamespace(**{
+        method: (lambda *a, **k: None)
+        for method in ("run_git", "request_review", "add_comment",
+                       "view_change_request", "list_pipeline_status", "get_job_logs")
+    })
+    execution = SimpleNamespace(
+        run_id=RunId("run"), execution_id="one", node_id="node",
+        runtime=SimpleNamespace(
+            source_control=source_control, store=SimpleNamespace(),
+            workorder_creator=None,
+        ),
+    )
+    state = {"workspaceId": "workspace", "inputs": {"mode": "disconnected"}}
+
+    async def scenario():
+        for name in (module.IMPLEMENTATION, "review-security", module.RERANKER,
+                     module.IMPACT_ANALYSIS):
+            binding, = nodes[name].mcp_server_bindings
+            async with binding(state, execution, None):
+                pass
+
+    asyncio.run(scenario())
+
+    assert served == {
+        module.IMPLEMENTATION: (("git_subcommand",), ()),
+        "review-security": ((), ("findings",)),
+        module.RERANKER: ((), ("findings",)),
+        module.IMPACT_ANALYSIS: ((), ("impact_level", "impact_rationale")),
+    }
 
 
 def test_the_catalog_answers_for_the_workflow_by_id() -> None:
@@ -491,7 +695,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     # Every entry declares the inputs the creation form asks for.
     assert [
         [item["name"] for item in one["inputs"]] for one in offered
-    ] == [["implementation_runner", "review_runner"]]
+    ] == [["implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch"]]
 
 
 # --- and nothing falls over --------------------------------------------------
@@ -530,7 +734,7 @@ def test_stage_runners_configure_models_and_mcp_identity(
     module = definition_module()
     graph = module.graph_for("codex")
     assert [item.name for item in graph.inputs] == [
-        "implementation_runner", "review_runner",
+        "implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch",
     ]
     nodes = nodes_of(graph.builder)
     observed = [

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
-from engine.domain import AgentId, AgentRunId, StepCompleted, StepId, StepSpec
+from engine.domain import (
+    AgentId, AgentRunId, ForgeMode, StepCompleted, StepId, StepSpec, forge_mode,
+)
 from engine.domain.ids import WorkspaceId
 from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.terminal_mcp import (
+    LOCAL_REPOSITORY_TOOLS,
     REPOSITORY_TOOL_METHODS,
     OpenedPullRequest,
     PostedComment,
@@ -27,7 +30,13 @@ WORKSPACE_ID = "workspaceId"
 
 @dataclass(frozen=True, slots=True)
 class TerminalMcpServer:
-    """Create one existing terminal broker for each graph node invocation."""
+    """Create one existing terminal broker for each graph node invocation.
+
+    A disconnected run (see `engine.domain.forge`) is served only the
+    repository tools that stay in its checkout, and is not asked for a pull
+    request: what would reach the forge is withheld by the server, not only by
+    the prompt asking the agent not to.
+    """
 
     step_id: str
     agent_id: str
@@ -42,8 +51,32 @@ class TerminalMcpServer:
     validate_completion: Callable[[StepCompleted], None] | None = None
     create_workorder: bool = False
 
+    def __call__(
+        self,
+        state: Mapping[str, object],
+        execution: NodeExecution,
+        approve: ApprovalHandler,
+    ) -> AbstractAsyncContextManager[BoundMcpServer]:
+        return self.for_mode(forge_mode(state.get("inputs")))._serve(
+            state, execution, approve,
+        )
+
+    def for_mode(self, mode: ForgeMode) -> TerminalMcpServer:
+        """This server as a run in `mode` is served it."""
+        if mode is ForgeMode.CONNECTED:
+            return self
+        return replace(
+            self,
+            repository_tools=tuple(
+                name for name in self.repository_tools if name in LOCAL_REPOSITORY_TOOLS
+            ),
+            required_outputs=tuple(
+                name for name in self.required_outputs if name != "pr_url"
+            ),
+        )
+
     @asynccontextmanager
-    async def __call__(
+    async def _serve(
         self,
         state: Mapping[str, object],
         execution: NodeExecution,

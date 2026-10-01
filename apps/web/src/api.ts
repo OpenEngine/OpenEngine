@@ -28,10 +28,8 @@ export type EngineConfig = {
   agents: AgentOption[];
   runners: RunnerOption[];
   defaultAgent: string;
-  /** The agent the New Project button talks to, empty when none is composed. */
-  planAgent: string;
-  showProjects: boolean;
-  repositories: { name: string; path: string }[];
+  /** `mode` is set when `engine init` fixed the mode of the repository's WorkOrders. */
+  repositories: { name: string; path: string; mode?: string }[];
   defaultRunner: string;
   /** Each workflow declares the inputs its creation form asks for. */
   workflows: {
@@ -40,13 +38,8 @@ export type EngineConfig = {
   }[];
 };
 
-/** Which agent the next conversation starts on, for a plan or an ordinary chat.
- *
- *  A deployment that composed no planner says so with an empty `planAgent`, and
- *  the plan page then opens on the default rather than on nothing: the button
- *  starting a chat you can retarget is better than one that starts none. */
-export function newChatAgent(config: EngineConfig, plan: boolean): string {
-  return (plan && config.planAgent) || config.defaultAgent;
+export function newChatAgent(config: EngineConfig): string {
+  return config.defaultAgent;
 }
 
 export type ApiThread = {
@@ -61,121 +54,6 @@ export type ApiThread = {
   workspaceRef?: string;
   workspaceAttached: boolean;
 };
-
-export type ApiProject = {
-  projectId: string;
-  name: string;
-  /** Put away rather than deleted: listed under Archived, and restorable. */
-  archived: boolean;
-  /** The planning conversation this project was named after, when it still has
-   *  one. A project with none is listed but has nothing to open. */
-  conversationUrl?: string;
-  /** How many milestones the plan holds, from the responses that counted them.
-   *  Absent where nothing counted, which is not the same as a plan of none. */
-  milestoneCount?: number;
-};
-
-/** The page listing one project's plan in full. */
-export function projectMilestonesUrl(projectId: string): string {
-  return `/projects/${encodeURIComponent(projectId)}/milestones`;
-}
-
-/** One milestone's own page: the tasks started under it.
- *
- *  Nested under the plan it belongs to rather than named by its id alone: the
- *  page is read as part of a project, and the way back out is the plan. */
-export function milestoneDetailsUrl(
-  projectId: string,
-  milestoneId: string,
-): string {
-  return `${projectMilestonesUrl(projectId)}/${encodeURIComponent(milestoneId)}`;
-}
-
-export function milestoneNewTaskUrl(
-  projectId: string,
-  milestoneId: string,
-): string {
-  return `${milestoneDetailsUrl(projectId, milestoneId)}/tasks/new`;
-}
-
-export function milestoneScopeUrl(
-  projectId: string,
-  milestoneId: string,
-): string {
-  return `${milestoneDetailsUrl(projectId, milestoneId)}/scope`;
-}
-
-export type ApiMilestone = {
-  milestoneId: string;
-  name: string;
-  description: string;
-  dependencies: string[];
-};
-
-export type ApiProjectMilestones = {
-  project: ApiProject;
-  milestones: ApiMilestone[];
-};
-
-export type ApiWorkOrderSpec = {
-  milestoneId: string;
-  name: string;
-  objective: string;
-  evidenceRequirements: string[];
-  dependencies: string[];
-};
-
-export type ApiScopingPlan = {
-  create: ApiWorkOrderSpec[];
-  cancel: string[];
-  supersede: { workorderId: string; replacements: ApiWorkOrderSpec[] }[];
-  reasons: string[];
-};
-
-export function scopeMilestone(
-  projectId: string,
-  milestoneId: string,
-  message: string,
-): Promise<ApiScopingPlan> {
-  return api<ApiScopingPlan>(
-    `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/scope`,
-    { method: "POST", body: JSON.stringify({ message }) },
-  );
-}
-
-export function getProjectMilestones(
-  projectId: string,
-  signal?: AbortSignal,
-): Promise<ApiProjectMilestones> {
-  return api<ApiProjectMilestones>(
-    `/api/projects/${encodeURIComponent(projectId)}/milestones`,
-    {
-      signal,
-    },
-  );
-}
-
-export function createProject(
-  name: string,
-  signal?: AbortSignal,
-): Promise<ApiProject> {
-  return api<ApiProject>("/api/projects", {
-    method: "POST",
-    body: JSON.stringify({ name }),
-    signal,
-  });
-}
-
-/** Put a project away, or take it back out. */
-export function setProjectArchived(
-  projectId: string,
-  archived: boolean,
-): Promise<ApiProject> {
-  return api<ApiProject>(
-    `/api/projects/${encodeURIComponent(projectId)}/${archived ? "archive" : "unarchive"}`,
-    { method: "POST" },
-  );
-}
 
 /** One node of the graph a WorkOrder is running, as its page draws it.
  *
@@ -199,7 +77,7 @@ export type ApiRunStep = {
 /** One WorkOrder as `GET /api/runs` lists it.
  *
  *  Every screen polls that list once a second to keep the rail current, so it
- *  carries what a rail, a card and a milestone's task list read and no more.
+ *  carries what a rail and a card read and no more.
  *  The prose an agent wrote is the WorkOrder page's, and comes with the single
  *  run it fetches. */
 export type ApiWorkflowRunListing = {
@@ -208,7 +86,6 @@ export type ApiWorkflowRunListing = {
   workflowId: string;
   workflowName: string;
   taskId: string;
-  milestoneId: string | null;
   repository: string;
   repositoryContext: { repository: string };
   parentRunId?: string | null;
@@ -261,7 +138,6 @@ export type RunView = ApiWorkflowRun & {
   pendingHumanReview: {
     stepId: string;
     title: string;
-    prUrl: string | null;
   } | null;
 };
 
@@ -439,7 +315,7 @@ export function startScheduledRun(runId: string): Promise<ApiWorkflowRun> {
 
 /** Throw a WorkOrder away for good.
  *
- *  Unlike archiving a project there is nothing to restore afterwards: the run
+ *  There is nothing to restore afterwards: the run
  *  and its history go with it, which is why the rail asks first. */
 export function deleteRun(runId: string): Promise<void> {
   return api<void>(`/api/runs/${encodeURIComponent(runId)}`, {
@@ -581,7 +457,12 @@ export function logout(): Promise<void> {
   return api<void>("/api/auth/github/logout", { method: "POST" });
 }
 
-export type GitHubStatus = { connected: boolean; clientIdConfigured: boolean };
+export type GitHubStatus = {
+  connected: boolean;
+  clientIdConfigured: boolean;
+  /** False when sign-in is on: agents then use the server's own connection. */
+  agentsUseConnection?: boolean;
+};
 
 export type SourceControlStatus = {
   provider: "gh-cli" | "github-oauth" | "gitlab-oauth";

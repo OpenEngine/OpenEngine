@@ -54,6 +54,20 @@ describe("SettingsPanel Slack connection", () => {
     vi.spyOn(window, "open").mockImplementation(() => null);
   });
 
+  it("says agents do not act as a signed-in user's GitHub connection", async () => {
+    vi.mocked(api.getGitHubStatus).mockResolvedValue({
+      connected: true,
+      clientIdConfigured: true,
+      agentsUseConnection: false,
+    });
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText(/The connection below is only yours, and agents do not act as it\./),
+    ).toBeVisible();
+  });
+
   it("shows an error when polling Slack status fails", async () => {
     vi.mocked(api.getSlackStatus)
       .mockResolvedValueOnce({ configured: true, connected: false })

@@ -30,7 +30,9 @@ def test_agent_transcript_is_mirrored(
 ):
     texts = (
         [" \n"] if blank_report
-        else ["Inspecting the code.", "Checking <@UOTHER> & [REDACTED].", "Final report: done."]
+        else ["Inspecting the code.", "Checking <@UOTHER> & [REDACTED].",
+              '{"name":"Update quickstart with oe installation instructions"}',
+              "Final report: done."]
     )
 
     async def agent(state):
@@ -129,14 +131,30 @@ def test_agent_transcript_is_mirrored(
     )
     posted = [m.text for _, m, _ in communications.posts]
     expected = [
-        escape(text, quote=False)
+        ("*name*\n\tUpdate quickstart with oe installation instructions"
+         if text.startswith('{"name":') else escape(text, quote=False))
         for text in texts[1 if fail_post else 0:]
         if text.strip()
     ]
     assert [text for text in posted if text in expected] == expected
     assert all(not message.progress for _, message, _ in communications.posts
                if message.text in expected)
-    assert ("Work order finished." in posted) == (blank_report and ending == "finished")
+    assert all(not message.links for _, message, _ in communications.posts
+               if message.text in expected or message.text == "*agent* started.")
+    assert posted.count("Work order finished.") == int(ending == "finished")
+    work_order_links = [
+        (message, link)
+        for _, message, _ in communications.posts
+        for link in message.links
+        if link.label == "View work order"
+    ]
+    assert len(work_order_links) == 1
+    completion, link = work_order_links[0]
+    assert completion.text == (
+        "Work order finished." if ending == "finished"
+        else "Work order failed: unexpected service failure"
+    )
+    assert link.url.endswith(f"/runs/{run_id}")
     assert posted.count("Work order failed: unexpected service failure") == int(ending == "failed")
     assert posted.count("*agent* started.") == 1
     assert not any(word in text for text in posted for word in (
@@ -216,10 +234,30 @@ def test_human_review_slack_sequence(tmp_path, decision, agent_report):
     expected.extend(["*Human review* started.", "Review complete and ready for your decision."])
     if decision == "cancel":
         expected.append("Work order failed: approval of this run was not allowed")
-    elif not agent_report:
+    else:
         expected.append("Work order finished.")
     assert [message.text for _, message, _ in communications.posts] == expected
     assert all((channel, thread) == ("CSOURCE", "1") for channel, _, thread in communications.posts)
     review_message = next(m for _, m, _ in communications.posts
                           if m.text == "Review complete and ready for your decision.")
     assert review_message.mention == "UREQUESTER"
+
+    assert any(link.label == "View work order" for link in review_message.links)
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ('{"name":"Quickstart","summary":"Install oe"}',
+     "*name*\n\tQuickstart\n*summary*\n\tInstall oe"),
+    ('{"result":{"ok":true},"count":2,"empty":null}',
+     '*result*\n\t{"ok": true}\n*count*\n\t2\n*empty*\n\tnull'),
+    ('{"<key>":"<@UOTHER> & [REDACTED]"}',
+     "*&lt;key&gt;*\n\t&lt;@UOTHER&gt; &amp; [REDACTED]"),
+    ("Plain text <example>", "Plain text &lt;example&gt;"),
+    ('{"incomplete":', '{"incomplete":'),
+    ('["one", "two"]', '["one", "two"]'),
+    ('{}', '{}'),
+])
+def test_slack_task_report(text, expected):
+    from engine.apps.web.api import _slack_task_report
+
+    assert _slack_task_report(text) == expected

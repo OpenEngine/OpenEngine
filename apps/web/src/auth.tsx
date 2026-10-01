@@ -25,7 +25,7 @@ function LoginPage() {
                 : error === "forbidden"
                   ? "Your GitHub account does not have write access to any of this deployment's repositories. Ask an administrator for access."
                   : error === "unverified"
-                    ? "Could not check your repository access. Please try again, or contact an operator if this continues: the server's GitHub login may have expired."
+                    ? "Could not check your repository access. The server's GitHub connection did not answer, and GitHub could not confirm your access through your own account either (it can only for public repositories). Please try again. If this continues, the server's GitHub connection has probably expired: someone with access to the server must reconnect it with engine connect github (GitHub OAuth) or gh auth login (GH CLI). Operators can still sign in."
                     : "Could not verify your GitHub identity. Please try again."}
           </p>
         )}
@@ -69,8 +69,11 @@ function UserBadge({ auth }: { auth: AuthStatus }) {
       {error && <p role="alert">Could not sign out. Please try again.</p>}
       {auth.accessCheckFailing && (
         <p role="alert">
-          Repository access checks are failing, so only operators can sign in.
-          Check the server's GitHub CLI login with <code>gh auth status</code>.
+          The server's GitHub connection is failing, so people GitHub cannot
+          vouch for through their own account cannot sign in, and agents cannot
+          use GitHub. In Settings, switch GitHub to a login that works, or
+          reconnect it on the server with <code>engine connect github</code>{" "}
+          (GitHub OAuth) or <code>gh auth login</code> (GH CLI).
         </p>
       )}
     </div>

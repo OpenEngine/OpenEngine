@@ -114,7 +114,6 @@ def test_composition_passes_the_target_repository_to_the_http_app(
     for name in (
         "build_capabilities", "build_runners", "build_read_only_runners",
         "build_session", "build_graph_runtime",
-        "build_milestone_scoper",
     ):
         monkeypatch.setattr(web_main, name, Mock())
     create_app = Mock()

@@ -43,7 +43,9 @@ def test_discovery_and_creation(dependency):
         assert initialized.status_code == 200
         assert initialized.json()["result"]["serverInfo"]["name"] == "OpenEngine"
         tools = rpc(client, "tools/list").json()["result"]["tools"]
-        assert [tool["name"] for tool in tools] == ["create_workorder"]
+        assert [tool["name"] for tool in tools] == [
+            "create_workorder", "workorder_status", "node_status", "steer_workorder", "node_steer",
+        ]
         assert set(tools[0]["inputSchema"]["properties"]) == {"prompt", "depends_on_run_id"}
         assert tools[0]["inputSchema"]["required"] == ["prompt"]
         assert tools[0]["annotations"]["idempotentHint"] is False
@@ -521,3 +523,197 @@ def test_login_required_without_engine_token_fails_startup(monkeypatch, tmp_path
         entry.main()
     assert error.value.code == 2
     assert "OE requires GitHub login" in capsys.readouterr().err
+
+
+@pytest.fixture
+def workorder_upstream():
+    requests = []
+    snapshot = {
+        "graphId": "workflow", "status": "running",
+        "activeExecutions": [{"nodeId": "implementation", "executionId": "exec-1"}],
+        "nextNodes": [], "values": {"publish": {"pr_url": "https://github.com/org/repo/pull/7"}},
+    }
+    topology = {
+        "nodes": [{"nodeId": "implementation"}, {"nodeId": "review"}],
+        "edges": [{"source": "implementation", "target": "review"}],
+    }
+    events = [
+        {"nodeId": "implementation", "executionId": "exec-1", "type": "transcript", "payload": {"role": "assistant", "text": str(i)}}
+        for i in range(8)
+    ] + [
+        {"nodeId": "review", "executionId": "exec-2", "type": "transcript", "payload": {"text": "other node"}},
+        {"nodeId": "implementation", "type": "tool.call", "payload": {"name": "shell"}},
+    ]
+
+    def upstream(request):
+        requests.append(request)
+        assert request.headers["authorization"] == f"Bearer {ENGINE_TOKEN}"
+        if request.url.path.endswith("graph-events") and any(
+            item["executionId"] == "exec-3" for item in snapshot["activeExecutions"]
+        ):
+            events.append({"nodeId": "implementation", "executionId": "exec-3",
+                           "type": "transcript", "payload": {"text": "parallel task"}})
+        if request.method == "POST":
+            return httpx.Response(200, json=snapshot)
+        return httpx.Response(200, json={
+            "/api/runs/run-123": {"runId": "run-123", "repository": SETTINGS.repository, "phase": "working"},
+            "/graph/api/runs/run-123": snapshot,
+            "/graph/api/graphs/workflow": topology,
+            "/api/runs/run-123/graph-events": {"events": events},
+        }[request.url.path])
+
+    from dataclasses import replace
+    with TestClient(create_app(
+        replace(SETTINGS, engine_token=ENGINE_TOKEN), transport=httpx.MockTransport(upstream),
+    )) as client:
+        yield client, requests, snapshot
+
+
+def test_workorder_status_transcript_topology_and_pr(workorder_upstream):
+    client, _, snapshot = workorder_upstream
+    for values, expected in [(snapshot["values"], "https://github.com/org/repo/pull/7"), ({"pr_url": "https://example.com/pr"}, "https://example.com/pr"), ({}, None)]:
+        snapshot["values"] = values
+        result = rpc(client, "tools/call", {
+            "name": "workorder_status", "arguments": {"run_id": "run-123"},
+        }).json()["result"]["structuredContent"]
+        assert result["current_nodes"] == ["implementation"]
+        assert result["topology"]["edges"] == [{"source": "implementation", "target": "review"}]
+        assert [m["text"] for m in result["transcript"]["implementation"]] == [str(i) for i in range(3, 8)]
+        assert result["pr_url"] == expected
+    snapshot.update(activeExecutions=[], nextNodes=[])
+    result = rpc(client, "tools/call", {
+        "name": "workorder_status", "arguments": {"run_id": "run-123"},
+    }).json()["result"]["structuredContent"]
+    assert result["current_nodes"] == []
+    assert result["transcript"] == {}
+
+
+def test_node_status_filters_before_taking_last_n(workorder_upstream):
+    client, _, _ = workorder_upstream
+    result = rpc(client, "tools/call", {
+        "name": "node_status", "arguments": {"run_id": "run-123", "nodename": "implementation", "last_n": 2},
+    }).json()["result"]["structuredContent"]
+    assert [m["text"] for m in result["messages"]] == ["6", "7"]
+
+
+@pytest.mark.parametrize("name,arguments,path,payload", [
+    ("node_steer", {"nodename": "implementation", "instruction": " Fix tests "}, "transitions", {"node": "implementation", "message": "Fix tests"}),
+    ("steer_workorder", {"instruction": "Fix tests", "execution_id": "exec-2"}, "steering", {"message": "Fix tests", "execution": "exec-2"}),
+    ("steer_workorder", {"instruction": " Fix tests "}, "steering", {"message": "Fix tests"}),
+    ("steer_workorder", {"instruction": "Fix tests", "nodename": "implementation"}, "steering", {"message": "Fix tests", "node": "implementation"}),
+])
+def test_node_reset_and_steering(workorder_upstream, name, arguments, path, payload):
+    client, requests, _ = workorder_upstream
+    result = rpc(client, "tools/call", {
+        "name": name, "arguments": {"run_id": "run-123", **arguments},
+    }).json()["result"]
+    assert not result.get("isError")
+    assert requests[-1].url.path == f"/graph/api/runs/run-123/{path}"
+    assert json.loads(requests[-1].content) == payload
+    assert sum(r.method == "POST" for r in requests) == 1
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("workorder_status", {"run_id": "../runs"}),
+    ("node_status", {"nodename": "implementation", "last_n": 0}),
+    ("node_status", {"nodename": "implementation", "last_n": 1001}),
+    ("node_steer", {"nodename": " ", "instruction": "Fix tests"}),
+    ("node_steer", {"nodename": "implementation", "instruction": " "}),
+    ("node_steer", {"nodename": "implementation", "instruction": "x" * 100_001}),
+    ("steer_workorder", {"instruction": "Fix tests", "execution_id": " "}),
+    ("steer_workorder", {"instruction": "Fix tests", "execution_id": "exec-1", "nodename": "implementation"}),
+    ("steer_workorder", {"instruction": " "}),
+])
+def test_invalid_control_arguments_never_reach_oe(name, arguments):
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(
+        lambda request: pytest.fail("invalid arguments reached OE"),
+    ))) as client:
+        assert rpc(client, "tools/call", {
+            "name": name, "arguments": {"run_id": "run-123", **arguments},
+        }).json()["result"]["isError"]
+
+
+@pytest.mark.parametrize("failure", [404, 409, "timeout", "invalid", "repository"])
+def test_control_failure_does_not_retry_or_expose_upstream(failure):
+    requests = []
+
+    def upstream(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"repository": "elsewhere" if failure == "repository" else SETTINGS.repository})
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private upstream details", request=request)
+        if failure == "invalid":
+            return httpx.Response(200, text="private upstream details")
+        return httpx.Response(failure, text="private upstream details")
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "node_steer", "arguments": {"run_id": "run-123", "nodename": "implementation", "instruction": "Fix tests"},
+        }).json()["result"]
+        assert result["isError"]
+        assert "private upstream details" not in str(result)
+    assert len(requests) == (1 if failure == "repository" else 2)
+
+
+def test_status_reports_parallel_nodes_and_idle_frontier(workorder_upstream):
+    client, _, snapshot = workorder_upstream
+    snapshot["activeExecutions"].append({"nodeId": "review", "executionId": "exec-2"})
+    result = rpc(client, "tools/call", {
+        "name": "workorder_status", "arguments": {"run_id": "run-123"},
+    }).json()["result"]["structuredContent"]
+    assert result["current_nodes"] == ["implementation", "review"]
+    assert result["transcript"]["review"] == [{"text": "other node"}]
+    snapshot.update(activeExecutions=[], nextNodes=["review"])
+    result = rpc(client, "tools/call", {
+        "name": "workorder_status", "arguments": {"run_id": "run-123"},
+    }).json()["result"]["structuredContent"]
+    assert result["current_nodes"] == ["review"]
+
+
+def test_node_status_rejects_unknown_node(workorder_upstream):
+    client, requests, _ = workorder_upstream
+    result = rpc(client, "tools/call", {
+        "name": "node_status", "arguments": {"run_id": "run-123", "nodename": "missing"},
+    }).json()["result"]
+    assert result["isError"]
+    assert not any(r.url.path.endswith("graph-events") for r in requests)
+
+
+def test_scheduled_status_does_not_require_graph_snapshot():
+    def upstream(request):
+        if request.url.path == "/api/runs/scheduled":
+            return httpx.Response(200, json={
+                "runId": "scheduled", "repository": SETTINGS.repository,
+                "phase": "scheduled", "workflowId": "workflow",
+            })
+        assert request.url.path == "/graph/api/graphs/workflow"
+        return httpx.Response(200, json={"nodes": [{"nodeId": "implementation"}], "edges": []})
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "workorder_status", "arguments": {"run_id": "scheduled"},
+        }).json()["result"]["structuredContent"]
+        assert result["status"] == "scheduled"
+        assert result["current_nodes"] == []
+        assert result["transcript"] == {}
+        assert result["pr_url"] is None
+
+
+def test_status_preserves_same_node_executions_and_fetches_events_once(workorder_upstream):
+    client, requests, snapshot = workorder_upstream
+    snapshot["activeExecutions"].extend([
+        {"nodeId": "review", "executionId": "exec-2"},
+        {"nodeId": "implementation", "executionId": "exec-3"},
+    ])
+    result = rpc(client, "tools/call", {
+        "name": "workorder_status", "arguments": {"run_id": "run-123"},
+    }).json()["result"]["structuredContent"]
+    executions = result["active_executions"]
+    assert [(e["node_id"], e["execution_id"]) for e in executions] == [
+        ("implementation", "exec-1"), ("review", "exec-2"), ("implementation", "exec-3"),
+    ]
+    assert [m["text"] for m in executions[0]["messages"]] == [str(i) for i in range(3, 8)]
+    assert executions[1]["messages"] == [{"text": "other node"}]
+    assert executions[2]["messages"] == [{"text": "parallel task"}]
+    assert sum(r.url.path.endswith("graph-events") for r in requests) == 1

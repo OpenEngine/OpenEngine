@@ -11,7 +11,6 @@ const run: ApiWorkflowRun = {
   workflowId: "implementation-review-codex",
   workflowName: "Implementation review (codex)",
   taskId: "task-1",
-  milestoneId: null,
   taskPrompt: "Do the work",
   repository: ".",
   repositoryContext: { repository: "." },
@@ -53,31 +52,6 @@ function body(name: string) {
 }
 
 describe("Sidebar", () => {
-  it("hides Projects and falls back to WorkOrders on a project page", async () => {
-    const user = userEvent.setup();
-    render(<Sidebar runs={[run]} initialSection="projects" showProjects={false} />);
-
-    expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "+ New project" })).not.toBeInTheDocument();
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
-    await user.click(header("WorkOrders"));
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
-    await user.click(header("WorkOrders"));
-    expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
-  });
-
-  it("keeps the two sections in one order and opens only the one asked for", () => {
-    const { container } = render(<Sidebar runs={[run]} initialSection="workflows" />);
-
-    const headers = [...container.querySelectorAll(".rail-head[aria-expanded]")];
-    expect(headers.map((element) => element.textContent)).toEqual([
-      "Projects",
-      "WorkOrders",
-    ]);
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("navigation", { name: "Recent WorkOrders" })).toBeVisible();
-    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
-  });
 
   it("filters multiple stages and outcomes without toggling the accordion", async () => {
     const user = userEvent.setup();
@@ -162,361 +136,6 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: /Second run/ })).toBeVisible();
     await user.click(screen.getByRole("checkbox", { name: "succeeded" }));
     expect(screen.queryByRole("link", { name: /Second run/ })).not.toBeInTheDocument();
-  });
-
-  it("moves the open state to the clicked section and closes the others", async () => {
-    const user = userEvent.setup();
-    render(<Sidebar runs={[run]} initialSection="workflows" />);
-
-    await user.click(header("Projects"));
-
-    expect(header("Projects")).toHaveAttribute("aria-expanded", "true");
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(header("WorkOrders"));
-
-    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
-  });
-
-  /** Which section a conversation belongs to is only known once the projects
-   *  load, so the rail follows a late answer -- but never over the reader. */
-  it("follows a late section until the reader opens one themselves", async () => {
-    const user = userEvent.setup();
-    const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
-
-    rerender(<Sidebar runs={[run]} initialSection="projects" />);
-    expect(header("Projects")).toHaveAttribute("aria-expanded", "true");
-
-    await user.click(header("WorkOrders"));
-    rerender(<Sidebar runs={[run]} initialSection="workflows" />);
-
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
-  });
-
-  /** The header is the whole control, so the way back out of a section is the
-   *  way in: the rail can sit with both headers stacked and nothing open.
-   *  Closing is the reader's choice like any other, so a late answer about
-   *  where the page belongs does not fold the rail back open. */
-  it("closes the open section when its own header is clicked again", async () => {
-    const user = userEvent.setup();
-    const { rerender } = render(<Sidebar runs={[run]} initialSection="workflows" />);
-
-    await user.click(header("WorkOrders"));
-
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "false");
-    expect(body("WorkOrders")).toHaveAttribute("inert");
-    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
-
-    rerender(<Sidebar runs={[run]} initialSection="projects" />);
-    expect(header("Projects")).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(header("WorkOrders"));
-
-    expect(header("WorkOrders")).toHaveAttribute("aria-expanded", "true");
-    expect(body("WorkOrders")).not.toHaveAttribute("inert");
-  });
-
-  it("keeps a closed section mounted but out of reach", async () => {
-    const user = userEvent.setup();
-    render(<Sidebar runs={[run]} initialSection="projects" />);
-
-    expect(body("WorkOrders")).toHaveAttribute("inert");
-    expect(within(body("WorkOrders")).getByRole("link", { name: "+ New WorkOrder" })).toBeVisible();
-
-    await user.click(header("WorkOrders"));
-
-    expect(body("WorkOrders")).not.toHaveAttribute("inert");
-    expect(body("Projects")).toHaveAttribute("inert");
-  });
-
-  it("puts each section's new button under its own header", () => {
-    render(<Sidebar runs={[run]} initialSection="workflows" />);
-
-    expect(within(body("WorkOrders")).getByRole("link", { name: "+ New WorkOrder" })).toHaveAttribute(
-      "href",
-      "/runs/new",
-    );
-    expect(within(body("Projects")).getByRole("link", { name: "+ New project" })).toHaveAttribute(
-      "href",
-      "/plan",
-    );
-  });
-
-  it("matches the new workflow button and lists projects by generated name", () => {
-    render(
-      <Sidebar
-        projects={[{ projectId: "project-1", name: "Engine roadmap", archived: false }]}
-        runs={[run]}
-        initialSection="projects"
-      />,
-    );
-
-    const newProject = within(body("Projects")).getByRole("link", {
-      name: "+ New project",
-    });
-    expect(newProject).toHaveClass("rail-button", "rail-button-primary");
-    expect(within(body("Projects")).getByText("Engine roadmap")).toBeInTheDocument();
-  });
-
-  it("marks a project on a milestone child without calling the parent link current", () => {
-    const { container } = render(
-      <Sidebar
-        projects={[
-          {
-            projectId: "project-1",
-            name: "Engine roadmap",
-            archived: false,
-            conversationUrl: "/conversations/agi-1",
-            milestoneCount: 2,
-          },
-        ]}
-        runs={[]}
-        initialSection="projects"
-        activeProjectId="project-1"
-        activeMilestonesPage={false}
-      />,
-    );
-
-    expect(container.querySelector(".rail-item")).toHaveAttribute("data-active", "true");
-    expect(screen.getByRole("link", { name: "Milestones · 2" })).not.toHaveAttribute(
-      "aria-current",
-    );
-  });
-
-  /** A project's only page is the planning conversation it was named after, so
-   *  the row is a link to it and the rail marks the one you are reading. */
-  it("opens a project's planning conversation and marks the one on screen", () => {
-    render(
-      <Sidebar
-        projects={[
-          {
-            projectId: "project-agi-1",
-            name: "Engine roadmap",
-            archived: false,
-            conversationUrl: "/conversations/agi-1",
-          },
-          {
-            projectId: "project-agi-2",
-            name: "Second roadmap",
-            archived: false,
-            conversationUrl: "/conversations/agi-2",
-          },
-        ]}
-        runs={[run]}
-        initialSection="projects"
-        activeConversationUrl="/conversations/agi-1"
-      />,
-    );
-
-    const open = within(body("Projects")).getByRole("link", { name: "Engine roadmap" });
-    expect(open).toHaveAttribute("href", "/conversations/agi-1");
-    expect(open).toHaveAttribute("aria-current", "page");
-    expect(open.closest(".rail-item")).toHaveAttribute("data-active", "true");
-    const other = within(body("Projects")).getByRole("link", { name: "Second roadmap" });
-    expect(other).not.toHaveAttribute("aria-current");
-    expect(other.closest(".rail-item")).not.toHaveAttribute("data-active");
-  });
-
-  /** The rail is drawn beside pages that are nobody's conversation, `/runs`
-   *  among them, and there it marks nothing. */
-  it("marks no project when no conversation is on screen", () => {
-    render(
-      <Sidebar
-        projects={[
-          {
-            projectId: "project-agi-1",
-            name: "Engine roadmap",
-            archived: false,
-            conversationUrl: "/conversations/agi-1",
-          },
-          { projectId: "project-2", name: "Recorded roadmap", archived: false },
-        ]}
-        runs={[run]}
-        initialSection="projects"
-      />,
-    );
-
-    for (const name of ["Engine roadmap", "Recorded roadmap"])
-      expect(
-        within(body("Projects")).getByText(name).closest(".rail-item"),
-      ).not.toHaveAttribute("data-active");
-  });
-
-  /** A project recorded some other way still says it exists, but a row that
-   *  leads nowhere should not dress up as something to click. */
-  it("lists a project with no conversation as plain text", () => {
-    render(
-      <Sidebar
-        projects={[{ projectId: "project-1", name: "Engine roadmap", archived: false }]}
-        runs={[run]}
-        initialSection="projects"
-      />,
-    );
-
-    expect(
-      within(body("Projects")).queryByRole("link", { name: "Engine roadmap" }),
-    ).not.toBeInTheDocument();
-    const row = within(body("Projects")).getByText("Engine roadmap");
-    expect(row).toBeInTheDocument();
-    // Two absent URLs are not a match: without this the row reads as the page
-    // you are on, on every page that is not a conversation.
-    expect(row.closest(".rail-item")).not.toHaveAttribute("data-active");
-  });
-
-  /** A plan is more than the conversation that wrote it, so a project that has
-   *  one offers it: a subheader under the row, opening the milestones page. */
-  it("offers the milestones of a project that has some, and marks the open one", () => {
-    render(
-      <Sidebar
-        projects={[
-          {
-            projectId: "project agi-1",
-            name: "Engine roadmap",
-            archived: false,
-            conversationUrl: "/conversations/agi-1",
-            milestoneCount: 3,
-          },
-          {
-            projectId: "project-agi-2",
-            name: "Second roadmap",
-            archived: false,
-            conversationUrl: "/conversations/agi-2",
-            milestoneCount: 1,
-          },
-        ]}
-        runs={[run]}
-        initialSection="projects"
-        activeProjectId="project agi-1"
-      />,
-    );
-
-    const open = within(body("Projects")).getByRole("link", {
-      name: "Milestones · 3",
-    });
-    // Encoded here rather than spelled by hand: an id with a space in it is
-    // not what the store writes, but it is what pins this to one builder.
-    expect(open).toHaveAttribute("href", "/projects/project%20agi-1/milestones");
-    expect(open).toHaveAttribute("aria-current", "page");
-    expect(open.closest(".rail-sub")).toHaveAttribute(
-      "aria-label",
-      "Milestones for Engine roadmap",
-    );
-    const other = within(body("Projects")).getByRole("link", { name: "Milestones · 1" });
-    expect(other).not.toHaveAttribute("aria-current");
-  });
-
-  /** Nothing planned is nothing to open, and a project put away has been put
-   *  away along with its plan -- the same reason its row stops being a link. */
-  it("offers no milestones for a project without them, or for an archived one", () => {
-    render(
-      <Sidebar
-        projects={[
-          { projectId: "project-1", name: "Engine roadmap", archived: false },
-          { projectId: "project-2", name: "Fresh plan", archived: false, milestoneCount: 0 },
-          { projectId: "project-3", name: "Put away", archived: true, milestoneCount: 4 },
-        ]}
-        runs={[run]}
-        initialSection="projects"
-      />,
-    );
-
-    expect(
-      within(body("Projects")).queryByRole("link", { name: /Milestones/, hidden: true }),
-    ).not.toBeInTheDocument();
-  });
-
-  /** A plan outlives the conversation that wrote it. Archiving the *thread*
-   *  leaves the project itself live, and its milestones are still worth
-   *  reading even though its name row has nowhere left to send a click. */
-  it("offers the milestones of a live project whose planning chat was archived", () => {
-    render(
-      <Sidebar
-        projects={[
-          { projectId: "project-agi-1", name: "Engine roadmap", archived: false, milestoneCount: 2 },
-        ]}
-        runs={[run]}
-        initialSection="projects"
-      />,
-    );
-
-    const projects = within(body("Projects"));
-    expect(projects.queryByRole("link", { name: "Engine roadmap" })).not.toBeInTheDocument();
-    expect(projects.getByRole("link", { name: "Milestones · 2" })).toHaveAttribute(
-      "href",
-      "/projects/project-agi-1/milestones",
-    );
-  });
-
-  /** Archiving is the same one click a chat gets, and it moves the row into a
-   *  list of its own rather than deleting anything. */
-  it("archives a project from the rail and lists it under Archived projects", async () => {
-    const user = userEvent.setup();
-    const archive = vi.fn();
-    const active = {
-      projectId: "project-agi-1",
-      name: "Engine roadmap",
-      archived: false,
-      conversationUrl: "/conversations/agi-1",
-    };
-    const { rerender } = render(
-      <Sidebar
-        projects={[active]}
-        runs={[run]}
-        initialSection="projects"
-        onArchiveProject={archive}
-      />,
-    );
-
-    expect(within(body("Projects")).queryByText("Archived projects")).not.toBeInTheDocument();
-    await user.click(
-      within(body("Projects")).getByRole("button", { name: "Archive Engine roadmap" }),
-    );
-    expect(archive).toHaveBeenCalledWith(active, true);
-
-    rerender(
-      <Sidebar
-        projects={[{ ...active, archived: true }]}
-        runs={[run]}
-        initialSection="projects"
-        onArchiveProject={archive}
-      />,
-    );
-
-    const archived = within(body("Projects")).getByText("Engine roadmap");
-    expect(archived.closest(".rail-archive")).not.toBeNull();
-    expect(within(body("Projects")).getByText("Archived projects")).toBeInTheDocument();
-    // Put away is not the page you are reading, so the row stops being a link.
-    expect(
-      within(body("Projects")).queryByRole("link", {
-        name: "Engine roadmap",
-        hidden: true,
-      }),
-    ).not.toBeInTheDocument();
-
-    await user.click(
-      within(body("Projects")).getByRole("button", {
-        name: "Restore Engine roadmap",
-        hidden: true,
-      }),
-    );
-    expect(archive).toHaveBeenLastCalledWith({ ...active, archived: true }, false);
-  });
-
-  /** Nothing owns the list on a rail drawn without a handler, so the button is
-   *  left out rather than left there doing nothing. */
-  it("omits the archive control when no handler is given", () => {
-    render(
-      <Sidebar
-        projects={[{ projectId: "project-1", name: "Engine roadmap", archived: false }]}
-        runs={[run]}
-        initialSection="projects"
-      />,
-    );
-
-    expect(
-      within(body("Projects")).queryByRole("button", { name: "Archive Engine roadmap" }),
-    ).not.toBeInTheDocument();
   });
 
   it("lists runs with their conversations and marks the one on screen", () => {
@@ -635,6 +254,31 @@ describe("Sidebar", () => {
       "href",
       "/runs/run-2/conversations/graph--review-performance",
     );
+  });
+
+  it("shows a node group holding one conversation as that conversation", () => {
+    render(
+      <Sidebar
+        runs={[graphRun]}
+        graphNodes={{
+          [graphRun.workflowId]: [
+            { ...nodes[1], group: "Implementation" },
+            {
+              nodeId: "ci-check",
+              name: "CI check",
+              kind: "agent",
+              group: "Implementation",
+              showInSidebar: false,
+            },
+          ],
+        }}
+        initialSection="workflows"
+      />,
+    );
+
+    const rail = within(body("WorkOrders"));
+    expect(rail.queryByText("Implementation", { selector: "summary" })).not.toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "Implementation" })).toBeVisible();
   });
 
   /** The checkout and the person's own verdict are stages, not conversations,
@@ -759,4 +403,12 @@ it("hides scheduled workorders and shows them after starting", () => {
   expect(screen.queryByText("First run")).not.toBeInTheDocument();
   rerender(<Sidebar initialSection="workflows" runs={[run]} />);
   expect(screen.getByText("First run")).toBeInTheDocument();
+});
+
+it("shows WorkOrders without a Projects accordion or creation link", () => {
+  render(<Sidebar runs={[run]} />);
+  expect(screen.getByRole("button", { name: "WorkOrders" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("link", { name: "+ New WorkOrder" })).toHaveAttribute("href", "/runs/new");
+  expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /New project/i })).not.toBeInTheDocument();
 });

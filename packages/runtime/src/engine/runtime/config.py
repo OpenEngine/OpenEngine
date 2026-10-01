@@ -13,12 +13,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from engine.domain import ForgeMode
 from engine.ports.agent_runner import ResponseStyle
 from engine.ports.permissions import ApprovalCapability
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
 DEFAULT_CONFIG_TEMPLATE = Path(__file__).with_name("default-engine.toml")
+#: What `[repo_modes]` may say a repository's WorkOrders run as.
+REPO_MODES = tuple(str(mode) for mode in ForgeMode)
 """A distributable `engine.toml`: loopback only, nothing machine-specific."""
 
 
@@ -182,8 +185,19 @@ class EngineConfig:
     orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
     attribution: bool = True
-    show_projects: bool = True
     repos: Mapping[str, str] = field(default_factory=dict)
+    repo_modes: Mapping[str, str] = field(default_factory=dict)
+    """`[repos]` names mapped to the mode their WorkOrders run in.
+
+    Written by `engine init`. A repository named `disconnected` here has every
+    WorkOrder on it run disconnected; one not named runs as the workflow says.
+    """
+    trusted_repos: frozenset[str] = frozenset()
+    """`[repos]` names whose WorkOrders are auto-approved.
+
+    Written by `engine init` when approvals are left to trusted repositories:
+    `approvals.auto_approve` covers every repository, this only the ones named.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,8 +284,9 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_token",
             "orchestrator",
             "public_url",
-            "show_projects",
+            "repo_modes",
             "repos",
+            "trusted_repos",
             "server",
             "state",
             "work_orders",
@@ -279,10 +294,6 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         },
         "configuration",
     )
-    show_projects = document.get("show_projects", True)
-    if not isinstance(show_projects, bool):
-        raise EngineConfigError("show_projects must be a boolean")
-
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
         raise EngineConfigError("attribution must be a boolean")
@@ -420,13 +431,33 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "orchestrator.health_check_interval must be a positive number"
         )
 
+    repos = {
+        _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
+        for name, path in _table(document.get("repos", {}), "repos").items()
+    }
+    repo_modes = {}
+    for name, mode in _table(document.get("repo_modes", {}), "repo_modes").items():
+        if name not in repos:
+            raise EngineConfigError(f"repo_modes.{name} names no repository under [repos]")
+        if mode not in REPO_MODES:
+            raise EngineConfigError(
+                f"repo_modes.{name} must be one of: {', '.join(REPO_MODES)}"
+            )
+        repo_modes[name] = mode
+    trusted_repos = set()
+    for name, trusted in _table(document.get("trusted_repos", {}), "trusted_repos").items():
+        if name not in repos:
+            raise EngineConfigError(f"trusted_repos.{name} names no repository under [repos]")
+        if not isinstance(trusted, bool):
+            raise EngineConfigError(f"trusted_repos.{name} must be a boolean")
+        if trusted:
+            trusted_repos.add(name)
+
     return EngineConfig(
         attribution=attribution,
-        show_projects=show_projects,
-        repos={
-            _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
-            for name, path in _table(document.get("repos", {}), "repos").items()
-        },
+        repos=repos,
+        repo_modes=repo_modes,
+        trusted_repos=frozenset(trusted_repos),
         default_branch=default_branch,
         github_client_id=github_client_id,
         github_login_client_id=_optional_nonblank_string(

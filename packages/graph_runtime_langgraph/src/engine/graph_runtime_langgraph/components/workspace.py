@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from engine.domain import WorkState
 from engine.graph_runtime_langgraph.acp import NoWorkingDirectoryError
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import WorkspaceProvider
@@ -53,10 +54,18 @@ class WorkspaceNode:
     about to change when it starts.
     """
 
+    ref_input: str = ""
+    """A creation input naming a ref to check out instead, when a run gives one.
+
+    What a run that reviews an existing change is checked out at: the change's
+    branch rather than the default one.
+    """
+
     graph_node_name: str = "Workspace"
     graph_node_kind: str = "workspace"
     graph_node_description: str = "Checks the repository out for this run."
     graph_node_show_in_sidebar: bool = False
+    graph_node_group: str = WorkState.PLANNING
     """Not a conversation, so it is not offered as one.
 
     A checkout says what it did -- the run's page prints the directory, and the
@@ -67,9 +76,12 @@ class WorkspaceNode:
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
         repository = self.repository or str(state.get(REPOSITORY) or ".")
-        await execution.say(f"Checking {repository} out at {self.base_ref}.")
+        inputs = state.get("inputs")
+        requested = inputs.get(self.ref_input) if self.ref_input and isinstance(inputs, Mapping) else ""
+        base_ref = requested if isinstance(requested, str) and requested.strip() else self.base_ref
+        await execution.say(f"Checking {repository} out at {base_ref}.")
         workspace = await self.provider.provision(
-            repository, self.base_ref, co_author=str(state.get(CO_AUTHOR) or "")
+            repository, base_ref, co_author=str(state.get(CO_AUTHOR) or "")
         )
         # Checked here rather than left for whoever reads the state, so the
         # complaint names the provider that answered rather than the node three
@@ -86,7 +98,7 @@ class WorkspaceNode:
         await execution.tool(
             "provision",
             "provision_workspace",
-            {"repository": repository, "baseRef": self.base_ref},
+            {"repository": repository, "baseRef": base_ref},
             workspace.root_path,
         )
         return {

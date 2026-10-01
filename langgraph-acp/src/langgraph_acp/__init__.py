@@ -75,6 +75,7 @@ from langgraph_acp.permissions import (
 )
 from langgraph_acp.providers.claude import CLAUDE_ACP_COMMAND, ClaudeACPProvider
 from langgraph_acp.providers.codex import CODEX_ACP_COMMAND, CodexACPProvider
+from langgraph_acp.providers.opencode import OPENCODE_ACP_COMMAND, OpenCodeACPProvider
 from langgraph_acp.result import ACPResult, ACPUsage
 from langgraph_acp.session import (
     ACPPrompt,
@@ -125,6 +126,8 @@ __all__ = [
     "InMemoryACPSessionStore",
     "JSONObject",
     "JSONValue",
+    "OPENCODE_ACP_COMMAND",
+    "OpenCodeACPProvider",
     "PROTOCOL_VERSION",
     "StdioACPProvider",
     "UnsupportedOption",

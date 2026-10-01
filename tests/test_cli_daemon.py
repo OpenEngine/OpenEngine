@@ -60,34 +60,34 @@ def test_launch_agent_runs_engine_web_with_the_config_and_logs(tmp_path: Path):
     assert "engine-orchestrator" not in daemon.render_launch_agent(spec).decode()
 
 
-def test_launchd_restart_waits_for_the_old_registration_to_disappear(tmp_path: Path, monkeypatch):
-    spec = _spec(tmp_path)
-    path = tmp_path / "agent.plist"
-    monkeypatch.setattr(daemon, "launch_agent_path", lambda: path)
-    monkeypatch.setattr(daemon.LaunchdBackend, "_domain", staticmethod(lambda: "gui/501"))
-    registered = True
-    unloading = False
+def test_launchd_restart_waits_for_old_registration_to_disappear(home: Path, monkeypatch):
+    # Model launchd after bootout: HTTP has closed, but print still succeeds
+    # and kickstart is a successful no-op until teardown removes the job.
+    registered = False
+    stopping = False
+    starts = 0
     sleeps = 0
-    calls = []
 
     def run(command):
-        nonlocal registered, unloading
+        nonlocal registered, stopping, starts
         action = command[1]
-        calls.append(action)
+        code = 0
         if action == "print":
-            return subprocess.CompletedProcess(command, 0 if registered else 113, "", "")
-        if action == "bootout":
-            unloading = True
+            code = 0 if registered else 113
         elif action == "bootstrap":
-            assert not registered, "The old LaunchAgent must be gone before bootstrap"
+            assert not registered
             registered = True
-            unloading = False
-        elif action == "kickstart":
-            assert registered and not unloading, "Cannot kickstart a departing LaunchAgent"
-        return subprocess.CompletedProcess(command, 0, "", "")
+            stopping = False
+            starts += 1
+        elif action == "bootout":
+            stopping = True
+        else:
+            assert action == "kickstart"
+        return subprocess.CompletedProcess(command, code, "", "")
 
     def sleep(_seconds):
         nonlocal sleeps, registered
+        assert stopping
         sleeps += 1
         if sleeps == 2:
             registered = False
@@ -95,60 +95,44 @@ def test_launchd_restart_waits_for_the_old_registration_to_disappear(tmp_path: P
     monkeypatch.setattr(daemon, "_run", run)
     monkeypatch.setattr(daemon.time, "sleep", sleep)
     backend = daemon.LaunchdBackend()
-
+    spec = _spec(home)
+    backend.start(spec)
     backend.stop()
-    backend.install(spec)
     backend.start(spec)
 
+    assert starts == 2
     assert sleeps == 2
-    assert [action for action in calls if action != "print"] == [
-        "bootout", "bootstrap", "kickstart",
-    ]
 
 
-@pytest.mark.parametrize("operation", ["bootout", "kickstart"])
-def test_launchd_reports_command_failures(tmp_path: Path, monkeypatch, operation):
-    monkeypatch.setattr(daemon.LaunchdBackend, "_domain", staticmethod(lambda: "gui/501"))
-    monkeypatch.setattr(daemon, "launch_agent_path", lambda: tmp_path / "agent.plist")
+def test_launchd_stop_times_out_if_registration_remains(monkeypatch):
+    now = 0.0
 
-    def run(command):
-        return subprocess.CompletedProcess(
-            command, 5 if command[1] == operation else 0, "", "launchd rejected the request"
-        )
+    def sleep(seconds):
+        nonlocal now
+        now += seconds
 
-    monkeypatch.setattr(daemon, "_run", run)
-    backend = daemon.LaunchdBackend()
-    with pytest.raises(RuntimeError, match=f"launchctl {operation} failed: launchd rejected"):
-        if operation == "bootout":
-            backend.stop()
-        else:
-            backend.start(_spec(tmp_path))
-
-
-def test_launchd_stop_has_a_deadline(monkeypatch):
-    monkeypatch.setattr(daemon.LaunchdBackend, "_domain", staticmethod(lambda: "gui/501"))
     monkeypatch.setattr(daemon, "_run", lambda command: subprocess.CompletedProcess(command, 0, "", ""))
-    clock = iter([0.0, daemon.STOP_TIMEOUT_SECONDS])
-    monkeypatch.setattr(daemon.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: now)
+    monkeypatch.setattr(daemon.time, "sleep", sleep)
+    monkeypatch.setattr(daemon, "STOP_TIMEOUT_SECONDS", 1.0)
 
-    with pytest.raises(RuntimeError, match="bootout did not unregister"):
+    with pytest.raises(RuntimeError, match="launchd did not remove"):
         daemon.LaunchdBackend().stop()
 
+    assert 1.0 <= now < 1.3
 
-def test_launchd_stop_tolerates_a_concurrent_removal(monkeypatch):
-    monkeypatch.setattr(daemon.LaunchdBackend, "_domain", staticmethod(lambda: "gui/501"))
-    results = iter([0, 113, 113])
-    calls = []
 
-    def run(command):
-        calls.append(command[1])
-        return subprocess.CompletedProcess(command, next(results), "", "service not found")
+@pytest.mark.parametrize("removed", [False, True])
+def test_launchd_stop_reports_bootout_failure_unless_already_removed(monkeypatch, removed):
+    checks = iter([True, not removed])
+    monkeypatch.setattr(daemon.LaunchdBackend, "running", lambda _self: next(checks))
+    monkeypatch.setattr(daemon, "_run", lambda command: subprocess.CompletedProcess(command, 5, "", "removal failed"))
 
-    monkeypatch.setattr(daemon, "_run", run)
-
-    daemon.LaunchdBackend().stop()
-
-    assert calls == ["print", "bootout", "print"]
+    if removed:
+        daemon.LaunchdBackend().stop()
+    else:
+        with pytest.raises(RuntimeError, match="launchctl bootout failed: removal failed"):
+            daemon.LaunchdBackend().stop()
 
 
 def test_systemd_unit_runs_engine_web_and_stops_it_gracefully(tmp_path: Path):

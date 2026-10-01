@@ -27,6 +27,7 @@ against, and a subprocess would only make these slower.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -38,7 +39,7 @@ from uuid import uuid4
 import pytest
 import httpx
 
-from engine.domain import ApprovalDecision, ApprovalKind, RunId, WorkspaceId
+from engine.domain import TRIAGE_TOOL, ApprovalDecision, ApprovalKind, RunId, WorkspaceId
 from engine.graph_runtime import EventLog, GraphCompilationError, RuntimeEvent, create_app
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
@@ -54,6 +55,7 @@ from engine.graph_runtime_langgraph.components import (
     HumanReviewNode,
     NameNode,
     NoWorkingDirectoryError,
+    TriageNode,
     WorkspaceNode,
     checkout,
 )
@@ -664,6 +666,71 @@ def test_a_rejected_run_ends(tmp_path: Path) -> None:
     assert refused.status.value == "failed"
     # Worded from the request, so the refusal a client shows is a sentence.
     assert refused.error == "approval of this run was not allowed"
+
+
+FINDINGS = [
+    {"tagline": "The greeting is misspelled", "description": "It says helo.", "agent": "codex", "facet": "bugs"},
+    {"tagline": "The file has no newline", "description": "Editors complain.", "agent": "codex", "facet": "conciseness"},
+]
+
+
+def triaged(tmp_path: Path, answer) -> Any:
+    """Run a checkout and a triage over `FINDINGS`, answering it with `answer`."""
+    provider = RecordingWorkspaceProvider()
+
+    @graph_workflow(id="triaged", name="Triaged")
+    def workflow() -> StateGraph:
+        builder: StateGraph = StateGraph(State)
+        builder.add_node(
+            "workspace",
+            WorkspaceNode(provider=provider, base_ref="origin/main", ref_input="ref"),
+        )
+        builder.add_node("triage", TriageNode(findings_key="review"))
+        builder.add_edge(START, "workspace")
+        builder.add_edge("workspace", "triage")
+        builder.add_edge("triage", END)
+        return builder
+
+    async def scenario() -> tuple[Any, Any]:
+        async with running([workflow], tmp_path) as (runtime, log):
+            run = await runtime.start(workflow.graph_id, {
+                "task": TASK, "review": FINDINGS, "inputs": {"ref": "origin/feature"},
+            })
+            events = await until(log, run.run_id, "approval.requested")
+            asked = (await runtime.snapshot(run.run_id)).pending_approvals[0]
+            await answer(runtime, run.run_id, asked)
+            await until(log, run.run_id, "run.finished", cursor=len(events))
+            return asked, await runtime.snapshot(run.run_id)
+
+    asked, finished = asyncio.run(scenario())
+    assert provider.provisioned == [(".", "origin/feature")]
+    assert asked.kind is ApprovalKind.USER_INPUT
+    assert asked.tool_name == TRIAGE_TOOL
+    # Finishing without a fix is a finished review, not a refused run.
+    assert finished.status.value == "completed"
+    return finished.values["fix"]
+
+
+def test_triage_fixes_the_findings_a_person_steers_to_it(tmp_path: Path) -> None:
+    async def choose_second(runtime, run_id, asked):
+        await runtime.steer(run_id, json.dumps([FINDINGS[1]]), execution_id=asked.execution_id)
+        await runtime.decide(run_id, asked.approval_id, ApprovalDecision.ACCEPT)
+
+    assert triaged(tmp_path, choose_second) == [FINDINGS[1]]
+
+
+def test_triage_accepted_with_nothing_chosen_fixes_every_finding(tmp_path: Path) -> None:
+    async def accept(runtime, run_id, asked):
+        await runtime.decide(run_id, asked.approval_id, ApprovalDecision.ACCEPT)
+
+    assert triaged(tmp_path, accept) == FINDINGS
+
+
+def test_triage_cancelled_fixes_nothing_and_finishes(tmp_path: Path) -> None:
+    async def finish(runtime, run_id, asked):
+        await runtime.decide(run_id, asked.approval_id, ApprovalDecision.CANCEL)
+
+    assert triaged(tmp_path, finish) == []
 
 
 # --- never the server's own directory ----------------------------------------

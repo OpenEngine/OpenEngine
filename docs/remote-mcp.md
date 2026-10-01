@@ -1,6 +1,6 @@
-# Create work orders through remote MCP
+# Manage work orders through remote MCP
 
-`engine-mcp-server` exposes one Streamable HTTP tool at `/mcp`:
+`engine-mcp-server` exposes Streamable HTTP tools at `/mcp`. Create work with:
 `create_workorder(prompt: string, depends_on_run_id?: string) -> {"run_id": "..."}`.
 It calls OE's `POST /api/runs`. Without a dependency, the graph workflow starts
 before returning. To chain work orders, pass a previous call's `run_id` as
@@ -9,13 +9,42 @@ The call returns the new run ID even while it is waiting. Existing workflow
 review and approval rules still apply. Time-based scheduling is not exposed.
 Each call creates a new work order; after a timeout, check OE before retrying.
 
-The gateway is a separate loopback process that exposes only its MCP tool.
+Inspect and steer work orders in the configured repository with:
+
+- `workorder_status(run_id)`: returns status, current node IDs (including parallel
+  nodes), node topology, the last five transcript messages per current node, and
+  `pr_url` when available. `active_executions` includes each task's `execution_id`,
+  `node_id`, and its own last five messages. Scheduled and finished runs can have no current node.
+- `node_status(run_id, nodename, last_n=10)`: returns the last 1–1000 transcript
+  messages for the selected node, oldest first. Use a `nodeId` from the topology.
+- `steer_workorder(run_id, instruction, nodename?, execution_id?)`: sends an instruction to an
+  active execution. Select either a node or an execution ID; use the execution
+  ID when multiple tasks run the same node.
+- `node_steer(run_id, nodename, instruction)`: stops current execution, queues
+  the instruction, and restarts from the latest checkpoint before the named node.
+  The instruction is queued before the node starts. The node must have been
+  reached previously; earlier attempts remain in the transcript.
+
+Reset and steering calls are never automatically retried. After an uncertain
+response, check status before repeating a mutation.
+
+For tool-call examples, see [MCP in the docsite](https://openengine.sh/docs/integrations/mcp/).
+
+**Current GitHub-login limitation:** OE's service token authorizes only
+`POST /api/runs`. When OE enforces GitHub browser login, creation works with
+`OE_MCP_ENGINE_TOKEN`, but the status and steering tools receive an upstream
+401 because they need additional API routes. The gateway does not forward a
+browser session; setting its service token does not enable those routes.
+
+## Access and hosting
+
+The gateway is a separate loopback process that exposes only its MCP tools.
 Funnel visibility applies to the entire HTTPS port, not individual paths: sharing
 an origin with OE's interface also publishes its UI, settings, and other APIs,
 even if the interface was previously tailnet-only. The gateway's bearer token
 does not protect those routes. See [Tailscale's port visibility rules](https://tailscale.com/docs/features/tailscale-serve#limitations).
 Repository and workflow are chosen by the host, not the caller. Any holder of the bearer token
-can start work in that repository. Keep it out of prompts, URLs, and source
+can start, inspect, reset, and steer work in that repository. Keep it out of prompts, URLs, and source
 control. Rotate it by changing the private env file and restarting the gateway.
 
 ## Host on the Mac mini
@@ -163,13 +192,15 @@ A 401 proves the gateway is listening and enforcing its bearer token. A 200
 means authentication is not being applied.
 
 An unauthenticated `curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp` must return
-401. With the bearer header, an MCP client should initialize and list exactly
-`create_workorder`. A successful call returns a run ID which appears immediately
+401. With the bearer header, an MCP client should initialize and list all five
+tools: `create_workorder`, `workorder_status`, `node_status`, `steer_workorder`,
+and `node_steer`. A successful creation returns a run ID which appears immediately
 in OE's work-order list. The gateway itself does not serve that list.
 
-A tool error with OE HTTP 401 means OE requires GitHub login and rejected the
-gateway's service token: check that `OE_MCP_ENGINE_TOKEN` matches OE's
-`ENGINE_SERVICE_TOKEN`. 401 from the gateway itself means the token is missing or incorrect; 403/421 means the configured public
+A creation error with OE HTTP 401 means OE requires GitHub login and rejected
+the gateway's service token: check that `OE_MCP_ENGINE_TOKEN` matches OE's
+`ENGINE_SERVICE_TOKEN`. For status and steering calls, see the GitHub-login
+limitation above. 401 from the gateway itself means the token is missing or incorrect; 403/421 means the configured public
 origin or Host does not match. Tool errors with OE HTTP 400 usually indicate an
 unknown workflow or missing required workflow inputs; use a workflow whose
 inputs have defaults. Connection errors mean OE is unavailable or could not

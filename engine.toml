@@ -1,7 +1,6 @@
 attribution = false
 default_branch = "main"
 # Hide the Projects accordion; set true to show it (defaults to true if omitted).
-show_projects = false
 public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
 github_login_client_id = "Iv23ligesj8xRFa2Iffc"
 github_login_redirect_uri = "https://sheas-mac-mini.taileb7fdb.ts.net/api/auth/github/callback"
@@ -22,6 +21,15 @@ repository = "OpenEngine/OpenEngine"
 # Aliases are accepted only by the named transport; this does not add forges.
 # Explicitly include the host of OpenEngine/OpenEngine.
 host_aliases = { "github.com" = "github.com" }
+
+# GitHub user IDs that sign in without a repository check, so they can still
+# get in when the server's GitHub login stops answering. See docs/github-login.md.
+[access]
+operators = [
+  6279187,    # dethstrobe
+  237151230,  # SheaHawkins
+  33102427,   # vvasyuk
+]
 
 [communications]
 provider = "slack"

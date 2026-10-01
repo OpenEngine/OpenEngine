@@ -106,14 +106,14 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("QueuedMessagePersistence", () => {
-  it("prompts for project context in project conversations", () => {
+  it("prompts for repository context in conversations", () => {
     runtime.state.thread.isRunning = false;
 
-    const { getByLabelText } = render(<Composer project />);
+    const { getByLabelText } = render(<Composer />);
 
     expect(getByLabelText("Message the agent")).toHaveAttribute(
       "placeholder",
-      "Tell the agent about the project you're working on..",
+      "Ask the agent about this repository…",
     );
   });
 

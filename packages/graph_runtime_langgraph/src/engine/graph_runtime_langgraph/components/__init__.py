@@ -11,6 +11,7 @@ would disagree about what a checkout or a human decision means.
     CICheck            wait for CI and report its verdict
     NameNode           give a run a concise display name, best effort
     HumanReviewNode    stop, and wait for a person
+    TriageNode         stop, and wait for a person to choose findings to fix
     ACPNode            run a coding agent over ACP
 
 Each is an ordinary async callable and each takes its collaborators as
@@ -40,6 +41,7 @@ from engine.graph_runtime_langgraph.components.findings import (
     RerankerNode,
     ReviewFacet,
     ReviewNode,
+    TriageNode,
 )
 from engine.graph_runtime_langgraph.components.human_review import HumanReviewNode
 from engine.graph_runtime_langgraph.components.name import NameNode
@@ -61,6 +63,7 @@ __all__ = [
     "NameNode",
     "OpenVerify",
     "NoWorkingDirectoryError",
+    "TriageNode",
     "WorkspaceNode",
     "checkout",
 ]

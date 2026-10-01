@@ -13,7 +13,7 @@ import logging
 import os
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
@@ -43,6 +43,10 @@ _SERVICE_ROUTE = ("POST", "/api/runs")
 # How often a response still streaming asks whether its user may keep it, so an
 # open event stream ends about when a new request would be refused.
 _STREAM_RECHECK = 30
+# Where a handler serving one repository's data puts an async check of whether
+# the request may still see it, so a stream is rechecked for that repository
+# and not only for access to any of them.
+STREAM_ACCESS = "engine.stream_access"
 
 
 def valid_service_token(token: str) -> bool:
@@ -95,24 +99,42 @@ class GitHubLogin:
         self,
         config: GitHubLoginConfig | None,
         service_token: Callable[[], str] = lambda: "",
-        authorize: Callable[[int, str], Awaitable[bool]] | None = None,
+        authorize: Callable[[int, str], Awaitable[Mapping[str, bool | None]]] | None = None,
         operators: Collection[int] = frozenset(),
+        authorize_user: Callable[[str], Awaitable[Mapping[str, bool | None]]] | None = None,
+        access_timeout: float = 10,
     ) -> None:
         self.config = config
-        # Whether a verified GitHub account (id, login) may have a session.
+        # Which of the deployment's repositories a verified GitHub account
+        # (id, login) can write to: repository -> GitHub's answer, or None
+        # where that lookup failed. Write access to any one admits a session.
         # Asked at sign-in and again, at most every _ACCESS_TTL seconds, by
         # signed-in requests, so revoked access does not outlive the cache.
         self.authorize = authorize
         # GitHub user IDs let in without asking: new people before they can
         # push anywhere, and everyone who can fix it when the server's own
-        # GitHub login stops answering.
+        # GitHub login stops answering. They see every repository.
         self.operators = frozenset(operators)
-        # user id -> (allowed, monotonic expiry). Only GitHub's answers are
-        # kept; a failed lookup is retried by the next request.
-        self._access: dict[int, tuple[bool, float]] = {}
+        # Which of the repositories the account holding a sign-in token can
+        # write to, asked with that token. Asked only for the repositories
+        # `authorize` could not answer, and then counted only as a yes, so a
+        # broken server connection does not lock out everyone who could fix it.
+        self.authorize_user = authorize_user
+        # Seconds one access check may take, server lookup and fallback together.
+        self.access_timeout = access_timeout
+        # user id -> session id -> (the read:user token GitHub issued at that
+        # sign-in, when that session's cookie expires). Kept in memory only,
+        # like the signing key, for rechecks, and per session, so signing out
+        # in one browser leaves the others their fallback.
+        self._user_tokens: dict[int, dict[str, tuple[str, float]]] = {}
+        # user id -> (writable repositories, monotonic expiry). Only complete
+        # answers from GitHub are kept; a failed lookup is retried by the next
+        # request.
+        self._access: dict[int, tuple[frozenset[str], float]] = {}
         # One lock per user, so one slow lookup holds up only that user.
         self._access_locks: dict[int, asyncio.Lock] = {}
-        # Whether the most recent lookup failed, shown to operators.
+        # Whether the most recent lookup through the server's connection
+        # failed, shown to signed-in users.
         self.access_check_failing = False
         # A reader rather than a value, so rotating the secret on disk takes
         # effect on the next request without a restart.
@@ -134,22 +156,30 @@ class GitHubLogin:
     def _sign(self, payload: str) -> str:
         return hmac.new(self._signing_key, payload.encode(), hashlib.sha256).hexdigest()
 
-    def _make_session_cookie(self, user_id: int, login: str) -> str:
-        """Build a signed session value: id|login|expires|signature."""
-        expires = int(time.time()) + _SESSION_TTL
-        payload = f"{user_id}|{login}|{expires}"
+    def _make_session_cookie(
+        self, user_id: int, login: str, session_id: str | None = None, expires: int | None = None
+    ) -> str:
+        """Build a signed session value: id|login|expires|session id|signature."""
+        expires = int(time.time()) + _SESSION_TTL if expires is None else expires
+        session_id = secrets.token_urlsafe(16) if session_id is None else session_id
+        payload = f"{user_id}|{login}|{expires}|{session_id}"
         return f"{payload}|{self._sign(payload)}"
 
     def _read_session(self, request: Request) -> dict[str, object] | None:
         """Verify and decode the session cookie, or None if invalid/expired."""
+        session = self._session(request)
+        return None if session is None else session[0]
+
+    def _session(self, request: Request) -> tuple[dict[str, object], str] | None:
+        """The session cookie's user and session id, or None if invalid/expired."""
         cookie = request.cookies.get(_SESSION_COOKIE, "")
         if not cookie or len(cookie) > 512:
             return None
         parts = cookie.split("|")
-        if len(parts) != 4:
+        if len(parts) != 5:
             return None
-        user_id_str, login, expires_str, signature = parts
-        payload = "|".join(parts[:3])
+        user_id_str, login, expires_str, session_id, signature = parts
+        payload = "|".join(parts[:4])
         if not secrets.compare_digest(signature.encode(), self._sign(payload).encode()):
             return None
         try:
@@ -157,9 +187,38 @@ class GitHubLogin:
             user_id = int(user_id_str)
         except ValueError:
             return None
-        if expires <= time.time() or user_id <= 0 or not login:
+        if expires <= time.time() or user_id <= 0 or not login or not session_id:
             return None
-        return {"id": user_id, "login": login}
+        return {"id": user_id, "login": login}, session_id
+
+    def _drop_expired_user_tokens(self) -> None:
+        """Forget the sign-in tokens of every session whose cookie has expired."""
+        now = time.time()
+        for owner in list(self._user_tokens):
+            sessions = self._user_tokens[owner]
+            for session_id in [s for s, (_, expires) in sessions.items() if expires <= now]:
+                del sessions[session_id]
+            if not sessions:
+                del self._user_tokens[owner]
+
+    def _user_tokens_of(self, user_id: int) -> list[str]:
+        """The sign-in tokens of the user's unexpired sessions.
+
+        `has_access` has already swept expired sessions; this only skips any
+        that expired while the server's lookup was running.
+        """
+        now = time.time()
+        sessions = self._user_tokens.get(user_id, {})
+        # Every token here was issued for this same user ID, so any one of
+        # them may vouch for it; one revoked in another browser must not
+        # stop the rest from being asked.
+        return list(dict.fromkeys(token for token, expires in sessions.values() if expires > now))
+
+    def _drop_user_token(self, user_id: int, session_id: str) -> None:
+        sessions = self._user_tokens.get(user_id, {})
+        sessions.pop(session_id, None)
+        if not sessions:
+            self._user_tokens.pop(user_id, None)
 
     async def has_access(self, user: dict[str, object], *, fresh: bool = False) -> bool | None:
         """Whether `user` may use the app: GitHub's answer, or None if it could not be had.
@@ -167,25 +226,115 @@ class GitHubLogin:
         `fresh` skips the cache, as a sign-in does, so newly granted access
         works at once.
         """
-        user_id, login = user["id"], user["login"]
-        if self.authorize is None or user_id in self.operators:
+        # Swept on every check, operators' included, so a token outlives its
+        # session only until the next request from anyone.
+        self._drop_expired_user_tokens()
+        if self.authorize is None or user["id"] in self.operators:
             return True
+        writable = await self.writable_repositories(user, fresh=fresh)
+        return None if writable is None else bool(writable)
+
+    async def writable_repositories(
+        self, user: dict[str, object], *, fresh: bool = False
+    ) -> frozenset[str] | None:
+        """The repositories `user` can write to, or None if that is unknown.
+
+        A repository whose lookup failed is left out, so it is hidden for this
+        request rather than shown. The answer is unknown only when nothing
+        admitted and something failed: then the user may yet have access.
+        """
+        user_id, login = user["id"], user["login"]
+        if self.authorize is None:
+            return frozenset()
         lock = self._access_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             cached = self._access.get(user_id)
             if not fresh and cached is not None and cached[1] > time.monotonic():
                 return cached[0]
+            # One deadline for the server's lookup and any fallback after it.
+            deadline = asyncio.get_running_loop().time() + self.access_timeout
             try:
-                allowed = await self.authorize(user_id, login)
+                async with asyncio.timeout_at(deadline):
+                    answers = await self.authorize(user_id, login)
             except Exception:
-                # Access that cannot be confirmed is not granted, but neither
-                # is the failure remembered: the next request asks again.
                 log.exception("could not check repository access for %s", login)
-                self.access_check_failing = True
-                return None
-            self.access_check_failing = False
-            self._access[user_id] = (allowed, time.monotonic() + _ACCESS_TTL)
-            return allowed
+                answers = None
+            writable = frozenset(project for project, allowed in (answers or {}).items() if allowed)
+            unanswered = None if answers is None else frozenset(
+                project for project, allowed in answers.items() if allowed is None
+            )
+            self.access_check_failing = unanswered is None or bool(unanswered)
+            if self.access_check_failing:
+                # The user's own tokens may add what the server could not
+                # answer, never take away what it did.
+                confirmed = await self._confirmed_by_user(user_id, login, unanswered, deadline)
+                writable |= confirmed
+                if unanswered is None or confirmed < unanswered:
+                    # Access that cannot be confirmed is not granted, but
+                    # neither is the failure remembered: the next request
+                    # asks again.
+                    return writable or None
+            if not writable:
+                # Access is gone, so no session needs a fallback for it.
+                self._user_tokens.pop(user_id, None)
+            self._access[user_id] = (writable, time.monotonic() + _ACCESS_TTL)
+            return writable
+
+    def access_known(self, user_id: int) -> bool:
+        """Whether a complete answer for `user_id` is cached and still fresh."""
+        cached = self._access.get(user_id)
+        return cached is not None and cached[1] > time.monotonic()
+
+    async def visible_repositories(self, request: Request) -> frozenset[str] | None:
+        """Which repositories' runs `request` may see, or None for all of them.
+
+        Everything when login is off, for the service credential, and for
+        operators; otherwise the repositories the signed-in user can write to.
+        """
+        if self.config is None or self._has_service_token(request):
+            return None
+        user = self._read_session(request)
+        if user is None:
+            return frozenset()
+        if self.authorize is None or user["id"] in self.operators:
+            return None
+        return await self.writable_repositories(user) or frozenset()
+
+    async def _confirmed_by_user(
+        self, user_id: int, login: str, repositories: frozenset[str] | None, deadline: float
+    ) -> frozenset[str]:
+        """Which of `repositories` (None for all) the user's own tokens showed write access to.
+
+        A failure is not a yes. Tokens are asked one at a time, newest first,
+        until every repository is confirmed or the deadline passes, so a user
+        with many sessions costs no more requests at once than one does.
+        """
+        confirmed: set[str] = set()
+        if self.authorize_user is None:
+            return frozenset()
+        try:
+            async with asyncio.timeout_at(deadline):
+                for token in reversed(self._user_tokens_of(user_id)):
+                    if asyncio.get_running_loop().time() >= deadline:
+                        # A lookup that answers without waiting would beat the timeout.
+                        raise TimeoutError
+                    try:
+                        answers = await self.authorize_user(token)
+                    except Exception:
+                        log.exception("could not check repository access for %s with their own token", login)
+                        continue
+                    confirmed.update(
+                        project for project, allowed in answers.items()
+                        if allowed is True and (repositories is None or project in repositories)
+                    )
+                    if repositories is not None and confirmed >= repositories:
+                        break
+        except TimeoutError:
+            log.warning("ran out of time checking repository access for %s with their own tokens", login)
+        if confirmed:
+            log.warning("admitted %s to %s on their own token's answer; the server's lookup failed",
+                        login, ", ".join(sorted(confirmed)))
+        return frozenset(confirmed)
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
@@ -301,7 +450,14 @@ class GitHubLogin:
                     raise ValueError("Invalid identity")
         except (httpx.HTTPError, ValueError, OSError):
             return RedirectResponse("/login?error=failed", status_code=302)
+        # Bound to the ID GitHub just returned for this token, and kept only
+        # as long as the session cookie issued for it.
+        session_id = secrets.token_urlsafe(16)
+        expires = int(time.time()) + _SESSION_TTL
+        self._user_tokens.setdefault(user["id"], {})[session_id] = (token, expires)
         allowed = await self.has_access(user, fresh=True)
+        if not allowed:
+            self._drop_user_token(user["id"], session_id)
         if allowed is None:
             # The identity is verified; only the permission check failed.
             return RedirectResponse("/login?error=unverified", status_code=302)
@@ -310,7 +466,7 @@ class GitHubLogin:
             return RedirectResponse("/login?error=forbidden", status_code=302)
         # Issue a session cookie and redirect to the app.
         response = RedirectResponse(pending[3], status_code=302)
-        session_value = self._make_session_cookie(user["id"], user["login"])
+        session_value = self._make_session_cookie(user["id"], user["login"], session_id, expires)
         response.set_cookie(_SESSION_COOKIE, session_value, max_age=_SESSION_TTL,
                             path="/", secure=self._is_secure(),
                             httponly=True, samesite="lax")
@@ -333,8 +489,9 @@ class GitHubLogin:
             "user": user,
             "loginRequired": self.config is not None,
         }
-        if user is not None and user["id"] in self.operators:
-            # Everyone else is refused while this is true, and cannot see why.
+        if user is not None:
+            # Whoever is signed in may be able to fix the server's connection;
+            # anyone it cannot vouch for is refused while this is true.
             body["accessCheckFailing"] = self.access_check_failing
         response = JSONResponse(body, headers=_HEADERS)
         if revoked:
@@ -343,8 +500,10 @@ class GitHubLogin:
         return response
 
     async def logout(self, request: Request) -> Response:
-        if self._read_session(request) is None:
+        session = self._session(request)
+        if session is None:
             return JSONResponse({"ok": True}, headers=_HEADERS)
+        self._drop_user_token(int(session[0]["id"]), session[1])
         response = JSONResponse({"ok": True}, headers=_HEADERS)
         response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
                                samesite="lax", secure=self._is_secure())
@@ -438,7 +597,12 @@ class _SessionAuthMiddleware:
             while True:
                 await anyio.sleep(_STREAM_RECHECK)
                 user = self.login._read_session(request)
-                if user is None or not await self.login.has_access(user):
+                still_visible = scope.get(STREAM_ACCESS)
+                if (
+                    user is None
+                    or not await self.login.has_access(user)
+                    or (still_visible is not None and not await still_visible())
+                ):
                     revoked = True
                     group.cancel_scope.cancel()
                     break

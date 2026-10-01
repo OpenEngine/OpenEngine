@@ -22,7 +22,6 @@ def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     loaded = load_engine_config(environ={}, cwd=tmp_path)
 
     assert loaded.path is None
-    assert loaded.config.show_projects is True
     assert loaded.config.attribution is True
     assert loaded.config.default_branch == "main"
     assert loaded.config.public_url == ""
@@ -195,10 +194,19 @@ def test_selection_is_explicit_then_environment_then_working_directory(
     "document,message",
     [
         ({"approval": {}}, "unknown key in configuration: approval"),
+        ({"repo_modes": {"api": "disconnected"}}, "repo_modes.api names no repository"),
+        (
+            {"repos": {"api": "/api"}, "repo_modes": {"api": "offline"}},
+            "repo_modes.api must be one of: connected, disconnected",
+        ),
+        ({"trusted_repos": {"api": True}}, "trusted_repos.api names no repository"),
+        (
+            {"repos": {"api": "/api"}, "trusted_repos": {"api": "yes"}},
+            "trusted_repos.api must be a boolean",
+        ),
+        ({"show_projects": False}, "unknown key in configuration: show_projects"),
         ({"approvals": {"automatic": True}}, "unknown key in approvals: automatic"),
         ({"approvals": {"auto_approve": "yes"}}, "must be a boolean"),
-        ({"show_projects": "false"}, "show_projects must be a boolean"),
-        ({"show_projects": 0}, "show_projects must be a boolean"),
         ({"attribution": "no"}, "attribution must be a boolean"),
         ({"default_branch": ""}, "default_branch must be a non-empty string"),
         ({"default_branch": 1}, "default_branch must be a non-empty string"),
@@ -522,7 +530,7 @@ def test_access_operators_reject_logins_and_bad_ids(operators) -> None:
         parse_engine_config({"access": {"operators": operators}})
 
 
-def test_login_repositories_are_read_from_the_checkouts_remotes(tmp_path) -> None:
+def test_repository_projects_are_read_from_the_checkouts_remotes(tmp_path) -> None:
     """`[repos]` names local paths; login asks GitHub about the repository
     each one pushes to, and skips what GitHub cannot answer for."""
     import subprocess
@@ -545,9 +553,30 @@ def test_login_repositories_are_read_from_the_checkouts_remotes(tmp_path) -> Non
         "github": {"host_aliases": {"github-web.example": "github-api.example"}},
     }))
 
-    assert web_main._login_repositories(loaded) == (
+    projects = web_main._repository_projects(loaded)
+    assert {name: projects[name] for name in repos if name in projects} == {
+        "api": "acme/api", "web": "acme/web", "same": "acme/web",
+        "enterprise": "github-web.example/acme/core",
+    }
+    assert web_main._login_repositories(loaded, projects) == (
         "acme/api", "acme/web", "github-web.example/acme/core",
     )
+
+
+def test_the_servers_own_checkout_is_named_dot(tmp_path, monkeypatch) -> None:
+    """A run in `.` is in the server's own checkout, which does not by itself
+    let anyone sign in."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
+                    "https://github.com/acme/server.git"], check=True)
+    monkeypatch.chdir(tmp_path)
+    loaded = LoadedEngineConfig(config=parse_engine_config({}))
+
+    projects = web_main._repository_projects(loaded)
+    assert projects == {".": "acme/server"}
+    assert web_main._login_repositories(loaded, projects) == ()
 
 
 def test_web_starts_login_with_only_operators(tmp_path, monkeypatch):
@@ -685,3 +714,19 @@ def test_the_distributable_default_config_is_loopback_and_machine_neutral() -> N
     assert config.communications.provider == "slack"
     assert config.workflows.directory == "workflows"
     assert "[orchestrator]" not in DEFAULT_CONFIG_TEMPLATE.read_text()
+
+
+def test_repo_modes_name_the_mode_of_onboarded_repositories() -> None:
+    config = parse_engine_config(
+        {"repos": {"api": "/api", "web": "/web"}, "repo_modes": {"api": "disconnected"}}
+    )
+
+    assert config.repo_modes == {"api": "disconnected"}
+
+
+def test_trusted_repos_name_the_repositories_whose_work_orders_are_auto_approved() -> None:
+    config = parse_engine_config(
+        {"repos": {"api": "/api", "web": "/web"}, "trusted_repos": {"api": True, "web": False}}
+    )
+
+    assert config.trusted_repos == frozenset({"api"})

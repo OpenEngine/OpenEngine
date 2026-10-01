@@ -10,9 +10,24 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ```
 ## Getting started
 
-Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
+On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
+logged in on this machine, run:
 
-OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. Make sure you are logged in to Codex or Claude on this machine. 
+```bash
+curl -LsSf https://openengine.sh/install.sh | sh
+```
+
+This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
+opens [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to
+reopen it and rerun the installer to upgrade.
+
+OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. OpenCode for local inference is offered, too!
+
+Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
+
+### From source
+
+Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
 First, clone the repo:
 ```bash
@@ -55,40 +70,48 @@ engine doctor --json
 engine status --server https://engine.example
 ```
 
-It defaults to `http://127.0.0.1:4364`; `engine config server URL` saves a
-server for the selected profile and `engine config profile NAME` switches
-profiles. This first CLI release is diagnostic-only: local service startup and
-interactive task workflows arrive in later stages. When the selected server is
-the default local address and no compatible service is responding, `engine
+It defaults to `http://127.0.0.1:4364`. When the selected server is the
+default local address and no compatible service is responding, `engine
 status` starts one `engine-web` process and waits for its health endpoint. An
 explicit `--server` is always probe-only. `engine daemon` runs the local
 service in the background instead; see
 [Background service](docs/releases.md#background-service).
+`engine connect gh|github|gitlab|slack` connects shared source control or Slack.
+`engine init`, run inside a git checkout, adds it under `[repos]` in the
+service's `engine.toml` (named after its `origin`, or `--name`) and restarts a
+running service so the repository appears in the WorkOrder dropdown. With
+GitHub sign-in enabled it warns that the repository's writers can now sign in.
+It asks how the repository's WorkOrders reach GitHub -- Git OAuth (connected,
+recommended), Git CLI (connected) or disconnected, or `--mode oauth|cli|disconnected`
+-- and prints the next step for a connected choice. Disconnected is recorded
+under `[repo_modes]`, and every WorkOrder on that repository then runs
+disconnected. It then asks how WorkOrders' requests are approved -- auto-approve
+(every repository), trusted repos (only repositories under `[trusted_repos]`,
+this one included) or manual, or `--approval auto|trusted|manual`. The installer
+offers to run it on a repository when it finishes.
 
-In an interactive terminal, running `engine` opens the read-only workbench.
-Type `/` to search the palette, then choose `/status`, `/connections`, `/threads`,
-`/transcript`, `/web`, or `/quit`. The matching scriptable commands are `engine status`,
-`engine connections`, `engine threads`
-(`--all` or `--archived`), `engine task THREAD_ID`, and `engine transcript THREAD_ID`.
-Task creation, streaming,
-and decisions remain later stages.
+`engine review [path | pull-request-url]` starts the WorkOrder workflow in its
+review state (`engine.domain.states`), skipping planning and implementation.
+A path (default: the current directory, local service only) reviews its
+committed branch; a GitHub pull request URL provisions a new workspace on the
+pull request's branch in the matching `[repos]` checkout, and fixes are pushed
+back to that branch. Pull requests from forks are refused, since their code
+would run the review's agents; check one out and review the path instead. The surviving
+findings are listed with **Fix this** beside each: Enter selects a finding,
+**Fix selected** or **Fix all** sends them back to the implementer, and the fix
+is reviewed again. **Post as comments** posts the findings on the pull request
+with `gh`. `--json` prints the findings and leaves the review waiting.
 
-Start a terminal task with `engine run "describe the work"`; it creates a
-conversation using the service's default agent and runner, then renders its
-NDJSON progress. For a local service, the directory where you invoke the
-command is attached as the task repository. `--agent`, `--runner`, and
-`--repository` override those defaults; pass `--repository` when targeting a
-remote service. `engine resume
-THREAD_ID` reconnects to a current run.
-Ctrl-C detaches the terminal stream only: it never sends the service a cancel
-request.
+In an interactive terminal, running `engine` opens the workbench. Type `/` to
+search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,
+`/review`, `/settings`, `/web`, or `/quit`. Typing a message starts a new work order and
+streams its progress; Ctrl-C detaches the terminal stream only and never sends
+the service a cancel request.
 
 While working on OpenEngine itself, run the development server instead:
 ```bash
 uv run engine-dev
 ```
-
-Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
 ## engine.toml
 The main configuration file for OpenEngine. It's defined [here](./engine.toml).
