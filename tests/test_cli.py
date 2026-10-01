@@ -497,7 +497,41 @@ def test_terminal_spinner_fits_its_line_to_the_terminal(monkeypatch):
 
     spinner._spin()
 
-    assert written[0] == "\r⠋ " + spinner.message[:37]
+    assert written[0] == "\r\x1b[J⠋ " + spinner.message[:37]
+
+
+def test_terminal_spinner_draws_its_detail_on_the_line_below(monkeypatch):
+    spinner = cli.TerminalSpinner("Reviewing", lambda width: f"w{width}")
+    written = []
+
+    class StopEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, _seconds):
+            return True
+
+    spinner._stopped = StopEvent()
+    monkeypatch.setattr(cli.shutil, "get_terminal_size", lambda: os.terminal_size((40, 24)))
+    monkeypatch.setattr(cli.sys, "stderr", type("Stderr", (), {"write": lambda _self, text: written.append(text), "flush": lambda *_args: None})())
+
+    spinner._spin()
+
+    assert written[0] == "\r\x1b[J⠋ Reviewing…\nw39\x1b[1A\r"
+
+
+def test_agent_feed_shows_the_latest_assistant_line_by_facet():
+    feed = cli.AgentFeed(cli.DEFAULT_SERVER, "run-1")
+    names = {"review_security": "Review (Security)", "reranker": "Reranker"}
+
+    assert feed.line(names, 80) == ""
+    feed.hear({"type": "transcript", "nodeId": "review_security", "payload": {"role": "assistant", "text": "Reading the diff.\n\nChecking auth\x1b[2J.\n"}})
+    feed.hear({"type": "tool.call", "nodeId": "reranker", "payload": {"callId": "c", "name": "Bash"}})
+    feed.hear({"type": "transcript", "nodeId": "reranker", "payload": {"role": "user", "text": "Rerank these."}})
+    assert feed.line(names, 80) == "\x1b[36mSecurity\x1b[0m Checking auth\\x1b[2J."
+
+    feed.hear({"type": "transcript", "nodeId": "reranker", "payload": {"role": "assistant", "text": "Merging duplicate findings"}})
+    assert feed.line(names, 20) == "\x1b[35mReranker\x1b[0m Merging dup"
 
 
 def test_terminal_spinner_cycles_until_stopped(monkeypatch):
