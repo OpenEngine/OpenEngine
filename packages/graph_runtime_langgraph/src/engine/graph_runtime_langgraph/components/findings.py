@@ -233,6 +233,12 @@ class RerankerNode(ACPNode):
         outputs = {output.name: output.value for output in event.outputs}
         parse_findings(outputs.get("findings"), require_lineage=True)
 
+    @staticmethod
+    def is_clean(event: StepCompleted) -> bool:
+        """Whether this completion leaves no finding standing, so it may approve."""
+        outputs = {output.name: output.value for output in event.outputs}
+        return not parse_findings(outputs.get("findings"), require_lineage=True)
+
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)
         findings = parse_findings(update.get("findings"), require_lineage=True)

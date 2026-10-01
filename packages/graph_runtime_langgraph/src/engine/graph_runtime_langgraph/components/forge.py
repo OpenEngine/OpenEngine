@@ -100,7 +100,9 @@ ANSWER_REVIEW = ByMode(
     disconnected="",
 )
 
-#: What a consolidated review is published as: `{runner}` names the reviewer.
+#: What a consolidated review is published as: `{runner}` names the reviewer,
+#: and `{clean}` is what to do when nothing survives -- `LOOKS_CLEAN` unless
+#: the step approves a clean change instead.
 PUBLISH_FINDINGS = ByMode(
     connected=(
         "For each surviving finding, post it as a PR comment using add_comment. "
@@ -110,7 +112,7 @@ PUBLISH_FINDINGS = ByMode(
         "_Produced by {runner} reviewing <facet>_\n\n"
         "Use the file and line from the finding for inline comments where "
         "available; use a general comment otherwise. If no findings survive, "
-        "leave one general comment saying the change looks clean.\n\n"
+        "{clean}\n\n"
         "After posting comments, call complete_step with the filtered findings "
         "as a JSON array (same schema as the inputs). Preserve each finding's "
         "agent and facet fields unchanged.\n\n"
@@ -123,6 +125,9 @@ PUBLISH_FINDINGS = ByMode(
         "Preserve each finding's agent and facet fields unchanged.\n\n"
     ),
 )
+
+#: What a reviewer that is not approving does with a clean change.
+LOOKS_CLEAN = "leave one general comment saying the change looks clean."
 
 #: What a single summary -- an assessment, a verdict -- is published as.
 #: Ends mid-sentence, before the instruction to complete the step.
@@ -149,6 +154,7 @@ __all__ = [
     "ANSWER_REVIEW",
     "ByMode",
     "CHANGE_UNDER_REVIEW",
+    "LOOKS_CLEAN",
     "OFFLINE",
     "PUBLISH_CHANGE",
     "PUBLISH_FINDINGS",

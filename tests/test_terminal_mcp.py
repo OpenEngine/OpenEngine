@@ -1718,56 +1718,116 @@ def test_concurrent_update_is_not_credited_to_noop_push():
 
 
 class ApprovingSourceControl:
-    """Approves whatever it is told to."""
+    """Approves whatever it is told to, unless its head has moved on."""
 
-    def __init__(self) -> None:
-        self.approved: list[tuple[str, str]] = []
+    def __init__(self, *, moved: bool = False) -> None:
+        self.moved = moved
+        self.approved: list[tuple[str, str, str]] = []
+        self.comments: list[str] = []
 
-    async def add_comment(self, *_arguments: object) -> CommentResult:
-        raise AssertionError("not called")
+    async def add_comment(self, pr_url: str, body: str, *_arguments: object) -> CommentResult:
+        self.comments.append(body)
+        return CommentResult(5, f"{pr_url}#issuecomment-5")
 
-    async def approve_pull_request(self, pr_url: str, body: str) -> CommentResult:
-        self.approved.append((pr_url, body))
+    async def run_git(self, workspace: WorkspaceId, arguments: tuple[str, ...]) -> GitResult:
+        assert tuple(arguments) == ("rev-parse", "HEAD")
+        return GitResult(0, "abc123\n", "")
+
+    async def approve_pull_request(self, pr_url: str, body: str, commit_id: str) -> CommentResult:
+        if self.moved:
+            raise ValueError(f"{pr_url} has moved past the reviewed commit {commit_id}")
+        self.approved.append((pr_url, body, commit_id))
         return CommentResult(9, f"{pr_url}#pullrequestreview-9")
 
 
-def test_a_review_step_may_approve_its_runs_pull_request_in_place_of_a_comment() -> None:
+async def _approving_broker(
+    source_control: ApprovingSourceControl, recorded: list[PostedComment],
+) -> TerminalMcpBroker:
+    broker = TerminalMcpBroker(
+        run_id=RunId("run-1"),
+        agent_run_id=AgentRunId("agent-run-1"),
+        step=StepSpec(StepId("reranker"), AgentId("reviewer"), ("findings",)),
+        registry=TerminalResultRegistry(),
+    )
+    broker.enable_repository_tools(
+        source_control,  # type: ignore[arg-type]
+        ("add_comment",),
+        WorkspaceId("workspace"),
+    )
+
+    async def lookup() -> list[tuple[str, int]]:
+        return [("acme/api", 7)]
+
+    async def record(posted: PostedComment) -> None:
+        recorded.append(posted)
+
+    broker.enable_pull_request_ownership(lookup)
+    broker.enable_comment_records(record)
+    broker.enable_clean_approval(
+        "https://github.com/acme/api/pull/7",
+        lambda event: not json.loads(dict(
+            (output.name, output.value) for output in event.outputs
+        )["findings"]),
+    )
+    broker._result = asyncio.get_running_loop().create_future()
+    return broker
+
+
+def _completing(findings: list[object]) -> dict[str, object]:
+    return {"outcome": "success", "summary": "Reviewed.",
+            "outputs": {"findings": json.dumps(findings)}}
+
+
+def test_a_review_step_approves_the_reviewed_commit_only_when_it_completes_clean() -> None:
     async def scenario() -> None:
-        source_control = ApprovingSourceControl()
-        broker = TerminalMcpBroker(
-            run_id=RunId("run-1"),
-            agent_run_id=AgentRunId("agent-run-1"),
-            step=StepSpec(StepId("reranker"), AgentId("reviewer"), ()),
-            registry=TerminalResultRegistry(),
-        )
-        broker.enable_repository_tools(
-            source_control,  # type: ignore[arg-type]
-            ("add_comment", "approve_pull_request"),
-            WorkspaceId("workspace"),
-        )
+        source_control, recorded = ApprovingSourceControl(), []
+        broker = await _approving_broker(source_control, recorded)
 
-        async def lookup() -> list[tuple[str, int]]:
-            return [("acme/api", 7)]
-
-        broker.enable_pull_request_ownership(lookup)
-        broker._result = asyncio.get_running_loop().create_future()
-
-        foreign = await broker._submit(_direct_request(
-            broker, "approve-1", "approve_pull_request",
-            {"pr_url": "https://github.com/acme/api/pull/8", "body": "Clean."},
-        ))
-        assert foreign["ok"] is False
-        approved = await broker._submit(_direct_request(
-            broker, "approve-2", "approve_pull_request",
-            {"pr_url": "https://github.com/acme/api/pull/7", "body": "Clean."},
-        ))
-        assert approved["ok"] is True
-        assert source_control.approved == [("https://github.com/acme/api/pull/7", "Clean.")]
-        # The approval is what this review left, so it may complete.
-        completed = await broker._submit(_direct_request(
+        # A finding survives: nothing is approved, and a comment is still owed.
+        surviving = await broker._submit(_direct_request(
             broker, "complete-1", "complete_step",
-            {"outcome": "success", "summary": "Approved.", "outputs": {}},
+            _completing([{"tagline": "It races.", "description": "Two writers."}]),
+        ))
+        assert surviving["ok"] is False
+        assert "add at least one pull-request comment" in surviving["error"]
+        assert source_control.approved == []
+        # Nothing survives: the reviewed commit is approved, in place of a comment.
+        clean = await broker._submit(_direct_request(
+            broker, "complete-2", "complete_step", _completing([]),
+        ))
+        assert clean["ok"] is True
+        assert source_control.approved == [(
+            "https://github.com/acme/api/pull/7",
+            "Engine's review of abc123 found nothing to fix.",
+            "abc123",
+        )]
+        assert [(posted.kind, posted.pr_number, posted.result.id) for posted in recorded] == [
+            ("approval", 7, 9),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_review_whose_approval_is_refused_leaves_a_comment_instead() -> None:
+    async def scenario() -> None:
+        source_control, recorded = ApprovingSourceControl(moved=True), []
+        broker = await _approving_broker(source_control, recorded)
+
+        refused = await broker._submit(_direct_request(
+            broker, "complete-1", "complete_step", _completing([]),
+        ))
+        assert refused["ok"] is False
+        assert "moved past the reviewed commit abc123" in refused["error"]
+        commented = await broker._submit(_direct_request(
+            broker, "comment-1", "add_comment",
+            {"pr_url": "https://github.com/acme/api/pull/7", "comment": "Looks clean."},
+        ))
+        assert commented["ok"] is True
+        completed = await broker._submit(_direct_request(
+            broker, "complete-2", "complete_step", _completing([]),
         ))
         assert completed["ok"] is True
+        assert source_control.approved == []
+        assert [posted.kind for posted in recorded] == ["issue"]
 
     asyncio.run(scenario())

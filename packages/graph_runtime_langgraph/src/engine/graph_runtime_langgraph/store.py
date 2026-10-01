@@ -133,11 +133,12 @@ class CommentRecord:
     repository: str
     """Canonical lowercase owner/repo; prefixed with the host outside github.com."""
     kind: str
-    """`issue` or `review`: which of GitHub's two id spaces `comment_id` is in.
+    """`issue`, `review` or `approval`: which of GitHub's id spaces `comment_id` is in.
 
-    GitHub numbers conversation comments and inline review comments from
-    separate sequences, so the two can hand out the same id for different
-    comments; together with `repository` this is what keeps them apart.
+    GitHub numbers conversation comments, inline review comments and reviews
+    -- an approval is one -- from separate sequences, so they can hand out the
+    same id for different things; together with `repository` this is what
+    keeps them apart.
     """
     pr_number: int
     run_id: RunId

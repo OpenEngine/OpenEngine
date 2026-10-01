@@ -119,6 +119,8 @@ class GithubReviewRequest:
     """The pull request's head branch, on the repository itself."""
     head_sha: str
     sender_id: int = 0
+    author: str = ""
+    """Who opened the pull request; empty when the delivery does not say."""
 
 
 #: The action a review request arrives as, on the pull request event.
@@ -161,11 +163,14 @@ def review_request_from_payload(
     branch, sha = head.get("ref"), head.get("sha")
     if not isinstance(branch, str) or not branch or not isinstance(sha, str) or not sha:
         return None
+    user = pull_request.get("user")
+    author = user.get("login") if isinstance(user, dict) else None
     return GithubReviewRequest(
         repository=full_name, number=number, sender=actor,
         title=str(pull_request.get("title") or ""),
         url=str(pull_request.get("html_url") or ""),
         branch=branch, head_sha=sha, sender_id=_account_id(sender),
+        author=author if isinstance(author, str) else "",
     )
 
 

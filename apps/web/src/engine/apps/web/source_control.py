@@ -243,9 +243,9 @@ class RoutingSourceControl:
             pr_url=pr_url,
         )
 
-    async def approve_pull_request(self, pr_url: str, body: str) -> CommentResult:
+    async def approve_pull_request(self, pr_url: str, body: str, commit_id: str) -> CommentResult:
         return await self._call(
-            lambda source: source.approve_pull_request(pr_url, body),
+            lambda source: source.approve_pull_request(pr_url, body, commit_id),
             pr_url=pr_url,
         )
 

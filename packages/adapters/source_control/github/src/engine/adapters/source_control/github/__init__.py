@@ -318,18 +318,28 @@ class GitHubSourceControl:
         )
         return CommentResult(response["id"], response["html_url"])
 
-    async def approve_pull_request(self, pr_url: str, body: str) -> CommentResult:
-        """Submit an approving pull-request review via the GitHub API."""
+    async def approve_pull_request(self, pr_url: str, body: str, commit_id: str) -> CommentResult:
+        """Approve `commit_id` of a pull request via the GitHub API.
+
+        Refused once the pull request's head has moved past `commit_id`: what
+        was pushed since was never reviewed. The review is still pinned to
+        `commit_id`, so a push racing the check is not what gets approved.
+        """
 
         if not pr_url.strip():
             raise ValueError("pr_url must not be empty")
         if not body.strip():
             raise ValueError("body must not be empty")
+        if not commit_id.strip():
+            raise ValueError("commit_id must not be empty")
         owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        head = _object(await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}")).get("head")
+        if not isinstance(head, dict) or head.get("sha") != commit_id:
+            raise ValueError(f"{pr_url} has moved past the reviewed commit {commit_id}")
         response = await self._api(
             "POST",
             f"/repos/{owner}/{repo}/pulls/{number}/reviews",
-            json={"body": body, "event": "APPROVE"},
+            json={"body": body, "event": "APPROVE", "commit_id": commit_id},
         )
         return CommentResult(response["id"], response["html_url"])
 

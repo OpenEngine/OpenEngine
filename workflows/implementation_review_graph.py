@@ -61,6 +61,7 @@ from engine.graph_runtime_langgraph.components import (
 from engine.graph_runtime_langgraph.components.forge import (
     ANSWER_REVIEW,
     CHANGE_UNDER_REVIEW,
+    LOOKS_CLEAN,
     PUBLISH_CHANGE,
     PUBLISH_FINDINGS,
     PUBLISH_SUMMARY,
@@ -218,11 +219,11 @@ KEEP_FINDINGS = (
     "facet fields unchanged.\n\n"
 )
 
-#: Added to the publishing instructions of a review allowed to approve.
+#: What a review allowed to approve does with a clean change: nothing, since
+#: completing with no findings is what approves it.
 APPROVE_CLEAN = (
-    "If no findings survive, approve the pull request with approve_pull_request "
-    "instead of leaving the general comment, with a body saying the change looks "
-    "clean. Never approve while any finding survives.\n\n"
+    "post nothing: completing with an empty findings array approves the pull "
+    "request, and an approval is the only way a clean change is answered."
 )
 
 # ---------------------------------------------------------------------------
@@ -284,8 +285,9 @@ class _RerankerTools(TerminalMcpServer):
 
     `KEEP_FINDINGS` asks it not to post, and the broker refuses `complete_step`
     from a step granted `add_comment` until it has posted, so the tool is
-    withheld by the server rather than only by the prompt. Approving is only
-    served to a review whose request allowed it.
+    withheld by the server rather than only by the prompt. Nor is approving
+    a tool: a review whose request allowed it approves when it completes with
+    no findings, which the broker checks on the completion itself.
     """
 
     def __call__(
@@ -297,11 +299,15 @@ class _RerankerTools(TerminalMcpServer):
         return TerminalMcpServer.__call__(self.for_state(state), state, execution, approve)
 
     def for_state(self, state: Mapping[str, object]) -> TerminalMcpServer:
-        withheld = set() if _may_approve(state) else {"approve_pull_request"}
-        if _keeps_findings(state):
-            withheld.add("add_comment")
-        return replace(self, repository_tools=tuple(
-            name for name in self.repository_tools if name not in withheld
+        served = replace(
+            self,
+            approves=_pr_url(state) if _may_approve(state) else "",
+            clean=RerankerNode.is_clean,
+        )
+        if not _keeps_findings(state):
+            return served
+        return replace(served, repository_tools=tuple(
+            name for name in self.repository_tools if name != "add_comment"
         ))
 
 
@@ -545,7 +551,8 @@ def pipeline(
             reviewer_count=len(REVIEW_FACETS),
             publishing=KEEP_FINDINGS if _keeps_findings(state) else PUBLISH_FINDINGS(
                 state, runner=state.get("inputs", {}).get("review_runner", reviewer),
-            ) + (APPROVE_CLEAN if _may_approve(state) else ""),
+                clean=APPROVE_CLEAN if _may_approve(state) else LOOKS_CLEAN,
+            ),
             findings_sections="".join(sections),
             change=f"The change is {CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state))}.\n\n",
             task=state.get("task", ""),
@@ -570,7 +577,6 @@ def pipeline(
                         "list_pipeline_status",
                         "get_job_logs",
                         "add_comment",
-                        "approve_pull_request",
                     ),
                 ),
             ),

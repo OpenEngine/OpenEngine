@@ -105,6 +105,7 @@ from engine.domain import (
     ApprovalRecord,
     ForgeMode,
     MODE_INPUT,
+    REVIEW_PUBLISH_INPUT,
     Message,
     STATE_INPUT,
     WorkState,
@@ -112,6 +113,7 @@ from engine.domain import (
     RunId,
     RunOrigin,
     ReviewPublishing,
+    review_publishing,
     RunPhase,
     RunState,
     TaskId,
@@ -1855,6 +1857,11 @@ def create_app(
         # the WorkOrder was asked for.
         if MODE_INPUT in inputs and (mode := await repository_mode(repository)) is not None:
             inputs = {**inputs, MODE_INPUT: str(mode)}
+        # Held here, where every start passes, rather than where the webhook
+        # builds its inputs: `publish_review` is an input anyone starting a
+        # run can set, and approving is the deployment's to allow.
+        if not github_review_approval and review_publishing(inputs) is ReviewPublishing.APPROVE:
+            inputs = {**inputs, REVIEW_PUBLISH_INPUT: str(ReviewPublishing.COMMENT)}
         async def runner_usage() -> dict[str, float]:
             # Scraped here rather than trusting the cache, which otherwise only
             # fills when someone opens the Utilization page, but at most hourly.
@@ -3581,8 +3588,10 @@ def create_app(
         out at the pull request's branch, reviewed, and stopped at triage --
         except that, having been asked on the pull request, it answers there:
         the reranker posts its findings, and approves a clean change unless
-        `[github] allow_approval` is off. A pull request a work order is still
-        working on is left to it: that run reviews its own change.
+        `[github] allow_approval` is off or the author asked for the review
+        themselves -- that would be a second approval they gave their own
+        change. A pull request a work order is still working on is left to
+        it: that run reviews its own change.
         """
         delivery = urlsplit(requested.url)
         found = change_request(delivery._replace(
@@ -3619,7 +3628,9 @@ def create_app(
             inputs=review_inputs(
                 declared, ref=f"origin/{requested.branch}", pr_url=url, branch=requested.branch,
                 publishing=(
-                    ReviewPublishing.APPROVE if github_review_approval else ReviewPublishing.COMMENT
+                    ReviewPublishing.APPROVE
+                    if requested.author and requested.author.lower() != requested.sender.lower()
+                    else ReviewPublishing.COMMENT
                 ),
             ),
         )

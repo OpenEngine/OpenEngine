@@ -144,6 +144,13 @@ off to have it leave a comment saying the change looks clean:
 allow_approval = false  # default true
 ```
 
+The approval is Engine's, not the model's: it is submitted only when the
+reranker completes with no findings, pinned to the commit that was reviewed,
+and refused if the pull request's head has moved on since. A review the pull
+request's author requested is answered with comments only. Even so, the model
+reads text the author controls, so do not count Engine's account toward the
+approvals branch protection requires.
+
 ## Merging as the human review
 
 A work order stops before it finishes and waits for a person to accept or

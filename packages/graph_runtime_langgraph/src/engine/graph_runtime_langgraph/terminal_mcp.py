@@ -14,6 +14,7 @@ from engine.domain.ids import WorkspaceId
 from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.terminal_mcp import (
     LOCAL_REPOSITORY_TOOLS,
+    CleanCompletion,
     REPOSITORY_TOOL_METHODS,
     OpenedPullRequest,
     PostedComment,
@@ -50,6 +51,10 @@ class TerminalMcpServer:
     # Raise ValueError to return a correctable tool error before acceptance.
     validate_completion: Callable[[StepCompleted], None] | None = None
     create_workorder: bool = False
+    approves: str = ""
+    """The pull request this step approves when `clean` says it completed
+    with nothing to fix; empty for a step that never approves."""
+    clean: CleanCompletion | None = None
 
     def __call__(
         self,
@@ -73,6 +78,7 @@ class TerminalMcpServer:
             required_outputs=tuple(
                 name for name in self.required_outputs if name != "pr_url"
             ),
+            approves="",
         )
 
     @asynccontextmanager
@@ -121,10 +127,10 @@ class TerminalMcpServer:
             WorkspaceId(workspace),
             approve,
         )
-        if (
-            {"add_comment", "approve_pull_request"} & set(served)
-            or "pr_url" in self.required_outputs
-        ):
+        clean = self.clean if self.approves else None
+        if clean is not None:
+            broker.enable_clean_approval(self.approves, clean)
+        if "add_comment" in served or clean is not None or "pr_url" in self.required_outputs:
             store = execution.runtime.store
 
             async def owned() -> tuple[tuple[str, int], ...]:
@@ -148,7 +154,7 @@ class TerminalMcpServer:
                 return holder == execution.run_id
 
             broker.enable_pull_request_claims(claim_reported)
-        if "add_comment" in served:
+        if "add_comment" in served or clean is not None:
             store = execution.runtime.store
 
             async def record(posted: PostedComment) -> None:

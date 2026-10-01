@@ -1390,9 +1390,14 @@ def _review_catalog():
 
 
 @pytest.mark.parametrize("may_write", [True, False])
-@pytest.mark.parametrize(("allow_approval", "publishing"), [(True, "approve"), (False, "comment")])
+@pytest.mark.parametrize(("allow_approval", "author", "publishing"), [
+    (True, "contributor", "approve"),
+    (False, "contributor", "comment"),
+    # An author asking for the review would be approving their own change.
+    (True, "Maintainer", "comment"),
+])
 def test_requesting_a_review_from_engine_starts_an_engine_review(
-    tmp_path, may_write, allow_approval, publishing, caplog,
+    tmp_path, may_write, allow_approval, author, publishing, caplog,
 ):
     from starlette.testclient import TestClient
     from test_github_ingress import _review_requested, _signed as github_signed
@@ -1411,7 +1416,7 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(
     source = MagicMock(can_write_repository=AsyncMock(return_value=may_write),
                        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source)
-    body = json.dumps(_review_requested()).encode()
+    body = json.dumps(_review_requested(user={"login": author})).encode()
     headers = dict(github_signed(body), **{"x-github-event": "pull_request"})
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200

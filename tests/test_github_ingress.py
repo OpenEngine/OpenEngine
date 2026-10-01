@@ -811,7 +811,7 @@ def _review_requested(**pull_request) -> dict:
             number=12, state="open", title="Add the feature",
             html_url="https://github.com/acme/api/pull/12",
             head={"ref": "feature", "sha": "abc123", "repo": {"full_name": "acme/api"}},
-            **pull_request,
+            **{"user": {"login": "contributor"}, **pull_request},
         ),
     }
 
@@ -825,8 +825,8 @@ def test_review_request_reads_pull_request_and_requester():
     assert requested is not None
     assert (requested.repository, requested.number, requested.sender, requested.sender_id) == (
         "acme/api", 12, "maintainer", 7)
-    assert (requested.branch, requested.head_sha, requested.title) == (
-        "feature", "abc123", "Add the feature")
+    assert (requested.branch, requested.head_sha, requested.title, requested.author) == (
+        "feature", "abc123", "Add the feature", "contributor")
 
 
 @pytest.mark.parametrize("change", [

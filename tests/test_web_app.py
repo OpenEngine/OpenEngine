@@ -2979,6 +2979,36 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(("allowed", "publishing"), [(True, "approve"), (False, "comment")])
+def test_a_run_started_by_hand_approves_only_where_the_deployment_allows(allowed, publishing):
+    from engine.graph_runtime.inputs import WorkflowInput
+
+    @dataclass(frozen=True)
+    class ReviewGraph(ScriptedGraph):
+        inputs: tuple = (WorkflowInput(
+            "publish_review", "Review findings", default="keep",
+            choices=("keep", "comment", "approve"),
+        ),)
+
+    graph = ReviewGraph(GraphId("reviews"), "Reviews", (ScriptedNode(NodeId("work"), (Say("Done"),)),))
+    app, runtime = _graph_app(InMemoryStateStore(), graph, github_review_approval=allowed)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post("/api/runs", json={
+                    "workflowId": "reviews", "repository": ".", "prompt": "Task",
+                    "inputs": {"publish_review": "approve"},
+                })
+                assert response.status_code == 201
+                snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                assert snapshot.values["inputs"]["publish_review"] == publishing
+
+    asyncio.run(scenario())
+
+
 def test_a_trusted_repository_auto_approves_its_workorders_only(tmp_path):
     graph = ScriptedGraph(
         GraphId("trust"), "Trust", (ScriptedNode(NodeId("work"), (Say("Done"),)),),

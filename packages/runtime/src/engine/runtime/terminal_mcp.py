@@ -88,6 +88,10 @@ PullRequestLookup = Callable[[], Awaitable[Sequence[tuple[str, int]]]]
 PullRequestClaimer = Callable[["OpenedPullRequest"], Awaitable[bool]]
 WorkorderCreator = Callable[[RunId, str, RunId | None], Awaitable[tuple[str, str]]]
 
+#: Whether a step's completion leaves nothing to fix. Bound, with the pull
+#: request such a completion approves, by whoever knows what the step reviews.
+CleanCompletion = Callable[[StepCompleted], bool]
+
 
 _SERVER_NAME = "workflow"
 _PROTOCOL_VERSION = "2025-06-18"
@@ -100,7 +104,6 @@ REPOSITORY_TOOL_METHODS: dict[str, str] = {
     "git_subcommand": "run_git",
     "open_pull_request": "request_review",
     "add_comment": "add_comment",
-    "approve_pull_request": "approve_pull_request",
     "view_change_request": "view_change_request",
     "list_work_items": "list_work_items",
     "view_work_item": "view_work_item",
@@ -165,8 +168,9 @@ class PostedComment:
     repository: str
     """Canonical lowercase owner/repo; prefixed with the host outside github.com."""
     pr_number: int
-    kind: Literal["issue", "review"]
-    """Which of GitHub's two comment id spaces `result.id` was drawn from."""
+    kind: Literal["issue", "review", "approval"]
+    """Which of GitHub's id spaces `result.id` was drawn from: an approval is a
+    pull-request review, numbered apart from either kind of comment."""
     result: CommentResult
 
 
@@ -256,6 +260,9 @@ class TerminalMcpBroker:
         self._opened: set[ChangeRequest] = set()
         self._pushed: set[_PushedBranch] = set()
         self._workorder_creator: WorkorderCreator | None = None
+        self._clean_approval: tuple[str, CleanCompletion] | None = None
+        self._approved = False
+        self._approval_refused = ""
 
     def enable_workorder_creation(self, create: WorkorderCreator) -> None:
         """Serve creation with the parent run bound by the host."""
@@ -279,6 +286,18 @@ class TerminalMcpBroker:
         able to find the comments an earlier one left.
         """
         self._comment_recorder = record
+
+    def enable_clean_approval(self, pr_url: str, clean: CleanCompletion) -> None:
+        """Approve `pr_url` when this step completes with nothing left to fix.
+
+        Decided on the completion rather than offered as a tool: an agent
+        reading a change somebody else wrote can be talked into anything, so
+        what approves is the result it hands back -- `clean` -- not its say-so.
+        The approval is pinned to the commit checked out in the workspace, the
+        one that was reviewed, and is posted on the pull request, so it stands
+        in for the comment a review step must otherwise leave.
+        """
+        self._clean_approval = (pr_url, clean)
 
     def enable_pull_request_records(self, record: PullRequestRecorder) -> None:
         """Record this run as the owner of every pull request it opens.
@@ -528,11 +547,6 @@ class TerminalMcpBroker:
                 return {"ok": True, "acknowledgement": "clarified"}
             admit: Callable[[], Awaitable[None]] | None = None
             if name == "complete_step":
-                if "add_comment" in self._repository_tools and not self._comments_added:
-                    return {
-                        "ok": False,
-                        "error": "add at least one pull-request comment before completing review",
-                    }
                 event: TerminalEvent = step_completed_from_arguments(
                     run_id=self._run_id,
                     step=self._step,
@@ -542,6 +556,23 @@ class TerminalMcpBroker:
                 )
                 if self._validate_completion is not None:
                     self._validate_completion(event)
+                approved = await self._approve_if_clean(event)
+                if (
+                    "add_comment" in self._repository_tools
+                    and not self._comments_added
+                    and not approved
+                ):
+                    refused = (
+                        f"could not approve the pull request ({self._approval_refused}); "
+                        if self._approval_refused else ""
+                    )
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"{refused}add at least one pull-request comment "
+                            "before completing review"
+                        ),
+                    }
                 claims: list[tuple[OpenedPullRequest, str]] = []
                 for output in event.outputs:
                     if output.name == "pr_url":
@@ -609,26 +640,6 @@ class TerminalMcpBroker:
             return {
                 "ok": True,
                 "acknowledgement": "comment added",
-                "output": json.dumps(dataclasses.asdict(result), sort_keys=True),
-            }
-
-        if name == "approve_pull_request":
-            pr_url, body = _approval_arguments(arguments)
-            foreign = await self._foreign_pull_request(pr_url)
-            if foreign is not None:
-                return {"ok": False, "error": foreign}
-            if not isinstance(self._source_control, PullRequestApprover):
-                return {"ok": False, "error": "this forge cannot approve pull requests"}
-            try:
-                result = await self._source_control.approve_pull_request(pr_url, body)
-            except Exception as error:
-                return {"ok": False, "error": f"could not approve pull request: {error}"}
-            # An approving review is posted on the pull request like a comment,
-            # so it is what a review step was asked to leave there.
-            self._comments_added += 1
-            return {
-                "ok": True,
-                "acknowledgement": "pull request approved",
                 "output": json.dumps(dataclasses.asdict(result), sort_keys=True),
             }
 
@@ -886,6 +897,42 @@ class TerminalMcpBroker:
 
         return admit
 
+    async def _approve_if_clean(self, event: StepCompleted) -> bool:
+        """Approve the reviewed pull request if `event` is clean; say whether it is approved.
+
+        A refusal -- the head moved on, the forge said no -- is kept rather
+        than retried, so the step can leave a comment instead and complete.
+        """
+        if self._clean_approval is None or self._approval_refused:
+            return False
+        if self._approved:
+            return True
+        pr_url, clean = self._clean_approval
+        if not clean(event):
+            return False
+        try:
+            foreign = await self._foreign_pull_request(pr_url)
+            if foreign is not None:
+                raise ValueError(foreign)
+            if not isinstance(self._source_control, PullRequestApprover):
+                raise ValueError("this forge cannot approve pull requests")
+            if self._workspace_id is None:
+                raise ValueError("this step has no workspace to say what was reviewed")
+            head = await self._source_control.run_git(self._workspace_id, ("rev-parse", "HEAD"))
+            commit = head.stdout.strip()
+            if head.exit_code != 0 or not commit:
+                raise ValueError("could not read the reviewed commit")
+            result = await self._source_control.approve_pull_request(
+                pr_url, f"Engine's review of {commit} found nothing to fix.", commit,
+            )
+        except Exception as error:
+            logger.warning("Did not approve %s: %s", pr_url, error)
+            self._approval_refused = str(error) or type(error).__name__
+            return False
+        self._approved = True
+        await self._record_comment("approval", result)
+        return True
+
     async def _record_pull_request(self, url: str) -> None:
         """Claim the pull request that is already open, if anyone is keeping it.
 
@@ -910,7 +957,7 @@ class TerminalMcpBroker:
             logger.exception("Could not record the opened pull request %s", url)
 
     async def _record_comment(
-        self, kind: Literal["issue", "review"], result: CommentResult
+        self, kind: Literal["issue", "review", "approval"], result: CommentResult
     ) -> None:
         """Write down a comment that is already posted, if anyone is keeping it.
 
@@ -1192,22 +1239,6 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "additionalProperties": False,
         },
     },
-    "approve_pull_request": {
-        "name": "approve_pull_request",
-        "description": (
-            "Submit an approving review of a pull request, with body as the "
-            "review's summary. Returns id and url."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "pr_url": {"type": "string", "minLength": 1},
-                "body": {"type": "string", "minLength": 1},
-            },
-            "required": ["pr_url", "body"],
-            "additionalProperties": False,
-        },
-    },
     "view_change_request": {
         "name": "view_change_request",
         "description": "View a pull request or merge request in this workspace repository.",
@@ -1398,22 +1429,6 @@ def _review_arguments(arguments: object) -> tuple[str, str, str, str]:
     if not isinstance(body, str):
         raise ValueError("body must be a string")
     return branch, base_ref, title, body
-
-
-def _approval_arguments(arguments: object) -> tuple[str, str]:
-    if not isinstance(arguments, dict):
-        raise ValueError("approve_pull_request arguments must be an object")
-    unexpected = set(arguments) - {"pr_url", "body"}
-    if unexpected:
-        names = ", ".join(sorted(str(name) for name in unexpected))
-        raise ValueError(f"unexpected approve_pull_request arguments: {names}")
-    pr_url = arguments.get("pr_url")
-    body = arguments.get("body")
-    if not isinstance(pr_url, str) or not pr_url.strip():
-        raise ValueError("pr_url must be a non-empty string")
-    if not isinstance(body, str) or not body.strip():
-        raise ValueError("body must be a non-empty string")
-    return pr_url, body
 
 
 def _comment_arguments(
@@ -1661,6 +1676,7 @@ def main() -> None:
 
 
 __all__ = [
+    "CleanCompletion",
     "CommentRecorder",
     "DEFAULT_BASE_REF",
     "OpenedPullRequest",

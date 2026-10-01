@@ -36,8 +36,8 @@ from engine.domain import (
     WorkspaceId, WorkState, review_inputs,
 )
 from engine.graph_runtime import GraphId, GraphWorkflow
-from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode
-from engine.graph_runtime_langgraph.components.forge import PUBLISH_CHANGE
+from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode, RerankerNode
+from engine.graph_runtime_langgraph.components.forge import LOOKS_CLEAN, PUBLISH_CHANGE
 from engine.graph_runtime_langgraph.components.name import NAMING_PROMPT
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.ports import Workspace
@@ -359,7 +359,6 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
         "list_pipeline_status",
         "get_job_logs",
         "add_comment",
-        "approve_pull_request",
     )
     assert reranker_binding.required_outputs == ("findings",)
     # A run started in review keeps its findings for a person, so the reranker
@@ -367,23 +366,26 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     # without a comment.
     reviewing = reranker_binding.for_state({"inputs": {STATE_INPUT: WorkState.REVIEW}})
     assert "add_comment" not in reviewing.repository_tools
-    assert "approve_pull_request" not in reviewing.repository_tools
-    # Only a review requested on the pull request, and allowed to, may approve.
-    assert reranker_binding.for_state({"inputs": {}}).repository_tools == (
-        "view_change_request", "list_pipeline_status", "get_job_logs", "add_comment",
-    )
+    assert not reviewing.approves
+    # Only a review requested on the pull request, and allowed to, approves --
+    # and then on its completion, not through a tool.
+    unrequested = reranker_binding.for_state({"inputs": {}})
+    assert unrequested.repository_tools == reranker_binding.repository_tools
+    assert not unrequested.approves
     requested = review_inputs(
-        {STATE_INPUT, MODE_INPUT, REVIEW_PUBLISH_INPUT},
+        {STATE_INPUT, MODE_INPUT, REVIEW_PUBLISH_INPUT, "pr_url"},
         ref="origin/topic", pr_url="https://github.com/acme/app/pull/7", branch="topic",
         publishing=ReviewPublishing.COMMENT,
     )
     commenting = reranker_binding.for_state({"inputs": requested})
     assert "add_comment" in commenting.repository_tools
-    assert "approve_pull_request" not in commenting.repository_tools
+    assert not commenting.approves
     approving = reranker_binding.for_state({"inputs": {
         **requested, REVIEW_PUBLISH_INPUT: str(ReviewPublishing.APPROVE),
     }})
     assert approving.repository_tools == reranker_binding.repository_tools
+    assert approving.approves == "https://github.com/acme/app/pull/7"
+    assert approving.clean is RerankerNode.is_clean
 
 
 def test_a_review_requested_on_the_pull_request_posts_and_may_approve() -> None:
@@ -400,11 +402,15 @@ def test_a_review_requested_on_the_pull_request_posts_and_may_approve() -> None:
 
     kept = prompt(ReviewPublishing.KEEP)
     assert "Do not post comments" in kept
-    assert "approve_pull_request" not in kept
+    assert "approves the pull" not in kept
     commented = prompt(ReviewPublishing.COMMENT)
     assert "using add_comment" in commented
-    assert "approve_pull_request" not in commented
-    assert "approve_pull_request" in prompt(ReviewPublishing.APPROVE)
+    assert LOOKS_CLEAN in commented
+    assert "approves the pull" not in commented
+    # One instruction for a clean change, not a comment overridden by an approval.
+    approved = prompt(ReviewPublishing.APPROVE)
+    assert module.APPROVE_CLEAN in approved
+    assert LOOKS_CLEAN not in approved
 
 
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
