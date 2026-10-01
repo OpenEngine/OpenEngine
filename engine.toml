@@ -1,9 +1,8 @@
 attribution = false
 default_branch = "main"
 # Hide the Projects accordion; set true to show it (defaults to true if omitted).
-public_url = "https://sheas-mac-mini.taileb7fdb.ts.net"
-github_login_client_id = "Iv23ligesj8xRFa2Iffc"
-github_login_redirect_uri = "https://sheas-mac-mini.taileb7fdb.ts.net/api/auth/github/callback"
+# A deployment's public_url and GitHub login settings belong in its own config
+# outside this checkout, loaded through ENGINE_CONFIG. See docs/github-login.md.
 
 # Repository names and local checkout paths offered when creating a WorkOrder.
 # Paths expand ~ and resolve relative to the server's working directory.

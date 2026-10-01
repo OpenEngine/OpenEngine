@@ -23,6 +23,13 @@ The secret file is reread at each token exchange, so updating it takes effect
 without a restart; changing the client ID or callback URL requires a restart.
 All three values are required when enabling login.
 
+Keep these values out of the repository's `engine.toml`: a checkout started
+with the client ID and callback but no secret refuses to start. Give the
+deployment its own config outside the checkout, such as
+`~/.config/openengine/engine.toml` with its `.env` beside it, and point the
+service at it with `ENGINE_CONFIG` or `engine-web --config`. `ENGINE_CONFIG`
+wins over `engine.toml` in the working directory.
+
 Visit `/login` and select **Sign in with GitHub** to start the browser
 authorization flow. It requests only `read:user`, uses OAuth state and PKCE,
 and issues a signed, HttpOnly session cookie at the callback before redirecting
