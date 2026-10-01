@@ -736,29 +736,116 @@ def test_review_retries_step_names_after_a_failed_fetch(monkeypatch, capsys):
     assert capsys.readouterr().err.splitlines() == ["→ Review (Bugs)", "✓ Review (Bugs)"]
 
 
-def test_enter_selects_a_finding_and_fix_selected_sends_only_it(monkeypatch):
-    offered = []
+def test_findings_are_all_reviewed_before_selected_fixes_are_sent(monkeypatch, capsys):
+    offered, sent, posted = [], [], []
+    findings = [*REVIEW_FINDINGS, {"tagline": "Third", "description": "Another issue."}]
+    choices = iter(["Fix", "Post to PR", "Ignore"])
 
     def choose(options, _prompt, **kwargs):
+        assert not sent, "implementation must wait until every finding is reviewed"
         offered.append(list(options))
-        return options[0] if len(offered) == 1 else next(option for option in options if option.startswith("Fix selected"))
+        return next(choices)
 
-    sent = []
     monkeypatch.setattr(cli, "palette", choose)
     monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append((path, body)) or {})
-
-    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
-
-    assert offered[0] == [
-        "○ Fix this · 1. The loop never ends", "○ Fix this · 2. Unused helper",
-        "Fix all", "Post as comments", "Finish",
-    ]
-    assert offered[1][0] == "✓ Fix this · 1. The loop never ends"
-    # The choice is steered first and the decision sent second.
+    monkeypatch.setattr(cli, "post_findings", lambda url, items: posted.append((url, items)) or 0)
+    url = "https://github.com/o/r/pull/1"
+    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, findings, url, REVIEW_PATCH)
+    assert offered == [["Fix", "Post to PR", "Ignore"]] * 3
+    assert posted == [(url, [findings[1]])]
     assert sent == [
-        ("/graph/api/runs/run-1/steering", {"message": json.dumps([REVIEW_FINDINGS[0]]), "node": "triage"}),
+        ("/graph/api/runs/run-1/steering", {"message": json.dumps([findings[0]]), "node": "triage"}),
         ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "accept"}),
     ]
+    output = capsys.readouterr().out
+    assert "Finding 2 of 3 · 1 queued for fixing" in output
+    assert "Reviewed 3 of 3 findings" in output
+    assert "+new" in output
+    assert "unrelated" not in output
+
+
+REVIEW_PATCH = """diff --git a/a.py b/a.py
+--- a/a.py
++++ b/a.py
+@@ -1,3 +1,3 @@
+ context
+-old
++new
+ end
+@@ -20 +20 @@
+-unrelated old
++unrelated new
+diff --git a/b.py b/b.py
+--- a/b.py
++++ b/b.py
+@@ -1 +1 @@
+-other old
++other new
+"""
+
+
+def test_finding_diff_selects_file_and_hunk():
+    patch = cli.finding_diff(REVIEW_PATCH, REVIEW_FINDINGS[0])
+    assert "+new" in patch
+    assert "unrelated" not in patch and "b/b.py" not in patch
+    assert "unrelated" in cli.finding_diff(REVIEW_PATCH, {"file": "a.py"})
+    assert cli.finding_diff(REVIEW_PATCH, {"file": "missing.py"}) == ""
+    assert cli.finding_diff(REVIEW_PATCH, {}) == ""
+    quoted = 'diff --git "a/a b.py" "b/a b.py"\n--- "a/a b.py"\n+++ "b/a b.py"\n@@ -1 +1 @@\n-old\n+new\n'
+    assert cli.finding_diff(quoted, {"file": "a b.py", "line": 1}) == quoted
+
+
+def test_diff_colors_only_on_a_terminal(monkeypatch, capsys):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    cli.render_finding_diff("@@ -1 +1 @@\n-old\n+new")
+    output = capsys.readouterr().out
+    assert "\x1b[31m-old" in output and "\x1b[32m+new" in output
+    monkeypatch.setenv("NO_COLOR", "1")
+    cli.render_finding_diff("+new")
+    assert capsys.readouterr().out == "+new\n"
+
+
+@pytest.mark.parametrize("choices,decision", [(["Ignore", "Ignore"], "cancel"), (["Fix", None], None)])
+def test_no_fixes_or_detaching_does_not_start_implementation(monkeypatch, choices, decision):
+    choices = iter(choices)
+    sent = []
+
+    def choose(options, *_args, **_kwargs):
+        assert "Post to PR" not in options
+        return next(choices)
+
+    monkeypatch.setattr(cli, "palette", choose)
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append(body) or {})
+    assert not cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "")
+    assert sent == ([{"decision": decision}] if decision else [])
+
+
+def test_failed_post_keeps_the_finding_open(monkeypatch):
+    choices = iter(["Post to PR", "Ignore", "Ignore"])
+    posted = []
+    monkeypatch.setattr(cli, "palette", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr(cli, "post_findings", lambda _url, items: posted.append(items) or 1)
+    monkeypatch.setattr(cli, "request_json", lambda *_args: {})
+    assert not cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
+    assert posted == [[REVIEW_FINDINGS[0]]]
+
+
+def test_review_diff_reads_the_fixed_workspace_in_each_round(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "git_output", lambda *args: calls.append(args) or REVIEW_PATCH)
+    target = cli.ReviewTarget("/repo", "old-commit", "", "Review")
+    assert cli.review_diff(cli.DEFAULT_SERVER, {"values": {"workspace": "/review-checkout"}}, target) == REVIEW_PATCH
+    assert calls == [("/review-checkout", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "origin/HEAD...HEAD", "--")]
+
+
+def test_review_diff_reads_pull_request_patch(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", lambda args, **kwargs: calls.append(args) or SimpleNamespace(returncode=0, stdout=REVIEW_PATCH))
+    target = cli.ReviewTarget("/remote/repo", "origin/topic", "https://github.com/o/r/pull/1", "Review")
+    assert cli.review_diff("https://remote", {}, target) == REVIEW_PATCH
+    assert calls == [["gh", "pr", "diff", target.pr_url, "--color=never"]]
 
 
 def test_posting_findings_comments_inline_where_a_finding_has_a_line(monkeypatch):
