@@ -1,6 +1,8 @@
 # OpenEngine
 
 [![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
+[![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
+[![Docs](https://img.shields.io/badge/docs-openengine.sh-blue)](https://openengine.sh/docs/)
 
 OpenEngine is a graph execution engine that meets you where you work.
 
