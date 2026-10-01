@@ -1342,6 +1342,7 @@ def choose_fixes(
             render_finding_diff(relevant)
         else:
             print("No matching diff is available for this finding.")
+        print()
         render_findings([finding])
         while True:
             actions = ["Fix", *(["Post to PR"] if pr_url else []), "Ignore"]

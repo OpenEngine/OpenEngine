@@ -762,6 +762,7 @@ def test_findings_are_all_reviewed_before_selected_fixes_are_sent(monkeypatch, c
     assert "Reviewed 3 of 3 findings" in output
     assert "+new" in output
     assert output.index("+new") < output.index(findings[0]["tagline"])
+    assert "+new\n end\n\nFindings (1)" in output
     assert "unrelated" not in output
 
 
