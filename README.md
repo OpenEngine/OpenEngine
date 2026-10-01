@@ -1,5 +1,7 @@
 # OpenEngine
 
+[![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
+
 OpenEngine is a graph execution engine that meets you where you work.
 
 ![](docs/images/oe_land.png)
