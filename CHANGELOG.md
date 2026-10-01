@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.0](https://github.com/OpenEngine/OpenEngine/compare/v1.0.0...v1.1.0) (2026-10-01)
+
+
+### Features
+
+* **cli:** add engine review to start the workflow in review and triage findings ([#604](https://github.com/OpenEngine/OpenEngine/issues/604)) ([f29d9d8](https://github.com/OpenEngine/OpenEngine/commit/f29d9d8e9a72910c1dcefb3ab5b1863877a5c6ec))
+* scope work order visibility to the repositories a user can write to ([#590](https://github.com/OpenEngine/OpenEngine/issues/590)) ([3ca4374](https://github.com/OpenEngine/OpenEngine/commit/3ca43742ee38ada44846202c8a6eb8250d0d0f98))
+* **web:** start an engine review when Engine is requested as a pull request reviewer ([#623](https://github.com/OpenEngine/OpenEngine/issues/623)) ([d79821f](https://github.com/OpenEngine/OpenEngine/commit/d79821feab6ee92aa871287c00762dc46cafe35c))
+
+
+### Bug Fixes
+
+* **release:** stop pinning release-please to 1.0.0 ([#622](https://github.com/OpenEngine/OpenEngine/issues/622)) ([4296cf2](https://github.com/OpenEngine/OpenEngine/commit/4296cf28aebdbe83a8f8e0d87a6c12cfc33b5350))
+
+
+### Documentation
+
+* **site:** feature the 1.0 release video on the homepage ([#619](https://github.com/OpenEngine/OpenEngine/issues/619)) ([e35c8d1](https://github.com/OpenEngine/OpenEngine/commit/e35c8d15fb4cd2d134e73b1276ffc4017f7374e7))
+
 ## [1.0.0](https://github.com/OpenEngine/OpenEngine/compare/v0.7.0...v1.0.0) (2026-09-30)
 
 
