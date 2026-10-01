@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from urllib.error import URLError
 
@@ -477,6 +478,26 @@ def test_stream_run_shows_a_spinner_until_the_first_event(monkeypatch):
 
     assert cli.stream_run("http://engine.test", "/api/threads/thread-1/runs", {"text": "Ship it"}) == 0
     assert events == ["start", "stop"]
+
+
+def test_terminal_spinner_fits_its_line_to_the_terminal(monkeypatch):
+    spinner = cli.TerminalSpinner("Reviewing: " + ", ".join(["Review (Security)"] * 10))
+    written = []
+
+    class StopEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, _seconds):
+            return True
+
+    spinner._stopped = StopEvent()
+    monkeypatch.setattr(cli.shutil, "get_terminal_size", lambda: os.terminal_size((40, 24)))
+    monkeypatch.setattr(cli.sys, "stderr", type("Stderr", (), {"write": lambda _self, text: written.append(text), "flush": lambda *_args: None})())
+
+    spinner._spin()
+
+    assert written[0] == "\r⠋ " + spinner.message[:37]
 
 
 def test_terminal_spinner_cycles_until_stopped(monkeypatch):

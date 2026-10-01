@@ -417,7 +417,9 @@ class TerminalSpinner:
     def _spin(self) -> None:
         while not self._stopped.is_set():
             for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
-                print(f"\r{frame} {self.message}…", end="", file=sys.stderr, flush=True)
+                # A line wider than the terminal wraps, and `\r` then redraws on a new row every frame.
+                line = f"{frame} {self.message}…"[:max(shutil.get_terminal_size().columns - 1, 1)]
+                print(f"\r{line}", end="", file=sys.stderr, flush=True)
                 if self._stopped.wait(0.1):
                     return
 
