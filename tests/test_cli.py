@@ -690,6 +690,28 @@ def test_review_json_waits_for_triage_and_prints_the_surviving_findings(monkeypa
     assert printed == {"runId": "run-1", "prUrl": "https://github.com/o/r/pull/1", "findings": REVIEW_FINDINGS}
 
 
+def test_review_says_each_step_as_it_starts_and_finishes(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "REVIEW_POLL_SECONDS", 0)
+    runs = iter([
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": [{"executionId": "e1", "nodeId": "implementation"}]},
+        {"status": "running", "graphId": "g", "pendingApprovals": [], "activeExecutions": [
+            {"executionId": "e2", "nodeId": "review_bugs"}, {"executionId": "e3", "nodeId": "unnamed"},
+        ]},
+        {"status": "awaiting_approval", "graphId": "g", "pendingApprovals": [TRIAGE], "activeExecutions": []},
+    ])
+    monkeypatch.setattr(cli, "fetch_json", lambda _server, path: (
+        {"nodes": [{"nodeId": "implementation", "name": "Implementation"}, {"nodeId": "review_bugs", "name": "Review (Bugs)"}]}
+        if path == "/graph/api/graphs/g" else next(runs)
+    ))
+
+    _run, triage = cli.wait_for_triage(cli.DEFAULT_SERVER, "run-1")
+
+    assert triage == TRIAGE
+    assert capsys.readouterr().err.splitlines() == [
+        "→ Implementation", "✓ Implementation", "→ Review (Bugs)", "→ unnamed", "✓ Review (Bugs)", "✓ unnamed",
+    ]
+
+
 def test_enter_selects_a_finding_and_fix_selected_sends_only_it(monkeypatch):
     offered = []
 
