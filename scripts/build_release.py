@@ -16,9 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "packages/runtime/src/engine/runtime/default-engine.toml"
 
 
-def build(commit: str, output: Path = ROOT / "dist") -> Path:
+def build(commit: str, output: Path = ROOT / "dist", label: str | None = None) -> Path:
+    """Build the bundle; ``label`` names it in place of the package version."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     version = project["project"]["version"]
+    label = label or version
     workspace = project["tool"]["uv"]["workspace"]
     sources = {ROOT, ROOT / "langgraph-acp"}
     excluded = {p for pattern in workspace["exclude"] for p in ROOT.glob(pattern)}
@@ -31,7 +33,7 @@ def build(commit: str, output: Path = ROOT / "dist") -> Path:
     subprocess.run(["npm", "--prefix", "apps/web", "run", "build"], cwd=ROOT, check=True)
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
-        bundle = Path(temporary) / f"openengine-{version}"
+        bundle = Path(temporary) / f"openengine-{label}"
         wheels = bundle / "wheels"
         wheels.mkdir(parents=True)
         for arguments in (["--all-packages"], ["langgraph-acp"]):
@@ -64,7 +66,7 @@ def build(commit: str, output: Path = ROOT / "dist") -> Path:
         # --require-hashes mode a wheel named on the command line is refused.
         requirements = bundle / "requirements.txt"
         subprocess.run(
-            ["uv", "export", "--frozen", "--all-packages", "--no-emit-workspace",
+            ["uv", "export", "--quiet", "--frozen", "--all-packages", "--no-emit-workspace",
              "--no-dev", "--no-emit-package", "langgraph-acp", "--no-header",
              "--output-file", str(requirements)],
             cwd=ROOT,
@@ -79,11 +81,11 @@ def build(commit: str, output: Path = ROOT / "dist") -> Path:
              "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
             for p in sorted(bundle.rglob("*")) if p.is_file()
         ]
-        manifest = {"schema_version": 1, "version": version, "commit": commit,
+        manifest = {"schema_version": 1, "version": label, "commit": commit,
                     "distributions": distributions, "requirements": "requirements.txt",
                     "config": "engine.toml", "files": files}
         (bundle / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        archive_path = output / f"openengine-{version}.tar.gz"
+        archive_path = output / f"openengine-{label}.tar.gz"
         with tarfile.open(archive_path, "w:gz") as archive:
             archive.add(bundle, arcname=bundle.name)
         # The published copy also names the archive's digest, which the copy
@@ -97,4 +99,7 @@ def build(commit: str, output: Path = ROOT / "dist") -> Path:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--commit", required=True, help="Source commit recorded in the manifest")
-    print(build(parser.parse_args().commit))
+    parser.add_argument("--label", help="Release version to name the bundle (default: the package version)")
+    parser.add_argument("--output", type=Path, default=ROOT / "dist", help="Directory for the archive and manifest")
+    arguments = parser.parse_args()
+    print(build(arguments.commit, arguments.output, arguments.label))

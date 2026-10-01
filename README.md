@@ -48,6 +48,12 @@ uv run \
   --all-packages \
   engine-web
 ```
+Or install the checked-out commit as your `engine`, in place of a release,
+exactly as the one-line installer would. It is labeled with the commit, such as
+`1.2.0-ffdb7cd`, and takes the installer's options:
+```bash
+scripts/install-local.sh
+```
 The production service defaults to `http://127.0.0.1:4364`. Verify its identity
 and readiness after startup:
 ```bash
