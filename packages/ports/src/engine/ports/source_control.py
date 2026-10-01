@@ -271,6 +271,15 @@ class SourceControl(Protocol):
         ...
 
 
+@runtime_checkable
+class PullRequestApprover(Protocol):
+    """Source control that can approve a review, which not every forge's adapter does."""
+
+    async def approve_pull_request(self, pr_url: str, body: str) -> CommentResult:
+        """Submit an approving review of this request and return its provenance."""
+        ...
+
+
 __all__ = [
     "ChangeRequest",
     "Discussion",
@@ -279,6 +288,7 @@ __all__ = [
     "Pipeline",
     "PipelineRetry",
     "PipelineStatus",
+    "PullRequestApprover",
     "SourceControl",
     "StatusCheck",
     "WorkItem",

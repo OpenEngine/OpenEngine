@@ -1383,12 +1383,17 @@ def _review_catalog():
             mode_input(), state_input(WorkState.PLANNING, WorkState.REVIEW),
             WorkflowInput("ref", "Ref"), WorkflowInput("pr_url", "Pull request"),
             WorkflowInput("branch", "Branch"),
+            WorkflowInput("publish_review", "Review findings", default="keep",
+                          choices=("keep", "comment", "approve")),
         ),
     ),))
 
 
 @pytest.mark.parametrize("may_write", [True, False])
-def test_requesting_a_review_from_engine_starts_an_engine_review(tmp_path, may_write, caplog):
+@pytest.mark.parametrize(("allow_approval", "publishing"), [(True, "approve"), (False, "comment")])
+def test_requesting_a_review_from_engine_starts_an_engine_review(
+    tmp_path, may_write, allow_approval, publishing, caplog,
+):
     from starlette.testclient import TestClient
     from test_github_ingress import _review_requested, _signed as github_signed
 
@@ -1401,6 +1406,7 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(tmp_path, may_w
         _review_catalog(), provider=FakeACPProvider(create=True),
         github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
         repos={"acme/api": (checkout := _checkout(tmp_path / "api", "git@github.com:Acme/API.git"))},
+        github_review_approval=allow_approval,
     )
     source = MagicMock(can_write_repository=AsyncMock(return_value=may_write),
                        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
@@ -1425,6 +1431,8 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(tmp_path, may_w
         assert inputs["inputs"] == {
             "mode": "connected", "state": "Review", "ref": "origin/feature",
             "pr_url": "https://github.com/acme/api/pull/12", "branch": "feature",
+            # Asked on the pull request, so answered there.
+            "publish_review": publishing,
         }
         # Claimed, so the review may comment on the pull request it was given.
         record = runtime.store.claim_pull_request.await_args.args[0]

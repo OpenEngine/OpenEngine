@@ -243,6 +243,12 @@ class RoutingSourceControl:
             pr_url=pr_url,
         )
 
+    async def approve_pull_request(self, pr_url: str, body: str) -> CommentResult:
+        return await self._call(
+            lambda source: source.approve_pull_request(pr_url, body),
+            pr_url=pr_url,
+        )
+
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int
     ) -> ChangeRequest:

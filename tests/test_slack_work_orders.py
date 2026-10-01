@@ -225,6 +225,7 @@ def _app(
     github_webhook_secret="",
     approval_policy=None,
     repos=None,
+    github_review_approval=True,
 ):
     from engine.apps.web.api import create_app
     from engine.runtime import AgentSession, Capabilities, WorkflowCatalog
@@ -263,6 +264,7 @@ def _app(
         github_comment_handler=github_comment_handler,
         github_webhook_secret=lambda: github_webhook_secret,
         github_repository="acme/api",
+        github_review_approval=github_review_approval,
     ), capabilities, slack_store
 
 def _mention_graph():

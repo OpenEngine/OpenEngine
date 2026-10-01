@@ -1715,3 +1715,59 @@ def test_concurrent_update_is_not_credited_to_noop_push():
         claim.assert_not_awaited()
 
     asyncio.run(scenario())
+
+
+class ApprovingSourceControl:
+    """Approves whatever it is told to."""
+
+    def __init__(self) -> None:
+        self.approved: list[tuple[str, str]] = []
+
+    async def add_comment(self, *_arguments: object) -> CommentResult:
+        raise AssertionError("not called")
+
+    async def approve_pull_request(self, pr_url: str, body: str) -> CommentResult:
+        self.approved.append((pr_url, body))
+        return CommentResult(9, f"{pr_url}#pullrequestreview-9")
+
+
+def test_a_review_step_may_approve_its_runs_pull_request_in_place_of_a_comment() -> None:
+    async def scenario() -> None:
+        source_control = ApprovingSourceControl()
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=StepSpec(StepId("reranker"), AgentId("reviewer"), ()),
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(
+            source_control,  # type: ignore[arg-type]
+            ("add_comment", "approve_pull_request"),
+            WorkspaceId("workspace"),
+        )
+
+        async def lookup() -> list[tuple[str, int]]:
+            return [("acme/api", 7)]
+
+        broker.enable_pull_request_ownership(lookup)
+        broker._result = asyncio.get_running_loop().create_future()
+
+        foreign = await broker._submit(_direct_request(
+            broker, "approve-1", "approve_pull_request",
+            {"pr_url": "https://github.com/acme/api/pull/8", "body": "Clean."},
+        ))
+        assert foreign["ok"] is False
+        approved = await broker._submit(_direct_request(
+            broker, "approve-2", "approve_pull_request",
+            {"pr_url": "https://github.com/acme/api/pull/7", "body": "Clean."},
+        ))
+        assert approved["ok"] is True
+        assert source_control.approved == [("https://github.com/acme/api/pull/7", "Clean.")]
+        # The approval is what this review left, so it may complete.
+        completed = await broker._submit(_direct_request(
+            broker, "complete-1", "complete_step",
+            {"outcome": "success", "summary": "Approved.", "outputs": {}},
+        ))
+        assert completed["ok"] is True
+
+    asyncio.run(scenario())

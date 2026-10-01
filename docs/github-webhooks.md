@@ -131,6 +131,19 @@ Repeated assignments and redeliveries for the same issue are deduplicated in
 the bounded ingress memory. Failed handling can be retried by redelivery. As
 with comment ingress, this deduplication does not survive a process restart.
 
+## Reviewing a pull request on request
+
+Requesting a review from Engine's account on a pull request starts a review of
+it, connected to that pull request. The reranker posts the surviving findings
+on the pull request as comments, then stops at triage for the fixes to make.
+When no findings survive, it approves the pull request instead. Turn approval
+off to have it leave a comment saying the change looks clean:
+
+```toml
+[github]
+allow_approval = false  # default true
+```
+
 ## Merging as the human review
 
 A work order stops before it finishes and waits for a person to accept or

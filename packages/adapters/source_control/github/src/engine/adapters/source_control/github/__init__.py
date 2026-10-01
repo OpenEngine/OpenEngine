@@ -318,6 +318,21 @@ class GitHubSourceControl:
         )
         return CommentResult(response["id"], response["html_url"])
 
+    async def approve_pull_request(self, pr_url: str, body: str) -> CommentResult:
+        """Submit an approving pull-request review via the GitHub API."""
+
+        if not pr_url.strip():
+            raise ValueError("pr_url must not be empty")
+        if not body.strip():
+            raise ValueError("body must not be empty")
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        response = await self._api(
+            "POST",
+            f"/repos/{owner}/{repo}/pulls/{number}/reviews",
+            json={"body": body, "event": "APPROVE"},
+        )
+        return CommentResult(response["id"], response["html_url"])
+
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int
     ) -> ChangeRequest:

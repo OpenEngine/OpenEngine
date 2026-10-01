@@ -121,7 +121,10 @@ class TerminalMcpServer:
             WorkspaceId(workspace),
             approve,
         )
-        if "add_comment" in served or "pr_url" in self.required_outputs:
+        if (
+            {"add_comment", "approve_pull_request"} & set(served)
+            or "pr_url" in self.required_outputs
+        ):
             store = execution.runtime.store
 
             async def owned() -> tuple[tuple[str, int], ...]:

@@ -35,6 +35,7 @@ from engine.ports import (
     ApprovalRequest,
     CommentResult,
     McpServerConfig,
+    PullRequestApprover,
     SourceControl,
 )
 from engine.runtime.change_requests import (
@@ -99,6 +100,7 @@ REPOSITORY_TOOL_METHODS: dict[str, str] = {
     "git_subcommand": "run_git",
     "open_pull_request": "request_review",
     "add_comment": "add_comment",
+    "approve_pull_request": "approve_pull_request",
     "view_change_request": "view_change_request",
     "list_work_items": "list_work_items",
     "view_work_item": "view_work_item",
@@ -607,6 +609,26 @@ class TerminalMcpBroker:
             return {
                 "ok": True,
                 "acknowledgement": "comment added",
+                "output": json.dumps(dataclasses.asdict(result), sort_keys=True),
+            }
+
+        if name == "approve_pull_request":
+            pr_url, body = _approval_arguments(arguments)
+            foreign = await self._foreign_pull_request(pr_url)
+            if foreign is not None:
+                return {"ok": False, "error": foreign}
+            if not isinstance(self._source_control, PullRequestApprover):
+                return {"ok": False, "error": "this forge cannot approve pull requests"}
+            try:
+                result = await self._source_control.approve_pull_request(pr_url, body)
+            except Exception as error:
+                return {"ok": False, "error": f"could not approve pull request: {error}"}
+            # An approving review is posted on the pull request like a comment,
+            # so it is what a review step was asked to leave there.
+            self._comments_added += 1
+            return {
+                "ok": True,
+                "acknowledgement": "pull request approved",
                 "output": json.dumps(dataclasses.asdict(result), sort_keys=True),
             }
 
@@ -1170,6 +1192,22 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "additionalProperties": False,
         },
     },
+    "approve_pull_request": {
+        "name": "approve_pull_request",
+        "description": (
+            "Submit an approving review of a pull request, with body as the "
+            "review's summary. Returns id and url."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_url": {"type": "string", "minLength": 1},
+                "body": {"type": "string", "minLength": 1},
+            },
+            "required": ["pr_url", "body"],
+            "additionalProperties": False,
+        },
+    },
     "view_change_request": {
         "name": "view_change_request",
         "description": "View a pull request or merge request in this workspace repository.",
@@ -1360,6 +1398,22 @@ def _review_arguments(arguments: object) -> tuple[str, str, str, str]:
     if not isinstance(body, str):
         raise ValueError("body must be a string")
     return branch, base_ref, title, body
+
+
+def _approval_arguments(arguments: object) -> tuple[str, str]:
+    if not isinstance(arguments, dict):
+        raise ValueError("approve_pull_request arguments must be an object")
+    unexpected = set(arguments) - {"pr_url", "body"}
+    if unexpected:
+        names = ", ".join(sorted(str(name) for name in unexpected))
+        raise ValueError(f"unexpected approve_pull_request arguments: {names}")
+    pr_url = arguments.get("pr_url")
+    body = arguments.get("body")
+    if not isinstance(pr_url, str) or not pr_url.strip():
+        raise ValueError("pr_url must be a non-empty string")
+    if not isinstance(body, str) or not body.strip():
+        raise ValueError("body must be a non-empty string")
+    return pr_url, body
 
 
 def _comment_arguments(

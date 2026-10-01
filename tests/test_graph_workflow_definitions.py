@@ -31,7 +31,10 @@ from engine.apps.web.__main__ import build_app
 from engine.apps.web.composition import Settings
 from engine.apps.worker.__main__ import main as worker
 from engine.apps.worker.composition import Settings as WorkerSettings
-from engine.domain import STATE_INPUT, WorkflowId, WorkspaceId, WorkState
+from engine.domain import (
+    MODE_INPUT, REVIEW_PUBLISH_INPUT, STATE_INPUT, ReviewPublishing, WorkflowId,
+    WorkspaceId, WorkState, review_inputs,
+)
 from engine.graph_runtime import GraphId, GraphWorkflow
 from engine.graph_runtime_langgraph.components import HumanReviewNode, NameNode
 from engine.graph_runtime_langgraph.components.forge import PUBLISH_CHANGE
@@ -356,6 +359,7 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
         "list_pipeline_status",
         "get_job_logs",
         "add_comment",
+        "approve_pull_request",
     )
     assert reranker_binding.required_outputs == ("findings",)
     # A run started in review keeps its findings for a person, so the reranker
@@ -363,7 +367,44 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     # without a comment.
     reviewing = reranker_binding.for_state({"inputs": {STATE_INPUT: WorkState.REVIEW}})
     assert "add_comment" not in reviewing.repository_tools
-    assert reranker_binding.for_state({"inputs": {}}) is reranker_binding
+    assert "approve_pull_request" not in reviewing.repository_tools
+    # Only a review requested on the pull request, and allowed to, may approve.
+    assert reranker_binding.for_state({"inputs": {}}).repository_tools == (
+        "view_change_request", "list_pipeline_status", "get_job_logs", "add_comment",
+    )
+    requested = review_inputs(
+        {STATE_INPUT, MODE_INPUT, REVIEW_PUBLISH_INPUT},
+        ref="origin/topic", pr_url="https://github.com/acme/app/pull/7", branch="topic",
+        publishing=ReviewPublishing.COMMENT,
+    )
+    commenting = reranker_binding.for_state({"inputs": requested})
+    assert "add_comment" in commenting.repository_tools
+    assert "approve_pull_request" not in commenting.repository_tools
+    approving = reranker_binding.for_state({"inputs": {
+        **requested, REVIEW_PUBLISH_INPUT: str(ReviewPublishing.APPROVE),
+    }})
+    assert approving.repository_tools == reranker_binding.repository_tools
+
+
+def test_a_review_requested_on_the_pull_request_posts_and_may_approve() -> None:
+    module = definition_module()
+    reranker = nodes_of(module.pipeline("codex"))[module.RERANKER]
+    pull_request = "https://github.com/acme/app/pull/7"
+
+    def prompt(publishing: ReviewPublishing) -> str:
+        inputs = review_inputs(
+            {STATE_INPUT, MODE_INPUT, REVIEW_PUBLISH_INPUT, "pr_url", "branch", "ref"},
+            ref="origin/topic", pr_url=pull_request, branch="topic", publishing=publishing,
+        )
+        return reranker.prompt({"inputs": inputs, "task": "Review it"})
+
+    kept = prompt(ReviewPublishing.KEEP)
+    assert "Do not post comments" in kept
+    assert "approve_pull_request" not in kept
+    commented = prompt(ReviewPublishing.COMMENT)
+    assert "using add_comment" in commented
+    assert "approve_pull_request" not in commented
+    assert "approve_pull_request" in prompt(ReviewPublishing.APPROVE)
 
 
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
@@ -695,7 +736,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     # Every entry declares the inputs the creation form asks for.
     assert [
         [item["name"] for item in one["inputs"]] for one in offered
-    ] == [["implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch"]]
+    ] == [["implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch", "publish_review"]]
 
 
 # --- and nothing falls over --------------------------------------------------
@@ -735,6 +776,7 @@ def test_stage_runners_configure_models_and_mcp_identity(
     graph = module.graph_for("codex")
     assert [item.name for item in graph.inputs] == [
         "implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch",
+        "publish_review",
     ]
     nodes = nodes_of(graph.builder)
     observed = [

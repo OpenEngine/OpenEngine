@@ -130,6 +130,9 @@ class GitHubConfig:
     host_aliases: Mapping[str, str] = field(default_factory=dict)
     """Web authorities mapped to their GitHub transport authority, including ports."""
 
+    allow_approval: bool = True
+    """Whether a review requested on GitHub may approve a change it finds clean."""
+
 
 @dataclass(frozen=True, slots=True)
 class AccessConfig:
@@ -311,10 +314,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "host_aliases"}, "github")
+    _reject_unknown(github, {"repository", "host_aliases", "allow_approval"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
+    allow_approval = github.get("allow_approval", True)
+    if not isinstance(allow_approval, bool):
+        raise EngineConfigError("github.allow_approval must be a boolean")
 
     access = _table(document.get("access", {}), "access")
     _reject_unknown(access, {"operators"}, "access")
@@ -479,6 +485,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                     github.get("host_aliases", {}), "github.host_aliases"
                 ).items()
             },
+            allow_approval=allow_approval,
         ),
         access=AccessConfig(operators=operators),
         communications=CommunicationsConfig(

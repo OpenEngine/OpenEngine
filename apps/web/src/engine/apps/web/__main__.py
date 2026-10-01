@@ -352,6 +352,7 @@ def compose_app(
         slack_credential_store=slack_credential_store,
         github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
         github_repository=settings.github_webhook.repository if settings.github_webhook else "",
+        github_review_approval=loaded.config.github.allow_approval,
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         work_orders=loaded.config.work_orders,

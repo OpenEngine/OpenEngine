@@ -362,6 +362,26 @@ def test_general_comment_posts_to_the_issues_comments_endpoint(
     assert payload == {"body": "Looks good."}
 
 
+def test_approval_submits_an_approving_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    source_control = GitHubSourceControl("")
+    api_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_api(self_inner, method: str, path: str, **kwargs: object) -> dict:
+        api_calls.append((method, path, kwargs.get("json", {})))
+        return {"id": 9, "html_url": "https://github.com/acme/api/pull/42#pullrequestreview-9"}
+
+    monkeypatch.setattr(type(source_control), "_api", fake_api)
+
+    result = asyncio.run(
+        source_control.approve_pull_request("https://github.com/acme/api/pull/42", "Looks clean.")
+    )
+
+    assert (result.id, result.url) == (9, "https://github.com/acme/api/pull/42#pullrequestreview-9")
+    assert api_calls == [(
+        "POST", "/repos/acme/api/pulls/42/reviews", {"body": "Looks clean.", "event": "APPROVE"},
+    )]
+
+
 def test_inline_comment_resolves_head_and_posts_review_comment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

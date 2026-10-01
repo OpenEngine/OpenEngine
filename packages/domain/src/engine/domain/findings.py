@@ -10,7 +10,8 @@ A finding reads the same whether the reranker posts it or a person does from
 
 from __future__ import annotations
 
-from collections.abc import Container
+from collections.abc import Container, Mapping
+from enum import StrEnum
 
 from engine.domain.forge import MODE_INPUT, ForgeMode
 from engine.domain.states import STATE_INPUT, WorkState
@@ -25,20 +26,49 @@ TRIAGE_TOOL = "findings_triage"
 REVIEW_REF_INPUT = "ref"
 REVIEW_PR_INPUT = "pr_url"
 REVIEW_BRANCH_INPUT = "branch"
+#: The creation input saying what a run started in review leaves on its pull request.
+REVIEW_PUBLISH_INPUT = "publish_review"
 
 
-def review_inputs(declared: Container[str], *, ref: str, pr_url: str, branch: str) -> dict[str, str]:
+class ReviewPublishing(StrEnum):
+    """What a run started in review leaves on the pull request it reviews.
+
+    `engine review` keeps the findings for the person who asked; a review
+    requested on the pull request itself is answered there, with comments and,
+    where the deployment allows it, an approval when nothing survives.
+    """
+
+    KEEP = "keep"
+    COMMENT = "comment"
+    APPROVE = "approve"
+
+
+def review_publishing(inputs: object) -> ReviewPublishing:
+    """What a run with these creation inputs publishes; keeping when unsaid or unknown."""
+    value = inputs.get(REVIEW_PUBLISH_INPUT) if isinstance(inputs, Mapping) else None
+    try:
+        return ReviewPublishing(value)
+    except ValueError:
+        return ReviewPublishing.KEEP
+
+
+def review_inputs(
+    declared: Container[str], *, ref: str, pr_url: str, branch: str,
+    publishing: ReviewPublishing = ReviewPublishing.KEEP,
+) -> dict[str, str]:
     """The creation inputs of a run started in review, limited to those `declared`.
 
     Connected only with a pull request branch: without one there is nothing
-    to push a fix to or wait on CI for.
+    to push a fix to or wait on CI for, nor anywhere to publish to.
     """
+    connected = bool(pr_url and branch)
     inputs = {
         STATE_INPUT: str(WorkState.REVIEW),
         REVIEW_REF_INPUT: ref,
         REVIEW_PR_INPUT: pr_url,
         REVIEW_BRANCH_INPUT: branch,
-        MODE_INPUT: str(ForgeMode.CONNECTED if pr_url and branch else ForgeMode.DISCONNECTED),
+        MODE_INPUT: str(ForgeMode.CONNECTED if connected else ForgeMode.DISCONNECTED),
+        REVIEW_PUBLISH_INPUT: str(publishing if connected else ReviewPublishing.KEEP),
     }
     return {name: value for name, value in inputs.items() if name in declared}
 
@@ -55,8 +85,11 @@ def finding_comment(tagline: str, description: str, *, agent: str = "", facet: s
 __all__ = [
     "REVIEW_BRANCH_INPUT",
     "REVIEW_PR_INPUT",
+    "REVIEW_PUBLISH_INPUT",
     "REVIEW_REF_INPUT",
     "TRIAGE_TOOL",
+    "ReviewPublishing",
     "finding_comment",
     "review_inputs",
+    "review_publishing",
 ]

@@ -111,6 +111,7 @@ from engine.domain import (
     Role,
     RunId,
     RunOrigin,
+    ReviewPublishing,
     RunPhase,
     RunState,
     TaskId,
@@ -1082,6 +1083,7 @@ def create_app(
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
+    github_review_approval: bool = True,
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
@@ -3576,9 +3578,11 @@ def create_app(
         """A review requested from Engine starts a review of the pull request.
 
         The same run `engine review <PR URL>` starts, in connected mode: checked
-        out at the pull request's branch, reviewed, and stopped at triage. A
-        pull request a work order is still working on is left to it: that run
-        reviews its own change.
+        out at the pull request's branch, reviewed, and stopped at triage --
+        except that, having been asked on the pull request, it answers there:
+        the reranker posts its findings, and approves a clean change unless
+        `[github] allow_approval` is off. A pull request a work order is still
+        working on is left to it: that run reviews its own change.
         """
         delivery = urlsplit(requested.url)
         found = change_request(delivery._replace(
@@ -3614,6 +3618,9 @@ def create_app(
             requester=github_requester(requested.sender_id, requested.sender),
             inputs=review_inputs(
                 declared, ref=f"origin/{requested.branch}", pr_url=url, branch=requested.branch,
+                publishing=(
+                    ReviewPublishing.APPROVE if github_review_approval else ReviewPublishing.COMMENT
+                ),
             ),
         )
 

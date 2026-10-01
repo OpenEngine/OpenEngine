@@ -16,8 +16,11 @@ at an existing change -- a pull request, or a branch -- through the `ref` and
 
     workspace -> [review facets] -> reranker -> triage -> (implementation -> ci-check -> review ...)
 
-Nothing is posted; a person is shown the surviving findings at *triage* and
-chooses which to fix, and each fix is reviewed again before triage asks again.
+A person is shown the surviving findings at *triage* and chooses which to
+fix, and each fix is reviewed again before triage asks again. Started by
+`engine review`, nothing is posted. Requested on the pull request itself, the
+`publish_review` input has the reranker post its findings there, and -- where
+`[github] allow_approval` permits -- approve the change when none survive.
 
 The workflow offers both forge modes (`engine.domain.forge`) through
 `mode_input`. Nothing here branches on the mode: the components narrow the
@@ -65,8 +68,9 @@ from engine.graph_runtime_langgraph.components.forge import (
     UPDATE_CHANGE,
 )
 from engine.domain import (
-    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT,
-    ForgeMode, StepCompleted, WorkState, forge_mode, start_state,
+    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_PUBLISH_INPUT, REVIEW_REF_INPUT,
+    ForgeMode, ReviewPublishing, StepCompleted, WorkState, forge_mode,
+    review_publishing, start_state,
 )
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
@@ -214,6 +218,13 @@ KEEP_FINDINGS = (
     "facet fields unchanged.\n\n"
 )
 
+#: Added to the publishing instructions of a review allowed to approve.
+APPROVE_CLEAN = (
+    "If no findings survive, approve the pull request with approve_pull_request "
+    "instead of leaving the general comment, with a body saying the change looks "
+    "clean. Never approve while any finding survives.\n\n"
+)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -269,11 +280,12 @@ class InputReviewNode(_RunnerInput, ReviewNode):
 
 
 class _RerankerTools(TerminalMcpServer):
-    """The reranker's tools, without `add_comment` in a run started in review.
+    """The reranker's tools, without what its run may not publish.
 
     `KEEP_FINDINGS` asks it not to post, and the broker refuses `complete_step`
     from a step granted `add_comment` until it has posted, so the tool is
-    withheld by the server rather than only by the prompt.
+    withheld by the server rather than only by the prompt. Approving is only
+    served to a review whose request allowed it.
     """
 
     def __call__(
@@ -285,10 +297,11 @@ class _RerankerTools(TerminalMcpServer):
         return TerminalMcpServer.__call__(self.for_state(state), state, execution, approve)
 
     def for_state(self, state: Mapping[str, object]) -> TerminalMcpServer:
-        if not _reviewing(state):
-            return self
+        withheld = set() if _may_approve(state) else {"approve_pull_request"}
+        if _keeps_findings(state):
+            withheld.add("add_comment")
         return replace(self, repository_tools=tuple(
-            name for name in self.repository_tools if name != "add_comment"
+            name for name in self.repository_tools if name not in withheld
         ))
 
 
@@ -314,6 +327,20 @@ def _review_node_name(facet_id: str) -> str:
 def _reviewing(state: Mapping[str, object]) -> bool:
     """Whether this run started in review, at a change it did not make."""
     return start_state(state.get("inputs")) is WorkState.REVIEW
+
+
+def _keeps_findings(state: Mapping[str, object]) -> bool:
+    """Whether this run started in review keeps its findings off the pull request."""
+    return _reviewing(state) and review_publishing(state.get("inputs")) is ReviewPublishing.KEEP
+
+
+def _may_approve(state: Mapping[str, object]) -> bool:
+    """Whether this run was asked for a review it may answer with an approval."""
+    return (
+        _reviewing(state)
+        and forge_mode(state.get("inputs")) is ForgeMode.CONNECTED
+        and review_publishing(state.get("inputs")) is ReviewPublishing.APPROVE
+    )
 
 
 def _pr_url(state: Mapping[str, object]) -> str:
@@ -516,9 +543,9 @@ def pipeline(
             )
         return RERANKER_PROMPT.format(
             reviewer_count=len(REVIEW_FACETS),
-            publishing=KEEP_FINDINGS if _reviewing(state) else PUBLISH_FINDINGS(
+            publishing=KEEP_FINDINGS if _keeps_findings(state) else PUBLISH_FINDINGS(
                 state, runner=state.get("inputs", {}).get("review_runner", reviewer),
-            ),
+            ) + (APPROVE_CLEAN if _may_approve(state) else ""),
             findings_sections="".join(sections),
             change=f"The change is {CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state))}.\n\n",
             task=state.get("task", ""),
@@ -543,6 +570,7 @@ def pipeline(
                         "list_pipeline_status",
                         "get_job_logs",
                         "add_comment",
+                        "approve_pull_request",
                     ),
                 ),
             ),
@@ -664,6 +692,11 @@ def graph_for(
             WorkflowInput(REF_INPUT, "Ref to review"),
             WorkflowInput(PR_INPUT, "Pull request to review"),
             WorkflowInput(BRANCH_INPUT, "Pull request branch"),
+            WorkflowInput(
+                REVIEW_PUBLISH_INPUT, "Review findings",
+                default=str(ReviewPublishing.KEEP),
+                choices=tuple(str(choice) for choice in ReviewPublishing),
+            ),
         ),
     )
 
