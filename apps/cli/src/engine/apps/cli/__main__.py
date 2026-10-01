@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1208,18 +1209,23 @@ def finding_location(finding: dict[str, Any]) -> str:
     return f"{file}:{finding['line']}" if file and finding.get("line") else str(file or "")
 
 
+def terminal_text(text: str) -> str:
+    """Display untrusted terminal controls literally, preserving tabs and newlines."""
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", text)
+
+
 def render_findings(findings: list[dict[str, Any]]) -> None:
     if not findings:
         print("No findings survived review.")
         return
     print(f"Findings ({len(findings)})")
     for index, finding in enumerate(findings, 1):
-        facet = f"[{finding['facet']}] " if finding.get("facet") else ""
-        print(f"{index}. {facet}{' '.join(str(finding.get('tagline', '')).split())}")
-        for line in str(finding.get("description", "")).splitlines():
+        facet = terminal_text(f"[{finding['facet']}] ") if finding.get("facet") else ""
+        print(f"{index}. {facet}{' '.join(terminal_text(str(finding.get('tagline', ''))).split())}")
+        for line in terminal_text(str(finding.get("description", ""))).splitlines():
             print(f"   {line}")
         if location := finding_location(finding):
-            print(f"   \x1b[2m{location}\x1b[0m")
+            print(f"   \x1b[2m{terminal_text(location)}\x1b[0m")
     print()
 
 
@@ -1251,7 +1257,7 @@ def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
         general = subprocess.run(["gh", "pr", "comment", pr_url, "--body", body], capture_output=True, text=True)
         if general.returncode != 0:
             failures += 1
-            print(f"engine: could not post {finding.get('tagline')!r}: {general.stderr.strip()}", file=sys.stderr)
+            print(f"engine: could not post {finding.get('tagline')!r}: {terminal_text(general.stderr.strip())}", file=sys.stderr)
     return failures
 
 
@@ -1261,52 +1267,114 @@ def send_fixes(server: str, run_id: str, triage: dict[str, Any], findings: list[
     request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "accept"})
 
 
-def choose_fixes(server: str, run_id: str, triage: dict[str, Any], findings: list[dict[str, Any]], pr_url: str) -> bool:
-    """Offer Fix this / Fix all / Post as comments. True when fixes were sent."""
-    selected: set[int] = set()
-    cursor = 0
-    while True:
-        labels: dict[str, int] = {}
-        descriptions: dict[str, str] = {}
-        for index, finding in enumerate(findings):
-            label = f"{'✓' if index in selected else '○'} Fix this · {index + 1}. {' '.join(str(finding.get('tagline', '')).split())}"
-            labels[label] = index
-            descriptions[label] = finding_location(finding)
-        actions = [*labels]
-        if selected:
-            actions.append(f"Fix selected ({len(selected)})")
-        if findings:
-            actions.append("Fix all")
-            if pr_url:
-                actions.append("Post as comments")
-        actions.append("Finish")
-        descriptions.update({
-            "Fix all": "Send every finding back to the implementer",
-            "Post as comments": f"Post {'the selected' if selected else 'every'} finding on {pr_url} with gh",
-            "Finish": "End the review without fixing anything",
-        })
-        choice = palette(actions, "Review: ", descriptions=descriptions, selected=cursor)
-        if choice in labels:
-            # Enter picks a finding for fixing, or puts it back, and stays on it.
-            cursor = labels[choice]
-            selected ^= {cursor}
-        elif choice is not None and choice.startswith("Fix selected"):
-            send_fixes(server, run_id, triage, [findings[index] for index in sorted(selected)])
-            return True
-        elif choice == "Fix all":
-            send_fixes(server, run_id, triage, findings)
-            return True
-        elif choice == "Post as comments":
-            chosen = [findings[index] for index in sorted(selected)] or findings
-            failures = post_findings(pr_url, chosen)
-            print(f"Posted {len(chosen) - failures} of {len(chosen)} findings on {pr_url}.")
-        elif choice == "Finish":
-            request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
-            print("Review finished.")
-            return False
+def review_diff(server: str, run: dict[str, Any], target: ReviewTarget) -> str:
+    """Read the current review round's patch, including any completed fixes."""
+    if target.pr_url:
+        result = subprocess.run(
+            ["gh", "pr", "diff", target.pr_url, "--color=never"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "could not read pull request diff")
+        return result.stdout
+    if not is_local_server(server):
+        raise RuntimeError("the review checkout is on a remote service")
+    workspace = (run.get("values") or {}).get("workspace")
+    if not workspace:
+        raise RuntimeError("the review checkout is unavailable")
+    return git_output(
+        workspace, "diff", "--no-ext-diff", "--no-textconv", "--no-color",
+        "origin/HEAD...HEAD", "--",
+    )
+
+
+def finding_diff(patch: str, finding: dict[str, Any]) -> str:
+    """Keep the finding's file and matching hunk, or its file if no hunk matches."""
+    path = finding.get("file")
+    if not path:
+        return ""
+    for section in re.split(r"(?=^diff --git )", patch, flags=re.MULTILINE):
+        paths = []
+        for line in section.splitlines():
+            if line.startswith(("--- ", "+++ ")):
+                name = line[4:].split("\t", 1)[0]
+                if name.startswith('"'):
+                    try:
+                        name = json.loads(name)
+                    except ValueError:
+                        continue
+                paths.append(name[2:] if name.startswith(("a/", "b/")) else name)
+        if path not in paths:
+            continue
+        hunks = re.split(r"(?=^@@ )", section, flags=re.MULTILINE)
+        number = finding.get("line")
+        if type(number) is int:
+            for hunk in hunks[1:]:
+                match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", hunk)
+                if match:
+                    start, count = int(match[1]), int(match[2] or 1)
+                    if start <= number < start + max(count, 1):
+                        return hunks[0] + hunk
+        return section
+    return ""
+
+
+def render_finding_diff(patch: str) -> None:
+    """Use familiar unified-diff colors, while keeping redirected output plain."""
+    color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    patch = terminal_text(patch)
+    for line in patch.splitlines():
+        tone = "32" if line.startswith("+") else "31" if line.startswith("-") else "36" if line.startswith("@@") else ""
+        print(f"\x1b[{tone}m{line}\x1b[0m" if color and tone else line)
+
+
+def choose_fixes(
+    server: str, run_id: str, triage: dict[str, Any],
+    findings: list[dict[str, Any]], pr_url: str, patch: str = "",
+) -> bool:
+    """Review every finding before handing the selected fixes to implementation."""
+    selected: list[dict[str, Any]] = []
+    for index, finding in enumerate(findings, 1):
+        print(f"Finding {index} of {len(findings)} · {len(selected)} queued for fixing")
+        render_findings([finding])
+        relevant = finding_diff(patch, finding)
+        if relevant:
+            render_finding_diff(relevant)
         else:
-            print(f"Detached; the review waits for your choice at {server}/runs/{run_id}.")
+            print("No matching diff is available for this finding.")
+        while True:
+            actions = ["Fix", *(["Post to PR"] if pr_url else []), "Ignore"]
+            choice = palette(actions, "Finding: ", descriptions={
+                "Fix": "Queue this fix; implementation starts after all findings are reviewed",
+                "Post to PR": f"Post this finding on {pr_url}",
+                "Ignore": "Continue without fixing or posting this finding",
+            })
+            if choice == "Fix":
+                selected.append(finding)
+                break
+            if choice == "Post to PR":
+                try:
+                    failures = post_findings(pr_url, [finding])
+                except (OSError, RuntimeError, ValueError) as error:
+                    print(f"engine: could not post finding: {terminal_text(str(error))}", file=sys.stderr)
+                    failures = 1
+                if failures:
+                    print("Posting failed. Retry or choose another action.")
+                    continue
+                print(f"Posted finding {index} to {pr_url}.")
+                break
+            if choice == "Ignore":
+                break
+            print(f"Detached; no fixes were sent. The review waits at {server}/runs/{run_id}.")
             return False
+    print(f"Reviewed {len(findings)} of {len(findings)} findings.")
+    if selected:
+        print(f"Sending {len(selected)} queued finding(s) to implementation…")
+        send_fixes(server, run_id, triage, selected)
+        return True
+    request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
+    print("Review finished.")
+    return False
 
 
 def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
@@ -1330,18 +1398,24 @@ def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
             if arguments.json:
                 print(json.dumps({"runId": run_id, "prUrl": target.pr_url, "findings": findings}, sort_keys=True))
                 return EXIT_OK
-            render_findings(findings)
             if not sys.stdin.isatty():
+                render_findings(findings)
                 print(f"Choose findings to fix at {server}/runs/{run_id}.")
                 return EXIT_OK
-            if not choose_fixes(server, run_id, triage, findings, target.pr_url):
+            patch = ""
+            if findings:
+                try:
+                    patch = review_diff(server, run, target)
+                except (OSError, RuntimeError) as error:
+                    print(f"engine: diff unavailable: {terminal_text(str(error))}", file=sys.stderr)
+            if not choose_fixes(server, run_id, triage, findings, target.pr_url, patch):
                 return EXIT_OK
             print("Fixing; the change is reviewed again when the fix is done.")
     except KeyboardInterrupt:
         print("\nDetached; the service-side review continues.")
         return EXIT_OK
     except (ValueError, RuntimeError, KeyError, json.JSONDecodeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
+        print(f"engine: {terminal_text(str(error))}", file=sys.stderr)
         return EXIT_UNHEALTHY
 
 

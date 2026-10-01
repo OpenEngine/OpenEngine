@@ -736,29 +736,176 @@ def test_review_retries_step_names_after_a_failed_fetch(monkeypatch, capsys):
     assert capsys.readouterr().err.splitlines() == ["→ Review (Bugs)", "✓ Review (Bugs)"]
 
 
-def test_enter_selects_a_finding_and_fix_selected_sends_only_it(monkeypatch):
-    offered = []
+def test_findings_are_all_reviewed_before_selected_fixes_are_sent(monkeypatch, capsys):
+    offered, sent, posted = [], [], []
+    findings = [*REVIEW_FINDINGS, {"tagline": "Third", "description": "Another issue."}]
+    choices = iter(["Fix", "Post to PR", "Ignore"])
 
     def choose(options, _prompt, **kwargs):
+        assert not sent, "implementation must wait until every finding is reviewed"
         offered.append(list(options))
-        return options[0] if len(offered) == 1 else next(option for option in options if option.startswith("Fix selected"))
+        return next(choices)
 
-    sent = []
     monkeypatch.setattr(cli, "palette", choose)
     monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append((path, body)) or {})
-
-    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
-
-    assert offered[0] == [
-        "○ Fix this · 1. The loop never ends", "○ Fix this · 2. Unused helper",
-        "Fix all", "Post as comments", "Finish",
-    ]
-    assert offered[1][0] == "✓ Fix this · 1. The loop never ends"
-    # The choice is steered first and the decision sent second.
+    monkeypatch.setattr(cli, "post_findings", lambda url, items: posted.append((url, items)) or 0)
+    url = "https://github.com/o/r/pull/1"
+    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, findings, url, REVIEW_PATCH)
+    assert offered == [["Fix", "Post to PR", "Ignore"]] * 3
+    assert posted == [(url, [findings[1]])]
     assert sent == [
-        ("/graph/api/runs/run-1/steering", {"message": json.dumps([REVIEW_FINDINGS[0]]), "node": "triage"}),
+        ("/graph/api/runs/run-1/steering", {"message": json.dumps([findings[0]]), "node": "triage"}),
         ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "accept"}),
     ]
+    output = capsys.readouterr().out
+    assert "Finding 2 of 3 · 1 queued for fixing" in output
+    assert "Reviewed 3 of 3 findings" in output
+    assert "+new" in output
+    assert "unrelated" not in output
+
+
+REVIEW_PATCH = """diff --git a/a.py b/a.py
+--- a/a.py
++++ b/a.py
+@@ -1,3 +1,3 @@
+ context
+-old
++new
+ end
+@@ -20 +20 @@
+-unrelated old
++unrelated new
+diff --git a/b.py b/b.py
+--- a/b.py
++++ b/b.py
+@@ -1 +1 @@
+-other old
++other new
+"""
+
+
+def test_finding_diff_selects_file_and_hunk():
+    patch = cli.finding_diff(REVIEW_PATCH, REVIEW_FINDINGS[0])
+    assert "+new" in patch
+    assert "unrelated" not in patch and "b/b.py" not in patch
+    assert "unrelated" in cli.finding_diff(REVIEW_PATCH, {"file": "a.py"})
+    assert cli.finding_diff(REVIEW_PATCH, {"file": "missing.py"}) == ""
+    assert cli.finding_diff(REVIEW_PATCH, {}) == ""
+    quoted = 'diff --git "a/a b.py" "b/a b.py"\n--- "a/a b.py"\n+++ "b/a b.py"\n@@ -1 +1 @@\n-old\n+new\n'
+    assert cli.finding_diff(quoted, {"file": "a b.py", "line": 1}) == quoted
+
+
+def test_diff_colors_only_on_a_terminal(monkeypatch, capsys):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    cli.render_finding_diff("@@ -1 +1 @@\n-old\n+new")
+    output = capsys.readouterr().out
+    assert "\x1b[31m-old" in output and "\x1b[32m+new" in output
+    monkeypatch.setenv("NO_COLOR", "1")
+    cli.render_finding_diff("+new")
+    assert capsys.readouterr().out == "+new\n"
+
+
+@pytest.mark.parametrize("choices,decision", [(["Ignore", "Ignore"], "cancel"), (["Fix", None], None)])
+def test_no_fixes_or_detaching_does_not_start_implementation(monkeypatch, choices, decision):
+    choices = iter(choices)
+    sent = []
+
+    def choose(options, *_args, **_kwargs):
+        assert "Post to PR" not in options
+        return next(choices)
+
+    monkeypatch.setattr(cli, "palette", choose)
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append(body) or {})
+    assert not cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "")
+    assert sent == ([{"decision": decision}] if decision else [])
+
+
+@pytest.mark.parametrize("tty,no_color", [(True, False), (True, True), (False, False)])
+def test_diff_escapes_terminal_controls_before_adding_color(monkeypatch, capsys, tty, no_color):
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: tty)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "1")
+    controls = [code for code in range(0xa0) if code < 32 or 127 <= code <= 159]
+    controls = [code for code in controls if code not in (9, 10)]
+    payload = "\x1b[2J\x1b]52;c;clipboard\x07\x9b2K\rhidden\b"
+    line = "+\t" + "".join(map(chr, controls)) + payload
+    cli.render_finding_diff(line + "\n context\n")
+    expected = "+\t" + "".join(f"\\x{code:02x}" for code in controls)
+    expected += "\\x1b[2J\\x1b]52;c;clipboard\\x07\\x9b2K\\x0dhidden\\x08"
+    if tty and not no_color:
+        expected = f"\x1b[32m{expected}\x1b[0m"
+    assert capsys.readouterr().out == expected + "\n context\n"
+
+
+@pytest.mark.parametrize("failure_stage", ["lookup", "posting"])
+@pytest.mark.parametrize("next_action", ["Post to PR", "Fix", "Ignore"])
+def test_post_errors_preserve_queued_fixes(monkeypatch, capsys, failure_stage, next_action):
+    from types import SimpleNamespace
+
+    choices = iter(["Fix", "Post to PR", next_action])
+    sent = []
+    failed = False
+
+    def fail_once(stage):
+        nonlocal failed
+        if stage == failure_stage and not failed:
+            failed = True
+            raise RuntimeError("lookup unavailable") if stage == "lookup" else OSError("posting unavailable")
+
+    def lookup(*_args):
+        fail_once("lookup")
+        return {"headRefOid": "sha"}
+
+    def post(*_args, **_kwargs):
+        fail_once("posting")
+        return SimpleNamespace(returncode=0)
+
+    def choose(*_args, **_kwargs):
+        assert not sent
+        return next(choices)
+
+    monkeypatch.setattr(cli, "palette", choose)
+    monkeypatch.setattr(cli, "gh_json", lookup)
+    monkeypatch.setattr(cli.subprocess, "run", post)
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append((path, body)) or {})
+    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
+    selected = REVIEW_FINDINGS if next_action == "Fix" else REVIEW_FINDINGS[:1]
+    assert sent == [
+        ("/graph/api/runs/run-1/steering", {"message": json.dumps(selected), "node": "triage"}),
+        ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "accept"}),
+    ]
+    output = capsys.readouterr()
+    assert "Posting failed. Retry or choose another action." in output.out
+    assert f"{failure_stage} unavailable" in output.err
+
+
+def test_failed_post_keeps_the_finding_open(monkeypatch):
+    choices = iter(["Post to PR", "Ignore", "Ignore"])
+    posted = []
+    monkeypatch.setattr(cli, "palette", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr(cli, "post_findings", lambda _url, items: posted.append(items) or 1)
+    monkeypatch.setattr(cli, "request_json", lambda *_args: {})
+    assert not cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
+    assert posted == [[REVIEW_FINDINGS[0]]]
+
+
+def test_review_diff_reads_the_fixed_workspace_in_each_round(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "git_output", lambda *args: calls.append(args) or REVIEW_PATCH)
+    target = cli.ReviewTarget("/repo", "old-commit", "", "Review")
+    assert cli.review_diff(cli.DEFAULT_SERVER, {"values": {"workspace": "/review-checkout"}}, target) == REVIEW_PATCH
+    assert calls == [("/review-checkout", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "origin/HEAD...HEAD", "--")]
+
+
+def test_review_diff_reads_pull_request_patch(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", lambda args, **kwargs: calls.append(args) or SimpleNamespace(returncode=0, stdout=REVIEW_PATCH))
+    target = cli.ReviewTarget("/remote/repo", "origin/topic", "https://github.com/o/r/pull/1", "Review")
+    assert cli.review_diff("https://remote", {}, target) == REVIEW_PATCH
+    assert calls == [["gh", "pr", "diff", target.pr_url, "--color=never"]]
 
 
 def test_posting_findings_comments_inline_where_a_finding_has_a_line(monkeypatch):
@@ -797,3 +944,49 @@ def test_posting_a_finding_whose_line_is_not_a_number_comments_generally(monkeyp
     general, = commands
     assert general[:3] == ["gh", "pr", "comment"]
     assert not any("hosts.yml" in part for part in general)
+
+
+@pytest.mark.parametrize("field", ["tagline", "description", "facet", "file", "line"])
+def test_finding_fields_escape_terminal_controls(field, capsys):
+    payload = "\x1b]52;c;clipboard\x07\x9b2K\rhidden\b"
+    finding = {"file": "a.py", field: payload}
+    original = dict(finding)
+    cli.render_findings([finding])
+    output = capsys.readouterr().out
+    assert "\\x1b]52;c;clipboard\\x07\\x9b2K\\x0dhidden\\x08" in output
+    # Only the renderer's own dim/reset sequences may reach the terminal.
+    output = output.replace("\x1b[2m", "").replace("\x1b[0m", "")
+    assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in output if char not in "\t\n")
+    assert finding == original
+
+
+@pytest.mark.parametrize("stage", ["lookup", "posting", "diff", "git"])
+def test_review_errors_escape_command_stderr(monkeypatch, capsys, stage):
+    from types import SimpleNamespace
+
+    payload = "failure\x1b]52;c;clipboard\x07\x9b2K\rhidden\b"
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/bin/gh")
+    monkeypatch.setattr(cli.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stderr=payload))
+    if stage in ("lookup", "posting"):
+        if stage == "posting":
+            monkeypatch.setattr(cli, "gh_json", lambda *_args: {"headRefOid": "sha"})
+        choices = iter(["Post to PR", "Ignore"])
+        monkeypatch.setattr(cli, "palette", lambda *_args, **_kwargs: next(choices))
+        monkeypatch.setattr(cli, "request_json", lambda *_args: {})
+        cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS[:1], "https://github.com/o/r/pull/1")
+    else:
+        monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, cli.Check("service", True, "ready")))
+        monkeypatch.setattr(cli, "fetch_json", lambda *_args: REVIEW_CONFIG)
+        if stage == "git":
+            monkeypatch.setattr(cli, "review_target", lambda *_args: cli.git_output("/repo", "status"))
+        else:
+            monkeypatch.setattr(cli, "review_target", lambda *_args: cli.ReviewTarget("/repo", "abc", "https://github.com/o/r/pull/1", "Review"))
+            monkeypatch.setattr(cli, "start_review", lambda *_args: "run-1")
+            monkeypatch.setattr(cli, "wait_for_triage", lambda *_args: ({}, TRIAGE))
+            monkeypatch.setattr(cli, "triage_findings", lambda *_args: REVIEW_FINDINGS)
+            monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+            monkeypatch.setattr(cli, "choose_fixes", lambda *_args: False)
+        cli.review(SimpleNamespace(target="/repo", json=False), cli.Preferences())
+    error = capsys.readouterr().err
+    assert "failure\\x1b]52;c;clipboard\\x07\\x9b2K\\x0dhidden\\x08" in error
+    assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in error if char not in "\t\n")
