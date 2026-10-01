@@ -821,6 +821,66 @@ def test_no_fixes_or_detaching_does_not_start_implementation(monkeypatch, choice
     assert sent == ([{"decision": decision}] if decision else [])
 
 
+@pytest.mark.parametrize("tty,no_color", [(True, False), (True, True), (False, False)])
+def test_diff_escapes_terminal_controls_before_adding_color(monkeypatch, capsys, tty, no_color):
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: tty)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "1")
+    controls = [code for code in range(0xa0) if code < 32 or 127 <= code <= 159]
+    controls = [code for code in controls if code not in (9, 10)]
+    payload = "\x1b[2J\x1b]52;c;clipboard\x07\x9b2K\rhidden\b"
+    line = "+\t" + "".join(map(chr, controls)) + payload
+    cli.render_finding_diff(line + "\n context\n")
+    expected = "+\t" + "".join(f"\\x{code:02x}" for code in controls)
+    expected += "\\x1b[2J\\x1b]52;c;clipboard\\x07\\x9b2K\\x0dhidden\\x08"
+    if tty and not no_color:
+        expected = f"\x1b[32m{expected}\x1b[0m"
+    assert capsys.readouterr().out == expected + "\n context\n"
+
+
+@pytest.mark.parametrize("failure_stage", ["lookup", "posting"])
+@pytest.mark.parametrize("next_action", ["Post to PR", "Fix", "Ignore"])
+def test_post_errors_preserve_queued_fixes(monkeypatch, capsys, failure_stage, next_action):
+    from types import SimpleNamespace
+
+    choices = iter(["Fix", "Post to PR", next_action])
+    sent = []
+    failed = False
+
+    def fail_once(stage):
+        nonlocal failed
+        if stage == failure_stage and not failed:
+            failed = True
+            raise RuntimeError("lookup unavailable") if stage == "lookup" else OSError("posting unavailable")
+
+    def lookup(*_args):
+        fail_once("lookup")
+        return {"headRefOid": "sha"}
+
+    def post(*_args, **_kwargs):
+        fail_once("posting")
+        return SimpleNamespace(returncode=0)
+
+    def choose(*_args, **_kwargs):
+        assert not sent
+        return next(choices)
+
+    monkeypatch.setattr(cli, "palette", choose)
+    monkeypatch.setattr(cli, "gh_json", lookup)
+    monkeypatch.setattr(cli.subprocess, "run", post)
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: sent.append((path, body)) or {})
+    assert cli.choose_fixes(cli.DEFAULT_SERVER, "run-1", TRIAGE, REVIEW_FINDINGS, "https://github.com/o/r/pull/1")
+    selected = REVIEW_FINDINGS if next_action == "Fix" else REVIEW_FINDINGS[:1]
+    assert sent == [
+        ("/graph/api/runs/run-1/steering", {"message": json.dumps(selected), "node": "triage"}),
+        ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "accept"}),
+    ]
+    output = capsys.readouterr()
+    assert "Posting failed. Retry or choose another action." in output.out
+    assert f"{failure_stage} unavailable" in output.err
+
+
 def test_failed_post_keeps_the_finding_open(monkeypatch):
     choices = iter(["Post to PR", "Ignore", "Ignore"])
     posted = []

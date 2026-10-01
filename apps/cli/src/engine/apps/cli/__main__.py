@@ -1317,6 +1317,8 @@ def finding_diff(patch: str, finding: dict[str, Any]) -> str:
 def render_finding_diff(patch: str) -> None:
     """Use familiar unified-diff colors, while keeping redirected output plain."""
     color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    # Keep tabs and patch newlines, but display untrusted terminal controls literally.
+    patch = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", patch)
     for line in patch.splitlines():
         tone = "32" if line.startswith("+") else "31" if line.startswith("-") else "36" if line.startswith("@@") else ""
         print(f"\x1b[{tone}m{line}\x1b[0m" if color and tone else line)
@@ -1347,7 +1349,12 @@ def choose_fixes(
                 selected.append(finding)
                 break
             if choice == "Post to PR":
-                if post_findings(pr_url, [finding]):
+                try:
+                    failures = post_findings(pr_url, [finding])
+                except (OSError, RuntimeError, ValueError) as error:
+                    print(f"engine: could not post finding: {error}", file=sys.stderr)
+                    failures = 1
+                if failures:
                     print("Posting failed. Retry or choose another action.")
                     continue
                 print(f"Posted finding {index} to {pr_url}.")
