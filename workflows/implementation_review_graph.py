@@ -71,7 +71,8 @@ from engine.domain import (
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
 )
-from engine.ports import WorkspaceProvider
+from engine.graph_runtime_langgraph.executions import NodeExecution
+from engine.ports import ApprovalHandler, WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from langgraph_acp import ACPAgentRegistry
@@ -265,6 +266,30 @@ def _validate_impact_analysis(event: StepCompleted) -> None:
 
 class InputReviewNode(_RunnerInput, ReviewNode):
     graph_node_runner_input = "review_runner"
+
+
+class _RerankerTools(TerminalMcpServer):
+    """The reranker's tools, without `add_comment` in a run started in review.
+
+    `KEEP_FINDINGS` asks it not to post, and the broker refuses `complete_step`
+    from a step granted `add_comment` until it has posted, so the tool is
+    withheld by the server rather than only by the prompt.
+    """
+
+    def __call__(
+        self,
+        state: Mapping[str, object],
+        execution: NodeExecution,
+        approve: ApprovalHandler,
+    ) -> Any:
+        return TerminalMcpServer.__call__(self.for_state(state), state, execution, approve)
+
+    def for_state(self, state: Mapping[str, object]) -> TerminalMcpServer:
+        if not _reviewing(state):
+            return self
+        return replace(self, repository_tools=tuple(
+            name for name in self.repository_tools if name != "add_comment"
+        ))
 
 
 class InputRerankerNode(_RunnerInput, RerankerNode):
@@ -507,7 +532,7 @@ def pipeline(
             prompt=_reranker_prompt,
             cwd=checkout,
             mcp_server_bindings=(
-                TerminalMcpServer(
+                _RerankerTools(
                     step_id=RERANKER,
                     create_workorder=True,
                     agent_id=runner,
