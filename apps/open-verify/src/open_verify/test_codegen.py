@@ -15,13 +15,14 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
     # Only this compiler supplies Python syntax. All model-provided strings are literals.
     lines = [
         '"""Generated Playwright journey. Start the app before running this file."""',
-        "from pathlib import Path",
         "from playwright.async_api import expect",
         "",
         "",
-        "async def test_change(page, *, entry_url=None, progress=print):",
+        "async def test_change(page, *, entry_url=None, progress=print, capture=None):",
         f"    await page.goto(entry_url or {test.url!r}, "
         "wait_until='domcontentloaded', timeout=30000)",
+        "    if capture is not None:",
+        "        await capture(page, 'initial')",
     ]
     for index, step in enumerate(test.steps):
         labels = {
@@ -39,6 +40,8 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
         label = "; ".join(checks) if checks else labels[step.kind]
         lines.append(f"    progress({f'  Check {index + 1}/{len(test.steps)}: {label}'!r})")
         if step.kind == "click":
+            lines.append("    if capture is not None:")
+            lines.append(f"        await capture(page, 'step-{index:02d}-before-click', {locator_code(step.locator)})")
             line = f"await {locator_code(step.locator)}.click()"
         elif step.kind == "fill":
             line = f"await {locator_code(step.locator)}.fill({step.value!r})"
@@ -65,11 +68,8 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
             ])
             continue
         elif step.kind == "screenshot":
-            lines.append("    if page.video is not None:")
-            lines.append("        capture_dir = Path(await page.video.path()).parent")
-            lines.append(
-                f"        await page.screenshot(path=str(capture_dir / 'checkpoint-{index:02d}-{step.name}.png'))"
-            )
+            lines.append("    if capture is not None:")
+            lines.append(f"        await capture(page, {step.name!r})")
             continue
         else:
             line = f"await expect(page).to_have_url({step.url!r})"

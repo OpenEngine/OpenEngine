@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 import sys
@@ -13,13 +14,25 @@ from open_verify import __version__
 from open_verify.artifacts import Artifacts
 from open_verify.auth import AssistedLogin, LoginRequest
 from open_verify.browser_session import BrowserSession
-from open_verify.media import encode_video
+from open_verify.capture import CheckpointCapture
+from open_verify.media import encode_gif
 from open_verify.test_codegen import render_test
 from open_verify.test_spec import BrowserTest, TestResult
 from open_verify.tools import LocalTools
 
-Journey = Callable[[object], Awaitable[None]]
+Journey = Callable[[object, CheckpointCapture | None], Awaitable[None]]
 JourneyResult = tuple[str, str, list[Path], list[Path], list[str]]
+
+
+def unique_screenshots(paths):
+    previous = None
+    result = []
+    for path in paths:
+        digest = hashlib.sha256(path.read_bytes()).digest()
+        if digest != previous:
+            previous = digest
+            result.append(path)
+    return result
 
 
 async def execute_journey(
@@ -29,10 +42,11 @@ async def execute_journey(
     timeout: float,
     capture_media: bool,
     on_result: Callable[[JourneyResult], None] | None = None,
+    prefix_screenshots: tuple[Path, ...] = (),
 ) -> JourneyResult:
     status, detail = "blocked", "Test did not start."
     screenshots, videos, omissions = [], [], []
-    video = None
+    capture = CheckpointCapture(tools.artifacts.path / 'checkpoints') if capture_media else None
     has_app_page = False
 
     def checkpoint():
@@ -44,57 +58,44 @@ async def execute_journey(
     try:
         async with asyncio.timeout(timeout):
             page = await tools.browser_page()
-            video = page.video if capture_media else None
-            await journey(page)
+            await journey(page, capture)
             status, detail = "passed", "All generated Playwright assertions passed."
     except AssertionError as exc:
         status, detail = "failed", str(exc)
     except Exception as exc:
-        # Failed navigation, missing browser/dependencies, action/deadline timeouts
-        # are inconclusive setup/execution failures, not proven product defects.
         status, detail = "blocked", f"{type(exc).__name__}: {exc}"
     finally:
         try:
-            if capture_media and tools.page is not None and tools.page.url != "about:blank":
+            if capture is not None and tools.page is not None and tools.page.url != "about:blank":
                 has_app_page = True
-                screenshot = tools.artifacts.path / "result.png"
-                try:
-                    await tools.page.screenshot(path=str(screenshot), timeout=5000)
-                    screenshots.append(screenshot)
-                    # Presentation time for the final state, not test synchronization.
-                    await asyncio.sleep(0.5)
-                except Exception as exc:
-                    omissions.append(f"Screenshot omitted: {exc}")
+                await capture(tools.page, 'result')
         finally:
-            # Context closure finalizes the recording before conversion.
             errors = await tools.close()
             if errors:
                 status, detail = "blocked", detail + " Cleanup failed: " + "; ".join(errors)
-                omissions.append("Video omitted because browser cleanup did not complete.")
-    if capture_media:
-        screenshots[:0] = sorted(tools.artifacts.path.rglob("checkpoint-*.png"))
-    if capture_media and video is not None and not errors and has_app_page:
-        pending = "Video omitted: encoding has not completed."
+                omissions.append("GIF omitted because browser cleanup did not complete.")
+    if capture is not None:
+        screenshots = unique_screenshots([*prefix_screenshots, *capture.paths])
+        omissions.extend(capture.omissions)
+    if capture is not None and not errors and has_app_page:
+        pending = "GIF omitted: encoding has not completed."
         omissions.append(pending)
         checkpoint()
         try:
-            source = await video.path()
-            destination = tools.artifacts.path / "result.mp4"
-            reason = await encode_video(source, destination)
+            destination = tools.artifacts.path / "journey-summary.gif"
+            reason = await encode_gif(screenshots, destination)
             if reason:
                 omissions.append(reason)
             else:
-                videos.append(destination)
+                screenshots.append(destination)
         except (asyncio.CancelledError, KeyboardInterrupt):
             omissions.remove(pending)
-            omissions.append("Video omitted: encoding was interrupted.")
+            omissions.append("GIF omitted: encoding was interrupted.")
             checkpoint()
             raise
         except Exception as exc:
-            omissions.append(f"Video omitted: {exc}")
+            omissions.append(f"GIF omitted: {exc}")
         omissions.remove(pending)
-    elif capture_media and video is None:
-        omissions.append("Video omitted: browser recording could not start.")
     elif capture_media and not has_app_page:
         omissions.append("Visual evidence omitted: no application page was reached.")
     return checkpoint()
@@ -143,7 +144,7 @@ class PlaywrightRunner:
             "URL; explicit URL assertions still check their recorded values. The test_change(page) "
             "function uses ordinary Playwright and can also be adopted into an async test suite. "
             "The standalone entry point keeps Open Verify's origin guards. "
-            "The browser extra includes an MP4 encoder; ffmpeg on PATH takes precedence.\n",
+            "The browser extra includes a GIF encoder; ffmpeg on PATH takes precedence.\n",
             encoding="utf-8",
         )
         execution = Artifacts(self.artifacts.path / "executions" / identity)
@@ -152,7 +153,7 @@ class PlaywrightRunner:
             execution,
             allow_origins=self.allow_origins,
             headless=self.headless,
-            record_video=capture_media,
+            record_video=False,
             storage_state=(self.authentication.state if test.authenticated and self.authentication else None),
             trace_browser=not test.authenticated,
             browser_session=self.browser_session,
@@ -160,7 +161,7 @@ class PlaywrightRunner:
 
         # Execute the exact bytes saved for review/replay, produced only by the
         # typed compiler (never accept arbitrary Python from the agent).
-        async def journey(page):
+        async def journey(page, capture):
             tools.check_url(test.url)
             if test.authenticated and (
                 self.authentication is None
@@ -169,7 +170,7 @@ class PlaywrightRunner:
                 raise ValueError("Authentication is missing or expired; run assisted_login and retry this case")
             namespace = {"__name__": "generated_journey"}
             exec(compile(source, str(path), "exec"), namespace)
-            await namespace["test_change"](page, progress=getattr(self, "progress", print))
+            await namespace["test_change"](page, progress=getattr(self, "progress", print), capture=capture)
 
         relative = path.relative_to(self.artifacts.path).as_posix()
         rerun = ["python", relative]
@@ -182,6 +183,12 @@ class PlaywrightRunner:
         def checkpoint(completed: JourneyResult):
             nonlocal result
             status, detail, screenshots, videos, omissions = completed
+            if test.authenticated and self.authentication is not None:
+                if self.authentication.summary:
+                    detail = self.authentication.summary + " " + detail
+                if capture_media:
+                    omissions = self.authentication.omissions + omissions
+            screenshots = unique_screenshots(screenshots)
             result = TestResult(
                 case_id=test.case_id,
                 status=status,
@@ -202,6 +209,8 @@ class PlaywrightRunner:
             timeout=test.timeout,
             capture_media=capture_media,
             on_result=checkpoint,
+            prefix_screenshots=tuple(self.artifacts.path / p for p in self.authentication.screenshots if p.endswith('.png'))
+                if test.authenticated and self.authentication else (),
         )
         return result
 
@@ -224,29 +233,37 @@ def replay_main(journey, *, url: str, timeout: float, authenticated=False, login
     async def run():
         artifacts = Artifacts(args.output.resolve())
         session = BrowserSession(headless=not (args.headed or args.login))
-        authentication = AssistedLogin(Path.cwd(), allow_origins=args.allow_origin, browser_session=session)
+        authentication = AssistedLogin(Path.cwd(), allow_origins=args.allow_origin, browser_session=session,
+                                       artifacts=artifacts)
         tools = LocalTools(
             Path.cwd(),
             artifacts,
             allow_origins=args.allow_origin,
             headless=not args.headed,
-            record_video=True,
+            record_video=False,
             storage_state=str(args.auth_state) if authenticated else None,
             trace_browser=not authenticated,
             browser_session=session,
         )
 
-        async def checked_journey(page):
+        async def checked_journey(page, capture):
             entry_url = os.environ.get("OV_BASE_URL", url)
             tools.check_url(entry_url)
             if args.login and not await authentication.verify(page.context, entry_url):
                 raise ValueError("Login session is missing or expired")
-            await journey(page, entry_url=entry_url)
+            kwargs = {"entry_url": entry_url}
+            if 'capture' in inspect.signature(journey).parameters:
+                kwargs['capture'] = capture
+            await journey(page, **kwargs)
 
         result = {}
 
         def checkpoint(completed: JourneyResult):
             status, detail, screenshots, videos, omissions = completed
+            if args.login:
+                detail = authentication.summary + " " + detail
+                omissions = authentication.omissions + omissions
+            screenshots = unique_screenshots(screenshots)
             result.update(
                 status=status,
                 detail=detail,
@@ -260,7 +277,7 @@ def replay_main(journey, *, url: str, timeout: float, authenticated=False, login
             if args.login:
                 # Login URLs are explicit, recorded setup; an OV_BASE_URL override
                 # never silently sends credentials to a different application.
-                await authentication.run(LoginRequest.model_validate(login))
+                await authentication.run(LoginRequest.model_validate(login), capture_media=True)
                 tools.storage_state = authentication.state
             await execute_journey(
                 checked_journey,
@@ -268,6 +285,8 @@ def replay_main(journey, *, url: str, timeout: float, authenticated=False, login
                 timeout=timeout,
                 capture_media=True,
                 on_result=checkpoint,
+                prefix_screenshots=tuple(artifacts.path / p for p in authentication.screenshots if p.endswith('.png'))
+                    if args.login else (),
             )
         finally:
             errors = await session.close()

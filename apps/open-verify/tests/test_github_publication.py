@@ -91,11 +91,11 @@ def test_uploads_only_evidence_and_deduplicates_repeat_publication(tmp_path):
         assert first == await github.publish(path, TARGET)
 
     asyncio.run(run())
-    assert len(github.assets) == 3 and len(github.comments) == 1
+    assert len(github.assets) == 2 and len(github.comments) == 1
     assert len(github.releases) == 1
     assert github.releases[0]["prerelease"] is True
     body = github.comments[0]["body"]
-    assert "![screenshot" in body and "[video" in body and "[test" in body
+    assert "![Screenshot" in body and "[Playwright test" in body and "[video" not in body
     assert "secret" not in body
 
 
@@ -115,9 +115,9 @@ def test_rejects_invalid_or_stale_evidence_before_any_write(tmp_path, failure):
     if failure == "type":
         data["artifacts"][0]["media_type"] = "video/mp4"
     if failure == "oversize":
-        with (tmp_path / "video.mp4").open("wb") as stream:
-            stream.truncate(10_000_000)
-        data["artifacts"][-1]["size_bytes"] = 10_000_000
+        with (tmp_path / "screen.png").open("wb") as stream:
+            stream.truncate(10_000_001)
+        data["artifacts"][-1]["size_bytes"] = 10_000_001
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError):
         asyncio.run(github.publish(path, TARGET))
@@ -128,6 +128,26 @@ def test_skip_does_not_create_release_or_comment(tmp_path):
     github = FakeGitHub()
     assert asyncio.run(github.publish(bundle(tmp_path, "skipped"), TARGET)) is None
     assert not github.writes
+
+
+@pytest.mark.parametrize('valid', [True, False])
+def test_login_gif_is_validated_and_embedded_as_summary(tmp_path, valid):
+    path = bundle(tmp_path)
+    data = json.loads(path.read_text())
+    gif = tmp_path / 'login-journey-summary.gif'
+    gif.write_bytes(b'GIF89afixture' if valid else b'not-a-gif')
+    data['artifacts'].append({'path': gif.name, 'type': 'screenshot', 'media_type': 'image/gif',
+                              'size_bytes': gif.stat().st_size, 'case_id': 'C1'})
+    path.write_text(json.dumps(data))
+    github = FakeGitHub()
+    if valid:
+        asyncio.run(github.publish(path, TARGET))
+        assert 'Journey summary' in github.comments[0]['body']
+        assert any(a['name'].endswith('.gif') for a in github.assets)
+    else:
+        with pytest.raises(ValueError, match='Invalid media'):
+            asyncio.run(github.publish(path, TARGET))
+        assert not github.writes
 
 
 def test_changed_pr_during_upload_never_receives_comment(tmp_path):
@@ -167,7 +187,7 @@ def test_retry_saved_bundle_reuses_uploaded_assets_and_checks_revision(tmp_path)
     assert asyncio.run(publish_saved(tmp_path, github=github)) == 2
     assert len(github.assets) == 1 and not github.comments
     assert asyncio.run(publish_saved(tmp_path, github=github)) == 0
-    assert len(github.assets) == 3 and len(github.comments) == 1
+    assert len(github.assets) == 2 and len(github.comments) == 1
     github.current = PullRequest('owner/repo', 1, 'c' * 40, BASE, BASE)
     assert asyncio.run(publish_saved(tmp_path, github=github)) == 2
     assert len(github.comments) == 1
@@ -191,7 +211,7 @@ def test_starter_asset_from_failed_upload_is_replaced(tmp_path):
 
     github.api = deleting
     asyncio.run(github.publish(path, TARGET))
-    assert len(removed) == 1 and len(github.assets) == 3
+    assert len(removed) == 1 and len(github.assets) == 2
     assert len(github.comments) == 1
 
 

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -38,6 +37,95 @@ def test_spec(url, *, expected="Hello Ada"):
 
 
 test_spec.__test__ = False
+
+
+def test_click_highlight_is_visible_in_capture_and_removed_before_action(tmp_path, web_app, monkeypatch):
+    from playwright.async_api import Page
+
+    from open_verify.capture import CheckpointCapture
+
+    original = Page.screenshot
+    captured = []
+
+    async def screenshot(page, **kwargs):
+        marker = page.locator('[data-ov-click-highlight]')
+        assert await marker.count() == 1
+        assert await marker.inner_text() == 'Next click'
+        assert await marker.evaluate('(e) => getComputedStyle(e).pointerEvents') == 'none'
+        assert await marker.evaluate('(e) => getComputedStyle(e).borderTopColor') == 'rgb(249, 115, 22)'
+        captured.append(True)
+        return await original(page, **kwargs)
+
+    monkeypatch.setattr(Page, 'screenshot', screenshot)
+
+    async def run():
+        tools = LocalTools(tmp_path, Artifacts(tmp_path / 'runs'), headless=True)
+        try:
+            page = await tools.browser_page()
+            await page.goto(web_app)
+            button = page.get_by_role('button', name='Greet')
+            before = await button.get_attribute('style')
+            capture = CheckpointCapture(tools.artifacts.path / 'checkpoints')
+            await capture(page, 'before-click', button)
+            assert captured and len(capture.paths) == 1 and not capture.omissions
+            assert await page.locator('[data-ov-click-highlight]').count() == 0
+            assert await button.get_attribute('style') == before
+            await page.get_by_label('Name').fill('Ada')
+            await button.click()
+            assert await page.get_by_text('Hello Ada', exact=True).is_visible()
+        finally:
+            await tools.close()
+
+    asyncio.run(run())
+
+
+def test_legacy_generated_journey_still_replays(tmp_path, web_app, monkeypatch):
+    from open_verify.playwright_runner import replay_main
+
+    async def legacy(page, *, entry_url=None):
+        await page.goto(entry_url or web_app)
+        assert await page.get_by_role('button', name='Greet').is_visible()
+
+    monkeypatch.setattr(sys, 'argv', ['legacy.py', '--output', str(tmp_path / 'replay')])
+    with pytest.raises(SystemExit) as result:
+        replay_main(legacy, url=web_app, timeout=15)
+    assert result.value.code == 0
+
+
+def test_checkpoint_dedup_keeps_return_to_previous_screen(tmp_path):
+    from open_verify.playwright_runner import unique_screenshots
+
+    paths = []
+    for index, data in enumerate((b'initial', b'initial', b'changed', b'initial')):
+        path = tmp_path / f'{index}.png'
+        path.write_bytes(data)
+        paths.append(path)
+    assert unique_screenshots(paths) == [paths[0], paths[2], paths[3]]
+
+
+def test_complete_cart_lifecycle_exports_one_test_and_one_gif(tmp_path, web_app):
+    artifacts = Artifacts(tmp_path / 'runs')
+    definition = browser_plan()
+    case = definition['plan']['cases'][0]
+    case.update(title='Add and remove an item', expected='Cart is empty again',
+                checks=['Initially empty', 'Item added', 'Item removed'])
+    journey = BrowserTest(case_id='greet', url=web_app + '/cart', steps=[
+        {'kind': 'expect_text', 'text': 'Cart: 0'},
+        {'kind': 'click', 'locator': {'by': 'role', 'role': 'button', 'name': 'Add item'}},
+        {'kind': 'expect_text', 'text': 'Cart: 1'},
+        {'kind': 'click', 'locator': {'by': 'role', 'role': 'button', 'name': 'Remove item'}},
+        {'kind': 'expect_text', 'text': 'Cart: 0'},
+    ], checks={'Initially empty': [0], 'Item added': [2], 'Item removed': [4]})
+    agent = ScriptedAgent([impact(), definition, action('run_browser_test', **journey.model_dump())])
+    runner = PlaywrightRunner(tmp_path, artifacts)
+    verification = Verification(agent, LocalTools(tmp_path, artifacts), artifacts,
+        change=Change(base='a', head='b', files=['app.html']), test_runner=runner, progress=lambda _: None)
+    report = asyncio.run(verification.run('Test adding and removing a cart item'))
+    assert report['status'] == 'complete' and runner.attempt == 1
+    manifest = json.loads((artifacts.path / 'manifest.json').read_text())
+    assert len(manifest['tests']) == 1
+    assert [item['media_type'] for item in manifest['artifacts']] == ['text/x-python', 'image/gif']
+    assert len(list(artifacts.path.rglob('*.png'))) >= 4
 
 
 @pytest.mark.parametrize('value,status', [(2, 'passed'), (3, 'failed')])
@@ -130,21 +218,16 @@ def test_change_runs_exact_generated_test_and_retains_focused_evidence(
     assert manifest["tests"][0]["status"] == status
     assert {item["type"] for item in manifest["artifacts"]} >= {"test", "screenshot"}
     checkpoint_images = list(artifacts.path.rglob("checkpoint-*.png"))
-    assert len(checkpoint_images) == (2 if status == "passed" else 1)
+    assert len(checkpoint_images) == (5 if status == "passed" else 4)
     for screenshot in checkpoint_images:
         assert screenshot.read_bytes().startswith(b"\x89PNG")
-    recordings = list(artifacts.path.rglob("*.webm"))
-    assert recordings and all(path.stat().st_size > 0 for path in recordings)
-    for item in manifest["artifacts"]:
-        assert (artifacts.path / item["path"]).is_file()
-        if item["type"] == "video":
-            assert item["size_bytes"] < 10_000_000
-            assert (artifacts.path / item["path"]).read_bytes()[4:8] == b"ftyp"
-    assert any(item["type"] == "video" for item in manifest["artifacts"]) or any(
-        "Video omitted" in reason for reason in manifest["omissions"]
-    )
-    if shutil.which("ffmpeg"):
-        assert any(item["type"] == "video" for item in manifest["artifacts"]), manifest["omissions"]
+    assert not list(artifacts.path.rglob("*.webm"))
+    assert not list(artifacts.path.rglob("*.mp4"))
+    assert all(item['type'] != 'video' for item in manifest['artifacts'])
+    gifs = [item for item in manifest['artifacts'] if item['media_type'] == 'image/gif']
+    assert len(gifs) == 1, manifest['omissions']
+    assert gifs[0]['size_bytes'] < 10_000_000
+    assert (artifacts.path / gifs[0]['path']).read_bytes().startswith(b'GIF89a')
 
     # Rerun the exported Python file as a separate process, not the in-process
     # host runner. It must reproduce the result against the same live fixture.
@@ -206,11 +289,11 @@ def test_cancelling_encoding_preserves_completed_evidence(
         encoding = asyncio.Event()
 
         async def encoder(source, destination):
-            assert Path(source).is_file()  # The browser already finalized the recording.
+            assert source and all(Path(p).is_file() for p in source)  # Checkpoints exist before encoding.
             encoding.set()
             await asyncio.Future()
 
-        monkeypatch.setattr("open_verify.playwright_runner.encode_video", encoder)
+        monkeypatch.setattr("open_verify.playwright_runner.encode_gif", encoder)
         task = asyncio.create_task(verification.run("Verify greeting"))
         try:
             await asyncio.wait_for(encoding.wait(), 30)
@@ -234,10 +317,10 @@ def test_cancelling_encoding_preserves_completed_evidence(
     assert manifest["tests"][0]["status"] == status
     assert {item["type"] for item in manifest["artifacts"]} == {"test", "screenshot"}
     assert any(
-        "Video omitted" in reason and "interrupted" in reason for reason in manifest["omissions"]
+        "GIF omitted" in reason and "interrupted" in reason for reason in manifest["omissions"]
     )
     for item in manifest["artifacts"]:
         assert (artifacts.path / item["path"]).is_file()
     (receipt,) = artifacts.path.glob("executions/*/*/result.json")
     saved = json.loads(receipt.read_text(encoding="utf-8"))
-    assert saved["omissions"] == manifest["omissions"]
+    assert all(reason in manifest["omissions"] for reason in saved["omissions"])

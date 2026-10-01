@@ -27,7 +27,7 @@ class Artifacts:
             "ok": ok,
             "result": result,
         }
-        if tool in {"http_request", "run_command", "start_process", "process_output", "run_browser_test"}:
+        if tool in {"http_request", "run_command", "start_process", "process_output", "run_browser_test", "assisted_login"}:
             relative = Path("actions") / f"{entry['id']}.json"
             receipt = self.path / relative
             receipt.parent.mkdir(exist_ok=True)

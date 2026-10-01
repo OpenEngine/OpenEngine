@@ -99,18 +99,19 @@ def write_manifest(
         omissions=list(cleanup_errors),
     )
     if manifest.status not in {"skipped", "planned"}:
-        for result in results:
+        latest_results = {result.case_id: result for result in results}
+        for result in latest_results.values():
             manifest.omissions.extend(result.omissions)
             attachments = [(result.test_file, "test", "text/x-python")]
             if (report.get("impact") or {}).get("material_ui_change"):
-                attachments.extend((p, "screenshot", "image/png") for p in result.screenshots)
+                attachments.extend((p, "screenshot", "image/gif" if Path(p).suffix == '.gif' else "image/png") for p in result.screenshots)
                 attachments.extend((p, "video", "video/mp4") for p in result.videos)
             accepted_test = None
             for relative, kind, mime in attachments:
                 try:
                     path = bundle_file(root, relative)
                     size = path.stat().st_size
-                    if size <= 0 or (kind == "video" and size >= MAX_VIDEO_BYTES):
+                    if size <= 0 or ((kind == "video" or mime == 'image/gif') and size >= MAX_VIDEO_BYTES):
                         raise ValueError("File is empty or exceeds the video byte limit")
                     manifest.artifacts.append(
                         Attachment(
@@ -145,6 +146,33 @@ def write_manifest(
                     manifest.support_files.append(relative)
                 except ValueError as exc:
                     manifest.omissions.append(str(exc))
+        for receipt in sorted(root.glob('login-*/receipt.json')):
+            relative = receipt.relative_to(root).as_posix()
+            try:
+                bundle_file(root, relative)
+                manifest.support_files.append(relative)
+            except ValueError as exc:
+                manifest.omissions.append(str(exc))
+        # Publish a journey, not a gallery of each checkpoint and retry. Full
+        # execution receipts and files remain untouched in the local run folder.
+        latest = {test.case_id: test for test in manifest.tests}
+        manifest.tests = list(latest.values())
+        selected = []
+        for case_id, test in latest.items():
+            files = [item for item in manifest.artifacts if item.case_id == case_id]
+            selected.extend(item for item in files if item.type == 'test' and item.path == test.path)
+            # Only use media from the final attempt, never a passing-looking GIF
+            # from an earlier attempt when the final attempt failed to encode.
+            result = latest_results[case_id]
+            images = [item for item in files if item.type == 'screenshot' and item.path in result.screenshots]
+            gifs = [item for item in images if item.media_type == 'image/gif']
+            if gifs:
+                selected.append(gifs[-1])
+            elif images:
+                selected.append(images[-1])
+                manifest.omissions.append(f'{case_id}: GIF unavailable; one screenshot is attached instead.')
+        # A reused local path may be listed in multiple attempts; attach it once.
+        manifest.artifacts = list({item.path: item for item in selected}.values())
     temporary = root / "manifest.json.tmp"
     temporary.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
     temporary.replace(root / "manifest.json")

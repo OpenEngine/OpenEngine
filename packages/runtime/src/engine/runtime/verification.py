@@ -17,9 +17,9 @@ from engine.runtime.change_requests import change_request
 MAX_VIDEO_BYTES = 10_000_000
 MAX_BUNDLE_BYTES = 100_000_000
 _TYPES = {
-    "test": (".py", "text/x-python"),
-    "screenshot": (".png", "image/png"),
-    "video": (".mp4", "video/mp4"),
+    "test": {(".py", "text/x-python")},
+    "screenshot": {(".png", "image/png"), (".gif", "image/gif")},
+    "video": {(".mp4", "video/mp4")},
 }
 
 
@@ -108,7 +108,7 @@ def load_verification(manifest: Path, *, expected_head: str) -> VerificationBund
         ):
             raise ValueError("Artifact must be a unique file inside the bundle")
         kind = entry.get("type")
-        if kind not in _TYPES or (path.suffix, entry.get("media_type")) != _TYPES[kind]:
+        if kind not in _TYPES or (path.suffix, entry.get("media_type")) not in _TYPES[kind]:
             raise ValueError("Unsupported verification attachment type")
         if entry.get("case_id") not in {test["case_id"] for test in tests}:
             raise ValueError("Artifact has no matching test case")
@@ -129,7 +129,9 @@ def load_verification(manifest: Path, *, expected_head: str) -> VerificationBund
         content = local.read_bytes()
         if len(content) != actual_size:
             raise ValueError("Artifact changed while being read")
-        if (kind == "screenshot" and not content.startswith(b"\x89PNG\r\n\x1a\n")) or (
+        if (entry.get('media_type') == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n")) or (
+            entry.get('media_type') == 'image/gif' and not content.startswith((b'GIF87a', b'GIF89a'))
+        ) or (
             kind == "video" and content[4:8] != b"ftyp"
         ):
             raise ValueError("Artifact content does not match its media type")
@@ -178,6 +180,8 @@ def verification_comment(bundle: VerificationBundle, urls: dict[str, str]) -> st
     ]
     for test in bundle.tests:
         lines.append(f"- {_text(test['case_id'])}: {test['status']}")
+        if test.get('detail'):
+            lines.append(f"  {_text(test['detail'][:240])}{'…' if len(test['detail']) > 240 else ''}")
     lines.append("")
     for artifact in bundle.artifacts:
         url = urls[artifact.path]
@@ -190,7 +194,7 @@ def verification_comment(bundle: VerificationBundle, urls: dict[str, str]) -> st
         ):
             raise ValueError("Artifact uploader returned an invalid HTTPS URL")
         safe_url = url.replace("<", "%3C").replace(">", "%3E").replace("\n", "%0A")
-        label = f"{artifact.kind} — {_text(artifact.case_id)}"
+        label = f"{artifact.kind} — {_text(artifact.case_id)} — {_text(Path(artifact.path).stem)}"
         if artifact.kind == "screenshot":
             lines.append(f"![{label}](<{safe_url}>)")
         else:

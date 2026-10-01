@@ -137,13 +137,13 @@ class GitHub:
         # so a changed on-disk file cannot silently become the uploaded evidence.
         files, total = [], 0
         types = {
-            "test": (".py", "text/x-python"),
-            "screenshot": (".png", "image/png"),
-            "video": (".mp4", "video/mp4"),
+            "test": {(".py", "text/x-python")},
+            "screenshot": {(".png", "image/png"), (".gif", "image/gif")},
+            "video": {(".mp4", "video/mp4")},
         }
         for item in manifest.artifacts:
             path = bundle_file(manifest_path.parent, item.path)
-            if (path.suffix, item.media_type) != types[
+            if (path.suffix, item.media_type) not in types[
                 item.type
             ] or path.stat().st_size != item.size_bytes:
                 raise ValueError("Artifact type or size does not match the manifest")
@@ -157,7 +157,9 @@ class GitHub:
             data = path.read_bytes()
             if len(data) != item.size_bytes:
                 raise ValueError("Evidence changed while reading")
-            if (item.type == "screenshot" and not data.startswith(b"\x89PNG\r\n\x1a\n")) or (
+            if (item.media_type == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n")) or (
+                item.media_type == "image/gif" and not data.startswith((b"GIF87a", b"GIF89a"))
+            ) or (
                 item.type == "video" and data[4:8] != b"ftyp"
             ):
                 raise ValueError("Invalid media file")
@@ -209,6 +211,7 @@ class GitHub:
         ]
         for test in manifest.tests:
             lines.append(f"- {safe_text(test.case_id)}: {test.status}")
+            lines.append(f"  {safe_text(test.detail[:240])}{'…' if len(test.detail) > 240 else ''}")
         for item, data, name in files:
             asset = assets.get(name)
             if asset is not None and asset.get("state") == "starter" and type(asset.get("id")) is int:
@@ -234,7 +237,7 @@ class GitHub:
             if asset.get("digest") and asset["digest"] != "sha256:" + name.split(".")[0]:
                 raise ValueError("GitHub asset digest mismatch")
             url = url.replace("<", "%3C").replace(">", "%3E").replace("\n", "%0A")
-            label = f"{item.type} — {safe_text(item.case_id)}"
+            label = f"{'Journey summary' if item.media_type == 'image/gif' else 'Playwright test' if item.type == 'test' else 'Screenshot'} — {safe_text(item.case_id)}"
             lines.extend(["", f"{'!' if item.type == 'screenshot' else ''}[{label}](<{url}>)"])
         if manifest.reason:
             lines.extend(["", safe_text(manifest.reason)])

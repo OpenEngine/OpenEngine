@@ -56,6 +56,20 @@ def collaborators():
     return source, uploader
 
 
+def test_gif_summary_supported_by_oe_consumer(tmp_path):
+    path = bundle(tmp_path)
+    gif = tmp_path / 'login-journey-summary.gif'
+    gif.write_bytes(b'GIF89afixture')
+    data = json.loads(path.read_text())
+    data['artifacts'].append({'path': gif.name, 'type': 'screenshot', 'media_type': 'image/gif',
+                             'size_bytes': gif.stat().st_size, 'case_id': 'C1'})
+    path.write_text(json.dumps(data))
+    source, uploader = collaborators()
+    publish(path, source, uploader)
+    assert uploader.upload.await_count == 4
+    assert 'login-journey-summary' in source.add_comment.call_args.args[1]
+
+
 def publish(path, source, uploader):
     return asyncio.run(
         publish_verification(

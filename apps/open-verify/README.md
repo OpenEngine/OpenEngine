@@ -3,7 +3,7 @@
 A standalone CLI for exploratory QA of a Git project. Describe a feature or point it
 at a change; Open Verify inspects the project, plans and exercises its browser,
 terminal or HTTP behavior, and saves evidence. Change mode exports runnable Playwright
-tests and relevant screenshots/video for OE. It has no web UI or service.
+tests and relevant screenshots/GIFs for OE. It has no web UI or service.
 
 ## Develop inside OpenEngine
 
@@ -61,8 +61,16 @@ are not rerun to collect more evidence. Progress names the journey and its check
 
 Generated journeys support reloads, local navigation and structured same-origin
 JSON assertions. They reject clicks on non-interactive role containers, such as
-groups. All checks for a case run in one test and one recording per attempt;
+groups. All checks for a case run in one test and one GIF summary per attempt;
 failed attempts remain available for diagnosis.
+
+Plan complete user journeys: entry, action, successful result, and any requested
+exit or reversal belong to one case. Pages and individual assertions are not
+separate use cases. Publication selects the final attempt's Playwright test and
+one GIF for each case. The PR comment contains a short result, a test link, and
+that GIF; individual PNGs and earlier attempts stay in the local run directory.
+If the final GIF is unavailable, at most one screenshot is attached with an
+explicit omission. An older attempt's GIF is never substituted for the final one.
 
 ```shell
 ov --pr https://github.com/OWNER/REPO/pull/NUMBER --allow-exec --publish
@@ -117,10 +125,10 @@ Paths inside your configuration may still need
 adjusting for the test checkout. The agent can ask for missing setup in the terminal.
 
 `--publish` uses your existing `gh` authentication to create/reuse an evidence
-prerelease and comment on the PR with screenshots and links to videos/tests. It
+prerelease and comment on the PR with screenshots/GIFs and links to tests. It
 does not need an OE installation. It rechecks the head **and base** before posting;
 if either moved, publication is blocked and artifacts remain available locally.
-Skipped changes produce no uploads or comment. Each video stays below 10,000,000
+Skipped changes produce no uploads or comment. Each generated GIF stays below 10,000,000
 bytes. Publication uses the same release-asset convention documented below; this
 can trigger configured tag/release workflows. Omit `--publish` to retain evidence
 locally without modifying GitHub.
@@ -164,14 +172,18 @@ additional origins. Each run starts without existing login state, so necessary U
 setup belongs in the journey. The `test_change(page)` function can also be adopted
 into an existing async Playwright suite.
 
-When impact warrants visual evidence, journeys can include named `screenshot` steps
-at meaningful UI checkpoints, plus a final screenshot and a short browser recording,
-including useful failures. The browser extra includes a bundled MP4 encoder;
-**ffmpeg with libx264 on PATH** takes precedence. Encoding is local and bounded; every published video must be
-strictly below **10,000,000 bytes**. Missing/failed encoding or a clip that remains too
-large results in an explicit omission, while tests/screenshots remain available.
-Raw WebM recordings and traces stay local diagnostics. The media encoder does not
-install dependencies automatically. Recording finalization follows [Playwright's context lifecycle](https://playwright.dev/python/docs/videos).
+When impact warrants visual evidence, journeys capture initial and final app
+states, named screenshot checkpoints, and the control immediately before each click.
+A temporary orange outline and “Next click” label identify that control. The overlay
+is removed before clicking and never handles pointer events or changes app styles.
+Screenshots form a looping GIF: two seconds per frame, three seconds on the last
+frame, with consecutive byte-identical images omitted. Authenticated journeys include their
+actual assisted-login app checkpoints at the beginning. GIFs are screenshot
+summaries, not continuous recordings. New runs produce no MP4 or WebM video.
+The browser extra bundles ffmpeg; an encoder on PATH takes precedence. Each GIF
+must stay below **10,000,000 bytes**; encoding failures are reported as omissions
+while screenshots and tests remain available. No dependencies are auto-installed
+by the encoder.
 
 Generated test and media paths are printed after each journey. A native-tool protocol
 violation cancels the agent turn and retries once in a fresh session with the recorded
@@ -213,7 +225,7 @@ The consumer validates the schema, file paths, media types, file sizes and PR
 revision before uploading. It refuses working-tree bundles for PR publication;
 commit and verify the exact PR revision first. It rechecks the PR head before
 commenting, keeps failure evidence, and uploads nothing for skipped changes.
-Only manifest-listed tests/screenshots/videos are uploaded; logs, traces, `.env`
+Only manifest-listed tests/screenshots/GIFss are uploaded; logs, traces, `.env`
 and login state stay local. Identical artifacts are reused and repeated publication
 of the same evidence reuses the existing comment.
 
@@ -221,9 +233,8 @@ The first uploader supports github.com using documented release asset APIs. It
 creates an `open-verify/pr-<number>/<head>` tag and prerelease for each verified PR
 revision, marked as not latest. This invokes any repository workflows subscribed
 to those tag/release events. Assets inherit repository access; private repository
-assets require GitHub access. PR comments embed screenshot URLs and link to MP4
-videos and Python tests; inline video playback is not guaranteed. Every video is
-strictly smaller than 10,000,000 bytes. Another store can implement
+assets require GitHub access. PR comments embed PNG screenshots and GIF summaries and link to Python tests.
+Legacy MP4 bundles remain supported for publication; new tests emit GIFs only. Another store can implement
 `VerificationUploader.upload` to return a durable HTTPS URL.
 
 For an existing bundle, OE can call `engine.runtime.verification.publish_verification`
@@ -248,7 +259,7 @@ be published as evidence for a committed PR revision.
 Open Verify reuses one Chromium process for exploration, assisted login, and all
 test cases in a run. Each independent test gets a fresh browser context; steps
 within a journey share its page. Authenticated cases receive only the saved app
-session. Contexts close after each test to finalize its video, and Chromium closes
+session. Contexts close after each test, and Chromium closes
 at the end of the run. Separate contexts may still appear as separate windows.
 
 For protected-page testing, run from an interactive terminal with the application's
@@ -265,9 +276,21 @@ other browser tests keep their existing origin policy.
 The host holds app cookies/local storage in memory for the run. Generated journeys
 with `authenticated: true` receive isolated copies; signed-out cases remain empty.
 The session is checked before each authenticated journey, and an expired session
-blocks that journey pending another assisted login. Login itself records no video,
-screenshots, or traces. State and provider credentials are not included in the bundle.
-This is user-assisted authentication, not evidence of autonomous GitHub login.
+blocks that journey pending another assisted login. For visual evidence, the actual
+login attempt captures the app's sign-in screen before clicking and the app after
+the authenticated return. A `login-*/receipt.json` records the signed-out check,
+sign-in click, observed redirect origins, and confirmed authenticated return, with
+timestamps. OAuth URL queries, tokens, and provider cookies are excluded.
+Provider pages, credential entry and MFA have no screenshots, video or traces.
+Consecutive app screenshots with matching bytes are deduplicated in test evidence.
+The PR comment labels the attempt as user-assisted login. The main journey GIF
+places these app checkpoints before the subsequent app checks; credential
+entry is never presented as recorded.
+The app checkpoints also form a looping `login-journey-summary.gif`: two seconds
+per screenshot and three seconds on the final result, capped below 10 MB. The
+complete journey GIF incorporates these login frames and is published inline;
+individual PNGs stay local.
+State and provider credentials are not included in the bundle.
 
 To replay an authenticated generated test, use `--login` in an interactive terminal
 to repeat the recorded assisted sign-in, or supply your own private Playwright
@@ -275,7 +298,7 @@ storage-state file with `--auth-state /path/to/private-state.json`. Recorded log
 instructions contain the app URL, status endpoint and button locator, never cookies
 or credentials. The manifest's replay command includes `--login` when available.
 The bundle does
-not contain that file. Protected-page screenshots/video may show account data;
+not contain that file. Protected-page screenshots/GIFs may show account data;
 use an appropriate test account. Dummy OAuth configuration cannot support live login.
 
 ### OE artifact contract
@@ -368,7 +391,7 @@ Change verification keeps separate responsibilities:
 - `models.py` / `test_spec.py`: typed provider-independent decisions and journeys.
 - `test_codegen.py`: deterministic Playwright source generation from typed steps.
 - `playwright_runner.py`: isolated execution and standalone replay through existing guards.
-- `media.py`: bounded MP4 conversion and byte-limit enforcement.
+- `media.py`: bounded GIF summaries and legacy MP4 conversion.
 - `manifest.py`: versioned OE contract and attachment validation.
 - `workflow.py`: impact, planning, execution, and evidence-backed findings in LangGraph.
 

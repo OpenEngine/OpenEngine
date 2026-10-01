@@ -24,6 +24,10 @@ def web_app():
                 <p id="result"></p></body></html>"""
             if self.path == "/api":
                 body = json.dumps({"items": [1, 2]}).encode()
+            if self.path == '/cart':
+                body = b'''<p id="cart">Cart: 0</p>
+                    <button onclick="document.querySelector('#cart').textContent='Cart: 1'">Add item</button>
+                    <button onclick="document.querySelector('#cart').textContent='Cart: 0'">Remove item</button>'''
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
