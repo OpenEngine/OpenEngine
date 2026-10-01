@@ -49,6 +49,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
+from engine.apps.web.loops import LoopSettingsStore, parse_loop_settings
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_communications import (
     GITHUB_CHANNEL_PREFIX,
@@ -1079,6 +1080,7 @@ def create_app(
     github_login_config: GitHubLoginConfig | None = None,
     service_token: Callable[[], str] = lambda: "",
     source_control_preferences: SourceControlPreferences | None = None,
+    loop_settings: LoopSettingsStore | None = None,
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
@@ -2688,6 +2690,21 @@ def create_app(
         _source_control_preferences.set(provider, origin if provider == "gitlab-oauth" else None)
         return Response(status_code=204)
 
+    _loop_settings = loop_settings or LoopSettingsStore()
+
+    async def get_loop_settings(_request: Request) -> JSONResponse:
+        return JSONResponse(_loop_settings.get().json())
+
+    async def set_loop_settings(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        try:
+            settings = parse_loop_settings(await request.json(), runners)
+        except ValueError as error:
+            return _error(str(error), 400)
+        _loop_settings.set(settings)
+        return JSONResponse(settings.json())
+
     async def github_get_client_id(_request: Request) -> JSONResponse:
         # Never return the actual value — only whether one is set and its hint.
         stored = _github_store(_request).get_client_id()
@@ -4119,6 +4136,8 @@ def create_app(
         Route("/api/slack/callback", slack_callback, name="slack_callback"),
         Route("/api/slack/disconnect", slack_disconnect, methods=["POST"]),
         Route("/api/slack/events", slack_ingress.webhook, methods=["POST"]),
+        Route("/api/loops/settings", get_loop_settings),
+        Route("/api/loops/settings", set_loop_settings, methods=["PUT"]),
         Route("/api/utilization", read_utilization),
         Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
         Route("/api/runs", list_runs),

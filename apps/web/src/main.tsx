@@ -261,6 +261,7 @@ function App() {
     <Sidebar
       runs={runs}
       graphNodes={graphNodes}
+      runners={config.runners.map((option) => option.id)}
       activeRunId={activeRunId}
       activeConversationUrl={conversationUrl}
       activeView={

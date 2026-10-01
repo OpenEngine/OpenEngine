@@ -736,6 +736,29 @@ export function refreshUtilization(
   });
 }
 
+/** The settings every loop runs under. Equal active hours mean any time of
+ *  day, and a zero `maxDailySpend` is no limit. The two runners are only set
+ *  under the `manual` strategy. */
+export type LoopSettings = {
+  activeHours: { start: string; end: string };
+  maxPrs: number;
+  maxDailySpend: number;
+  runnerStrategy: "least-utilized" | "round-robin" | "manual";
+  implementationRunner: string;
+  reviewRunner: string;
+};
+
+export function getLoopSettings(): Promise<LoopSettings> {
+  return api<LoopSettings>("/api/loops/settings");
+}
+
+export function setLoopSettings(settings: LoopSettings): Promise<LoopSettings> {
+  return api<LoopSettings>("/api/loops/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
 /** A refusal, carrying the status it was refused with.
  *
  *  The message is what a reader is shown and is unchanged, so nothing that

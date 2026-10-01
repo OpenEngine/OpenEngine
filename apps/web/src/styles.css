@@ -1452,6 +1452,25 @@ select:disabled { cursor: default; }
 }
 .settings-input:focus { border-color: var(--night-muted); }
 
+/* The Loops section is one short form, scrolled when the rail is too short. */
+.rail-loops {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px var(--rail-pad, 18px) 16px;
+}
+.rail-loops label { display: block; }
+.rail-loops-hours {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--night-muted);
+}
+.rail-loops-hours legend { padding: 0; }
+
 .settings-client-id {
   display: flex;
   align-items: center;
