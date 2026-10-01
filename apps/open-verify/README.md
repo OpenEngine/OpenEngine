@@ -139,6 +139,80 @@ with the revision snapshot and `publication.json` with the comment URL or blocke
 The current checkout can be dirty, but `--pr` cannot be combined with `--base`,
 `--head`, or `--include-working-tree`: it always tests the PR's committed code.
 
+### Local OpenEngine browser-login setup
+
+For a live GitHub sign-in test, prepare these two private files in the directory
+where you run `ov`. Both `engine.local.toml` and `.env` are gitignored. Keep real
+secrets out of committed configuration and test requests.
+
+Use a registered **GitHub OAuth App** for local browser sign-in. Its authorization
+callback URL must be `http://localhost:5173/api/auth/github/callback`. Obtain the
+client ID and matching client secret from that app's owner or its GitHub settings.
+These identify OE to GitHub; you still sign in with your own account in the browser.
+This is separate from connecting GitHub in OE Settings and does not use a GitLab
+app secret.
+
+Create `engine.local.toml`, replacing the client ID, checkout path, and example
+operator ID with your own values:
+
+```toml
+default_branch = "main"
+public_url = "http://localhost:5173"
+github_login_client_id = "YOUR_GITHUB_OAUTH_CLIENT_ID"
+github_login_redirect_uri = "http://localhost:5173/api/auth/github/callback"
+
+[repos]
+"OpenEngine/OpenEngine" = "/absolute/path/to/OpenEngine"
+
+[access]
+# Your stable numeric GitHub account ID, not your username.
+operators = [12345678]
+
+[workflows]
+directory = "workflows"
+
+[work_orders]
+repository = "OpenEngine/OpenEngine"
+workflow = "implementation-review-rerank"
+```
+
+Find your numeric account ID with `gh api user --jq .id`. The operator entry
+allows that account to access this local instance after signing in.
+
+Add the matching secret to `.env` beside `engine.local.toml`, preserving any
+existing settings:
+
+```dotenv
+ENGINE_GITHUB_LOGIN_CLIENT_SECRET=YOUR_GITHUB_OAUTH_CLIENT_SECRET
+```
+
+Restrict access with `chmod 600 .env engine.local.toml`. OE reads `.env` beside the
+selected configuration directly; you do not need to source it. Existing
+`ENGINE_GITHUB_LOGIN_*` process environment values override file configuration,
+so remove stale overrides before testing. Use `localhost` consistently for the
+app URL and callback; do not substitute `127.0.0.1` in the browser URL.
+
+Run from your checkout containing those files:
+
+```shell
+ov "Test GitHub login and access to the app" \
+  --pr https://github.com/OpenEngine/OpenEngine/pull/609 \
+  --allow-exec --publish \
+  --setup-file engine.local.toml \
+  --setup-file .env
+```
+
+Replace the PR URL with the change you want to test. OV copies these files into
+the isolated PR checkout and gives their paths to the agent, which must start OE
+with the supplied configuration (`--config engine.local.toml`) and matching local
+origin. It installs missing project dependencies, starts the app, and opens the
+login journey. Complete credentials and MFA in the browser when prompted; OV then
+continues verification and publishes the result. To include logout, request
+“Test GitHub sign-in, app access, and sign-out as one complete journey.”
+
+See [GitHub browser login](../../docs/github-login.md) for configuration and access
+rules. The placeholders above cannot perform real OAuth sign-in.
+
 ## Verify a change
 
 ```shell
