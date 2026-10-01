@@ -280,6 +280,11 @@ class GitHubLogin:
             self._access[user_id] = (writable, time.monotonic() + _ACCESS_TTL)
             return writable
 
+    def access_known(self, user_id: int) -> bool:
+        """Whether a complete answer for `user_id` is cached and still fresh."""
+        cached = self._access.get(user_id)
+        return cached is not None and cached[1] > time.monotonic()
+
     async def visible_repositories(self, request: Request) -> frozenset[str] | None:
         """Which repositories' runs `request` may see, or None for all of them.
 

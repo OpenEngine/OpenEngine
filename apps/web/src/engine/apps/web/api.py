@@ -3801,15 +3801,33 @@ def create_app(
         which the ingress treats like any other failure, so the delivery can be
         redelivered.
         """
-        sender = delivery.author if isinstance(delivery, GithubComment) else delivery.sender
+        if isinstance(delivery, GithubComment):
+            sender, sender_id = delivery.author, delivery.author_id
+        else:
+            sender, sender_id = delivery.sender, delivery.sender_id
         found = change_request(urlsplit(delivery.url)._replace(
             path=f"/{delivery.repository}/pull/{delivery.number}", query="", fragment="",
         ).geturl())
         repository = found.project if found is not None else delivery.repository
-        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-            may_write = await session.capabilities.source_control.can_write_repository(
-                pull_request_url(repository, delivery.number), sender,
-            )
+        may_write: bool | None = None
+        if sender_id and repository.lower() in access_repositories:
+            # The same per-user answer, and cache, that scopes the web app:
+            # a sender who was just checked there, or here, is not asked again.
+            async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                writable = await github_login.writable_repositories(
+                    {"id": sender_id, "login": sender}
+                )
+            if writable is not None and repository.lower() in writable:
+                may_write = True
+            elif github_login.access_known(sender_id):
+                may_write = False
+        if may_write is None:
+            # Not one of this deployment's repositories, or its answer is
+            # unknown: ask GitHub about this one directly.
+            async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                may_write = await session.capabilities.source_control.can_write_repository(
+                    pull_request_url(repository, delivery.number), sender,
+                )
         if not may_write:
             # Ignored rather than answered: a refusal posted back is both noise
             # and a way to make this process talk to somebody it will not act for.

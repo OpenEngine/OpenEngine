@@ -265,6 +265,38 @@ def test_a_comment_reaches_no_agent_without_write_access(tmp_path, access):
     assert not communications.posts
 
 
+def test_a_comment_authors_access_is_answered_from_the_login_cache(tmp_path):
+    """The ingress asks through the same per-user cache that scopes the web app,
+    so a second comment from the same author is not asked about again."""
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock()
+    source_control.add_comment = AsyncMock()
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    source_control.can_write_repository = AsyncMock(return_value=False)
+    object.__setattr__(capabilities, "source_control", source_control)
+
+    with TestClient(app) as client:
+        for comment_id in (1, 2):
+            payload = _issue_comment(comment_id, "new workorder please")
+            payload["issue"]["pull_request"] = {}
+            payload["comment"]["user"]["id"] = 99
+            body = json.dumps(payload).encode()
+            assert client.post("/api/github/events", content=body, headers=dict(
+                github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+            client.portal.call(app.state.github_ingress.drain)
+        source_control.can_write_repository.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/1", "someone", user_id=99)
+        runtime.steer.assert_not_awaited()
+
+
 @pytest.mark.parametrize("stalls", ["login", "permission"])
 def test_a_stalled_forge_lookup_does_not_stop_the_queue_behind_it(tmp_path, stalls, monkeypatch):
     """One comment's slow lookup must not become every comment's.
@@ -1378,8 +1410,9 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(tmp_path, may_w
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=headers).status_code == 200
         client.portal.call(app.state.github_ingress.drain)
+        # Asked through the login cache, which is per user and per repository.
         source.can_write_repository.assert_awaited_once_with(
-            "https://github.com/acme/api/pull/12", "maintainer")
+            "https://github.com/acme/api/pull/1", "maintainer", user_id=7)
         if not may_write:
             runtime.start.assert_not_awaited()
             assert "ignored a GitHub delivery on acme/api#12 from maintainer, who cannot write to it" \
