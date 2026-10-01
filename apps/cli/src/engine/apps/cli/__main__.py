@@ -31,8 +31,7 @@ from platformdirs import user_config_path, user_data_path, user_state_path
 
 from engine.apps.cli import daemon, onboarding
 from engine.domain import (
-    MODE_INPUT, REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT, STATE_INPUT, TRIAGE_TOOL,
-    ForgeMode, WorkState, finding_comment,
+    STATE_INPUT, TRIAGE_TOOL, WorkState, finding_comment, review_inputs,
 )
 from engine.runtime.change_requests import ChangeRequest, change_request, remote_project
 
@@ -1115,17 +1114,9 @@ def review_workflow(config: dict[str, Any]) -> dict[str, Any]:
 def start_review(server: str, config: dict[str, Any], target: ReviewTarget) -> str:
     workflow = review_workflow(config)
     declared = {item.get("name") for item in workflow.get("inputs") or [] if isinstance(item, dict)}
-    inputs = {
-        STATE_INPUT: str(WorkState.REVIEW),
-        REVIEW_REF_INPUT: target.ref,
-        REVIEW_PR_INPUT: target.pr_url,
-        REVIEW_BRANCH_INPUT: target.branch,
-        # Without a pull request branch there is nothing to push to or wait on CI for.
-        MODE_INPUT: str(ForgeMode.CONNECTED if target.pr_url and target.branch else ForgeMode.DISCONNECTED),
-    }
     run = request_json(server, "/api/runs", {
         "prompt": target.task, "repository": target.repository, "workflowId": workflow["id"],
-        "inputs": {name: value for name, value in inputs.items() if name in declared},
+        "inputs": review_inputs(declared, ref=target.ref, pr_url=target.pr_url, branch=target.branch),
     })
     return str(run["runId"])
 
@@ -1134,14 +1125,54 @@ def graph_run(server: str, run_id: str) -> dict[str, Any]:
     return fetch_json(server, f"/graph/api/runs/{run_id}?includeValues=true")
 
 
+def step_names(server: str, graph_id: str) -> dict[str, str] | None:
+    """Each node's display name, so progress reads `Review (Bugs)` rather than a node id; None to retry next poll."""
+    try:
+        graph = fetch_json(server, f"/graph/api/graphs/{graph_id}")
+    except RuntimeError:
+        return None
+    return {
+        str(node["nodeId"]): str(node.get("name") or node["nodeId"])
+        for node in graph.get("nodes") or [] if isinstance(node, dict) and node.get("nodeId")
+    }
+
+
+def review_steps(run: dict[str, Any], names: dict[str, str]) -> dict[str, str]:
+    """The run's executing steps, by execution id, with their display names."""
+    return {
+        str(item.get("executionId")): names.get(str(item.get("nodeId")), str(item.get("nodeId")))
+        for item in run.get("activeExecutions") or [] if isinstance(item, dict)
+    }
+
+
+def review_spinner(steps: dict[str, str]) -> TerminalSpinner:
+    return TerminalSpinner(f"Reviewing: {', '.join(steps.values())}" if steps else "Reviewing")
+
+
 def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Watch the run until it asks for findings to fix, or ends."""
-    spinner = TerminalSpinner("Reviewing")
+    """Watch the run until it asks for findings to fix, or ends, saying each step as it starts and ends."""
+    spinner = review_spinner({})
     spinner.start()
     answered: set[str] = set()
+    names: dict[str, str] | None = None
+    steps: dict[str, str] = {}
     try:
         while True:
             run = graph_run(server, run_id)
+            if names is None and run.get("graphId"):
+                names = step_names(server, str(run["graphId"]))
+            current = review_steps(run, names or {})
+            if current != steps:
+                spinner.stop()
+                for execution, name in steps.items():
+                    if execution not in current:
+                        print(f"✓ {name}", file=sys.stderr)
+                for execution, name in current.items():
+                    if execution not in steps:
+                        print(f"→ {name}", file=sys.stderr)
+                steps = current
+                spinner = review_spinner(steps)
+                spinner.start()
             pending = [item for item in run.get("pendingApprovals") or [] if isinstance(item, dict)]
             triage = next((item for item in pending if item.get("toolName") == TRIAGE_TOOL), None)
             if triage is not None or run.get("status") in {"completed", "failed"}:
@@ -1157,7 +1188,7 @@ def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str,
                     request_json(server, f"/graph/api/runs/{run_id}/approvals/{approval['approvalId']}", {"decision": "accept" if action == "Approve" else "cancel"})
                 else:
                     print("Answer it in the web UI; still watching the review.")
-                spinner = TerminalSpinner("Reviewing")
+                spinner = review_spinner(steps)
                 spinner.start()
             time.sleep(REVIEW_POLL_SECONDS)
     finally:
