@@ -114,6 +114,11 @@ has been reviewed, then sent together to implementation with progress shown;
 the resulting change is reviewed again. Posting uses `gh` and posts only that
 finding. `--json` prints the findings and leaves the review waiting.
 
+`engine fix [path | pull-request-url]` reviews the same targets without asking:
+every surviving finding is sent to implementation, and the fixed change is
+reviewed again until a round has no findings. `--rounds N` (default 3) bounds
+the fix rounds; past it, the remaining findings wait in the web UI.
+
 In an interactive terminal, running `engine` opens the workbench. Type `/` to
 search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,
 `/review`, `/settings`, `/web`, or `/quit`. Typing a message starts a new work order and

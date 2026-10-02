@@ -1495,6 +1495,48 @@ def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
         return EXIT_UNHEALTHY
 
 
+FIX_ROUNDS = 3
+
+
+def fix(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    """Review a local change or a pull request, then fix every finding until a round has none."""
+    try:
+        server, check = read_service(arguments, preferences)
+        if not check.ok:
+            raise RuntimeError(check.detail)
+        config = fetch_json(server, "/api/config")
+        target = review_target(arguments.target, server, config)
+        run_id = start_review(server, config, target)
+        print(f"Fixing {target.pr_url or target.repository} ({run_id})")
+        rounds = 0
+        while True:
+            run, triage = wait_for_triage(server, run_id)
+            if triage is None:
+                if run.get("status") == "failed":
+                    raise RuntimeError(f"fix failed: {run.get('error')}")
+                print("Review finished.")
+                return EXIT_OK
+            findings = triage_findings(server, run, triage)
+            render_findings(findings)
+            if not findings:
+                request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
+                print("Review finished.")
+                return EXIT_OK
+            if rounds >= arguments.rounds:
+                print(f"Stopped after {rounds} fix round(s); the remaining findings wait at {server}/runs/{run_id}.")
+                return EXIT_UNHEALTHY
+            rounds += 1
+            print(f"Sending {len(findings)} finding(s) to implementation (round {rounds} of {arguments.rounds})…")
+            send_fixes(server, run_id, triage, findings)
+            print("Fixing; the change is reviewed again when the fix is done.")
+    except KeyboardInterrupt:
+        print("\nDetached; the service-side fix continues.")
+        return EXIT_OK
+    except (ValueError, RuntimeError, KeyError, json.JSONDecodeError) as error:
+        print(f"engine: {terminal_text(str(error))}", file=sys.stderr)
+        return EXIT_UNHEALTHY
+
+
 COMMAND_DESCRIPTIONS = {
     "/help": "Show available commands",
     "/status": "Check whether the OpenEngine service is ready",
@@ -1792,6 +1834,10 @@ def parser() -> argparse.ArgumentParser:
     reviewing.add_argument("target", nargs="?", default=".", help="a repository path (default: current directory) or a pull request URL")
     reviewing.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
     reviewing.add_argument("--json", action="store_true", help="print the findings as JSON and leave the review waiting")
+    fixing = commands.add_parser("fix", help="review a local change or a pull request, then fix every finding")
+    fixing.add_argument("target", nargs="?", default=".", help="a repository path (default: current directory) or a pull request URL")
+    fixing.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
+    fixing.add_argument("--rounds", type=int, default=FIX_ROUNDS, metavar="N", help=f"stop after N fix rounds (default: {FIX_ROUNDS})")
     onboarding.add_parser(commands)
     daemon.add_parser(commands)
     return result
@@ -1813,6 +1859,8 @@ def main(argv: list[str] | None = None) -> int:
         return connect(arguments, preferences)
     if arguments.command == "review":
         return review(arguments, preferences)
+    if arguments.command == "fix":
+        return fix(arguments, preferences)
     if arguments.command == "init":
         return onboarding.main(arguments)
     if arguments.command == "daemon":

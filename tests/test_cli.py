@@ -745,6 +745,42 @@ def test_review_json_waits_for_triage_and_prints_the_surviving_findings(monkeypa
     assert printed == {"runId": "run-1", "prUrl": "https://github.com/o/r/pull/1", "findings": REVIEW_FINDINGS}
 
 
+def fix_service(monkeypatch, rounds):
+    ready = cli.Check("service", True, "ready")
+    monkeypatch.setattr(cli, "read_service", lambda *_args: (cli.DEFAULT_SERVER, ready))
+    monkeypatch.setattr(cli, "fetch_json", lambda *_args: REVIEW_CONFIG)
+    monkeypatch.setattr(cli, "review_target", lambda *_args: cli.ReviewTarget("/code/repo", "abc", "https://github.com/o/r/pull/1", "Review"))
+    monkeypatch.setattr(cli, "start_review", lambda *_args: "run-1")
+    rounds = iter(rounds)
+    monkeypatch.setattr(cli, "wait_for_triage", lambda *_args: ({}, TRIAGE))
+    monkeypatch.setattr(cli, "triage_findings", lambda *_args: next(rounds))
+    posted = []
+    monkeypatch.setattr(cli, "request_json", lambda _server, path, body: posted.append((path, body)) or {})
+    return posted
+
+
+def test_fix_sends_every_finding_until_a_round_has_none(monkeypatch, capsys):
+    posted = fix_service(monkeypatch, [REVIEW_FINDINGS, []])
+
+    assert cli.main(["fix", "https://github.com/o/r/pull/1"]) == cli.EXIT_OK
+
+    assert posted == [
+        ("/graph/api/runs/run-1/steering", {"message": json.dumps(REVIEW_FINDINGS), "node": "triage"}),
+        ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "accept"}),
+        ("/graph/api/runs/run-1/approvals/approval-1", {"decision": "cancel"}),
+    ]
+    assert "Review finished." in capsys.readouterr().out
+
+
+def test_fix_stops_after_its_rounds_and_leaves_the_findings_waiting(monkeypatch, capsys):
+    posted = fix_service(monkeypatch, [REVIEW_FINDINGS, REVIEW_FINDINGS])
+
+    assert cli.main(["fix", "https://github.com/o/r/pull/1", "--rounds", "1"]) == cli.EXIT_UNHEALTHY
+
+    assert [body["decision"] for path, body in posted if "approvals" in path] == ["accept"]
+    assert "Stopped after 1 fix round(s)" in capsys.readouterr().out
+
+
 def test_review_says_each_step_as_it_starts_and_finishes(monkeypatch, capsys):
     monkeypatch.setattr(cli, "REVIEW_POLL_SECONDS", 0)
     runs = iter([
