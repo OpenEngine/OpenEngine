@@ -1448,13 +1448,21 @@ def choose_fixes(
         print(f"Sending {len(selected)} queued finding(s) to implementation…")
         send_fixes(server, run_id, triage, selected)
         return True
-    request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
-    print("Review finished.")
+    finish_review(server, run_id, triage)
     return False
 
 
-def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
-    """Start a workflow in review on a local change or a pull request, then triage it."""
+def finish_review(server: str, run_id: str, triage: dict[str, Any]) -> None:
+    """Close a review that has nothing left to fix."""
+    request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
+    print("Review finished.")
+
+
+ReviewRound = Callable[[str, str, dict[str, Any], dict[str, Any], ReviewTarget, list[dict[str, Any]]], int | None]
+
+
+def run_review(arguments: argparse.Namespace, preferences: Preferences, name: str, verb: str, handle_round: ReviewRound) -> int:
+    """Start a workflow in review and hand each round of findings to `handle_round` until it returns an exit code."""
     try:
         server, check = read_service(arguments, preferences)
         if not check.ok:
@@ -1462,37 +1470,49 @@ def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
         config = fetch_json(server, "/api/config")
         target = review_target(arguments.target, server, config)
         run_id = start_review(server, config, target)
-        print(f"Reviewing {target.pr_url or target.repository} ({run_id})")
+        print(f"{verb} {target.pr_url or target.repository} ({run_id})")
         while True:
             run, triage = wait_for_triage(server, run_id)
             if triage is None:
                 if run.get("status") == "failed":
-                    raise RuntimeError(f"review failed: {run.get('error')}")
+                    raise RuntimeError(f"{name} failed: {run.get('error')}")
                 print("Review finished.")
                 return EXIT_OK
             findings = triage_findings(server, run, triage)
-            if arguments.json:
-                print(json.dumps({"runId": run_id, "prUrl": target.pr_url, "findings": findings}, sort_keys=True))
-                return EXIT_OK
-            if not sys.stdin.isatty():
-                render_findings(findings)
-                print(f"Choose findings to fix at {server}/runs/{run_id}.")
-                return EXIT_OK
-            patch = ""
-            if findings:
-                try:
-                    patch = review_diff(server, run, target)
-                except (OSError, RuntimeError) as error:
-                    print(f"engine: diff unavailable: {terminal_text(str(error))}", file=sys.stderr)
-            if not choose_fixes(server, run_id, triage, findings, target.pr_url, patch):
-                return EXIT_OK
+            result = handle_round(server, run_id, run, triage, target, findings)
+            if result is not None:
+                return result
             print("Fixing; the change is reviewed again when the fix is done.")
     except KeyboardInterrupt:
-        print("\nDetached; the service-side review continues.")
+        print(f"\nDetached; the service-side {name} continues.")
         return EXIT_OK
     except (ValueError, RuntimeError, KeyError, json.JSONDecodeError) as error:
         print(f"engine: {terminal_text(str(error))}", file=sys.stderr)
         return EXIT_UNHEALTHY
+
+
+def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
+    """Start a workflow in review on a local change or a pull request, then triage it."""
+    def handle_round(
+        server: str, run_id: str, run: dict[str, Any], triage: dict[str, Any],
+        target: ReviewTarget, findings: list[dict[str, Any]],
+    ) -> int | None:
+        if arguments.json:
+            print(json.dumps({"runId": run_id, "prUrl": target.pr_url, "findings": findings}, sort_keys=True))
+            return EXIT_OK
+        if not sys.stdin.isatty():
+            render_findings(findings)
+            print(f"Choose findings to fix at {server}/runs/{run_id}.")
+            return EXIT_OK
+        patch = ""
+        if findings:
+            try:
+                patch = review_diff(server, run, target)
+            except (OSError, RuntimeError) as error:
+                print(f"engine: diff unavailable: {terminal_text(str(error))}", file=sys.stderr)
+        return None if choose_fixes(server, run_id, triage, findings, target.pr_url, patch) else EXIT_OK
+
+    return run_review(arguments, preferences, "review", "Reviewing", handle_round)
 
 
 FIX_ROUNDS = 3
@@ -1500,41 +1520,41 @@ FIX_ROUNDS = 3
 
 def fix(arguments: argparse.Namespace, preferences: Preferences) -> int:
     """Review a local change or a pull request, then fix every finding until a round has none."""
-    try:
-        server, check = read_service(arguments, preferences)
-        if not check.ok:
-            raise RuntimeError(check.detail)
-        config = fetch_json(server, "/api/config")
-        target = review_target(arguments.target, server, config)
-        run_id = start_review(server, config, target)
-        print(f"Fixing {target.pr_url or target.repository} ({run_id})")
-        rounds = 0
-        while True:
-            run, triage = wait_for_triage(server, run_id)
-            if triage is None:
-                if run.get("status") == "failed":
-                    raise RuntimeError(f"fix failed: {run.get('error')}")
-                print("Review finished.")
+    rounds = 0
+
+    def handle_round(
+        server: str, run_id: str, run: dict[str, Any], triage: dict[str, Any],
+        target: ReviewTarget, findings: list[dict[str, Any]],
+    ) -> int | None:
+        nonlocal rounds
+        render_findings(findings)
+        if not findings:
+            finish_review(server, run_id, triage)
+            return EXIT_OK
+        if rounds >= arguments.rounds:
+            print(f"Stopped after {rounds} fix round(s); the remaining findings wait at {server}/runs/{run_id}.")
+            return EXIT_UNHEALTHY
+        # Findings come from reviewing someone else's change, so a person confirms them before an agent acts.
+        if not arguments.yes:
+            if not sys.stdin.isatty():
+                print(f"Confirm these fixes in a terminal, pass --yes, or choose them at {server}/runs/{run_id}.")
                 return EXIT_OK
-            findings = triage_findings(server, run, triage)
-            render_findings(findings)
-            if not findings:
-                request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
-                print("Review finished.")
+            choice = palette(["Fix all", "Stop"], "Findings: ", descriptions={
+                "Fix all": f"Send all {len(findings)} finding(s) to implementation",
+                "Stop": "Finish the review without fixing these findings",
+            })
+            if choice == "Stop":
+                finish_review(server, run_id, triage)
                 return EXIT_OK
-            if rounds >= arguments.rounds:
-                print(f"Stopped after {rounds} fix round(s); the remaining findings wait at {server}/runs/{run_id}.")
-                return EXIT_UNHEALTHY
-            rounds += 1
-            print(f"Sending {len(findings)} finding(s) to implementation (round {rounds} of {arguments.rounds})…")
-            send_fixes(server, run_id, triage, findings)
-            print("Fixing; the change is reviewed again when the fix is done.")
-    except KeyboardInterrupt:
-        print("\nDetached; the service-side fix continues.")
-        return EXIT_OK
-    except (ValueError, RuntimeError, KeyError, json.JSONDecodeError) as error:
-        print(f"engine: {terminal_text(str(error))}", file=sys.stderr)
-        return EXIT_UNHEALTHY
+            if choice != "Fix all":
+                print(f"Detached; no fixes were sent. The review waits at {server}/runs/{run_id}.")
+                return EXIT_OK
+        rounds += 1
+        print(f"Sending {len(findings)} finding(s) to implementation (round {rounds} of {arguments.rounds})…")
+        send_fixes(server, run_id, triage, findings)
+        return None
+
+    return run_review(arguments, preferences, "fix", "Fixing", handle_round)
 
 
 COMMAND_DESCRIPTIONS = {
@@ -1838,6 +1858,7 @@ def parser() -> argparse.ArgumentParser:
     fixing.add_argument("target", nargs="?", default=".", help="a repository path (default: current directory) or a pull request URL")
     fixing.add_argument("--server", metavar="URL", help="override the configured OpenEngine service")
     fixing.add_argument("--rounds", type=int, default=FIX_ROUNDS, metavar="N", help=f"stop after N fix rounds (default: {FIX_ROUNDS})")
+    fixing.add_argument("--yes", action="store_true", help="send each round's findings without confirming them")
     onboarding.add_parser(commands)
     daemon.add_parser(commands)
     return result

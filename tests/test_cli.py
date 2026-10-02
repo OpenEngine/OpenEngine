@@ -762,7 +762,7 @@ def fix_service(monkeypatch, rounds):
 def test_fix_sends_every_finding_until_a_round_has_none(monkeypatch, capsys):
     posted = fix_service(monkeypatch, [REVIEW_FINDINGS, []])
 
-    assert cli.main(["fix", "https://github.com/o/r/pull/1"]) == cli.EXIT_OK
+    assert cli.main(["fix", "https://github.com/o/r/pull/1", "--yes"]) == cli.EXIT_OK
 
     assert posted == [
         ("/graph/api/runs/run-1/steering", {"message": json.dumps(REVIEW_FINDINGS), "node": "triage"}),
@@ -775,10 +775,31 @@ def test_fix_sends_every_finding_until_a_round_has_none(monkeypatch, capsys):
 def test_fix_stops_after_its_rounds_and_leaves_the_findings_waiting(monkeypatch, capsys):
     posted = fix_service(monkeypatch, [REVIEW_FINDINGS, REVIEW_FINDINGS])
 
-    assert cli.main(["fix", "https://github.com/o/r/pull/1", "--rounds", "1"]) == cli.EXIT_UNHEALTHY
+    assert cli.main(["fix", "https://github.com/o/r/pull/1", "--rounds", "1", "--yes"]) == cli.EXIT_UNHEALTHY
 
     assert [body["decision"] for path, body in posted if "approvals" in path] == ["accept"]
     assert "Stopped after 1 fix round(s)" in capsys.readouterr().out
+
+
+def test_fix_without_a_terminal_or_yes_leaves_the_findings_waiting(monkeypatch, capsys):
+    posted = fix_service(monkeypatch, [REVIEW_FINDINGS])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+    assert cli.main(["fix", "https://github.com/o/r/pull/1"]) == cli.EXIT_OK
+
+    assert posted == []
+    assert "pass --yes" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("choice", "decisions"), [("Fix all", ["accept", "cancel"]), ("Stop", ["cancel"]), (None, [])])
+def test_fix_in_a_terminal_asks_before_sending_the_findings(monkeypatch, choice, decisions):
+    posted = fix_service(monkeypatch, [REVIEW_FINDINGS, []])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "palette", lambda *_args, **_kwargs: choice)
+
+    assert cli.main(["fix", "https://github.com/o/r/pull/1"]) == cli.EXIT_OK
+
+    assert [body["decision"] for path, body in posted if "approvals" in path] == decisions
 
 
 def test_review_says_each_step_as_it_starts_and_finishes(monkeypatch, capsys):
