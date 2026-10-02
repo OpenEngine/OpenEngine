@@ -45,6 +45,7 @@ def test_discovery_and_creation(dependency):
         tools = rpc(client, "tools/list").json()["result"]["tools"]
         assert [tool["name"] for tool in tools] == [
             "create_workorder", "workorder_status", "node_status", "steer_workorder", "node_steer",
+            "create_loop", "loop_status",
         ]
         assert set(tools[0]["inputSchema"]["properties"]) == {"prompt", "depends_on_run_id"}
         assert tools[0]["inputSchema"]["required"] == ["prompt"]
@@ -717,3 +718,71 @@ def test_status_preserves_same_node_executions_and_fetches_events_once(workorder
     assert executions[1]["messages"] == [{"text": "other node"}]
     assert executions[2]["messages"] == [{"text": "parallel task"}]
     assert sum(r.url.path.endswith("graph-events") for r in requests) == 1
+
+
+LOOP = {
+    "loopId": "loop-1", "name": "Triage", "repository": SETTINGS.repository, "prompt": "Triage issues",
+    "everyMinutes": 30, "activeHours": {"start": "09:00", "end": "17:00"},
+    "maxWorkOrders": 3, "maxDailySpend": 5.0, "createdAt": "2026-10-02T09:00:00-06:00",
+    "running": False, "nextRunAt": "2026-10-02T09:30:00-06:00", "deferredUntil": "run-123",
+    "spentToday": 1.25, "workOrders": [{"runId": "run-123", "name": "Fix the bug", "phase": "working"}],
+}
+
+
+def test_create_loop_fills_defaults_and_reports_status():
+    requests = []
+
+    def upstream(request):
+        requests.append(request)
+        if request.url.path == "/api/loops/defaults":
+            return httpx.Response(200, json={
+                "everyMinutes": 60, "activeHours": {"start": "09:00", "end": "17:00"},
+                "maxWorkOrders": 3, "maxDailySpend": 5.0,
+            })
+        if request.method == "POST":
+            return httpx.Response(201, json=LOOP)
+        assert request.url.path == "/api/loops/loop-1"
+        return httpx.Response(200, json=LOOP)
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        created = rpc(client, "tools/call", {
+            "name": "create_loop",
+            "arguments": {"name": " Triage ", "prompt": " Triage issues ", "every_minutes": 30},
+        }).json()["result"]
+        assert not created.get("isError")
+        status = rpc(client, "tools/call", {
+            "name": "loop_status", "arguments": {"loop_id": "loop-1"},
+        }).json()["result"]["structuredContent"]
+    assert created["structuredContent"] == status
+    assert status["loop_id"] == "loop-1"
+    assert status["deferred_until"] == "run-123"
+    assert status["workorders"] == [{"run_id": "run-123", "name": "Fix the bug", "phase": "working"}]
+    assert json.loads(requests[1].content) == {
+        "name": "Triage", "prompt": "Triage issues", "repository": "/repos/oe", "everyMinutes": 30,
+        "activeHours": {"start": "09:00", "end": "17:00"}, "maxWorkOrders": 3, "maxDailySpend": 5.0,
+    }
+    assert sum(r.method == "POST" for r in requests) == 1
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("create_loop", {"name": " ", "prompt": "Triage issues"}),
+    ("create_loop", {"name": "Triage", "prompt": " "}),
+    ("loop_status", {"loop_id": "../loops"}),
+])
+def test_invalid_loop_arguments_never_reach_oe(name, arguments):
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(
+        lambda request: pytest.fail("invalid arguments reached OE"),
+    ))) as client:
+        assert rpc(client, "tools/call", {"name": name, "arguments": arguments}).json()["result"]["isError"]
+
+
+def test_loop_status_refuses_other_repositories():
+    def upstream(request):
+        return httpx.Response(200, json={**LOOP, "repository": "elsewhere"})
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "loop_status", "arguments": {"loop_id": "loop-1"},
+        }).json()["result"]
+    assert result["isError"]
+    assert "Triage" not in str(result)
