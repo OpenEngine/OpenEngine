@@ -1336,12 +1336,14 @@ def choose_fixes(
     selected: list[dict[str, Any]] = []
     for index, finding in enumerate(findings, 1):
         print(f"Finding {index} of {len(findings)} · {len(selected)} queued for fixing")
-        render_findings([finding])
+        # The diff comes first so the finding sits just above the choice it informs.
         relevant = finding_diff(patch, finding)
         if relevant:
             render_finding_diff(relevant)
         else:
             print("No matching diff is available for this finding.")
+        print()
+        render_findings([finding])
         while True:
             actions = ["Fix", *(["Post to PR"] if pr_url else []), "Ignore"]
             choice = palette(actions, "Finding: ", descriptions={
