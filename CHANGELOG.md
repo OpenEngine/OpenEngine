@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.3.0](https://github.com/OpenEngine/OpenEngine/compare/v1.2.0...v1.3.0) (2026-10-02)
+
+
+### Features
+
+* add a script to install the checked-out commit locally ([#633](https://github.com/OpenEngine/OpenEngine/issues/633)) ([f5c0c07](https://github.com/OpenEngine/OpenEngine/commit/f5c0c0749a6183285d55acb3192319ab4317a29d))
+* **web:** add a Loops section to the sidebar for loop settings ([#629](https://github.com/OpenEngine/OpenEngine/issues/629)) ([7c5e0f8](https://github.com/OpenEngine/OpenEngine/commit/7c5e0f8e7a7e9eb9c57b7811256ff8b5bf2d6034))
+* **web:** create and run loops with the concierge's WorkOrder tools ([#635](https://github.com/OpenEngine/OpenEngine/issues/635)) ([ea2974f](https://github.com/OpenEngine/OpenEngine/commit/ea2974f413fa3b3d3962f7d119a3c396e95a5aa2))
+
+
+### Bug Fixes
+
+* **cli:** keep the review spinner on one terminal line ([#634](https://github.com/OpenEngine/OpenEngine/issues/634)) ([790e073](https://github.com/OpenEngine/OpenEngine/commit/790e0730c6040b72d41bf45bb6c01164d99d6204))
+* **cli:** show each review finding below its diff ([#637](https://github.com/OpenEngine/OpenEngine/issues/637)) ([aad5dce](https://github.com/OpenEngine/OpenEngine/commit/aad5dceb9e31047f2fa6984b1b483bfa3eaeef81))
+* dev server would fail to start ootb due to github integration ([#631](https://github.com/OpenEngine/OpenEngine/issues/631)) ([ffdb7cd](https://github.com/OpenEngine/OpenEngine/commit/ffdb7cdaa1100775dcef291b0ad4b3612e7cb9f2))
+* **runtime:** let a step complete without posting a pull-request comment ([#636](https://github.com/OpenEngine/OpenEngine/issues/636)) ([6a852d7](https://github.com/OpenEngine/OpenEngine/commit/6a852d7d19b73bc7ac46466bdefbebbf468969eb))
+
+
+### Documentation
+
+* add Slack and documentation badges to README ([#628](https://github.com/OpenEngine/OpenEngine/issues/628)) ([f1cd9c1](https://github.com/OpenEngine/OpenEngine/commit/f1cd9c1f72e808d109446a61cba480659782ec7b))
+
 ## [1.2.0](https://github.com/OpenEngine/OpenEngine/compare/v1.1.0...v1.2.0) (2026-10-01)
 
 
