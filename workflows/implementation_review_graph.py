@@ -271,9 +271,8 @@ class InputReviewNode(_RunnerInput, ReviewNode):
 class _RerankerTools(TerminalMcpServer):
     """The reranker's tools, without `add_comment` in a run started in review.
 
-    `KEEP_FINDINGS` asks it not to post, and the broker refuses `complete_step`
-    from a step granted `add_comment` until it has posted, so the tool is
-    withheld by the server rather than only by the prompt.
+    `KEEP_FINDINGS` asks it not to post, so the tool is withheld by the server
+    rather than only by the prompt.
     """
 
     def __call__(

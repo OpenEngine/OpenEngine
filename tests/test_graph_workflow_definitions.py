@@ -359,8 +359,7 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     )
     assert reranker_binding.required_outputs == ("findings",)
     # A run started in review keeps its findings for a person, so the reranker
-    # is not served add_comment -- whose broker would refuse to complete
-    # without a comment.
+    # is not served add_comment.
     reviewing = reranker_binding.for_state({"inputs": {STATE_INPUT: WorkState.REVIEW}})
     assert "add_comment" not in reviewing.repository_tools
     assert reranker_binding.for_state({"inputs": {}}) is reranker_binding
@@ -857,13 +856,6 @@ def test_impact_analysis_rejects_then_accepts_corrected_assessment(
         )
         async with binding({"workspaceId": "workspace"}, execution, None):
             broker, = brokers
-            premature = await broker._submit(_request(broker, "premature", "complete_step", {
-                "outcome": "success", "summary": f"{level}: assessment",
-                "outputs": {"impact_level": level, "impact_rationale": "Evidence"},
-            }))
-            assert premature["ok"] is False
-            assert "comment" in premature["error"]
-            assert not broker._result.done()
             comment = f"{level}: assessment\n\nEvidence and required human actions"
             posted = await broker._submit(_request(broker, "comment", "add_comment", {
                 "pr_url": pr_url, "comment": comment,

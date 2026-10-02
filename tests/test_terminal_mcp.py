@@ -339,7 +339,7 @@ def test_a_session_with_no_step_lists_only_the_repository_tools() -> None:
 
 
 @pytest.mark.parametrize("reply_id", [None, 99])
-def test_repo_comment_is_forwarded_before_review_can_complete(reply_id: int | None) -> None:
+def test_repo_comment_is_forwarded(reply_id: int | None) -> None:
     class RecordingSourceControl:
         def __init__(self) -> None:
             self.comments: list[tuple[object, ...]] = []
@@ -361,21 +361,13 @@ def test_repo_comment_is_forwarded_before_review_can_complete(reply_id: int | No
         request = {
             "token": broker._token,
             "request_id": "comment-1",
-            "name": "complete_step",
+            "name": "add_comment",
             "arguments": {
-                "outcome": "success",
-                "summary": "Done.",
-                "outputs": {"revision": "abc123"},
+                "pr_url": "https://github.com/acme/api/pull/42",
+                "comment": "This can race.",
+                "file": "src/worker.py",
+                "line": 17,
             },
-        }
-
-        refused = await broker._submit(request)
-        request["name"] = "add_comment"
-        request["arguments"] = {
-            "pr_url": "https://github.com/acme/api/pull/42",
-            "comment": "This can race.",
-            "file": "src/worker.py",
-            "line": 17,
         }
         if reply_id is not None:
             request["arguments"].pop("file")
@@ -383,7 +375,6 @@ def test_repo_comment_is_forwarded_before_review_can_complete(reply_id: int | No
             request["arguments"]["in_reply_to_id"] = reply_id
         accepted = await broker._submit(request)
 
-        assert refused["ok"] is False
         assert accepted["ok"] is True
         assert accepted["acknowledgement"] == "comment added"
         assert json.loads(accepted["output"]) == {"id": 123, "url": "https://example.com/comment/123"}
@@ -396,6 +387,38 @@ def test_repo_comment_is_forwarded_before_review_can_complete(reply_id: int | No
                 reply_id,
             )
         ]
+
+    asyncio.run(scenario())
+
+
+def test_step_granted_add_comment_can_complete_without_commenting() -> None:
+    class SourceControl:
+        async def add_comment(self, *_arguments: object) -> CommentResult:
+            raise AssertionError("no comment should be posted")
+
+    async def scenario() -> None:
+        broker = TerminalMcpBroker(
+            run_id=RunId("run-1"),
+            agent_run_id=AgentRunId("agent-run-1"),
+            step=STEP,
+            registry=TerminalResultRegistry(),
+        )
+        broker.enable_repository_tools(SourceControl(), ("add_comment",))  # type: ignore[arg-type]
+        broker._result = asyncio.get_running_loop().create_future()
+
+        completed = await broker._submit({
+            "token": broker._token,
+            "request_id": "complete-1",
+            "name": "complete_step",
+            "arguments": {
+                "outcome": "success",
+                "summary": "Nothing survived review.",
+                "outputs": {"revision": "abc123"},
+            },
+        })
+
+        assert completed["ok"] is True
+        assert broker._result.done()
 
     asyncio.run(scenario())
 

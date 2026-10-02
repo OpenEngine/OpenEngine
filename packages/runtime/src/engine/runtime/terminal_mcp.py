@@ -245,7 +245,6 @@ class TerminalMcpBroker:
         self._workspace_id: WorkspaceId | None = None
         self._git_approval: ApprovalHandler | None = None
         self._tool_call_ids: ToolCallLookup | None = None
-        self._comments_added = 0
         self._status_reporter: StatusReporter | None = None
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
@@ -526,11 +525,6 @@ class TerminalMcpBroker:
                 return {"ok": True, "acknowledgement": "clarified"}
             admit: Callable[[], Awaitable[None]] | None = None
             if name == "complete_step":
-                if "add_comment" in self._repository_tools and not self._comments_added:
-                    return {
-                        "ok": False,
-                        "error": "add at least one pull-request comment before completing review",
-                    }
                 event: TerminalEvent = step_completed_from_arguments(
                     run_id=self._run_id,
                     step=self._step,
@@ -597,7 +591,6 @@ class TerminalMcpBroker:
                 )
             except Exception as error:
                 return {"ok": False, "error": f"could not add comment: {error}"}
-            self._comments_added += 1
             # Which id space GitHub drew the id from follows from how the
             # comment was addressed, the same way the adapter routes it.
             kind: Literal["issue", "review"] = (
