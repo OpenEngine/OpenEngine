@@ -19,6 +19,7 @@ import textwrap
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
@@ -392,8 +393,10 @@ def content_text(content: object) -> str:
 class TerminalSpinner:
     """Show that a streaming request is alive before its first event arrives."""
 
-    def __init__(self, message: str = "OpenEngine is thinking") -> None:
+    def __init__(self, message: str = "OpenEngine is thinking", detail: Callable[[int], str] | None = None) -> None:
         self.message = message
+        # A line drawn under the spinner, given the width it must fit.
+        self.detail = detail
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
         self._finished = False
@@ -412,12 +415,18 @@ class TerminalSpinner:
         if self._thread is not None:
             self._thread.join()
             self._thread = None
-            print("\r\x1b[K", end="", file=sys.stderr, flush=True)
+            print("\r\x1b[J", end="", file=sys.stderr, flush=True)
 
     def _spin(self) -> None:
         while not self._stopped.is_set():
             for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
-                print(f"\r{frame} {self.message}…", end="", file=sys.stderr, flush=True)
+                # A line wider than the terminal wraps, and `\r` then redraws on a new row every frame.
+                width = max(shutil.get_terminal_size().columns - 1, 1)
+                line = f"{frame} {self.message}…"[:width]
+                detail = self.detail(width) if self.detail else ""
+                # Draw the detail a row down, then return to the spinner's row for the next frame to clear both.
+                below = f"\n{detail}\x1b[1A\r" if detail else ""
+                print(f"\r\x1b[J{line}{below}", end="", file=sys.stderr, flush=True)
                 if self._stopped.wait(0.1):
                     return
 
@@ -1146,16 +1155,80 @@ def review_steps(run: dict[str, Any], names: dict[str, str]) -> dict[str, str]:
     }
 
 
-def review_spinner(steps: dict[str, str]) -> TerminalSpinner:
-    return TerminalSpinner(f"Reviewing: {', '.join(steps.values())}" if steps else "Reviewing")
+AGENT_COLORS = (36, 35, 33, 32, 34, 31)
+
+
+def agent_name(step: str) -> str:
+    """`Review (Security)` reads as `Security`; any other step, the reranker included, as itself."""
+    match = re.fullmatch(r"Review \((.+)\)", step)
+    return match[1] if match else step
+
+
+class AgentFeed:
+    """The latest line any of a run's agents said, read from its event stream in the background."""
+
+    def __init__(self, server: str, run_id: str) -> None:
+        self.server = server
+        self.run_id = run_id
+        self.latest: tuple[str, str] | None = None
+        self._colors: dict[str, int] = {}
+        self._stopped = False
+
+    def start(self) -> None:
+        if sys.stderr.isatty():
+            threading.Thread(target=self._read, daemon=True).start()
+
+    def stop(self) -> None:
+        # Closing a response another thread is reading blocks, so the daemon reader leaves at its next event.
+        self._stopped = True
+
+    def _read(self) -> None:
+        request = Request(f"{self.server}/graph/api/runs/{self.run_id}/events", headers=request_headers({"Accept": "text/event-stream"}))
+        try:
+            with urlopen(request) as response:
+                for raw in response:
+                    if self._stopped:
+                        return
+                    if raw.startswith(b"data:"):
+                        self.hear(json.loads(raw[5:]))
+        except (OSError, ValueError):
+            return
+
+    def hear(self, event: dict[str, Any]) -> None:
+        """Keep the last line of what an agent said; prompts and tool calls are not what it said."""
+        payload = event.get("payload") or {}
+        if event.get("type") != "transcript" or payload.get("role") != "assistant":
+            return
+        lines = [line.strip() for line in str(payload.get("text", "")).splitlines() if line.strip()]
+        if lines:
+            self.latest = (str(event.get("nodeId")), lines[-1])
+
+    def line(self, names: dict[str, str], width: int) -> str:
+        if self.latest is None:
+            return ""
+        node, text = self.latest
+        name = terminal_text(agent_name(names.get(node, node)))[:width]
+        color = self._colors.setdefault(name, AGENT_COLORS[len(self._colors) % len(AGENT_COLORS)])
+        text = " ".join(terminal_text(text).split())[:max(width - len(name) - 1, 0)]
+        return f"\x1b[{color}m{name}\x1b[0m {text}".rstrip()
+
+
+def review_spinner(steps: dict[str, str], detail: Callable[[int], str] | None = None) -> TerminalSpinner:
+    return TerminalSpinner(f"Reviewing: {', '.join(steps.values())}" if steps else "Reviewing", detail)
 
 
 def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Watch the run until it asks for findings to fix, or ends, saying each step as it starts and ends."""
-    spinner = review_spinner({})
+    names: dict[str, str] | None = None
+    feed = AgentFeed(server, run_id)
+    feed.start()
+
+    def said(width: int) -> str:
+        return feed.line(names or {}, width)
+
+    spinner = review_spinner({}, said)
     spinner.start()
     answered: set[str] = set()
-    names: dict[str, str] | None = None
     steps: dict[str, str] = {}
     try:
         while True:
@@ -1172,7 +1245,7 @@ def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str,
                     if execution not in steps:
                         print(f"→ {name}", file=sys.stderr)
                 steps = current
-                spinner = review_spinner(steps)
+                spinner = review_spinner(steps, said)
                 spinner.start()
             pending = [item for item in run.get("pendingApprovals") or [] if isinstance(item, dict)]
             triage = next((item for item in pending if item.get("toolName") == TRIAGE_TOOL), None)
@@ -1189,11 +1262,12 @@ def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str,
                     request_json(server, f"/graph/api/runs/{run_id}/approvals/{approval['approvalId']}", {"decision": "accept" if action == "Approve" else "cancel"})
                 else:
                     print("Answer it in the web UI; still watching the review.")
-                spinner = review_spinner(steps)
+                spinner = review_spinner(steps, said)
                 spinner.start()
             time.sleep(REVIEW_POLL_SECONDS)
     finally:
         spinner.stop()
+        feed.stop()
 
 
 def triage_findings(server: str, run: dict[str, Any], triage: dict[str, Any]) -> list[dict[str, Any]]:
