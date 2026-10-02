@@ -31,7 +31,7 @@ because a handler that wants to render the diff an agent attached should not
 have to wait for a release here.
 """
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
@@ -165,11 +165,33 @@ async def deny_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome
     return ACPPermissionOutcome.cancelled()
 
 
+def allow_mcp_tools(server: str, names: Iterable[str]) -> ACPPermissionHandler:
+    """Allow once each call to one of `server`'s MCP tools `names`; refuse the rest.
+
+    A tool is matched by either spelling an agent gives it, `mcp__server__name`
+    or `server/name`, in any of the fields agents put it in.
+    """
+    granted = frozenset(
+        f"{prefix}{name}" for prefix in (f"mcp__{server}__", f"{server}/") for name in names
+    )
+
+    async def handle(request: ACPPermissionRequest) -> ACPPermissionOutcome:
+        if any(isinstance(value, str) and value in granted
+               for value in (request.tool_call.get(key) for key in ("name", "toolName", "title"))):
+            for option in request.options:
+                if option.kind == "allow_once":
+                    return ACPPermissionOutcome.selected(option.option_id)
+        return ACPPermissionOutcome.cancelled()
+
+    return handle
+
+
 __all__ = [
     "CANCELLED",
     "ACPPermissionHandler",
     "ACPPermissionOption",
     "ACPPermissionOutcome",
     "ACPPermissionRequest",
+    "allow_mcp_tools",
     "deny_permission",
 ]
