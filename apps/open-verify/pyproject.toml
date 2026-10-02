@@ -1,11 +1,10 @@
 [project]
 name = "open-verify"
 version = "0.1.0"
-description = "Exploratory QA from your terminal, powered by LangGraph and ACP agents."
+description = "Exploratory QA from your terminal, powered by a deterministic runner and ACP agents."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "langgraph>=1.0,<2",
     "langgraph-acp>=0.3.0,<0.4",
     "pydantic>=2.0,<3",
     "httpx>=0.28,<1",

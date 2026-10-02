@@ -16,6 +16,7 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
     lines = [
         '"""Generated Playwright journey. Start the app before running this file."""',
         "from playwright.async_api import expect",
+        "from open_verify.json_values import json_equal",
         "",
         "",
         "async def test_change(page, *, entry_url=None, progress=print, capture=None):",
@@ -26,8 +27,10 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
     ]
     for index, step in enumerate(test.steps):
         labels = {
+            "requires_verification": "Replay requires live verification",
             "reload": "Reloading the app to check session persistence",
             "navigate": "Opening an app page",
+            "navigate_url": "Opening a recorded destination",
             "expect_json": "Checking an API response",
             "screenshot": "Capturing a screenshot",
             "click": "Clicking a control",
@@ -39,7 +42,9 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
         checks = [name for name, indexes in test.checks.items() if index in indexes]
         label = "; ".join(checks) if checks else labels[step.kind]
         lines.append(f"    progress({f'  Check {index + 1}/{len(test.steps)}: {label}'!r})")
-        if step.kind == "click":
+        if step.kind == "requires_verification":
+            line = f"raise RuntimeError({step.reason!r})"
+        elif step.kind == "click":
             lines.append("    if capture is not None:")
             lines.append(f"        await capture(page, 'step-{index:02d}-before-click', {locator_code(step.locator)})")
             line = f"await {locator_code(step.locator)}.click()"
@@ -54,6 +59,8 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
             line = "await page.reload(wait_until='domcontentloaded')"
         elif step.kind == "navigate":
             line = f"await page.goto(await page.evaluate('(path) => new URL(path, location.origin).href', {step.path!r}), wait_until='domcontentloaded')"
+        elif step.kind == "navigate_url":
+            line = f"await page.goto({step.url!r}, wait_until='domcontentloaded')"
         elif step.kind == "expect_json":
             lines.extend([
                 "    response = await page.evaluate(\"\"\"async (path) => {",
@@ -62,9 +69,12 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
                 f"    }}\"\"\", {step.path!r})",
                 f"    assert response['status'] == {step.status!r}, 'Unexpected API status'",
                 "    value = response['body']",
-                f"    for key in {step.field!r}:",
-                "        value = value[key]",
-                f"    assert type(value) is type({step.value!r}) and value == {step.value!r}, 'JSON field did not match expected value'",
+                "    try:",
+                f"        for key in {step.field!r}:",
+                "            value = value[key]",
+                "    except (KeyError, IndexError, TypeError) as exc:",
+                "        raise AssertionError('Expected JSON field is absent') from exc",
+                f"    assert json_equal(value, {step.value!r}), 'JSON field did not match expected value'",
             ])
             continue
         elif step.kind == "screenshot":

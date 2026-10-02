@@ -2,22 +2,36 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
-
-class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+from open_verify.contracts import Contract
+from open_verify.journey_spec import BrowserJourney
 
 
 class Case(Contract):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     interface: Literal["browser", "terminal", "http", "mixed"]
+    journey: BrowserJourney | None = None
     prerequisites: list[str] = Field(default_factory=list)
     steps: list[str] = Field(min_length=1)
     expected: str = Field(min_length=1)
     checks: list[str] = Field(default_factory=list, max_length=10,
         description="Concrete completion checks for this journey; every check must have a test assertion")
+
+
+    @model_validator(mode="after")
+    def journey_coverage(self):
+        """Reject unusable structured cases before setup or application actions."""
+        if self.journey is not None:
+            if self.interface != "browser" or len(self.id) > 160:
+                raise ValueError("A structured journey requires a browser case ID of at most 160 characters")
+            assertions = [s.instruction for s in self.journey.steps if s.kind == "assert"]
+            if len(assertions) > 10 or len(set(assertions)) != len(assertions) or any(not s.strip() for s in assertions):
+                raise ValueError("A journey needs at most 10 unique, nonempty assertion instructions")
+            if self.checks and set(self.checks) != set(assertions):
+                raise ValueError("Journey assertions must cover the planned checks verbatim")
+        return self
 
 
 class Plan(Contract):

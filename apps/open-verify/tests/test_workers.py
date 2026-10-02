@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import pytest
+from network_fixtures import external_destination
 from test_network_lifecycle import QuietHandler, serve
 
 from open_verify.artifacts import Artifacts
@@ -68,7 +69,7 @@ def test_worker_startup_keeps_browser_usable(tmp_path, kind):
 
 @pytest.mark.parametrize("mode", ["direct", "redirect", "allowed"])
 @pytest.mark.parametrize("kind", ["dedicated", "nested", "shared"])
-def test_worker_network_origin_policy(tmp_path, mode, kind):
+def test_worker_network_origin_policy(tmp_path, mode, kind, monkeypatch):
     pytest.importorskip("playwright.async_api")
     received = []
 
@@ -80,7 +81,8 @@ def test_worker_network_origin_policy(tmp_path, mode, kind):
             self.end_headers()
             self.wfile.write(b"Permitted response")
 
-    with serve(Destination, "127.0.0.2") as destination:
+    with serve(Destination) as destination:
+        external_destination(monkeypatch, destination)
 
         class App(QuietHandler):
             def do_GET(self):

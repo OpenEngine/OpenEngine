@@ -6,17 +6,18 @@ import json
 import sys
 from pathlib import Path
 
-from platformdirs import user_data_path
+from platformdirs import user_cache_path, user_data_path
 
 from open_verify import __version__
 from open_verify.agent import ACPDecisionAgent, provider_for
 from open_verify.artifacts import Artifacts
 from open_verify.browser_session import BrowserSession
 from open_verify.changes import read_change
+from open_verify.local_engine import LocalEngine, project_root
 from open_verify.manifest import write_manifest
 from open_verify.playwright_runner import PlaywrightRunner
-from open_verify.tools import LocalTools, project_root
-from open_verify.workflow import Verification, exit_code
+from open_verify.replay_cache import ReplayCache
+from open_verify.runner import VerificationRunner, exit_code
 
 
 class TerminalProgress:
@@ -94,6 +95,10 @@ def parser():
         default=[],
         help="Additional browser/HTTP origin; repeatable. Localhost is allowed.",
     )
+    cli.add_argument("--cache", choices=["auto", "strict", "refresh", "off"], default="auto",
+                     help="Action replay: auto reuse/fallback, strict read-only, refresh live recordings, or off")
+    cli.add_argument("--cache-dir", type=Path, default=user_cache_path("open-verify") / "replay",
+                     help="Local recording storage, isolated by project; excluded from run bundles")
     cli.add_argument("--headless", action="store_true", help="Hide the browser window")
     cli.add_argument(
         "--max-steps", type=positive_int, default=60, help="Maximum agent decisions (default: 60)"
@@ -152,7 +157,7 @@ async def run_local(args, *, artifacts=None, prepare=None):
         raise ValueError("--agent-command must be a nonempty JSON array of strings")
     provider = provider_for(args.agent, command)
     for origin in args.allow_origin:
-        LocalTools.origin(origin)
+        LocalEngine.origin(origin)
     artifacts.write(
         "session.json",
         {
@@ -161,6 +166,7 @@ async def run_local(args, *, artifacts=None, prepare=None):
             "agent": args.agent,
             "model": args.model,
             "plan_only": args.plan_only,
+            "cache": args.cache,
             "allow_exec": args.allow_exec,
             "setup_files": args.setup_file,
             "change": change.model_dump(exclude={"diff"}) if change else None,
@@ -172,7 +178,7 @@ async def run_local(args, *, artifacts=None, prepare=None):
     # routed through host adapters, not the provider's native workspace tools.
     agent = ACPDecisionAgent(provider, artifacts.path, model=args.model, timeout=args.agent_timeout)
     browser_session = BrowserSession(headless=args.headless)
-    tools = LocalTools(
+    tools = LocalEngine(
         project,
         artifacts,
         allow_exec=args.allow_exec,
@@ -191,7 +197,7 @@ async def run_local(args, *, artifacts=None, prepare=None):
         except (EOFError, KeyboardInterrupt):
             return None
 
-    verification = Verification(
+    verification = VerificationRunner(
         agent,
         tools,
         artifacts,
@@ -203,6 +209,8 @@ async def run_local(args, *, artifacts=None, prepare=None):
         interactive_login=sys.stdin.isatty(),
         setup_files=args.setup_file,
         max_cases=args.max_cases,
+        replay_cache=ReplayCache(args.cache_dir.resolve(), project) if args.cache != "off" else None,
+        cache_mode=args.cache,
         change=change,
         test_runner=(
             PlaywrightRunner(
@@ -227,7 +235,7 @@ async def run_local(args, *, artifacts=None, prepare=None):
             artifacts.write("cleanup-errors.json", cleanup_errors)
             print("Cleanup needs attention: " + "; ".join(cleanup_errors), file=sys.stderr)
         # Refresh the publication contract after all resources have been closed,
-        # including when the graph saved a partial report before raising.
+        # including when the runner saved a partial report before raising.
         saved = artifacts.path / "report.json"
         final_report = report or (json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else None)
         if final_report is not None:

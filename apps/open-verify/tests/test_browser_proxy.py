@@ -2,6 +2,7 @@ import asyncio
 from urllib.parse import urlsplit
 
 import pytest
+from network_fixtures import external_destination
 
 from open_verify.artifacts import Artifacts
 from open_verify.browser_proxy import BrowserProxy
@@ -10,7 +11,7 @@ from open_verify.tools import LocalTools
 
 @pytest.mark.parametrize("allowed_scheme", [None, "http", "https"])
 @pytest.mark.parametrize("protocol", ["tls", "websocket"])
-def test_connect_checks_destination_and_closes_tunnel(tmp_path, allowed_scheme, protocol):
+def test_connect_checks_destination_and_closes_tunnel(tmp_path, allowed_scheme, protocol, monkeypatch):
     async def run():
         connections = []
         finished = asyncio.Event()
@@ -26,8 +27,9 @@ def test_connect_checks_destination_and_closes_tunnel(tmp_path, allowed_scheme, 
                 await writer.wait_closed()
                 finished.set()
 
-        server = await asyncio.start_server(destination, "127.0.0.2", 0)
-        authority = f"127.0.0.2:{server.sockets[0].getsockname()[1]}"
+        server = await asyncio.start_server(destination, "127.0.0.1", 0)
+        authority = f"127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        external_destination(monkeypatch, f"http://{authority}")
         tools = LocalTools(
             tmp_path,
             Artifacts(tmp_path / "runs"),

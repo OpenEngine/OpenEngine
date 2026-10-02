@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psutil
 import pytest
+from network_fixtures import external_destination
 
 from open_verify.artifacts import Artifacts
 from open_verify.browser_guard import ChildSession
@@ -62,7 +63,7 @@ def site_isolated_browser(monkeypatch):
 
 @pytest.mark.parametrize("trigger", ["navigation", "click", "fetch", "iframe", "nested_iframe"])
 def test_browser_blocks_redirect_before_destination_receives_request(
-    tmp_path, trigger, site_isolated_browser
+    tmp_path, trigger, site_isolated_browser, monkeypatch
 ):
     pytest.importorskip("playwright.async_api")
     received = []
@@ -72,7 +73,8 @@ def test_browser_blocks_redirect_before_destination_receives_request(
             received.append(self.path)
             self.html("Rejected destination")
 
-    with serve(Denied, "127.0.0.2") as denied_url:
+    with serve(Denied) as denied_url:
+        external_destination(monkeypatch, denied_url)
 
         class Allowed(QuietHandler):
             def do_GET(self):
@@ -176,8 +178,10 @@ def test_websocket_origin_checked_before_handshake(
             except OSError:
                 pass
 
-    host = "127.0.0.1" if policy == "localhost" else "127.0.0.2"
+    host = "127.0.0.1"
     with serve(WebSocketServer, host) as websocket_origin:
+        if policy != "localhost":
+            external_destination(monkeypatch, websocket_origin)
         websocket_url = websocket_origin.replace("http:", "ws:") + "/socket"
 
         class Page(QuietHandler):
@@ -353,7 +357,7 @@ def test_http_timeout_bounds_a_response_that_keeps_delivering_bytes(tmp_path):
 
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
-def test_browser_follows_allowed_redirects_without_replaying_requests(tmp_path, status):
+def test_browser_follows_allowed_redirects_without_replaying_requests(tmp_path, status, monkeypatch):
     pytest.importorskip("playwright.async_api")
     requests = []
 
@@ -367,7 +371,8 @@ def test_browser_follows_allowed_redirects_without_replaying_requests(tmp_path, 
             requests.append(("POST", self.path, body))
             self.html("Redirect complete")
 
-    with serve(Destination, "127.0.0.2") as destination:
+    with serve(Destination) as destination:
+        external_destination(monkeypatch, destination)
 
         class Source(QuietHandler):
             def do_GET(self):

@@ -10,13 +10,12 @@ import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from open_verify import __version__
 from open_verify.artifacts import Artifacts
 from open_verify.auth import AssistedLogin, LoginRequest
 from open_verify.browser_session import BrowserSession
 from open_verify.capture import CheckpointCapture
 from open_verify.media import encode_gif
-from open_verify.test_codegen import render_test
+from open_verify.test_export import save_browser_test
 from open_verify.test_spec import BrowserTest, TestResult
 from open_verify.tools import LocalTools
 
@@ -120,33 +119,10 @@ class PlaywrightRunner:
         on_result: Callable[[TestResult], None] | None = None,
     ) -> TestResult:
         self.attempt += 1
-        identity = hashlib.sha256(test.case_id.encode()).hexdigest()[:16]
-        folder = self.artifacts.path / "tests"
-        folder.mkdir(exist_ok=True)
-        path = folder / f"test_{identity}_{self.attempt:03d}.py"
         login_request = (self.authentication.request.model_dump()
                          if test.authenticated and self.authentication and self.authentication.request else None)
-        source = render_test(test, login=login_request)
-        path.write_text(source, encoding="utf-8")
-        path.with_suffix(".json").write_text(test.model_dump_json(indent=2), encoding="utf-8")
-        (folder / "requirements.txt").write_text(
-            f"open-verify[browser]=={__version__}\n", encoding="utf-8"
-        )
-        (folder / "README.md").write_text(
-            "# Generated Playwright tests\n\n"
-            "Use the same Open Verify version (install from its standalone source if unpublished), "
-            "install the browser extra, then run `playwright install chromium`. "
-            "Start the app using ../plan.json and the recorded prerequisites in ../report.md. "
-            "Each test starts with an isolated browser context. Authenticated tests use "
-            "--login for assisted sign-in or a private --auth-state file for replay; other tests start signed out. Prerequisite "
-            "UI steps belong in the test. Use disposable test data. No dependencies are installed automatically.\n\n"
-            "Run the manifest's argv from the bundle root. Set OV_BASE_URL to override the entry "
-            "URL; explicit URL assertions still check their recorded values. The test_change(page) "
-            "function uses ordinary Playwright and can also be adopted into an async test suite. "
-            "The standalone entry point keeps Open Verify's origin guards. "
-            "The browser extra includes a GIF encoder; ffmpeg on PATH takes precedence.\n",
-            encoding="utf-8",
-        )
+        path, source = save_browser_test(test, self.artifacts, attempt=self.attempt, login=login_request)
+        identity = hashlib.sha256(test.case_id.encode()).hexdigest()[:16]
         execution = Artifacts(self.artifacts.path / "executions" / identity)
         tools = LocalTools(
             self.project,

@@ -84,7 +84,7 @@ def write_manifest(
     cleanup_errors=(),
 ) -> Manifest:
     environment = {"python": sys.version.split()[0], "platform": platform.platform()}
-    for package in ("open-verify", "playwright", "langgraph", "langgraph-acp"):
+    for package in ("open-verify", "playwright", "langgraph-acp"):
         try:
             environment[package] = version(package)
         except PackageNotFoundError:

@@ -83,7 +83,7 @@ def execute(tmp_path, decisions, *, allow_exec=True, **options):
     return asyncio.run(run())
 
 
-def test_real_graph_rejects_invented_evidence_then_accepts_actual_output(tmp_path):
+def test_runner_rejects_invented_evidence_then_accepts_actual_output(tmp_path):
     report, agent, artifacts = execute(
         tmp_path,
         [
@@ -240,7 +240,7 @@ def test_provider_error_leaves_a_partial_report(tmp_path):
     assert report["findings"][0]["status"] == "inconclusive"
 
 
-def test_full_acp_subprocess_to_langgraph_to_terminal(tmp_path):
+def test_full_acp_subprocess_to_runner_to_terminal(tmp_path):
     script = tmp_path / "decisions.json"
     script.write_text(
         json.dumps(

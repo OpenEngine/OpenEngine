@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 from typing import Annotated, Literal, Protocol
+from urllib.parse import urlsplit
 
 from pydantic import Field, JsonValue, model_validator
 
-from open_verify.models import Contract
+from open_verify.contracts import Contract
 
 
 class Locator(Contract):
@@ -18,6 +19,14 @@ class Locator(Contract):
         if self.by == "role" and not self.role:
             raise ValueError("Role locators need a role")
         return self
+
+
+class LoginRequest(Contract):
+    url: str
+    status_url: str
+    login: Locator
+    authenticated_field: str = "authenticated"
+    timeout: float = Field(default=300, ge=1, le=600)
 
 
 class Click(Contract):
@@ -71,6 +80,22 @@ class Navigate(Contract):
     path: str = Field(pattern=r"^/([^/\s\\][^\s\\]*)?$")
 
 
+class NavigateURL(Contract):
+    """An absolute destination that must survive redirects of the entry page."""
+
+    kind: Literal["navigate_url"]
+    url: str
+
+    @model_validator(mode="after")
+    def absolute_destination(self):
+        """Keep destinations as HTTP(S) data; runtime origin policy still applies."""
+        parsed = urlsplit(self.url)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None):
+            raise ValueError("Navigation requires an HTTP(S) URL without embedded credentials")
+        return self
+
+
 class ExpectJSON(Contract):
     kind: Literal["expect_json"]
     path: str = Field(pattern=r"^/([^/\s\\][^\s\\]*)?$")
@@ -79,7 +104,14 @@ class ExpectJSON(Contract):
     value: JsonValue
 
 
-Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL | Screenshot | Reload | Navigate | ExpectJSON, Field(discriminator="kind")]
+class ReplayBarrier(Contract):
+    """A replay must stop where live verification or an unrecorded action is required."""
+
+    kind: Literal["requires_verification"]
+    reason: str = Field(min_length=1)
+
+
+Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL | Screenshot | Reload | Navigate | NavigateURL | ExpectJSON | ReplayBarrier, Field(discriminator="kind")]
 
 
 class BrowserTest(Contract):
@@ -95,7 +127,7 @@ class BrowserTest(Contract):
 
     @model_validator(mode="after")
     def assertion_required(self):
-        assertions = (ExpectText, ExpectURL, ExpectJSON)
+        assertions = (ExpectText, ExpectURL, ExpectJSON, ReplayBarrier)
         if not any(isinstance(step, assertions) for step in self.steps):
             raise ValueError("A regression test needs at least one explicit assertion")
         for indexes in self.checks.values():

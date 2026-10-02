@@ -9,13 +9,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
-from pydantic import Field
 
 from open_verify.artifacts import Artifacts
 from open_verify.capture import highlight, remove_highlight
 from open_verify.media import encode_login_gif
-from open_verify.models import Contract
-from open_verify.test_spec import Locator
+from open_verify.test_spec import LoginRequest
 from open_verify.tools import LocalTools, LocatorArgs
 
 GITHUB_ORIGINS = ("https://github.com", "https://github.githubassets.com",
@@ -30,14 +28,6 @@ GOOGLE_LOGIN_ORIGINS = (
     "https://fonts.googleapis.com",
     "https://lh3.googleusercontent.com",
 )
-
-
-class LoginRequest(Contract):
-    url: str
-    status_url: str
-    login: Locator
-    authenticated_field: str = "authenticated"
-    timeout: float = Field(default=300, ge=1, le=600)
 
 
 class AssistedLogin:
