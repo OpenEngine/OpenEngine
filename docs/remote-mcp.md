@@ -29,9 +29,13 @@ Run work on an interval with loops in the configured repository:
 
 - `create_loop(name, prompt, every_minutes=60, max_workorders?, max_daily_spend?,
   active_hours_start?, active_hours_end?)`: calls OE's `POST /api/loops`. The loop
-  prompts an agent every `every_minutes` to create, steer, and resume work orders.
-  Omitted limits and active hours (`HH:MM`) use OE's loop settings. Each call
-  creates a new loop.
+  prompts an agent every `every_minutes` (at least 15) to create, steer, and resume
+  work orders. `max_workorders` and `max_daily_spend` default to OE's loop settings
+  and may not exceed them; a zero spending limit is refused when OE sets one.
+  Omitted active hours (`HH:MM`) use OE's loop settings. Each call creates a new
+  loop. Only static-token gateways offer it: OE saves the loop under the gateway's
+  service credential, so an OIDC caller's loop would keep running after they leave
+  the allowlist. Delete loops in OE's UI.
 - `loop_status(loop_id)`: returns the loop's schedule and limits, whether it is
   `running`, `next_run_at`, the `deferred_until` run ID it waits for,
   `spent_today`, and the `workorders` it created.
@@ -204,7 +208,7 @@ means authentication is not being applied.
 
 An unauthenticated `curl -i https://YOUR-MINI.YOUR-TAILNET.ts.net/mcp` must return
 401. With the bearer header, an MCP client should initialize and list all seven
-tools: `create_workorder`, `workorder_status`, `node_status`, `steer_workorder`,
+tools (six with OIDC, which omits `create_loop`): `create_workorder`, `workorder_status`, `node_status`, `steer_workorder`,
 `node_steer`, `create_loop`, and `loop_status`. A successful creation returns a run ID which appears immediately
 in OE's work-order list. The gateway itself does not serve that list.
 

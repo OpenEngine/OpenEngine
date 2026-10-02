@@ -786,3 +786,69 @@ def test_loop_status_refuses_other_repositories():
         }).json()["result"]
     assert result["isError"]
     assert "Triage" not in str(result)
+
+
+DEFAULTS = {
+    "everyMinutes": 60, "activeHours": {"start": "09:00", "end": "17:00"},
+    "maxWorkOrders": 3, "maxDailySpend": 5.0,
+}
+
+
+@pytest.mark.parametrize("arguments,reaches_oe", [
+    ({"every_minutes": 1}, False),
+    ({"max_workorders": 4}, True),
+    ({"max_daily_spend": 0}, True),
+    ({"max_daily_spend": 5.01}, True),
+])
+def test_create_loop_stays_within_oe_loop_settings(arguments, reaches_oe):
+    requests = []
+
+    def upstream(request):
+        requests.append(request)
+        assert request.method == "GET"
+        return httpx.Response(200, json=DEFAULTS)
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {"name": "create_loop", "arguments": {
+            "name": "Triage", "prompt": "Triage issues", **arguments,
+        }}).json()["result"]
+    assert result["isError"]
+    assert bool(requests) == reaches_oe
+
+
+def test_create_loop_accepts_lower_limits_and_trims_hours():
+    requests = []
+
+    def upstream(request):
+        requests.append(request)
+        return httpx.Response(200, json=DEFAULTS) if request.method == "GET" else httpx.Response(201, json=LOOP)
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        assert not rpc(client, "tools/call", {"name": "create_loop", "arguments": {
+            "name": "Triage", "prompt": "Triage issues", "max_workorders": 1, "max_daily_spend": 2.5,
+            "active_hours_start": " 08:00 ", "active_hours_end": "18:00\n",
+        }}).json()["result"].get("isError")
+    payload = json.loads(requests[1].content)
+    assert payload["activeHours"] == {"start": "08:00", "end": "18:00"}
+    assert (payload["maxWorkOrders"], payload["maxDailySpend"]) == (1, 2.5)
+
+
+@pytest.mark.parametrize("name,arguments,hint", [
+    ("create_loop", {"name": "Triage", "prompt": "Triage issues"}, "Nothing was created; retry create_loop."),
+    ("loop_status", {"loop_id": "loop-1"}, "Retry loop_status."),
+])
+def test_loop_reads_name_the_right_retry(caplog, name, arguments, hint):
+    def upstream(request):
+        raise httpx.ConnectError("down", request=request)
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        assert rpc(client, "tools/call", {"name": name, "arguments": arguments}).json()["result"]["isError"]
+    assert f"OE could not confirm the request. {hint}" in caplog.text
+    assert "workorder_status" not in caplog.text
+
+
+def test_oidc_callers_cannot_create_loops(oidc):
+    settings, transport, token, _, _ = oidc
+    with TestClient(create_app(settings, oidc_transport=transport)) as client:
+        tools = [tool["name"] for tool in oauth_rpc(client, token()).json()["result"]["tools"]]
+    assert "create_loop" not in tools and "loop_status" in tools

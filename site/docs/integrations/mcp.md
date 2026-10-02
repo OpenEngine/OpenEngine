@@ -45,7 +45,8 @@ the command runs.
 If the host uses OAuth, leave off `--header`. Then run `/mcp` inside Claude
 Code: `oe` should show as connected (choose it to sign in when using OAuth)
 with seven tools: `create_workorder`, `workorder_status`, `node_status`,
-`steer_workorder`, `node_steer`, `create_loop` and `loop_status`. See
+`steer_workorder`, `node_steer`, `create_loop` and `loop_status`. OAuth hosts
+leave out `create_loop`. See
 [Claude Code's MCP documentation](https://code.claude.com/docs/en/mcp) for other
 scopes and options.
 
@@ -103,7 +104,7 @@ Ask in plain language; your agent picks the tool:
 | `node_status` | `run_id`, `nodename`, optional `last_n` (1–1000, default 10) | Returns a node's messages, oldest first. Use a `nodeId` from `topology.nodes`. |
 | `steer_workorder` | `run_id`, `instruction`, optional `nodename` or `execution_id` | Sends an instruction to an active task. Omit both selectors when only one task is running; use `execution_id` for parallel tasks at the same node. |
 | `node_steer` | `run_id`, `nodename`, `instruction` | Resets to the latest checkpoint before a previously reached node and resumes with the instruction queued. |
-| `create_loop` | `name`, `prompt`, optional `every_minutes` (default 60), `max_workorders`, `max_daily_spend`, `active_hours_start`, `active_hours_end` | Creates a loop that prompts an agent on that interval to create and steer WorkOrders. Omitted limits use the host's loop settings. |
+| `create_loop` | `name`, `prompt`, optional `every_minutes` (at least 15, default 60), `max_workorders`, `max_daily_spend`, `active_hours_start`, `active_hours_end` | Creates a loop that prompts an agent on that interval to create and steer WorkOrders. Limits default to, and may not exceed, the host's loop settings. Token hosts only. |
 | `loop_status` | `loop_id` | Returns the loop's schedule and limits, `running`, `next_run_at`, `deferred_until`, `spent_today` and the `workorders` it created. |
 
 Prompts and instructions must be non-blank and at most 100,000 characters.
