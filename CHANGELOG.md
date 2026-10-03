@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/OpenEngine/OpenEngine/compare/v1.3.0...v1.4.0) (2026-10-03)
+
+
+### Features
+
+* **mcp:** add tools to create loops and check their status ([#638](https://github.com/OpenEngine/OpenEngine/issues/638)) ([b8d6c53](https://github.com/OpenEngine/OpenEngine/commit/b8d6c535f803a33e650249d6cfac0a1692c42605))
+
+
+### Documentation
+
+* **site:** enable blog and add "AI Skeptic to AI Pilled" post ([#641](https://github.com/OpenEngine/OpenEngine/issues/641)) ([c077bf2](https://github.com/OpenEngine/OpenEngine/commit/c077bf2b7222cfdaf5668aaa2740d48f31e0af04))
+
 ## [1.3.0](https://github.com/OpenEngine/OpenEngine/compare/v1.2.0...v1.3.0) (2026-10-02)
 
 
