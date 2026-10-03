@@ -114,11 +114,18 @@ has been reviewed, then sent together to implementation with progress shown;
 the resulting change is reviewed again. Posting uses `gh` and posts only that
 finding. `--json` prints the findings and leaves the review waiting.
 
-In an interactive terminal, running `engine` opens the workbench. Type `/` to
-search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,
-`/review`, `/settings`, `/web`, or `/quit`. Typing a message starts a new work order and
-streams its progress; Ctrl-C detaches the terminal stream only and never sends
-the service a cancel request.
+In an interactive terminal, running `engine` opens the workbench: work orders
+beside the selected one's graph, a run's nodes beside what they are doing, and
+a node's conversation to steer. Enter goes in, Esc comes back out, and
+`engine --disconnected` starts new work orders without pushing, opening pull
+requests, or posting comments. See
+[From a terminal](docs/graph-workorders.md#from-a-terminal-engine).
+
+`engine palette` opens the line-based palette. Type `/` to search it, then
+choose `/status`, `/threads`, `/new`, `/approvals`, `/settings`, `/web`, or
+`/quit`. Typing a message starts a new work order and streams its progress;
+Ctrl-C detaches the terminal stream only and never sends the service a cancel
+request.
 
 While working on OpenEngine itself, run the development server instead:
 ```bash

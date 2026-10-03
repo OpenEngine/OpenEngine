@@ -236,3 +236,44 @@ and edits the same override. Returning to the workflow's original runner clears
 the override, and retry uses that runner even when the original creation input
 was different. Nodes can implement `_for_runner` to configure models and MCP
 bindings for the resolved runner, including approval recovery.
+
+## From a terminal: `engine`
+
+Running `engine` with no command opens the workbench against the configured
+service (`--server URL` to pick another):
+
+```
+work orders | graph                     highlight a WorkOrder, or "New workorder"
+graph       | in progress + its stream  Enter on a WorkOrder
+orders | graph | conversation           Enter on a node
+```
+
+The graph is a chronologue: every time a node started, in order, grouped under
+its state (Planning, Implementation, Review) and followed by the nodes not yet
+reached. A run that went back to implementation shows it twice, and Enter on
+either opens its conversation. Enter sends, Shift/Option+Enter (Ctrl+Enter on
+Windows) adds a line, and Esc goes back and keeps what you typed. A working
+node can be messaged; implementation can be messaged after it finished, which
+sends the run back to it. `/approve` and `/reject`, with an optional note,
+answer a node that is waiting, including the final human review. Enter on a
+Review header shows what the reviewers found.
+
+The work orders stay on screen as a narrow column when a run or conversation
+is open, and the columns slide between screens. A message sent to a node shows
+as *queued* until the agent takes it up, which it does at once unless it is
+finishing a turn a person answered a permission request in.
+
+The wheel scrolls the pane under the pointer. Dragging selects text inside the
+pane the drag started in, never across into the panes beside it, and copies it
+to the clipboard when you let go (`pbcopy`, `clip` or `wl-copy`/`xclip`
+locally; OSC 52 over SSH). Hold Shift, or Option in iTerm2 and Terminal.app,
+for the terminal's own selection.
+
+## Disconnected mode
+
+The **Mode** input runs a WorkOrder without the forge: nothing is pushed, no
+pull request is opened, CI is skipped, and no comments are posted. The change
+is committed in the run's own checkout and the findings are kept in the run,
+where the WorkOrder page and `engine` show them. `engine --disconnected`
+defaults new WorkOrders to it, and so does a service with no source control
+connected.
