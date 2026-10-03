@@ -27,3 +27,4 @@ playwright-report/
 # Server-local secrets
 .env
 .env.*
+/engine.local.toml

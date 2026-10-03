@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import layout
 from layout import imported_modules, is_first_party, is_stdlib
 
 
@@ -22,6 +23,39 @@ def _write(tmp_path: Path, rel: str, source: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(source))
     return path
+
+
+def test_discovery_respects_workspace_members_and_exclusions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "pyproject.toml").write_text('''
+        [tool.uv.workspace]
+        members = ["apps/*", "apps/web", "packages/*", "packages/adapters/*/*"]
+        exclude = ["apps/standalone-*", "packages/engine", "packages/adapters"]
+    ''')
+    for rel, name in [
+        ("apps/web", "engine-web"),
+        ("packages/domain", "engine-domain"),
+        ("packages/adapters/state_store/memory", "engine-adapter-state-store-memory"),
+        ("separate-project", "not-a-member"),
+    ]:
+        root = tmp_path / rel
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
+    for rel in ["apps/standalone-qa", "packages/engine", "packages/adapters"]:
+        root = tmp_path / rel
+        root.mkdir(parents=True, exist_ok=True)
+        # Excluded projects must not be parsed or assigned an Engine layer.
+        (root / "pyproject.toml").write_text("not valid TOML")
+    monkeypatch.setattr(layout, "REPO_ROOT", tmp_path)
+
+    packages = layout.discover_packages()
+
+    assert [(p.root.relative_to(tmp_path).as_posix(), p.layer) for p in packages] == [
+        ("apps/web", layout.APP),
+        ("packages/adapters/state_store/memory", layout.ADAPTER),
+        ("packages/domain", layout.DOMAIN),
+    ]
 
 
 def test_absolute_imports_are_collected(tmp_path: Path) -> None:

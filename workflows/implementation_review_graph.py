@@ -49,6 +49,7 @@ from engine.graph_runtime_langgraph.components import (
     REVIEW_FACETS,
     HumanReviewNode,
     NameNode,
+    OpenVerify,
     RerankerNode,
     ReviewNode,
     TriageNode,
@@ -95,6 +96,7 @@ REVIEW = "review"
 RERANKER = "reranker"
 IMPACT_ANALYSIS = "impact-analysis"
 HUMAN_REVIEW = "human-review"
+VERIFICATION = "verification"
 TRIAGE = "triage"
 
 #: Where the findings a person chose at triage are kept for implementation.
@@ -404,12 +406,12 @@ def pipeline(
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
+    verification: OpenVerify | None = None,
 ) -> StateGraph:
     """Use declared stage inputs, defaulting to `runner` and the other provider.
 
-    The three keyword arguments are the only things a deployment or a test has
-    business replacing: where the checkouts are made, which agents answer, and
-    what session settings (attribution, output style) the adapter should apply.
+    Deployments can replace checkout provisioning, agents and session settings,
+    and opt into Open Verify by supplying its installed CLI and evidence uploader.
     """
     builder: StateGraph = StateGraph(State)
     builder.add_node(
@@ -613,7 +615,12 @@ def pipeline(
         RERANKER, _after_reranker, [IMPLEMENTATION, IMPACT_ANALYSIS, TRIAGE],
     )
     builder.add_conditional_edges(TRIAGE, _after_triage, [IMPLEMENTATION, END])
-    builder.add_edge(IMPACT_ANALYSIS, HUMAN_REVIEW)
+    if verification is not None:
+        builder.add_node(VERIFICATION, verification)
+        builder.add_edge(IMPACT_ANALYSIS, VERIFICATION)
+        builder.add_edge(VERIFICATION, HUMAN_REVIEW)
+    else:
+        builder.add_edge(IMPACT_ANALYSIS, HUMAN_REVIEW)
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
 
@@ -636,6 +643,7 @@ def graph_for(
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
     session_config: Mapping[str, object] | None = None,
+    verification: OpenVerify | None = None,
 ) -> GraphWorkflow:
     """Build the workflow with the requested initial implementation runner."""
     return graph_workflow(
@@ -644,6 +652,7 @@ def graph_for(
             workspace_provider=workspace_provider,
             agents=agents,
             session_config=session_config,
+            verification=verification,
         ),
         id="implementation-review-rerank",
         name="Implementation review rerank",

@@ -261,7 +261,9 @@ class LaunchdBackend(Backend):
             result = _run(["launchctl", "bootstrap", self._domain(), str(launch_agent_path())])
             if result.returncode != 0 and not self.running():
                 raise RuntimeError(f"launchctl bootstrap failed: {result.stderr.strip() or result.returncode}")
-        _run(["launchctl", "kickstart", f"{self._domain()}/{LABEL}"])
+        result = _run(["launchctl", "kickstart", f"{self._domain()}/{LABEL}"])
+        if result.returncode != 0:
+            raise RuntimeError(f"launchctl kickstart failed: {result.stderr.strip() or result.returncode}")
 
     def uninstall(self) -> None:
         self.stop()
@@ -627,7 +629,10 @@ def command_setup(arguments: argparse.Namespace) -> int:
     result = command_open(arguments)
     if result != EXIT_OK:
         # Leave nothing restarting in the background after a failed setup.
-        backend.stop()
+        try:
+            backend.stop()
+        except (OSError, RuntimeError) as error:
+            _fail(error)
     return result
 
 
