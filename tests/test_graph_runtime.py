@@ -1927,6 +1927,7 @@ def test_polling_projects_display_values_and_full_state_is_explicit(build: Backe
         "internal": {"transcript": "large transcript" * 1000},
         "result": {"pr_url": "https://example.test/pull/1", "raw": "large output" * 1000},
         "implementation": {"summary": "Implemented", "tests": ["passed"]},
+        "inputs": {"mode": "disconnected", "brief": "large brief" * 1000},
     }
 
     async def scenario():
@@ -1943,6 +1944,7 @@ def test_polling_projects_display_values_and_full_state_is_explicit(build: Backe
         "workspaceId": "workspace-1",
         "result": {"pr_url": "https://example.test/pull/1"},
         "implementation": values["implementation"],
+        "inputs": {"mode": "disconnected"},
     }
     assert full["values"] == values
     assert poll["pendingApprovals"] == full["pendingApprovals"]

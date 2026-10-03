@@ -1082,6 +1082,7 @@ select:disabled { cursor: default; }
 .decision-actions { display: flex; gap: 12px; }
 
 .timeline { display: grid; gap: 0; padding: 30px var(--gutter) 56px; }
+.workorder-workspace { margin: 0 var(--gutter) 40px; border-top: 1px solid var(--rule); }
 .step-group { margin: 0 0 22px 40px; }
 .step-group-summary {
   display: flex;

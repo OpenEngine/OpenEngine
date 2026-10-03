@@ -27,6 +27,7 @@ import {
   linkable,
   useRunGithubComments,
 } from "./github-activity";
+import { WorkspaceControl } from "./workspace";
 
 export const IN_PROGRESS_PHASES = new Set([
   "pending",
@@ -856,6 +857,10 @@ function graphPullRequestUrl(graph: ApiGraphRun | undefined): string | null {
   return null;
 }
 
+/** Where the page's workspace control is, so the disconnected callout can
+ *  point at it. */
+const WORKSPACE_ANCHOR = "workspace";
+
 export function RunDetailPage({ runId }: { runId: string }) {
   // Read here rather than inside the panel so the strip's link and the panel
   // it scrolls to are two views of one answer: the link is only offered when
@@ -927,6 +932,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
     };
   }, [runId]);
   const prUrl = useMemo(() => graphPullRequestUrl(graph), [graph]);
+  const hasWorkspace = typeof graph?.values.workspaceId === "string";
+  const inputs = graph?.values.inputs;
+  const disconnected = inputs != null && typeof inputs === "object"
+    && (inputs as Record<string, unknown>)[MODE_INPUT] === "disconnected";
   const shownRun = useMemo<RunView | undefined>(() => {
     if (!baseRun) return undefined;
     const empty: RunView = {
@@ -1088,6 +1097,26 @@ export function RunDetailPage({ runId }: { runId: string }) {
               )}
             </section>
           )}
+          {/* Nothing of a disconnected run leaves its checkout, so the only
+              way to see the agent's work is to take that checkout over. */}
+          {disconnected && (
+            <section className="callout">
+              <p className="eyebrow">Disconnected</p>
+              <p>
+                This WorkOrder pushes nothing and opens no pull request; its work
+                stays in its own checkout.{" "}
+                {hasWorkspace ? (
+                  <>
+                    To check it out locally, use the{" "}
+                    <a href={`#${WORKSPACE_ANCHOR}`}>detach command ↓</a> at the
+                    bottom of this page.
+                  </>
+                ) : (
+                  "Once its workspace is ready, the command to check it out locally appears at the bottom of this page."
+                )}
+              </p>
+            </section>
+          )}
           {run.pendingHumanReview && graph?.pendingApprovals[0] && (
             <section className="callout callout-action">
               <p className="eyebrow">Action required</p>
@@ -1133,6 +1162,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
               ),
             )}
           </section>
+          {hasWorkspace && (
+            <section id={WORKSPACE_ANCHOR} className="dock-foot workorder-workspace" aria-label="Workspace">
+              <WorkspaceControl runId={runId} />
+            </section>
+          )}
         </>
       )}
     </main>
