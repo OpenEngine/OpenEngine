@@ -133,6 +133,35 @@ def test_a_github_app_is_still_recognised_by_its_user_type() -> None:
     assert comment_from_payload("issue_comment", payload, self_login="") is None
 
 
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+@pytest.mark.parametrize(
+    ("body", "self_login", "accepted"),
+    [
+        ("@someone-else please take a look", "OpenEngine-worker", False),
+        ("Please ask @someone-else", "OpenEngine-worker", False),
+        ("@alice, @bob: please take a look", "OpenEngine-worker", False),
+        ("@openengine-worker-extra please take a look", "OpenEngine-worker", False),
+        ("please fix it", "OpenEngine-worker", True),
+        ("@OPENENGINE-WORKER please fix it", "OpenEngine-worker", True),
+        ("@alice, please help @openengine-worker", "OpenEngine-worker", True),
+        ("@openengine-worker please help @alice", "OpenEngine-worker", True),
+        ("Contact alice@example.com", "OpenEngine-worker", True),
+        ("@engine[bot] please fix it", "engine[bot]", True),
+        ("@other[bot] please fix it", "engine[bot]", False),
+        ("@engine please fix it", "engine[bot]", False),
+        ("@someone-else please take a look", "", True),
+    ],
+)
+def test_comments_directed_at_other_accounts_are_ignored(event, body, self_login, accepted) -> None:
+    payload = _issue_comment(body=body)
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
+    comment = comment_from_payload(event, payload, self_login=self_login)
+    assert (comment is not None) is accepted
+    if accepted:
+        assert comment.body == body
+
+
 def test_a_merged_pull_request_is_read() -> None:
     merged = merge_from_payload("pull_request", _merged_pull_request())
     assert merged is not None
