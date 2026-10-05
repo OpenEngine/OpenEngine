@@ -34,7 +34,9 @@ Secrets are excluded from the spec's repr and override host and per-command
 environment values. Workspace copies are disposable; use `copy_out` to retain
 results. Copy paths and command working directories are workspace-relative and
 cannot resolve outside it. Files and directories can be copied; directory copies
-merge into their destination.
+merge into their destination. Recursive copies preserve source symlinks and reject
+existing destination symlinks instead of following them. Completed commands stop
+remaining descendants in their process group before releasing cleanup tracking.
 
 ```toml
 [sandbox]

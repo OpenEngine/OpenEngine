@@ -5,7 +5,7 @@ Images and egress restrictions are rejected rather than silently ignored.
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
@@ -24,6 +24,23 @@ def _kill(process: asyncio.subprocess.Process) -> None:
             process.kill()
     except ProcessLookupError:
         pass
+
+
+async def _filesystem_work(function: Callable[..., None], *args: object) -> None:
+    # Cancelling to_thread does not stop its worker. Keep ownership until the
+    # worker finishes, even if teardown or repeated cancellation arrives.
+    worker = asyncio.create_task(asyncio.to_thread(function, *args))
+    cancelled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled = True
+    try:
+        worker.result()
+    finally:
+        if cancelled:
+            raise asyncio.CancelledError
 
 
 class ProcessExecution:
@@ -58,7 +75,7 @@ class ProcessSandboxInstance:
     def __init__(self, root: Path, spec: SandboxSpec):
         self._root = root
         self._spec = spec
-        self._executions: list[ProcessExecution] = []
+        self._executions: set[ProcessExecution] = set()
         self._destroyed = False
         self._spawn_lock = asyncio.Lock()
         self._cleanup: asyncio.Task[None] | None = None
@@ -89,17 +106,32 @@ class ProcessSandboxInstance:
                 # Track a process even if cancellation arrives during creation,
                 # so context teardown cannot miss it.
                 process = await spawning
-                self._executions.append(ProcessExecution(process, self._spec.timeout))
+                self._track(process)
                 raise
-            execution = ProcessExecution(process, self._spec.timeout)
-            self._executions.append(execution)
-            return execution
+            return self._track(process)
+
+    def _track(self, process: asyncio.subprocess.Process) -> ProcessExecution:
+        execution = ProcessExecution(process, self._spec.timeout)
+        self._executions.add(execution)
+
+        def retire(_: asyncio.Task[int]) -> None:
+            # wait() completes after pipe closure. Descendants that closed their
+            # pipes still belong to us: stop them before forgetting the group.
+            _kill(process)
+            if execution._timer is not None:
+                execution._timer.cancel()
+            self._executions.discard(execution)
+
+        execution._waiter.add_done_callback(retire)
+        return execution
 
     async def copy_in(self, source: Path, destination: str) -> None:
-        _copy(Path(source), self._path(destination))
+        async with self._spawn_lock:
+            await _filesystem_work(_copy, Path(source), self._path(destination))
 
     async def copy_out(self, source: str, destination: Path) -> None:
-        _copy(self._path(source), Path(destination))
+        async with self._spawn_lock:
+            await _filesystem_work(_copy, self._path(source), Path(destination))
 
     async def destroy(self) -> None:
         if self._cleanup is None:
@@ -116,26 +148,37 @@ class ProcessSandboxInstance:
             await self._stop_processes()
 
     async def _stop_processes(self) -> None:
-        for execution in self._executions:
+        executions = tuple(self._executions)
+        for execution in executions:
             if execution._timer is not None:
                 execution._timer.cancel()
             _kill(execution.process)
         # Drain unread pipes so even commands blocked on output can be reaped.
         try:
             await asyncio.gather(*(
-                execution.process.communicate() for execution in self._executions
+                execution.process.communicate() for execution in executions
             ), return_exceptions=True)
-            await asyncio.gather(*(execution._waiter for execution in self._executions))
+            await asyncio.gather(*(execution._waiter for execution in executions))
         finally:
-            shutil.rmtree(self._root)
+            await _filesystem_work(shutil.rmtree, self._root)
 
 
 def _copy(source: Path, destination: Path) -> None:
+    # Never follow an existing destination link, including dangling links.
+    if destination.is_symlink():
+        raise ValueError("copy destination must not be a symlink")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if source.is_dir():
-        shutil.copytree(source, destination, dirs_exist_ok=True)
+    if source.is_symlink():
+        destination.symlink_to(source.readlink(), target_is_directory=source.is_dir())
+    elif source.is_dir():
+        destination.mkdir(exist_ok=True)
+        for child in source.iterdir():
+            _copy(child, destination / child.name)
+        shutil.copystat(source, destination)
+    elif destination.is_dir():
+        _copy(source, destination / source.name)
     else:
-        shutil.copy2(source, destination)
+        shutil.copy2(source, destination, follow_symlinks=False)
 
 
 class ProcessSandbox:
@@ -147,7 +190,7 @@ class ProcessSandbox:
         sandbox = ProcessSandboxInstance(root, spec)
         try:
             if spec.workspace is not None:
-                shutil.copytree(spec.workspace, root, dirs_exist_ok=True)
+                await sandbox.copy_in(spec.workspace, ".")
             yield sandbox
         finally:
             await sandbox.destroy()
