@@ -530,7 +530,7 @@ def test_doctor_probes_node(home, monkeypatch, capsys, recorded, healable):
         daemon.write_record(daemon.Record('process', spec))
     monkeypatch.setattr(daemon, 'engine_web_executable', lambda: Path(spec.program))
     monkeypatch.setattr(daemon, '_port_finding', lambda _port: daemon.Finding('port', 'ok', 'free'))
-    monkeypatch.setattr(daemon.shutil, 'which', lambda name: f'/shims/{name}')
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name, **_kwargs: f'/shims/{name}' if name != 'claude' else None)
     monkeypatch.setattr(daemon, '_node_version', lambda node: (26, 10, 0) if node == '/real/bin/node' else None)
     monkeypatch.setattr(daemon, '_node_installs', lambda: [daemon.NodeInstall(Path('/real/bin'), None)] if healable else [])
     assert cli.main(['daemon', 'doctor', '--json']) == (0 if healable else 1)
