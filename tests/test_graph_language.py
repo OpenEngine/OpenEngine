@@ -183,3 +183,72 @@ def test_the_sketch_compiles_to_langgraph(tmp_path) -> None:
     edges = {(edge.source, edge.target) for edge in drawn.edges}
     assert {("__start__", "workspace"), ("workspace", "spec"), ("ci_check", "reviewers-bugs"),
             ("reranker", "implementer"), ("reranker", "__end__")} <= edges
+
+
+@pytest.mark.parametrize(("field", "value", "path"), [
+    ("inputs", [], "inputs"),
+    ("inputs", {"tone": "bad"}, "inputs.tone"),
+    ("inputs", {"bad-name": {}}, "inputs.bad-name"),
+    ("inputs", {"tone": {"required": "yes"}}, "inputs.tone.required"),
+    ("inputs", {"tone": {"default": []}}, "inputs.tone.default"),
+    ("inputs", {"tone": {"choices": "plain"}}, "inputs.tone.choices"),
+    ("inputs", {"tone": {"default": "x", "choices": ["y"]}}, "inputs.tone.default"),
+    ("loop", "hourly", "loop"),
+    ("loop", {"instruction": [1]}, "loop.instruction"),
+    ("flow", {}, "flow"),
+    ("flow", ["not an edge"], "flow[0]"),
+    ("flow", [42], "flow[0]"),
+    ("flow", [{"to": "end"}], "flow[0].from"),
+    ("flow", [{"from": "work"}], "flow[0]"),
+    ("flow", [{"from": "start", "route": []}], "flow[0].from"),
+    ("flow", [{"from": "work", "route": []}], "flow[0].route"),
+    ("flow", [{"from": "work", "route": [42]}], "flow[0].route[0]"),
+    ("flow", [{"from": "work", "route": [{"when": 42, "to": "end"}]}], "flow[0].route[0].when"),
+    ("flow", [{"from": "work", "route": [{"when": "true", "to": "end"}]}], "flow[0].route"),
+    ("flow", [{"from": "work", "route": [{"to": "end"}, {"to": "end"}]}], "flow[0].route"),
+])
+def test_invalid_graph_fields_report_their_location(field, value, path):
+    raw = {
+        "apiVersion": "openengine.dev/v1", "name": "validation",
+        "implementation": {"work": {"agent": "claude", "prompt": "go"}},
+        field: value,
+    }
+    with pytest.raises(GraphError) as raised:
+        parse_graph(raw)
+    assert path in {problem.path for problem in raised.value.problems}
+
+
+@pytest.mark.parametrize(("fields", "path"), [
+    ({"agent": None}, "agent"),
+    ({"agent": {}}, "agent"),
+    ({"agent": {"same": "missing"}}, "agent.same"),
+    ({"agent": "${outputs.work}"}, "agent"),
+    ({"agent": "${inputs.missing}"}, "agent"),
+    ({"prompt": ""}, "prompt"),
+    ({"tools": "shell"}, "tools"),
+    ({"tools": ["unknown"]}, "tools[0]"),
+    ({"model": 12}, "model"),
+    ({"steering": "sometimes"}, "steering"),
+    ({"outputs": []}, "outputs"),
+    ({"outputs": {"bad-name": {}}}, "outputs.bad-name"),
+    ({"outputs": {"result": "string"}}, "outputs.result"),
+    ({"outputs": {"result": {"enum": 42}}}, "outputs.result.enum"),
+    ({"outputs": {"result": {"type": "unknown"}}}, "outputs.result.type"),
+    ({"outputs": {"result": {"type": "number", "enum": ["x"]}}}, "outputs.result.enum"),
+    ({"outputs": {"result": {"lineage": True}}}, "outputs.result.lineage"),
+    ({"outputs": {"result": {"required": "yes"}}}, "outputs.result.required"),
+    ({"facets": {}}, "facets"),
+    ({"facets": ["security"]}, "facets[0]"),
+    ({"facets": [{"facet": {}}]}, "facets[0].facet"),
+    ({"facets": [{"facet": 42}]}, "facets[0].facet"),
+    ({"facets": [{"facet": {"id": "bad id", "name": "name", "focus": "focus"}}]}, "facets[0].facet.id"),
+    ({"facets": [{"facet": "security"}, {"facet": "security"}]}, "facets"),
+])
+def test_invalid_agent_settings_report_their_location(fields, path):
+    raw = {
+        "apiVersion": "openengine.dev/v1", "name": "validation",
+        "implementation": {"work": {"agent": "claude", "prompt": "go", **fields}},
+    }
+    with pytest.raises(GraphError) as raised:
+        parse_graph(raw)
+    assert f"implementation.work.{path}" in {problem.path for problem in raised.value.problems}
