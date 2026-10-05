@@ -14,6 +14,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -90,7 +91,8 @@ export const test = base.extend<{
 }>({
   seededDatabase: [false, { option: true }],
   engine: async ({ seededDatabase }, use, testInfo) => {
-    const root = mkdtempSync(path.join(tmpdir(), "engine-e2e-"));
+    // Match the API's resolved repository paths (macOS aliases /var to /private/var).
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "engine-e2e-")));
     const state = path.join(root, "state");
     mkdirSync(state);
     const { repository, origin } = fixtureRepository(root);
