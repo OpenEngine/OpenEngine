@@ -32,9 +32,17 @@ from engine.domain.ids import (
     RunId,
     SessionGrantId,
     TaskId,
+    WorkOrderId,
     WorkspaceId,
 )
 from engine.domain.state import RunState
+from engine.domain.scoping import (
+    LoopQueueItem,
+    PersistedScopingPlan,
+    ScopingPlan,
+    TicketApproval,
+    resolve_scoping_plan,
+)
 
 
 class InMemoryStateStore:
@@ -47,6 +55,7 @@ class InMemoryStateStore:
     """
 
     def __init__(self) -> None:
+        self._scoping_plans: dict[str, PersistedScopingPlan] = {}
         self._lock = Lock()
         self._states: dict[RunId, RunState] = {}
         self._instances: dict[AgentInstanceId, AgentInstance] = {}
@@ -56,7 +65,38 @@ class InMemoryStateStore:
         self._session_grants: dict[SessionGrantId, SessionGrant] = {}
         self._message_numbers = count(1)
 
-    # --- runs ------------------------------------------------------------
+    # --- scoped tickets --------------------------------------------------
+
+    async def save_scoping_plan(
+        self, loop_id: str, plan: ScopingPlan
+    ) -> PersistedScopingPlan:
+        """Persist one proposal atomically, resolving all local references."""
+        ids = tuple(WorkOrderId(uuid4().hex) for _ in (
+            *plan.create, *(s for item in plan.supersede for s in item.replacements)
+        ))
+        stored = resolve_scoping_plan(uuid4().hex, loop_id, plan, ids)
+        with self._lock:
+            self._scoping_plans[stored.plan_id] = stored
+        return stored
+
+    async def load_scoping_plan(self, plan_id: str) -> PersistedScopingPlan | None:
+        with self._lock:
+            return self._scoping_plans.get(plan_id)
+
+    async def set_ticket_approval(
+        self, plan_id: str, ticket_id: WorkOrderId, approval: TicketApproval
+    ) -> PersistedScopingPlan:
+        """Update approval; the queue projection immediately reflects it."""
+        with self._lock:
+            stored = self._scoping_plans[plan_id].with_approval(ticket_id, approval)
+            self._scoping_plans[plan_id] = stored
+            return stored
+
+    async def list_loop_queue(self, loop_id: str) -> Sequence[LoopQueueItem]:
+        """Approved tickets in proposal order, retaining dependency ids."""
+        with self._lock:
+            return tuple(item for plan in self._scoping_plans.values()
+                         if plan.loop_id == loop_id for item in plan.queue_items())
 
     async def load(self, run_id: RunId) -> RunState | None:
         with self._lock:

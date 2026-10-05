@@ -19,6 +19,7 @@ from engine.domain import (
     WorkOrderId,
     WorkOrderSpec,
 )
+from engine.domain.scoping import TicketApproval, TicketLayer, TicketSourceRef
 from langgraph_acp import ACPNode, ACPResult
 from langgraph_acp.agent import ACPAgentRegistry
 from langgraph_acp.providers import CodexACPProvider
@@ -31,7 +32,14 @@ do not recreate work they already cover. Return only one JSON object with these 
 create (work-order specs), cancel (work-order ids), supersede (objects containing a
 workorder_id and replacement specs), and reasons (strings). A work-order spec has
 milestone_id, name, objective, evidence_requirements, and dependencies. Every list
-may be empty. Do not wrap the JSON in Markdown.
+may be empty. Specs may also include key (unique within this plan), layer
+(contracts, data, api, frontend), estimated_changed_lines (nonnegative integer),
+acceptance_criteria (strings), dependency_keys (plan-local keys), parent_key
+(a plan-local key; subtasks are derived), and source_ref ({kind, ref}, with kind
+one of github_milestone, github_issue, jira_epic, jira_issue). The dependencies field names
+existing durable work-order ids; dependency_keys names tickets in this proposal,
+including supersession replacements. All proposals require caller approval.
+Do not wrap the JSON in Markdown.
 
 Inputs:
 """
@@ -74,6 +82,15 @@ def _spec(value: object) -> WorkOrderSpec:
             "scoper response spec identifiers and descriptions must be strings"
         )
     return WorkOrderSpec(
+        key=value.get("key", ""),
+        layer=TicketLayer(value["layer"]) if value.get("layer") is not None else None,
+        estimated_changed_lines=value.get("estimated_changed_lines"),
+        acceptance_criteria=_strings(value.get("acceptance_criteria", []),
+                                     field="acceptance_criteria"),
+        dependency_keys=_strings(value.get("dependency_keys", []), field="dependency_keys"),
+        parent_key=value.get("parent_key"),
+        approval=TicketApproval.PROPOSED,
+        source_ref=TicketSourceRef(**value["source_ref"]) if value.get("source_ref") else None,
         milestone_id=MilestoneId(milestone_id),
         name=name,
         objective=objective,
