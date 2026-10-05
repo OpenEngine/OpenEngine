@@ -278,6 +278,70 @@ def test_strict_decision_contract():
     assert parse_decision('```json\n{"kind":"finish"}\n```').kind == "finish"
 
 
+def test_decision_envelope_ignores_acp_transport_notice():
+    response = """Warning: Model metadata is only available with a ChatGPT account.
+<open-verify-response>
+{"kind":"finish"}
+</open-verify-response>"""
+
+    assert parse_decision(response).kind == "finish"
+
+
+def test_decision_contract_does_not_guess_json_after_prose():
+    response = (
+        'Warning: Model metadata is only available with a ChatGPT account.\n{"kind":"finish"}'
+    )
+
+    with pytest.raises(ValueError):
+        parse_decision(response)
+
+
+def test_decision_contract_rejects_multiple_envelopes():
+    response = """<open-verify-response>{"kind":"finish"}</open-verify-response>
+<open-verify-response>{"kind":"finish"}</open-verify-response>"""
+
+    with pytest.raises(ValueError):
+        parse_decision(response)
+
+
+def test_acp_agent_keeps_transport_notice_outside_decision(tmp_path):
+    from types import SimpleNamespace
+
+    from langgraph_acp import ACPEventType
+
+    class Session:
+        async def prompt(self, prompt):
+            assert "<open-verify-response>" in prompt
+            yield SimpleNamespace(
+                type=ACPEventType.MESSAGE_DELTA,
+                data={
+                    "content": {
+                        "type": "text",
+                        "text": "Warning: Model metadata is unavailable.\n",
+                    }
+                },
+            )
+            yield SimpleNamespace(
+                type=ACPEventType.MESSAGE_DELTA,
+                data={
+                    "content": {
+                        "type": "text",
+                        "text": '<open-verify-response>{"kind":"finish"}</open-verify-response>',
+                    }
+                },
+            )
+            yield SimpleNamespace(
+                type=ACPEventType.PROMPT_COMPLETED, data={"stopReason": "end_turn"}
+            )
+
+    agent = ACPDecisionAgent(None, tmp_path)
+    agent.client = object()
+    agent.session = Session()
+
+    assert asyncio.run(agent.decide("finish the plan")).kind == "finish"
+    assert agent.protocol_notices == ["Warning: Model metadata is unavailable."]
+
+
 def test_failure_exit_code():
     assert exit_code({"status": "complete", "findings": [{"status": "failed"}]}) == 1
 
@@ -420,7 +484,8 @@ def test_long_case_rotates_session_with_current_context(tmp_path):
         async def close(self):
             self.closed = True
         async def prompt(self, prompt):
-            assert prompt == 'current bounded task and observations'
+            assert prompt.startswith('current bounded task and observations\n\n')
+            assert prompt.endswith('</open-verify-response>')
             yield SimpleNamespace(type=ACPEventType.MESSAGE_DELTA,
                 data={'content': {'type': 'text', 'text': '{"kind":"finish"}'}})
             yield SimpleNamespace(type=ACPEventType.PROMPT_COMPLETED, data={'stopReason': 'end_turn'})
@@ -435,3 +500,60 @@ def test_long_case_rotates_session_with_current_context(tmp_path):
     assert asyncio.run(agent.decide('current bounded task and observations')).kind == 'finish'
     assert agent.session is not old
     assert agent.session_chars < MAX_SESSION_CHARS
+
+
+@pytest.mark.parametrize(
+    "override,installed,expected",
+    [
+        ("/explicit/codex", "/installed/codex", {"CODEX_PATH": "/explicit/codex"}),
+        (None, "/installed/codex", {"CODEX_PATH": "/installed/codex"}),
+        (None, None, None),
+    ],
+)
+def test_codex_provider_selects_cli(monkeypatch, override, installed, expected):
+    if override is None:
+        monkeypatch.delenv("CODEX_PATH", raising=False)
+    else:
+        monkeypatch.setenv("CODEX_PATH", override)
+    monkeypatch.setattr("open_verify.agent.shutil.which", lambda _: installed)
+    assert provider_for("codex").env == expected
+
+
+@pytest.mark.parametrize("notice", ["", "Warning: Model metadata not found.\n\n"])
+def test_provider_rejection_is_not_retried_as_invalid_decision(tmp_path, notice):
+    from types import SimpleNamespace
+
+    from langgraph_acp import ACPEventType
+
+    class Session:
+        calls = 0
+
+        async def prompt(self, prompt):
+            self.calls += 1
+            yield SimpleNamespace(
+                type=ACPEventType.MESSAGE_DELTA,
+                data={"content": {"type": "text", "text": notice + json.dumps({
+                    "type": "error", "status": 400,
+                    "error": {"type": "invalid_request_error", "message":
+                        "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."},
+                })}},
+            )
+            yield SimpleNamespace(
+                type=ACPEventType.PROMPT_COMPLETED, data={"stopReason": "end_turn"}
+            )
+
+    agent = ACPDecisionAgent(None, tmp_path)
+    agent.client = object()
+    agent.session = Session()
+    with pytest.raises(RuntimeError, match="ACP provider failed:.*gpt-6.1-sol"):
+        asyncio.run(agent.decide("finish"))
+    assert agent.session.calls == 1
+
+
+def test_provider_error_text_in_a_decision_remains_decision_data():
+    from open_verify.agent import provider_failure
+
+    message = '<open-verify-response>{"kind":"finish"}</open-verify-response>'
+    assert provider_failure(message) is None
+    assert provider_failure('{"kind":"finish"}') is None
+    assert provider_failure('{"type":"error","error":"invalid field"}') is None

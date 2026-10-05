@@ -88,7 +88,7 @@ is reported as the blocker. If tool access is denied or missing, report the affe
 blocked. Never invent evidence.
 Procedural guidance suggests useful next actions; adapt it to observations. Finish when all cases
 are assessed or no further progress is possible. A discovered defect is a useful testing result.
-Return exactly one JSON object matching the decision schema, with no surrounding commentary.
+The agent transport adds the exact response envelope required for every decision.
 """
 
 CHANGE_INSTRUCTIONS = """

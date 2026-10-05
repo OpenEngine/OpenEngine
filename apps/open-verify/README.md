@@ -409,6 +409,11 @@ a blocker.
 Useful options:
 
 - `--model ID`: select a model supported by the chosen provider.
+  Without it, Codex inherits its local configuration, including `~/.codex/config.toml`.
+  Open Verify uses `CODEX_PATH` when set, otherwise the installed `codex` on `PATH`,
+  falling back to the ACP adapter's bundled CLI when neither is available. This
+  keeps model support aligned with the local CLI. Provider errors stop the run
+  immediately and are reported separately from decision-schema errors.
 - `--agent NAME --agent-command '["executable", "--acp"]'`: another ACP provider.
 - `--plan-only`: discovery and a plan; no QA command, HTTP or browser actions.
 - `--allow-exec`: authorize agent-selected commands and background services. Commands
@@ -460,6 +465,13 @@ Open Verify uses a deterministic Python runner with replaceable executors and
 application engines. ACP supplies the model conversation; no LangGraph runtime is
 needed inside the CLI. OpenEngine may still invoke the CLI from its outer
 LangGraph workflow through the existing manifest contract.
+
+Codex and Claude both reach the runner through ACP, whose message stream is
+plain text rather than a provider-native structured-output API. Every decision
+prompt therefore requires one `<open-verify-response>` envelope containing a
+single JSON object. Provider notices outside that envelope are retained as
+bounded diagnostics and never become a decision; undelimited prose plus JSON
+is rejected and repaired once.
 
 ```text
 User request / diff
