@@ -16,6 +16,7 @@ import getpass
 import json
 import os
 import plistlib
+import re
 import shutil
 import signal
 import shlex
@@ -126,8 +127,80 @@ def engine_web_executable() -> Path:
     return Path(found).absolute()
 
 
-def detect_tools() -> dict[str, str]:
+NODE_MINIMUM = (20, 19, 0)
+NODE_HELP = "install Node 20.19+ or set a global default in your version manager"
+
+
+def _node_version(node: str) -> tuple[int, int, int] | None:
+    """Probe outside the invoking project, where an unconfigured shim fails."""
+    try:
+        result = subprocess.run(
+            [node, "--version"], cwd=Path.home(), capture_output=True,
+            text=True, check=False, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", result.stdout.strip())
+    if result.returncode != 0 or match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def _node_installs() -> list[Path]:
+    """Real installations, newest first across version managers."""
+    home = Path.home()
+    data = _xdg("XDG_DATA_HOME", ".local/share")
+    roots = [
+        (Path(os.environ.get("MISE_DATA_DIR", data / "mise")) / "installs/node", "*/bin"),
+        (Path(os.environ.get("ASDF_DATA_DIR", home / ".asdf")) / "installs/nodejs", "*/bin"),
+        (Path(os.environ.get("NVM_DIR", home / ".nvm")) / "versions/node", "*/bin"),
+        (home / ".nodenv/versions", "*/bin"),
+        (home / ".volta/tools/image/node", "*/bin"),
+        (data / "fnm/node-versions", "*/installation/bin"),
+        (home / "Library/Application Support/fnm/node-versions", "*/installation/bin"),
+    ]
+    candidates = []
+    for root, pattern in roots:
+        for directory in root.glob(pattern):
+            release = directory.relative_to(root).parts[0]
+            if (root / release).is_symlink() or not re.fullmatch(r"v?\d+\.\d+\.\d+", release):
+                continue
+            candidates.append(directory)
+    candidates.extend(Path(path) for path in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"))
+    working = []
+    for directory in candidates:
+        if (directory / "npx").is_file():
+            version = _node_version(str(directory / "node"))
+            if version is not None and version >= NODE_MINIMUM:
+                working.append((version, directory))
+    return [directory for _, directory in sorted(working, reverse=True)]
+
+
+def _check_node(tools: dict[str, str]) -> tuple[dict[str, str], str | None]:
+    node = tools.get("node")
+    version = _node_version(node) if node else None
+    if version is not None and version >= NODE_MINIMUM:
+        return tools, None
+    if version is not None:
+        problem = f"{node} is Node {'.'.join(map(str, version))}; requires Node 20.19+"
+    else:
+        problem = f"{node} cannot run outside a project" if node else "node not found"
+    for directory in _node_installs():
+        return {**tools, "node": str(directory / "node"), "npx": str(directory / "npx")}, problem
+    return tools, problem
+
+
+def _path_tools() -> dict[str, str]:
     return {name: str(Path(found).absolute()) for name in TOOLS if (found := shutil.which(name))}
+
+
+def detect_tools() -> dict[str, str]:
+    found = _path_tools()
+    tools, problem = _check_node(found)
+    if problem:
+        detail = f"using {tools['node']}" if tools != found else NODE_HELP
+        print(f"engine daemon: {problem}; {detail}", file=sys.stderr)
+    return tools
 
 
 @dataclass(frozen=True)
@@ -146,7 +219,10 @@ class ServiceSpec:
 
     def environment(self) -> dict[str, str]:
         directories: list[str] = []
-        for tool in self.tools.values():
+        for name in ("node", "npx", *(name for name in self.tools if name not in {"node", "npx"})):
+            tool = self.tools.get(name)
+            if tool is None:
+                continue
             directory = str(Path(tool).parent)
             if directory not in directories:
                 directories.append(directory)
@@ -558,6 +634,15 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
         if state == "foreign":
             raise RuntimeError(f"another program is using {spec.url}; free port {spec.port} or change [server] port in {spec.config}")
         if state == "down":
+            tools, problem = _check_node(spec.tools)
+            if tools != spec.tools:
+                spec = replace(spec, tools=tools)
+                backend.stop()
+                backend.install(spec)
+                write_record(Record(backend.name, spec))
+                print(f"engine daemon: {problem}; using {tools['node']}", file=sys.stderr)
+            elif problem:
+                print(f"engine daemon: warning: {problem}; {NODE_HELP}", file=sys.stderr)
             rotate_log(Path(spec.log))
             backend.start(spec)
         state, body = wait_for(spec.url, {"ready", "foreign"}, START_TIMEOUT_SECONDS, backend)
@@ -783,10 +868,17 @@ def diagnose() -> list[Finding]:
         findings.append(Finding("engine-web", "error", str(error)))
     record = read_record()
     recorded = record.spec.tools if record else {}
-    found = detect_tools()
+    found = _path_tools()
+    checked = recorded if record else found
+    healed, problem = _check_node(checked)
     for name in TOOLS:
         path = recorded.get(name) or found.get(name)
-        if path:
+        if name == "node" and problem:
+            if healed != checked:
+                findings.append(Finding(name, "warn", f"{problem}; engine daemon start will use {healed['node']}"))
+            else:
+                findings.append(Finding(name, "error", f"{problem}; {NODE_HELP}"))
+        elif path:
             note = "" if record is None or name in recorded else " (on PATH, but not recorded; rerun engine daemon setup)"
             findings.append(Finding(name, "ok", path + note))
         elif name in REQUIRED_TOOLS:

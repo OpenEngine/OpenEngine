@@ -22,6 +22,8 @@ def home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
+    monkeypatch.setattr(daemon, "_node_version", lambda _node: (24, 21, 0))
+    monkeypatch.setattr(daemon, "_node_installs", lambda: [])
     return tmp_path
 
 
@@ -42,7 +44,7 @@ def test_service_environment_uses_recorded_tools_and_loopback(tmp_path: Path):
     assert environment["ENGINE_CONFIG"] == str(tmp_path / "config" / "openengine" / "engine.toml")
     assert environment["ENGINE_HOST"] == "127.0.0.1"
     assert environment["USER"] == environment["LOGNAME"] == daemon.getpass.getuser()
-    assert environment["PATH"].split(":")[:2] == ["/usr/bin", "/opt/node/bin"]
+    assert environment["PATH"].split(":")[:2] == ["/opt/node/bin", "/usr/bin"]
     assert "/usr/local/bin" in environment["PATH"].split(":")
 
 
@@ -415,3 +417,117 @@ def test_doctor_claude_auth_failure_is_a_warning(home, monkeypatch, error):
 
     monkeypatch.setattr(daemon.subprocess, "run", run)
     assert daemon._claude_login_finding(spec).level == "warn"
+
+
+@pytest.mark.parametrize('version', [(24, 21, 0), None, (20, 18, 0)])
+def test_detect_node(home, monkeypatch, capsys, version):
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name: f'/shims/{name}')
+    monkeypatch.setattr(daemon, '_node_version', lambda _node: version)
+    monkeypatch.setattr(daemon, '_node_installs', lambda: [Path('/real/bin')] if version is None else [])
+    tools = daemon.detect_tools()
+    directory = '/real/bin' if version is None else '/shims'
+    assert tools['node'] == directory + '/node'
+    assert tools['npx'] == directory + '/npx'
+    output = capsys.readouterr().err
+    if version == (24, 21, 0):
+        assert not output
+    elif version:
+        assert '20.18.0' in output and daemon.NODE_HELP in output
+    else:
+        assert 'cannot run outside a project; using /real/bin/node' in output
+
+
+def test_node_installs_across_managers(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    for variable, directory in [('XDG_DATA_HOME', 'data'), ('MISE_DATA_DIR', 'mise'),
+                                ('ASDF_DATA_DIR', 'asdf'), ('NVM_DIR', 'nvm')]:
+        monkeypatch.setenv(variable, str(tmp_path / directory))
+    paths = ['mise/installs/node/26.1.0/bin', 'asdf/installs/nodejs/24.1.0/bin',
+             'nvm/versions/node/v22.1.0/bin', '.nodenv/versions/23.1.0/bin',
+             '.volta/tools/image/node/21.1.0/bin', 'data/fnm/node-versions/v25.1.0/installation/bin',
+             'Library/Application Support/fnm/node-versions/v20.19.0/installation/bin',
+             'mise/installs/node/28.1.0/bin', 'mise/installs/node/20.18.0/bin',
+             'mise/installs/node/27.1.0/bin']
+    versions = {}
+    for path in paths:
+        directory = tmp_path / path
+        directory.mkdir(parents=True)
+        (directory / 'node').touch()
+        if '27.1.0' not in path:
+            (directory / 'npx').touch()
+        release = directory.parent.name if directory.parent.name != 'installation' else directory.parent.parent.name
+        versions[str(directory / 'node')] = None if release == '28.1.0' else tuple(map(int, release.lstrip('v').split('.')))
+    root = tmp_path / 'mise/installs/node'
+    for alias in ('latest', '26', '29.0.0'):
+        (root / alias).symlink_to(root / '26.1.0', target_is_directory=True)
+    monkeypatch.setattr(daemon, '_node_version', lambda node: versions.get(node))
+    installs = daemon._node_installs()
+    assert installs == [tmp_path / paths[i] for i in (0, 5, 1, 3, 2, 4, 6)]
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name: f'/shims/{name}')
+    assert daemon.detect_tools()['node'] == str(installs[0] / 'node')
+
+
+@pytest.mark.parametrize('healable', [True, False])
+def test_start_heals_recorded_node(home, monkeypatch, capsys, healable):
+    spec = _spec(home, tools={'git': '/shims/git', 'node': '/shims/node', 'npx': '/shims/npx'})
+    daemon.prepare_directories()
+    daemon.write_record(daemon.Record('process', spec))
+    monkeypatch.setattr(daemon, '_node_version', lambda _node: None)
+    monkeypatch.setattr(daemon, '_node_installs', lambda: [Path('/real/bin')] if healable else [])
+    monkeypatch.setattr(daemon, 'health', lambda _url: ('down', None))
+    monkeypatch.setattr(daemon, 'wait_for', lambda *_args: ('ready', {}))
+    events = []
+    monkeypatch.setattr(daemon.ProcessBackend, 'stop', lambda _self: events.append('stop'))
+    monkeypatch.setattr(daemon.ProcessBackend, 'install', lambda _self, spec: events.append(('install', spec)))
+    monkeypatch.setattr(daemon.ProcessBackend, 'start', lambda _self, spec: events.append(('start', spec)))
+    assert cli.main(['daemon', 'start']) == 0
+    recorded = daemon.read_record().spec
+    if healable:
+        assert events == ['stop', ('install', recorded), ('start', recorded)]
+        assert recorded.tools['node'] == '/real/bin/node'
+        assert recorded.tools['npx'] == '/real/bin/npx'
+        assert recorded.environment()['PATH'].split(':')[0] == '/real/bin'
+        assert 'using /real/bin/node' in capsys.readouterr().err
+    else:
+        assert recorded == spec
+        assert events == [('start', spec)]
+        assert daemon.NODE_HELP in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('recorded', [True, False])
+@pytest.mark.parametrize('healable', [True, False])
+def test_doctor_probes_node(home, monkeypatch, capsys, recorded, healable):
+    spec = _spec(home)
+    Path(spec.config).parent.mkdir(parents=True)
+    Path(spec.config).write_text('[server]\nport = 4364\n')
+    if recorded:
+        daemon.prepare_directories()
+        daemon.write_record(daemon.Record('process', spec))
+    monkeypatch.setattr(daemon, 'engine_web_executable', lambda: Path(spec.program))
+    monkeypatch.setattr(daemon, '_port_finding', lambda _port: daemon.Finding('port', 'ok', 'free'))
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name: f'/shims/{name}')
+    monkeypatch.setattr(daemon, '_node_version', lambda _node: None)
+    monkeypatch.setattr(daemon, '_node_installs', lambda: [Path('/real/bin')] if healable else [])
+    assert cli.main(['daemon', 'doctor', '--json']) == (0 if healable else 1)
+    nodes = [check for check in json.loads(capsys.readouterr().out)['checks'] if check['name'] == 'node']
+    assert len(nodes) == 1
+    assert nodes[0]['level'] == ('warn' if healable else 'error')
+    assert ('engine daemon start will use /real/bin/node' if healable else daemon.NODE_HELP) in nodes[0]['detail']
+
+
+@pytest.mark.parametrize('result', ['v20.19.0', 'invalid', 'failure', 'timeout', 'missing'])
+def test_node_probe_uses_home_and_timeout(tmp_path, monkeypatch, result):
+    monkeypatch.setenv('HOME', str(tmp_path))
+
+    def run(command, **kwargs):
+        assert command == ['/shims/node', '--version']
+        assert kwargs['cwd'] == tmp_path
+        assert kwargs['timeout'] == 5
+        if result == 'timeout':
+            raise subprocess.TimeoutExpired(command, 5)
+        if result == 'missing':
+            raise FileNotFoundError()
+        return subprocess.CompletedProcess(command, int(result == 'failure'), result, '')
+
+    monkeypatch.setattr(daemon.subprocess, 'run', run)
+    assert daemon._node_version('/shims/node') == ((20, 19, 0) if result == 'v20.19.0' else None)
