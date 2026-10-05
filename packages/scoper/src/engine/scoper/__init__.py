@@ -81,6 +81,13 @@ def _spec(value: object) -> WorkOrderSpec:
         raise ValueError(
             "scoper response spec identifiers and descriptions must be strings"
         )
+    source_ref = value.get("source_ref")
+    if source_ref is not None and (
+        not isinstance(source_ref, Mapping) or set(source_ref) != {"kind", "ref"}
+    ):
+        raise ValueError(
+            "scoper response source_ref must be an object with exactly kind and ref"
+        )
     return WorkOrderSpec(
         key=value.get("key", ""),
         layer=TicketLayer(value["layer"]) if value.get("layer") is not None else None,
@@ -90,7 +97,7 @@ def _spec(value: object) -> WorkOrderSpec:
         dependency_keys=_strings(value.get("dependency_keys", []), field="dependency_keys"),
         parent_key=value.get("parent_key"),
         approval=TicketApproval.PROPOSED,
-        source_ref=TicketSourceRef(**value["source_ref"]) if value.get("source_ref") else None,
+        source_ref=TicketSourceRef(**source_ref) if source_ref is not None else None,
         milestone_id=MilestoneId(milestone_id),
         name=name,
         objective=objective,

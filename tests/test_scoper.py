@@ -20,7 +20,34 @@ from engine.domain import (
     WorkOrderSpec,
     WorkOrderStatus,
 )
-from engine.scoper import Scoper, scope
+from engine.scoper import Scoper, _plan, scope
+
+
+@pytest.mark.parametrize("supersede", [False, True])
+@pytest.mark.parametrize("source_ref", [
+    "jira_issue", ["kind", "ref"], 1, True, "", [], 0, False, {},
+    {"kind": "jira_issue"}, {"ref": "TEAM-12"},
+    {"kind": "jira_issue", "ref": "TEAM-12", "extra": "unexpected"},
+])
+def test_scoper_rejects_malformed_source_refs(source_ref, supersede) -> None:
+    ticket = {
+        "milestone_id": "m", "name": "API", "objective": "Ship API",
+        "source_ref": source_ref,
+    }
+    response = (
+        {"supersede": [{"workorder_id": "old", "replacements": [ticket]}]}
+        if supersede else {"create": [ticket]}
+    )
+    with pytest.raises(ValueError, match="source_ref"):
+        _plan(json.dumps(response))
+
+
+@pytest.mark.parametrize("fields", [{}, {"source_ref": None}])
+def test_scoper_allows_absent_source_ref(fields) -> None:
+    plan = _plan(json.dumps({"create": [{
+        "milestone_id": "m", "name": "API", "objective": "Ship API", **fields,
+    }]}))
+    assert plan.create[0].source_ref is None
 
 
 def test_scoping_plan_can_describe_all_supported_changes() -> None:
