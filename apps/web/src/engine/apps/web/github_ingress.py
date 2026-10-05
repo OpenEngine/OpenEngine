@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
@@ -43,6 +44,9 @@ MERGE_EVENT = "pull_request"
 #: Initial affiliation filter. These labels do not prove write access; the
 #: concierge checks effective repository permissions before steering a run.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+# Avoid reading email addresses as mentions; include GitHub App bot logins.
+_MENTION = re.compile(r"(?<![\w@])@([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:\[bot\])?)(?![\w-])")
 
 #: The most a delivery may weigh. The route is reachable without a session, so
 #: a body is buffered before anything about it is trusted: without a ceiling,
@@ -243,6 +247,12 @@ def verify_signature(webhook_secret: str, signature: str, body: bytes) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def mentions_other_accounts(body: str, self_login: str) -> bool:
+    """Whether a comment addresses other accounts without also addressing Engine."""
+    mentions = {match.lower() for match in _MENTION.findall(body)}
+    return bool(self_login and mentions and self_login.lower() not in mentions)
+
+
 def comment_from_payload(
     event: str, payload: Mapping[str, object], *, self_login: str = ""
 ) -> GithubComment | None:
@@ -256,6 +266,9 @@ def comment_from_payload(
     personal access token belonging to a machine user is not: such an account is
     an ordinary ``User`` and typically a collaborator, so it would pass every
     other check here and Engine would answer itself forever.
+
+    Comments mentioning other accounts are ignored unless they also mention
+    ``self_login``. Without a configured login, this filter is not applied.
     """
     if event not in COMMENT_EVENTS or payload.get("action") != "created":
         return None
@@ -288,13 +301,16 @@ def comment_from_payload(
         return None
     if not isinstance(comment_id, (int, str)) or isinstance(comment_id, bool) or comment_id == "":
         return None
+    body = str(comment.get("body") or "")
+    if mentions_other_accounts(body, self_login):
+        return None
     in_reply_to = comment.get("in_reply_to_id")
     return GithubComment(
         comment_id=str(comment_id),
         repository=full_name,
         number=number,
         author=author,
-        body=str(comment.get("body") or ""),
+        body=body,
         url=str(comment.get("html_url") or ""),
         event=event,
         is_pull_request=(
