@@ -545,7 +545,7 @@ def test_a_retried_delivery_does_not_forward_the_same_comment_twice(tmp_path, fa
             "Forwarded to work order `existing`.")
         assert source_control.add_comment.await_count == (2 if failure == "reply" else 1)
         contents = [call.args[2] for call in source_control.add_reaction.await_args_list]
-        assert contents == ["-1", "+1"]
+        assert contents == ["eyes", "eyes"]
     assert not communications.posts
 
 
@@ -628,7 +628,7 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
         assert not provider.clients
         source.add_comment.assert_not_awaited()
         source.add_reaction.assert_awaited_once_with(
-            "https://github.com/acme/api/pull/7", 1, "-1", review_comment=False)
+            "https://github.com/acme/api/pull/7", 1, "eyes", review_comment=False)
     assert not communications.posts
 
 
@@ -1690,7 +1690,7 @@ def test_issue_progress_survives_a_failed_pull_request_lookup(tmp_path, monkeypa
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
 @pytest.mark.parametrize("outcome", ["started", "forwarded", "not_forwarded", "undelivered", "error"])
-def test_mentioned_comment_reaction_follows_host_outcome(tmp_path, event, outcome):
+def test_mentioned_comment_acknowledged_and_unacted_outcome_logged(tmp_path, event, outcome, caplog):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -1719,9 +1719,15 @@ def test_mentioned_comment_reaction_follows_host_outcome(tmp_path, event, outcom
         client.portal.call(app.state.github_ingress.drain)
         source.add_reaction.assert_awaited_once_with(
             "https://github.com/acme/api/pull/7", 42,
-            "+1" if outcome in ("started", "forwarded") else "-1",
+            "eyes",
             review_comment=event == "pull_request_review_comment",
         )
+        if outcome in ("not_forwarded", "undelivered"):
+            assert "Engine did not act on GitHub mention 42" in caplog.text
+        elif outcome == "error":
+            assert "GitHub mention 42 failed" in caplog.text
+        else:
+            assert "Engine did not act on GitHub mention" not in caplog.text
         if outcome != "error":
             source.add_comment.assert_awaited_once()
             client.post("/api/github/events", content=body, headers=headers)
@@ -1744,7 +1750,7 @@ def test_failed_reaction_does_not_fail_turn_or_suppress_reply(tmp_path, caplog):
             await concierge.close()
     asyncio.run(run())
     reply.assert_awaited_once_with(request.origin, NOT_FORWARDED)
-    react.assert_awaited_once_with(request, "-1")
+    react.assert_awaited_once_with(request, "eyes")
     assert "Could not react to GitHub comment 42" in caplog.text
 
 
@@ -1780,4 +1786,27 @@ def test_reactions_respect_disconnected_mode(tmp_path, monkeypatch, disconnected
         source.add_reaction.assert_not_awaited()
     else:
         source.add_reaction.assert_awaited_once_with(
-            "https://github.com/acme/api/pull/7", 42, "-1", review_comment=False)
+            "https://github.com/acme/api/pull/7", 42, "eyes", review_comment=False)
+
+
+def test_mention_is_acknowledged_before_concierge_turn():
+    from engine.github_concierge import FeedbackRequest, GithubConcierge
+
+    react = AsyncMock()
+    request = FeedbackRequest(
+        RunOrigin(channel="github:acme/api", thread_id="7", author="person"),
+        "@Engine please help", comment_id="42", allow_start=True,
+    )
+    concierge = GithubConcierge(
+        provider=FakeACPProvider(), continue_workorder=AsyncMock(),
+        reply=AsyncMock(), react=react,
+    )
+
+    async def turn(state):
+        react.assert_awaited_once_with(request, "eyes")
+        assert state["request"] == request
+
+    concierge.graph = MagicMock(ainvoke=AsyncMock(side_effect=turn))
+    asyncio.run(concierge.handle(request))
+    concierge.graph.ainvoke.assert_awaited_once()
+    react.assert_awaited_once_with(request, "eyes")

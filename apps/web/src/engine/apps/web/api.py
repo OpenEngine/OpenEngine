@@ -3820,6 +3820,8 @@ def create_app(
                     rf"(?<![\w@-])@{re.escape(login)}(?![\w-])", comment.body, re.IGNORECASE,
                 ):
                     return
+                log.error("Engine refused GitHub mention %s in %s",
+                          comment.comment_id, comment.repository)
                 thread = str(comment.number)
                 if comment.event == "pull_request_review_comment":
                     thread += f"/review/{comment.in_reply_to_id or comment.comment_id}"
@@ -3827,7 +3829,7 @@ def create_app(
                     origin=RunOrigin(channel=f"github:{found.project}", thread_id=thread,
                                      author=comment.author),
                     text=comment.body, comment_id=comment.comment_id, allow_start=True,
-                ), "-1")
+                ), "eyes")
         except Exception:
             log.exception("Could not react to refused GitHub comment %s", comment.comment_id)
 
