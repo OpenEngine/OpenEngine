@@ -230,10 +230,7 @@ def _check_node(tools: dict[str, str]) -> NodeCheck:
         problem = f"{node} is Node {'.'.join(map(str, version))}; requires Node 20.19+"
     else:
         problem = f"{node} cannot run outside a project" if node else "node not found"
-    installs = _node_installs()
-    # Stable partition: newest first within the preferred manager and fallback group.
-    installs.sort(key=lambda item: not (manager is not None and item.manager == manager))
-    for install in installs:
+    for install in _node_installs():
         directory = install.directory
         candidate_version = _node_version(str(directory / "node"))
         if candidate_version is None or candidate_version < NODE_MINIMUM:

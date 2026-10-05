@@ -657,9 +657,9 @@ def test_node_diagnostics_reuse_verified_version(home, monkeypatch, capsys, oper
     assert "mise use -g node@26.10.0" in detail
 
 
-@pytest.mark.parametrize("own_install", [True, False])
+@pytest.mark.parametrize("other_version", [(26, 10, 0), (22, 0, 0), None])
 @pytest.mark.parametrize("manager", ["mise", "asdf"])
-def test_healing_prefers_shim_manager_and_uses_provenance(home, monkeypatch, manager, own_install):
+def test_healing_uses_newest_working_install_and_provenance(home, monkeypatch, manager, other_version):
     for variable, directory in (("XDG_DATA_HOME", "data"), ("MISE_DATA_DIR", "mise"),
                                 ("ASDF_DATA_DIR", "asdf"), ("NVM_DIR", "nvm")):
         monkeypatch.setenv(variable, str(home / directory))
@@ -668,24 +668,27 @@ def test_healing_prefers_shim_manager_and_uses_provenance(home, monkeypatch, man
     monkeypatch.setenv("NVM_DIR", str(home / "old-manager"))
     shim = str(manager_home / "shims/node")
     own = manager_home / ("installs/node" if manager == "mise" else "installs/nodejs") / "24.21.0/bin"
-    other = home / "old-manager/versions/node/v26.10.0/bin"
-    for directory in ([own, other] if own_install else [other]):
+    release = "22.0.0" if other_version == (22, 0, 0) else "26.10.0"
+    other = home / f"old-manager/versions/node/v{release}/bin"
+    for directory in (own, other):
         directory.mkdir(parents=True)
         (directory / "npx").touch()
     probes = []
     def probe(node):
         probes.append(node)
-        return {str(own / "node"): (24, 21, 0), str(other / "node"): (26, 10, 0)}.get(node)
+        return {str(own / "node"): (24, 21, 0), str(other / "node"): other_version}.get(node)
     monkeypatch.setattr(daemon, "_node_version", probe)
     # Restore the real scanner, normally stubbed by the home fixture.
     monkeypatch.setattr(daemon, "_node_installs", REAL_NODE_INSTALLS)
     check = daemon._check_node({"node": shim, "npx": str(manager_home / "shims/npx")})
-    chosen = own if own_install else other
+    own_selected = other_version != (26, 10, 0)
+    chosen = own if own_selected else other
     assert check.tools["node"] == str(chosen / "node")
-    assert check.install_manager == (manager if own_install else "nvm")
+    assert check.install_manager == (manager if own_selected else "nvm")
     notice = daemon._healing_notice(check)
-    assert probes == [shim, str(chosen / "node")]
-    if own_install:
+    expected = [shim, str(other / "node"), str(own / "node")] if other_version is None else [shim, str(chosen / "node")]
+    assert probes == expected
+    if own_selected:
         command = "mise use -g node@24.21.0" if manager == "mise" else "asdf set -u nodejs 24.21.0"
         assert command in notice
     else:
