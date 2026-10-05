@@ -247,6 +247,12 @@ def verify_signature(webhook_secret: str, signature: str, body: bytes) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def mentions_other_accounts(body: str, self_login: str) -> bool:
+    """Whether a comment addresses other accounts without also addressing Engine."""
+    mentions = {match.lower() for match in _MENTION.findall(body)}
+    return bool(self_login and mentions and self_login.lower() not in mentions)
+
+
 def comment_from_payload(
     event: str, payload: Mapping[str, object], *, self_login: str = ""
 ) -> GithubComment | None:
@@ -296,10 +302,8 @@ def comment_from_payload(
     if not isinstance(comment_id, (int, str)) or isinstance(comment_id, bool) or comment_id == "":
         return None
     body = str(comment.get("body") or "")
-    if self_login:
-        mentions = {match.lower() for match in _MENTION.findall(body)}
-        if mentions and self_login.lower() not in mentions:
-            return None
+    if mentions_other_accounts(body, self_login):
+        return None
     in_reply_to = comment.get("in_reply_to_id")
     return GithubComment(
         comment_id=str(comment_id),
@@ -482,10 +486,7 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
         self_login = ""
         if (
-            (
-                _asks_for_self_login(event, payload)
-                or (event in COMMENT_EVENTS and payload.get("action") == "created")
-            )
+            _asks_for_self_login(event, payload)
             and self._authenticated_login is not None
             and self._repository
         ):

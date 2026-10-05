@@ -508,44 +508,6 @@ def _client(secret: str = WEBHOOK_SECRET, handle=None, repository: str = "acme/a
     return TestClient(app), ingress
 
 
-@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-@pytest.mark.parametrize("body, expected", [
-    ("@someone-else please check this", 0),
-    ("@OpenEngineBot please check this", 1),
-    ("@someone-else @OpenEngineBot please check this", 1),
-    ("please check this", 1),
-])
-def test_comment_webhook_resolves_login_and_filters_mentions(event, body, expected):
-    from unittest.mock import AsyncMock
-    from starlette.applications import Starlette
-    from starlette.routing import Route
-    from starlette.testclient import TestClient
-
-    handled = []
-    lookup = AsyncMock(return_value="openenginebot")
-    ingress = GithubIngress(
-        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
-        authenticated_login=lookup, handle=_record(handled),
-    )
-    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
-    payload = _issue_comment(body=body)
-    if event == "pull_request_review_comment":
-        payload["pull_request"] = payload.pop("issue")
-    encoded = json.dumps(payload).encode()
-    with TestClient(app) as client:
-        response = client.post(
-            "/events", content=encoded,
-            headers=dict(_signed(encoded), **{"x-github-event": event}),
-        )
-        client.portal.call(ingress.drain)
-        client.portal.call(ingress.close)
-    assert response.status_code == 200
-    assert len(handled) == expected
-    if expected:
-        assert handled[0].body == body
-    lookup.assert_awaited_once_with("acme/api")
-
-
 def test_an_unsigned_delivery_is_refused() -> None:
     client, ingress = _client()
     body = json.dumps(_issue_comment()).encode()

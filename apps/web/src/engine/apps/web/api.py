@@ -67,7 +67,7 @@ from engine.apps.web.github_communications import (
 )
 from engine.apps.web.github_ingress import (
     GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReviewRequest,
-    github_co_author, github_requester,
+    github_co_author, github_requester, mentions_other_accounts,
 )
 from engine.apps.web.github_login import STREAM_ACCESS, GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -3821,6 +3821,9 @@ def create_app(
                 # GitHub logins are case-insensitive, so the comparison is too.
                 github_activity.ignored("posted by Engine itself")
                 return
+        if mentions_other_accounts(comment.body, login):
+            github_activity.ignored("addressed to another account")
+            return
         # Whether the author can write to the repository was asked by the
         # ingress before this was called; see `github_sender_may_act`.
         mentioned = bool(login and re.search(
