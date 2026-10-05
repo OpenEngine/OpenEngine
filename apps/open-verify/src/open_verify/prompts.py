@@ -151,6 +151,16 @@ image input support. A viewport cannot establish facts about unseen page regions
 End every journey with an assert. Keep assertions separate from actions; the actor's
 claim of success is not verification. Each act has a fresh conversation; each semantic
 assert has a separate evidence-only judge. Preserve every requested completion check.
+When a journey needs provisioned test data, declare journey.readiness as assertion
+steps that prove the required records are visible through the running app's API or
+UI before the journey begins. Use exact checks where possible. A successful seed
+command or database write does not establish readiness. Prefer supported app APIs
+or existing fixture helpers. If direct seeding is necessary, inspect all application
+indexes, ownership and state stores required for visibility, not just runtime state.
+The host checks readiness before acting. On SETUP_NOT_READY, inspect app logs via
+process_output and API/UI evidence, diagnose the discrepancy and correct setup before
+calling run_journey again. Do not blindly rerun unchanged setup. At most two repair
+opportunities are available; keep the original readiness and journey checks fixed.
 After planning, finish application setup using host tools, then call run_journey with
 only case_id. The host executes the fixed steps and records the case verdict. Do not
 replace a structured journey with run_browser_test or a model-written finding.

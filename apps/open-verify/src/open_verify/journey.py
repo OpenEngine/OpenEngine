@@ -82,6 +82,37 @@ class JourneyRunner:
         self.attempt = 0
         self.replay_cache, self.cache_mode = replay_cache, cache_mode
 
+    async def check_readiness(self, case):
+        """Check setup through a fresh app session without executing journey actions."""
+        results, engine = [], None
+        status, detail = "passed", "Setup readiness confirmed"
+        cache = ReplaySession(None, "off", case, self.engine, self.artifacts, self.progress)
+        try:
+            async with asyncio.timeout(30):
+                engine = await self.engine.open_journey(url=case.journey.url,
+                    authenticated=case.journey.authenticated, authentication=self.authentication)
+                await self.observe(engine, "browser_open", {"url": case.journey.url})
+            for index, check in enumerate(case.journey.readiness):
+                self.progress(f"  Setup readiness: {check.instruction}")
+                result = await self.run_step(engine, check, index, [], [], {},
+                                             case.journey.url, cache)
+                results.append(result.model_dump())
+                if result.status != "passed":
+                    status, detail = "blocked", result.detail
+                    break
+        except Exception as exc:
+            status, detail = "blocked", f"{type(exc).__name__}: {exc}"
+        finally:
+            if engine is not None:
+                try:
+                    async with asyncio.timeout(15):
+                        errors = await engine.close()
+                    if errors:
+                        status, detail = "blocked", "Readiness cleanup failed: " + "; ".join(errors)
+                except Exception as exc:
+                    status, detail = "blocked", f"Readiness cleanup failed: {exc}"
+        return {"case_id": case.id, "status": status, "detail": detail, "checks": results}
+
     async def run(self, case, *, capture_media=False, on_result=None):
         """Own the case context, preserve partial evidence and never rerun to obtain media."""
         self.attempt += 1
@@ -301,15 +332,16 @@ class JourneyRunner:
             }), on_call=budget.model_call)
             decision = ActDecision.model_validate(response.model_dump())
             if decision.kind == "complete":
-                if decision.status == "failed":
+                if decision.outcome == "blocked":
                     return "blocked", "Action could not complete: " + decision.summary
-                if cache.mode != "off" and decision.status == "passed" and cache.eligible:
+                if cache.mode != "off" and cache.eligible:
                     final = screen_hash((await self.observe(engine))["result"])
                     if initial is not None and final is not None:
                         cache.pending[index] = RecordedStep(index=index, initial=initial, final=final, actions=recorded)
                     else:
                         cache.exclude(index, "Incomplete screen observation")
-                return decision.status, decision.summary
+                # Completion advances to the fixed assertions; it is not a case verdict.
+                return "passed", decision.summary
             budget.action()
             action = decision.action
             signature = json.dumps([action.tool, action.arguments], sort_keys=True)

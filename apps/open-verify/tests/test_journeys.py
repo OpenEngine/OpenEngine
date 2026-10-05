@@ -33,7 +33,7 @@ def case(url, *, text="Cart: 1", semantic=False, act_options=None):
 
 
 def complete():
-    return ActDecision(kind="complete", status="passed", summary="The item was added")
+    return ActDecision(kind="complete", outcome="done", summary="The item was added")
 
 
 class Actor:
@@ -370,3 +370,141 @@ def test_journey_media_and_interruption_checkpoint(tmp_path, web_app, monkeypatc
     assert snapshots[-1].status == 'passed'
     assert 'GIF omitted: encoding was interrupted.' in snapshots[-1].omissions
     assert not any('has not completed' in s for s in snapshots[-1].omissions)
+
+
+@pytest.mark.parametrize("status", ["passed", "failed", "blocked"])
+def test_actor_cannot_submit_a_verdict(status):
+    with pytest.raises(ValueError):
+        ActDecision.model_validate({
+            "kind": "complete", "status": status, "summary": "Actor claims a verdict"
+        })
+
+
+def test_actor_done_cannot_overrule_independent_judge(tmp_path):
+    artifacts = Artifacts(tmp_path / "runs")
+    actor = Actor([complete()], verdict="fails")
+    result = asyncio.run(JourneyRunner(FakeEngine(artifacts), artifacts, actor,
+        progress=lambda _: None).run(case("http://localhost", semantic=True)))
+    assert result.status == "failed"
+    steps = read_steps(artifacts)
+    assert [step["status"] for step in steps] == ["passed", "failed"]
+    assert len(actor.judgments) == 1
+
+
+def test_actor_blocked_never_becomes_a_product_failure(tmp_path):
+    artifacts = Artifacts(tmp_path / "runs")
+    actor = Actor([ActDecision(kind="complete", outcome="blocked", summary="Cannot click")])
+    result = asyncio.run(JourneyRunner(FakeEngine(artifacts), artifacts, actor,
+        progress=lambda _: None).run(case("http://localhost", semantic=True)))
+    assert result.status == "blocked"
+    assert not actor.judgments
+    assert read_steps(artifacts)[1]["code"] == "NOT_RUN"
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_readiness_checks_observable_app_state_without_actor_actions(tmp_path, ready):
+    artifacts = Artifacts(tmp_path / "runs")
+
+    class ReadinessEngine(FakeEngine):
+        async def assert_check(self, check):
+            return self.artifacts.record("assert_check", {}, {
+                "status": "passed" if ready else "failed",
+                "detail": "Fixture visible" if ready else "Fixture missing from app",
+            }, ready)
+
+    from open_verify.journey_spec import AssertStep
+
+    target = case("http://localhost")
+    target.journey.readiness = [AssertStep(kind="assert", instruction="Fixture visible",
+        check={"kind": "expect_text", "text": "Disposable WorkOrder"})]
+    engine = ReadinessEngine(artifacts)
+    actor = Actor()
+    readiness = asyncio.run(JourneyRunner(engine, artifacts, actor,
+        progress=lambda _: None).check_readiness(target))
+    assert readiness["status"] == ("passed" if ready else "blocked")
+    assert not actor.contexts
+    assert "browser_click" not in engine.calls
+    assert engine.closed
+    assert not list((artifacts.path / "tests").glob("*.py"))
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+def test_runner_gates_journey_and_bounds_setup_recovery(tmp_path, recovers):
+    from open_verify.test_spec import TestResult
+
+    artifacts = Artifacts(tmp_path / "runs")
+    runner = VerificationRunner(None, LocalTools(tmp_path, artifacts), artifacts,
+        progress=lambda _: None)
+    target = case("http://localhost")
+    from open_verify.journey_spec import AssertStep
+
+    target.journey.readiness = [AssertStep(kind="assert", instruction="Fixture visible",
+        check={"kind": "expect_text", "text": "Disposable WorkOrder"})]
+    # Serialize first so the runner validates the immutable plan as production does.
+    state = {"stage": "execute", "plan": {"cases": [target.model_dump()]}, "findings": []}
+
+    class Journeys:
+        checks = 0
+        runs = 0
+
+        async def check_readiness(self, current):
+            self.checks += 1
+            assert current.journey.readiness[0].instruction == "Fixture visible"
+            ready = recovers and self.checks == 2
+            return {"case_id": current.id, "status": "passed" if ready else "blocked",
+                "detail": "Fixture visible" if ready else "Fixture missing from app"}
+
+        async def run(self, current, **kwargs):
+            self.runs += 1
+            return TestResult(case_id=current.id, status="passed", detail="Independent check passed",
+                test_file="fixture.py", rerun=[])
+
+    journeys = Journeys()
+    runner.journeys = journeys
+
+    async def exercise():
+        first = await runner.run_journey(state, {"case_id": target.id})
+        assert not first["ok"]
+        assert first["result"]["code"] == "SETUP_NOT_READY"
+        assert first["result"]["remaining_repairs"] == 2
+        assert not journeys.runs and not runner.test_results
+        second = await runner.run_journey(state, {"case_id": target.id})
+        if recovers:
+            assert second["ok"] and second["result"]["status"] == "passed"
+            assert journeys.runs == 1 and len(runner.test_results) == 1
+        else:
+            assert not second["ok"] and second["result"]["remaining_repairs"] == 1
+            third = await runner.run_journey(state, {"case_id": target.id})
+            assert third["ok"] and third["result"]["status"] == "blocked"
+            assert "Journey not run" in third["result"]["detail"]
+            assert not journeys.runs and not runner.test_results
+        assert state["plan"]["cases"][0]["journey"]["steps"] == target.model_dump()["journey"]["steps"]
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("visible", [True, False])
+def test_real_browser_readiness_gates_fixed_journey(tmp_path, web_app, visible):
+    from open_verify.journey_spec import AssertStep
+
+    artifacts = Artifacts(tmp_path / "runs")
+    target = case(web_app)
+    target.journey.readiness = [AssertStep(kind="assert", instruction="Cart starts empty",
+        check={"kind": "expect_text", "text": "Cart: 0" if visible else "Missing fixture"},
+        timeout=15 if visible else 2)]
+    planned = plan()
+    planned["plan"]["cases"] = [target.model_dump()]
+    calls = [action("run_journey", case_id=target.id)] * (1 if visible else 3)
+    actor = Actor()
+    runner = VerificationRunner(ScriptedAgent([planned, *calls]),
+        LocalTools(tmp_path, artifacts, headless=True), artifacts,
+        journey_executor=actor, progress=lambda _: None)
+    report = asyncio.run(runner.run("Check cart"))
+    assert report["findings"][0]["status"] == ("passed" if visible else "blocked")
+    readiness = [e for e in artifacts.observations if e["tool"] == "setup_readiness"]
+    assert len(readiness) == (1 if visible else 3)
+    if visible:
+        assert actor.contexts and len(runner.test_results) == 1
+    else:
+        assert not actor.contexts and not runner.test_results
+        assert not list((artifacts.path / "tests").glob("*.py"))

@@ -46,8 +46,8 @@ class AgentJourneyExecutor:
             "screen_diff summarizes changes since the previous observation; the full current snapshot "
             "and node table are authoritative. A reset or truncated diff is not a complete change list. "
             "Use ordinary locators only when semantic references are unavailable. Each action result includes the screen. "
-            "Conclude passed only when current evidence supports the goal. Failed means an observed "
-            "product problem; blocked means missing setup or an unavailable interaction. "
+            "Return complete with outcome=done when you have finished the requested actions, "
+            "or outcome=blocked when you cannot continue. You cannot declare the feature passed or failed. "
             "An unchanged screen is not proof of success. Change approach after action failures. "
             "Your conclusion never replaces the independent assertions that follow.\n"
         )

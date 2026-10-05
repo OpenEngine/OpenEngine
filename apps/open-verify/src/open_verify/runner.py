@@ -101,6 +101,7 @@ class VerificationRunner:
         self._local_app_process_id: str | None = None
         self._active_case: str | None = None
         self._setup_answers: list[str] = []
+        self._readiness_attempts: dict[str, int] = {}
 
     async def decide(self, state: QAState):
         if state["steps"] >= self.max_steps:
@@ -436,6 +437,27 @@ class VerificationRunner:
                 raise ValueError("Execute only the current case's structured journey")
             if any(r.case_id == request.case_id for r in self.test_results):
                 raise ValueError("This journey already ran; its checks cannot be revised")
+            case = Case.model_validate(current)
+            if case.journey.readiness:
+                attempt = self._readiness_attempts.get(case.id, 0) + 1
+                self._readiness_attempts[case.id] = attempt
+                readiness = await self.journeys.check_readiness(case)
+                receipt = self.artifacts.record("setup_readiness", {"case_id": case.id,
+                    "attempt": attempt}, readiness, readiness["status"] == "passed")
+                if not receipt["ok"]:
+                    self.progress(f"Setup readiness blocked: {readiness['detail']} ({receipt['id']})")
+                    if attempt < 3:
+                        return self.artifacts.record("run_journey", arguments, {
+                            "error": "Setup readiness failed; journey has not started.",
+                            "code": "SETUP_NOT_READY", "readiness_evidence": receipt["id"],
+                            "detail": readiness["detail"], "remaining_repairs": 3 - attempt,
+                            "recovery": "Inspect app process_output and the app's API/UI; check fixture visibility, state locations, configuration and application indexes. Correct setup, then call run_journey again. Preserve all readiness checks and journey assertions.",
+                        }, False)
+                    return self.artifacts.record("run_journey", arguments, {
+                        "case_id": case.id, "status": "blocked", "rerun": [],
+                        "detail": "Setup readiness failed after two repair opportunities: "
+                                  + readiness["detail"] + " (" + receipt["id"] + "). Journey not run.",
+                    }, True)
             slot = len(self.test_results)
 
             def checkpoint(result):

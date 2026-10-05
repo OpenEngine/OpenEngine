@@ -636,9 +636,26 @@ entry URL, authentication requirement, action goals and assertions. After setup,
 the steps in order and finalizes the case without asking the actor for a finding.
 Legacy plans without `journey` continue through the existing workflow.
 
+For a provisioned fixture, the planner declares `journey.readiness`: up to five
+assertion steps proving the required data is visible through the running app's
+API or UI. The host runs these checks in a fresh session before journey actions.
+A seed command exiting successfully is insufficient. Failed readiness returns
+`SETUP_NOT_READY` evidence to the setup executor for log/API inspection and
+correction. After two repair opportunities, continued failure finalizes the case
+as blocked without running the journey. Readiness checks and product assertions
+remain fixed. Plans without readiness checks retain their existing behavior;
+this gate depends on the planner declaring the required fixture checks.
+
 ```json
 {
   "url": "http://localhost:3000/cart",
+  "readiness": [
+    {
+      "kind": "assert",
+      "instruction": "The fixture cart is visible and initially empty",
+      "check": {"kind": "expect_text", "text": "Cart: 0"}
+    }
+  ],
   "steps": [
     {"kind": "act", "instruction": "Add one item to the cart"},
     {
@@ -653,6 +670,12 @@ Legacy plans without `journey` continue through the existing workflow.
 
 Each `act` starts a fresh ACP conversation. It can open, inspect, click, fill,
 press a key or reload through checked engine tools. It cannot run setup commands.
+The actor returns `complete` with `outcome: "done"` or `outcome: "blocked"`;
+its response schema has no pass/fail verdict. `done` advances to independent
+assertions and never proves the feature works. The engine executes actions,
+exact checks or a fresh judge verify the result, and the runner assigns the case
+verdict. Custom journey executors must use `outcome` rather than the former
+actor `status` field.
 The default limits are 60 seconds, 12 action requests and 12 model calls, including
 schema repair. Repeated identical actions or failures stop the step. Prior step
 receipts provide bounded context; the executor receives copies.

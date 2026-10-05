@@ -42,6 +42,8 @@ class BrowserJourney(Contract):
     url: str = Field(min_length=1)
     authenticated: bool = False
     steps: list[JourneyStep] = Field(min_length=1, max_length=20)
+    readiness: list[AssertStep] = Field(default_factory=list, max_length=5,
+        description="Independent app-visible setup checks, run before any journey action; required for provisioned fixtures")
 
     @model_validator(mode="after")
     def ends_with_verification(self):
@@ -59,16 +61,16 @@ class StepAction(Contract):
 class ActDecision(Contract):
     kind: Literal["action", "complete"]
     action: StepAction | None = None
-    status: Literal["passed", "failed", "blocked"] | None = None
+    outcome: Literal["done", "blocked"] | None = None
     summary: str = Field(default="", max_length=2000)
 
     @model_validator(mode="after")
     def matching_payload(self):
         if self.kind == "action":
-            if self.action is None or self.status is not None or self.summary:
+            if self.action is None or self.outcome is not None or self.summary:
                 raise ValueError("An action decision contains only its action")
-        elif self.action is not None or self.status is None or not self.summary.strip():
-            raise ValueError("A conclusion requires a status and summary, without an action")
+        elif self.action is not None or self.outcome is None or not self.summary.strip():
+            raise ValueError("An action completion requires an outcome and summary, without an action")
         return self
 
 
