@@ -95,16 +95,18 @@ class GitHubOAuthTransport:
         return headers
 
     async def request(self, method: str, path: str, **kwargs: object) -> object:
+        url = (self._api_url.removesuffix("/v3") + "/graphql"
+               if path == "/graphql" else f"{self._api_url}{path}")
         token = self._token
         async with httpx.AsyncClient() as client:
             response = await client.request(
-                method, f"{self._api_url}{path}", headers=self._headers(token), **kwargs
+                method, url, headers=self._headers(token), **kwargs
             )
         if await self._refresh_after_unauthorized(response, token):
             async with httpx.AsyncClient() as client:
                 response = await client.request(
                     method,
-                    f"{self._api_url}{path}",
+                    url,
                     headers=self._headers(self._token),
                     **kwargs,
                 )
@@ -128,7 +130,7 @@ class GitHubOAuthTransport:
         if await self._refresh_after_unauthorized(response, token):
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 response = await client.get(
-                    f"{self._api_url}{path}", headers=self._headers(self._token)
+                    url, headers=self._headers(self._token)
                 )
         if response.is_error:
             raise self._request_error("GET", path, response)
@@ -185,7 +187,7 @@ class GitHubCliTransport:
     async def request(self, method: str, path: str, **kwargs: object) -> object:
         arguments = [
             "api",
-            path,
+            "graphql" if path == "/graphql" else path,
             "--hostname",
             self._host,
             "--method",

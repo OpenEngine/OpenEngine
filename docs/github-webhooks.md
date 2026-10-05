@@ -266,3 +266,32 @@ deliberate: it is a window on what is happening, and GitHub's delivery log and
 the pull request are the durable record.
 
 It is served from `GET /api/runs/{run_id}/github-comments`.
+
+## Issue references and review replies
+
+An issue assignment carries the issue repository and number as run data. Engine
+adds `Refs #N` to workspace commits and snapshots (or `owner/repo#N` for an issue
+in another repository). `open_pull_request` requires `issue_resolution` for these
+runs: `refs` keeps the issue open; `resolves` also adds `Resolves #N` to the head
+commit. Engine normalizes the PR body's issue line for either choice, including
+an agent-written `Fixes #N`. The closing keyword takes effect when merged to the
+default branch.
+
+Publishing a closing reference amends the head and pushes it with an explicit
+lease on the previously pushed SHA. The named branch must be checked out and
+clean. If somebody changed the remote head, publishing stops so their work is
+not overwritten.
+
+Review feedback includes the root comment ID and GraphQL thread ID. Both IDs,
+and each thread's resolution state, are also available through
+`view_change_request`. Review replies through `add_comment` require `thread_id`,
+`in_reply_to_id`, and an explicit `resolve` choice. For addressed work, use
+`resolve=true` and `commit_sha`: Engine formats `Addressed in <sha>: <comment>`,
+posts the reply, then resolves the thread through the configured GitHub
+transport and Engine's approval gate. Disagreements use `resolve=false` and
+leave the thread open. Retrying the same addressed reply after a resolution
+failure reuses the posted reply.
+
+`[github] resolve_addressed_threads = false` leaves addressed threads open for
+reviewers to resolve themselves. The default is `true`. Disconnected runs do
+not expose review replies or resolution.

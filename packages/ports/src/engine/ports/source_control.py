@@ -62,6 +62,9 @@ class Discussion:
     url: str
     path: str | None = None
     line: int | None = None
+    comment_id: int | None = None
+    thread_id: str | None = None
+    is_resolved: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +184,7 @@ class SourceControl(Protocol):
         base_ref: str,
         title: str,
         body: str,
+        *, issue: dict[str, object] | None = None, issue_resolution: str | None = None,
     ) -> str:
         """Open a review (pull request). Returns its URL.
 
@@ -230,12 +234,23 @@ class SourceControl(Protocol):
         file: str | None = None,
         line: int | None = None,
         in_reply_to_id: int | None = None,
+        *, thread_id: str | None = None, resolve: bool = False, commit_sha: str | None = None,
     ) -> CommentResult:
         """Comment on a review and return its provenance.
 
         GitHub replies target a top-level review comment ID and cannot specify
         file or line. Providers without reply support raise NotImplementedError.
+        With ``resolve``, prefix the reply with its ``commit_sha`` and resolve
+        the matching ``thread_id`` unless team configuration disables it.
         """
+        ...
+
+    async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
+        """Find the thread and root comment for a review reply."""
+        ...
+
+    async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
+        """Resolve a thread belonging to this PR, unless disabled by configuration."""
         ...
 
     async def view_change_request(

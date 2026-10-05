@@ -10,11 +10,14 @@ human, whether or not a worktree is currently sitting on it.
 
 import asyncio
 import shlex
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
 from engine.domain.ids import WorkspaceId
 from engine.ports.workspace_provider import Workspace, WorkspaceState
+from engine.runtime.change_requests import remote_project
+from engine.runtime.issue_links import issue_reference
 
 #: Where checkouts go when nothing says otherwise.
 #:
@@ -37,6 +40,9 @@ SNAPSHOT_MESSAGE = "engine: snapshot of uncommitted work before detaching"
 #: Worktree config naming who `_credit` credits, for commits that skip its hook.
 CO_AUTHOR_SETTING = "engine.coAuthor"
 
+#: The issue reference snapshots carry when commit hooks are skipped.
+ISSUE_SETTING = "engine.issueReference"
+
 
 class GitWorktreeWorkspaceProvider:
     """Provisions isolated checkouts as git worktrees under a root directory.
@@ -48,7 +54,7 @@ class GitWorktreeWorkspaceProvider:
         self._root_directory = Path(root_directory).resolve()
 
     async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = ""
+        self, repository: str, base_ref: str, *, co_author: str = "", issue: Mapping[str, object] | None = None
     ) -> Workspace:
         workspace_id = WorkspaceId(f"ws-{uuid4().hex[:12]}")
         repository_root = await _repository_root(repository)
@@ -58,7 +64,7 @@ class GitWorktreeWorkspaceProvider:
             repository_root,
             base_ref,
             resolved_base=resolved_base,
-            co_author=co_author,
+            co_author=co_author, issue=issue,
         )
 
     async def root_path(self, workspace_id: WorkspaceId) -> str:
@@ -82,6 +88,7 @@ class GitWorktreeWorkspaceProvider:
         base_ref: str,
         *,
         co_author: str = "",
+        issue: Mapping[str, object] | None = None,
     ) -> Workspace:
         repository_root = await _repository_root(repository)
         root_path = self._path_for(workspace_id)
@@ -94,7 +101,7 @@ class GitWorktreeWorkspaceProvider:
                 ref=_branch_for(workspace_id),
             )
         return await self._checkout(
-            workspace_id, repository_root, base_ref, co_author=co_author
+            workspace_id, repository_root, base_ref, co_author=co_author, issue=issue
         )
 
     async def detach(self, workspace_id: WorkspaceId) -> None:
@@ -139,6 +146,7 @@ class GitWorktreeWorkspaceProvider:
         *,
         resolved_base: str | None = None,
         co_author: str = "",
+        issue: Mapping[str, object] | None = None,
     ) -> Workspace:
         """Put a worktree at this workspace's path, on this workspace's branch."""
         root_path = self._path_for(workspace_id)
@@ -162,8 +170,12 @@ class GitWorktreeWorkspaceProvider:
                 str(root_path),
                 resolved_base or base_ref,
             )
-        if co_author:
-            await _credit(root_path, co_author)
+        if co_author or issue:
+            reference = ""
+            if issue:
+                remote = await _git(str(root_path), "remote", "get-url", "origin")
+                reference = issue_reference(issue, remote_project(remote) or "")
+            await _credit(root_path, co_author, reference)
         return Workspace(
             workspace_id=workspace_id,
             root_path=str(root_path),
@@ -314,12 +326,12 @@ async def _snapshot(root_path: Path) -> None:
         "--no-verify",
         *credit,
         "--message",
-        SNAPSHOT_MESSAGE,
+        SNAPSHOT_MESSAGE + (f"\n\nRefs {reference}" if (reference := await _setting(root_path, ISSUE_SETTING)) else ""),
     )
 
 
-async def _credit(root_path: Path, co_author: str) -> None:
-    """Name ``co_author`` in a `Co-authored-by` trailer on every commit here.
+async def _credit(root_path: Path, co_author: str, issue_reference: str = "") -> None:
+    """Add co-author credit and an optional issue reference to every commit here.
 
     A `commit-msg` hook rather than an instruction to the agent, because a
     prompt cannot promise a trailer. The hook lives in this worktree's own git
@@ -340,18 +352,24 @@ async def _credit(root_path: Path, co_author: str) -> None:
                 _write_hook(hooks / hook.name, f"exec {shlex.quote(str(hook))} \"$@\"\n")
     forward = shlex.quote(str(original / "commit-msg"))
     trailer = shlex.quote(f"Co-authored-by: {name}")
+    credit = (f'  grep -Fqx -- {trailer} "$1" || '
+              "git interpret-trailers --in-place --if-exists addIfDifferent "
+              f'--trailer {trailer} "$1" || exit\n') if name else ""
+    if issue_reference:
+        reference = shlex.quote(f"Refs {issue_reference}")
+        credit += (f'  grep -Fqx -- {reference} "$1" || '
+                   f'printf "\\n%s\\n" {reference} >> "$1" || exit\n')
     _write_hook(
         hooks / "commit-msg",
         # An empty message is left empty, so git still aborts the commit.
         'if git stripspace --strip-comments < "$1" | grep -q .; then\n'
-        "  git interpret-trailers --in-place --if-exists addIfDifferent "
-        f'--trailer {trailer} "$1" || exit\n'
-        "fi\n"
+        + credit + "fi\n"
         f'if [ -x {forward} ]; then exec {forward} "$@"; fi\n',
     )
     await _git(path, "config", "extensions.worktreeConfig", "true")
     await _git(path, "config", "--worktree", "core.hooksPath", str(hooks))
     await _git(path, "config", "--worktree", CO_AUTHOR_SETTING, name)
+    await _git(path, "config", "--worktree", ISSUE_SETTING, issue_reference)
 
 
 def _executable(path: Path) -> bool:

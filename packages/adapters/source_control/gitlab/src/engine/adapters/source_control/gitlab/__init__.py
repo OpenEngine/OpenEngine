@@ -134,6 +134,12 @@ class GitLabSourceControl:
         note = discussion["notes"][0]
         return CommentResult(note["id"], f"{pr_url}#note_{note['id']}")
 
+    async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
+        raise NotImplementedError("GitLab review thread lookup is not supported")
+
+    async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
+        raise NotImplementedError("GitLab review thread resolution is not supported")
+
     async def view_change_request(self, workspace_id: WorkspaceId, number: int) -> ChangeRequest:
         project = await self._project(workspace_id); mr = await self._api("GET", f"/projects/{project}/merge_requests/{number}")
         notes = await self._list(f"/projects/{project}/merge_requests/{number}/notes")

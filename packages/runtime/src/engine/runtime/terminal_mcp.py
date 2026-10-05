@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import secrets
 import shlex
 import sys
@@ -253,6 +254,10 @@ class TerminalMcpBroker:
         self._opened: set[ChangeRequest] = set()
         self._pushed: set[_PushedBranch] = set()
         self._workorder_creator: WorkorderCreator | None = None
+        self._issue: dict[str, object] | None = None
+
+    def enable_issue(self, issue: dict[str, object]) -> None:
+        self._issue = issue
 
     def enable_workorder_creation(self, create: WorkorderCreator) -> None:
         """Serve creation with the parent run bound by the host."""
@@ -585,9 +590,25 @@ class TerminalMcpBroker:
             foreign = await self._foreign_pull_request(pr_url)
             if foreign is not None:
                 return {"ok": False, "error": foreign}
+            options = {}
+            if in_reply_to_id is not None:
+                if not isinstance(arguments.get("resolve"), bool):
+                    raise ValueError("review replies require resolve: true for addressed work or false to leave the thread open")
+                thread_id = arguments.get("thread_id")
+                if not isinstance(thread_id, str) or not thread_id.strip():
+                    raise ValueError("review replies require thread_id from view_change_request")
+                commit_sha = arguments.get("commit_sha")
+                if arguments["resolve"] and (not isinstance(commit_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):
+                    raise ValueError("addressed review replies require commit_sha")
+                options = {"thread_id": thread_id, "resolve": arguments["resolve"], "commit_sha": commit_sha}
+                approved = await self._approve_forge("add_comment", arguments, request_id)
+                if approved is not None:
+                    return approved
+            elif any(key in arguments for key in ("resolve", "thread_id", "commit_sha")):
+                raise ValueError("review resolution options require in_reply_to_id")
             try:
                 result = await self._source_control.add_comment(
-                    pr_url, comment, file, line, in_reply_to_id
+                    pr_url, comment, file, line, in_reply_to_id, **options
                 )
             except Exception as error:
                 return {"ok": False, "error": f"could not add comment: {error}"}
@@ -690,9 +711,18 @@ class TerminalMcpBroker:
             return _repository_result(result)
 
         branch, base_ref, title, body = _review_arguments(arguments)
+        options = {}
+        if self._issue:
+            resolution = arguments.get("issue_resolution")
+            if not isinstance(resolution, str) or resolution not in {"resolves", "refs"}:
+                raise ValueError("issue_resolution is required for issue work: choose resolves or refs")
+            options = {"issue": self._issue, "issue_resolution": resolution}
+            approved = await self._approve_forge("open_pull_request", arguments, request_id)
+            if approved is not None:
+                return approved
         try:
             url = await self._source_control.request_review(
-                self._workspace_id, branch, base_ref, title, body
+                self._workspace_id, branch, base_ref, title, body, **options
             )
         except Exception as error:
             return {"ok": False, "error": f"could not open the pull request: {error}"}
@@ -906,6 +936,24 @@ class TerminalMcpBroker:
             logger.exception(
                 "Could not record posted comment %s: %s", result.id, result.url
             )
+
+    async def _approve_forge(self, name: str, arguments: object, request_id: McpRequestId) -> dict[str, object] | None:
+        if self._git_approval is None:
+            return {"ok": False, "error": f"{name} requires approval handling for this step"}
+        request = ApprovalRequest(
+            approval_id=f"terminal:{self._agent_run_id}:{request_id}",
+            kind=ApprovalKind.TOOL_USE, reason="Publish changes to GitHub.",
+            tool_name=f"mcp__{_SERVER_NAME}__{name}",
+            arguments=json.dumps(arguments, sort_keys=True),
+            allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),
+        )
+        try:
+            decision = await self._git_approval(request)
+        except Exception as error:
+            return {"ok": False, "error": f"could not approve {name}: {error}"}
+        if decision is not ApprovalDecision.ACCEPT:
+            return {"ok": False, "error": f"{name} was not approved"}
+        return None
 
     async def _approve_git(
         self, arguments: tuple[str, ...], request_id: McpRequestId
@@ -1130,6 +1178,7 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "properties": {
                 "branch": {"type": "string", "minLength": 1},
                 "base_ref": {"type": "string", "minLength": 1},
+                "issue_resolution": {"enum": ["resolves", "refs"], "description": "Required for issue work. The host normalizes the PR body and, for resolves, amends and republishes the head commit with a closing reference."},
                 "title": {"type": "string", "minLength": 1},
                 "body": {"type": "string"},
             },
@@ -1153,9 +1202,12 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
                 "file": {"type": "string", "minLength": 1},
                 "line": {"type": "integer", "minimum": 1},
                 "in_reply_to_id": {"type": "integer", "minimum": 1},
+                "thread_id": {"type": "string", "minLength": 1},
+                "resolve": {"type": "boolean", "description": "Required for review replies. True posts Addressed in <commit_sha>: <comment> and resolves the thread unless disabled by team configuration. False replies and leaves it open."},
+                "commit_sha": {"type": "string", "pattern": "^[0-9a-fA-F]{7,40}$"},
             },
             "required": ["pr_url", "comment"],
-            "dependentRequired": {"file": ["line"], "line": ["file"]},
+            "dependentRequired": {"file": ["line"], "line": ["file"], "in_reply_to_id": ["thread_id", "resolve"]},
             "not": {
                 "required": ["in_reply_to_id"],
                 "anyOf": [{"required": ["file"]}, {"required": ["line"]}],
@@ -1336,7 +1388,7 @@ def _git_arguments(arguments: object) -> tuple[str, ...]:
 def _review_arguments(arguments: object) -> tuple[str, str, str, str]:
     if not isinstance(arguments, dict):
         raise ValueError("open_pull_request arguments must be an object")
-    unexpected = set(arguments) - {"branch", "base_ref", "title", "body"}
+    unexpected = set(arguments) - {"branch", "base_ref", "title", "body", "issue_resolution"}
     if unexpected:
         names = ", ".join(sorted(str(name) for name in unexpected))
         raise ValueError(f"unexpected open_pull_request arguments: {names}")
@@ -1360,7 +1412,7 @@ def _comment_arguments(
 ) -> tuple[str, str, str | None, int | None, int | None]:
     if not isinstance(arguments, dict):
         raise ValueError("add_comment arguments must be an object")
-    unexpected = set(arguments) - {"pr_url", "comment", "file", "line", "in_reply_to_id"}
+    unexpected = set(arguments) - {"pr_url", "comment", "file", "line", "in_reply_to_id", "thread_id", "resolve", "commit_sha"}
     if unexpected:
         names = ", ".join(sorted(str(name) for name in unexpected))
         raise ValueError(f"unexpected add_comment arguments: {names}")

@@ -199,6 +199,7 @@ def build_capabilities(
     )
     github = GitHubSourceControl(
         "",
+        resolve_addressed_threads=settings.engine_config.github.resolve_addressed_threads,
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
         transport=GitHubCliTransport(),
@@ -223,6 +224,7 @@ def build_capabilities(
 
     github_oauth = GitHubSourceControl(
         _github_token,
+        resolve_addressed_threads=settings.engine_config.github.resolve_addressed_threads,
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
         transport=GitHubOAuthTransport(

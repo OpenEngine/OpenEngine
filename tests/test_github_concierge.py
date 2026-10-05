@@ -176,6 +176,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    source_control.review_thread = AsyncMock(return_value=MagicMock(thread_id="PRRT_1"))
     object.__setattr__(capabilities, "source_control", source_control)
 
     def deliver(client, comment_id, text):
@@ -201,8 +202,12 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
         # feedback reaches it by name rather than by reading every saved run.
         assert not client.portal.call(capabilities.state_store.list_runs)
         runtime.store.run_for_pull_request.assert_awaited_with("acme/api", 7)
-        runtime.steer.assert_awaited_once_with(
-            RunId("existing"), "Implement it", node_id=NodeId("implementation"))
+        runtime.steer.assert_awaited_once()
+        assert runtime.steer.await_args.args[0] == RunId("existing")
+        assert runtime.steer.await_args.args[1].startswith("Implement it")
+        if event == "pull_request_review_comment":
+            assert "Requested review thread: PRRT_1; root comment: 1" in runtime.steer.await_args.args[1]
+            source_control.review_thread.assert_awaited_with("https://github.com/acme/api/pull/7", 1)
         assert len(provider.clients) == 1
         assert len(provider.clients[0].prompts) == 2
         assert not provider.clients[0].result.get("isError")
@@ -713,7 +718,8 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, h
     )
     source_control = MagicMock(
         add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
-        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+        review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1")))
     object.__setattr__(capabilities, "source_control", source_control)
 
     payload = _issue_comment(1, f"{mention} new workorder please")
@@ -736,8 +742,10 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, h
             return
         # Started in the checkout of the repository the comment arrived from,
         # which is where the pull request is, rather than the configured default.
-        assert runtime.start.await_args.args[1] == {
-            "task": "Implement it", "repository": checkout}
+        assert runtime.start.await_args.args[1]["repository"] == checkout
+        assert runtime.start.await_args.args[1]["task"].startswith("Implement it")
+        if event == "pull_request_review_comment":
+            assert "Requested review thread: PRRT_1; root comment: 1" in runtime.start.await_args.args[1]["task"]
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
         # No chat origin: this conversation is the pull request, which the
@@ -1405,12 +1413,14 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
             assert "Fix the bug" in inputs["task"]
             assert "Reproduction steps" in inputs["task"]
             assert "https://github.com/acme/api/issues/7" in inputs["task"]
-            assert "Fixes #7" in inputs["task"]
+            assert "issue_resolution" in inputs["task"]
+            assert inputs["issue"] == {"repository": "acme/api", "number": 7}
             runs = client.portal.call(capabilities.state_store.list_runs)
             assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
             # Progress is reported back to the issue, addressed to the assigner.
             assert runs[0].origin == RunOrigin(
                 channel="github:acme/api", thread_id="issue/7",
+                issue_repository="acme/api", issue_number=7,
                 author="maintainer", requester=runs[0].requester or "",
             )
         else:
