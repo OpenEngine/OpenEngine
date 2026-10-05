@@ -468,10 +468,16 @@ def test_node_installs_across_managers(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('healable', [True, False])
-def test_start_heals_recorded_node(home, monkeypatch, capsys, healable):
+@pytest.mark.parametrize('recorded', [True, False])
+def test_start_heals_node(home, monkeypatch, capsys, healable, recorded):
     spec = _spec(home, tools={'git': '/shims/git', 'node': '/shims/node', 'npx': '/shims/npx'})
+    Path(spec.config).parent.mkdir(parents=True)
+    Path(spec.config).write_text('[server]\nport = 4364\n')
     daemon.prepare_directories()
-    daemon.write_record(daemon.Record('process', spec))
+    if recorded:
+        daemon.write_record(daemon.Record('process', spec))
+    monkeypatch.setattr(daemon, 'engine_web_executable', lambda: Path(spec.program))
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name: spec.tools.get(name))
     monkeypatch.setattr(daemon, '_node_version', lambda _node: None)
     monkeypatch.setattr(daemon, '_node_installs', lambda: [Path('/real/bin')] if healable else [])
     monkeypatch.setattr(daemon, 'health', lambda _url: ('down', None))
@@ -481,17 +487,21 @@ def test_start_heals_recorded_node(home, monkeypatch, capsys, healable):
     monkeypatch.setattr(daemon.ProcessBackend, 'install', lambda _self, spec: events.append(('install', spec)))
     monkeypatch.setattr(daemon.ProcessBackend, 'start', lambda _self, spec: events.append(('start', spec)))
     assert cli.main(['daemon', 'start']) == 0
-    recorded = daemon.read_record().spec
+    record = daemon.read_record()
     if healable:
-        assert events == ['stop', ('install', recorded), ('start', recorded)]
-        assert recorded.tools['node'] == '/real/bin/node'
-        assert recorded.tools['npx'] == '/real/bin/npx'
-        assert recorded.environment()['PATH'].split(':')[0] == '/real/bin'
-        assert 'using /real/bin/node' in capsys.readouterr().err
+        assert record is not None
+        assert events == ['stop', ('install', record.spec), ('start', record.spec)]
+        assert record.spec.tools['node'] == '/real/bin/node'
+        assert record.spec.tools['npx'] == '/real/bin/npx'
+        assert record.spec.environment()['PATH'].split(':')[0] == '/real/bin'
+        detail = 'using /real/bin/node'
     else:
-        assert recorded == spec
+        assert record == (daemon.Record('process', spec) if recorded else None)
         assert events == [('start', spec)]
-        assert daemon.NODE_HELP in capsys.readouterr().err
+        detail = f'warning: /shims/node cannot run outside a project; {daemon.NODE_HELP}'
+    output = capsys.readouterr().err.splitlines()
+    assert len(output) == 1
+    assert detail in output[0]
 
 
 @pytest.mark.parametrize('recorded', [True, False])

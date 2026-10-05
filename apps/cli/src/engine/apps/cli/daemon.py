@@ -532,7 +532,8 @@ def current() -> tuple[Backend, ServiceSpec]:
     record = read_record()
     if record is not None and record.backend in BACKENDS:
         return BACKENDS[record.backend](), _with_live_port(record.spec)
-    return ProcessBackend(), build_spec()
+    # Startup owns Node validation and diagnostics for an unrecorded service.
+    return ProcessBackend(), build_spec(tools=_path_tools())
 
 
 def _with_live_port(spec: ServiceSpec) -> ServiceSpec:
