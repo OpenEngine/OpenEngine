@@ -146,29 +146,62 @@ def _node_version(node: str) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups())
 
 
-def _node_installs() -> list[Path]:
-    """Unprobed installs ordered by release, followed by system fallbacks."""
+def _node_manager_homes() -> list[tuple[str, Path]]:
     home = Path.home()
     data = _xdg("XDG_DATA_HOME", ".local/share")
-    roots = [
-        (Path(os.environ.get("MISE_DATA_DIR", data / "mise")) / "installs/node", "*/bin"),
-        (Path(os.environ.get("ASDF_DATA_DIR", home / ".asdf")) / "installs/nodejs", "*/bin"),
-        (Path(os.environ.get("NVM_DIR", home / ".nvm")) / "versions/node", "*/bin"),
-        (home / ".nodenv/versions", "*/bin"),
-        (home / ".volta/tools/image/node", "*/bin"),
-        (data / "fnm/node-versions", "*/installation/bin"),
-        (home / "Library/Application Support/fnm/node-versions", "*/installation/bin"),
+    return [
+        ("mise", Path(os.environ.get("MISE_DATA_DIR", data / "mise"))),
+        ("asdf", Path(os.environ.get("ASDF_DATA_DIR", home / ".asdf"))),
+        ("nvm", Path(os.environ.get("NVM_DIR", home / ".nvm"))),
+        ("nodenv", home / ".nodenv"),
+        ("volta", home / ".volta"),
+        ("fnm", data / "fnm"),
+        ("fnm", home / "Library/Application Support/fnm"),
     ]
+
+
+def _shim_manager(node: str | None) -> str | None:
+    if node:
+        path = Path(node)
+        for manager, home in _node_manager_homes():
+            if path.parent == home / "shims":
+                return manager
+            # nvm/fnm expose an installation's bin directory rather than shims.
+            if manager in {"nvm", "fnm"} and path.is_relative_to(home):
+                return manager
+            if manager == "volta" and path.parent == home / "bin":
+                return manager
+    return None
+
+
+@dataclass(frozen=True)
+class NodeInstall:
+    directory: Path
+    manager: str | None
+
+
+def _node_installs() -> list[NodeInstall]:
+    """Unprobed installs with provenance, newest first, then system fallbacks."""
+    layouts = {
+        "mise": ("installs/node", "*/bin"),
+        "asdf": ("installs/nodejs", "*/bin"),
+        "nvm": ("versions/node", "*/bin"),
+        "nodenv": ("versions", "*/bin"),
+        "volta": ("tools/image/node", "*/bin"),
+        "fnm": ("node-versions", "*/installation/bin"),
+    }
     candidates = []
-    for root, pattern in roots:
+    for manager, home in _node_manager_homes():
+        suffix, pattern = layouts[manager]
+        root = home / suffix
         for directory in root.glob(pattern):
             release = directory.relative_to(root).parts[0]
             if (root / release).is_symlink() or not re.fullmatch(r"v?\d+\.\d+\.\d+", release):
                 continue
             if (directory / "npx").is_file():
-                candidates.append((tuple(map(int, release.lstrip("v").split("."))), directory))
-    ordered = [directory for _, directory in sorted(candidates, reverse=True)]
-    ordered.extend(Path(path) for path in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
+                candidates.append((tuple(map(int, release.lstrip("v").split("."))), NodeInstall(directory, manager)))
+    ordered = [directory for _, directory in sorted(candidates, key=lambda item: item[0], reverse=True)]
+    ordered.extend(NodeInstall(Path(path), None) for path in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
                    if (Path(path) / "npx").is_file())
     return ordered
 
@@ -179,19 +212,29 @@ class NodeCheck:
     problem: str | None
     version: tuple[int, int, int] | None
     healed: bool = False
+    shim_manager: str | None = None
+    install_manager: str | None = None
 
 
 def _check_node(tools: dict[str, str]) -> NodeCheck:
     node = tools.get("node")
+    manager = _shim_manager(tools.get("original_node", node))
     version = _node_version(node) if node else None
     if version is not None and version >= NODE_MINIMUM:
+        install_manager = next((item.manager for item in _node_installs()
+                                if str(item.directory / "node") == node), None) if "original_node" in tools else None
         return NodeCheck(tools, "using a healed Node installation" if "original_node" in tools else None,
-                         version, healed="original_node" in tools)
+                         version, healed="original_node" in tools,
+                         shim_manager=manager, install_manager=install_manager)
     if version is not None:
         problem = f"{node} is Node {'.'.join(map(str, version))}; requires Node 20.19+"
     else:
         problem = f"{node} cannot run outside a project" if node else "node not found"
-    for directory in _node_installs():
+    installs = _node_installs()
+    # Stable partition: newest first within the preferred manager and fallback group.
+    installs.sort(key=lambda item: not (manager is not None and item.manager == manager))
+    for install in installs:
+        directory = install.directory
         candidate_version = _node_version(str(directory / "node"))
         if candidate_version is None or candidate_version < NODE_MINIMUM:
             continue
@@ -200,38 +243,32 @@ def _check_node(tools: dict[str, str]) -> NodeCheck:
             if name in tools:
                 healed.setdefault(f"original_{name}", tools[name])
             healed[name] = str(directory / name)
-        return NodeCheck(healed, problem, candidate_version, healed=True)
+        return NodeCheck(healed, problem, candidate_version, healed=True,
+                         shim_manager=manager, install_manager=install.manager)
     return NodeCheck(tools, problem, version)
 
 
-def _healing_notice(check: NodeCheck) -> str:
-    """Explain the inherited PATH tradeoff and how to leave fallback mode."""
-    tools = check.tools
-    node = tools["node"]
-    version = check.version
-    release = ".".join(map(str, version)) if version else None
-    command = None
-    # Prefer the original manager when the replacement came from another one.
-    paths = (tools.get("original_node", ""), node)
-    for path in paths:
-        if not release:
-            break
-        if "mise" in path or path.startswith(str(Path(os.environ.get("MISE_DATA_DIR", _xdg("XDG_DATA_HOME", ".local/share") / "mise"))) + "/"):
-            command = f"mise use -g node@{release}"
-        elif "asdf" in path or path.startswith(str(Path(os.environ.get("ASDF_DATA_DIR", Path.home() / ".asdf"))) + "/"):
-            command = f"asdf set -u nodejs {release} (asdf <0.16: asdf global nodejs {release})"
-        elif "nvm" in path or path.startswith(str(Path(os.environ.get("NVM_DIR", Path.home() / ".nvm"))) + "/"):
-            command = f"nvm alias default {release}"
-        elif "nodenv" in path:
-            command = f"nodenv global {release}"
-        elif "fnm" in path:
-            command = f"fnm default {release}"
-        if command:
-            break
-    restore = f"run {command}" if command else "set a global Node default in your version manager"
-    return (f"degraded: using {node}; project Node pins are ignored while healed; "
-            f"{restore}, then run engine daemon setup from a shell with the manager on PATH "
-            "to restore project switching; the global default applies only where no project selects Node")
+def _healing_notice(check: NodeCheck, *, verbose: bool = False) -> str:
+    """Format the verified result without spawning Node again."""
+    release = ".".join(map(str, check.version)) if check.version else None
+    commands = {
+        "mise": f"mise use -g node@{release}",
+        "asdf": f"asdf set -u nodejs {release}",
+        "nvm": f"nvm alias default {release}",
+        "nodenv": f"nodenv global {release}",
+        "fnm": f"fnm default {release}",
+    }
+    command = commands.get(check.shim_manager) if release and check.shim_manager == check.install_manager else None
+    manager = check.shim_manager or "your version manager"
+    restore = f"run {command}" if command else f"set a global Node 20.19+ default in {manager}"
+    notice = (f"degraded: using {check.tools['node']}; project Node pins are ignored until you "
+              f"{restore}, then engine daemon setup")
+    if verbose:
+        notice += ("; healing is a fallback; the global default applies only where no project selects Node. "
+                   "Run setup from a shell with the manager on PATH to restore project switching.")
+        if command and check.shim_manager == "asdf":
+            notice += f" For asdf <0.16, use asdf global nodejs {release}."
+    return notice
 
 
 def _path_tools() -> dict[str, str]:
@@ -244,7 +281,8 @@ def detect_tools() -> dict[str, str]:
     tools, problem = check.tools, check.problem
     if problem:
         detail = _healing_notice(check) if check.healed else NODE_HELP
-        print(f"engine daemon: {problem}; {detail}", file=sys.stderr)
+        notice = detail if check.healed else f"{problem}; {detail}"
+        print(f"engine daemon: {notice}", file=sys.stderr)
     return tools
 
 
@@ -688,10 +726,10 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
                 backend.stop()
                 backend.install(spec)
                 write_record(Record(backend.name, spec))
-                print(f"engine daemon: {problem}; {_healing_notice(check)}", file=sys.stderr)
+                print(f"engine daemon: {_healing_notice(check)}", file=sys.stderr)
             elif problem:
                 detail = _healing_notice(check) if check.healed else NODE_HELP
-                print(f"engine daemon: warning: {problem}; {detail}", file=sys.stderr)
+                print(f"engine daemon: {detail}" if check.healed else f"engine daemon: warning: {problem}; {detail}", file=sys.stderr)
             rotate_log(Path(spec.log))
             backend.start(spec)
         state, body = wait_for(spec.url, {"ready", "foreign"}, START_TIMEOUT_SECONDS, backend)
@@ -925,7 +963,7 @@ def diagnose() -> list[Finding]:
         path = recorded.get(name) or found.get(name)
         if name == "node" and problem:
             if check.healed:
-                findings.append(Finding(name, "warn", f"{problem}; engine daemon start will use {healed['node']}; {_healing_notice(check)}"))
+                findings.append(Finding(name, "warn", f"{problem}; engine daemon start will use {healed['node']}; {_healing_notice(check, verbose=True)}"))
             else:
                 findings.append(Finding(name, "error", f"{problem}; {NODE_HELP}"))
         elif path:
