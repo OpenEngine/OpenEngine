@@ -511,7 +511,7 @@ def test_start_heals_node(home, monkeypatch, capsys, healable, recorded):
     else:
         assert record == (daemon.Record('process', spec) if recorded else None)
         assert events == [('start', spec)]
-        detail = f'warning: /shims/node cannot run outside a project; {daemon.NODE_HELP}'
+        detail = f'warning: /shims/node is missing; {daemon.NODE_HELP}'
     output = capsys.readouterr().err.splitlines()
     assert len(output) == 1
     assert detail in output[0]
@@ -711,3 +711,19 @@ def test_manager_names_in_unrelated_paths_are_not_provenance(home, monkeypatch):
     notice = daemon._healing_notice(check)
     assert "in your version manager" in notice
     assert "nvm alias" not in notice and "fnm default" not in notice
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_node_failure_message_distinguishes_missing_binary(home, monkeypatch, missing):
+    node = home / "node"
+    node.touch()
+    if missing:
+        node.unlink()
+    monkeypatch.setattr(daemon, "_node_version", lambda _node: None)
+    tools = {"node": str(node)}
+    check = daemon._check_node(tools)
+    assert check.tools == tools
+    assert check.problem == (
+        f"{node} is missing" if missing
+        else f"{node} failed the Node version check from {home}"
+    )

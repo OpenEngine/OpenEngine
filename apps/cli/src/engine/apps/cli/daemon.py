@@ -228,8 +228,12 @@ def _check_node(tools: dict[str, str]) -> NodeCheck:
                          shim_manager=manager, install_manager=install_manager)
     if version is not None:
         problem = f"{node} is Node {'.'.join(map(str, version))}; requires Node 20.19+"
+    elif node is None:
+        problem = "node not found"
+    elif not Path(node).exists():
+        problem = f"{node} is missing"
     else:
-        problem = f"{node} cannot run outside a project" if node else "node not found"
+        problem = f"{node} failed the Node version check from {Path.home()}"
     for install in _node_installs():
         directory = install.directory
         candidate_version = _node_version(str(directory / "node"))
