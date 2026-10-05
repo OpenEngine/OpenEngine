@@ -676,6 +676,9 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
     monkeypatch.chdir(tmp_path)
+    # State resolves beside engine.toml, so without this the test would open
+    # whatever databases a developer's checkout has accumulated there.
+    monkeypatch.setenv("ENGINE_STATE_DIRECTORY", str(tmp_path))
     app = build_app()
 
     async def ask() -> dict:
