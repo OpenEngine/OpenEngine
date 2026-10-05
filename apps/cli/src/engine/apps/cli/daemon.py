@@ -12,11 +12,13 @@ Temporal is not used: `engine-orchestrator` is never started.
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import plistlib
 import shutil
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -30,6 +32,8 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from engine.runtime.config import load_engine_config
 
 LABEL = "sh.openengine.engine"
 SYSTEMD_UNIT = "openengine.service"
@@ -147,10 +151,13 @@ class ServiceSpec:
             if directory not in directories:
                 directories.append(directory)
         directories += [path for path in SYSTEM_PATH if path not in directories]
+        user = getpass.getuser()
         return {
             "ENGINE_CONFIG": self.config,
             "ENGINE_HOST": HOST,
             "HOME": str(Path.home()),
+            "USER": user,
+            "LOGNAME": user,
             "PATH": os.pathsep.join(directories),
         }
 
@@ -729,6 +736,32 @@ def _port_finding(port: int) -> Finding:
     return Finding("port", "ok", f"{HOST}:{port} is free")
 
 
+def _claude_login_finding(spec: ServiceSpec) -> Finding:
+    environment = spec.environment()
+    try:
+        loaded = load_engine_config(spec.config)
+        if (directory := loaded.claude_config_dir) is not None:
+            environment["CLAUDE_CONFIG_DIR"] = str(directory)
+    except ValueError as error:
+        return Finding("claude login", "error", str(error))
+    directory = environment.get("CLAUDE_CONFIG_DIR", str(Path(environment["HOME"]) / ".claude"))
+    fix = f"run claude /login with CLAUDE_CONFIG_DIR={shlex.quote(directory)}"
+    executable = spec.tools.get("claude") or shutil.which("claude", path=environment["PATH"])
+    if executable is None:
+        return Finding("claude login", "warn", f"claude not on service PATH; rerun engine daemon setup; {fix}")
+    try:
+        result = subprocess.run(
+            [executable, "auth", "status"], env=environment,
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+        status = json.loads(result.stdout)
+        if result.returncode == 0 and isinstance(status, dict) and status.get("loggedIn") is True:
+            return Finding("claude login", "ok", f"{status.get('email') or 'logged in (email unavailable)'} (CLAUDE_CONFIG_DIR={directory})")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return Finding("claude login", "warn", fix)
+
+
 def diagnose() -> list[Finding]:
     config = config_path()
     findings: list[Finding] = []
@@ -760,6 +793,11 @@ def diagnose() -> list[Finding]:
             findings.append(Finding(name, "warn", f"{name} not found; install it and rerun engine daemon setup"))
         else:
             findings.append(Finding(name, "warn", f"{name} not found; optional, needed only to run that agent"))
+    if port is not None and ("claude" in recorded or "claude" in found):
+        spec = record.spec if record else ServiceSpec(
+            program="", config=str(config), port=port, log="", tools=found,
+        )
+        findings.append(_claude_login_finding(spec))
     return findings
 
 

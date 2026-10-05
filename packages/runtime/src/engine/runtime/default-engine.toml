@@ -21,6 +21,10 @@ graph_state_directory = "graph-state"
 [communications]
 provider = "slack"
 
+[claude]
+# The Claude Code login agents use (CLAUDE_CONFIG_DIR). Defaults to ~/.claude.
+# config_dir = "~/repo/work/.claude-work"
+
 [approvals]
 auto_approve = false
 allow = ["read"]

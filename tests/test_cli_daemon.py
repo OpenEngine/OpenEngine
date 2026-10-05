@@ -41,6 +41,7 @@ def test_service_environment_uses_recorded_tools_and_loopback(tmp_path: Path):
 
     assert environment["ENGINE_CONFIG"] == str(tmp_path / "config" / "openengine" / "engine.toml")
     assert environment["ENGINE_HOST"] == "127.0.0.1"
+    assert environment["USER"] == environment["LOGNAME"] == daemon.getpass.getuser()
     assert environment["PATH"].split(":")[:2] == ["/usr/bin", "/opt/node/bin"]
     assert "/usr/local/bin" in environment["PATH"].split(":")
 
@@ -53,6 +54,8 @@ def test_launch_agent_runs_engine_web_with_the_config_and_logs(tmp_path: Path):
     assert plist["Label"] == daemon.LABEL
     assert plist["ProgramArguments"] == ["/opt/openengine/venv/bin/engine-web"]
     assert plist["EnvironmentVariables"] == spec.environment()
+    assert plist["EnvironmentVariables"]["USER"] == daemon.getpass.getuser()
+    assert plist["EnvironmentVariables"]["LOGNAME"] == daemon.getpass.getuser()
     assert plist["StandardOutPath"] == plist["StandardErrorPath"] == spec.log
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] == {"SuccessfulExit": False}
@@ -143,6 +146,8 @@ def test_systemd_unit_runs_engine_web_and_stops_it_gracefully(tmp_path: Path):
     assert 'ExecStart="/home/me/open engine/engine-web"\n' in unit
     assert f'Environment="ENGINE_CONFIG={spec.config}"\n' in unit
     assert 'Environment="ENGINE_HOST=127.0.0.1"\n' in unit
+    assert f'Environment="USER={daemon.getpass.getuser()}"\n' in unit
+    assert f'Environment="LOGNAME={daemon.getpass.getuser()}"\n' in unit
     assert 'Environment="PATH=/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin"\n' in unit
     assert f"StandardOutput=append:{spec.log}\n" in unit
     assert "KillSignal=SIGTERM\n" in unit
@@ -357,3 +362,56 @@ def test_start_rotates_an_oversized_log(home: Path, monkeypatch):
 
     assert not log.exists()
     assert log.with_name("engine-web.log.1").read_bytes() == b"x" * 11
+
+
+@pytest.mark.parametrize(
+    "returncode, output, level",
+    [
+        (0, '{"loggedIn": true, "email": "work@example.com"}', "ok"),
+        (1, '{"loggedIn": false}', "warn"),
+        (0, 'not JSON', "warn"),
+        (0, '[]', "warn"),
+    ],
+)
+@pytest.mark.parametrize("configured", [True, False])
+def test_doctor_checks_service_claude_login(home, monkeypatch, returncode, output, level, configured):
+    spec = _spec(home, tools={"claude": "/recorded/bin/claude", "node": "/node/bin/node"})
+    config = Path(spec.config)
+    config.parent.mkdir(parents=True)
+    account = config.parent / "account"
+    account.mkdir()
+    config.write_text('[claude]\nconfig_dir = "account"\n' if configured else "")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/shell/account")
+    monkeypatch.setattr(daemon, "read_record", lambda: daemon.Record(backend="process", spec=spec))
+    monkeypatch.setattr(daemon, "detect_tools", lambda: {"claude": "/shell/bin/claude"})
+    monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path(spec.program))
+    monkeypatch.setattr(daemon, "_port_finding", lambda port: daemon.Finding("port", "ok", "free"))
+
+    def run(command, **kwargs):
+        assert command == ["/recorded/bin/claude", "auth", "status"]
+        env = kwargs["env"]
+        assert env["USER"] == env["LOGNAME"] == daemon.getpass.getuser()
+        assert env["PATH"].split(os.pathsep)[:2] == ["/recorded/bin", "/node/bin"]
+        assert env.get("CLAUDE_CONFIG_DIR") == (str(account) if configured else None)
+        return subprocess.CompletedProcess(command, returncode, output, "")
+
+    monkeypatch.setattr(daemon.subprocess, "run", run)
+    finding = next(f for f in daemon.diagnose() if f.name == "claude login")
+    assert finding.level == level
+    expected = account if configured else home / ".claude"
+    assert str(expected) in finding.detail
+    assert ("work@example.com" if level == "ok" else "run claude /login with CLAUDE_CONFIG_DIR=") in finding.detail
+
+
+@pytest.mark.parametrize("error", [OSError("not executable"), subprocess.TimeoutExpired("claude", 15)])
+def test_doctor_claude_auth_failure_is_a_warning(home, monkeypatch, error):
+    spec = _spec(home, tools={"claude": "/recorded/bin/claude"})
+    config = Path(spec.config)
+    config.parent.mkdir(parents=True)
+    config.write_text("")
+
+    def run(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(daemon.subprocess, "run", run)
+    assert daemon._claude_login_finding(spec).level == "warn"

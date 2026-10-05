@@ -93,6 +93,9 @@ class ClaudeConfig:
     provider, and a reader could not tell which of the two they were.
     """
 
+    config_dir: str = ""
+    """Claude Code login directory, or empty to inherit the provider environment."""
+
     output_style: ResponseStyle | None = None
     """How Claude should write, or ``None`` to leave its own default.
 
@@ -208,6 +211,14 @@ class LoadedEngineConfig:
     path: Path | None = None
 
     @property
+    def claude_config_dir(self) -> Path | None:
+        configured = self.config.claude.config_dir
+        if not configured:
+            return None
+        base = self.path.parent if self.path is not None else Path.cwd()
+        return _relative_to(Path(configured).expanduser(), base).resolve()
+
+    @property
     def workflows_directory(self) -> Path | None:
         configured = self.config.workflows.directory
         if not configured:
@@ -262,7 +273,10 @@ def load_engine_config(
     except tomllib.TOMLDecodeError as error:
         raise EngineConfigError(f"invalid TOML in {path}: {error}") from error
 
-    return LoadedEngineConfig(config=parse_engine_config(document), path=path)
+    loaded = LoadedEngineConfig(config=parse_engine_config(document), path=path)
+    if (directory := loaded.claude_config_dir) is not None and not directory.is_dir():
+        raise EngineConfigError(f"claude.config_dir is not an existing directory: {directory}")
+    return loaded
 
 
 def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
@@ -378,7 +392,11 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         raise EngineConfigError("work_orders.slack_operators must not contain empty user IDs")
 
     claude = _table(document.get("claude", {}), "claude")
-    _reject_unknown(claude, {"output_style"}, "claude")
+    _reject_unknown(claude, {"output_style", "config_dir"}, "claude")
+    config_dir = (
+        _nonblank_string(claude["config_dir"], "claude.config_dir")
+        if "config_dir" in claude else ""
+    )
     output_style = _output_style(claude.get("output_style", ""))
 
     approvals = _table(document.get("approvals", {}), "approvals")
@@ -491,7 +509,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             runner=work_order_runner,
             slack_operators=work_order_slack_operators,
         ),
-        claude=ClaudeConfig(output_style=output_style),
+        claude=ClaudeConfig(output_style=output_style, config_dir=config_dir),
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -568,7 +586,8 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
     output_style = style.value if style is not None else "provider default"
     return (
         f"configuration: {source}; attribution={attribution}; default_branch={default_branch}; "
-        f"claude.output_style={output_style}; approvals enforced "
+        f"claude.output_style={output_style}; "
+        f"claude.config_dir={loaded.claude_config_dir or 'provider default'}; approvals enforced "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
         f"workflows={workflows}"
     )
