@@ -46,7 +46,7 @@ def test_service_environment_uses_recorded_tools_and_loopback(tmp_path: Path):
     assert environment["ENGINE_CONFIG"] == str(tmp_path / "config" / "openengine" / "engine.toml")
     assert environment["ENGINE_HOST"] == "127.0.0.1"
     assert environment["USER"] == environment["LOGNAME"] == daemon.getpass.getuser()
-    assert environment["PATH"].split(":")[:2] == ["/opt/node/bin", "/usr/bin"]
+    assert environment["PATH"].split(":")[:2] == ["/usr/bin", "/opt/node/bin"]
     assert "/usr/local/bin" in environment["PATH"].split(":")
 
 
@@ -595,7 +595,7 @@ def test_working_shim_keeps_project_switching(home, monkeypatch):
     checked, problem = check.tools, check.problem
     assert checked == tools
     assert problem is None
-    assert _spec(home, tools=checked).environment()["PATH"].split(":")[0] == "/mise/shims"
+    assert _spec(home, tools=checked).environment()["PATH"].split(":")[:2] == ["/usr/bin", "/mise/shims"]
 
 
 def test_candidate_probe_skips_old_and_broken(home, monkeypatch):
@@ -727,3 +727,32 @@ def test_node_failure_message_distinguishes_missing_binary(home, monkeypatch, mi
         f"{node} is missing" if missing
         else f"{node} failed the Node version check from {home}"
     )
+
+
+@pytest.mark.parametrize("node_directory", ["/mise/shims", "/opt/node/bin"])
+def test_healthy_path_preserves_recorded_order(home, node_directory):
+    tools = {"git": "/usr/bin/git", "claude": "/agents/bin/claude",
+             "node": f"{node_directory}/node", "npx": f"{node_directory}/npx"}
+    expected = ["/usr/bin", "/agents/bin", node_directory]
+    expected += [path for path in daemon.SYSTEM_PATH if path not in expected]
+    assert _spec(home, tools=tools).environment()["PATH"] == os.pathsep.join(expected)
+
+
+def test_healed_dedicated_path_preserves_remaining_tool_order(home):
+    directory = home / ".local/share/mise/installs/node/26.10.0/bin"
+    tools = {"git": "/usr/bin/git", "claude": "/agents/bin/claude",
+             "node": str(directory / "node"), "npx": str(directory / "npx"),
+             "original_node": "/mise/shims/node", "original_npx": "/mise/shims/npx"}
+    expected = [str(directory), "/mise/shims", "/usr/bin", "/agents/bin"]
+    expected += [path for path in daemon.SYSTEM_PATH if path not in expected]
+    assert _spec(home, tools=tools).environment()["PATH"] == os.pathsep.join(expected)
+
+
+@pytest.mark.parametrize("directory", ["/opt/homebrew/bin", "/usr/local/bin"])
+def test_healed_shared_directory_does_not_shadow_recorded_git(home, directory):
+    tools = {"git": "/usr/bin/git", "claude": "/agents/bin/claude",
+             "node": f"{directory}/node", "npx": f"{directory}/npx",
+             "original_node": "/mise/shims/node", "original_npx": "/mise/shims/npx"}
+    path = _spec(home, tools=tools).environment()["PATH"]
+    assert path.split(os.pathsep)[:4] == ["/usr/bin", "/agents/bin", directory, "/mise/shims"]
+    assert daemon.shutil.which("git", path=path) == "/usr/bin/git"

@@ -127,6 +127,7 @@ def engine_web_executable() -> Path:
     return Path(found).absolute()
 
 
+NODE_SYSTEM_DIRECTORIES = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
 NODE_MINIMUM = (20, 19, 0)
 NODE_HELP = "install Node 20.19+ or set a global default in your version manager"
 
@@ -201,7 +202,7 @@ def _node_installs() -> list[NodeInstall]:
             if (directory / "npx").is_file():
                 candidates.append((tuple(map(int, release.lstrip("v").split("."))), NodeInstall(directory, manager)))
     ordered = [directory for _, directory in sorted(candidates, key=lambda item: item[0], reverse=True)]
-    ordered.extend(NodeInstall(Path(path), None) for path in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
+    ordered.extend(NodeInstall(Path(path), None) for path in NODE_SYSTEM_DIRECTORIES
                    if (Path(path) / "npx").is_file())
     return ordered
 
@@ -303,8 +304,14 @@ class ServiceSpec:
 
     def environment(self) -> dict[str, str]:
         directories: list[str] = []
-        for name in ("node", "npx", "original_node", "original_npx",
-                     *(name for name in self.tools if name not in {"node", "npx", "original_node", "original_npx"})):
+        names = list(self.tools)
+        node = self.tools.get("node")
+        # Healing selects either a dedicated manager install or a shared system
+        # directory. Only the former can safely precede unrelated recorded tools.
+        if ("original_node" in self.tools and node
+                and str(Path(node).parent) not in NODE_SYSTEM_DIRECTORIES):
+            names = ["node", "original_node", "original_npx", *names]
+        for name in names:
             tool = self.tools.get(name)
             if tool is None:
                 continue
