@@ -482,7 +482,10 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
         self_login = ""
         if (
-            _asks_for_self_login(event, payload)
+            (
+                _asks_for_self_login(event, payload)
+                or (event in COMMENT_EVENTS and payload.get("action") == "created")
+            )
             and self._authenticated_login is not None
             and self._repository
         ):
