@@ -173,32 +173,42 @@ def _node_installs() -> list[Path]:
     return ordered
 
 
-def _check_node(tools: dict[str, str]) -> tuple[dict[str, str], str | None]:
+@dataclass(frozen=True)
+class NodeCheck:
+    tools: dict[str, str]
+    problem: str | None
+    version: tuple[int, int, int] | None
+    healed: bool = False
+
+
+def _check_node(tools: dict[str, str]) -> NodeCheck:
     node = tools.get("node")
     version = _node_version(node) if node else None
     if version is not None and version >= NODE_MINIMUM:
-        return tools, "using a healed Node installation" if "original_node" in tools else None
+        return NodeCheck(tools, "using a healed Node installation" if "original_node" in tools else None,
+                         version, healed="original_node" in tools)
     if version is not None:
         problem = f"{node} is Node {'.'.join(map(str, version))}; requires Node 20.19+"
     else:
         problem = f"{node} cannot run outside a project" if node else "node not found"
     for directory in _node_installs():
-        version = _node_version(str(directory / "node"))
-        if version is None or version < NODE_MINIMUM:
+        candidate_version = _node_version(str(directory / "node"))
+        if candidate_version is None or candidate_version < NODE_MINIMUM:
             continue
         healed = dict(tools)
         for name in ("node", "npx"):
             if name in tools:
                 healed.setdefault(f"original_{name}", tools[name])
             healed[name] = str(directory / name)
-        return healed, problem
-    return tools, problem
+        return NodeCheck(healed, problem, candidate_version, healed=True)
+    return NodeCheck(tools, problem, version)
 
 
-def _healing_notice(tools: dict[str, str]) -> str:
+def _healing_notice(check: NodeCheck) -> str:
     """Explain the inherited PATH tradeoff and how to leave fallback mode."""
+    tools = check.tools
     node = tools["node"]
-    version = _node_version(node)
+    version = check.version
     release = ".".join(map(str, version)) if version else None
     command = None
     # Prefer the original manager when the replacement came from another one.
@@ -230,9 +240,10 @@ def _path_tools() -> dict[str, str]:
 
 def detect_tools() -> dict[str, str]:
     found = _path_tools()
-    tools, problem = _check_node(found)
+    check = _check_node(found)
+    tools, problem = check.tools, check.problem
     if problem:
-        detail = _healing_notice(tools) if tools != found else NODE_HELP
+        detail = _healing_notice(check) if check.healed else NODE_HELP
         print(f"engine daemon: {problem}; {detail}", file=sys.stderr)
     return tools
 
@@ -670,15 +681,16 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
         if state == "foreign":
             raise RuntimeError(f"another program is using {spec.url}; free port {spec.port} or change [server] port in {spec.config}")
         if state == "down":
-            tools, problem = _check_node(spec.tools)
+            check = _check_node(spec.tools)
+            tools, problem = check.tools, check.problem
             if tools != spec.tools:
                 spec = replace(spec, tools=tools)
                 backend.stop()
                 backend.install(spec)
                 write_record(Record(backend.name, spec))
-                print(f"engine daemon: {problem}; {_healing_notice(tools)}", file=sys.stderr)
+                print(f"engine daemon: {problem}; {_healing_notice(check)}", file=sys.stderr)
             elif problem:
-                detail = _healing_notice(tools) if "original_node" in tools and (_node_version(tools["node"]) or (0, 0, 0)) >= NODE_MINIMUM else NODE_HELP
+                detail = _healing_notice(check) if check.healed else NODE_HELP
                 print(f"engine daemon: warning: {problem}; {detail}", file=sys.stderr)
             rotate_log(Path(spec.log))
             backend.start(spec)
@@ -907,12 +919,13 @@ def diagnose() -> list[Finding]:
     recorded = record.spec.tools if record else {}
     found = _path_tools()
     checked = recorded if record else found
-    healed, problem = _check_node(checked)
+    check = _check_node(checked)
+    healed, problem = check.tools, check.problem
     for name in TOOLS:
         path = recorded.get(name) or found.get(name)
         if name == "node" and problem:
-            if healed != checked or ("original_node" in healed and (_node_version(healed["node"]) or (0, 0, 0)) >= NODE_MINIMUM):
-                findings.append(Finding(name, "warn", f"{problem}; engine daemon start will use {healed['node']}; {_healing_notice(healed)}"))
+            if check.healed:
+                findings.append(Finding(name, "warn", f"{problem}; engine daemon start will use {healed['node']}; {_healing_notice(check)}"))
             else:
                 findings.append(Finding(name, "error", f"{problem}; {NODE_HELP}"))
         elif path:
