@@ -730,3 +730,83 @@ def test_trusted_repos_name_the_repositories_whose_work_orders_are_auto_approved
     )
 
     assert config.trusted_repos == frozenset({"api"})
+
+
+@pytest.mark.parametrize("value", ["account", "~/account"])
+def test_claude_config_directory_resolves_at_load(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    directory = tmp_path / "account"
+    directory.mkdir()
+    config = tmp_path / "engine.toml"
+    config.write_text(f'[claude]\nconfig_dir = "{value}"\n')
+    monkeypatch.chdir(tmp_path.parent)
+
+    loaded = load_engine_config(config)
+
+    assert loaded.config.claude.config_dir == value
+    assert loaded.claude_config_dir == directory
+    assert f"claude.config_dir={directory}" in describe_loaded_config(loaded)
+
+
+@pytest.mark.parametrize("value", ["missing", "file"])
+def test_claude_config_directory_must_exist(tmp_path, value):
+    (tmp_path / "file").write_text("")
+    config = tmp_path / "engine.toml"
+    config.write_text(f'[claude]\nconfig_dir = "{value}"\n')
+    with pytest.raises(EngineConfigError, match="claude.config_dir"):
+        load_engine_config(config)
+
+
+@pytest.mark.parametrize("claude", [
+    {"config_dir": 1}, {"config_dir": ""}, {"config_dir": " "}, {"unknown": "x"},
+])
+def test_claude_directory_settings_are_strict(claude):
+    with pytest.raises(EngineConfigError):
+        parse_engine_config({"claude": claude})
+
+
+@pytest.mark.parametrize("inherited", [None, "/existing/account"])
+def test_web_preserves_claude_environment_without_configuration(tmp_path, monkeypatch, inherited):
+    import os
+
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    if inherited is not None:
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", inherited)
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    loaded, _ = web_main.read_configuration(config)
+    assert loaded.claude_config_dir is None
+    assert os.environ.get("CLAUDE_CONFIG_DIR") == inherited
+
+
+def test_web_claude_provider_inherits_configured_login(tmp_path, monkeypatch):
+    import asyncio
+    import sys
+
+    from langgraph_acp import ClaudeACPProvider
+
+    directory = tmp_path / "account"
+    directory.mkdir()
+    config = tmp_path / "engine.toml"
+    config.write_text('[claude]\nconfig_dir = "account"\n')
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/other/account")
+    # Use the protocol fake, but have it echo the child's inherited account.
+    fake = Path(__file__).parents[1] / "langgraph-acp/tests/fake_agent.py"
+    wrapper = tmp_path / "echo_account.py"
+    wrapper.write_text(
+        "import os, runpy\n"
+        "os.environ['FAKE_AGENT_RESPONSE'] = os.environ['CLAUDE_CONFIG_DIR']\n"
+        f"runpy.run_path({str(fake)!r}, run_name='__main__')\n"
+    )
+    web_main.read_configuration(config)
+
+    async def prompt():
+        client = await ClaudeACPProvider(command=(sys.executable, str(wrapper))).connect()
+        try:
+            session = await client.new_session(cwd=tmp_path)
+            return [event async for event in session.prompt("Which account?")]
+        finally:
+            await client.close()
+
+    events = asyncio.run(prompt())
+    assert any(event.data.get("content") == {"type": "text", "text": str(directory)} for event in events)

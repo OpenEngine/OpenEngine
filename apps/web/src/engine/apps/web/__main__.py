@@ -296,6 +296,9 @@ def read_configuration(
     server watches exactly what this function reads.
     """
     loaded = load_engine_config(config_path)
+    # Workflow providers may omit env entirely; all Claude children inherit this.
+    if (directory := loaded.claude_config_dir) is not None:
+        os.environ["CLAUDE_CONFIG_DIR"] = str(directory)
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(
