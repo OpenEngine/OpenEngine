@@ -1320,13 +1320,31 @@ def render_findings(findings: list[dict[str, Any]]) -> None:
     print()
 
 
-def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
-    """Post each finding with `gh`, inline where it has a line. Returns failures."""
+@dataclass
+class PostedFindings:
+    failures: int
+    comments: list[dict[str, Any]]
+
+    def __bool__(self) -> bool:
+        return bool(self.failures)
+
+
+def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> PostedFindings:
+    """Post findings and return both failures and created GitHub comment IDs."""
     request = pull_request(pr_url)
     if request is None:
         raise RuntimeError(f"{pr_url} is not a GitHub pull request URL")
     head = str(gh_json("pr", "view", pr_url, "--json", "headRefOid").get("headRefOid") or "")
     failures = 0
+    comments: list[dict[str, Any]] = []
+
+    def remember(result, finding):
+        try:
+            comment_id = json.loads(getattr(result, "stdout", ""))["id"]
+            comments.append({"finding": finding, "comment_id": comment_id, "pr_url": pr_url, "head_sha": head})
+        except (ValueError, KeyError, TypeError):
+            print("engine: could not read posted comment ID", file=sys.stderr)
+
     for finding in findings:
         # Worded as the reranker would have posted it.
         body = finding_comment(
@@ -1343,13 +1361,18 @@ def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
                 "-F", f"line={line}", "-f", "side=RIGHT",
             ], capture_output=True, text=True)
             if inline.returncode == 0:
+                remember(inline, finding)
                 continue
         # A line outside the diff cannot take an inline comment; say it generally.
-        general = subprocess.run(["gh", "pr", "comment", pr_url, "--body", body], capture_output=True, text=True)
+        general = subprocess.run(["gh", "api", "--hostname", request.host, "--method", "POST",
+                                  f"repos/{request.path}/issues/{request.number}/comments", "-f", f"body={body}"],
+                                 capture_output=True, text=True)
         if general.returncode != 0:
             failures += 1
             print(f"engine: could not post {finding.get('tagline')!r}: {terminal_text(general.stderr.strip())}", file=sys.stderr)
-    return failures
+        else:
+            remember(general, finding)
+    return PostedFindings(failures, comments)
 
 
 def send_fixes(server: str, run_id: str, triage: dict[str, Any], findings: list[dict[str, Any]]) -> None:
@@ -1448,6 +1471,12 @@ def choose_fixes(
             if choice == "Post to PR":
                 try:
                     failures = post_findings(pr_url, [finding])
+                    if isinstance(failures, PostedFindings):
+                        for posted in failures.comments:
+                            try:
+                                request_json(server, f"/api/runs/{run_id}/findings/posted", posted)
+                            except Exception as error:
+                                print(f"engine: comment posted, but ledger recording failed: {terminal_text(str(error))}", file=sys.stderr)
                 except (OSError, RuntimeError, ValueError) as error:
                     print(f"engine: could not post finding: {terminal_text(str(error))}", file=sys.stderr)
                     failures = 1

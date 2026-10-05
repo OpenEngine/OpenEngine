@@ -6,6 +6,10 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+import logging
+
+from engine.domain.findings_ledger import ReviewFinding
+from engine.runtime.findings import capture
 
 from engine.domain import (
     AgentId, AgentRunId, ForgeMode, StepCompleted, StepId, StepSpec, forge_mode,
@@ -149,6 +153,22 @@ class TerminalMcpServer:
             store = execution.runtime.store
 
             async def record(posted: PostedComment) -> None:
+                ledger = getattr(execution.runtime, "findings_ledger", None)
+                if ledger is not None and posted.finding is not None:
+                    head = posted.result.head_sha
+                    if head is None:
+                        try:
+                            head = await source_control.finding_head(posted.pr_url)
+                        except Exception:
+                            logging.getLogger(__name__).exception("Could not resolve finding head")
+                    try:
+                        row = ReviewFinding(
+                            run_id=str(execution.run_id), node_id=str(execution.node_id), stage="posted",
+                            pr_url=posted.pr_url, head_sha=head, comment_id=posted.result.id, **posted.finding,
+                        )
+                        capture(ledger, [row])
+                    except Exception:
+                        logging.getLogger(__name__).exception("Could not capture posted finding")
                 await store.remember_comment(
                     CommentRecord(
                         comment_id=posted.result.id,

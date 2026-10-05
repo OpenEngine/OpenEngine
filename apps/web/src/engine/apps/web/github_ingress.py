@@ -94,6 +94,8 @@ class GithubMerge:
     merged_by: str
     """Whoever merged. A merge with no person behind it is not read at all."""
     url: str
+    merge_sha: str = ""
+    approves_workorder: bool = True
 
 
 @dataclass(frozen=True)
@@ -323,7 +325,7 @@ def comment_from_payload(
 
 
 def merge_from_payload(
-    event: str, payload: Mapping[str, object], *, self_login: str = ""
+    event: str, payload: Mapping[str, object], *, self_login: str = "", include_automated: bool = False
 ) -> GithubMerge | None:
     """The merge in a delivery, or ``None`` for anything that is not one.
 
@@ -351,18 +353,12 @@ def merge_from_payload(
         return None
     if pull_request.get("merged") is not True:
         return None
-    merged_by = pull_request.get("merged_by")
-    if not isinstance(merged_by, dict) or merged_by.get("type") == "Bot":
-        # No account at all is refused with the bots: a merge Engine cannot
-        # attribute to a person is not a person having reviewed the work.
-        return None
-    login = merged_by.get("login")
-    if not isinstance(login, str) or not login:
-        return None
-    if self_login and login.lower() == self_login.lower():
-        # A machine account holding a personal access token is an ordinary
-        # `User` to GitHub, so the bot type above does not catch Engine's own.
-        # GitHub logins are case-insensitive, so the comparison is too.
+    merged_by = pull_request.get("merged_by") or {}
+    login = merged_by.get("login", "") if isinstance(merged_by, dict) else ""
+    human = bool(isinstance(login, str) and login and isinstance(merged_by, dict)
+                 and merged_by.get("type") != "Bot"
+                 and not (self_login and login.lower() == self_login.lower()))
+    if not human and not include_automated:
         return None
     full_name, number = repository.get("full_name"), pull_request.get("number")
     if not isinstance(full_name, str) or not full_name:
@@ -372,8 +368,10 @@ def merge_from_payload(
     return GithubMerge(
         repository=full_name,
         number=number,
-        merged_by=login,
+        merged_by=login if isinstance(login, str) else "",
         url=str(pull_request.get("html_url") or ""),
+        merge_sha=str(pull_request.get("merge_commit_sha") or ""),
+        approves_workorder=human,
     )
 
 
@@ -395,6 +393,7 @@ class GithubIngress:
         repository: str = "",
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
+        reconcile_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
         handle_review_request: Callable[[GithubReviewRequest], Awaitable[None]] | None = None,
         authenticated_login: Callable[[str], Awaitable[str]] | None = None,
@@ -417,6 +416,7 @@ class GithubIngress:
         self._may_act = may_act
         self._handle = handle
         self._handle_merge = handle_merge
+        self._reconcile_merge = reconcile_merge
         self._handle_assignment = handle_assignment
         self._handle_review_request = handle_review_request
         self._verify_signature = verify_signature
@@ -547,7 +547,7 @@ class GithubIngress:
                 comment, "comment", (comment.event, comment.comment_id),
                 wired=self._handle is not None, delivery_id=delivery_id,
             )
-        merged = merge_from_payload(event, payload, self_login=self_login)
+        merged = merge_from_payload(event, payload, self_login=self_login, include_automated=self._reconcile_merge is not None)
         if merged is not None:
             # By the pull request rather than by a delivery id: what is acted on
             # is that this pull request is merged, which happens once, and a
@@ -555,7 +555,7 @@ class GithubIngress:
             return self._enqueue(
                 merged, "merged pull request",
                 (MERGE_EVENT, f"{merged.repository.lower()}#{merged.number}"),
-                wired=self._handle_merge is not None, delivery_id=delivery_id,
+                wired=self._handle_merge is not None or self._reconcile_merge is not None, delivery_id=delivery_id,
             )
         if event in COMMENT_EVENTS:
             # A comment is what somebody expects an answer to, so one that is
@@ -647,8 +647,13 @@ class GithubIngress:
                     if self._may_act is None or await self._may_act(delivery):
                         await self._handle_review_request(delivery)
                 else:
-                    assert self._handle_merge is not None
-                    await self._handle_merge(delivery)
+                    if self._reconcile_merge is not None:
+                        try:
+                            await self._reconcile_merge(delivery)
+                        except Exception:
+                            log.exception("Could not reconcile findings for %s", delivery.url)
+                    if delivery.approves_workorder and self._handle_merge is not None:
+                        await self._handle_merge(delivery)
                 log.info(
                     "handled %s in %.1fs%s", named, time.monotonic() - began,
                     self._outcome(comment),
