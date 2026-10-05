@@ -13,6 +13,7 @@ from layout import PACKAGES, Package
 #: Straight from the ticket's tree. Hard-coded on purpose -- discovery finding
 #: five packages and calling it a day would pass a discovery-driven test.
 EXPECTED_PACKAGE_ROOTS = [
+    "packages/adapters/sandbox/process",
     "packages/domain",
     "packages/ports",
     "packages/runtime",
@@ -35,6 +36,7 @@ EXPECTED_PACKAGE_ROOTS = [
 
 #: Capability -> the port protocol that defines it.
 CAPABILITIES = {
+    "Sandbox": "Sandbox",
     "Workflow Runtime": "WorkflowRuntime",
     "Source Control": "SourceControl",
     "Agent Runner": "AgentRunner",
@@ -47,6 +49,7 @@ CAPABILITIES = {
 #: path names the capability before the vendor, because that is where the
 #: adapter lives: `packages/adapters/<capability>/<vendor>`.
 IMPLEMENTATIONS = {
+    "Sandbox": ("engine.adapters.sandbox.process", "ProcessSandbox"),
     "Workflow Runtime": ("engine.adapters.workflow_runtime.temporal", "TemporalWorkflowRuntime"),
     "Source Control": ("engine.adapters.source_control.github", "GitHubSourceControl"),
     "Agent Runner": ("engine.adapters.agent_runner.acp", "ACPAgentRunner"),
@@ -103,5 +106,6 @@ def test_capabilities_container_covers_every_port() -> None:
         "communications",
         "workspace_provider",
         "state_store",
+        "sandbox",
     }
     assert set(Capabilities.__dataclass_fields__) == expected

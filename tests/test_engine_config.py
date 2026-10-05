@@ -810,3 +810,29 @@ def test_web_claude_provider_inherits_configured_login(tmp_path, monkeypatch):
 
     events = asyncio.run(prompt())
     assert any(event.data.get("content") == {"type": "text", "text": str(directory)} for event in events)
+
+
+@pytest.mark.parametrize("backend", ["process", "smolvm"])
+def test_sandbox_configuration(backend):
+    assert parse_engine_config({}).sandbox.backend == "process"
+    assert parse_engine_config({"sandbox": {"backend": backend}}).sandbox.backend == backend
+
+
+@pytest.mark.parametrize("sandbox", [{"backend": "docker"}, {"backend": None}, {"unknown": True}, "process"])
+def test_invalid_sandbox_configuration(sandbox):
+    with pytest.raises(EngineConfigError, match="sandbox"):
+        parse_engine_config({"sandbox": sandbox})
+
+
+@pytest.mark.parametrize("app", [web_main, worker_main, control_server_main])
+def test_sandbox_backend_composition(app, tmp_path):
+    from dataclasses import replace
+    from engine.adapters.sandbox.process import ProcessSandbox
+
+    settings = app.Settings()
+    if hasattr(settings, "sqlite_path"):
+        settings = replace(settings, sqlite_path=str(tmp_path / "state.sqlite"))
+    assert isinstance(app.build_capabilities(settings).sandbox, ProcessSandbox)
+    settings = replace(settings, engine_config=parse_engine_config({"sandbox": {"backend": "smolvm"}}))
+    with pytest.raises(NotImplementedError, match="smolvm"):
+        app.build_capabilities(settings)

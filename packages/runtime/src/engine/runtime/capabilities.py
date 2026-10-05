@@ -12,6 +12,7 @@ from engine.ports import (
     AgentRunner,
     Communications,
     SourceControl,
+    Sandbox,
     StateStore,
     WorkflowRuntime,
     WorkspaceProvider,
@@ -28,6 +29,7 @@ class Capabilities:
     communications: Communications
     workspace_provider: WorkspaceProvider
     state_store: StateStore
+    sandbox: Sandbox | None = None
 
 
 __all__ = ["Capabilities"]
