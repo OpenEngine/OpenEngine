@@ -1742,11 +1742,12 @@ def test_concurrent_update_is_not_credited_to_noop_push():
     asyncio.run(scenario())
 
 
-def test_issue_publication_requires_explicit_resolution_and_approval():
+@pytest.mark.parametrize("accepted", [True, False])
+def test_issue_publication_requires_explicit_resolution_and_approval(accepted):
     async def scenario():
         source = AsyncMock()
         source.request_review.return_value = "https://github.com/acme/api/pull/8"
-        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT if accepted else ApprovalDecision.CANCEL)
         broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
         broker.enable_repository_tools(source, ("open_pull_request",), WorkspaceId("ws"), approval)
         broker.enable_issue({"repository": "acme/api", "number": 7})
@@ -1756,9 +1757,17 @@ def test_issue_publication_requires_explicit_resolution_and_approval():
         source.request_review.assert_not_awaited()
         args["issue_resolution"] = "resolves"
         result = await broker._submit(_direct_request(broker, "2", "open_pull_request", args))
-        assert result["ok"]
-        assert source.request_review.await_args.kwargs == {"issue": {"repository": "acme/api", "number": 7}, "issue_resolution": "resolves"}
+        assert result["ok"] is accepted
+        assert source.request_review.await_count == int(accepted)
+        if accepted:
+            assert source.request_review.await_args.kwargs == {"issue": {"repository": "acme/api", "number": 7}, "issue_resolution": "resolves"}
         approval.assert_awaited_once()
+        request = approval.await_args.args[0]
+        assert "git commit --amend" in request.reason
+        assert "git push --force-with-lease" in request.reason
+        assert "core.hooksPath=/dev/null" in request.reason
+        assert "helpers still run on the host" in request.reason
+        assert json.loads(request.arguments) == args
     asyncio.run(scenario())
 
 

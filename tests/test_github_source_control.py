@@ -830,12 +830,12 @@ def test_issue_publication_normalizes_body_and_head(monkeypatch, tmp_path, resol
     result = asyncio.run(source.request_review(WORKSPACE, "agent/issue", "main", "feat: change", f"Description\n\nFixes {reference}", issue={"repository": issue_repo, "number": 7}, issue_resolution=resolution))
     assert result.endswith("/8")
     assert source._api.await_args.kwargs["json"]["body"] == f"Description\n\n{keyword} {reference}"
-    amends = [call for call in calls if call[:2] == ("commit", "--amend")]
+    amends = [call for call in calls if call[2:4] == ("commit", "--amend")]
     if resolution == "resolves":
         assert len(amends) == 1
         assert f"Resolves {reference}" in amends[0][-1]
         assert f"Refs {reference}" in amends[0][-1]
-        assert ("push", "--force-with-lease=refs/heads/agent/issue:abc1234", "origin", "HEAD:refs/heads/agent/issue") in calls
+        assert ("-c", "core.hooksPath=/dev/null", "push", "--force-with-lease=refs/heads/agent/issue:abc1234", "origin", "HEAD:refs/heads/agent/issue") in calls
     else:
         assert not amends
 
@@ -868,6 +868,8 @@ def test_addressed_review_reply_resolves_only_when_enabled(resolve, enabled):
     assert posted[0][2]["json"]["body"] == ("Addressed in abcdef0: " if resolve else "") + "Guard the empty input"
     mutations = [request for request in requests if "mutation" in request[2].get("json", {}).get("query", "")]
     assert len(mutations) == int(resolve and enabled)
+    queries = [request for request in requests if "query" in request[2].get("json", {}).get("query", "")]
+    assert len(queries) == 1
     if mutations:
         assert mutations[0][2]["json"]["variables"] == {"thread": "PRRT_1"}
 
@@ -913,12 +915,23 @@ def test_issue_head_amend_is_published_and_keeps_credit_once(tmp_path):
     _git(root, "commit", "-m", "feat: fix the issue")
     _git(root, "push", "origin", "agent/issue")
     old = _git(root, "rev-parse", "HEAD")
+    tree = _git(root, "rev-parse", "HEAD^{tree}")
+    hooks = tmp_path / "untrusted-hooks"
+    hooks.mkdir()
+    marker = tmp_path / "hook-executed"
+    for name in ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite", "pre-push"):
+        hook = hooks / name
+        hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n")
+        hook.chmod(0o755)
+    _git(root, "config", "core.hooksPath", str(hooks))
     source._repo_coords = AsyncMock(return_value=("acme", "api"))
     source._api = AsyncMock(return_value={"html_url": "https://github.com/acme/api/pull/8"})
     asyncio.run(source.request_review(WORKSPACE, "agent/issue", "main", "feat: fix", "Fixes #7", issue={"repository": "acme/api", "number": 7}, issue_resolution="resolves"))
     new = _git(root, "rev-parse", "HEAD")
     message = _git(root, "log", "-1", "--format=%B")
     assert old != new
+    assert not marker.exists()
+    assert _git(root, "rev-parse", "HEAD^{tree}") == tree
     assert message.count("Resolves #7") == message.count("Refs #7") == 1
     assert message.count("Co-authored-by: Alice <alice@example.test>") == 1
     assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == new
@@ -931,7 +944,7 @@ def test_resolution_retry_reuses_own_posted_reply():
     from engine.ports.source_control import Discussion
     source = GitHubSourceControl("")
     source.review_thread = AsyncMock(return_value=Discussion("alice", "Fix", "", comment_id=41, thread_id="PRRT_1"))
-    source.resolve_review_thread = AsyncMock(side_effect=[RuntimeError("unavailable"), True])
+    source._resolve_validated_thread = AsyncMock(side_effect=[RuntimeError("unavailable"), True])
     source.authenticated_login = AsyncMock(return_value="engine")
     posted = {"id": 42, "html_url": "https://github.com/acme/api/pull/7#discussion_r42", "body": "Addressed in abcdef0: Fixed", "in_reply_to_id": 41, "user": {"login": "engine"}}
     source._paginated_objects = AsyncMock(side_effect=[[], [posted]])

@@ -940,9 +940,21 @@ class TerminalMcpBroker:
     async def _approve_forge(self, name: str, arguments: object, request_id: McpRequestId) -> dict[str, object] | None:
         if self._git_approval is None:
             return {"ok": False, "error": f"{name} requires approval handling for this step"}
+        reason = "Publish changes to GitHub."
+        if name == "open_pull_request" and self._issue:
+            reason = (
+                "Open an issue-linked pull request on GitHub. On the host, update the "
+                "head commit's issue trailers with git commit --amend --only --allow-empty "
+                "--message, then rewrite the published branch with git push "
+                "--force-with-lease=refs/heads/<branch>:<current-head> origin "
+                "HEAD:refs/heads/<branch> if the message changed. Both commands disable "
+                "all repository hooks with -c core.hooksPath=/dev/null; existing credit "
+                "trailers are preserved. Git transport and credential helpers still run "
+                "on the host. The branch and issue resolution are supplied in the arguments."
+            )
         request = ApprovalRequest(
             approval_id=f"terminal:{self._agent_run_id}:{request_id}",
-            kind=ApprovalKind.TOOL_USE, reason="Publish changes to GitHub.",
+            kind=ApprovalKind.TOOL_USE, reason=reason,
             tool_name=f"mcp__{_SERVER_NAME}__{name}",
             arguments=json.dumps(arguments, sort_keys=True),
             allowed_decisions=(ApprovalDecision.ACCEPT, ApprovalDecision.CANCEL),

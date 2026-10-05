@@ -235,8 +235,11 @@ class GitHubSourceControl:
             raise ValueError("push the current head before opening the issue pull request")
         if old.strip() == updated.strip():
             return
-        await self._git_checked(root, ("commit", "--amend", "--only", "--allow-empty", "--message", updated))
-        await self._git_checked(root, ("push", f"--force-with-lease=refs/heads/{branch}:{head}",
+        # This host-side metadata rewrite preserves existing credit trailers.
+        # Do not execute checkout-controlled hooks while amending or publishing it.
+        no_hooks = ("-c", f"core.hooksPath={os.devnull}")
+        await self._git_checked(root, (*no_hooks, "commit", "--amend", "--only", "--allow-empty", "--message", updated))
+        await self._git_checked(root, (*no_hooks, "push", f"--force-with-lease=refs/heads/{branch}:{head}",
                                        "origin", f"HEAD:refs/heads/{branch}"))
 
     async def can_write_repository(
@@ -380,7 +383,7 @@ class GitHubSourceControl:
                 )
             if resolve:
                 try:
-                    await self.resolve_review_thread(pr_url, thread_id)
+                    await self._resolve_validated_thread(thread)
                 except Exception as error:
                     raise GitHubSourceControlError(
                         f"Reply posted at {response['html_url']}, but thread resolution failed; "
@@ -468,13 +471,17 @@ class GitHubSourceControl:
         thread = next((thread for thread in threads if thread.thread_id == thread_id), None)
         if thread is None:
             raise ValueError("review thread does not belong to this pull request")
+        return await self._resolve_validated_thread(thread)
+
+    async def _resolve_validated_thread(self, thread: Discussion) -> bool:
+        """Resolve a thread whose membership the caller has already checked."""
         if not self._resolve_addressed_threads:
             return False
         if thread.is_resolved:
             return True
         data = await self._graphql("""mutation($thread: ID!) {
           resolveReviewThread(input: {threadId: $thread}) { thread { id isResolved } }
-        }""", thread=thread_id)
+        }""", thread=thread.thread_id)
         if data["resolveReviewThread"]["thread"]["isResolved"] is not True:
             raise GitHubSourceControlError("GitHub did not resolve the review thread")
         return True
