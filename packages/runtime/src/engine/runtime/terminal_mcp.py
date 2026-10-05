@@ -166,6 +166,8 @@ class PostedComment:
     kind: Literal["issue", "review"]
     """Which of GitHub's two comment id spaces `result.id` was drawn from."""
     result: CommentResult
+    pr_url: str = ""
+    finding: Mapping[str, object] | None = None
 
 
 class TerminalResultAlreadySubmittedError(RuntimeError):
@@ -596,11 +598,11 @@ class TerminalMcpBroker:
             kind: Literal["issue", "review"] = (
                 "review" if file is not None or in_reply_to_id is not None else "issue"
             )
-            await self._record_comment(kind, result)
+            await self._record_comment(kind, result, pr_url=pr_url, finding=arguments.get("finding"))
             return {
                 "ok": True,
                 "acknowledgement": "comment added",
-                "output": json.dumps(dataclasses.asdict(result), sort_keys=True),
+                "output": json.dumps({"id": result.id, "url": result.url}, sort_keys=True),
             }
 
         if self._workspace_id is None:
@@ -881,7 +883,8 @@ class TerminalMcpBroker:
             logger.exception("Could not record the opened pull request %s", url)
 
     async def _record_comment(
-        self, kind: Literal["issue", "review"], result: CommentResult
+        self, kind: Literal["issue", "review"], result: CommentResult,
+        *, pr_url: str = "", finding: Mapping[str, object] | None = None,
     ) -> None:
         """Write down a comment that is already posted, if anyone is keeping it.
 
@@ -900,7 +903,7 @@ class TerminalMcpBroker:
                 )
                 return
             await self._comment_recorder(
-                PostedComment(posted.project, posted.number, kind, result)
+                PostedComment(posted.project, posted.number, kind, result, pr_url, finding)
             )
         except Exception:
             logger.exception(
@@ -1152,6 +1155,18 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
                 "comment": {"type": "string", "minLength": 1},
                 "file": {"type": "string", "minLength": 1},
                 "line": {"type": "integer", "minimum": 1},
+                "finding": {
+                    "type": "object",
+                    "description": "When posting a review finding, its structured fields with original reviewer lineage, including file and line even for a general comment.",
+                    "properties": {
+                        "tagline": {"type": "string"}, "description": {"type": "string"},
+                        "agent": {"type": "string"}, "facet": {"type": "string"},
+                        "severity": {"type": "string"}, "file": {"type": ["string", "null"]},
+                        "line": {"type": ["integer", "null"]}, "model_tier": {"type": ["string", "null"]},
+                    },
+                    "required": ["tagline", "description", "agent", "facet"],
+                    "additionalProperties": False,
+                },
                 "in_reply_to_id": {"type": "integer", "minimum": 1},
             },
             "required": ["pr_url", "comment"],
@@ -1360,7 +1375,7 @@ def _comment_arguments(
 ) -> tuple[str, str, str | None, int | None, int | None]:
     if not isinstance(arguments, dict):
         raise ValueError("add_comment arguments must be an object")
-    unexpected = set(arguments) - {"pr_url", "comment", "file", "line", "in_reply_to_id"}
+    unexpected = set(arguments) - {"pr_url", "comment", "file", "line", "in_reply_to_id", "finding"}
     if unexpected:
         names = ", ".join(sorted(str(name) for name in unexpected))
         raise ValueError(f"unexpected add_comment arguments: {names}")

@@ -51,6 +51,7 @@ class CommentResult:
 
     id: int
     url: str
+    head_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,6 +13,7 @@ letting callers pass a path is what keeps the engine from ever holding one.
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import logging
 import os
@@ -316,7 +317,39 @@ class GitHubSourceControl:
                 "side": "RIGHT",
             },
         )
-        return CommentResult(response["id"], response["html_url"])
+        return CommentResult(response["id"], response["html_url"], head_sha)
+
+    async def finding_head(self, pr_url: str) -> str:
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        pr = await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}")
+        return pr["head"]["sha"]
+
+    async def finding_file(self, pr_url: str, sha: str, path: str) -> str:
+        """Read an exact revision, distinguishing absent paths from API failures."""
+        owner, repo, _ = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        prefix = f"/repos/{owner}/{repo}"
+        commit = await self._api("GET", f"{prefix}/git/commits/{quote(sha, safe='')}")
+        tree_sha = commit["tree"]["sha"]
+        parts = path.split("/")
+        for index, part in enumerate(parts):
+            tree = await self._api("GET", f"{prefix}/git/trees/{tree_sha}")
+            if tree.get("truncated"):
+                raise GitHubSourceControlError("Cannot reconcile a truncated tree")
+            entry = next((item for item in tree["tree"] if item["path"] == part), None)
+            if entry is None:
+                return ""
+            if index < len(parts) - 1:
+                if entry["type"] != "tree":
+                    return ""
+                tree_sha = entry["sha"]
+            else:
+                if entry["type"] != "blob":
+                    raise GitHubSourceControlError("Finding path is not a file")
+                blob = await self._api("GET", f"{prefix}/git/blobs/{entry['sha']}")
+                if blob.get("encoding") != "base64":
+                    raise GitHubSourceControlError("Unsupported finding file encoding")
+                return base64.b64decode(blob["content"]).decode("utf-8")
+        raise GitHubSourceControlError("Empty finding path")
 
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int

@@ -11,6 +11,7 @@ from uuid import uuid4
 import warnings
 
 from migrations.migration import upgrade_connection
+from .findings import SQLiteFindingsLedger
 
 from engine.domain.agents import AgentInstance, AgentRun, AgentRunStatus
 from engine.domain.approvals import (
@@ -52,6 +53,7 @@ class SQLiteStateStore:
         with self._lock, self._connection:
             self._connection.execute("PRAGMA foreign_keys = ON")
             upgrade_connection(self._connection)
+        self.findings = SQLiteFindingsLedger(self._connection, self._lock)
 
     # --- workflow runs ----------------------------------------------------
 

@@ -104,6 +104,8 @@ ANSWER_REVIEW = ByMode(
 PUBLISH_FINDINGS = ByMode(
     connected=(
         "For each surviving finding, post it as a PR comment using add_comment. "
+        "Pass the original structured finding (including agent, facet, file and "
+        "line) in the finding argument, even when posting a general comment. "
         "Format each comment as:\n\n"
         "**<tagline>**\n\n"
         "<description>\n\n"

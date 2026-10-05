@@ -81,6 +81,8 @@ from engine.graph_runtime_langgraph.executions import (
     driving,
 )
 from engine.graph_runtime_langgraph.graphs import START, LangGraphDefinition
+from engine.ports.findings_ledger import FindingsLedger
+
 from engine.graph_runtime_langgraph.store import (
     ApprovalRecord,
     GraphRuntimeStore,
@@ -149,7 +151,9 @@ class LangGraphRuntime:
         store: GraphRuntimeStore | None = None,
         source_control: SourceControl | None = None,
         checkpointer: Any | None = None,
+        findings_ledger: FindingsLedger | None = None,
     ) -> None:
+        self.findings_ledger = findings_ledger
         self._definitions = {graph.graph_id: graph for graph in graphs}
         self.checkpointer = checkpointer
         """What a graph added after construction is compiled against.

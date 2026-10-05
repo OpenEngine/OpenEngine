@@ -1073,7 +1073,8 @@ def test_posted_comments_are_recorded_against_the_change_request(
 
     assert asyncio.run(scenario()) == [
         PostedComment(
-            repository, 42, "issue", CommentResult(123, comment_url)
+            repository, 42, "issue", CommentResult(123, comment_url),
+            pr_url="https://github.com/acme/api/pull/42",
         )
     ]
 
