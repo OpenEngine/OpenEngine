@@ -25,9 +25,9 @@ from engine.scoper import Scoper, _plan, scope
 
 @pytest.mark.parametrize("supersede", [False, True])
 @pytest.mark.parametrize("source_ref", [
-    "jira_issue", ["kind", "ref"], 1, True, "", [], 0, False, {},
-    {"kind": "jira_issue"}, {"ref": "TEAM-12"},
-    {"kind": "jira_issue", "ref": "TEAM-12", "extra": "unexpected"},
+    "github_issue", ["kind", "ref"], 1, True, "", [], 0, False, {},
+    {"kind": "github_issue"}, {"ref": "https://github.com/org/repo/issues/12"},
+    {"kind": "github_issue", "ref": "https://github.com/org/repo/issues/12", "extra": "unexpected"},
 ])
 def test_scoper_rejects_malformed_source_refs(source_ref, supersede) -> None:
     ticket = {

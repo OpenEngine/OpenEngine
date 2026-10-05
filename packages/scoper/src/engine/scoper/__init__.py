@@ -36,7 +36,7 @@ may be empty. Specs may also include key (unique within this plan), layer
 (contracts, data, api, frontend), estimated_changed_lines (nonnegative integer),
 acceptance_criteria (strings), dependency_keys (plan-local keys), parent_key
 (a plan-local key; subtasks are derived), and source_ref ({kind, ref}, with kind
-one of github_milestone, github_issue, jira_epic, jira_issue). The dependencies field names
+one of github_milestone, github_issue). The dependencies field names
 existing durable work-order ids; dependency_keys names tickets in this proposal,
 including supersession replacements. All proposals require caller approval.
 Do not wrap the JSON in Markdown.

@@ -44,8 +44,6 @@ class TicketApproval(Enum):
 class TicketSourceKind(Enum):
     GITHUB_MILESTONE = "github_milestone"
     GITHUB_ISSUE = "github_issue"
-    JIRA_EPIC = "jira_epic"
-    JIRA_ISSUE = "jira_issue"
 
 
 @dataclass(frozen=True, slots=True)

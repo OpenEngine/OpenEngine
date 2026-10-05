@@ -110,7 +110,7 @@ def test_invalid_ticket_contract(changes):
 
 @pytest.mark.parametrize("kind", list(TicketSourceKind))
 def test_source_refs(kind):
-    assert TicketSourceRef(kind.value, "TEAM-12").kind is kind
+    assert TicketSourceRef(kind.value, "https://github.com/org/repo/issues/12").kind is kind
     with pytest.raises(ValueError):
         TicketSourceRef(kind, "")
 
@@ -122,7 +122,7 @@ def test_scoper_preserves_contract_fields_but_cannot_approve():
         "layer": "api", "estimated_changed_lines": 42,
         "acceptance_criteria": ["Returns 200"], "dependency_keys": ["data"],
         "parent_key": "feature", "approval": "approved",
-        "source_ref": {"kind": "jira_issue", "ref": "TEAM-12"},
+        "source_ref": {"kind": "github_issue", "ref": "https://github.com/org/repo/issues/12"},
     }]}))
     ticket = plan.create[0]
     assert ticket.layer is TicketLayer.API
@@ -130,7 +130,7 @@ def test_scoper_preserves_contract_fields_but_cannot_approve():
     assert ticket.acceptance_criteria == ("Returns 200",)
     assert ticket.dependency_keys == ("data",)
     assert ticket.parent_key == "feature"
-    assert ticket.source_ref == TicketSourceRef(TicketSourceKind.JIRA_ISSUE, "TEAM-12")
+    assert ticket.source_ref == TicketSourceRef(TicketSourceKind.GITHUB_ISSUE, "https://github.com/org/repo/issues/12")
     assert ticket.approval is TicketApproval.PROPOSED
 
 
