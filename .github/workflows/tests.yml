@@ -91,7 +91,8 @@ jobs:
 
   web:
     name: web client
-    runs-on: ubuntu-latest
+    # Fork PRs keep hosted CI; only repository branches use the Mac mini.
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted", "macOS", "ARM64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -120,7 +121,8 @@ jobs:
     # user would have seen -- which should not be reported as a component test
     # or a Python test going red.
     name: browser end to end
-    runs-on: ubuntu-latest
+    # Fork PRs keep hosted CI; only repository branches use the Mac mini.
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted", "macOS", "ARM64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -182,7 +184,8 @@ jobs:
     # break the code", and deserves its own red X. It is version-independent --
     # the checks are static analysis over the source tree.
     name: dependency boundaries
-    runs-on: ubuntu-latest
+    # Fork PRs keep hosted CI; only repository branches use the Mac mini.
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted", "macOS", "ARM64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -211,15 +214,17 @@ jobs:
         # dependency that arrives through packaging rather than an import.
         run: |
           set -euo pipefail
-          uv venv /tmp/bare
-          uv pip install --python /tmp/bare/bin/python packages/domain
-          uv pip freeze --python /tmp/bare/bin/python
-          installed=$(uv pip freeze --python /tmp/bare/bin/python | wc -l)
+          bare=$(mktemp -d "$RUNNER_TEMP/domain-bare.XXXXXX")
+          trap 'rm -rf "$bare"' EXIT
+          uv venv "$bare"
+          uv pip install --python "$bare/bin/python" packages/domain
+          uv pip freeze --python "$bare/bin/python"
+          installed=$(uv pip freeze --python "$bare/bin/python" | wc -l)
           if [ "$installed" -ne 1 ]; then
             echo "::error::expected only engine-domain, found $installed packages"
             exit 1
           fi
-          /tmp/bare/bin/python -c "
+          "$bare/bin/python" -c "
           from dataclasses import replace
           from engine.domain import RunId, RunPhase, RunState, TaskId, WorkflowId
           run = RunState(
@@ -234,7 +239,8 @@ jobs:
 
   tests:
     name: tests (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    # Fork PRs keep hosted CI; only repository branches use the Mac mini.
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted", "macOS", "ARM64"]' || '["ubuntu-latest"]') }}
     strategy:
       # Report every version's result; one old-version failure should not hide
       # the others.

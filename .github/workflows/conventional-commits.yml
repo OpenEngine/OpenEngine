@@ -27,7 +27,8 @@ concurrency:
 jobs:
   pr-title:
     name: Validate PR title
-    runs-on: ubuntu-latest
+    # Fork PRs keep hosted CI; only repository branches use the Mac mini.
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted", "macOS", "ARM64"]' || '["ubuntu-latest"]') }}
     # The action reads the title through the PR API rather than the event
     # payload, so it needs this scope; without it the API 403s as
     # "Resource not accessible by integration". No checkout, so no contents.
@@ -55,7 +56,8 @@ jobs:
 
   commit-messages:
     name: Validate commit messages
-    runs-on: ubuntu-latest
+    # Fork PRs keep hosted CI; only repository branches use the Mac mini.
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted", "macOS", "ARM64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
