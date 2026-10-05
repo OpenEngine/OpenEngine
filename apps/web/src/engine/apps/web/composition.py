@@ -31,6 +31,8 @@ from langgraph_acp.providers import (
     CLAUDE_ACP_COMMAND,
     CODEX_ACP_COMMAND,
     OPENCODE_ACP_COMMAND,
+    ClaudeACPProvider,
+    CodexACPProvider,
 )
 
 from engine.adapters.agent_runner.acp import (
@@ -81,7 +83,9 @@ from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
-from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+from engine.graph_runtime_langgraph import LangGraphRuntime
+from engine.graph_runtime_langgraph.workflows import RUNS, agent_registry, sqlite_runtime
+from engine.graph_service import GraphService, StartRun
 from engine.ports import AgentRunner, Communications, SourceControl
 from engine.runtime import (
     AgentSession,
@@ -378,6 +382,38 @@ def build_graph_runtime(
         settings.graph_state_directory,
         source_control=source_control,
     )
+
+
+def build_graph_service(
+    settings: Settings,
+    *,
+    default_repository: str = "",
+    repositories: Mapping[str, str] | None = None,
+) -> Callable[[LangGraphRuntime, StartRun], GraphService]:
+    config = settings.engine_config
+    """How the daemon offers registered graphs, once its graph engine is open.
+
+    A factory rather than a service, because the service registers graphs on
+    the runtime and the runtime does not exist until the server starts. Its
+    agents are langgraph-acp sessions on the same providers the workflow
+    directory's graphs use; its tables live in the graph engine's own file.
+    """
+
+    def build(runtime: LangGraphRuntime, start: StartRun) -> GraphService:
+        return GraphService(
+            runtime,
+            Path(settings.graph_state_directory) / RUNS,
+            workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
+            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider()]),
+            start=start,
+            session_config=claude_session_config_for(settings),
+            default_repository=default_repository,
+            repositories=repositories,
+            model_tiers=config.model_tiers,
+            allow_python=config.graphs.allow_python,
+        )
+
+    return build
 
 
 def claude_session_config_for(settings: Settings) -> dict[str, object] | None:

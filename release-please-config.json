@@ -145,6 +145,16 @@
           "type": "toml",
           "path": "langgraph-acp/uv.lock",
           "jsonpath": "$.package[?(@.source.editable)].version"
+        },
+        {
+          "type": "toml",
+          "path": "cli/client/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
+          "path": "cli/service/pyproject.toml",
+          "jsonpath": "$.project.version"
         }
       ]
     }

@@ -32,6 +32,7 @@ from urllib.request import Request, urlopen
 from platformdirs import user_config_path, user_data_path, user_state_path
 
 from engine.apps.cli import daemon, onboarding
+from engine.cli import backends, commands as graph_commands
 from engine.domain import (
     STATE_INPUT, TRIAGE_TOOL, WorkState, finding_comment, review_inputs,
 )
@@ -90,6 +91,8 @@ def preferences_path() -> Path:
 
 def service_token() -> str:
     """Reuse the server's existing local bearer credential without a new login."""
+    if (selected := selected_backend()) is not None and (token := selected.token()):
+        return token
     if token := os.environ.get("ENGINE_SERVICE_TOKEN"):
         return token
     try:
@@ -510,9 +513,23 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
     return EXIT_UNHEALTHY
 
 
+def selected_backend() -> backends.Backend | None:
+    """The backend `engine backend use` chose, once anyone has chosen one."""
+    try:
+        config = backends.load()
+        if not config.configured and not os.environ.get(backends.SELECTED_ENVIRONMENT_VARIABLE):
+            return None
+        return config.selected()
+    except backends.BackendError:
+        return None
+
+
 def selected_server(arguments: argparse.Namespace, preferences: Preferences) -> str:
-    candidate = arguments.server if getattr(arguments, "server", None) else preferences.profile().server
-    return normalize_server(candidate)
+    if getattr(arguments, "server", None):
+        return normalize_server(arguments.server)
+    if (backend := selected_backend()) is not None:
+        return normalize_server(backend.url)
+    return normalize_server(preferences.profile().server)
 
 
 def read_service(arguments: argparse.Namespace, preferences: Preferences) -> tuple[str, Check]:
@@ -1794,6 +1811,7 @@ def parser() -> argparse.ArgumentParser:
     reviewing.add_argument("--json", action="store_true", help="print the findings as JSON and leave the review waiting")
     onboarding.add_parser(commands)
     daemon.add_parser(commands)
+    graph_commands.add_parsers(commands)
     return result
 
 
@@ -1817,6 +1835,8 @@ def main(argv: list[str] | None = None) -> int:
         return onboarding.main(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
+    if arguments.command in graph_commands.COMMANDS:
+        return graph_commands.main(arguments)
     raise AssertionError("unreachable command")
 
 
