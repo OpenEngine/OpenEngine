@@ -1423,7 +1423,7 @@ def _review_catalog():
         inputs=(
             mode_input(), state_input(WorkState.PLANNING, WorkState.REVIEW),
             WorkflowInput("ref", "Ref"), WorkflowInput("pr_url", "Pull request"),
-            WorkflowInput("branch", "Branch"),
+            WorkflowInput("branch", "Branch"), WorkflowInput("publish_review", "Publish"),
         ),
     ),))
 
@@ -1466,6 +1466,8 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(tmp_path, may_w
         assert inputs["inputs"] == {
             "mode": "connected", "state": "Review", "ref": "origin/feature",
             "pr_url": "https://github.com/acme/api/pull/12", "branch": "feature",
+            # Whoever asked reads the review on the pull request, not at triage.
+            "publish_review": "true",
         }
         # Claimed, so the review may comment on the pull request it was given.
         record = runtime.store.claim_pull_request.await_args.args[0]

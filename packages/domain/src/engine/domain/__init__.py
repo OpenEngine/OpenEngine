@@ -27,6 +27,7 @@ from engine.domain.events import Event, RunFailed, StepCompleted
 from engine.domain.findings import (
     REVIEW_BRANCH_INPUT,
     REVIEW_PR_INPUT,
+    REVIEW_PUBLISH_INPUT,
     REVIEW_REF_INPUT,
     TRIAGE_TOOL,
     finding_comment,
@@ -89,6 +90,7 @@ __all__ = [
     "review_inputs",
     "REVIEW_BRANCH_INPUT",
     "REVIEW_PR_INPUT",
+    "REVIEW_PUBLISH_INPUT",
     "REVIEW_REF_INPUT",
     "TRIAGE_TOOL",
     "Message",

@@ -239,12 +239,14 @@ describe("NewWorkflowPage", () => {
         { name: "ref", label: "Ref to review", default: "", required: false, choices: [] },
         { name: "pr_url", label: "Pull request to review", default: "", required: false, choices: [] },
         { name: "branch", label: "Pull request branch", default: "", required: false, choices: [] },
+        { name: "publish_review", label: "Post the review to the pull request", default: "", required: false, choices: [] },
         { name: "context", label: "Context", default: "", required: false, choices: [] },
       ],
     }] }} />);
     expect(screen.queryByLabelText("Ref to review")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Pull request to review")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Pull request branch")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Post the review to the pull request")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Context")).toBeVisible();
   });
 
