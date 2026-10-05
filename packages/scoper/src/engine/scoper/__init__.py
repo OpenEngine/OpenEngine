@@ -35,8 +35,11 @@ milestone_id, name, objective, evidence_requirements, and dependencies. Every li
 may be empty. Specs may also include key (unique within this plan), layer
 (contracts, data, api, frontend), estimated_changed_lines (nonnegative integer),
 acceptance_criteria (strings), dependency_keys (plan-local keys), parent_key
-(a plan-local key; subtasks are derived), and source_ref ({kind, ref}, with kind
-one of github_milestone, github_issue). The dependencies field names
+(a plan-local key; subtasks are derived), and source_ref ({kind, repository, number}, with kind
+one of github_milestone, github_issue, repository in owner/repo form, and number
+a positive issue or milestone number). Copy source_ref only from the matching
+input milestone's source_refs or an existing work order for that milestone.
+Omit source_ref when no source was supplied; never infer it from prose. The dependencies field names
 existing durable work-order ids; dependency_keys names tickets in this proposal,
 including supersession replacements. All proposals require caller approval.
 Do not wrap the JSON in Markdown.
@@ -68,7 +71,9 @@ def _strings(value: object, *, field: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _spec(value: object) -> WorkOrderSpec:
+def _spec(
+    value: object, *, sources: Mapping[str, set[TicketSourceRef]],
+) -> WorkOrderSpec:
     if not isinstance(value, Mapping):
         raise ValueError("scoper response work-order specs must be objects")
     try:
@@ -83,11 +88,15 @@ def _spec(value: object) -> WorkOrderSpec:
         )
     source_ref = value.get("source_ref")
     if source_ref is not None and (
-        not isinstance(source_ref, Mapping) or set(source_ref) != {"kind", "ref"}
+        not isinstance(source_ref, Mapping) or set(source_ref) != {"kind", "repository", "number"}
     ):
         raise ValueError(
-            "scoper response source_ref must be an object with exactly kind and ref"
+            "scoper response source_ref must be an object with exactly kind, repository and number"
         )
+    if source_ref is not None:
+        source_ref = TicketSourceRef(**source_ref)
+        if source_ref not in sources.get(milestone_id, set()):
+            raise ValueError("scoper response source_ref was not supplied for this milestone")
     return WorkOrderSpec(
         key=value.get("key", ""),
         layer=TicketLayer(value["layer"]) if value.get("layer") is not None else None,
@@ -97,7 +106,7 @@ def _spec(value: object) -> WorkOrderSpec:
         dependency_keys=_strings(value.get("dependency_keys", []), field="dependency_keys"),
         parent_key=value.get("parent_key"),
         approval=TicketApproval.PROPOSED,
-        source_ref=TicketSourceRef(**source_ref) if source_ref is not None else None,
+        source_ref=source_ref,
         milestone_id=MilestoneId(milestone_id),
         name=name,
         objective=objective,
@@ -111,7 +120,16 @@ def _spec(value: object) -> WorkOrderSpec:
     )
 
 
-def _plan(message: str) -> ScopingPlan:
+def _plan(
+    message: str, *, milestones: Sequence[MilestoneScope] = (),
+    workorders: Sequence[WorkOrder] = (),
+) -> ScopingPlan:
+    sources: dict[str, set[TicketSourceRef]] = {}
+    for milestone in milestones:
+        sources.setdefault(milestone.milestone_id, set()).update(milestone.source_refs)
+    for workorder in workorders:
+        if workorder.spec.source_ref is not None:
+            sources.setdefault(workorder.spec.milestone_id, set()).add(workorder.spec.source_ref)
     try:
         value: Any = json.loads(message)
     except json.JSONDecodeError as error:
@@ -131,11 +149,11 @@ def _plan(message: str) -> ScopingPlan:
         replacements.append(
             Supersession(
                 WorkOrderId(item["workorder_id"]),
-                tuple(_spec(spec) for spec in specs),
+                tuple(_spec(spec, sources=sources) for spec in specs),
             )
         )
     return ScopingPlan(
-        create=tuple(_spec(item) for item in create),
+        create=tuple(_spec(item, sources=sources) for item in create),
         cancel=tuple(
             WorkOrderId(item)
             for item in _strings(value.get("cancel", []), field="cancel")
@@ -173,7 +191,7 @@ class Scoper:
             if self.timeout_seconds is None
             else await asyncio.wait_for(turn, timeout=self.timeout_seconds)
         )
-        return _plan(result.message)
+        return _plan(result.message, milestones=milestones, workorders=workorders)
 
 
 @dataclass(frozen=True, slots=True)

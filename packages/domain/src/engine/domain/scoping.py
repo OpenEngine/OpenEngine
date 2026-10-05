@@ -1,5 +1,8 @@
 """Data exchanged across the work-order scoping boundary."""
 
+from __future__ import annotations
+
+import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -26,6 +29,8 @@ class MilestoneScope:
     dependencies: tuple[MilestoneId, ...] = field(default=())
     name: str = ""
     """Human-readable identity supplied alongside the durable milestone id."""
+    source_refs: tuple[TicketSourceRef, ...] = ()
+    """Caller-supplied GitHub milestone and issue identities backing this scope."""
 
 
 class TicketLayer(Enum):
@@ -49,12 +54,17 @@ class TicketSourceKind(Enum):
 @dataclass(frozen=True, slots=True)
 class TicketSourceRef:
     kind: TicketSourceKind
-    ref: str
+    repository: str
+    number: int
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", TicketSourceKind(self.kind))
-        if not isinstance(self.ref, str) or not self.ref.strip():
-            raise ValueError("source ref must be nonempty")
+        if not isinstance(self.repository, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", self.repository
+        ) or self.repository.split("/")[-1] in {".", ".."}:
+            raise ValueError("source repository must be owner/repo")
+        if type(self.number) is not int or self.number <= 0:
+            raise ValueError("source number must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)

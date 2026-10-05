@@ -27,7 +27,10 @@ from engine.scoper import Scoper, _plan, scope
 @pytest.mark.parametrize("source_ref", [
     "github_issue", ["kind", "ref"], 1, True, "", [], 0, False, {},
     {"kind": "github_issue"}, {"ref": "https://github.com/org/repo/issues/12"},
-    {"kind": "github_issue", "ref": "https://github.com/org/repo/issues/12", "extra": "unexpected"},
+    {"kind": "github_issue", "repository": "org/repo"},
+    {"repository": "org/repo", "number": 12},
+    {"kind": "github_issue", "number": 12},
+    {"kind": "github_issue", "repository": "org/repo", "number": 12, "extra": "unexpected"},
 ])
 def test_scoper_rejects_malformed_source_refs(source_ref, supersede) -> None:
     ticket = {
@@ -170,3 +173,69 @@ def test_scope_returns_new_scope_from_mocked_agent(
         ),),
         reasons=("Implementation is complete and browser validation is underway.",),
     )
+
+
+@pytest.mark.parametrize("supersede", [False, True])
+@pytest.mark.parametrize("kind", ["github_issue", "github_milestone"])
+@pytest.mark.parametrize("input_location", ["milestone", "workorder"])
+@pytest.mark.parametrize("change", [
+    {}, {"repository": "other/repo"}, {"number": 13},
+    {"kind": "github_milestone"}, {"milestone_id": "other"},
+])
+def test_scoper_checks_source_against_inputs(supersede, kind, input_location, change):
+    from langgraph_acp import ACPResult
+    from engine.domain import TicketSourceRef
+
+    source = TicketSourceRef(kind, "org/repo", 12)
+    raw_source = {"kind": kind, "repository": "org/repo", "number": 12}
+    returned_source = {**raw_source, **{k: v for k, v in change.items() if k != "milestone_id"}}
+    ticket = {
+        "milestone_id": change.get("milestone_id", "m"),
+        "name": "API", "objective": "Ship API", "source_ref": returned_source,
+    }
+    response = (
+        {"supersede": [{"workorder_id": "old", "replacements": [ticket]}]}
+        if supersede else {"create": [ticket]}
+    )
+    milestone = MilestoneScope(
+        MilestoneId("m"), source_refs=(source,) if input_location == "milestone" else (),
+    )
+    workorders = (
+        WorkOrder(WorkOrderId("old"), WorkOrderSpec(
+            MilestoneId("m"), "API", "Ship API", source_ref=source,
+        )),
+    ) if input_location == "workorder" else ()
+
+    async def node(prompt):
+        inputs = json.loads(prompt.split("Inputs:\n", 1)[1])
+        provided = (
+            inputs["milestones"][0]["source_refs"][0]
+            if input_location == "milestone"
+            else inputs["workorders"][0]["spec"]["source_ref"]
+        )
+        assert provided == raw_source
+        return ACPResult(message=json.dumps(response))
+
+    async def run():
+        return await Scoper(node=node).scope(
+            workorders=workorders, milestones=(milestone,), policy=ScopingPolicy(),
+        )
+
+    if returned_source != raw_source or ticket["milestone_id"] != "m":
+        with pytest.raises(ValueError, match="source_ref was not supplied"):
+            asyncio.run(run())
+    else:
+        plan = asyncio.run(run())
+        result = plan.supersede[0].replacements[0] if supersede else plan.create[0]
+        assert result.source_ref == source
+
+
+def test_scoper_rejects_source_without_structured_input():
+    response = json.dumps({"create": [{
+        "milestone_id": "m", "name": "API", "objective": "Ship API",
+        "source_ref": {"kind": "github_issue", "repository": "org/repo", "number": 12},
+    }]})
+    with pytest.raises(ValueError, match="source_ref was not supplied"):
+        _plan(response, milestones=(MilestoneScope(
+            MilestoneId("m"), requirements=("Implement https://github.com/org/repo/issues/12",),
+        ),))
