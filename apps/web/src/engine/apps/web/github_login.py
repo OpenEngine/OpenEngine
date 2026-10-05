@@ -40,6 +40,9 @@ _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 # The one route a service credential may reach: the MCP gateway creating work
 # orders. Everything else still requires a browser session.
 _SERVICE_ROUTE = ("POST", "/api/runs")
+#: The graph API `engine graph|loop|node` speak, which a remote CLI reaches with
+#: the same service credential. Operator-level, like the credential itself.
+_SERVICE_PREFIX = "/api/v1/"
 # How often a response still streaming asks whether its user may keep it, so an
 # open event stream ends about when a new request would be refused.
 _STREAM_RECHECK = 30
@@ -338,7 +341,10 @@ class GitHubLogin:
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
-        if (request.method, request.url.path) != _SERVICE_ROUTE:
+        if (
+            (request.method, request.url.path) != _SERVICE_ROUTE
+            and not request.url.path.startswith(_SERVICE_PREFIX)
+        ):
             return False
         expected = self.service_token()
         if not valid_service_token(expected):
@@ -514,7 +520,8 @@ class GitHubLogin:
 
         Unauthenticated requests to protected API endpoints receive a 401.
         Auth-related endpoints, static assets, and SPA pages are exempt. The
-        service token admits only `POST /api/runs`, for the MCP gateway.
+        service token admits `POST /api/runs`, for the MCP gateway, and the
+        `/api/v1/` graph API, for a CLI pointed at this server.
         """
         if not self.configured:
             return app

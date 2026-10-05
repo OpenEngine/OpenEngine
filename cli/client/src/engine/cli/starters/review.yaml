@@ -1,0 +1,64 @@
+apiVersion: openengine.dev/v1
+kind: Graph
+name: review
+description: Review your branch from four angles, consolidate the findings, and report them. Changes nothing.
+
+inputs:
+  instruction:
+    description: Anything to focus the review on
+  ref:
+    description: The branch to review (engine graph exec fills in your current branch)
+    required: true
+  reviewer:
+    description: The runner that reviews
+    default: codex
+    choices: [claude, codex, least-utilized]
+  runner:
+    description: The runner that consolidates the findings
+    default: claude
+    choices: [claude, codex, least-utilized]
+
+plan:
+  workspace:
+    ref: ${inputs.ref}
+
+review:
+  reviewers:
+    name: Review
+    agent: ${inputs.reviewer}
+    facets:
+      - {facet: security, model: elevated}
+      - {facet: bugs, model: default}
+      - {facet: performance, model: default}
+      - {facet: dryness, model: default}
+    prompt: |
+      Review the changes on this branch (${inputs.ref}) against the repository's
+      default branch, focusing only on **${item.facet.name}**.
+
+      ${item.facet.focus}
+
+      Find the merge base first (for example `git merge-base HEAD origin/HEAD`,
+      falling back to origin/main), then read the diff and the code around it
+      before judging. Inspect only: do not edit, commit or push anything.
+
+      The requester asked you to keep this in mind: ${instruction}
+    outputs:
+      findings: {type: findings, required: true}
+
+  reranker:
+    name: Consolidate
+    agent: ${inputs.runner}
+    prompt: |
+      ${size(outputs.reviewers)} reviewers examined the same branch, each from one
+      angle. Consolidate their findings, somewhat aggressively squashing noise.
+
+      Remove a finding that is a nitpick or a matter of taste, a duplicate of
+      another (even across angles), an unlikely hypothetical, not actionable, or
+      already handled by code the reviewer missed. Keep what a senior engineer
+      would want fixed before merging. Order what survives by severity, and keep
+      each finding's agent and facet unchanged.
+
+      The reviews:
+      ${json(outputs.reviewers)}
+    outputs:
+      findings: {type: findings, required: true, lineage: required}

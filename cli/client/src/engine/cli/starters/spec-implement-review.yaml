@@ -1,0 +1,108 @@
+apiVersion: openengine.dev/v1
+kind: Graph
+name: spec-implement-review
+description: Write a short spec, implement it, review the result against the spec with a different agent, and fix what survives once.
+
+inputs:
+  instruction:
+    description: What to build or change
+  runner:
+    description: The runner that specs and implements (review uses a different one)
+    default: claude
+    choices: [claude, codex, least-utilized]
+
+plan:
+  spec:
+    name: Spec
+    agent: ${inputs.runner}
+    prompt: |
+      Write a short implementation spec for this request. Do not change any
+      files yet.
+
+      ${instruction}
+
+      Read the code it touches first. Cover the goal, the approach, the files to
+      change and how, edge cases, how it will be tested, and anything explicitly
+      out of scope. Keep it concrete and brief enough to implement from.
+
+implementation:
+  implementer:
+    name: Implement
+    agent: {same: spec}
+    prompt: |
+      Implement this spec in the checkout you are in.
+
+      Request: ${instruction}
+
+      Spec:
+      ${outputs.spec}
+
+      Follow the spec; where reality forces a deviation, make it and say why.
+      Match the surrounding style, add or update tests, and run them. Leave your
+      changes uncommitted so the reviewers see them with `git diff`. Finish with
+      what you changed, any deviations, and how you verified it.
+
+review:
+  reviewers:
+    name: Review
+    agent: {not: implementer}
+    facets:
+      - {facet: security, model: elevated}
+      - {facet: bugs, model: default}
+      - {facet: performance, model: default}
+      - {facet: dryness, model: default}
+    prompt: |
+      Review the uncommitted changes in this checkout (`git status`, `git diff`,
+      and any new files) against the spec they implement, focusing only on
+      **${item.facet.name}**.
+
+      ${item.facet.focus}
+
+      Request: ${instruction}
+
+      Spec:
+      ${outputs.spec}
+
+      The implementer reported:
+      ${outputs.implementer}
+
+      Inspect only: do not edit anything.
+    outputs:
+      findings: {type: findings, required: true}
+
+  reranker:
+    name: Consolidate
+    agent: {same: implementer}
+    prompt: |
+      ${size(outputs.reviewers)} reviewers examined the same change against its
+      spec, each from one angle. Consolidate their findings, somewhat
+      aggressively squashing noise: drop nitpicks, duplicates, unlikely
+      hypotheticals, anything not actionable, and anything already handled.
+      Always keep a finding that the spec is not met. Keep each finding's agent
+      and facet unchanged.
+
+      Spec:
+      ${outputs.spec}
+
+      The reviews:
+      ${json(outputs.reviewers)}
+    outputs:
+      findings: {type: findings, required: true, lineage: required}
+
+  fix:
+    name: Fix
+    agent: {same: implementer}
+    prompt: |
+      Address these review findings on the uncommitted changes in this checkout,
+      keeping to the spec. Make the smallest complete fix for each, run the
+      relevant tests, and leave the changes uncommitted. Say which findings you
+      fixed and which you did not, and why.
+
+      ${json(outputs.reranker.findings)}
+
+flow:
+  - from: reranker
+    route:
+      - {when: "size(outputs.reranker.findings) > 0 && visits.fix < 1", to: fix}
+      - {to: end}
+  - fix -> reviewers

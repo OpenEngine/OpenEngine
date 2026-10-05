@@ -26,6 +26,7 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_graph_runtime,
+    build_graph_service,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -364,6 +365,11 @@ def compose_app(
         login_repositories=_login_repositories(loaded, projects) if github_login_config else (),
         repository_projects=projects if github_login_config else {},
         login_operators=loaded.config.access.operators,
+        graph_service=build_graph_service(
+            settings,
+            default_repository=loaded.config.work_orders.repository,
+            repositories=loaded.config.repos,
+        ),
     )
 
 

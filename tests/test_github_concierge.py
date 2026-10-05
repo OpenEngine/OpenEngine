@@ -219,6 +219,47 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     )
 
 
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+@pytest.mark.parametrize("body, expected", [
+    ("@someone-else please check this", 0),
+    ("@OpenEngineBot please check this", 1),
+    ("@someone-else @OpenEngineBot please check this", 1),
+    ("please check this", 1),
+])
+def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body, expected):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    provider = FakeACPProvider(create=True)
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(), provider=provider,
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source_control = MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="openenginebot"),
+    )
+    object.__setattr__(capabilities, "source_control", source_control)
+    payload = _issue_comment(body=body)
+    payload["issue"]["pull_request"] = {}
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
+    encoded = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/github/events", content=encoded,
+            headers=dict(github_signed(encoded), **{"x-github-event": event}),
+        )
+        client.portal.call(app.state.github_ingress.drain)
+    assert response.status_code == 200
+    assert len(provider.clients) == expected
+    assert source_control.add_comment.await_count == expected
+    source_control.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
+    if not expected:
+        runtime.steer.assert_not_awaited()
+
+
 @pytest.mark.parametrize("access", ["read", "error"])
 def test_a_comment_reaches_no_agent_without_write_access(tmp_path, access):
     """Write access is checked before the comment becomes a prompt.

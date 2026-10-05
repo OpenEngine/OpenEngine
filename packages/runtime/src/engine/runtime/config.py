@@ -55,6 +55,15 @@ class WorkflowsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphsConfig:
+    """How this backend treats graphs registered through `engine graph add`."""
+
+    allow_python: bool = True
+    """Whether a Python graph may be uploaded. Python runs with the daemon's
+    privileges, so a backend that wants YAML only turns this off."""
+
+
+@dataclass(frozen=True, slots=True)
 class ServerConfig:
     """Where the web interface listens."""
 
@@ -187,6 +196,13 @@ class EngineConfig:
     workflows: WorkflowsConfig = WorkflowsConfig()
     orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
+    graphs: GraphsConfig = GraphsConfig()
+    model_tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    """`[runners.<runner>.models]`: tier name to model, per runner.
+
+    What a graph's `model: elevated` means on this backend, so graphs name a
+    tier and each backend decides which model that is.
+    """
     attribution: bool = True
     repos: Mapping[str, str] = field(default_factory=dict)
     repo_modes: Mapping[str, str] = field(default_factory=dict)
@@ -296,10 +312,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_login_client_id",
             "github_login_redirect_uri",
             "github_token",
+            "graphs",
             "orchestrator",
             "public_url",
             "repo_modes",
             "repos",
+            "runners",
             "trusted_repos",
             "server",
             "state",
@@ -420,6 +438,20 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     bash = _table(approvals.get("bash", {}), "approvals.bash")
     _reject_unknown(bash, {"allow", "ask", "deny"}, "approvals.bash")
 
+    graphs = _table(document.get("graphs", {}), "graphs")
+    _reject_unknown(graphs, {"allow_python"}, "graphs")
+    allow_python = graphs.get("allow_python", True)
+    if not isinstance(allow_python, bool):
+        raise EngineConfigError("graphs.allow_python must be a boolean")
+    model_tiers: dict[str, dict[str, str]] = {}
+    for runner, settings in _table(document.get("runners", {}), "runners").items():
+        settings = _table(settings, f"runners.{runner}")
+        _reject_unknown(settings, {"models"}, f"runners.{runner}")
+        model_tiers[runner] = {
+            tier: _nonblank_string(model, f"runners.{runner}.models.{tier}")
+            for tier, model in _table(settings.get("models", {}), f"runners.{runner}.models").items()
+        }
+
     workflows = _table(document.get("workflows", {}), "workflows")
     _reject_unknown(workflows, {"directory"}, "workflows")
     workflow_directory = workflows.get("directory", "")
@@ -510,6 +542,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             slack_operators=work_order_slack_operators,
         ),
         claude=ClaudeConfig(output_style=output_style, config_dir=config_dir),
+        graphs=GraphsConfig(allow_python=allow_python),
+        model_tiers=model_tiers,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -671,6 +705,7 @@ __all__ = [
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
+    "GraphsConfig",
     "LoadedEngineConfig",
     "ResponseStyle",
     "ServerConfig",

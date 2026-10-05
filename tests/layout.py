@@ -20,6 +20,9 @@ DOMAIN = "domain"
 PORTS = "ports"
 RUNTIME = "runtime"
 ADAPTER = "adapter"
+#: `cli/`: the graph service an app mounts, and the client an app's CLI adds.
+#: Built on the graph runtime's LangGraph binding, and below every app.
+SURFACE = "surface"
 APP = "app"
 
 #: The layers that make up the dependency-free core of the system.
@@ -56,6 +59,15 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.single_tool_mcp",
     ),
     ADAPTER: ("engine.domain", "engine.ports", "engine.runtime"),
+    SURFACE: (
+        "engine.domain",
+        "engine.ports",
+        "engine.runtime",
+        "engine.graph_runtime",
+        "engine.graph_runtime_langgraph",
+        "engine.graph_service",
+        "engine.cli",
+    ),
     # The graph packages are here for the same reason `engine.adapters` is: an
     # app is where the pieces are wired together, and one of the pieces it can
     # wire now is the engine that runs graph workflows. The contract and its
@@ -68,6 +80,8 @@ ALLOWED_ENGINE_PREFIXES: dict[str, tuple[str, ...]] = {
         "engine.adapters",
         "engine.graph_runtime",
         "engine.graph_runtime_langgraph",
+        "engine.graph_service",
+        "engine.cli",
         "engine.github_concierge",
         "engine.scoper",
         "engine.single_tool_mcp",
@@ -123,6 +137,8 @@ def _layer_for(root: Path) -> str:
             return PORTS
         case ("packages", "runtime"):
             return RUNTIME
+        case ("cli", "service" | "client"):
+            return SURFACE
         case _:
             raise AssertionError(f"unclassified package at {root}")
 
@@ -169,6 +185,7 @@ def discover_packages() -> tuple[Package, ...]:
         # Two levels: the capability directory groups, the vendor directory ships.
         *ADAPTERS_ROOT.glob("*/*/pyproject.toml"),
         *(REPO_ROOT / "apps").glob("*/pyproject.toml"),
+        *(REPO_ROOT / "cli").glob("*/pyproject.toml"),
     ]
     packages = []
     for pyproject in roots:

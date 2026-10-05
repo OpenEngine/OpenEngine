@@ -92,7 +92,12 @@ from langgraph_acp import (
 )
 
 from engine.graph_runtime.events import EventKind, RuntimeEvent
-from engine.graph_runtime_langgraph.executions import NodeExecution, current_execution
+from engine.graph_runtime_langgraph.executions import (
+    NodeExecution,
+    SteeringMessage,
+    current_execution,
+    steering_id_of,
+)
 from engine.runtime.step_results import (
     INVALID_COMPLETION_CORRECTIONS,
     INVALID_COMPLETION_ERROR,
@@ -679,6 +684,9 @@ class ACPNode:
                 if not resuming and history and pending_prompts:
                     opening = pending_prompts.popleft()
                     asked = _replay_prompt(history, opening)
+                    if steering := steering_id_of(opening):
+                        # The replay wraps the message; keep it traceable.
+                        asked = SteeringMessage(asked, steering)
                 elif not resuming and history and last_outcome is EventKind.RUN_FAILED:
                     # A replacement session must retain the interrupted follow-up
                     # and tool context, including when the operator changed runners.
@@ -1027,6 +1035,11 @@ class ACPNode:
                             pending.append(text)
             await flush()
 
+        steering_id = steering_id_of(prompt)
+        if steering_id:
+            await execution.emit(
+                EventKind.STEERING_DELIVERED, {"steeringId": steering_id}
+            )
         speaking = asyncio.create_task(consume())
         steering: asyncio.Future[None] = asyncio.create_task(
             execution.wait_for_message()
@@ -1053,6 +1066,12 @@ class ACPNode:
                 return_exceptions=True,
             )
             turn.narrating = None
+        if steering_id and not cancelled:
+            # Applied means the agent finished the turn it was given, which a
+            # queued or merely-sent message cannot claim.
+            await execution.emit(
+                EventKind.STEERING_APPLIED, {"steeringId": steering_id}
+            )
         # The node's durable output is still the whole turn: what the graph
         # carries forward does not change with where the words were published.
         return _TurnResult("".join(said), cancelled=cancelled)

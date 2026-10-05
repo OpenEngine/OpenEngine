@@ -290,7 +290,10 @@ async def sqlite_runtime(
         definitions = tuple(_compiled(workflow, saver) for workflow in workflows)
         store = SqliteGraphRuntimeStore(root / RUNS)
         runtime = LangGraphRuntime(
-            *definitions, store=store, source_control=source_control
+            *definitions,
+            store=store,
+            source_control=source_control,
+            checkpointer=saver,
         )
         try:
             yield runtime

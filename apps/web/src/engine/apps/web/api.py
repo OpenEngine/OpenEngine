@@ -43,7 +43,7 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 from html import escape
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -67,7 +67,7 @@ from engine.apps.web.github_communications import (
 )
 from engine.apps.web.github_ingress import (
     GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReviewRequest,
-    github_co_author, github_requester,
+    github_co_author, github_requester, mentions_other_accounts,
 )
 from engine.apps.web.github_login import STREAM_ACCESS, GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -144,6 +144,8 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_service import GraphService, StartRequest, StartRun
+from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
@@ -1006,6 +1008,9 @@ class _GraphSurface:
 
     runtime: GraphRuntime | None = None
     app: Starlette | None = None
+    service: GraphService | None = None
+    """Registered graphs, loops and node steering, when the engine supports them."""
+    service_app: Starlette | None = None
 
 
 class GithubProvenance(Protocol):
@@ -1108,6 +1113,7 @@ def create_app(
     repository_projects: Mapping[str, str] | None = None,
     utilization: UtilizationService | None = None,
     concierge_provider: ACPAgentProvider | None = None,
+    graph_service: Callable[[Any, StartRun], GraphService] | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_catalog is None:
@@ -1353,6 +1359,8 @@ def create_app(
         if progress := graph_progress.get(event.run_id):
             progress.apply(event)
         await graph_events.append(event)
+        if surface.service is not None:
+            await surface.service.observe(event)
         await graph_notifications(event)
         if (
             event.kind is EventKind.APPROVAL_REQUESTED
@@ -1388,6 +1396,54 @@ def create_app(
             await session.state_store.save(updated)
         if updated.phase is RunPhase.SUCCEEDED:
             dependencies_changed.set()
+
+    async def open_graph_service(runtime: GraphRuntime, opened: AsyncExitStack) -> None:
+        """Serve `/api/v1`, for `engine graph|loop|node`, on this engine.
+
+        Contained like the engine itself: a failure here takes registered
+        graphs and loops offline and leaves everything else serving.
+        """
+        if graph_service is None or getattr(runtime, "checkpointer", None) is None:
+            return
+
+        async def start(workflow: GraphWorkflow, request: StartRequest) -> RunId:
+            # The WorkOrder path, so a CLI run is listed, approved under this
+            # deployment's policy and reported like any other.
+            state = await start_graph_run(
+                runtime,
+                workflow,
+                inputs=dict(request.inputs),
+                prompt=request.instruction,
+                repository=request.repository,
+            )
+            return state.run_id
+
+        try:
+            service = graph_service(runtime, start)
+            await service.open()
+        except Exception:
+            log.exception("registered graphs are not being offered in this process")
+            return
+        opened.push_async_callback(service.aclose)
+        surface.service = service
+        surface.service_app = create_graph_service_app(service)
+
+    async def graph_service_surface(scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass `/api/v1` to the registered-graph service, for operators only.
+
+        Its runs, loops and steering span every repository, so a signed-in
+        user who sees only some of them is refused rather than shown all.
+        """
+        if surface.service_app is None:
+            await JSONResponse(
+                {"error": "this process is not running graph workflows"}, status_code=503,
+            )(scope, receive, send)
+            return
+        if scope["type"] == "http":
+            if await github_login.visible_repositories(Request(scope)) is not None:
+                await _error("the graph API is for operators", 403)(scope, receive, send)
+                return
+        await surface.service_app(scope, receive, send)
 
     async def restore_graph_runs(runtime: GraphRuntime) -> None:
         """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
@@ -1545,6 +1601,9 @@ def create_app(
                     # ours is installed afterwards and does both.
                     surface.app = create_graph_app(surface.runtime, graph_events)
                     surface.runtime.observe(graph_event)
+                    # Registered graphs are offered again before runs are
+                    # restored, since a run resumes only if its graph exists.
+                    await open_graph_service(surface.runtime, opened)
                     await restore_graph_runs(surface.runtime)
                     dependency_task = asyncio.create_task(dispatch_dependencies())
                     dependencies_changed.set()
@@ -3821,6 +3880,9 @@ def create_app(
                 # GitHub logins are case-insensitive, so the comparison is too.
                 github_activity.ignored("posted by Engine itself")
                 return
+        if mentions_other_accounts(comment.body, login):
+            github_activity.ignored("addressed to another account")
+            return
         # Whether the author can write to the repository was asked by the
         # ingress before this was called; see `github_sender_may_act`.
         mentioned = bool(login and re.search(
@@ -4315,6 +4377,9 @@ def create_app(
         # The graph half of the runs above, served by the engine that runs
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),
+        # Registered graphs, runs of them, loops and node steering, for the
+        # `engine graph|loop|node` commands.
+        Mount("/api/v1", app=graph_service_surface),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}", thread_scoped(get_thread)),
