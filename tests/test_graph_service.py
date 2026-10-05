@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
+import yaml
 from engine.domain import RunId, WorkspaceId
 from engine.graph_runtime import RunStatus
 from engine.graph_runtime_langgraph import (
@@ -23,7 +24,7 @@ from engine.graph_runtime_langgraph import (
     SqliteGraphRuntimeStore,
     agent_registry,
 )
-from engine.graph_service import GraphService, ManifestError, create_app, parse_manifest
+from engine.graph_service import GraphError, GraphService, create_app, parse_graph
 from engine.graph_service.service import Conflict, NotFound, ServiceError
 from engine.ports import Workspace
 from langgraph_acp import StdioACPProvider
@@ -31,21 +32,29 @@ from langgraph_acp import StdioACPProvider
 AGENT = Path(__file__).parent / "graph_service_agent.py"
 DATABASE = "graph-runs.sqlite3"
 
-PAIR = {
-    "name": "pair",
-    "description": "Implement, then review.",
-    "runners": ["stub"],
-    "inputs": {"instruction": {"required": True}, "tone": {"default": "plain"}},
-    "nodes": [
-        {"id": "implement", "agent": "stub", "prompt": "do {{ instruction }} ({{ inputs.tone }})"},
-        {"id": "review", "agent": "stub", "prompt": "review {{ nodes.implement }}"},
-    ],
-    "edges": [["implement", "review"]],
-}
+PAIR = """apiVersion: openengine.dev/v1
+name: pair
+description: Implement, then review.
+inputs:
+  tone: {default: plain}
+implementation:
+  implement:
+    agent: stub
+    prompt: do ${instruction} (${inputs.tone})
+review:
+  review:
+    agent: stub
+    prompt: review ${outputs.implement}
+"""
 
 
-def single(name: str, prompt: str, **extra: Any) -> dict[str, Any]:
-    return {"name": name, "nodes": [{"id": "work", "agent": "stub", "prompt": prompt}], **extra}
+def single(name: str, prompt: str, **extra: Any) -> str:
+    return yaml.safe_dump({
+        "apiVersion": "openengine.dev/v1",
+        "name": name,
+        "implementation": {"work": {"agent": "stub", "prompt": prompt}},
+        **extra,
+    }, sort_keys=False)
 
 
 class Checkouts:
@@ -131,50 +140,49 @@ async def running_execution(service: GraphService, run_id: str, node: str) -> di
     raise AssertionError(f"{node} never started")
 
 
-# --- manifests ----------------------------------------------------------------
+# --- graph validation ---------------------------------------------------------
 
 
-def test_a_manifest_reports_every_problem_at_once() -> None:
-    with pytest.raises(ManifestError) as raised:
-        parse_manifest(
+def test_a_graph_reports_multiple_problems_at_once() -> None:
+    with pytest.raises(GraphError) as raised:
+        parse_graph(
             {
+                "apiVersion": "openengine.dev/v1",
                 "name": "Bad Name",
-                "runners": ["stub"],
-                "nodes": [
-                    {"id": "a", "agent": "stub", "prompt": "{{ inputs.missing }} {{ nodes.b }}"},
-                    {"id": "b", "agent": "other", "prompt": "go"},
-                    {"id": "workspace", "agent": "stub", "prompt": "x"},
-                ],
-                "edges": [["a", "b"], ["b", "a"], ["a", "nowhere"]],
+                "implementation": {
+                    "a": {"agent": "stub", "prompt": "go"},
+                    "b": {"agent": "other", "prompt": "go"},
+                    "workspace": {"agent": "stub", "prompt": "x"},
+                },
                 "loop": {"every": "5s"},
             },
-            available_runners=["stub"],
+            runners=["stub"],
         )
     paths = {problem.path for problem in raised.value.problems}
-    assert {"name", "nodes[0].prompt", "nodes[1].agent", "nodes[2].id", "edges", "edges[2].to", "loop.every"} <= paths
-    messages = " ".join(problem.message for problem in raised.value.problems)
-    assert "cycle" in messages and "inputs.missing" in messages
+    assert {"name", "implementation.b.agent", "implementation.workspace", "loop.every"} <= paths
 
 
-def test_a_prompt_may_only_read_nodes_that_run_before_it() -> None:
-    manifest = {
+def test_a_prompt_may_only_read_nodes_that_can_run_before_it() -> None:
+    graph = {
+        "apiVersion": "openengine.dev/v1",
         "name": "fan",
-        "nodes": [
-            {"id": "a", "agent": "stub", "prompt": "x"},
-            {"id": "b", "agent": "stub", "prompt": "{{ nodes.c }}"},
-            {"id": "c", "agent": "stub", "prompt": "{{ nodes.a }}"},
-        ],
-        "edges": [["a", "b"], ["a", "c"]],
+        "implementation": {
+            "a": {"agent": "stub", "prompt": "x"},
+            "b": {"agent": "stub", "prompt": "${outputs.c}"},
+            "c": {"agent": "stub", "prompt": "${outputs.a}"},
+        },
+        "flow": ["a -> [b, c]", "b -> end", "c -> end"],
     }
-    with pytest.raises(ManifestError, match="does not run before 'b'"):
-        parse_manifest(manifest)
+    with pytest.raises(GraphError, match="cannot have run before b"):
+        parse_graph(graph)
 
 
-def test_the_instruction_is_always_an_input_and_runners_must_exist() -> None:
-    parsed = parse_manifest(single("solo", "{{ instruction }}"))
-    assert [(item.name, item.required) for item in parsed.inputs] == [("instruction", True)]
-    with pytest.raises(ManifestError, match="not configured on this backend"):
-        parse_manifest(single("solo", "x"), available_runners=["codex"])
+def test_the_instruction_is_built_in_and_runners_must_exist() -> None:
+    parsed = parse_graph(yaml.safe_load(single("solo", "${instruction}")))
+    assert parsed.inputs == ()
+    assert parsed.node("work").prompt == "${instruction}"
+    with pytest.raises(GraphError, match="not configured on this backend"):
+        parse_graph(yaml.safe_load(single("solo", "x")), runners=["codex"])
 
 
 # --- graphs and runs ----------------------------------------------------------
@@ -183,12 +191,12 @@ def test_the_instruction_is_always_an_input_and_runners_must_exist() -> None:
 def test_registering_discovering_and_running_a_graph(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            graph, created = await service.add_graph("default", PAIR)
+            graph, created = await service.add_graph("default", source=PAIR)
             assert created and graph["version"] == 1 and graph["graphId"].startswith("g-")
-            again, created = await service.add_graph("default", PAIR)
+            again, created = await service.add_graph("default", source=PAIR)
             assert not created and again["versionId"] == graph["versionId"]
             assert [item["name"] for item in service.list_graphs("default")] == ["pair"]
-            assert service.get_graph("default", "pair")["definition"]["edges"] == [["implement", "review"]]
+            assert service.get_graph("default", "pair")["source"] == PAIR
 
             run, created = await service.submit_run(
                 project="default", graph="pair", instruction="the thing", idempotency_key="k1",
@@ -221,9 +229,9 @@ def test_registering_discovering_and_running_a_graph(tmp_path: Path) -> None:
 def test_a_new_version_does_not_change_a_run_already_pinned(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            first, _ = await service.add_graph("default", single("solo", "one {{ instruction }}"))
+            first, _ = await service.add_graph("default", source=single("solo", "one ${instruction}"))
             run, _ = await service.submit_run(project="default", graph="solo", instruction="x")
-            second, created = await service.add_graph("default", single("solo", "two {{ instruction }}"))
+            second, created = await service.add_graph("default", source=single("solo", "two ${instruction}"))
             assert created and second["version"] == 2 and second["graphId"] == first["graphId"]
             assert (await settled(service, run["runId"]))["results"] == {"work": "echo: one x"}
             assert service.get_graph("default", "solo@1")["versionId"] == first["versionId"]
@@ -236,8 +244,8 @@ def test_a_new_version_does_not_change_a_run_already_pinned(tmp_path: Path) -> N
 def test_names_resolve_within_a_project_and_ambiguity_is_refused(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            await service.add_graph("alpha", single("solo", "x"))
-            await service.add_graph("beta", single("solo", "y"))
+            await service.add_graph("alpha", source=single("solo", "x"))
+            await service.add_graph("beta", source=single("solo", "y"))
             assert service.get_graph("alpha", "solo")["project"] == "alpha"
             with pytest.raises(Conflict, match="ambiguous"):
                 service.get_graph(None, "solo")
@@ -250,7 +258,7 @@ def test_names_resolve_within_a_project_and_ambiguity_is_refused(tmp_path: Path)
 def test_registered_graphs_survive_a_restart(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            await service.add_graph("default", single("solo", "{{ instruction }}"))
+            await service.add_graph("default", source=single("solo", "${instruction}"))
         async with graph_service(tmp_path) as service:
             run, _ = await service.submit_run(project="default", graph="solo", instruction="hi")
             assert (await settled(service, run["runId"]))["results"] == {"work": "echo: hi"}
@@ -261,7 +269,7 @@ def test_registered_graphs_survive_a_restart(tmp_path: Path) -> None:
 def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            await service.add_graph("default", single("locked", "AUTH {{ instruction }}"))
+            await service.add_graph("default", source=single("locked", "AUTH ${instruction}"))
             run, _ = await service.submit_run(project="default", graph="locked", instruction="x")
             failed = await settled(service, run["runId"])
             assert failed["status"] == "failed"
@@ -274,8 +282,8 @@ def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: 
 def test_runs_are_refused_without_their_required_inputs(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            await service.add_graph("default", PAIR)
-            with pytest.raises(ServiceError, match="unknown input"):
+            await service.add_graph("default", source=PAIR)
+            with pytest.raises(ServiceError, match="unknown workflow inputs"):
                 await service.submit_run(project="default", graph="pair", instruction="x", inputs={"nope": "1"})
             with pytest.raises(ServiceError, match="instruction is required"):
                 await service.submit_run(project="default", graph="pair", instruction=" ")
@@ -289,7 +297,7 @@ def test_runs_are_refused_without_their_required_inputs(tmp_path: Path) -> None:
 def test_steering_reaches_the_running_attempt_and_is_applied(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            await service.add_graph("default", single("slow", "WAIT {{ instruction }}"))
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
             run, _ = await service.submit_run(project="default", graph="slow", instruction="x")
             execution = await running_execution(service, run["runId"], "work")
             steering, created = await service.steer(execution["executionId"], "finish now", "s1")
@@ -312,7 +320,7 @@ def test_steering_reaches_the_running_attempt_and_is_applied(tmp_path: Path) -> 
 def test_steering_is_not_applied_by_merely_being_queued(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            await service.add_graph("default", single("slow", "WAIT {{ instruction }}"))
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
             run, _ = await service.submit_run(project="default", graph="slow", instruction="x")
             execution = await running_execution(service, run["runId"], "work")
             # A steered turn that is itself cancelled was delivered, never applied.
@@ -339,7 +347,7 @@ def test_a_loop_needs_a_cadence_and_never_overlaps_its_runs(tmp_path: Path) -> N
     async def scenario() -> None:
         clock = Clock()
         async with graph_service(tmp_path, clock=clock) as service:
-            await service.add_graph("default", single("slow", "WAIT {{ instruction }}"))
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
             with pytest.raises(ServiceError, match="no cadence"):
                 await service.add_loop(project="default", graph="slow", instruction="x")
             loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
@@ -371,7 +379,7 @@ def test_reaching_max_spend_stops_the_run_and_survives_a_restart(tmp_path: Path)
     async def scenario() -> None:
         clock = Clock()
         async with graph_service(tmp_path, clock=clock) as service:
-            await service.add_graph("default", PAIR)
+            await service.add_graph("default", source=PAIR)
             loop = await service.add_loop(
                 project="default", graph="pair", instruction="x", every="1h", max_spend_usd=0.4,
             )
@@ -399,7 +407,7 @@ def test_reaching_max_spend_stops_the_run_and_survives_a_restart(tmp_path: Path)
 def test_reaching_max_prs_pauses_the_loop(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path, clock=Clock()) as service:
-            await service.add_graph("default", single("solo", "{{ instruction }}"))
+            await service.add_graph("default", source=single("solo", "${instruction}"))
             loop = await service.add_loop(
                 project="default", graph="solo", instruction="x", every="1h", max_prs=1,
             )
@@ -419,7 +427,7 @@ def test_reaching_max_prs_pauses_the_loop(tmp_path: Path) -> None:
 def test_a_loop_pauses_when_its_runner_needs_signing_in(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path, clock=Clock()) as service:
-            await service.add_graph("default", single("locked", "AUTH {{ instruction }}"))
+            await service.add_graph("default", source=single("locked", "AUTH ${instruction}"))
             loop = await service.add_loop(project="default", graph="locked", instruction="x", every="1h")
             await service.tick()
             await settled(service, (await service.loop_json(loop["loopId"]))["activeRunId"])
@@ -438,12 +446,12 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
         async with graph_service(tmp_path) as service:
             transport = httpx.ASGITransport(app=create_app(service))
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                refused = await client.post("/graphs", json={"manifest": {"name": "x", "nodes": []}})
+                refused = await client.post("/graphs", json={"source": "apiVersion: openengine.dev/v1\nname: x\n"})
                 assert refused.status_code == 400
-                assert refused.json()["problems"][0]["path"] == "nodes"
-                added = await client.post("/graphs", json={"project": "p", "manifest": PAIR})
+                assert refused.json()["problems"][0]["path"] == "plan"
+                added = await client.post("/graphs", json={"project": "p", "source": PAIR})
                 assert added.status_code == 201
-                assert (await client.post("/graphs", json={"project": "p", "manifest": PAIR})).status_code == 200
+                assert (await client.post("/graphs", json={"project": "p", "source": PAIR})).status_code == 200
                 listed = await client.get("/graphs", params={"project": "p"})
                 assert [graph["name"] for graph in listed.json()["graphs"]] == ["pair"]
                 assert (await client.get("/graphs/pair@1", params={"project": "p"})).json()["version"] == 1
@@ -491,7 +499,7 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(tmp_p
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 async with app.router.lifespan_context(app):
-                    added = await client.post("/api/v1/graphs", json={"manifest": PAIR})
+                    added = await client.post("/api/v1/graphs", json={"source": PAIR})
                     assert added.status_code == 201, added.text
                     run = await client.post("/api/v1/runs", json={
                         "graph": "pair", "instruction": "it", "idempotencyKey": "k",
