@@ -3690,9 +3690,21 @@ def create_app(
             reached = await github_steer_workorder(run_id, prompt)
         return reached
 
+    async def github_react(request: FeedbackRequest, content: str) -> None:
+        repository = request.origin.channel.removeprefix("github:")
+        if disconnected_repositories:
+            checkout = await github_checkout(repository)
+            if await repository_mode(checkout) == ForgeMode.DISCONNECTED:
+                return
+        number, _, review_id = request.origin.thread_id.partition("/review/")
+        await session.capabilities.source_control.add_reaction(
+            pull_request_url(repository, int(number)), int(request.comment_id), content,
+            review_comment=bool(review_id),
+        )
+
     github_concierge = GithubConcierge(
         provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
-        continue_workorder=github_continue_workorder, reply=github_reply,
+        continue_workorder=github_continue_workorder, reply=github_reply, react=github_react,
     )
 
     posting_login: dict[str, str] = {}
@@ -3794,9 +3806,35 @@ def create_app(
             ),
         )
 
+    async def github_refuse_comment(comment: GithubComment) -> None:
+        """Best-effort acknowledgement for mentions refused before a model turn."""
+        try:
+            async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                found = change_request(urlsplit(comment.url)._replace(
+                    path=f"/{comment.repository}/pull/{comment.number}", query="", fragment="",
+                ).geturl())
+                if found is None:
+                    return
+                login = await github_posting_login(found.project)
+                if not login or comment.author.lower() == login.lower() or not re.search(
+                    rf"(?<![\w@-])@{re.escape(login)}(?![\w-])", comment.body, re.IGNORECASE,
+                ):
+                    return
+                thread = str(comment.number)
+                if comment.event == "pull_request_review_comment":
+                    thread += f"/review/{comment.in_reply_to_id or comment.comment_id}"
+                await github_react(FeedbackRequest(
+                    origin=RunOrigin(channel=f"github:{found.project}", thread_id=thread,
+                                     author=comment.author),
+                    text=comment.body, comment_id=comment.comment_id, allow_start=True,
+                ), "-1")
+        except Exception:
+            log.exception("Could not react to refused GitHub comment %s", comment.comment_id)
+
     async def github_concierge_turn(comment: GithubComment) -> None:
         # Issue comments do not start work; only assignment events do.
         if not comment.is_pull_request:
+            await github_refuse_comment(comment)
             github_activity.ignored("not a pull request")
             return
         # The delivery names the forge as well as the repository. Preserve its
@@ -4011,6 +4049,8 @@ def create_app(
             log.info("ignored a GitHub delivery on %s#%s from %s, who cannot write to it",
                      repository, delivery.number, sender)
             github_activity.ignored(f"{sender} cannot write to {repository}")
+            if isinstance(delivery, GithubComment):
+                await github_refuse_comment(delivery)
         return may_write
 
     github_ingress = GithubIngress(

@@ -30,6 +30,7 @@ refused where they are made, and the agent is told why.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
@@ -49,6 +50,7 @@ from .github_egress import Continuation, FeedbackBroker
 #: and the host granted this comment permission to start work.
 ContinueWorkorder = Callable[[RunOrigin, str, bool], Awaitable[Continuation]]
 Reply = Callable[[RunOrigin, str], Awaitable[None]]
+log = logging.getLogger(__name__)
 
 INSTRUCTIONS = """You are OpenEngineBot, a pull request concierge. Your one effect
 on this pull request is the continue_workorder tool: when a comment asks for a
@@ -175,12 +177,14 @@ class GithubConcierge:
     def __init__(self, *, provider: ACPAgentProvider,
                  continue_workorder: ContinueWorkorder,
                  reply: Reply, max_threads: int = 32,
+                 react: Callable[[FeedbackRequest, str], Awaitable[None]] | None = None,
                  timeout_seconds: float = 180) -> None:
         if max_threads < 1:
             raise ValueError("max_threads must be positive")
         self.provider = provider
         self.continue_workorder = continue_workorder
         self.reply = reply
+        self.react = react
         self.max_threads = max_threads
         self.timeout_seconds = timeout_seconds
         self._threads: OrderedDict[
@@ -225,8 +229,19 @@ class GithubConcierge:
                 async with asyncio.timeout(self.timeout_seconds):
                     await self.graph.ainvoke({"request": request})
             except BaseException:
+                await self._react(request, "-1")
                 await self._forget(self._key(request.origin))
                 raise
+            await self._react(request, "+1" if self._delivery.run_id else "-1")
+
+    async def _react(self, request: FeedbackRequest, content: str) -> None:
+        if self.react is None or not request.allow_start or not request.comment_id:
+            return
+        try:
+            async with asyncio.timeout(10):
+                await self.react(request, content)
+        except Exception:
+            log.exception("Could not react to GitHub comment %s", request.comment_id)
 
     def _forwarded_key(self, request: FeedbackRequest) -> tuple[str, str, str] | None:
         """This comment's identity, or ``None`` if the caller did not give one.
@@ -257,6 +272,7 @@ class GithubConcierge:
             # This comment's feedback reached the work order on an earlier
             # attempt and only the reply is outstanding. Running the turn again
             # would ask the agent to do the same work a second time.
+            self._delivery = landed
             return {"reply": landed.announcement()}
         self._delivery = Delivery()
         self._forwarding = forwarded
