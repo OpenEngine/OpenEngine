@@ -72,7 +72,7 @@ from engine.graph_runtime_langgraph.components.forge import (
 )
 from engine.domain import (
     REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_PUBLISH_INPUT, REVIEW_REF_INPUT,
-    ForgeMode, StepCompleted, WorkState, forge_mode, start_state,
+    ForgeMode, StepCompleted, WorkState, forge_mode, publishes_review, start_state,
 )
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
@@ -325,8 +325,7 @@ def _reviewing(state: Mapping[str, object]) -> bool:
 
 def _publishing(state: Mapping[str, object]) -> bool:
     """Whether a run started in review posts its review instead of triaging it."""
-    inputs = state.get("inputs")
-    return _reviewing(state) and isinstance(inputs, Mapping) and inputs.get(PUBLISH_INPUT) == "true"
+    return _reviewing(state) and publishes_review(state.get("inputs"))
 
 
 def _keeping_findings(state: Mapping[str, object]) -> bool:

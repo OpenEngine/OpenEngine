@@ -10,7 +10,7 @@ A finding reads the same whether the reranker posts it or a person does from
 
 from __future__ import annotations
 
-from collections.abc import Container
+from collections.abc import Container, Mapping
 
 from engine.domain.forge import MODE_INPUT, ForgeMode
 from engine.domain.states import STATE_INPUT, WorkState
@@ -26,8 +26,14 @@ REVIEW_REF_INPUT = "ref"
 REVIEW_PR_INPUT = "pr_url"
 REVIEW_BRANCH_INPUT = "branch"
 #: Set when whoever asked for the review reads it on the pull request rather
-#: than at triage: Engine requested as a reviewer on GitHub.
+#: than at triage: Engine requested as a reviewer on GitHub. Everything that
+#: behaves differently asks `publishes_review` rather than reading it itself.
 REVIEW_PUBLISH_INPUT = "publish_review"
+
+
+def publishes_review(inputs: object) -> bool:
+    """Whether a run's inputs post its review to the pull request."""
+    return isinstance(inputs, Mapping) and inputs.get(REVIEW_PUBLISH_INPUT) == "true"
 
 
 def review_inputs(
@@ -67,5 +73,6 @@ __all__ = [
     "REVIEW_REF_INPUT",
     "TRIAGE_TOOL",
     "finding_comment",
+    "publishes_review",
     "review_inputs",
 ]
