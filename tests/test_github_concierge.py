@@ -1246,14 +1246,16 @@ def _submit(arguments, *, name="continue_workorder", token=None, reach=None):
     return asyncio.run(scenario())
 
 
-async def _accept(prompt, started=False):
+async def _accept(prompt, acknowledgement="", started=False):
     _accept.prompts.append(prompt)
+    _accept.acknowledgements.append(acknowledgement)
     return Continuation(
         url="https://engine.example/runs/run-abc", run_id="run-abc", started=started,
     )
 
 
 _accept.prompts = []
+_accept.acknowledgements = []
 
 
 @pytest.mark.parametrize("started", [False, True])
@@ -1261,7 +1263,8 @@ def test_feedback_broker_reaches_the_pull_requests_work_order(started):
     _accept.prompts = []
     result = _submit(
         {"prompt": "  address the review  "},
-        reach=lambda prompt: _accept(prompt, started=started),
+        reach=lambda prompt, acknowledgement: _accept(
+            prompt, acknowledgement, started=started),
     )
     assert result["ok"] is True
     assert "run-abc" in result["text"]
@@ -1275,12 +1278,24 @@ def test_feedback_broker_reaches_the_pull_requests_work_order(started):
     assert _accept.prompts == ["address the review"]
 
 
+def test_feedback_broker_passes_the_acknowledgement_along():
+    _accept.prompts, _accept.acknowledgements = [], []
+    result = _submit({
+        "prompt": "rename retry", "acknowledgement": "  On it: renaming `retry`.  ",
+    })
+    assert result["ok"] is True
+    assert _accept.acknowledgements == ["On it: renaming `retry`."]
+
+
 @pytest.mark.parametrize("request_, error", [
     ({"prompt": ""}, "prompt must be a non-empty string"),
     ({"prompt": "   "}, "prompt must be a non-empty string"),
     ({"prompt": 7}, "prompt must be a non-empty string"),
     ({}, "prompt must be a non-empty string"),
     ({"prompt": "go", "repository": "acme/api"}, "unknown feedback arguments"),
+    ({"prompt": "go", "acknowledgement": 7}, "acknowledgement must be a string"),
+    ({"prompt": "go", "acknowledgement": "x" * 501},
+     "acknowledgement must be at most 500 characters"),
     ("not an object", "arguments must be an object"),
 ])
 def test_feedback_broker_refuses_a_malformed_call(request_, error):
@@ -1301,7 +1316,7 @@ def test_feedback_broker_refuses_a_forged_credential():
 
 
 def test_feedback_broker_reports_why_the_feedback_did_not_land():
-    async def refuse(_prompt):
+    async def refuse(_prompt, _acknowledgement):
         raise RuntimeError("could not identify one existing work order")
 
     result = _submit({"prompt": "go"}, reach=refuse)
@@ -1330,13 +1345,16 @@ def test_github_permissions_only_allow_the_feedback_tool():
     asyncio.run(scenario())
 
 
-def test_only_fixed_text_and_host_identifiers_are_ever_published():
-    """The reply is chosen by what happened, not composed by anyone.
+def test_the_reply_is_the_acknowledgement_only_once_feedback_lands():
+    """The agent's acknowledgement is published only when the feedback landed.
 
-    Every branch here is a constant or an identifier this process already held,
-    which is the property that makes an untrusted comment unable to reach the
-    public reply however the agent answering it is steered.
+    Every other branch is a constant or an identifier this process already
+    held, so a failed or absent forward never publishes model text.
     """
+    acknowledged = Delivery(run_id="run-abc", url="https://engine.example/runs/run-abc",
+                            attempted=True, acknowledgement="On it: renaming `retry`.")
+    assert acknowledged.announcement() == "On it: renaming `retry`."
+    # The agent gave no acknowledgement: fall back to naming the run.
     delivered = Delivery(run_id="run-abc", url="https://engine.example/runs/run-abc",
                          attempted=True)
     assert delivered.announcement() == (
