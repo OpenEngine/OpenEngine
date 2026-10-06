@@ -3811,8 +3811,10 @@ def create_app(
     async def github_review_pull_request(requested: GithubReviewRequest) -> None:
         """A review requested from Engine starts a review of the pull request.
 
-        The same run `engine review <PR URL>` starts, in connected mode: checked
-        out at the pull request's branch, reviewed, and stopped at triage. A
+        The same run `engine review <PR URL>` starts, in connected mode and
+        checked out at the pull request's branch, except that nobody waits at
+        triage: whoever asked reads the review on the pull request, so the
+        surviving findings and the impact analysis are posted there. A
         pull request a work order is still working on is left to it: that run
         reviews its own change.
         """
@@ -3850,6 +3852,7 @@ def create_app(
             requester=github_requester(requested.sender_id, requested.sender),
             inputs=review_inputs(
                 declared, ref=f"origin/{requested.branch}", pr_url=url, branch=requested.branch,
+                publish=True,
             ),
         )
 
