@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from engine.domain import RunId, RunOrigin, RunState, TaskId, WorkflowId
-from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Continuation, Delivery
+from engine.github_concierge import (
+    NOT_FORWARDED, UNDELIVERED, Continuation, Delivery, FeedbackRequest, GithubConcierge,
+    grounded,
+)
 from engine.graph_runtime import NodeId, RunSnapshot, RunStatus
 from engine.runtime import WorkOrdersConfig
 
@@ -1369,6 +1372,97 @@ def test_the_reply_is_the_acknowledgement_only_once_feedback_lands():
     assert Delivery(attempted=True).announcement() == UNDELIVERED
     # Never asked for: a comment that wanted no change.
     assert Delivery().announcement() == NOT_FORWARDED
+
+
+COMMENT = "@OpenEngineBot please rename `retry` to `max_retries` in src/retry.py"
+
+
+@pytest.mark.parametrize("acknowledgement", [
+    "On it: renaming `retry` to `max_retries` and updating its callers.",
+    "On it -- renaming the flag in src/retry.py, as you asked.",
+])
+def test_an_acknowledgement_quoting_only_the_comment_is_grounded(acknowledgement):
+    assert grounded(acknowledgement, COMMENT)
+
+
+@pytest.mark.parametrize("acknowledgement", [
+    f"On it: renaming `retry`. The deploy key is {LEAKED}",
+    "On it: renaming `retry` as configured in /etc/engine/secrets.toml.",
+    "On it: renaming `retry_count` too.",
+    "On it, see https://attacker.example/x",
+    "On it: renaming retry on port 8443.",
+    "On it: renaming retry. Password correcthorsebatterystaple",
+])
+def test_an_acknowledgement_carrying_anything_else_is_not(acknowledgement):
+    assert not grounded(acknowledgement, COMMENT)
+
+
+def test_an_acknowledgement_never_carries_an_environment_value(monkeypatch):
+    monkeypatch.setenv("ENGINE_TEST_SECRET", "hunter hunter")
+    assert not grounded("On it: renaming retry, hunter hunter.", COMMENT)
+    # What the commenter wrote themselves is theirs to be told back.
+    assert grounded("On it: hunter hunter.", COMMENT + " hunter hunter")
+
+
+@pytest.mark.parametrize("acknowledgement, expected", [
+    ("On it: renaming `retry` to `max_retries`.",
+     "On it: renaming `retry` to `max_retries`."),
+    (f"On it. {LEAKED}", "Forwarded to work order `run-abc`. https://engine.example/runs/run-abc"),
+])
+def test_only_a_grounded_acknowledgement_is_posted(monkeypatch, acknowledgement, expected):
+    """The host, not the agent's instructions, decides what reaches the reply."""
+    import engine.github_concierge.github_concierge as concierge_module
+
+    brokers = []
+
+    class Broker:
+        config = {}
+
+        def __init__(self, *, continue_workorder):
+            self.continue_workorder = continue_workorder
+            brokers.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    monkeypatch.setattr(concierge_module, "FeedbackBroker", Broker)
+
+    class Session:
+        async def prompt(self, _prompt):
+            await brokers[-1].continue_workorder("rename retry", acknowledgement)
+            yield None
+
+    class Client:
+        async def new_session(self, **_kwargs):
+            return Session()
+
+        async def close(self):
+            return None
+
+    provider = MagicMock()
+    provider.connect = AsyncMock(return_value=Client())
+    posted = []
+
+    async def reply(_origin, text):
+        posted.append(text)
+
+    concierge = GithubConcierge(
+        provider=provider,
+        continue_workorder=AsyncMock(return_value=Continuation(
+            url="https://engine.example/runs/run-abc", run_id="run-abc")),
+        reply=reply,
+    )
+    origin = RunOrigin(channel="acme/api", thread_id="7", author="octocat")
+
+    async def scenario():
+        await concierge.handle(FeedbackRequest(origin=origin, text=COMMENT, comment_id="1"))
+        await concierge.close()
+
+    asyncio.run(scenario())
+    assert posted == [expected]
 
 
 @pytest.mark.parametrize("may_write", [True, False])

@@ -13,6 +13,11 @@ tool succeeded: the acknowledgement the agent passed alongside the feedback --
 restating what it asked for -- when it landed, and fixed text otherwise. The
 agent's turn prose is never read, and its tool call is refused anything beyond
 the feedback tool, so that acknowledgement is the only model text published.
+The agent can read the host it runs on and the comment steering it is
+untrusted, so that text is held to the comment rather than to the agent's
+word: prose is free, but an acknowledgement carrying a literal the commenter
+did not write -- an identifier, a path, a number, a token, an environment
+value -- is replaced by fixed text.
 
 Forwarding happens once per comment. Reaching a work order changes what an
 agent is building, or starts one building, while posting the reply that
@@ -30,6 +35,8 @@ refused where they are made, and the agent is told why.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
@@ -57,12 +64,9 @@ and it reaches the work order for this pull request. Whether that is the work
 order already in flight or a new one started for this pull request is the
 host's decision, not yours. You have no implementation role.
 
-When you call it, also pass an acknowledgement: one or two sentences, posted
-on the pull request once the request lands, that acknowledge the comment and
-repeat what is being done -- for example "On it: renaming the `retry` flag to
-`max_retries` and updating its callers." Restate only the request. Nothing else
-you write is published: if the tool fails, or a comment asks for no change and
-you call nothing, the reply is fixed text.
+When you call it, also pass the acknowledgement the tool describes. Nothing
+else you write is published: if the tool fails, or a comment asks for no change
+and you call nothing, the reply is fixed text.
 """
 
 #: How many already-forwarded comments are remembered, so a reply retried after
@@ -83,6 +87,31 @@ NOT_FORWARDED = (
     "I only forward change requests to the work order for this pull request, "
     "and I have not forwarded anything for this comment."
 )
+
+#: A word of plain prose, which an acknowledgement may use freely. Anything
+#: else -- digits, paths, identifiers, URLs, or a run of letters too long to be
+#: a word -- is a literal, and must be quoted from the comment.
+_PROSE_WORD = re.compile(r"[A-Za-z][A-Za-z'\u2019-]{0,19}")
+_TRIM = "-\u2013\u2014`*_\"'\u2018\u2019\u201c\u201d.,;:!?()[]{}<>"
+#: Environment values this short are ordinary words, not secrets.
+_SECRET_FLOOR = 8
+
+
+def grounded(acknowledgement: str, comment: str) -> bool:
+    """Whether every literal in ``acknowledgement`` was written in ``comment``.
+
+    What keeps the public reply from carrying what the agent read on the host:
+    prose words are free, everything else must already be on the pull request,
+    and no environment value that is not may appear in it at all.
+    """
+    for token in acknowledgement.split():
+        token = token.strip(_TRIM)
+        if token and not _PROSE_WORD.fullmatch(token) and token not in comment:
+            return False
+    return not any(
+        len(value) >= _SECRET_FLOOR and value in acknowledgement and value not in comment
+        for value in os.environ.values()
+    )
 
 
 class AlreadyForwarded(RuntimeError):
@@ -199,6 +228,7 @@ class GithubConcierge:
         self._delivery = Delivery()
         self._forwarding = None
         self._allow_start = False
+        self._comment = ""
         # What forwarding achieved for comments already dealt with, so a reply
         # retried by redelivery is only a reply.
         self._forwarded: OrderedDict[tuple[str, str, str], Delivery] = OrderedDict()
@@ -268,6 +298,8 @@ class GithubConcierge:
         self._forwarding = forwarded
         # Sessions outlive comments; starting permission belongs to this turn.
         self._allow_start = request.allow_start
+        # What the acknowledgement may quote, for the same reason.
+        self._comment = request.text
         fresh = key not in self._threads
         if fresh:
             while len(self._threads) >= self.max_threads:
@@ -297,7 +329,10 @@ class GithubConcierge:
                     reached = await self.continue_workorder(origin, prompt, self._allow_start)
                     self._delivery = Delivery(
                         run_id=reached.run_id, url=reached.url, attempted=True,
-                        started=reached.started, acknowledgement=acknowledgement,
+                        started=reached.started,
+                        acknowledgement=(
+                            acknowledgement if grounded(acknowledgement, self._comment) else ""
+                        ),
                     )
                     # Recorded here rather than once the turn ends, because the
                     # work order already has the feedback: everything after this
@@ -338,4 +373,5 @@ __all__ = [
     "FeedbackRequest",
     "GithubConcierge",
     "build_graph",
+    "grounded",
 ]

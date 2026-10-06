@@ -73,12 +73,13 @@ _TOOL_SPEC: dict[str, object] = {
                 "type": "string",
                 "maxLength": ACKNOWLEDGEMENT_LIMIT,
                 "description": (
-                    "A short reply posted publicly on the pull request once the "
-                    "feedback lands: acknowledge the request and restate what "
-                    "will be done, e.g. 'On it: renaming the `retry` flag to "
-                    "`max_retries` and updating its callers.' Restate only the "
-                    "request; never include file contents, environment "
-                    "details, or anything else you have read."
+                    "One or two sentences posted publicly on the pull request "
+                    "once the feedback lands: acknowledge the request and "
+                    "restate what will be done, e.g. 'On it: renaming the "
+                    "`retry` flag to `max_retries` and updating its callers.' "
+                    "Restate only the request. Any identifier, path, number, "
+                    "or other literal must be quoted from the comment, or "
+                    "fixed text is posted instead."
                 ),
             },
         },
