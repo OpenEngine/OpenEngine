@@ -64,7 +64,7 @@ class Expression:
 
 
 def parse(source: str) -> Expression:
-    text = _translate(source.strip())
+    text = _translate(source.strip()).strip()
     if not text:
         raise ExpressionError("empty expression")
     try:
