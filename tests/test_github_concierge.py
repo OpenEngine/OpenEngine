@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from engine.domain import RunId, RunOrigin, RunState, TaskId, WorkflowId
-from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Continuation, Delivery
+from engine.github_concierge import (
+    NOT_FORWARDED, UNDELIVERED, Continuation, Delivery, FeedbackRequest, GithubConcierge,
+    grounded,
+)
 from engine.graph_runtime import NodeId, RunSnapshot, RunStatus
 from engine.runtime import WorkOrdersConfig
 
@@ -1246,14 +1249,16 @@ def _submit(arguments, *, name="continue_workorder", token=None, reach=None):
     return asyncio.run(scenario())
 
 
-async def _accept(prompt, started=False):
+async def _accept(prompt, acknowledgement="", started=False):
     _accept.prompts.append(prompt)
+    _accept.acknowledgements.append(acknowledgement)
     return Continuation(
         url="https://engine.example/runs/run-abc", run_id="run-abc", started=started,
     )
 
 
 _accept.prompts = []
+_accept.acknowledgements = []
 
 
 @pytest.mark.parametrize("started", [False, True])
@@ -1261,7 +1266,8 @@ def test_feedback_broker_reaches_the_pull_requests_work_order(started):
     _accept.prompts = []
     result = _submit(
         {"prompt": "  address the review  "},
-        reach=lambda prompt: _accept(prompt, started=started),
+        reach=lambda prompt, acknowledgement: _accept(
+            prompt, acknowledgement, started=started),
     )
     assert result["ok"] is True
     assert "run-abc" in result["text"]
@@ -1275,12 +1281,24 @@ def test_feedback_broker_reaches_the_pull_requests_work_order(started):
     assert _accept.prompts == ["address the review"]
 
 
+def test_feedback_broker_passes_the_acknowledgement_along():
+    _accept.prompts, _accept.acknowledgements = [], []
+    result = _submit({
+        "prompt": "rename retry", "acknowledgement": "  On it: renaming `retry`.  ",
+    })
+    assert result["ok"] is True
+    assert _accept.acknowledgements == ["On it: renaming `retry`."]
+
+
 @pytest.mark.parametrize("request_, error", [
     ({"prompt": ""}, "prompt must be a non-empty string"),
     ({"prompt": "   "}, "prompt must be a non-empty string"),
     ({"prompt": 7}, "prompt must be a non-empty string"),
     ({}, "prompt must be a non-empty string"),
     ({"prompt": "go", "repository": "acme/api"}, "unknown feedback arguments"),
+    ({"prompt": "go", "acknowledgement": 7}, "acknowledgement must be a string"),
+    ({"prompt": "go", "acknowledgement": "x" * 501},
+     "acknowledgement must be at most 500 characters"),
     ("not an object", "arguments must be an object"),
 ])
 def test_feedback_broker_refuses_a_malformed_call(request_, error):
@@ -1301,7 +1319,7 @@ def test_feedback_broker_refuses_a_forged_credential():
 
 
 def test_feedback_broker_reports_why_the_feedback_did_not_land():
-    async def refuse(_prompt):
+    async def refuse(_prompt, _acknowledgement):
         raise RuntimeError("could not identify one existing work order")
 
     result = _submit({"prompt": "go"}, reach=refuse)
@@ -1330,13 +1348,16 @@ def test_github_permissions_only_allow_the_feedback_tool():
     asyncio.run(scenario())
 
 
-def test_only_fixed_text_and_host_identifiers_are_ever_published():
-    """The reply is chosen by what happened, not composed by anyone.
+def test_the_reply_is_the_acknowledgement_only_once_feedback_lands():
+    """The agent's acknowledgement is published only when the feedback landed.
 
-    Every branch here is a constant or an identifier this process already held,
-    which is the property that makes an untrusted comment unable to reach the
-    public reply however the agent answering it is steered.
+    Every other branch is a constant or an identifier this process already
+    held, so a failed or absent forward never publishes model text.
     """
+    acknowledged = Delivery(run_id="run-abc", url="https://engine.example/runs/run-abc",
+                            attempted=True, acknowledgement="On it: renaming `retry`.")
+    assert acknowledged.announcement() == "On it: renaming `retry`."
+    # The agent gave no acknowledgement: fall back to naming the run.
     delivered = Delivery(run_id="run-abc", url="https://engine.example/runs/run-abc",
                          attempted=True)
     assert delivered.announcement() == (
@@ -1351,6 +1372,97 @@ def test_only_fixed_text_and_host_identifiers_are_ever_published():
     assert Delivery(attempted=True).announcement() == UNDELIVERED
     # Never asked for: a comment that wanted no change.
     assert Delivery().announcement() == NOT_FORWARDED
+
+
+COMMENT = "@OpenEngineBot please rename `retry` to `max_retries` in src/retry.py"
+
+
+@pytest.mark.parametrize("acknowledgement", [
+    "On it: renaming `retry` to `max_retries` and updating its callers.",
+    "On it -- renaming the flag in src/retry.py, as you asked.",
+])
+def test_an_acknowledgement_quoting_only_the_comment_is_grounded(acknowledgement):
+    assert grounded(acknowledgement, COMMENT)
+
+
+@pytest.mark.parametrize("acknowledgement", [
+    f"On it: renaming `retry`. The deploy key is {LEAKED}",
+    "On it: renaming `retry` as configured in /etc/engine/secrets.toml.",
+    "On it: renaming `retry_count` too.",
+    "On it, see https://attacker.example/x",
+    "On it: renaming retry on port 8443.",
+    "On it: renaming retry. Password correcthorsebatterystaple",
+])
+def test_an_acknowledgement_carrying_anything_else_is_not(acknowledgement):
+    assert not grounded(acknowledgement, COMMENT)
+
+
+def test_an_acknowledgement_never_carries_an_environment_value(monkeypatch):
+    monkeypatch.setenv("ENGINE_TEST_SECRET", "hunter hunter")
+    assert not grounded("On it: renaming retry, hunter hunter.", COMMENT)
+    # What the commenter wrote themselves is theirs to be told back.
+    assert grounded("On it: hunter hunter.", COMMENT + " hunter hunter")
+
+
+@pytest.mark.parametrize("acknowledgement, expected", [
+    ("On it: renaming `retry` to `max_retries`.",
+     "On it: renaming `retry` to `max_retries`."),
+    (f"On it. {LEAKED}", "Forwarded to work order `run-abc`. https://engine.example/runs/run-abc"),
+])
+def test_only_a_grounded_acknowledgement_is_posted(monkeypatch, acknowledgement, expected):
+    """The host, not the agent's instructions, decides what reaches the reply."""
+    import engine.github_concierge.github_concierge as concierge_module
+
+    brokers = []
+
+    class Broker:
+        config = {}
+
+        def __init__(self, *, continue_workorder):
+            self.continue_workorder = continue_workorder
+            brokers.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    monkeypatch.setattr(concierge_module, "FeedbackBroker", Broker)
+
+    class Session:
+        async def prompt(self, _prompt):
+            await brokers[-1].continue_workorder("rename retry", acknowledgement)
+            yield None
+
+    class Client:
+        async def new_session(self, **_kwargs):
+            return Session()
+
+        async def close(self):
+            return None
+
+    provider = MagicMock()
+    provider.connect = AsyncMock(return_value=Client())
+    posted = []
+
+    async def reply(_origin, text):
+        posted.append(text)
+
+    concierge = GithubConcierge(
+        provider=provider,
+        continue_workorder=AsyncMock(return_value=Continuation(
+            url="https://engine.example/runs/run-abc", run_id="run-abc")),
+        reply=reply,
+    )
+    origin = RunOrigin(channel="acme/api", thread_id="7", author="octocat")
+
+    async def scenario():
+        await concierge.handle(FeedbackRequest(origin=origin, text=COMMENT, comment_id="1"))
+        await concierge.close()
+
+    asyncio.run(scenario())
+    assert posted == [expected]
 
 
 @pytest.mark.parametrize("may_write", [True, False])

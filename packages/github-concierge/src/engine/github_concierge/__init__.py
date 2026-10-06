@@ -8,6 +8,7 @@ from .github_concierge import (
     FeedbackRequest,
     GithubConcierge,
     build_graph,
+    grounded,
 )
 from .github_egress import (
     FEEDBACK_TOOL_NAME,
@@ -28,5 +29,6 @@ __all__ = [
     "FeedbackRequest",
     "GithubConcierge",
     "build_graph",
+    "grounded",
     "tool_permission",
 ]

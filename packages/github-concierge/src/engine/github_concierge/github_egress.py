@@ -10,8 +10,9 @@ host decides nothing about who may make it.
 
 The host binds the pull request the feedback belongs to, and chooses what
 reaching it means: steering the work order already in flight for that pull
-request, or starting one when none is. The agent supplies only the feedback
-text: it cannot choose which work order hears it, nor whether one is started.
+request, or starting one when none is. The agent supplies the feedback text and
+the acknowledgement posted once it lands: it cannot choose which work order
+hears it, nor whether one is started.
 """
 
 from __future__ import annotations
@@ -37,9 +38,13 @@ class Continuation:
     started: bool = False
 
 
-#: Given a prompt, forward it to this pull request's work order -- the one in
-#: flight, or one started for it -- and say which was reached.
-ContinueWorkorder = Callable[[str], Awaitable[Continuation]]
+#: Given a prompt and the acknowledgement to post once it lands, forward the
+#: prompt to this pull request's work order -- the one in flight, or one
+#: started for it -- and say which was reached.
+ContinueWorkorder = Callable[[str, str], Awaitable[Continuation]]
+
+#: Long enough to restate a request, short enough to stay an acknowledgement.
+ACKNOWLEDGEMENT_LIMIT = 500
 
 _SERVER_NAME = "concierge"
 _SERVER_INFO_NAME = "engine-concierge"
@@ -53,8 +58,8 @@ _TOOL_SPEC: dict[str, object] = {
         "behind it can act on the request. The host decides where that lands: "
         "the work order already in flight for this pull request, or a new one "
         "started for it when none is. Calling this is the only way to affect "
-        "the pull request: the reply posted there is fixed text chosen by "
-        "whether this succeeded."
+        "the pull request: when it succeeds, the acknowledgement is posted "
+        "there as the reply."
     ),
     "inputSchema": {
         "type": "object",
@@ -63,6 +68,19 @@ _TOOL_SPEC: dict[str, object] = {
                 "type": "string",
                 "minLength": 1,
                 "description": "The feedback the work order should act on.",
+            },
+            "acknowledgement": {
+                "type": "string",
+                "maxLength": ACKNOWLEDGEMENT_LIMIT,
+                "description": (
+                    "One or two sentences posted publicly on the pull request "
+                    "once the feedback lands: acknowledge the request and "
+                    "restate what will be done, e.g. 'On it: renaming the "
+                    "`retry` flag to `max_retries` and updating its callers.' "
+                    "Restate only the request. Any identifier, path, number, "
+                    "or other literal must be quoted from the comment, or "
+                    "fixed text is posted instead."
+                ),
             },
         },
         "required": ["prompt"],
@@ -94,10 +112,18 @@ class FeedbackBroker(SingleToolBroker):
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return {"ok": False, "error": "prompt must be a non-empty string"}
-        if set(arguments) - {"prompt"}:
+        acknowledgement = arguments.get("acknowledgement", "")
+        if not isinstance(acknowledgement, str):
+            return {"ok": False, "error": "acknowledgement must be a string"}
+        if len(acknowledgement.strip()) > ACKNOWLEDGEMENT_LIMIT:
+            return {
+                "ok": False,
+                "error": f"acknowledgement must be at most {ACKNOWLEDGEMENT_LIMIT} characters",
+            }
+        if set(arguments) - {"prompt", "acknowledgement"}:
             return {"ok": False, "error": "unknown feedback arguments"}
         try:
-            reached = await self._continue_workorder(prompt.strip())
+            reached = await self._continue_workorder(prompt.strip(), acknowledgement.strip())
         except Exception as error:
             return {"ok": False, "error": f"could not deliver the feedback: {error}"}
         delivered = (
