@@ -26,6 +26,9 @@ from open_verify.replay_cache import (
 from open_verify.step_executor import JourneyExecutor
 from open_verify.test_export import save_browser_test
 from open_verify.test_spec import (
+    ExpectSameURL,
+    ExpectURL,
+    RememberURL,
     BrowserTest,
     Click,
     Fill,
@@ -118,6 +121,7 @@ class JourneyRunner:
         self.attempt += 1
         journey = case.journey.model_copy(deep=True)
         results, trace, checks, screenshots, omissions = [], [], {}, [], []
+        baselines = {}
         engine = None
         cache = ReplaySession(self.replay_cache, self.cache_mode, case, self.engine, self.artifacts, self.progress)
         interrupted = None
@@ -132,7 +136,7 @@ class JourneyRunner:
                 await self.observe(engine, "browser_open", {"url": journey.url})
             for index, step in enumerate(journey.steps):
                 self.progress(f"  {step.kind} {index + 1}/{len(journey.steps)}: {step.instruction}")
-                result = await self.run_step(engine, step, index, results, trace, checks, journey.url, cache)
+                result = await self.run_step(engine, step, index, results, trace, checks, journey.url, cache, baselines)
                 results.append(result)
                 self.artifacts.record("journey_step", {"case_id": case.id}, result.model_dump(),
                                       result.status == "passed")
@@ -201,7 +205,9 @@ class JourneyRunner:
             if any(isinstance(s, ReplayBarrier) for s in trace) and not omissions:
                 omissions.append("Exported replay contains an explicit verification barrier; inspect its reason before replay.")
             result = TestResult(case_id=case.id, runner="playwright", status=status, detail=detail,
-                test_file=relative, rerun=rerun, screenshots=screenshots, omissions=omissions)
+                test_file=relative, rerun=rerun, screenshots=screenshots, omissions=omissions,
+                checkpoints=[{key: s.model_dump()[key] for key in ('instruction', 'status', 'detail', 'code')}
+                             for s in results if s.kind == 'assert'])
             folder = self.artifacts.path / "journeys"
             folder.mkdir(exist_ok=True)
             self.artifacts.write(f"journeys/{identity}.json", {
@@ -245,11 +251,13 @@ class JourneyRunner:
             raise StepStopped("OBSERVATION_UNAVAILABLE", str(receipt["result"]))
         return receipt
 
-    async def run_step(self, engine, step, index, completed, trace, checks, entry_url, cache):
+    async def run_step(self, engine, step, index, completed, trace, checks, entry_url, cache, baselines=None):
         """Enforce one clock across observation, session setup, model repair and execution."""
         budget = StepBudget(step)
         first = len(self.artifacts.observations)
         code = None
+        if baselines is None:
+            baselines = {}
         try:
             async with asyncio.timeout(step.timeout):
                 if isinstance(step, ActStep):
@@ -259,7 +267,12 @@ class JourneyRunner:
                     trace.append(step.check or ReplayBarrier(kind="requires_verification",
                         reason=f"Live {step.mode} judgment required: {step.instruction}"))
                     if step.check is not None:
-                        receipt = await engine.assert_check(step.check)
+                        check = step.check
+                        if isinstance(check, ExpectSameURL):
+                            if check.baseline not in baselines:
+                                raise StepStopped('BASELINE_UNAVAILABLE', 'URL baseline is unavailable')
+                            check = ExpectURL(kind='expect_url', url=baselines[check.baseline]['url'])
+                        receipt = await engine.assert_check(check)
                         status, detail = receipt["result"]["status"], receipt["result"]["detail"]
                         await self.observe(engine)
                     else:
@@ -281,12 +294,23 @@ class JourneyRunner:
                         else:
                             fresh = (await self.observe(engine))["result"]
                             evidence = {key: fresh[key] for key in ("url", "snapshot", "truncated") if key in fresh}
+                            if step.compare_to:
+                                if step.compare_to not in baselines:
+                                    raise StepStopped('BASELINE_UNAVAILABLE', 'Comparison baseline is unavailable')
+                                evidence['baseline'] = deepcopy(baselines[step.compare_to])
                             response = await self.executor.judge(step.instruction, deepcopy(evidence), on_call=budget.model_call)
                         judgment = Judgment.model_validate(response.model_dump())
-                        status = {"holds": "passed", "fails": "failed", "inconclusive": "failed"}[judgment.verdict]
+                        status = {"holds": "passed", "fails": "failed", "inconclusive": "blocked"}[judgment.verdict]
                         detail = judgment.explanation
                         if judgment.verdict == "inconclusive":
                             code = "ASSERTION_INCONCLUSIVE"
+                    if status == 'passed' and step.remember_as:
+                        observed = await self.observe(engine)
+                        fresh = observed['result']
+                        baselines[step.remember_as] = {key: fresh[key] for key in ('url', 'snapshot', 'truncated') if key in fresh}
+                        baselines[step.remember_as]['evidence_id'] = observed['id']
+                        trace.append(RememberURL(kind='remember_url', name=step.remember_as,
+                                                 wait_for_navigation=fresh.get('url') != entry_url))
         except asyncio.CancelledError as exc:
             exc.step_result = StepResult(index=index, kind=step.kind, instruction=step.instruction,
                 status="blocked", code="STEP_INTERRUPTED", detail="Step interrupted",

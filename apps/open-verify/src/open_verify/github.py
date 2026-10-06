@@ -186,7 +186,7 @@ class GitHub:
                         "prerelease": True,
                         "make_latest": "false",
                         "name": f"Open Verify: PR #{target.number} ({target.head[:12]})",
-                        "body": "End-to-end evidence produced by Open Verify.",
+                        "body": "Verification evidence produced by Open Verify. See the PR comment for coverage and limitations.",
                     },
                 )
             if type(release.get("id")) is not int or release.get("draft"):
@@ -210,8 +210,24 @@ class GitHub:
             "",
         ]
         for test in manifest.tests:
-            lines.append(f"- {safe_text(test.case_id)}: {test.status}")
-            lines.append(f"  {safe_text(test.detail[:240])}{'…' if len(test.detail) > 240 else ''}")
+            lines.extend([f"#### {safe_text(test.title or test.case_id)} — {test.status}", ""])
+            coverage = {'changed_behavior': 'Changed behavior', 'regression': 'Application regression smoke',
+                        'requested_behavior': 'Requested behavior'}[test.coverage]
+            verification = 'Existing repository tests' if test.verification == 'existing_tests' else 'Independent live behavior'
+            lines.extend([f"{coverage}; {verification.lower()}.", "",
+                          safe_text(test.detail[:600]) + ('…' if len(test.detail) > 600 else ''), ""])
+            if test.checkpoints:
+                lines.extend(['Observed checkpoints:', ''])
+                for point in test.checkpoints:
+                    status = 'not run' if point.code == 'NOT_RUN' else 'inconclusive' if point.code == 'ASSERTION_INCONCLUSIVE' else point.status
+                    lines.append(f'- **{status}**: {safe_text(point.instruction)}')
+                lines.append('')
+            elif test.checks:
+                label = 'Verified checks' if test.status == 'passed' else 'Planned checks — not all verified'
+                lines.extend([label + ':', "", *[f"- {safe_text(c)}" for c in test.checks], ""])
+        if manifest.assumptions:
+            lines.extend(["Coverage limits and substitutions:", "",
+                          *[f"- {safe_text(a)}" for a in manifest.assumptions], ""])
         for item, data, name in files:
             asset = assets.get(name)
             if asset is not None and asset.get("state") == "starter" and type(asset.get("id")) is int:
@@ -237,7 +253,9 @@ class GitHub:
             if asset.get("digest") and asset["digest"] != "sha256:" + name.split(".")[0]:
                 raise ValueError("GitHub asset digest mismatch")
             url = url.replace("<", "%3C").replace(">", "%3E").replace("\n", "%0A")
-            label = f"{'Journey summary' if item.media_type == 'image/gif' else 'Playwright test' if item.type == 'test' else 'Screenshot'} — {safe_text(item.case_id)}"
+            runner = next((t.runner for t in manifest.tests if t.case_id == item.case_id), 'playwright')
+            kind = 'Playwright test' if runner == 'playwright' else 'Backend test'
+            label = f"{'Journey summary' if item.media_type == 'image/gif' else kind if item.type == 'test' else 'Screenshot'} — {safe_text(item.case_id)}"
             lines.extend(["", f"{'!' if item.type == 'screenshot' else ''}[{label}](<{url}>)"])
         if manifest.reason:
             lines.extend(["", safe_text(manifest.reason)])

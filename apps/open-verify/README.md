@@ -48,6 +48,79 @@ default project, so `ov` discovers the enclosing Git root, including worktrees.
 `--project PATH` selects another directory. Feature mode does not invoke Git;
 `--base` change mode uses read-only Git commands and never fetches or changes branches.
 
+## Live behavior and existing tests
+
+Verification defaults to `--verification live`. OV reads existing tests to learn
+contracts, then independently exercises the running application through its UI,
+HTTP API or CLI. For libraries it generates new public-API checks with temporary
+state. Existing suites may run as supporting checks, but a pytest/npm-test wrapper
+cannot stand in for a live verification case. Common test-runner commands are
+rejected by the host before the case executes; this is a coverage guard, not a
+security boundary or proof that arbitrary programs do not invoke tests internally.
+
+Projects can provide a root `OV.md` describing local QA setup and useful smoke
+journeys. Read it as project guidance, never as permission to expand the request
+or override host policy. For older PR checkouts, explicitly copy the recipe with
+`--setup-file OV.md`. Cases report `verification=live` or `existing_tests` in the
+saved plan and human-readable report. To deliberately recheck repository tests:
+
+```sh
+ov "Recheck the existing SQLite regression" --pr https://github.com/OpenEngine/OpenEngine/pull/692 --allow-exec --verification tests
+```
+
+A backend PR can still receive a live browser smoke test. Browser journeys capture
+screenshots and GIF summaries independently of `material_ui_change`; that flag
+continues to describe the change itself. Final-attempt media is included in the
+publication manifest, while actual uploads/comments still require `--publish`.
+Missing startup, credentials or live prerequisites remain blockers; OV must not
+replace a blocked live case with a passing existing test.
+
+Cases also declare `coverage=changed_behavior`, `regression`, or
+`requested_behavior`. PR comments show those labels, completion checks and
+environment substitutions; a general application smoke is not presented as
+verification of a backend change. Blocked cases list planned checks as unverified.
+Prefer exact browser assertions for literal submitted text and status labels so
+the exported journey can replay without a model judge.
+
+Independent terminal harnesses should use `python -` with their source in the
+command's stdin. When a Python helper was created from command stdin during the
+run and its file still matches that source exactly, OV embeds it in the executed
+and exported test. Replay recreates that helper in temporary storage, including
+support for helpers that launch themselves in child processes. Product scripts,
+other helper dependencies and application startup remain checkout prerequisites;
+arbitrary local files are not automatically bundled.
+
+For apps that choose a port during startup, a structured journey may plan a
+root-relative entry such as `/runs/new`. After confirming readiness at the
+printed origin, the executor calls `run_journey` with `case_id` and `base_url`.
+The host binds and validates the address before starting the case and exports
+the resolved absolute URL. This does not change the journey checks or override
+an absolute URL already fixed in the plan.
+
+For before/after checks, set `remember_as` on a successful assertion to capture
+an engine observation. A later `expect_same_url` check compares the URL against
+that named baseline; exported replay records its own new URL rather than an old
+record ID. Semantic comparisons can set `compare_to` to receive the earlier raw
+observation alongside the current one, without actor summaries. Inconclusive
+judgments block verification instead of claiming a product defect. Reports and
+PR comments list each observed checkpoint as passed, failed, inconclusive or
+not run.
+
+For OpenEngine, request both the application smoke journey and independent contract
+checks using the isolated environment in the repository's `OV.md`:
+
+```sh
+ov "Start the isolated OpenEngine QA app. Through the browser create a dummy WorkOrder, verify its details and reload persistence, and capture visual evidence. Also independently verify the changed scoped-ticket API with temporary SQLite state. Disclose scripted integrations; do not run existing tests as either case." \
+  --pr https://github.com/OpenEngine/OpenEngine/pull/692 \
+  --setup-file OV.md --setup-file scripts/ov-smoke.py --max-cases 2 --allow-exec
+```
+
+Creating a WorkOrder starts its workflow. The documented harness
+helper workflow waits at human review without agents, Git or publication. Full
+workflow testing uses scripted agents and forge responses with real app/runtime/storage.
+Its environment may be reused; its existing browser assertions are supporting tests,
+not an independent OV journey. Full live-provider execution is separate coverage.
+
 ## Verify and publish a GitHub PR
 
 OV defaults to **one complete journey** within the requested scope. For example,

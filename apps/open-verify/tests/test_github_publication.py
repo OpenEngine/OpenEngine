@@ -99,6 +99,48 @@ def test_uploads_only_evidence_and_deduplicates_repeat_publication(tmp_path):
     assert "secret" not in body
 
 
+def test_publication_distinguishes_changed_behavior_and_blocked_smoke(tmp_path):
+    path = bundle(tmp_path)
+    data = json.loads(path.read_text())
+    data['status'] = 'blocked'
+    data['assumptions'] = ['GitHub is stubbed; production agents are untested.']
+    data['tests'][0].update(title='SQLite proposal lifecycle', runner='terminal',
+        coverage='changed_behavior', checks=['Approval survives reopen', 'Rejection removes queued work'])
+    data['tests'].append({**data['tests'][0], 'case_id': 'smoke', 'title': 'Create dummy WorkOrder',
+        'runner': 'playwright', 'coverage': 'regression', 'status': 'blocked',
+        'detail': 'Creation succeeded; reload check did not run.',
+        'checks': ['Same WorkOrder persists after reload']})
+    path.write_text(json.dumps(data))
+    github = FakeGitHub()
+    asyncio.run(github.publish(path, TARGET))
+    body = github.comments[0]['body']
+    assert 'Result: **blocked**' in body
+    assert 'Changed behavior; independent live behavior' in body
+    assert 'Application regression smoke' in body
+    assert 'Verified checks:' in body and 'Planned checks — not all verified:' in body
+    assert 'Rejection removes queued work' in body
+    assert 'production agents are untested' in body
+    assert '[Backend test' in body
+
+
+def test_publication_lists_passed_inconclusive_and_unexecuted_checkpoints(tmp_path):
+    path = bundle(tmp_path)
+    data = json.loads(path.read_text())
+    data['status'] = 'blocked'
+    data['tests'][0].update(status='blocked', checkpoints=[
+        {'instruction': 'Prompt visible', 'status': 'passed', 'detail': 'Exact match'},
+        {'instruction': 'Identity compared', 'status': 'blocked', 'detail': 'Missing baseline',
+         'code': 'ASSERTION_INCONCLUSIVE'},
+        {'instruction': 'Review after reload', 'status': 'blocked', 'detail': 'Not executed', 'code': 'NOT_RUN'}])
+    path.write_text(json.dumps(data))
+    github = FakeGitHub()
+    asyncio.run(github.publish(path, TARGET))
+    body = github.comments[0]['body']
+    assert '**passed**: Prompt visible' in body
+    assert '**inconclusive**: Identity compared' in body
+    assert '**not run**: Review after reload' in body
+
+
 @pytest.mark.parametrize("failure", ["head", "base", "oversize", "traversal", "dirty", "type"])
 def test_rejects_invalid_or_stale_evidence_before_any_write(tmp_path, failure):
     path = bundle(tmp_path)

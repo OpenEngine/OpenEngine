@@ -12,6 +12,8 @@ class Case(Contract):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     interface: Literal["browser", "terminal", "http", "mixed"]
+    verification: Literal["live", "existing_tests"] = "live"
+    coverage: Literal["changed_behavior", "regression", "requested_behavior"] = "requested_behavior"
     journey: BrowserJourney | None = None
     prerequisites: list[str] = Field(default_factory=list)
     steps: list[str] = Field(min_length=1)

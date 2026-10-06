@@ -39,13 +39,15 @@ class Artifacts:
         return entry
 
     def report(self, state: dict):
+        from open_verify.manifest import outcome
+
         self.write("report.json", state)
         lines = [
             "# Open Verify",
             "",
             f"Request: {state['request']}",
             "",
-            f"Status: **{state['status']}**",
+            f"Result: **{outcome(state, [])}** (session: {state['status']})",
             "",
             state.get("note", ""),
             "",
@@ -57,7 +59,9 @@ class Artifacts:
         if plan:
             lines.extend([plan["project_summary"], "", "## Plan", ""])
             for case in plan["cases"]:
-                lines.extend([f"- {case['id']}: {case['title']} — {case['expected']}"])
+                kind = "Existing repository tests" if case.get("verification") == "existing_tests" else "Independent live behavior"
+                lines.extend([f"- {case['id']}: {case['title']} — {case['expected']}",
+                              f"  Verification: {kind}. Coverage: {case.get('coverage', 'requested_behavior').replace('_', ' ')}."])
             if plan["questions"] or plan["assumptions"]:
                 lines.extend(["", "## Questions and assumptions", ""])
                 lines.extend(f"- {item}" for item in plan["questions"] + plan["assumptions"])
@@ -81,6 +85,18 @@ class Artifacts:
                 ]
             )
             lines.extend(f"{i}. {step}" for i, step in enumerate(result["reproduction"], 1))
+            case = next((c for c in (plan or {}).get("cases", []) if c["id"] == result["case_id"]), {})
+            checkpoints = next((e['result'].get('checkpoints') for e in reversed(self.observations)
+                                if e['id'] in result['evidence'] and e['result'].get('checkpoints')), None)
+            if checkpoints:
+                lines.extend(['', 'Observed checkpoints:', ''])
+                for point in checkpoints:
+                    status = 'not run' if point.get('code') == 'NOT_RUN' else 'inconclusive' if point.get('code') == 'ASSERTION_INCONCLUSIVE' else point['status']
+                    lines.append(f"- **{status}**: {point['instruction']}")
+            elif case.get("checks"):
+                label = "Verified checks" if result["status"] == "passed" else "Planned checks (not all verified)"
+                lines.extend(["", label + ":", ""])
+                lines.extend(f"- {check}" for check in case["checks"])
         lines.extend(
             [
                 "",

@@ -21,6 +21,7 @@ from open_verify.procedures import Procedures
 from open_verify.step_executor import AgentJourneyExecutor, JourneyExecutor
 from open_verify.test_spec import BrowserRunner, BrowserTest, LoginRequest
 from open_verify.verification import CaseVerifier
+from open_verify.verification_policy import existing_test_command
 
 
 class QAState(TypedDict, total=False):
@@ -49,6 +50,7 @@ class VerificationRunner:
         artifacts: Artifacts,
         *,
         plan_only=False,
+        verification="live",
         max_steps=60,
         progress=print,
         progress_status=lambda _: None,
@@ -66,6 +68,9 @@ class VerificationRunner:
         self.executor = executor or (AgentExecutor(agent) if agent is not None else None)
         self.engine = tools
         self.artifacts = artifacts
+        if verification not in {"live", "tests"}:
+            raise ValueError("verification must be live or tests")
+        self.verification = verification
         self.plan_only = plan_only
         self.max_steps = max_steps
         self.progress = progress
@@ -135,6 +140,7 @@ class VerificationRunner:
             **self.engine.environment(),
             "execution_enabled": self.engine.allow_exec,
             "max_cases": self.max_cases,
+            "verification_mode": self.verification,
             "setup_files": list(self.setup_files),
             "tools": self.engine.catalog(state["stage"]),
             "procedure_node": node,
@@ -310,6 +316,8 @@ class VerificationRunner:
             if len(plan["cases"]) > self.max_cases:
                 return {"feedback": f"Plan exceeds max_cases={self.max_cases}. Combine the requested checks into complete journeys and omit unrequested scenarios."}
             for case in plan["cases"]:
+                if self.verification == "live" and case["verification"] == "existing_tests":
+                    return {"feedback": "Live verification requires independent behavior checks. Existing tests may run as supporting setup evidence, but cannot be the case. Use --verification tests to request existing-test verification."}
                 if case.get("journey"):
                     if case["interface"] != "browser":
                         return {"feedback": "Structured journeys currently require the browser interface."}
@@ -410,9 +418,23 @@ class VerificationRunner:
                 raise ValueError("Test must cover every planned completion check verbatim")
             if any(r.case_id == test.case_id for r in self.test_results):
                 raise ValueError("This backend case already ran; automatic retries are not allowed")
+            if self.verification == "live" and current.get("verification") == "existing_tests":
+                raise ValueError("Existing-test cases require --verification tests")
+            if current.get("verification", "live") == "live" and any(
+                step.kind == "command" and existing_test_command(step.argv)
+                for step in test.steps
+            ):
+                raise ValueError(
+                    "An existing test-runner command cannot establish live behavior. "
+                    "Start and exercise the app through its UI/API/CLI, or generate independent "
+                    "API assertions for a library. Existing tests are supporting evidence. "
+                    "With --verification tests, declare the case verification=existing_tests."
+                )
             slot = len(self.test_results)
 
             def checkpoint(result):
+                if current.get("verification") == "existing_tests" and not result.detail.startswith("Existing repository tests:"):
+                    result.detail = "Existing repository tests: " + result.detail + "; no independent live coverage."
                 if len(self.test_results) == slot:
                     self.test_results.append(result)
                 else:
@@ -438,6 +460,19 @@ class VerificationRunner:
             if any(r.case_id == request.case_id for r in self.test_results):
                 raise ValueError("This journey already ran; its checks cannot be revised")
             case = Case.model_validate(current)
+            if case.journey.url.startswith('/'):
+                if request.base_url is None:
+                    raise ValueError('Relative journey URL requires base_url from the running app. '
+                                     'Read its startup output, confirm readiness, then call run_journey '
+                                     'with case_id and base_url; keep all planned checks unchanged.')
+                url = request.base_url.rstrip('/') + case.journey.url
+                self.engine.check_url(url)
+                case.journey.url = url
+                self.artifacts.record('bind_journey_url', {'case_id': case.id},
+                                      {'planned_url': current['journey']['url'], 'url': url}, True)
+            elif request.base_url is not None:
+                raise ValueError('base_url applies only to a planned root-relative journey; '
+                                 'an absolute journey URL cannot be overridden')
             if case.journey.readiness:
                 attempt = self._readiness_attempts.get(case.id, 0) + 1
                 self._readiness_attempts[case.id] = attempt
@@ -466,8 +501,8 @@ class VerificationRunner:
                 else:
                     self.test_results[slot] = result
 
-            result = await self.journeys.run(Case.model_validate(current),
-                capture_media=bool((state.get("impact") or {}).get("material_ui_change")),
+            result = await self.journeys.run(case,
+                capture_media=True,
                 on_result=checkpoint)
             checkpoint(result)
             summaries = [p for p in result.screenshots if p.endswith(".gif")]
@@ -488,7 +523,8 @@ class VerificationRunner:
                 self.progress(f"  {summary}")
                 shown.add(summary)
         for case in plan["cases"]:
-            self.progress(f"  Test: {case['id']} — {self.short_text(case['title'])}")
+            label = "Existing tests" if case.get("verification") == "existing_tests" else "Live behavior"
+            self.progress(f"  {label}: {case['id']} — {self.short_text(case['title'])}")
 
     def action_progress(self, tool: str, arguments: dict) -> str | None:
         if tool == "start_process":

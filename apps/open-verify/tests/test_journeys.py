@@ -36,6 +36,113 @@ def complete():
     return ActDecision(kind="complete", outcome="done", summary="The item was added")
 
 
+@pytest.mark.parametrize('changed', [False, True])
+def test_recorded_url_comparison_and_exported_replay(tmp_path, web_app, changed):
+    artifacts = Artifacts(tmp_path / 'runs')
+    actor = Actor([ActDecision.model_validate({'kind': 'action', 'action': {
+        'tool': 'browser_open' if changed else 'browser_reload',
+        'arguments': {'url': web_app + '/cart'} if changed else {}, 'reason': 'Navigate or reload'}}), complete()])
+    target = Case.model_validate({'id': 'persist', 'title': 'Preserve identity', 'interface': 'browser',
+        'steps': ['Remember', 'Reload', 'Compare'], 'expected': 'Same URL', 'journey': {'url': web_app,
+        'steps': [
+            {'kind': 'assert', 'instruction': 'Initial form visible', 'remember_as': 'created',
+             'check': {'kind': 'expect_text', 'text': 'Greet'}},
+            {'kind': 'act', 'instruction': 'Navigate' if changed else 'Reload'},
+            {'kind': 'assert', 'instruction': 'Same detail URL',
+             'check': {'kind': 'expect_same_url', 'baseline': 'created'}}]}})
+    engine = LocalTools(tmp_path, artifacts, headless=True)
+    result = asyncio.run(JourneyRunner(engine, artifacts, actor, progress=lambda _: None).run(target))
+    assert result.status == ('failed' if changed else 'passed')
+    assert result.checkpoints[0].status == 'passed'
+    source = (artifacts.path / result.test_file).read_text()
+    assert "saved_urls['created'] = page.url" in source
+    if not changed:
+        replay = subprocess.run([sys.executable, result.test_file], cwd=artifacts.path,
+            env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')},
+            capture_output=True, text=True, timeout=30)
+        assert replay.returncode == 0, replay.stdout + replay.stderr
+
+
+def test_semantic_comparison_gets_host_baseline_without_actor_claims(tmp_path, web_app):
+    artifacts = Artifacts(tmp_path / 'runs')
+    actor = Actor([ActDecision.model_validate({'kind': 'action', 'action': {
+        'tool': 'browser_reload', 'arguments': {}, 'reason': 'Reload'}}), complete()])
+    target = Case.model_validate({'id': 'compare', 'title': 'Compare observations', 'interface': 'browser',
+        'steps': ['Remember', 'Reload', 'Compare'], 'expected': 'Same content', 'journey': {'url': web_app,
+        'steps': [
+            {'kind': 'assert', 'instruction': 'Form visible', 'remember_as': 'before',
+             'check': {'kind': 'expect_text', 'text': 'Greet'}},
+            {'kind': 'act', 'instruction': 'Reload'},
+            {'kind': 'assert', 'instruction': 'Same form after reload', 'compare_to': 'before'}]}})
+    result = asyncio.run(JourneyRunner(LocalTools(tmp_path, artifacts, headless=True), artifacts,
+        actor, progress=lambda _: None).run(target))
+    assert result.status == 'passed'
+    evidence = actor.judgments[0][1]
+    assert evidence['url'] == evidence['baseline']['url']
+    assert 'Greet' in evidence['baseline']['snapshot']
+    assert evidence['baseline']['evidence_id'].startswith('E')
+    assert 'summary' not in evidence['baseline']
+
+
+def test_journey_rejects_unknown_and_duplicate_baselines():
+    from open_verify.journey_spec import BrowserJourney
+    with pytest.raises(ValueError, match='earlier remembered'):
+        BrowserJourney(url='http://localhost', steps=[{'kind':'assert', 'instruction':'Same',
+            'check': {'kind':'expect_same_url', 'baseline':'missing'}}])
+    with pytest.raises(ValueError, match='unique'):
+        BrowserJourney(url='http://localhost', steps=[{'kind':'assert', 'instruction': label,
+            'remember_as':'duplicate'} for label in ('One', 'Two')])
+
+
+def test_relative_entry_binds_discovered_origin_and_exports_absolute_replay(tmp_path, web_app):
+    artifacts = Artifacts(tmp_path / 'runs')
+    engine = LocalTools(tmp_path, artifacts, headless=True)
+    runner = VerificationRunner(None, engine, artifacts, journey_executor=Actor(), progress=lambda _: None)
+    target = case(web_app)
+    target.journey.url = '/cart'
+    state = {'stage': 'execute', 'plan': {'cases': [target.model_dump()]}, 'findings': []}
+    async def run():
+        try:
+            missing = await runner.run_journey(state, {'case_id': target.id})
+            assert not missing['ok'] and 'requires base_url' in missing['result']['error']
+            assert not runner.test_results  # Address repair must not consume the case.
+            receipt = await runner.run_journey(state, {'case_id': target.id, 'base_url': web_app})
+            assert receipt['result']['status'] == 'passed', receipt
+            assert state['plan']['cases'][0]['journey']['url'] == '/cart'
+            return runner.test_results[0]
+        finally:
+            await engine.close()
+    result = asyncio.run(run())
+    source = (artifacts.path / result.test_file).read_text()
+    assert web_app + '/cart' in source
+    replay = subprocess.run([sys.executable, result.test_file], cwd=artifacts.path,
+        env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')},
+        capture_output=True, text=True, timeout=30)
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+
+
+@pytest.mark.parametrize('origin', ['https://user:pass@example.com', '//example.com',
+                                  'file:///tmp', 'http://localhost/path', 'http://localhost?x=1'])
+def test_runtime_base_rejects_credentials_and_non_origin_values(origin):
+    from open_verify.journey_spec import RunJourney
+    with pytest.raises(ValueError):
+        RunJourney(case_id='cart', base_url=origin)
+
+
+def test_runtime_base_cannot_override_absolute_plan_or_external_origin(tmp_path):
+    artifacts = Artifacts(tmp_path / 'runs')
+    runner = VerificationRunner(None, LocalTools(tmp_path, artifacts), artifacts, progress=lambda _: None)
+    target = case('http://localhost:8000')
+    state = {'stage': 'execute', 'plan': {'cases': [target.model_dump()]}, 'findings': []}
+    async def run():
+        receipt = await runner.run_journey(state, {'case_id': target.id, 'base_url': 'http://localhost:9000'})
+        assert not receipt['ok'] and 'cannot be overridden' in receipt['result']['error']
+        state['plan']['cases'][0]['journey']['url'] = '/cart'
+        receipt = await runner.run_journey(state, {'case_id': target.id, 'base_url': 'https://example.com'})
+        assert not receipt['ok'] and not runner.test_results
+    asyncio.run(run())
+
+
 class Actor:
     def __init__(self, decisions=None, verdict="holds"):
         self.decisions = iter(decisions or [ActDecision.model_validate({"kind": "action", "action": {
@@ -79,7 +186,7 @@ def test_real_journey_and_exported_replay(tmp_path, web_app, text, expected):
     assert replay.returncode == (0 if expected == 'passed' else 1), replay.stdout + replay.stderr
 
 
-@pytest.mark.parametrize(("verdict", "status"), [('holds', 'passed'), ('fails', 'failed'), ('inconclusive', 'failed')])
+@pytest.mark.parametrize(("verdict", "status"), [('holds', 'passed'), ('fails', 'failed'), ('inconclusive', 'blocked')])
 def test_semantic_judge_sees_fresh_screen_and_replay_cannot_claim_success(tmp_path, web_app, verdict, status):
     artifacts = Artifacts(tmp_path / 'runs')
     actor = Actor(verdict=verdict)

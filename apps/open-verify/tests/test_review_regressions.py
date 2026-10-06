@@ -20,7 +20,7 @@ from open_verify.journey import JourneyRunner
 from open_verify.journey_spec import ActDecision
 from open_verify.replay_cache import ReplayCache
 from open_verify.test_codegen import render_test
-from open_verify.test_spec import BrowserTest, ExpectJSON, ExpectURL
+from open_verify.test_spec import BrowserTest, ExpectJSON, ExpectText, ExpectURL
 from open_verify.tools import LocalTools
 
 
@@ -47,6 +47,58 @@ def test_nested_json_matches_in_live_and_generated_assertions(tmp_path, web_app,
             else:
                 with pytest.raises(AssertionError, match='JSON field did not match'):
                     await namespace['test_change'](page)
+        finally:
+            await tools.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('visible', [True, False])
+def test_duplicate_exact_text_checks_match_live_and_export(tmp_path, web_app, visible):
+    async def run():
+        tools = LocalTools(tmp_path, Artifacts(tmp_path / 'runs'), headless=True)
+        check = ExpectText(kind='expect_text', text='Unique dummy prompt', visible=visible)
+        try:
+            await tools.execute('browser_open', {'url': web_app})
+            page = await tools.browser_page()
+            style = '' if visible else ' style="display:none"'
+            html = ('<span hidden>Unique dummy prompt</span>'
+                    f'<h1{style}>Unique dummy prompt</h1><p{style}>Unique dummy prompt</p>')
+            await page.set_content(html)
+            receipt = await tools.assert_check(check)
+            assert receipt['result']['status'] == 'passed'
+            namespace = {'__name__': 'generated_journey'}
+            test = BrowserTest(case_id='duplicate', url=web_app, steps=[check])
+            exec(compile(render_test(test), '<generated>', 'exec'), namespace)
+            # Preserve a fresh fixture on the generated test's entry navigation.
+            await page.route(web_app, lambda route: route.fulfill(body=html, content_type='text/html'))
+            await namespace['test_change'](page)
+            if visible:
+                assert (await tools.execute('browser_expect_text', {'text': check.text}))['ok']
+        finally:
+            await tools.close()
+    asyncio.run(run())
+
+
+def test_export_waits_for_creation_navigation_before_recording_dynamic_url(tmp_path, web_app):
+    async def run():
+        tools = LocalTools(tmp_path, Artifacts(tmp_path / 'runs'), headless=True)
+        try:
+            page = await tools.browser_page()
+            html = ('<p>Dummy prompt</p><button onclick="setTimeout(() => '
+                    'location.href = \'/record/new-id\', 150)">Create</button>')
+            await page.route(web_app + '/new', lambda route: route.fulfill(body=html, content_type='text/html'))
+            await page.route(web_app + '/record/new-id', lambda route: route.fulfill(
+                body='<h1>Dummy prompt</h1>', content_type='text/html'))
+            test = BrowserTest(case_id='identity', url=web_app + '/new', steps=[
+                {'kind': 'click', 'locator': {'by': 'role', 'role': 'button', 'name': 'Create'}},
+                {'kind': 'expect_text', 'text': 'Dummy prompt'},
+                {'kind': 'remember_url', 'name': 'created', 'wait_for_navigation': True},
+                {'kind': 'reload'},
+                {'kind': 'expect_same_url', 'baseline': 'created'}])
+            namespace = {'__name__': 'generated_journey'}
+            exec(compile(render_test(test), '<generated>', 'exec'), namespace)
+            await namespace['test_change'](page)
+            assert page.url == web_app + '/record/new-id'
         finally:
             await tools.close()
     asyncio.run(run())

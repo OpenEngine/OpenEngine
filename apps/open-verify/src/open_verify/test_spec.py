@@ -111,7 +111,18 @@ class ReplayBarrier(Contract):
     reason: str = Field(min_length=1)
 
 
-Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL | Screenshot | Reload | Navigate | NavigateURL | ExpectJSON | ReplayBarrier, Field(discriminator="kind")]
+class RememberURL(Contract):
+    kind: Literal['remember_url']
+    name: str = Field(min_length=1, max_length=80)
+    wait_for_navigation: bool = False
+
+
+class ExpectSameURL(Contract):
+    kind: Literal['expect_same_url']
+    baseline: str = Field(min_length=1, max_length=80)
+
+
+Step = Annotated[Click | Fill | Press | ExpectText | ExpectURL | Screenshot | Reload | Navigate | NavigateURL | ExpectJSON | ReplayBarrier | RememberURL | ExpectSameURL, Field(discriminator="kind")]
 
 
 class BrowserTest(Contract):
@@ -127,13 +138,28 @@ class BrowserTest(Contract):
 
     @model_validator(mode="after")
     def assertion_required(self):
-        assertions = (ExpectText, ExpectURL, ExpectJSON, ReplayBarrier)
+        assertions = (ExpectText, ExpectURL, ExpectJSON, ReplayBarrier, ExpectSameURL)
+        saved = set()
+        for step in self.steps:
+            if isinstance(step, RememberURL):
+                if step.name in saved:
+                    raise ValueError('URL baseline names must be unique')
+                saved.add(step.name)
+            if isinstance(step, ExpectSameURL) and step.baseline not in saved:
+                raise ValueError('URL comparison requires an earlier recorded baseline')
         if not any(isinstance(step, assertions) for step in self.steps):
             raise ValueError("A regression test needs at least one explicit assertion")
         for indexes in self.checks.values():
             if not indexes or any(i < 0 or i >= len(self.steps) or not isinstance(self.steps[i], assertions) for i in indexes):
                 raise ValueError("Completion checks must reference assertion steps")
         return self
+
+
+class Checkpoint(Contract):
+    instruction: str
+    status: Literal['passed', 'failed', 'blocked']
+    detail: str
+    code: str | None = None
 
 
 class TestResult(Contract):
@@ -146,6 +172,7 @@ class TestResult(Contract):
     screenshots: list[str] = Field(default_factory=list)
     videos: list[str] = Field(default_factory=list)
     omissions: list[str] = Field(default_factory=list)
+    checkpoints: list[Checkpoint] = Field(default_factory=list)
 
 
 class BrowserRunner(Protocol):

@@ -99,6 +99,10 @@ def parser():
                      help="Action replay: auto reuse/fallback, strict read-only, refresh live recordings, or off")
     cli.add_argument("--cache-dir", type=Path, default=user_cache_path("open-verify") / "replay",
                      help="Local recording storage, isolated by project; excluded from run bundles")
+    cli.add_argument(
+        "--verification", choices=["live", "tests"], default="live",
+        help="live: independently exercise behavior (default); tests: permit existing test suites",
+    )
     cli.add_argument("--headless", action="store_true", help="Hide the browser window")
     cli.add_argument(
         "--max-steps", type=positive_int, default=60, help="Maximum agent decisions (default: 60)"
@@ -166,6 +170,7 @@ async def run_local(args, *, artifacts=None, prepare=None):
             "agent": args.agent,
             "model": args.model,
             "plan_only": args.plan_only,
+            "verification": args.verification,
             "cache": args.cache,
             "allow_exec": args.allow_exec,
             "setup_files": args.setup_file,
@@ -202,6 +207,7 @@ async def run_local(args, *, artifacts=None, prepare=None):
         tools,
         artifacts,
         plan_only=args.plan_only,
+        verification=args.verification,
         max_steps=args.max_steps,
         progress=terminal.write,
         progress_status=terminal.status,

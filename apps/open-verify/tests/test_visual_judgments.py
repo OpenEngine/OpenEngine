@@ -67,7 +67,7 @@ def test_visual_schema_is_explicit_and_exact_checks_cannot_be_combined():
 
 
 @pytest.mark.parametrize(('verdict', 'status', 'code'), [
-    ('holds', 'passed', None), ('fails', 'failed', None), ('inconclusive', 'failed', 'ASSERTION_INCONCLUSIVE'),
+    ('holds', 'passed', None), ('fails', 'failed', None), ('inconclusive', 'blocked', 'ASSERTION_INCONCLUSIVE'),
 ])
 def test_visual_judge_uses_exact_fresh_viewport_and_export_barrier(tmp_path, web_app, verdict, status, code):
     artifacts = Artifacts(tmp_path / 'runs')

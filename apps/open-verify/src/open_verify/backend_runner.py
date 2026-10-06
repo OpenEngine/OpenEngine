@@ -2,10 +2,12 @@
 
 import argparse
 import asyncio
+import shlex
 import hashlib
 import importlib.util
 import json
 import os
+import re
 import stat
 from pathlib import Path
 from uuid import uuid4
@@ -131,6 +133,10 @@ async def execute_backend(test: BackendTest, engine, artifacts, *, progress=prin
             for index, step in enumerate(test.steps):
                 first = len(artifacts.observations)
                 progress(f'  Backend step {index + 1}/{len(test.steps)}: {step.kind}')
+                if step.kind == 'command':
+                    progress('    $ ' + shlex.join(step.argv))
+                else:
+                    progress(f'    {step.method} {step.url}')
                 tool = 'http_request' if step.kind == 'http' else 'run_command'
                 receipt = await engine.execute(tool, step.model_dump(exclude={'kind', 'expect'}))
                 if not receipt['ok']:
@@ -204,6 +210,53 @@ def save_backend_test(test: BackendTest, artifacts):
     return path
 
 
+def embed_generated_scripts(test: BackendTest, engine, artifacts) -> BackendTest:
+    """Carry stdin-created Python helpers in the executed/exported specification.
+
+    Only copy a regular file whose exact contents were supplied as command stdin
+    in this run. Product scripts and arbitrary local files are not bundled.
+    Execute the embedded helper from scratch storage to preserve __file__ and
+    child-process usage without relying on the original disposable checkout.
+    """
+    saved = test.model_copy(deep=True)
+    sources = {e.get('arguments', {}).get('stdin') for e in artifacts.observations
+               if e['tool'] == 'run_command' and e['ok']}
+    sources.discard(None)
+    sources.discard('')
+    for step in saved.steps:
+        if step.kind != 'command':
+            continue
+        for index, word in enumerate(step.argv[:-1]):
+            if not re.fullmatch(r'python(?:\d+(?:\.\d+)*)?(?:\.exe)?', Path(word).name):
+                continue
+            argument = step.argv[index + 1]
+            if not argument.endswith('.py'):
+                continue
+            path = Path(argument)
+            if not path.is_absolute():
+                path = engine.project / step.cwd / path
+            try:
+                if path.is_symlink() or not path.is_file() or path.stat().st_size > 80_000:
+                    continue
+                source = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                continue
+            if source not in sources:
+                continue
+            bootstrap = (
+                'import pathlib, subprocess, sys, tempfile\n'
+                'with tempfile.TemporaryDirectory(prefix="ov-replay-helper-") as folder:\n'
+                f'    script = pathlib.Path(folder) / {path.name!r}\n'
+                f'    script.write_text({source!r}, encoding="utf-8")\n'
+                '    result = subprocess.run([sys.executable, str(script), *sys.argv[1:]])\n'
+                'raise SystemExit(result.returncode)\n'
+            )
+            step.argv[index + 1:index + 2] = ['-c', bootstrap]
+            break
+    # Apply the same size and coverage validation to the final saved data.
+    return BackendTest.model_validate(saved.model_dump())
+
+
 class BackendRunner:
     """Execute the exact saved artifact with the host's existing checked engine."""
 
@@ -212,6 +265,7 @@ class BackendRunner:
 
     async def run(self, test: BackendTest, *, on_result=None):
         """Preserve the generated file and a blocked result even if execution is cancelled."""
+        test = embed_generated_scripts(test, self.engine, self.artifacts)
         path = save_backend_test(test, self.artifacts)
         relative = path.relative_to(self.artifacts.path).as_posix()
         rerun = ['python', relative, '--project', str(self.engine.project)]

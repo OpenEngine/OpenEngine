@@ -543,7 +543,7 @@ class LocalEngine:
         try:
             page = await self.browser_page()
             if check.kind == "expect_text":
-                target = expect(page.get_by_text(check.text, exact=True))
+                target = expect(page.get_by_text(check.text, exact=True).and_(page.locator(':visible')).first)
                 if check.visible:
                     await target.to_be_visible()
                 else:
@@ -687,7 +687,7 @@ class LocalEngine:
             raise ValueError("Open a browser page first")
         from playwright.async_api import expect
 
-        await expect(self.page.get_by_text(args.text, exact=True)).to_be_visible()
+        await expect(self.page.get_by_text(args.text, exact=True).and_(self.page.locator(':visible')).first).to_be_visible()
         return await self.browser_snapshot(EmptyArgs())
 
     async def close(self):

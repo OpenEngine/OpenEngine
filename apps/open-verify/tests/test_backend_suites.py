@@ -127,6 +127,54 @@ def test_terminal_expected_nonzero_exit_and_combined_output_replay(tmp_path):
     assert not (tmp_path / '.git').exists()
 
 
+def test_generated_helper_replays_after_original_script_and_checkout_are_removed(tmp_path):
+    project = tmp_path / 'checkout'
+    project.mkdir()
+    artifacts = Artifacts(tmp_path / 'runs')
+    engine = LocalTools(project, artifacts, allow_exec=True)
+    # The helper invokes itself in a fresh process and uses both argv and stdin.
+    source = ('import pathlib, subprocess, sys\n'
+              'if len(sys.argv) == 1:\n'
+              '    subprocess.run([sys.executable, __file__, "child"], check=True)\n'
+              'else:\n'
+              '    assert input() == "dummy"\n'
+              '    assert pathlib.Path.cwd().name in {"checkout", "replacement"}\n'
+              '    print("DURABLE_HELPER_PASS")\n')
+    helper = project / '.open_verify' / 'lifecycle.py'
+    async def run():
+        await engine.execute('run_command', {'argv': [sys.executable, '-c',
+            'import pathlib,sys; p=pathlib.Path(".open_verify/lifecycle.py"); '
+            'p.parent.mkdir(); p.write_text(sys.stdin.read())'], 'stdin': source})
+        test = suite('terminal', [{'kind': 'command', 'argv': [sys.executable, str(helper)],
+            'stdin': 'dummy\n', 'expect': {'exit_code': 0,
+            'output': {'mode': 'contains', 'value': 'DURABLE_HELPER_PASS'}}}])
+        try:
+            return await BackendRunner(engine, artifacts, progress=lambda _: None).run(test)
+        finally:
+            await engine.close()
+    result = asyncio.run(run())
+    assert result.status == 'passed'
+    helper.unlink()
+    helper.parent.rmdir()
+    project.rmdir()
+    replacement = tmp_path / 'replacement'
+    replacement.mkdir()
+    rerun = replay(result, artifacts, extra=('--project', str(replacement)))
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    exported = json.loads((artifacts.path / result.test_file).with_suffix('.json').read_text())
+    assert exported['steps'][0]['argv'][1] == '-c'
+
+
+def test_product_scripts_are_not_copied_without_matching_setup_evidence(tmp_path):
+    from open_verify.backend_runner import embed_generated_scripts
+    artifacts = Artifacts(tmp_path / 'runs')
+    engine = LocalTools(tmp_path, artifacts, allow_exec=True)
+    (tmp_path / 'product.py').write_text('print("product")')
+    test = suite('terminal', [{'kind': 'command', 'argv': [sys.executable, 'product.py'],
+                              'expect': {'exit_code': 0}}])
+    assert embed_generated_scripts(test, engine, artifacts) == test
+
+
 @pytest.mark.parametrize('expect', [{'status': 404}, {'headers': {'X-Test': 'no'}},
     {'json_check': {'field': ['missing'], 'value': None}},
     {'json_check': {'field': ['items', 0, 'ok'], 'value': 1}},

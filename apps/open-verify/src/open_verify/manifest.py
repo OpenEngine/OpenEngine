@@ -11,7 +11,7 @@ from pydantic import Field
 from open_verify.changes import Change, ChangeReference
 from open_verify.media import MAX_VIDEO_BYTES
 from open_verify.models import Contract, Finding, Impact
-from open_verify.test_spec import TestResult
+from open_verify.test_spec import TestResult, Checkpoint
 
 
 class Attachment(Contract):
@@ -30,6 +30,11 @@ class ManifestTest(Contract):
     path: str | None
     rerun: list[str]
     cwd: Literal["."] = "."
+    title: str = ""
+    coverage: Literal["changed_behavior", "regression", "requested_behavior"] = "requested_behavior"
+    verification: Literal["live", "existing_tests"] = "live"
+    checks: list[str] = Field(default_factory=list)
+    checkpoints: list[Checkpoint] = Field(default_factory=list)
 
 
 class Manifest(Contract):
@@ -44,6 +49,7 @@ class Manifest(Contract):
     artifacts: list[Attachment] = Field(default_factory=list)
     support_files: list[str] = Field(default_factory=list)
     omissions: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
 
 
 def bundle_file(root: Path, relative: str) -> Path:
@@ -97,13 +103,16 @@ def write_manifest(
         environment=environment,
         findings=report.get("findings", []),
         omissions=list(cleanup_errors),
+        assumptions=(report.get("plan") or {}).get("assumptions", []),
     )
     if manifest.status not in {"skipped", "planned"}:
         latest_results = {result.case_id: result for result in results}
         for result in latest_results.values():
+            case = next((c for c in (report.get("plan") or {}).get("cases", [])
+                         if c["id"] == result.case_id), {})
             manifest.omissions.extend(result.omissions)
             attachments = [(result.test_file, "test", "text/x-python")]
-            if (report.get("impact") or {}).get("material_ui_change"):
+            if result.screenshots or result.videos:
                 attachments.extend((p, "screenshot", "image/gif" if Path(p).suffix == '.gif' else "image/png") for p in result.screenshots)
                 attachments.extend((p, "video", "video/mp4") for p in result.videos)
             accepted_test = None
@@ -134,6 +143,11 @@ def write_manifest(
                     detail=result.detail,
                     path=accepted_test,
                     rerun=result.rerun if accepted_test else [],
+                    title=case.get("title", ""),
+                    coverage=case.get("coverage", "requested_behavior"),
+                    verification=case.get("verification", "live"),
+                    checks=case.get("checks", []),
+                    checkpoints=result.checkpoints,
                 )
             )
             if accepted_test is None and manifest.status == "passed":

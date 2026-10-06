@@ -239,3 +239,24 @@ credential today.
   number of `data-testid` landmarks in the client would make them read better
   and break less; worth doing when the second or third spec wants the same
   element.
+
+## Independent OV smoke journeys
+
+After installing the checkout's dependencies and building the web client, start
+an isolated server without invoking the existing Playwright specs:
+
+```sh
+.venv/bin/python scripts/ov-smoke.py --port 0
+```
+
+The helper provisions temporary directories and composes this harness with a
+human-review-only QA workflow. It also works when copied into an older PR with
+`--setup-file scripts/ov-smoke.py`, without changing that PR's product source.
+
+Use the printed `ENGINE_E2E_URL`. The **OV application smoke** workflow has one
+human-review gate; creating a WorkOrder uses the real API, graph runtime and
+stores, then waits without launching a model or doing Git/forge work. OV can
+independently create it through the browser, assert details and reload persistence,
+and capture a GIF. This verifies application wiring, not the production
+implementation-review workflow or external integrations. Use a separate disposable
+state directory per run and stop the server after evidence capture.

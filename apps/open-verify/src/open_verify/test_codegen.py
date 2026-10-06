@@ -20,6 +20,7 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
         "",
         "",
         "async def test_change(page, *, entry_url=None, progress=print, capture=None):",
+        "    saved_urls = {}",
         f"    await page.goto(entry_url or {test.url!r}, "
         "wait_until='domcontentloaded', timeout=30000)",
         "    if capture is not None:",
@@ -38,12 +39,20 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
             "press": "Pressing a key",
             "expect_text": "Checking visible app content",
             "expect_url": "Checking the page URL",
+            "remember_url": "Recording the current URL for comparison",
+            "expect_same_url": "Checking the URL against its recorded baseline",
         }
         checks = [name for name, indexes in test.checks.items() if index in indexes]
         label = "; ".join(checks) if checks else labels[step.kind]
         lines.append(f"    progress({f'  Check {index + 1}/{len(test.steps)}: {label}'!r})")
         if step.kind == "requires_verification":
             line = f"raise RuntimeError({step.reason!r})"
+        elif step.kind == 'remember_url':
+            if step.wait_for_navigation:
+                lines.append(f"    await expect(page).not_to_have_url(entry_url or {test.url!r})")
+            line = f"saved_urls[{step.name!r}] = page.url"
+        elif step.kind == 'expect_same_url':
+            line = f"await expect(page).to_have_url(saved_urls[{step.baseline!r}])"
         elif step.kind == "click":
             lines.append("    if capture is not None:")
             lines.append(f"        await capture(page, 'step-{index:02d}-before-click', {locator_code(step.locator)})")
@@ -54,7 +63,7 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
             line = f"await {locator_code(step.locator)}.press({step.key!r})"
         elif step.kind == "expect_text":
             assertion = "to_be_visible" if step.visible else "not_to_be_visible"
-            line = f"await expect(page.get_by_text({step.text!r}, exact=True)).{assertion}()"
+            line = f"await expect(page.get_by_text({step.text!r}, exact=True).and_(page.locator(':visible')).first).{assertion}()"
         elif step.kind == "reload":
             line = "await page.reload(wait_until='domcontentloaded')"
         elif step.kind == "navigate":
@@ -84,10 +93,6 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
         else:
             line = f"await expect(page).to_have_url({step.url!r})"
         lines.append("    " + line)
-        if step.kind == "expect_text" and step.visible:
-            lines.append(
-                f"    await page.get_by_text({step.text!r}, exact=True).scroll_into_view_if_needed()"
-            )
     lines.extend(
         [
             "",
