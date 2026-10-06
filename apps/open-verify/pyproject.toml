@@ -1,0 +1,41 @@
+[project]
+name = "open-verify"
+version = "0.1.0"
+description = "Exploratory QA from your terminal, powered by a deterministic runner and ACP agents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph-acp>=0.3.0,<0.4",
+    "pydantic>=2.0,<3",
+    "httpx>=0.28,<1",
+    "platformdirs>=4,<5",
+    "psutil>=6,<8",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.49,<2", "imageio-ffmpeg>=0.6,<1"]
+
+[project.scripts]
+open-verify = "open_verify.cli:main"
+ov = "open_verify.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/open_verify"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.11"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]

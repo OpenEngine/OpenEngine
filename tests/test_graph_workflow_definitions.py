@@ -400,14 +400,22 @@ def test_the_human_stage_is_the_shared_component_rather_than_a_bespoke_node() ->
 
 
 @pytest.mark.parametrize("has_findings", [False, True])
+@pytest.mark.parametrize("verification_enabled", [False, True])
 def test_review_feedback_returns_to_implementation_at_most_once(
-    monkeypatch, has_findings,
+    monkeypatch, tmp_path, has_findings, verification_enabled,
 ) -> None:
     from langchain_core.runnables import RunnableLambda
     from engine.graph_runtime_langgraph.components import RerankerNode
 
     module = definition_module()
-    builder = module.pipeline("codex")
+    from engine.graph_runtime_langgraph.components import OpenVerify
+    from unittest.mock import AsyncMock
+
+    verification = (
+        OpenVerify(uploader=AsyncMock(), output_directory=tmp_path)
+        if verification_enabled else None
+    )
+    builder = module.pipeline("codex", verification=verification)
     implementation = nodes_of(builder)[module.IMPLEMENTATION]
     visited = []
     prompts = []
@@ -447,7 +455,11 @@ def test_review_feedback_returns_to_implementation_at_most_once(
         assert visited.count(f"review-{facet.id}") == rounds
     assert visited.count(module.WORKSPACE) == 1
     assert visited.count(module.IMPACT_ANALYSIS) == 1
-    assert visited[-2:] == [module.IMPACT_ANALYSIS, module.HUMAN_REVIEW]
+    final_stages = [module.IMPACT_ANALYSIS]
+    if verification_enabled:
+        final_stages.append(module.VERIFICATION)
+    final_stages.append(module.HUMAN_REVIEW)
+    assert visited[-len(final_stages):] == final_stages
     assert prompts[0] == module.IMPLEMENTATION_PROMPT.format(
         publish=PUBLISH_CHANGE.connected, task="Repair the result",
     )
@@ -585,7 +597,10 @@ def test_a_run_started_in_review_triages_before_it_fixes(monkeypatch) -> None:
     assert "Reply to each review comment" not in fix
 
 
-def test_a_review_requested_on_the_forge_posts_its_findings_and_impact(monkeypatch) -> None:
+@pytest.mark.parametrize("verification_enabled", [False, True])
+def test_a_review_requested_on_the_forge_posts_its_findings_and_impact(
+    monkeypatch, tmp_path, verification_enabled,
+) -> None:
     """Asked to publish, a run started in review posts instead of triaging.
 
     The reranker posts the surviving findings and impact analysis posts its
@@ -595,7 +610,15 @@ def test_a_review_requested_on_the_forge_posts_its_findings_and_impact(monkeypat
     from engine.graph_runtime_langgraph.components import RerankerNode
 
     module = definition_module()
-    builder = module.pipeline("codex")
+    from engine.graph_runtime_langgraph.components import OpenVerify
+
+    from unittest.mock import AsyncMock
+
+    verification = (
+        OpenVerify(uploader=AsyncMock(), output_directory=tmp_path)
+        if verification_enabled else None
+    )
+    builder = module.pipeline("codex", verification=verification)
     nodes = nodes_of(builder)
     visited = []
     prompts = {}
@@ -633,7 +656,9 @@ def test_a_review_requested_on_the_forge_posts_its_findings_and_impact(monkeypat
 
     assert visited.count(module.RERANKER) == 1
     assert visited[-1] == module.IMPACT_ANALYSIS
-    for skipped in (module.TRIAGE, module.IMPLEMENTATION, module.HUMAN_REVIEW):
+    for skipped in (
+        module.TRIAGE, module.IMPLEMENTATION, module.HUMAN_REVIEW, module.VERIFICATION,
+    ):
         assert skipped not in visited
     assert "add_comment" in prompts[module.RERANKER]
     assert "add_comment" in prompts[module.IMPACT_ANALYSIS]

@@ -21,8 +21,8 @@ packages = ["migrations"]
 members = ["packages/*", "packages/adapters/*/*", "apps/*", "cli/client", "cli/service"]
 # `packages/adapters` is a grouping directory, not a distribution. The
 # capability directories under it are the same, and `packages/*` does not reach
-# them.
-exclude = ["packages/adapters", "packages/engine"]
+# them. Open Verify is an independent distribution for later repository extraction.
+exclude = ["packages/adapters", "packages/engine", "apps/open-verify"]
 
 [dependency-groups]
 # `watchfiles` is what `engine-dev` reloads on: Uvicorn falls back to polling

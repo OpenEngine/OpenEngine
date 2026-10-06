@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "nodes": ["discover", "plan", "launch", "observe", "exercise", "investigate", "report"],
+  "edges": [
+    {"from": "discover", "to": "discover", "condition": "Project behavior or startup is unclear", "guidance": "Read relevant docs, manifests, entry points and existing tests. Follow file references selectively.", "pitfalls": "Do not assume all projects use the same framework or read secret files."},
+    {"from": "discover", "to": "plan", "condition": "Enough evidence to describe the requested feature", "guidance": "Create cases with observable expected outcomes, setup, happy paths, invalid inputs and boundaries.", "pitfalls": "Implementation behavior is not proof of intended behavior. State assumptions and questions."},
+    {"from": "plan", "to": "launch", "condition": "The plan is ready and execution is requested", "guidance": "Use documented startup commands and disposable test data. Track each process you start.", "pitfalls": "Do not edit product code to make a test pass. Do not use production data."},
+    {"from": "launch", "to": "observe", "condition": "Service process started", "guidance": "Inspect logs and check readiness before testing. A process existing does not establish readiness.", "pitfalls": "Avoid fixed sleeps and repeated restarts with unchanged configuration."},
+    {"from": "observe", "to": "exercise", "condition": "The target is ready", "guidance": "Exercise the requested feature through browser, terminal or HTTP and compare actual outcomes with the plan.", "pitfalls": "A successful tool call alone does not prove the feature works."},
+    {"from": "exercise", "to": "exercise", "condition": "More planned cases remain", "guidance": "Cover failure paths and boundary inputs. Reset relevant state between independent cases.", "pitfalls": "Preserve exploratory freedom; this graph is guidance, not a list of mandatory actions."},
+    {"from": "exercise", "to": "investigate", "condition": "Unexpected behavior or a tool failure", "guidance": "Inspect the evidence, distinguish environment failures from product defects, and reproduce where possible.", "pitfalls": "Do not retry the same failing action indefinitely or label a missing dependency a product bug."},
+    {"from": "investigate", "to": "exercise", "condition": "The cause is understood or setup is corrected", "guidance": "Continue the relevant case and record what changed.", "pitfalls": "Do not erase evidence of earlier failures."},
+    {"from": "exercise", "to": "report", "condition": "Cases are assessed or the budget is exhausted", "guidance": "Cite captured evidence; report passes, failures, blockers and uncertainty separately.", "pitfalls": "Never invent observations. Finding a real defect is a successful QA outcome."},
+    {"from": "investigate", "to": "report", "condition": "Further progress is blocked", "guidance": "Record the blocker and identify untested cases.", "pitfalls": "Do not mark unexecuted cases passed."}
+  ]
+}
