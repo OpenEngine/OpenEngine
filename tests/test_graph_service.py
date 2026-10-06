@@ -120,6 +120,17 @@ async def settled(service: GraphService, run_id: str, timeout: float = 30.0) -> 
         await asyncio.sleep(0.05)
 
 
+async def paused(service: GraphService, loop_id: str, timeout: float = 30.0) -> dict[str, Any]:
+    """The loop once paused; the service settles a loop just after its run turns terminal."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        loop = await service.loop_json(loop_id)
+        if loop["state"] == "paused":
+            return loop
+        assert asyncio.get_running_loop().time() < deadline, loop
+        await asyncio.sleep(0.05)
+
+
 async def running_execution(service: GraphService, run_id: str, node: str) -> dict[str, Any]:
     """The node's attempt, once its agent is mid-turn.
 
@@ -425,9 +436,9 @@ def test_reaching_max_prs_pauses_the_loop(tmp_path: Path) -> None:
                 PullRequestRecord("example/repo", 7, RunId(run_id), "2026-10-05T12:00:00+00:00")
             )
             await settled(service, run_id)
-            loop = await service.loop_json(loop["loopId"])
+            loop = await paused(service, loop["loopId"])
             assert loop["prCount"] == 1
-            assert loop["state"] == "paused" and loop["pauseReason"].startswith("max-prs reached")
+            assert loop["pauseReason"].startswith("max-prs reached")
 
     asyncio.run(scenario())
 
@@ -439,8 +450,7 @@ def test_a_loop_pauses_when_its_runner_needs_signing_in(tmp_path: Path) -> None:
             loop = await service.add_loop(project="default", graph="locked", instruction="x", every="1h")
             await service.tick()
             await settled(service, (await service.loop_json(loop["loopId"]))["activeRunId"])
-            loop = await service.loop_json(loop["loopId"])
-            assert loop["state"] == "paused"
+            loop = await paused(service, loop["loopId"])
             assert "engine runner signin stub" in loop["pauseReason"]
 
     asyncio.run(scenario())

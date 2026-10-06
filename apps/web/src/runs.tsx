@@ -384,7 +384,7 @@ export function NewWorkflowPage({
   const selected = config.workflows.find((workflow) => workflow.id === workflowId);
   // Review targets are supplied by engine review, not the WorkOrder form.
   const inputs = (selected?.inputs ?? []).filter(
-    (input) => !["ref", "pr_url", "branch"].includes(input.name),
+    (input) => !["ref", "pr_url", "branch", "publish_review"].includes(input.name),
   );
   // A repository onboarded as disconnected fixes the mode of its WorkOrders.
   const repositoryMode = config.repositories.find((repo) => repo.path === repository)?.mode;
