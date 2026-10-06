@@ -25,6 +25,10 @@ from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
 from engine.graph_runtime_langgraph.executions import current_execution
 
 
+#: How bad a finding is, when a reviewer says; empty when it does not.
+SEVERITIES = ("", "high", "medium", "low")
+
+
 @dataclass(frozen=True, slots=True)
 class Finding:
     """One reviewer observation, structured for comment posting and reranking."""
@@ -41,6 +45,8 @@ class Finding:
     """The file this finding relates to, if any."""
     line: int | None = None
     """The line number, if applicable."""
+    severity: str = ""
+    """`high`, `medium` or `low`, when the reviewer ranked it."""
 
     def __post_init__(self) -> None:
         for name, limit in (("tagline", 2), ("description", 3)):
@@ -57,6 +63,8 @@ class Finding:
             raise ValueError("line must be a positive integer")
         if not isinstance(self.agent, str) or not isinstance(self.facet, str):
             raise ValueError("agent and facet must be strings")
+        if self.severity not in SEVERITIES:
+            raise ValueError("severity must be high, medium or low")
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"tagline": self.tagline, "description": self.description}
@@ -68,6 +76,8 @@ class Finding:
             d["file"] = self.file
         if self.line is not None:
             d["line"] = self.line
+        if self.severity:
+            d["severity"] = self.severity
         return d
 
     @classmethod
@@ -79,6 +89,7 @@ class Finding:
             agent=data.get("agent", ""),
             file=data.get("file"),
             line=data.get("line"),
+            severity=data.get("severity") or "",
         )
 
     def as_comment(self) -> str:
@@ -170,6 +181,7 @@ __all__ = [
     "Finding",
     "REVIEW_FACETS",
     "ReviewFacet",
+    "SEVERITIES",
     "ReviewNode",
     "RerankerNode",
     "TRIAGE_TOOL",

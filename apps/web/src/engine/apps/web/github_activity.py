@@ -217,6 +217,10 @@ class GithubActivityLog:
             return
         self._entries[self._current] = replace(entry, **fields)
 
+    def entry(self, comment: GithubComment) -> CommentActivity | None:
+        """This comment's row, if it is still remembered."""
+        return self._entries.get(self._key(comment))
+
     def recent(self) -> tuple[CommentActivity, ...]:
         """Everything remembered, newest first, which is how it is read."""
         return tuple(reversed(self._entries.values()))

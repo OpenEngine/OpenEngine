@@ -19,6 +19,12 @@ at an existing change -- a pull request, or a branch -- through the `ref` and
 Nothing is posted; a person is shown the surviving findings at *triage* and
 chooses which to fix, and each fix is reviewed again before triage asks again.
 
+A review requested from Engine on the forge sets the `publish_review` input
+instead: whoever asked reads the review on the pull request, so the survivors
+are posted there and impact analysis posts its rating, and nothing waits:
+
+    workspace -> [review facets] -> reranker -> impact-analysis
+
 The workflow offers both forge modes (`engine.domain.forge`) through
 `mode_input`. Nothing here branches on the mode: the components narrow the
 tools and skip CI themselves, and the prompts are filled from the shared
@@ -66,8 +72,8 @@ from engine.graph_runtime_langgraph.components.forge import (
     UPDATE_CHANGE,
 )
 from engine.domain import (
-    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT,
-    ForgeMode, StepCompleted, WorkState, forge_mode, start_state,
+    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_PUBLISH_INPUT, REVIEW_REF_INPUT,
+    ForgeMode, StepCompleted, WorkState, forge_mode, publishes_review, start_state,
 )
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
@@ -104,6 +110,8 @@ FIX = "fix"
 
 #: The creation inputs naming the change a run started in review looks at.
 REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
+#: Set on a run started in review to post its review rather than triage it.
+PUBLISH_INPUT = REVIEW_PUBLISH_INPUT
 
 #: Codex and Claude, reached through their ACP adapters.  `agent_registry` is
 #: what routes an agent's permission request back to the run that raised it.
@@ -271,11 +279,10 @@ class InputReviewNode(_RunnerInput, ReviewNode):
 
 
 class _RerankerTools(TerminalMcpServer):
-    """The reranker's tools, without `add_comment` in a run started in review.
+    """The reranker's tools, without `add_comment` in a run that keeps its findings.
 
-    `KEEP_FINDINGS` asks it not to post, and the broker refuses `complete_step`
-    from a step granted `add_comment` until it has posted, so the tool is
-    withheld by the server rather than only by the prompt.
+    `KEEP_FINDINGS` asks it not to post, so the tool is withheld by the server
+    rather than only by the prompt.
     """
 
     def __call__(
@@ -287,7 +294,7 @@ class _RerankerTools(TerminalMcpServer):
         return TerminalMcpServer.__call__(self.for_state(state), state, execution, approve)
 
     def for_state(self, state: Mapping[str, object]) -> TerminalMcpServer:
-        if not _reviewing(state):
+        if not _keeping_findings(state):
             return self
         return replace(self, repository_tools=tuple(
             name for name in self.repository_tools if name != "add_comment"
@@ -316,6 +323,16 @@ def _review_node_name(facet_id: str) -> str:
 def _reviewing(state: Mapping[str, object]) -> bool:
     """Whether this run started in review, at a change it did not make."""
     return start_state(state.get("inputs")) is WorkState.REVIEW
+
+
+def _publishing(state: Mapping[str, object]) -> bool:
+    """Whether a run started in review posts its review instead of triaging it."""
+    return _reviewing(state) and publishes_review(state.get("inputs"))
+
+
+def _keeping_findings(state: Mapping[str, object]) -> bool:
+    """Whether the surviving findings are left for a person at triage."""
+    return _reviewing(state) and not _publishing(state)
 
 
 def _pr_url(state: Mapping[str, object]) -> str:
@@ -376,10 +393,15 @@ def _after_workspace(state: dict[str, Any]) -> str | list[Send]:
 
 def _after_reranker(state: dict[str, Any]) -> str:
     if _reviewing(state):
-        return TRIAGE
+        return IMPACT_ANALYSIS if _publishing(state) else TRIAGE
     if state.get(REVIEW) and state.get("review_rounds") == 1:
         return IMPLEMENTATION
     return IMPACT_ANALYSIS
+
+
+def _after_impact_analysis(state: dict[str, Any]) -> str:
+    # A change this run did not make has no work order for a person to accept.
+    return END if _publishing(state) else HUMAN_REVIEW
 
 
 def _after_triage(state: dict[str, Any]) -> str:
@@ -518,7 +540,7 @@ def pipeline(
             )
         return RERANKER_PROMPT.format(
             reviewer_count=len(REVIEW_FACETS),
-            publishing=KEEP_FINDINGS if _reviewing(state) else PUBLISH_FINDINGS(
+            publishing=KEEP_FINDINGS if _keeping_findings(state) else PUBLISH_FINDINGS(
                 state, runner=state.get("inputs", {}).get("review_runner", reviewer),
             ),
             findings_sections="".join(sections),
@@ -618,10 +640,15 @@ def pipeline(
     builder.add_conditional_edges(TRIAGE, _after_triage, [IMPLEMENTATION, END])
     if verification is not None:
         builder.add_node(VERIFICATION, verification)
-        builder.add_edge(IMPACT_ANALYSIS, VERIFICATION)
+        builder.add_conditional_edges(
+            IMPACT_ANALYSIS, _after_impact_analysis,
+            {HUMAN_REVIEW: VERIFICATION, END: END},
+        )
         builder.add_edge(VERIFICATION, HUMAN_REVIEW)
     else:
-        builder.add_edge(IMPACT_ANALYSIS, HUMAN_REVIEW)
+        builder.add_conditional_edges(
+            IMPACT_ANALYSIS, _after_impact_analysis, [HUMAN_REVIEW, END],
+        )
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
 
@@ -673,6 +700,7 @@ def graph_for(
             WorkflowInput(REF_INPUT, "Ref to review"),
             WorkflowInput(PR_INPUT, "Pull request to review"),
             WorkflowInput(BRANCH_INPUT, "Pull request branch"),
+            WorkflowInput(PUBLISH_INPUT, "Post the review to the pull request"),
         ),
     )
 

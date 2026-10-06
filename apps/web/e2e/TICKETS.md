@@ -289,16 +289,9 @@ Covers **1f**. Depends on T4 and T3.
 
 The review profile grants `add_comment` (`implementation_review.py:89`) and the
 dispatcher enables the tool on the broker only when the profile asks for it
-*and* the wired source control has the method (`dispatcher.py:278-290`). Two
-behaviours follow, and both should be asserted:
-
-1. A reviewer that calls `add_comment` with the `pr_url` the implementation step
-   declared reaches the fake `gh` with that URL and body.
-2. **A reviewer that tries to `complete_step` without commenting is refused** --
-   `"add at least one pull-request comment before completing review"`
-   (`terminal_mcp.py:172-177`) -- and the correction is what makes it comment.
-   This is the more interesting half: it is a rule about review quality that
-   nothing else tests end to end.
+*and* the wired source control has the method (`dispatcher.py:278-290`). A
+reviewer that calls `add_comment` with the `pr_url` the implementation step
+declared reaches the fake `gh` with that URL and body.
 
 **Assert** against the fake `gh`'s recording, and on the run reaching
 `awaiting_human_review` with the review step's `findings` output shown.

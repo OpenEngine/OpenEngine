@@ -21,6 +21,7 @@ import {
   useGraphNodes,
   useRuns,
 } from "./runs";
+import { LoopPage, NewLoopPage } from "./loops";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar } from "./sidebar";
 import { UtilizationPage } from "./utilization";
@@ -261,16 +262,21 @@ function App() {
     <Sidebar
       runs={runs}
       graphNodes={graphNodes}
+      runners={config.runners.map((option) => option.id)}
       activeRunId={activeRunId}
       activeConversationUrl={conversationUrl}
+      activeLoopId={route.kind === "loop" ? route.loopId : undefined}
+      initialSection={route.kind === "loop" || route.kind === "new-loop" ? "loops" : undefined}
       activeView={
         route.kind === "runs"
           ? "runs"
           : route.kind === "new-run"
             ? "new"
-            : route.kind === "utilization"
-              ? "utilization"
-              : undefined
+            : route.kind === "new-loop"
+              ? "new-loop"
+              : route.kind === "utilization"
+                ? "utilization"
+                : undefined
       }
       onDeleteRun={deleteRun}
     />
@@ -304,6 +310,10 @@ function App() {
           />
         ) : route.kind === "utilization" ? (
           <UtilizationPage />
+        ) : route.kind === "new-loop" ? (
+          <NewLoopPage config={config} />
+        ) : route.kind === "loop" ? (
+          <LoopPage loopId={route.loopId} />
         ) : (
           <ChatPanel
             config={config}

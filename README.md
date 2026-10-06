@@ -1,5 +1,9 @@
 # OpenEngine
 
+[![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
+[![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
+[![Docs](https://img.shields.io/badge/docs-openengine.sh-blue)](https://openengine.sh/docs/)
+
 OpenEngine is a graph execution engine that meets you where you work.
 
 ![](docs/images/oe_land.png)
@@ -43,6 +47,12 @@ uv run \
   --directory /path/to/your/project \
   --all-packages \
   engine-web
+```
+Or install the checked-out commit as your `engine`, in place of a release,
+exactly as the one-line installer would. It is labeled with the commit, such as
+`1.2.0-ffdb7cd`, and takes the installer's options:
+```bash
+scripts/install-local.sh
 ```
 The production service defaults to `http://127.0.0.1:4364`. Verify its identity
 and readiness after startup:
@@ -97,10 +107,12 @@ committed branch; a GitHub pull request URL provisions a new workspace on the
 pull request's branch in the matching `[repos]` checkout, and fixes are pushed
 back to that branch. Pull requests from forks are refused, since their code
 would run the review's agents; check one out and review the path instead. The surviving
-findings are listed with **Fix this** beside each: Enter selects a finding,
-**Fix selected** or **Fix all** sends them back to the implementer, and the fix
-is reviewed again. **Post as comments** posts the findings on the pull request
-with `gh`. `--json` prints the findings and leaves the review waiting.
+findings are presented one at a time with the relevant diff, highlighting
+additions and deletions. Choose **Fix**, **Post to PR** (when a pull request is
+available), or **Ignore** for each finding. Fixes are queued until every finding
+has been reviewed, then sent together to implementation with progress shown;
+the resulting change is reviewed again. Posting uses `gh` and posts only that
+finding. `--json` prints the findings and leaves the review waiting.
 
 In an interactive terminal, running `engine` opens the workbench. Type `/` to
 search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,

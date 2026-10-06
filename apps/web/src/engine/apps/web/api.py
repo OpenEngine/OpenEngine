@@ -43,12 +43,22 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 from html import escape
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
+from engine.apps.web.loop_runs import (
+    Loop,
+    LoopHost,
+    LoopRunner,
+    LoopStore,
+    loop_defaults,
+    parse_loop,
+    tool_permission as loop_tool_permission,
+)
+from engine.apps.web.loops import LoopSettingsStore, parse_loop_settings
 from engine.apps.web.github_activity import GithubActivityLog, activity_json
 from engine.apps.web.github_communications import (
     GITHUB_CHANNEL_PREFIX,
@@ -57,7 +67,7 @@ from engine.apps.web.github_communications import (
 )
 from engine.apps.web.github_ingress import (
     GithubAssignment, GithubComment, GithubIngress, GithubMerge, GithubReviewRequest,
-    github_co_author, github_requester,
+    github_co_author, github_requester, mentions_other_accounts,
 )
 from engine.apps.web.github_login import STREAM_ACCESS, GitHubLogin, GitHubLoginConfig
 from engine.apps.web.github_auth import (
@@ -134,6 +144,8 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_service import GraphService, StartRequest, StartRun
+from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
@@ -996,6 +1008,9 @@ class _GraphSurface:
 
     runtime: GraphRuntime | None = None
     app: Starlette | None = None
+    service: GraphService | None = None
+    """Registered graphs, loops and node steering, when the engine supports them."""
+    service_app: Starlette | None = None
 
 
 class GithubProvenance(Protocol):
@@ -1079,6 +1094,10 @@ def create_app(
     github_login_config: GitHubLoginConfig | None = None,
     service_token: Callable[[], str] = lambda: "",
     source_control_preferences: SourceControlPreferences | None = None,
+    loop_settings: LoopSettingsStore | None = None,
+    loop_store: LoopStore | None = None,
+    loop_provider: ACPAgentProvider | None = None,
+    loop_tick_seconds: float = 60,
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
@@ -1094,6 +1113,7 @@ def create_app(
     repository_projects: Mapping[str, str] | None = None,
     utilization: UtilizationService | None = None,
     concierge_provider: ACPAgentProvider | None = None,
+    graph_service: Callable[[Any, StartRun], GraphService] | None = None,
 ) -> Starlette:
     """Build the web application around already-composed capabilities."""
     if workflow_catalog is None:
@@ -1339,6 +1359,8 @@ def create_app(
         if progress := graph_progress.get(event.run_id):
             progress.apply(event)
         await graph_events.append(event)
+        if surface.service is not None:
+            await surface.service.observe(event)
         await graph_notifications(event)
         if (
             event.kind is EventKind.APPROVAL_REQUESTED
@@ -1374,6 +1396,54 @@ def create_app(
             await session.state_store.save(updated)
         if updated.phase is RunPhase.SUCCEEDED:
             dependencies_changed.set()
+
+    async def open_graph_service(runtime: GraphRuntime, opened: AsyncExitStack) -> None:
+        """Serve `/api/v1`, for `engine graph|loop|node`, on this engine.
+
+        Contained like the engine itself: a failure here takes registered
+        graphs and loops offline and leaves everything else serving.
+        """
+        if graph_service is None or getattr(runtime, "checkpointer", None) is None:
+            return
+
+        async def start(workflow: GraphWorkflow, request: StartRequest) -> RunId:
+            # The WorkOrder path, so a CLI run is listed, approved under this
+            # deployment's policy and reported like any other.
+            state = await start_graph_run(
+                runtime,
+                workflow,
+                inputs=dict(request.inputs),
+                prompt=request.instruction,
+                repository=request.repository,
+            )
+            return state.run_id
+
+        try:
+            service = graph_service(runtime, start)
+            await service.open()
+        except Exception:
+            log.exception("registered graphs are not being offered in this process")
+            return
+        opened.push_async_callback(service.aclose)
+        surface.service = service
+        surface.service_app = create_graph_service_app(service)
+
+    async def graph_service_surface(scope: Scope, receive: Receive, send: Send) -> None:
+        """Pass `/api/v1` to the registered-graph service, for operators only.
+
+        Its runs, loops and steering span every repository, so a signed-in
+        user who sees only some of them is refused rather than shown all.
+        """
+        if surface.service_app is None:
+            await JSONResponse(
+                {"error": "this process is not running graph workflows"}, status_code=503,
+            )(scope, receive, send)
+            return
+        if scope["type"] == "http":
+            if await github_login.visible_repositories(Request(scope)) is not None:
+                await _error("the graph API is for operators", 403)(scope, receive, send)
+                return
+        await surface.service_app(scope, receive, send)
 
     async def restore_graph_runs(runtime: GraphRuntime) -> None:
         """Pick every unfinished graph WorkOrder back up, or say why it cannot be.
@@ -1531,6 +1601,9 @@ def create_app(
                     # ours is installed afterwards and does both.
                     surface.app = create_graph_app(surface.runtime, graph_events)
                     surface.runtime.observe(graph_event)
+                    # Registered graphs are offered again before runs are
+                    # restored, since a run resumes only if its graph exists.
+                    await open_graph_service(surface.runtime, opened)
                     await restore_graph_runs(surface.runtime)
                     dependency_task = asyncio.create_task(dispatch_dependencies())
                     dependencies_changed.set()
@@ -1540,6 +1613,13 @@ def create_app(
                         await asyncio.gather(dependency_task, return_exceptions=True)
 
                     opened.push_async_callback(stop_dependencies)
+                    loops_task = asyncio.create_task(dispatch_loops())
+
+                    async def stop_loops() -> None:
+                        loops_task.cancel()
+                        await asyncio.gather(loops_task, return_exceptions=True)
+
+                    opened.push_async_callback(stop_loops)
             ready = graph_runtime is None or surface.runtime is not None
             try:
                 yield
@@ -2688,6 +2768,162 @@ def create_app(
         _source_control_preferences.set(provider, origin if provider == "gitlab-oauth" else None)
         return Response(status_code=204)
 
+    _loop_settings = loop_settings or LoopSettingsStore()
+
+    async def get_loop_settings(_request: Request) -> JSONResponse:
+        return JSONResponse(_loop_settings.get().json())
+
+    async def set_loop_settings(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        try:
+            settings = parse_loop_settings(await request.json(), runners)
+        except ValueError as error:
+            return _error(str(error), 400)
+        _loop_settings.set(settings)
+        return JSONResponse(settings.json())
+
+    async def loop_create_workorder(loop: Loop, prompt: str) -> str:
+        graph = _mentioned_workflow()
+        if graph is None:
+            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
+        assert surface.runtime is not None
+        state = await start_graph_run(
+            surface.runtime, graph,
+            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            prompt=prompt, repository=loop.repository, requester=loop.requester,
+        )
+        return str(state.run_id)
+
+    async def loop_list_runs(repository: str) -> list[RunState]:
+        return [
+            state for state in await session.state_store.list_runs()
+            if same_repository(state.repository, repository)
+        ]
+
+    async def loop_direct(run_id: str, prompt: str, *, resume: bool) -> None:
+        runtime = surface.runtime
+        if runtime is None:
+            raise RuntimeError("graph WorkOrders are not running in this process")
+        snapshot = await runtime.snapshot(RunId(run_id))
+        if snapshot is None:
+            raise RuntimeError("the WorkOrder is unavailable")
+        stopped = snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED)
+        if stopped != resume:
+            raise RuntimeError(
+                "this WorkOrder is still running; use steer_workorder" if resume
+                else "this WorkOrder has stopped; use resume_workorder"
+            )
+        node = _reentry_node(runtime, snapshot)
+        if resume and node is None:
+            raise RuntimeError("the workflow has no unique implementation to resume")
+        await runtime.steer(RunId(run_id), f"Loop instruction:\n{prompt}", node_id=node)
+
+    async def loop_steer(run_id: str, prompt: str) -> None:
+        await loop_direct(run_id, prompt, resume=False)
+
+    async def loop_resume(run_id: str, prompt: str) -> None:
+        await loop_direct(run_id, prompt, resume=True)
+
+    async def loop_load(run_id: str) -> RunState | None:
+        return await session.state_store.load(RunId(run_id))
+
+    def loop_spend(run_id: str) -> float:
+        return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0
+
+    async def loop_may_act(loop: Loop) -> bool:
+        """Whether the loop's creator can still write to its repository, asked
+        again before each run and WorkOrder as their own request would be."""
+        if loop.requester is None or github_login.config is None or github_login.authorize is None:
+            # Created by someone who sees everything: login was off, or the
+            # service credential made it.
+            return True
+        provider, _, rest = loop.requester.partition(":")
+        account, _, login = rest.partition(":")
+        if provider != "github" or not account.isdigit() or not login:
+            return False
+        user: dict[str, object] = {"id": int(account), "login": login}
+        if user["id"] in github_login.operators:
+            return True
+        writable = await github_login.writable_repositories(user)
+        return writable is not None and repository_visible(writable, loop.repository)
+
+    _loops = loop_store or LoopStore()
+    loop_runner = LoopRunner(
+        _loops,
+        LoopHost(
+            create=loop_create_workorder, load=loop_load, list_runs=loop_list_runs,
+            steer=loop_steer, resume=loop_resume, spend=loop_spend,
+            # Defined further down, so looked up when called.
+            same_repository=lambda one, other: same_repository(one, other),
+            may_act=loop_may_act,
+        ),
+        loop_provider or CodexACPProvider(permissions=loop_tool_permission),
+    )
+    loop_runs: set[asyncio.Task[None]] = set()
+
+    async def dispatch_loops() -> None:
+        while True:
+            try:
+                for task in await loop_runner.tick():
+                    loop_runs.add(task)
+                    task.add_done_callback(loop_runs.discard)
+            except Exception:
+                log.exception("could not start due loops")
+            await asyncio.sleep(loop_tick_seconds)
+
+    async def loop_json(loop: Loop) -> dict[str, object]:
+        # The newest first, read together rather than one after another.
+        states = await asyncio.gather(
+            *(loop_load(one.run_id) for one in reversed(loop.workorders)))
+        return loop_runner.json(loop, [state for state in states if state is not None])
+
+    async def list_loops(request: Request) -> JSONResponse:
+        visible = await github_login.visible_repositories(request)
+        return JSONResponse({"loops": [
+            await loop_json(loop) for loop in _loops.list()
+            if repository_visible(visible, loop.repository)
+        ]})
+
+    async def new_loop_defaults(_request: Request) -> JSONResponse:
+        return JSONResponse(loop_defaults(_loop_settings.get()))
+
+    async def create_loop(request: Request) -> JSONResponse:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        repositories = [
+            str(Path(path).expanduser().resolve()) for path in (repos or {}).values()
+        ] or ["."]
+        try:
+            loop = parse_loop(
+                await request.json(), repositories, datetime.now().astimezone(),
+            )
+        except ValueError as error:
+            return _error(str(error), 400)
+        if not repository_visible(await github_login.visible_repositories(request), loop.repository):
+            return _error("you cannot write to this repository", 403)
+        loop = replace(loop, requester=_web_requester(request))
+        _loops.save(loop)
+        return JSONResponse(await loop_json(loop), status_code=201)
+
+    async def visible_loop(request: Request) -> Loop | None:
+        loop = _loops.get(request.path_params["loop_id"])
+        visible = await github_login.visible_repositories(request)
+        return loop if loop is not None and repository_visible(visible, loop.repository) else None
+
+    async def get_loop(request: Request) -> JSONResponse:
+        loop = await visible_loop(request)
+        return JSONResponse(await loop_json(loop)) if loop else _error("loop not found", 404)
+
+    async def delete_loop(request: Request) -> Response:
+        if not _is_local_request(request):
+            return _error("forbidden", 403)
+        loop = await visible_loop(request)
+        if loop is None:
+            return _error("loop not found", 404)
+        _loops.delete(loop.loop_id)
+        return Response(status_code=204)
+
     async def github_get_client_id(_request: Request) -> JSONResponse:
         # Never return the actual value — only whether one is set and its hint.
         stored = _github_store(_request).get_client_id()
@@ -3575,8 +3811,10 @@ def create_app(
     async def github_review_pull_request(requested: GithubReviewRequest) -> None:
         """A review requested from Engine starts a review of the pull request.
 
-        The same run `engine review <PR URL>` starts, in connected mode: checked
-        out at the pull request's branch, reviewed, and stopped at triage. A
+        The same run `engine review <PR URL>` starts, in connected mode and
+        checked out at the pull request's branch, except that nobody waits at
+        triage: whoever asked reads the review on the pull request, so the
+        surviving findings and the impact analysis are posted there. A
         pull request a work order is still working on is left to it: that run
         reviews its own change.
         """
@@ -3614,6 +3852,7 @@ def create_app(
             requester=github_requester(requested.sender_id, requested.sender),
             inputs=review_inputs(
                 declared, ref=f"origin/{requested.branch}", pr_url=url, branch=requested.branch,
+                publish=True,
             ),
         )
 
@@ -3644,6 +3883,9 @@ def create_app(
                 # GitHub logins are case-insensitive, so the comparison is too.
                 github_activity.ignored("posted by Engine itself")
                 return
+        if mentions_other_accounts(comment.body, login):
+            github_activity.ignored("addressed to another account")
+            return
         # Whether the author can write to the repository was asked by the
         # ingress before this was called; see `github_sender_may_act`.
         mentioned = bool(login and re.search(
@@ -4119,6 +4361,13 @@ def create_app(
         Route("/api/slack/callback", slack_callback, name="slack_callback"),
         Route("/api/slack/disconnect", slack_disconnect, methods=["POST"]),
         Route("/api/slack/events", slack_ingress.webhook, methods=["POST"]),
+        Route("/api/loops/settings", get_loop_settings),
+        Route("/api/loops/settings", set_loop_settings, methods=["PUT"]),
+        Route("/api/loops/defaults", new_loop_defaults),
+        Route("/api/loops", list_loops),
+        Route("/api/loops", create_loop, methods=["POST"]),
+        Route("/api/loops/{loop_id}", get_loop),
+        Route("/api/loops/{loop_id}", delete_loop, methods=["DELETE"]),
         Route("/api/utilization", read_utilization),
         Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
         Route("/api/runs", list_runs),
@@ -4131,6 +4380,9 @@ def create_app(
         # The graph half of the runs above, served by the engine that runs
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),
+        # Registered graphs, runs of them, loops and node steering, for the
+        # `engine graph|loop|node` commands.
+        Mount("/api/v1", app=graph_service_surface),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),
         Route("/api/threads/{thread_id}", thread_scoped(get_thread)),

@@ -736,6 +736,75 @@ export function refreshUtilization(
   });
 }
 
+/** The settings every loop runs under. Active hours, `maxPrs` and
+ *  `maxDailySpend` are exit criteria each loop is held to on its own: equal
+ *  active hours mean any time of day, and a zero `maxDailySpend` is no limit. The two runners are only set
+ *  under the `manual` strategy. */
+export type LoopSettings = {
+  activeHours: { start: string; end: string };
+  maxPrs: number;
+  maxDailySpend: number;
+  runnerStrategy: "least-utilized" | "round-robin" | "manual";
+  implementationRunner: string;
+  reviewRunner: string;
+};
+
+export function getLoopSettings(): Promise<LoopSettings> {
+  return api<LoopSettings>("/api/loops/settings");
+}
+
+export function setLoopSettings(settings: LoopSettings): Promise<LoopSettings> {
+  return api<LoopSettings>("/api/loops/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+/** What the new loop form fills in: a standing prompt on one repository, how
+ *  often it is picked up again, and the exit criteria it is held to. */
+export type LoopDraft = {
+  name: string;
+  repository: string;
+  prompt: string;
+  everyMinutes: number;
+  activeHours: { start: string; end: string };
+  maxWorkOrders: number;
+  maxDailySpend: number;
+};
+
+/** A saved loop, with when it runs next, what its WorkOrders spent today, and
+ *  the WorkOrders it has created, newest first. `nextRunAt` is null while it
+ *  is running; `deferredUntil` names a WorkOrder its next run waits for. */
+export type Loop = LoopDraft & {
+  loopId: string;
+  createdAt: string;
+  running: boolean;
+  nextRunAt: string | null;
+  deferredUntil: string | null;
+  spentToday: number;
+  workOrders: { runId: string; name: string; phase: string }[];
+};
+
+export function getLoopDefaults(): Promise<Omit<LoopDraft, "name" | "repository" | "prompt">> {
+  return api("/api/loops/defaults");
+}
+
+export async function listLoops(): Promise<Loop[]> {
+  return (await api<{ loops: Loop[] }>("/api/loops")).loops;
+}
+
+export function getLoop(loopId: string): Promise<Loop> {
+  return api<Loop>(`/api/loops/${encodeURIComponent(loopId)}`);
+}
+
+export function createLoop(draft: LoopDraft): Promise<Loop> {
+  return api<Loop>("/api/loops", { method: "POST", body: JSON.stringify(draft) });
+}
+
+export function deleteLoop(loopId: string): Promise<void> {
+  return api<void>(`/api/loops/${encodeURIComponent(loopId)}`, { method: "DELETE" });
+}
+
 /** A refusal, carrying the status it was refused with.
  *
  *  The message is what a reader is shown and is unchanged, so nothing that

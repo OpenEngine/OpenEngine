@@ -39,10 +39,11 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
 import httpx
 from platformdirs import user_cache_path
+
+from engine.apps.web.settings_file import atomic_write_json
 
 #: Where each provider answers "what has this account spent". Both are the
 #: endpoint the vendor's own CLI reads, called with the vendor's own token.
@@ -483,25 +484,10 @@ class UtilizationService:
         return replace(reading, runner=runner, read_at=time.time())
 
     def _write(self, readings: Sequence[RunnerUtilization]) -> None:
-        """Replace the cache atomically, from a scratch file nothing shares.
-
-        Two open tabs are two refreshes, and a scratch name they both hold would
-        let one rename the file the other is still filling -- leaving whichever
-        lost as the cache, half written or empty. A name per write means each
-        renames only its own, and the last one to finish wins whole.
-        """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._path.with_name(f"{self._path.name}.{uuid4().hex}.tmp")
-        try:
-            temporary.write_text(
-                json.dumps({"runners": [_reading_json(reading) for reading in readings]}) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(temporary, self._path)
-        finally:
-            # Only reached when the rename did not happen; a scratch file left
-            # behind would never be read and never be cleaned up.
-            temporary.unlink(missing_ok=True)
+        """Replace the cache whole; two open tabs are two refreshes at once."""
+        atomic_write_json(
+            self._path, {"runners": [_reading_json(reading) for reading in readings]}
+        )
 
 
 def _merge(

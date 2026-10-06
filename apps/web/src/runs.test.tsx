@@ -233,6 +233,23 @@ describe("NewWorkflowPage", () => {
     });
   });
 
+  it("hides review target inputs while preserving ordinary workflow inputs", () => {
+    render(<NewWorkflowPage config={{ ...config, workflows: [{
+      id: "review", name: "Review", inputs: [
+        { name: "ref", label: "Ref to review", default: "", required: false, choices: [] },
+        { name: "pr_url", label: "Pull request to review", default: "", required: false, choices: [] },
+        { name: "branch", label: "Pull request branch", default: "", required: false, choices: [] },
+        { name: "publish_review", label: "Post the review to the pull request", default: "", required: false, choices: [] },
+        { name: "context", label: "Context", default: "", required: false, choices: [] },
+      ],
+    }] }} />);
+    expect(screen.queryByLabelText("Ref to review")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Pull request to review")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Pull request branch")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Post the review to the pull request")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Context")).toBeVisible();
+  });
+
   it("explains the mode and fixes it for a repository onboarded as disconnected", async () => {
     const user = userEvent.setup();
     const fetch = stubPageApi();

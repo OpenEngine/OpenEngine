@@ -51,10 +51,15 @@ def test_workflow_opt_in_runs_verification_before_human_review(tmp_path):
     module = definition_module()
     node = OpenVerify(uploader=uploader, output_directory=tmp_path)
     graph = module.pipeline("codex", verification=node)
-    assert ("impact-analysis", "verification") in graph.edges
-    assert ("verification", "human-review") in graph.edges
-    assert ("impact-analysis", "human-review") not in graph.edges
-    assert ("impact-analysis", "human-review") in module.pipeline("codex").edges
+    edges = {(edge.source, edge.target) for edge in graph.compile().get_graph().edges}
+    assert ("impact-analysis", "verification") in edges
+    assert ("verification", "human-review") in edges
+    assert ("impact-analysis", "human-review") not in edges
+    default_edges = {
+        (edge.source, edge.target)
+        for edge in module.pipeline("codex").compile().get_graph().edges
+    }
+    assert ("impact-analysis", "human-review") in default_edges
 
 
 def test_node_timeout_cleans_up_child_without_publication(tmp_path, monkeypatch):

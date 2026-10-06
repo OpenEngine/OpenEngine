@@ -17,6 +17,17 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .auth import OIDCTokenVerifier, https_url
 
+#: The shortest interval a gateway loop may run at: the loop agent's own spend
+#: is not counted against the loop's daily spending limit.
+MIN_LOOP_MINUTES = 15
+
+
+def text(value: str, label: str, most: int = 100_000) -> str:
+    """The value without surrounding whitespace, refused when blank or too long."""
+    if not value.strip() or len(value) > most:
+        raise ValueError(f"{label} must contain 1–{most} characters and not be blank")
+    return value.strip()
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -160,10 +171,8 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         Otherwise execution starts immediately. Returns the new run ID without
         waiting for completion. Each call creates new work.
         """
-        if not prompt.strip() or len(prompt) > 100_000:
-            raise ValueError("prompt must contain 1–100000 characters and not be blank")
         payload = {
-            "prompt": prompt.strip(), "repository": settings.repository,
+            "prompt": text(prompt, "prompt"), "repository": settings.repository,
             "workflowId": settings.workflow,
         }
         if depends_on_run_id is not None:
@@ -194,7 +203,10 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             raise RuntimeError("OE returned an invalid result. Check the work-order list before retrying.") from error
         return {"run_id": run_id}
 
-    async def request_engine(method: str, path: str, payload: dict | None = None) -> dict:
+    async def request_engine(
+        method: str, path: str, payload: dict | None = None,
+        retry_hint: str = "Check workorder_status before retrying.",
+    ) -> dict:
         headers = {"Authorization": f"Bearer {settings.engine_token}"} if settings.engine_token else {}
         async with httpx.AsyncClient(
             base_url=settings.engine_url, transport=transport, timeout=60, trust_env=False,
@@ -202,9 +214,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             try:
                 response = await client.request(method, path, json=payload, headers=headers)
             except httpx.RequestError as error:
-                raise RuntimeError(
-                    "OE could not confirm the request. Check workorder_status before retrying."
-                ) from error
+                raise RuntimeError(f"OE could not confirm the request. {retry_hint}") from error
         if not response.is_success:
             raise RuntimeError(f"OE rejected the request (HTTP {response.status_code}).")
         try:
@@ -318,11 +328,9 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         Use execution_id when multiple tasks run the same node. To revisit an
         earlier node, use node_steer with the instruction in the same call.
         """
-        if not instruction.strip() or len(instruction) > 100_000:
-            raise ValueError("instruction must contain 1–100000 characters and not be blank")
+        payload = {"message": text(instruction, "instruction")}
         if nodename is not None and execution_id is not None:
             raise ValueError("give at most one of nodename or execution_id")
-        payload = {"message": instruction.strip()}
         if execution_id is not None:
             identifier(execution_id)
             payload["execution"] = execution_id.strip()
@@ -343,12 +351,83 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         reached previously.
         """
         identifier(nodename)
-        if not instruction.strip() or len(instruction) > 100_000:
-            raise ValueError("instruction must contain 1–100000 characters and not be blank")
+        message = text(instruction, "instruction")
         key, _ = await workorder(run_id)
         return await request_engine(
-            "POST", f"/graph/api/runs/{key}/transitions", {"node": nodename.strip(), "message": instruction.strip()},
+            "POST", f"/graph/api/runs/{key}/transitions", {"node": nodename.strip(), "message": message},
         )
+
+    def loop_summary(loop: dict) -> dict[str, object]:
+        if loop.get("repository") != settings.repository:
+            raise ValueError("loop is outside the configured repository")
+        return {
+            "loop_id": loop["loopId"], "name": loop["name"], "prompt": loop["prompt"],
+            "every_minutes": loop["everyMinutes"], "active_hours": loop["activeHours"],
+            "max_workorders": loop["maxWorkOrders"], "max_daily_spend": loop["maxDailySpend"],
+            "running": loop["running"], "next_run_at": loop["nextRunAt"],
+            "deferred_until": loop["deferredUntil"], "spent_today": loop["spentToday"],
+            "workorders": [
+                {"run_id": one["runId"], "name": one["name"], "phase": one["phase"]}
+                for one in loop["workOrders"]
+            ],
+        }
+
+    async def create_loop(
+        name: str, prompt: str, every_minutes: int = 60, max_workorders: int | None = None,
+        max_daily_spend: float | None = None, active_hours_start: str | None = None,
+        active_hours_end: str | None = None,
+    ) -> dict[str, object]:
+        """Create a loop that prompts an agent every every_minutes in the configured repository.
+
+        Each run may create, steer and resume work orders, one at a time.
+        every_minutes must be at least 15. max_workorders per day and
+        max_daily_spend in dollars default to, and may not exceed, OE's loop
+        settings; active hours (HH:MM, equal for any time) default to them.
+        Each call creates a new loop; check loop_status before retrying.
+        """
+        payload = {"name": text(name, "name", 200), "prompt": text(prompt, "prompt")}
+        if every_minutes < MIN_LOOP_MINUTES:
+            raise ValueError(f"every_minutes must be at least {MIN_LOOP_MINUTES}")
+        defaults = await request_engine(
+            "GET", "/api/loops/defaults", retry_hint="Nothing was created; retry create_loop.",
+        )
+        most, budget, hours = defaults["maxWorkOrders"], defaults["maxDailySpend"], defaults["activeHours"]
+        if max_workorders is not None and max_workorders > most:
+            raise ValueError(f"max_workorders may not exceed OE's loop setting of {most}")
+        # OE treats a zero spending limit as none, so only the operator may set one.
+        if max_daily_spend is not None and budget > 0 and not 0 < max_daily_spend <= budget:
+            raise ValueError(f"max_daily_spend must be more than 0 and at most OE's loop setting of {budget}")
+        payload |= {
+            "repository": settings.repository, "everyMinutes": every_minutes,
+            "activeHours": {"start": (active_hours_start or hours["start"]).strip(),
+                            "end": (active_hours_end or hours["end"]).strip()},
+            "maxWorkOrders": most if max_workorders is None else max_workorders,
+            "maxDailySpend": budget if max_daily_spend is None else max_daily_spend,
+        }
+        # Never retry this POST: a lost response can still mean the loop was saved.
+        return loop_summary(await request_engine(
+            "POST", "/api/loops", payload, retry_hint="Check the OE loop list before retrying.",
+        ))
+
+    if not settings.oidc_issuer:
+        # OE saves the loop under the gateway's service credential, so it runs
+        # with no requester to re-check. Only the static token, which the
+        # operator holds, may create one; an OIDC caller's loop would outlive
+        # their removal from the allowlist.
+        mcp.tool(annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True,
+        ))(create_loop)
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def loop_status(loop_id: str) -> dict[str, object]:
+        """Return a loop's schedule, limits, spend today and the work orders it created.
+
+        next_run_at is null while the loop is running; deferred_until names
+        the work order the next run waits for. Use workorder_status for one.
+        """
+        return loop_summary(await request_engine(
+            "GET", f"/api/loops/{identifier(loop_id)}", retry_hint="Retry loop_status.",
+        ))
 
     app = mcp.streamable_http_app(
         stateless_http=True, json_response=True,

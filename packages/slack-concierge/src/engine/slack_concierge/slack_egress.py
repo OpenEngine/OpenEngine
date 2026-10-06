@@ -25,7 +25,7 @@ from typing import TextIO
 
 from engine.single_tool_mcp import McpRequestId, PROTOCOL_VERSION as _PROTOCOL_VERSION
 from engine.single_tool_mcp import SingleToolBroker
-from langgraph_acp.permissions import ACPPermissionOutcome, ACPPermissionRequest
+from langgraph_acp.permissions import allow_mcp_tools
 
 from .repository import REPOSITORY_TOOL_NAMES, REPOSITORY_TOOL_SPECS, RepositoryReader
 
@@ -443,17 +443,11 @@ __all__ = [
 ]
 
 
-async def tool_permission(request: ACPPermissionRequest) -> ACPPermissionOutcome:
-    """Approve only the named concierge MCP grants."""
-
-    names = {f"{prefix}{name}" for prefix in ("mcp__concierge__", "concierge/")
-             for name in ("create_workorder", "steer_workorder", "resume_workorder", "answer_workorder_question", "decide_workorder_review", *REPOSITORY_TOOL_NAMES)}
-    if any(isinstance(value, str) and value in names
-           for value in (request.tool_call.get(field) for field in ("name", "toolName", "title"))):
-        for option in request.options:
-            if option.kind == "allow_once":
-                return ACPPermissionOutcome.selected(option.option_id)
-    return ACPPermissionOutcome.cancelled()
+#: Approve only the named concierge MCP grants.
+tool_permission = allow_mcp_tools("concierge", (
+    "create_workorder", "steer_workorder", "resume_workorder", "answer_workorder_question",
+    "decide_workorder_review", *REPOSITORY_TOOL_NAMES,
+))
 
 
 __all__ = [

@@ -55,6 +55,15 @@ class WorkflowsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphsConfig:
+    """How this backend treats graphs registered through `engine graph add`."""
+
+    allow_python: bool = True
+    """Whether a Python graph may be uploaded. Python runs with the daemon's
+    privileges, so a backend that wants YAML only turns this off."""
+
+
+@dataclass(frozen=True, slots=True)
 class ServerConfig:
     """Where the web interface listens."""
 
@@ -92,6 +101,9 @@ class ClaudeConfig:
     the top level they would read as promises Engine cannot keep for every
     provider, and a reader could not tell which of the two they were.
     """
+
+    config_dir: str = ""
+    """Claude Code login directory, or empty to inherit the provider environment."""
 
     output_style: ResponseStyle | None = None
     """How Claude should write, or ``None`` to leave its own default.
@@ -184,6 +196,13 @@ class EngineConfig:
     workflows: WorkflowsConfig = WorkflowsConfig()
     orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
+    graphs: GraphsConfig = GraphsConfig()
+    model_tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    """`[runners.<runner>.models]`: tier name to model, per runner.
+
+    What a graph's `model: elevated` means on this backend, so graphs name a
+    tier and each backend decides which model that is.
+    """
     attribution: bool = True
     repos: Mapping[str, str] = field(default_factory=dict)
     repo_modes: Mapping[str, str] = field(default_factory=dict)
@@ -206,6 +225,14 @@ class LoadedEngineConfig:
 
     config: EngineConfig = EngineConfig()
     path: Path | None = None
+
+    @property
+    def claude_config_dir(self) -> Path | None:
+        configured = self.config.claude.config_dir
+        if not configured:
+            return None
+        base = self.path.parent if self.path is not None else Path.cwd()
+        return _relative_to(Path(configured).expanduser(), base).resolve()
 
     @property
     def workflows_directory(self) -> Path | None:
@@ -262,7 +289,10 @@ def load_engine_config(
     except tomllib.TOMLDecodeError as error:
         raise EngineConfigError(f"invalid TOML in {path}: {error}") from error
 
-    return LoadedEngineConfig(config=parse_engine_config(document), path=path)
+    loaded = LoadedEngineConfig(config=parse_engine_config(document), path=path)
+    if (directory := loaded.claude_config_dir) is not None and not directory.is_dir():
+        raise EngineConfigError(f"claude.config_dir is not an existing directory: {directory}")
+    return loaded
 
 
 def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
@@ -282,10 +312,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_login_client_id",
             "github_login_redirect_uri",
             "github_token",
+            "graphs",
             "orchestrator",
             "public_url",
             "repo_modes",
             "repos",
+            "runners",
             "trusted_repos",
             "server",
             "state",
@@ -378,7 +410,11 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         raise EngineConfigError("work_orders.slack_operators must not contain empty user IDs")
 
     claude = _table(document.get("claude", {}), "claude")
-    _reject_unknown(claude, {"output_style"}, "claude")
+    _reject_unknown(claude, {"output_style", "config_dir"}, "claude")
+    config_dir = (
+        _nonblank_string(claude["config_dir"], "claude.config_dir")
+        if "config_dir" in claude else ""
+    )
     output_style = _output_style(claude.get("output_style", ""))
 
     approvals = _table(document.get("approvals", {}), "approvals")
@@ -401,6 +437,20 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     bash = _table(approvals.get("bash", {}), "approvals.bash")
     _reject_unknown(bash, {"allow", "ask", "deny"}, "approvals.bash")
+
+    graphs = _table(document.get("graphs", {}), "graphs")
+    _reject_unknown(graphs, {"allow_python"}, "graphs")
+    allow_python = graphs.get("allow_python", True)
+    if not isinstance(allow_python, bool):
+        raise EngineConfigError("graphs.allow_python must be a boolean")
+    model_tiers: dict[str, dict[str, str]] = {}
+    for runner, settings in _table(document.get("runners", {}), "runners").items():
+        settings = _table(settings, f"runners.{runner}")
+        _reject_unknown(settings, {"models"}, f"runners.{runner}")
+        model_tiers[runner] = {
+            tier: _nonblank_string(model, f"runners.{runner}.models.{tier}")
+            for tier, model in _table(settings.get("models", {}), f"runners.{runner}.models").items()
+        }
 
     workflows = _table(document.get("workflows", {}), "workflows")
     _reject_unknown(workflows, {"directory"}, "workflows")
@@ -491,7 +541,9 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             runner=work_order_runner,
             slack_operators=work_order_slack_operators,
         ),
-        claude=ClaudeConfig(output_style=output_style),
+        claude=ClaudeConfig(output_style=output_style, config_dir=config_dir),
+        graphs=GraphsConfig(allow_python=allow_python),
+        model_tiers=model_tiers,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -568,7 +620,8 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
     output_style = style.value if style is not None else "provider default"
     return (
         f"configuration: {source}; attribution={attribution}; default_branch={default_branch}; "
-        f"claude.output_style={output_style}; approvals enforced "
+        f"claude.output_style={output_style}; "
+        f"claude.config_dir={loaded.claude_config_dir or 'provider default'}; approvals enforced "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
         f"workflows={workflows}"
     )
@@ -652,6 +705,7 @@ __all__ = [
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
+    "GraphsConfig",
     "LoadedEngineConfig",
     "ResponseStyle",
     "ServerConfig",

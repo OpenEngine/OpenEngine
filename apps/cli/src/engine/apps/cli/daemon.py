@@ -12,11 +12,14 @@ Temporal is not used: `engine-orchestrator` is never started.
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import plistlib
+import re
 import shutil
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -30,6 +33,8 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from engine.runtime.config import load_engine_config
 
 LABEL = "sh.openengine.engine"
 SYSTEMD_UNIT = "openengine.service"
@@ -122,8 +127,165 @@ def engine_web_executable() -> Path:
     return Path(found).absolute()
 
 
-def detect_tools() -> dict[str, str]:
+NODE_SYSTEM_DIRECTORIES = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
+NODE_MINIMUM = (20, 19, 0)
+NODE_HELP = "install Node 20.19+ or set a global default in your version manager"
+
+
+def _node_version(node: str) -> tuple[int, int, int] | None:
+    """Probe outside the invoking project, where an unconfigured shim fails."""
+    try:
+        result = subprocess.run(
+            [node, "--version"], cwd=Path.home(), capture_output=True,
+            text=True, check=False, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", result.stdout.strip())
+    if result.returncode != 0 or match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def _node_manager_homes() -> list[tuple[str, Path]]:
+    home = Path.home()
+    data = _xdg("XDG_DATA_HOME", ".local/share")
+    return [
+        ("mise", Path(os.environ.get("MISE_DATA_DIR", data / "mise"))),
+        ("asdf", Path(os.environ.get("ASDF_DATA_DIR", home / ".asdf"))),
+        ("nvm", Path(os.environ.get("NVM_DIR", home / ".nvm"))),
+        ("nodenv", home / ".nodenv"),
+        ("volta", home / ".volta"),
+        ("fnm", data / "fnm"),
+        ("fnm", home / "Library/Application Support/fnm"),
+    ]
+
+
+def _shim_manager(node: str | None) -> str | None:
+    if node:
+        path = Path(node)
+        for manager, home in _node_manager_homes():
+            if path.parent == home / "shims":
+                return manager
+            # nvm/fnm expose an installation's bin directory rather than shims.
+            if manager in {"nvm", "fnm"} and path.is_relative_to(home):
+                return manager
+            if manager == "volta" and path.parent == home / "bin":
+                return manager
+    return None
+
+
+@dataclass(frozen=True)
+class NodeInstall:
+    directory: Path
+    manager: str | None
+
+
+def _node_installs() -> list[NodeInstall]:
+    """Unprobed installs with provenance, newest first, then system fallbacks."""
+    layouts = {
+        "mise": ("installs/node", "*/bin"),
+        "asdf": ("installs/nodejs", "*/bin"),
+        "nvm": ("versions/node", "*/bin"),
+        "nodenv": ("versions", "*/bin"),
+        "volta": ("tools/image/node", "*/bin"),
+        "fnm": ("node-versions", "*/installation/bin"),
+    }
+    candidates = []
+    for manager, home in _node_manager_homes():
+        suffix, pattern = layouts[manager]
+        root = home / suffix
+        for directory in root.glob(pattern):
+            release = directory.relative_to(root).parts[0]
+            if (root / release).is_symlink() or not re.fullmatch(r"v?\d+\.\d+\.\d+", release):
+                continue
+            if (directory / "npx").is_file():
+                candidates.append((tuple(map(int, release.lstrip("v").split("."))), NodeInstall(directory, manager)))
+    ordered = [directory for _, directory in sorted(candidates, key=lambda item: item[0], reverse=True)]
+    ordered.extend(NodeInstall(Path(path), None) for path in NODE_SYSTEM_DIRECTORIES
+                   if (Path(path) / "npx").is_file())
+    return ordered
+
+
+@dataclass(frozen=True)
+class NodeCheck:
+    tools: dict[str, str]
+    problem: str | None
+    version: tuple[int, int, int] | None
+    healed: bool = False
+    shim_manager: str | None = None
+    install_manager: str | None = None
+
+
+def _check_node(tools: dict[str, str]) -> NodeCheck:
+    node = tools.get("node")
+    manager = _shim_manager(tools.get("original_node", node))
+    version = _node_version(node) if node else None
+    if version is not None and version >= NODE_MINIMUM:
+        install_manager = next((item.manager for item in _node_installs()
+                                if str(item.directory / "node") == node), None) if "original_node" in tools else None
+        return NodeCheck(tools, "using a healed Node installation" if "original_node" in tools else None,
+                         version, healed="original_node" in tools,
+                         shim_manager=manager, install_manager=install_manager)
+    if version is not None:
+        problem = f"{node} is Node {'.'.join(map(str, version))}; requires Node 20.19+"
+    elif node is None:
+        problem = "node not found"
+    elif not Path(node).exists():
+        problem = f"{node} is missing"
+    else:
+        problem = f"{node} failed the Node version check from {Path.home()}"
+    for install in _node_installs():
+        directory = install.directory
+        candidate_version = _node_version(str(directory / "node"))
+        if candidate_version is None or candidate_version < NODE_MINIMUM:
+            continue
+        healed = dict(tools)
+        for name in ("node", "npx"):
+            if name in tools:
+                healed.setdefault(f"original_{name}", tools[name])
+            healed[name] = str(directory / name)
+        return NodeCheck(healed, problem, candidate_version, healed=True,
+                         shim_manager=manager, install_manager=install.manager)
+    return NodeCheck(tools, problem, version)
+
+
+def _healing_notice(check: NodeCheck, *, verbose: bool = False) -> str:
+    """Format the verified result without spawning Node again."""
+    release = ".".join(map(str, check.version)) if check.version else None
+    commands = {
+        "mise": f"mise use -g node@{release}",
+        "asdf": f"asdf set -u nodejs {release}",
+        "nvm": f"nvm alias default {release}",
+        "nodenv": f"nodenv global {release}",
+        "fnm": f"fnm default {release}",
+    }
+    command = commands.get(check.shim_manager) if release and check.shim_manager == check.install_manager else None
+    manager = check.shim_manager or "your version manager"
+    restore = f"run {command}" if command else f"set a global Node 20.19+ default in {manager}"
+    notice = (f"degraded: using {check.tools['node']}; project Node pins are ignored until you "
+              f"{restore}, then engine daemon setup")
+    if verbose:
+        notice += ("; healing is a fallback; the global default applies only where no project selects Node. "
+                   "Run setup from a shell with the manager on PATH to restore project switching.")
+        if command and check.shim_manager == "asdf":
+            notice += f" For asdf <0.16, use asdf global nodejs {release}."
+    return notice
+
+
+def _path_tools() -> dict[str, str]:
     return {name: str(Path(found).absolute()) for name in TOOLS if (found := shutil.which(name))}
+
+
+def detect_tools() -> dict[str, str]:
+    found = _path_tools()
+    check = _check_node(found)
+    tools, problem = check.tools, check.problem
+    if problem:
+        detail = _healing_notice(check) if check.healed else NODE_HELP
+        notice = detail if check.healed else f"{problem}; {detail}"
+        print(f"engine daemon: {notice}", file=sys.stderr)
+    return tools
 
 
 @dataclass(frozen=True)
@@ -142,15 +304,28 @@ class ServiceSpec:
 
     def environment(self) -> dict[str, str]:
         directories: list[str] = []
-        for tool in self.tools.values():
+        names = list(self.tools)
+        node = self.tools.get("node")
+        # Healing selects either a dedicated manager install or a shared system
+        # directory. Only the former can safely precede unrelated recorded tools.
+        if ("original_node" in self.tools and node
+                and str(Path(node).parent) not in NODE_SYSTEM_DIRECTORIES):
+            names = ["node", "original_node", "original_npx", *names]
+        for name in names:
+            tool = self.tools.get(name)
+            if tool is None:
+                continue
             directory = str(Path(tool).parent)
             if directory not in directories:
                 directories.append(directory)
         directories += [path for path in SYSTEM_PATH if path not in directories]
+        user = getpass.getuser()
         return {
             "ENGINE_CONFIG": self.config,
             "ENGINE_HOST": HOST,
             "HOME": str(Path.home()),
+            "USER": user,
+            "LOGNAME": user,
             "PATH": os.pathsep.join(directories),
         }
 
@@ -451,7 +626,8 @@ def current() -> tuple[Backend, ServiceSpec]:
     record = read_record()
     if record is not None and record.backend in BACKENDS:
         return BACKENDS[record.backend](), _with_live_port(record.spec)
-    return ProcessBackend(), build_spec()
+    # Startup owns Node validation and diagnostics for an unrecorded service.
+    return ProcessBackend(), build_spec(tools=_path_tools())
 
 
 def _with_live_port(spec: ServiceSpec) -> ServiceSpec:
@@ -553,6 +729,17 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
         if state == "foreign":
             raise RuntimeError(f"another program is using {spec.url}; free port {spec.port} or change [server] port in {spec.config}")
         if state == "down":
+            check = _check_node(spec.tools)
+            tools, problem = check.tools, check.problem
+            if tools != spec.tools:
+                spec = replace(spec, tools=tools)
+                backend.stop()
+                backend.install(spec)
+                write_record(Record(backend.name, spec))
+                print(f"engine daemon: {_healing_notice(check)}", file=sys.stderr)
+            elif problem:
+                detail = _healing_notice(check) if check.healed else NODE_HELP
+                print(f"engine daemon: {detail}" if check.healed else f"engine daemon: warning: {problem}; {detail}", file=sys.stderr)
             rotate_log(Path(spec.log))
             backend.start(spec)
         state, body = wait_for(spec.url, {"ready", "foreign"}, START_TIMEOUT_SECONDS, backend)
@@ -734,6 +921,32 @@ def _port_finding(port: int) -> Finding:
     return Finding("port", "ok", f"{HOST}:{port} is free")
 
 
+def _claude_login_finding(spec: ServiceSpec) -> Finding:
+    environment = spec.environment()
+    try:
+        loaded = load_engine_config(spec.config)
+        if (directory := loaded.claude_config_dir) is not None:
+            environment["CLAUDE_CONFIG_DIR"] = str(directory)
+    except ValueError as error:
+        return Finding("claude login", "error", str(error))
+    directory = environment.get("CLAUDE_CONFIG_DIR", str(Path(environment["HOME"]) / ".claude"))
+    fix = f"run claude /login with CLAUDE_CONFIG_DIR={shlex.quote(directory)}"
+    executable = spec.tools.get("claude") or shutil.which("claude", path=environment["PATH"])
+    if executable is None:
+        return Finding("claude login", "warn", f"claude not on service PATH; rerun engine daemon setup; {fix}")
+    try:
+        result = subprocess.run(
+            [executable, "auth", "status"], env=environment,
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+        status = json.loads(result.stdout)
+        if result.returncode == 0 and isinstance(status, dict) and status.get("loggedIn") is True:
+            return Finding("claude login", "ok", f"{status.get('email') or 'logged in (email unavailable)'} (CLAUDE_CONFIG_DIR={directory})")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return Finding("claude login", "warn", fix)
+
+
 def diagnose() -> list[Finding]:
     config = config_path()
     findings: list[Finding] = []
@@ -755,16 +968,29 @@ def diagnose() -> list[Finding]:
         findings.append(Finding("engine-web", "error", str(error)))
     record = read_record()
     recorded = record.spec.tools if record else {}
-    found = detect_tools()
+    found = _path_tools()
+    checked = recorded if record else found
+    check = _check_node(checked)
+    healed, problem = check.tools, check.problem
     for name in TOOLS:
         path = recorded.get(name) or found.get(name)
-        if path:
+        if name == "node" and problem:
+            if check.healed:
+                findings.append(Finding(name, "warn", f"{problem}; engine daemon start will use {healed['node']}; {_healing_notice(check, verbose=True)}"))
+            else:
+                findings.append(Finding(name, "error", f"{problem}; {NODE_HELP}"))
+        elif path:
             note = "" if record is None or name in recorded else " (on PATH, but not recorded; rerun engine daemon setup)"
             findings.append(Finding(name, "ok", path + note))
         elif name in REQUIRED_TOOLS:
             findings.append(Finding(name, "warn", f"{name} not found; install it and rerun engine daemon setup"))
         else:
             findings.append(Finding(name, "warn", f"{name} not found; optional, needed only to run that agent"))
+    if port is not None and ("claude" in recorded or "claude" in found):
+        spec = record.spec if record else ServiceSpec(
+            program="", config=str(config), port=port, log="", tools=found,
+        )
+        findings.append(_claude_login_finding(spec))
     return findings
 
 

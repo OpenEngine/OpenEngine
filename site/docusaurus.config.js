@@ -39,7 +39,13 @@ const config = {
           sidebarPath: './sidebars.js',
           editUrl: `${REPO}/edit/main/site/`,
         },
-        blog: false,
+        blog: {
+          routeBasePath: 'blog',
+          showReadingTime: true,
+          onInlineAuthors: 'throw',
+          onUntruncatedBlogPosts: 'throw',
+          editUrl: `${REPO}/edit/main/site/`,
+        },
         theme: {customCss: './src/css/custom.css'},
       }),
     ],
@@ -54,6 +60,7 @@ const config = {
         logo: {alt: '', src: 'favicon.svg'},
         items: [
           {type: 'docSidebar', sidebarId: 'docs', position: 'right', label: 'Docs'},
+          {to: '/blog', position: 'right', label: 'Blog'},
           {href: 'mailto:hello@openengine.sh', position: 'right', label: 'Contact Us', className: 'navbar-cta'},
         ],
       },

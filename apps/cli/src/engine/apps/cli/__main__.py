@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ import textwrap
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
@@ -30,6 +32,7 @@ from urllib.request import Request, urlopen
 from platformdirs import user_config_path, user_data_path, user_state_path
 
 from engine.apps.cli import daemon, onboarding
+from engine.cli import backends, commands as graph_commands
 from engine.domain import (
     STATE_INPUT, TRIAGE_TOOL, WorkState, finding_comment, review_inputs,
 )
@@ -88,6 +91,8 @@ def preferences_path() -> Path:
 
 def service_token() -> str:
     """Reuse the server's existing local bearer credential without a new login."""
+    if (selected := selected_backend()) is not None and (token := selected.token()):
+        return token
     if token := os.environ.get("ENGINE_SERVICE_TOKEN"):
         return token
     try:
@@ -391,8 +396,10 @@ def content_text(content: object) -> str:
 class TerminalSpinner:
     """Show that a streaming request is alive before its first event arrives."""
 
-    def __init__(self, message: str = "OpenEngine is thinking") -> None:
+    def __init__(self, message: str = "OpenEngine is thinking", detail: Callable[[int], str] | None = None) -> None:
         self.message = message
+        # A line drawn under the spinner, given the width it must fit.
+        self.detail = detail
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
         self._finished = False
@@ -411,12 +418,18 @@ class TerminalSpinner:
         if self._thread is not None:
             self._thread.join()
             self._thread = None
-            print("\r\x1b[K", end="", file=sys.stderr, flush=True)
+            print("\r\x1b[J", end="", file=sys.stderr, flush=True)
 
     def _spin(self) -> None:
         while not self._stopped.is_set():
             for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
-                print(f"\r{frame} {self.message}…", end="", file=sys.stderr, flush=True)
+                # A line wider than the terminal wraps, and `\r` then redraws on a new row every frame.
+                width = max(shutil.get_terminal_size().columns - 1, 1)
+                line = f"{frame} {self.message}…"[:width]
+                detail = self.detail(width) if self.detail else ""
+                # Draw the detail a row down, then return to the spinner's row for the next frame to clear both.
+                below = f"\n{detail}\x1b[1A\r" if detail else ""
+                print(f"\r\x1b[J{line}{below}", end="", file=sys.stderr, flush=True)
                 if self._stopped.wait(0.1):
                     return
 
@@ -500,9 +513,23 @@ def stream_run(server: str, path: str, body: dict[str, Any] | None = None) -> in
     return EXIT_UNHEALTHY
 
 
+def selected_backend() -> backends.Backend | None:
+    """The backend `engine backend use` chose, once anyone has chosen one."""
+    try:
+        config = backends.load()
+        if not config.configured and not os.environ.get(backends.SELECTED_ENVIRONMENT_VARIABLE):
+            return None
+        return config.selected()
+    except backends.BackendError:
+        return None
+
+
 def selected_server(arguments: argparse.Namespace, preferences: Preferences) -> str:
-    candidate = arguments.server if getattr(arguments, "server", None) else preferences.profile().server
-    return normalize_server(candidate)
+    if getattr(arguments, "server", None):
+        return normalize_server(arguments.server)
+    if (backend := selected_backend()) is not None:
+        return normalize_server(backend.url)
+    return normalize_server(preferences.profile().server)
 
 
 def read_service(arguments: argparse.Namespace, preferences: Preferences) -> tuple[str, Check]:
@@ -1145,16 +1172,80 @@ def review_steps(run: dict[str, Any], names: dict[str, str]) -> dict[str, str]:
     }
 
 
-def review_spinner(steps: dict[str, str]) -> TerminalSpinner:
-    return TerminalSpinner(f"Reviewing: {', '.join(steps.values())}" if steps else "Reviewing")
+AGENT_COLORS = (36, 35, 33, 32, 34, 31)
+
+
+def agent_name(step: str) -> str:
+    """`Review (Security)` reads as `Security`; any other step, the reranker included, as itself."""
+    match = re.fullmatch(r"Review \((.+)\)", step)
+    return match[1] if match else step
+
+
+class AgentFeed:
+    """The latest line any of a run's agents said, read from its event stream in the background."""
+
+    def __init__(self, server: str, run_id: str) -> None:
+        self.server = server
+        self.run_id = run_id
+        self.latest: tuple[str, str] | None = None
+        self._colors: dict[str, int] = {}
+        self._stopped = False
+
+    def start(self) -> None:
+        if sys.stderr.isatty():
+            threading.Thread(target=self._read, daemon=True).start()
+
+    def stop(self) -> None:
+        # Closing a response another thread is reading blocks, so the daemon reader leaves at its next event.
+        self._stopped = True
+
+    def _read(self) -> None:
+        request = Request(f"{self.server}/graph/api/runs/{self.run_id}/events", headers=request_headers({"Accept": "text/event-stream"}))
+        try:
+            with urlopen(request) as response:
+                for raw in response:
+                    if self._stopped:
+                        return
+                    if raw.startswith(b"data:"):
+                        self.hear(json.loads(raw[5:]))
+        except (OSError, ValueError):
+            return
+
+    def hear(self, event: dict[str, Any]) -> None:
+        """Keep the last line of what an agent said; prompts and tool calls are not what it said."""
+        payload = event.get("payload") or {}
+        if event.get("type") != "transcript" or payload.get("role") != "assistant":
+            return
+        lines = [line.strip() for line in str(payload.get("text", "")).splitlines() if line.strip()]
+        if lines:
+            self.latest = (str(event.get("nodeId")), lines[-1])
+
+    def line(self, names: dict[str, str], width: int) -> str:
+        if self.latest is None:
+            return ""
+        node, text = self.latest
+        name = terminal_text(agent_name(names.get(node, node)))[:width]
+        color = self._colors.setdefault(name, AGENT_COLORS[len(self._colors) % len(AGENT_COLORS)])
+        text = " ".join(terminal_text(text).split())[:max(width - len(name) - 1, 0)]
+        return f"\x1b[{color}m{name}\x1b[0m {text}".rstrip()
+
+
+def review_spinner(steps: dict[str, str], detail: Callable[[int], str] | None = None) -> TerminalSpinner:
+    return TerminalSpinner(f"Reviewing: {', '.join(steps.values())}" if steps else "Reviewing", detail)
 
 
 def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Watch the run until it asks for findings to fix, or ends, saying each step as it starts and ends."""
-    spinner = review_spinner({})
+    names: dict[str, str] | None = None
+    feed = AgentFeed(server, run_id)
+    feed.start()
+
+    def said(width: int) -> str:
+        return feed.line(names or {}, width)
+
+    spinner = review_spinner({}, said)
     spinner.start()
     answered: set[str] = set()
-    names: dict[str, str] | None = None
     steps: dict[str, str] = {}
     try:
         while True:
@@ -1171,7 +1262,7 @@ def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str,
                     if execution not in steps:
                         print(f"→ {name}", file=sys.stderr)
                 steps = current
-                spinner = review_spinner(steps)
+                spinner = review_spinner(steps, said)
                 spinner.start()
             pending = [item for item in run.get("pendingApprovals") or [] if isinstance(item, dict)]
             triage = next((item for item in pending if item.get("toolName") == TRIAGE_TOOL), None)
@@ -1188,11 +1279,12 @@ def wait_for_triage(server: str, run_id: str) -> tuple[dict[str, Any], dict[str,
                     request_json(server, f"/graph/api/runs/{run_id}/approvals/{approval['approvalId']}", {"decision": "accept" if action == "Approve" else "cancel"})
                 else:
                     print("Answer it in the web UI; still watching the review.")
-                spinner = review_spinner(steps)
+                spinner = review_spinner(steps, said)
                 spinner.start()
             time.sleep(REVIEW_POLL_SECONDS)
     finally:
         spinner.stop()
+        feed.stop()
 
 
 def triage_findings(server: str, run: dict[str, Any], triage: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1208,18 +1300,23 @@ def finding_location(finding: dict[str, Any]) -> str:
     return f"{file}:{finding['line']}" if file and finding.get("line") else str(file or "")
 
 
+def terminal_text(text: str) -> str:
+    """Display untrusted terminal controls literally, preserving tabs and newlines."""
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", text)
+
+
 def render_findings(findings: list[dict[str, Any]]) -> None:
     if not findings:
         print("No findings survived review.")
         return
     print(f"Findings ({len(findings)})")
     for index, finding in enumerate(findings, 1):
-        facet = f"[{finding['facet']}] " if finding.get("facet") else ""
-        print(f"{index}. {facet}{' '.join(str(finding.get('tagline', '')).split())}")
-        for line in str(finding.get("description", "")).splitlines():
+        facet = terminal_text(f"[{finding['facet']}] ") if finding.get("facet") else ""
+        print(f"{index}. {facet}{' '.join(terminal_text(str(finding.get('tagline', ''))).split())}")
+        for line in terminal_text(str(finding.get("description", ""))).splitlines():
             print(f"   {line}")
         if location := finding_location(finding):
-            print(f"   \x1b[2m{location}\x1b[0m")
+            print(f"   \x1b[2m{terminal_text(location)}\x1b[0m")
     print()
 
 
@@ -1251,7 +1348,7 @@ def post_findings(pr_url: str, findings: list[dict[str, Any]]) -> int:
         general = subprocess.run(["gh", "pr", "comment", pr_url, "--body", body], capture_output=True, text=True)
         if general.returncode != 0:
             failures += 1
-            print(f"engine: could not post {finding.get('tagline')!r}: {general.stderr.strip()}", file=sys.stderr)
+            print(f"engine: could not post {finding.get('tagline')!r}: {terminal_text(general.stderr.strip())}", file=sys.stderr)
     return failures
 
 
@@ -1261,52 +1358,116 @@ def send_fixes(server: str, run_id: str, triage: dict[str, Any], findings: list[
     request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "accept"})
 
 
-def choose_fixes(server: str, run_id: str, triage: dict[str, Any], findings: list[dict[str, Any]], pr_url: str) -> bool:
-    """Offer Fix this / Fix all / Post as comments. True when fixes were sent."""
-    selected: set[int] = set()
-    cursor = 0
-    while True:
-        labels: dict[str, int] = {}
-        descriptions: dict[str, str] = {}
-        for index, finding in enumerate(findings):
-            label = f"{'✓' if index in selected else '○'} Fix this · {index + 1}. {' '.join(str(finding.get('tagline', '')).split())}"
-            labels[label] = index
-            descriptions[label] = finding_location(finding)
-        actions = [*labels]
-        if selected:
-            actions.append(f"Fix selected ({len(selected)})")
-        if findings:
-            actions.append("Fix all")
-            if pr_url:
-                actions.append("Post as comments")
-        actions.append("Finish")
-        descriptions.update({
-            "Fix all": "Send every finding back to the implementer",
-            "Post as comments": f"Post {'the selected' if selected else 'every'} finding on {pr_url} with gh",
-            "Finish": "End the review without fixing anything",
-        })
-        choice = palette(actions, "Review: ", descriptions=descriptions, selected=cursor)
-        if choice in labels:
-            # Enter picks a finding for fixing, or puts it back, and stays on it.
-            cursor = labels[choice]
-            selected ^= {cursor}
-        elif choice is not None and choice.startswith("Fix selected"):
-            send_fixes(server, run_id, triage, [findings[index] for index in sorted(selected)])
-            return True
-        elif choice == "Fix all":
-            send_fixes(server, run_id, triage, findings)
-            return True
-        elif choice == "Post as comments":
-            chosen = [findings[index] for index in sorted(selected)] or findings
-            failures = post_findings(pr_url, chosen)
-            print(f"Posted {len(chosen) - failures} of {len(chosen)} findings on {pr_url}.")
-        elif choice == "Finish":
-            request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
-            print("Review finished.")
-            return False
+def review_diff(server: str, run: dict[str, Any], target: ReviewTarget) -> str:
+    """Read the current review round's patch, including any completed fixes."""
+    if target.pr_url:
+        result = subprocess.run(
+            ["gh", "pr", "diff", target.pr_url, "--color=never"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "could not read pull request diff")
+        return result.stdout
+    if not is_local_server(server):
+        raise RuntimeError("the review checkout is on a remote service")
+    workspace = (run.get("values") or {}).get("workspace")
+    if not workspace:
+        raise RuntimeError("the review checkout is unavailable")
+    return git_output(
+        workspace, "diff", "--no-ext-diff", "--no-textconv", "--no-color",
+        "origin/HEAD...HEAD", "--",
+    )
+
+
+def finding_diff(patch: str, finding: dict[str, Any]) -> str:
+    """Keep the finding's file and matching hunk, or its file if no hunk matches."""
+    path = finding.get("file")
+    if not path:
+        return ""
+    for section in re.split(r"(?=^diff --git )", patch, flags=re.MULTILINE):
+        paths = []
+        for line in section.splitlines():
+            if line.startswith(("--- ", "+++ ")):
+                name = line[4:].split("\t", 1)[0]
+                if name.startswith('"'):
+                    try:
+                        name = json.loads(name)
+                    except ValueError:
+                        continue
+                paths.append(name[2:] if name.startswith(("a/", "b/")) else name)
+        if path not in paths:
+            continue
+        hunks = re.split(r"(?=^@@ )", section, flags=re.MULTILINE)
+        number = finding.get("line")
+        if type(number) is int:
+            for hunk in hunks[1:]:
+                match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", hunk)
+                if match:
+                    start, count = int(match[1]), int(match[2] or 1)
+                    if start <= number < start + max(count, 1):
+                        return hunks[0] + hunk
+        return section
+    return ""
+
+
+def render_finding_diff(patch: str) -> None:
+    """Use familiar unified-diff colors, while keeping redirected output plain."""
+    color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    patch = terminal_text(patch)
+    for line in patch.splitlines():
+        tone = "32" if line.startswith("+") else "31" if line.startswith("-") else "36" if line.startswith("@@") else ""
+        print(f"\x1b[{tone}m{line}\x1b[0m" if color and tone else line)
+
+
+def choose_fixes(
+    server: str, run_id: str, triage: dict[str, Any],
+    findings: list[dict[str, Any]], pr_url: str, patch: str = "",
+) -> bool:
+    """Review every finding before handing the selected fixes to implementation."""
+    selected: list[dict[str, Any]] = []
+    for index, finding in enumerate(findings, 1):
+        print(f"Finding {index} of {len(findings)} · {len(selected)} queued for fixing")
+        # The diff comes first so the finding sits just above the choice it informs.
+        relevant = finding_diff(patch, finding)
+        if relevant:
+            render_finding_diff(relevant)
         else:
-            print(f"Detached; the review waits for your choice at {server}/runs/{run_id}.")
+            print("No matching diff is available for this finding.")
+        print()
+        render_findings([finding])
+        while True:
+            actions = ["Fix", *(["Post to PR"] if pr_url else []), "Ignore"]
+            choice = palette(actions, "Finding: ", descriptions={
+                "Fix": "Queue this fix; implementation starts after all findings are reviewed",
+                "Post to PR": f"Post this finding on {pr_url}",
+                "Ignore": "Continue without fixing or posting this finding",
+            })
+            if choice == "Fix":
+                selected.append(finding)
+                break
+            if choice == "Post to PR":
+                try:
+                    failures = post_findings(pr_url, [finding])
+                except (OSError, RuntimeError, ValueError) as error:
+                    print(f"engine: could not post finding: {terminal_text(str(error))}", file=sys.stderr)
+                    failures = 1
+                if failures:
+                    print("Posting failed. Retry or choose another action.")
+                    continue
+                print(f"Posted finding {index} to {pr_url}.")
+                break
+            if choice == "Ignore":
+                break
+            print(f"Detached; no fixes were sent. The review waits at {server}/runs/{run_id}.")
             return False
+    print(f"Reviewed {len(findings)} of {len(findings)} findings.")
+    if selected:
+        print(f"Sending {len(selected)} queued finding(s) to implementation…")
+        send_fixes(server, run_id, triage, selected)
+        return True
+    request_json(server, f"/graph/api/runs/{run_id}/approvals/{triage['approvalId']}", {"decision": "cancel"})
+    print("Review finished.")
+    return False
 
 
 def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
@@ -1330,18 +1491,24 @@ def review(arguments: argparse.Namespace, preferences: Preferences) -> int:
             if arguments.json:
                 print(json.dumps({"runId": run_id, "prUrl": target.pr_url, "findings": findings}, sort_keys=True))
                 return EXIT_OK
-            render_findings(findings)
             if not sys.stdin.isatty():
+                render_findings(findings)
                 print(f"Choose findings to fix at {server}/runs/{run_id}.")
                 return EXIT_OK
-            if not choose_fixes(server, run_id, triage, findings, target.pr_url):
+            patch = ""
+            if findings:
+                try:
+                    patch = review_diff(server, run, target)
+                except (OSError, RuntimeError) as error:
+                    print(f"engine: diff unavailable: {terminal_text(str(error))}", file=sys.stderr)
+            if not choose_fixes(server, run_id, triage, findings, target.pr_url, patch):
                 return EXIT_OK
             print("Fixing; the change is reviewed again when the fix is done.")
     except KeyboardInterrupt:
         print("\nDetached; the service-side review continues.")
         return EXIT_OK
     except (ValueError, RuntimeError, KeyError, json.JSONDecodeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
+        print(f"engine: {terminal_text(str(error))}", file=sys.stderr)
         return EXIT_UNHEALTHY
 
 
@@ -1644,6 +1811,7 @@ def parser() -> argparse.ArgumentParser:
     reviewing.add_argument("--json", action="store_true", help="print the findings as JSON and leave the review waiting")
     onboarding.add_parser(commands)
     daemon.add_parser(commands)
+    graph_commands.add_parsers(commands)
     return result
 
 
@@ -1667,6 +1835,8 @@ def main(argv: list[str] | None = None) -> int:
         return onboarding.main(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
+    if arguments.command in graph_commands.COMMANDS:
+        return graph_commands.main(arguments)
     raise AssertionError("unreachable command")
 
 

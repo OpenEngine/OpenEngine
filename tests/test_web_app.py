@@ -4078,3 +4078,19 @@ def test_operators_see_every_run(tmp_path) -> None:
         "run-api", "run-api-path", "run-github", "run-web", "run-web-scheduled", "run-elsewhere",
     }
     assert [repo["name"] for repo in repositories] == ["api", "web"]
+
+
+def test_engines_own_info_lines_reach_the_log():
+    """Without a handler Python prints only warnings, so every decision Engine
+    logged at INFO -- a webhook ignored and why -- went nowhere."""
+    import logging
+
+    from engine.apps.web.__main__ import configure_logging
+
+    engine = logging.getLogger("engine")
+    before = engine.level
+    try:
+        configure_logging()
+        assert logging.getLogger("engine.apps.web.github_ingress").isEnabledFor(logging.INFO)
+    finally:
+        engine.setLevel(before)

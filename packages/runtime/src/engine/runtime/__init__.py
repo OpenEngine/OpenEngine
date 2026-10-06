@@ -87,6 +87,7 @@ from engine.runtime.workflows import (
     WorkflowCatalog,
     WorkflowLoadError,
     load_workflow_catalog,
+    load_workflow_file,
 )
 
 __all__ = [
@@ -150,6 +151,7 @@ __all__ = [
     "profile_for",
     "load_engine_config",
     "load_workflow_catalog",
+    "load_workflow_file",
     "parse_engine_config",
     "session_grant_from",
     "run_failed_from_tool_call",

@@ -10,6 +10,7 @@ which constructs the same application again in every fresh child process.
 
 import argparse
 import ipaddress
+import logging
 import os
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from engine.apps.web.composition import (
     Settings,
     build_capabilities,
     build_graph_runtime,
+    build_graph_service,
     build_read_only_runners,
     build_runners,
     build_session,
@@ -295,6 +297,9 @@ def read_configuration(
     server watches exactly what this function reads.
     """
     loaded = load_engine_config(config_path)
+    # Workflow providers may omit env entirely; all Claude children inherit this.
+    if (directory := loaded.claude_config_dir) is not None:
+        os.environ["CLAUDE_CONFIG_DIR"] = str(directory)
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(
@@ -360,7 +365,30 @@ def compose_app(
         login_repositories=_login_repositories(loaded, projects) if github_login_config else (),
         repository_projects=projects if github_login_config else {},
         login_operators=loaded.config.access.operators,
+        graph_service=build_graph_service(
+            settings,
+            default_repository=loaded.config.work_orders.repository,
+            repositories=loaded.config.repos,
+        ),
     )
+
+
+#: Timestamped, and named by logger, because the log is read after the fact:
+#: "what happened to that webhook an hour ago" is answered by the time and the
+#: module that said it, and a line without either is one nobody can place.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging() -> None:
+    """Show Engine's own INFO lines; keep libraries at WARNING.
+
+    Without a handler Python prints only warnings, so every decision Engine
+    logs at INFO -- a webhook ignored and why, a merge accepted -- was written
+    to nowhere. Libraries stay at WARNING because some log every HTTP request
+    at INFO, which would bury the lines this is for.
+    """
+    logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
+    logging.getLogger("engine").setLevel(logging.INFO)
 
 
 def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
@@ -370,6 +398,7 @@ def build_app(config_path: str | os.PathLike[str] | None = None) -> Starlette:
     in each child process it starts, so the configuration file is selected by
     ``ENGINE_CONFIG`` there rather than by a command line the child never saw.
     """
+    configure_logging()
     return compose_app(*read_configuration(config_path))
 
 
@@ -386,6 +415,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _service_token_reader(loaded)
             report_wiring(settings)
             return 0
+        configure_logging()
         app = compose_app(loaded, workflow_catalog)
     except (EngineConfigError, WorkflowLoadError) as error:
         print(f"configuration error: {error}", file=sys.stderr)

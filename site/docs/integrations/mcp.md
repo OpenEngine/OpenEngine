@@ -44,8 +44,9 @@ the command runs.
 
 If the host uses OAuth, leave off `--header`. Then run `/mcp` inside Claude
 Code: `oe` should show as connected (choose it to sign in when using OAuth)
-with five tools: `create_workorder`, `workorder_status`, `node_status`,
-`steer_workorder` and `node_steer`. See
+with seven tools: `create_workorder`, `workorder_status`, `node_status`,
+`steer_workorder`, `node_steer`, `create_loop` and `loop_status`. OAuth hosts
+leave out `create_loop`. See
 [Claude Code's MCP documentation](https://code.claude.com/docs/en/mcp) for other
 scopes and options.
 
@@ -88,7 +89,11 @@ Ask in plain language; your agent picks the tool:
   existing API."* This stops the run and restarts from before that node with
   your instruction queued. It can repeat work; earlier transcript stays visible.
 
-Time-based scheduling is not available through MCP.
+- *"Create a loop that triages new issues every 30 minutes."* The loop prompts
+  an agent on that interval, within the host's loop limits, and you get back
+  its `loop_id`.
+- *"How is loop-1 doing?"* Loop status shows when it runs next, what it spent
+  today and the WorkOrders it created.
 
 ### Tool reference
 
@@ -99,15 +104,17 @@ Time-based scheduling is not available through MCP.
 | `node_status` | `run_id`, `nodename`, optional `last_n` (1–1000, default 10) | Returns a node's messages, oldest first. Use a `nodeId` from `topology.nodes`. |
 | `steer_workorder` | `run_id`, `instruction`, optional `nodename` or `execution_id` | Sends an instruction to an active task. Omit both selectors when only one task is running; use `execution_id` for parallel tasks at the same node. |
 | `node_steer` | `run_id`, `nodename`, `instruction` | Resets to the latest checkpoint before a previously reached node and resumes with the instruction queued. |
+| `create_loop` | `name`, `prompt`, optional `every_minutes` (at least 15, default 60), `max_workorders`, `max_daily_spend`, `active_hours_start`, `active_hours_end` | Creates a loop that prompts an agent on that interval to create and steer WorkOrders. Limits default to, and may not exceed, the host's loop settings. Token hosts only. |
+| `loop_status` | `loop_id` | Returns the loop's schedule and limits, `running`, `next_run_at`, `deferred_until`, `spent_today` and the `workorders` it created. |
 
 Prompts and instructions must be non-blank and at most 100,000 characters.
-Status and steering tools only accept runs from the host's configured repository.
+Status and steering tools only accept runs and loops from the host's configured repository.
 
 ## Troubleshooting
 
 - **Nothing is retried automatically.** If a create, steer or reset call times
-  out, check the WorkOrder list or `workorder_status` before asking again, or
-  you may start duplicate work.
+  out, check the WorkOrder or loop list, `workorder_status` or `loop_status`
+  before asking again, or you may start duplicate work.
 - **401 when connecting:** the token is missing, wrong or rotated. Check that
   `OE_MCP_TOKEN` was set when you ran `claude mcp add`; after a rotation,
   remove the server with `claude mcp remove --scope user oe` and add it again.
@@ -115,7 +122,7 @@ Status and steering tools only accept runs from the host's configured repository
   Ask the host for the exact URL.
 - **Error mentioning OE HTTP 400:** the host's workflow is unknown or needs
   inputs; ask the host to check its configuration.
-- **Status or steering fails with an upstream 401:** the host has GitHub login
-  enabled. Creating WorkOrders still works, but OpenEngine's service token
-  doesn't yet authorize the status and steering routes; follow the run in the
-  OpenEngine UI instead.
+- **Status, steering or loop tools fail with an upstream 401:** the host has
+  GitHub login enabled. Creating WorkOrders still works, but OpenEngine's
+  service token doesn't yet authorize the other routes; use the OpenEngine UI
+  instead.

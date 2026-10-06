@@ -94,22 +94,7 @@ def load_workflow_catalog(
     graphs: list[GraphWorkflow] = []
     sources: dict[str, Path] = {}
     for path in paths:
-        module_name = "_openengine_workflow_" + sha256(str(path).encode()).hexdigest()[:16]
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            raise WorkflowLoadError(f"cannot import workflow definition: {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        try:
-            spec.loader.exec_module(module)
-            exported = _exported_with_config(module, path, session_config)
-        except WorkflowLoadError:
-            raise
-        except Exception as error:
-            raise WorkflowLoadError(f"{path}: {type(error).__name__}: {error}") from error
-        finally:
-            sys.modules.pop(module_name, None)
-        for value in exported:
+        for value in load_workflow_file(path, session_config=session_config):
             identifier = str(value.graph_id)
             if identifier in sources:
                 raise WorkflowLoadError(
@@ -119,6 +104,34 @@ def load_workflow_catalog(
             sources[identifier] = path
             graphs.append(value)
     return WorkflowCatalog.from_graphs(graphs)
+
+
+def load_workflow_file(
+    path: str | Path,
+    *,
+    session_config: Mapping[str, object] | None = None,
+) -> tuple[GraphWorkflow, ...]:
+    """Import one workflow definition file and return what it exports.
+
+    The same rules as a workflow directory, for one file: what a backend does
+    with a Python graph uploaded through `engine graph add`.
+    """
+    path = Path(path).resolve()
+    module_name = "_openengine_workflow_" + sha256(str(path).encode()).hexdigest()[:16]
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise WorkflowLoadError(f"cannot import workflow definition: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+        return _exported_with_config(module, path, session_config)
+    except WorkflowLoadError:
+        raise
+    except Exception as error:
+        raise WorkflowLoadError(f"{path}: {type(error).__name__}: {error}") from error
+    finally:
+        sys.modules.pop(module_name, None)
 
 
 def _exported(module: object, path: Path) -> tuple[GraphWorkflow, ...]:
@@ -177,4 +190,4 @@ def _accepts_session_config(func: object) -> bool:
     return "session_config" in signature.parameters
 
 
-__all__ = ["WorkflowCatalog", "WorkflowLoadError", "load_workflow_catalog"]
+__all__ = ["WorkflowCatalog", "WorkflowLoadError", "load_workflow_catalog", "load_workflow_file"]
