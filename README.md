@@ -21,6 +21,17 @@ logged in on this machine, run:
 curl -LsSf https://openengine.sh/install.sh | sh
 ```
 
+On Windows, use Windows Subsystem for Linux (WSL). If needed, run
+`wsl --install` in an administrator PowerShell, restart when prompted, and
+complete the Linux distribution's first-run setup. Install Git and Node.js
+20.19+ and log in to Codex or Claude inside WSL, then run from PowerShell:
+
+```powershell
+wsl sh -c "curl -LsSf https://openengine.sh/install.sh | sh"
+```
+
+Run subsequent `engine` commands inside WSL.
+
 This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
 opens [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to
 reopen it and rerun the installer to upgrade.
