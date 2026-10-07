@@ -54,7 +54,9 @@ class GitLabSourceControl:
         self._public(branch)
         await self._checked(workspace_id, ("push", "--set-upstream", "origin", branch))
 
-    async def request_review(self, workspace_id: WorkspaceId, branch: str, base_ref: str, title: str, body: str) -> str:
+    async def request_review(self, workspace_id: WorkspaceId, branch: str, base_ref: str, title: str, body: str, *, issue: dict[str, object] | None = None, issue_resolution: str | None = None) -> str:
+        if issue is not None or issue_resolution is not None:
+            raise NotImplementedError("GitLab issue-linked publishing is not supported")
         self._public(branch)
         project = await self._project(workspace_id)
         result = await self._api("POST", f"/projects/{project}/merge_requests", json={"source_branch": branch, "target_branch": base_ref, "title": title, "description": body})
@@ -98,7 +100,9 @@ class GitLabSourceControl:
     ) -> None:
         raise NotImplementedError("GitLab comment reactions are not supported")
 
-    async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
+    async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None, *, thread_id: str | None = None, resolve: bool = False, commit_sha: str | None = None) -> CommentResult:
+        if thread_id is not None or resolve or commit_sha is not None:
+            raise NotImplementedError("GitLab review thread resolution is not supported")
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")
         project, iid = self._merge_request(pr_url)

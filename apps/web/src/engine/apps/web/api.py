@@ -3737,10 +3737,11 @@ def create_app(
         """
         repository = origin.channel.removeprefix("github:")
         number = int(origin.thread_id.partition("/review/")[0])
-        if origin.review_thread_id and origin.review_comment_id:
-            prompt += (f"\n\nRequested review thread: {origin.review_thread_id}; "
+        if origin.review_comment_id:
+            prompt += (f"\n\nRequested review thread: {origin.review_thread_id or 'lookup unavailable'}; "
                        f"root comment: {origin.review_comment_id}; PR: {pull_request_url(repository, number)}. "
-                       "Reply using add_comment with thread_id and in_reply_to_id. "
+                       "Reply using add_comment with in_reply_to_id. If thread_id is unavailable, "
+                       "look it up with view_change_request; a plain reply can omit it. "
                        "For addressed work supply resolve=true and commit_sha; "
                        "for disagreement or a needed decision supply resolve=false.")
         runtime = surface.runtime
@@ -3954,9 +3955,15 @@ def create_app(
         if comment.event == "pull_request_review_comment":
             root_comment = int(comment.in_reply_to_id or comment.comment_id)
             if not comment.thread_id:
-                async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-                    thread = await session.capabilities.source_control.review_thread(pull_request_url(found.project, found.number), root_comment)
-                comment = replace(comment, thread_id=thread.thread_id or "")
+                try:
+                    async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                        thread = await session.capabilities.source_control.review_thread(pull_request_url(found.project, found.number), root_comment)
+                    comment = replace(comment, thread_id=thread.thread_id or "")
+                except Exception:
+                    # Thread metadata is optional enrichment. Authorization has
+                    # already succeeded; retain the root ID so the agent can
+                    # reply or retry lookup without losing the feedback.
+                    log.warning("Review thread lookup failed; forwarding feedback with root comment ID %s", root_comment)
             thread_id += f"/review/{root_comment}"
         await github_concierge.handle(FeedbackRequest(
             origin=RunOrigin(

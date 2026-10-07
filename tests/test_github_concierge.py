@@ -155,7 +155,8 @@ def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
 
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-def test_github_comments_continue_existing_workorders(tmp_path, event):
+@pytest.mark.parametrize("lookup_fails", [False, True])
+def test_github_comments_continue_existing_workorders(tmp_path, event, lookup_fails):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -176,7 +177,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
-    source_control.review_thread = AsyncMock(return_value=MagicMock(thread_id="PRRT_1"))
+    source_control.review_thread = AsyncMock(return_value=MagicMock(thread_id="PRRT_1"), side_effect=RuntimeError("unavailable") if lookup_fails else None)
     object.__setattr__(capabilities, "source_control", source_control)
 
     def deliver(client, comment_id, text):
@@ -206,7 +207,7 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
         assert runtime.steer.await_args.args[0] == RunId("existing")
         assert runtime.steer.await_args.args[1].startswith("Implement it")
         if event == "pull_request_review_comment":
-            assert "Requested review thread: PRRT_1; root comment: 1" in runtime.steer.await_args.args[1]
+            assert f"Requested review thread: {'lookup unavailable' if lookup_fails else 'PRRT_1'}; root comment: 1" in runtime.steer.await_args.args[1]
             source_control.review_thread.assert_awaited_with("https://github.com/acme/api/pull/7", 1)
         assert len(provider.clients) == 1
         assert len(provider.clients[0].prompts) == 2
@@ -233,7 +234,8 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     ("@someone-else @OpenEngineBot please check this", 1),
     ("please check this", 1),
 ])
-def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body, expected):
+@pytest.mark.parametrize("lookup_failure", [None, RuntimeError("unavailable"), TimeoutError(), NotImplementedError(), "slow"])
+def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body, expected, lookup_failure, monkeypatch):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -246,8 +248,13 @@ def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body
     source_control = MagicMock(
         add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
         authenticated_login=AsyncMock(return_value="openenginebot"),
-        review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1")),
+        review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1"), side_effect=lookup_failure),
     )
+    if lookup_failure == "slow":
+        async def slow_lookup(*args):
+            await asyncio.sleep(10)
+        source_control.review_thread.side_effect = slow_lookup
+        monkeypatch.setattr("engine.apps.web.api.GITHUB_AUTHORIZATION_TIMEOUT_SECONDS", 0.05)
     object.__setattr__(capabilities, "source_control", source_control)
     payload = _issue_comment(body=body)
     payload["issue"]["pull_request"] = {}

@@ -281,7 +281,6 @@ def test_reviewer_mcp_surface_includes_repo_comment_tool() -> None:
     assert add_comment["inputSchema"]["dependentRequired"] == {
         "file": ["line"],
         "line": ["file"],
-        "in_reply_to_id": ["thread_id", "resolve"],
     }
 
 
@@ -1786,4 +1785,19 @@ def test_review_resolution_is_approval_gated(accepted):
         assert approval.await_args.args[0].tool_name == "mcp__workflow__add_comment"
         if accepted:
             assert source.add_comment.await_args.kwargs == {"thread_id": "PRRT_1", "resolve": True, "commit_sha": "abcdef0"}
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("url", ["https://github.com/acme/api/pull/7", "https://gitlab.com/acme/api/-/merge_requests/7"])
+def test_plain_reply_accepts_omitted_resolution_metadata(url):
+    async def scenario():
+        source = AsyncMock()
+        source.add_comment.return_value = CommentResult(2, url + "#reply")
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"), approval)
+        result = await broker._submit(_direct_request(broker, "1", "add_comment", {"pr_url": url, "comment": "Needs a decision", "in_reply_to_id": 1}))
+        assert result["ok"]
+        source.add_comment.assert_awaited_once_with(url, "Needs a decision", None, None, 1)
+        approval.assert_awaited_once()
     asyncio.run(scenario())

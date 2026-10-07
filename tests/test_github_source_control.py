@@ -830,7 +830,7 @@ def test_issue_publication_normalizes_body_and_head(monkeypatch, tmp_path, resol
     result = asyncio.run(source.request_review(WORKSPACE, "agent/issue", "main", "feat: change", f"Description\n\nFixes {reference}", issue={"repository": issue_repo, "number": 7}, issue_resolution=resolution))
     assert result.endswith("/8")
     assert source._api.await_args.kwargs["json"]["body"] == f"Description\n\n{keyword} {reference}"
-    amends = [call for call in calls if call[2:4] == ("commit", "--amend")]
+    amends = [call for call in calls if "--amend" in call]
     if resolution == "resolves":
         assert len(amends) == 1
         assert f"Resolves {reference}" in amends[0][-1]
@@ -932,6 +932,12 @@ def test_issue_head_amend_is_published_and_keeps_credit_once(tmp_path):
         hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n")
         hook.chmod(0o755)
     _git(root, "config", "core.hooksPath", str(hooks))
+    helper = tmp_path / "untrusted-helper"
+    helper.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n")
+    helper.chmod(0o755)
+    _git(root, "config", "core.fsmonitor", str(helper))
+    _git(root, "config", "commit.gpgsign", "true")
+    _git(root, "config", "gpg.program", str(helper))
     source._repo_coords = AsyncMock(return_value=("acme", "api"))
     source._api = AsyncMock(return_value={"html_url": "https://github.com/acme/api/pull/8"})
     asyncio.run(source.request_review(WORKSPACE, "agent/issue", "main", "feat: fix", "Fixes #7", issue={"repository": "acme/api", "number": 7}, issue_resolution="resolves"))
@@ -1055,3 +1061,28 @@ def test_targeted_reply_does_not_reuse_another_authors_comment():
     ))
     assert result.id == 43
     assert source._api.await_args.args[1].endswith("/41/replies")
+
+
+def test_issue_head_lease_preserves_a_concurrent_remote_push(tmp_path):
+    root = tmp_path / "checkout"
+    source = _checkout(root)
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    _git(root, "remote", "set-url", "origin", str(remote))
+    _git(root, "push", "origin", "main")
+    _git(root, "checkout", "-b", "agent/issue")
+    _git(root, "commit", "--allow-empty", "-m", "feat: fix")
+    _git(root, "push", "origin", "agent/issue")
+    head = _git(root, "rev-parse", "HEAD")
+    concurrent = _git(root, "commit-tree", "HEAD^{tree}", "-p", head, "-m", "concurrent change")
+    checked = source._git_checked
+
+    async def racing(root_path, arguments):
+        if "--amend" in arguments:
+            _git(root, "push", "origin", f"{concurrent}:refs/heads/agent/issue")
+        return await checked(root_path, arguments)
+
+    source._git_checked = racing
+    with pytest.raises(GitHubSourceControlError):
+        asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
+    assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == concurrent

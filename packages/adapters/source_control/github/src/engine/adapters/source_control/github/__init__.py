@@ -220,7 +220,7 @@ class GitHubSourceControl:
     ) -> None:
         """Amend only this published head, refusing concurrent remote changes."""
         current = await self._git_checked(root, ("branch", "--show-current"))
-        if current != branch or await self._git_checked(root, ("status", "--porcelain")):
+        if current != branch or await self._git_checked(root, ("-c", "core.fsmonitor=false", "status", "--porcelain")):
             raise ValueError("issue publishing requires the named branch checked out with a clean workspace")
         head = await self._git_checked(root, ("rev-parse", "HEAD"))
         if not await self._git_checked(root, ("rev-list", f"origin/{base}..HEAD")):
@@ -238,7 +238,7 @@ class GitHubSourceControl:
         # This host-side metadata rewrite preserves existing credit trailers.
         # Do not execute checkout-controlled hooks while amending or publishing it.
         no_hooks = ("-c", f"core.hooksPath={os.devnull}")
-        await self._git_checked(root, (*no_hooks, "commit", "--amend", "--only", "--allow-empty", "--message", updated))
+        await self._git_checked(root, (*no_hooks, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", "commit", "--amend", "--only", "--allow-empty", "--message", updated))
         await self._git_checked(root, (*no_hooks, "push", f"--force-with-lease=refs/heads/{branch}:{head}",
                                        "origin", f"HEAD:refs/heads/{branch}"))
 

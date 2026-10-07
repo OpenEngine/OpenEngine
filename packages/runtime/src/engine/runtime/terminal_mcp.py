@@ -592,15 +592,16 @@ class TerminalMcpBroker:
                 return {"ok": False, "error": foreign}
             options = {}
             if in_reply_to_id is not None:
-                if not isinstance(arguments.get("resolve"), bool):
-                    raise ValueError("review replies require resolve: true for addressed work or false to leave the thread open")
+                if "resolve" in arguments and not isinstance(arguments["resolve"], bool):
+                    raise ValueError("resolve must be true for addressed work or false to leave the thread open")
                 thread_id = arguments.get("thread_id")
-                if not isinstance(thread_id, str) or not thread_id.strip():
-                    raise ValueError("review replies require thread_id from view_change_request")
+                if thread_id is not None and (not isinstance(thread_id, str) or not thread_id.strip()):
+                    raise ValueError("thread_id must be a non-empty string from view_change_request when provided")
                 commit_sha = arguments.get("commit_sha")
-                if arguments["resolve"] and (not isinstance(commit_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):
+                if arguments.get("resolve", False) and (not isinstance(commit_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):
                     raise ValueError("addressed review replies require commit_sha")
-                options = {"thread_id": thread_id, "resolve": arguments["resolve"], "commit_sha": commit_sha}
+                if any(key in arguments for key in ("thread_id", "resolve", "commit_sha")):
+                    options = {"thread_id": thread_id, "resolve": arguments.get("resolve", False), "commit_sha": commit_sha}
                 approved = await self._approve_forge("add_comment", arguments, request_id)
                 if approved is not None:
                     return approved
@@ -1215,11 +1216,11 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
                 "line": {"type": "integer", "minimum": 1},
                 "in_reply_to_id": {"type": "integer", "minimum": 1},
                 "thread_id": {"type": "string", "minLength": 1},
-                "resolve": {"type": "boolean", "description": "Required for review replies. True posts Addressed in <commit_sha>: <comment> and resolves the thread unless disabled by team configuration. False replies and leaves it open."},
+                "resolve": {"type": "boolean", "description": "Optional; defaults to false. True posts Addressed in <commit_sha>: <comment> and resolves the thread unless disabled by team configuration. False replies and leaves it open."},
                 "commit_sha": {"type": "string", "pattern": "^[0-9a-fA-F]{7,40}$"},
             },
             "required": ["pr_url", "comment"],
-            "dependentRequired": {"file": ["line"], "line": ["file"], "in_reply_to_id": ["thread_id", "resolve"]},
+            "dependentRequired": {"file": ["line"], "line": ["file"]},
             "not": {
                 "required": ["in_reply_to_id"],
                 "anyOf": [{"required": ["file"]}, {"required": ["line"]}],
