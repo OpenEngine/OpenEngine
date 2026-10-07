@@ -180,3 +180,47 @@ def test_execute_sends_the_repository_it_is_run_from(tmp_path, monkeypatch) -> N
     recorded = serve(monkeypatch, RUN)
     assert main(["graph", "execute", "pair", "say hello"]) == 0
     assert recorded.requests[0]["body"]["repository"] == str(tmp_path.resolve())
+
+
+@pytest.mark.parametrize("command", ["graph", "loop"])
+def test_spec_prints_current_documentation_without_a_backend(command, monkeypatch, capsys) -> None:
+    from inspect import getdoc
+    from engine.cli import specs
+
+    recorded = serve(monkeypatch)
+    monkeypatch.setenv(backends.SELECTED_ENVIRONMENT_VARIABLE, "missing-backend")
+    assert main([command, "spec"]) == 0
+    output = capsys.readouterr()
+    assert output.out == getdoc(getattr(specs, f"{command}_spec")) + "\n"
+    assert output.err == ""
+    assert recorded.requests == []
+
+    with pytest.raises(SystemExit) as exited:
+        main([command, "spec", "--help"])
+    assert exited.value.code == 0
+    assert output.out.rstrip() in capsys.readouterr().out
+
+
+def test_generated_spec_documentation_matches_command_documentation() -> None:
+    from pathlib import Path
+    from runpy import run_path
+
+    root = Path(__file__).resolve().parents[1]
+    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
+    assert (root / "site/docs/cli-specs.md").read_text() == generator["render"]()
+
+
+def test_documented_graph_and_loop_examples_match_current_language() -> None:
+    from inspect import getdoc
+    import re
+    import yaml
+    from engine.cli.specs import graph_spec, loop_spec
+    from engine.graph_service.language import API_VERSION, parse_graph
+
+    graph = yaml.safe_load(re.search(r"```yaml\n(.*?)\n```", getdoc(graph_spec), re.S)[1])
+    loop = yaml.safe_load(re.search(r"```yaml\n(.*?)\n```", getdoc(loop_spec), re.S)[1])
+    assert graph["apiVersion"] == API_VERSION
+    graph["loop"] = loop["loop"]
+    parsed = parse_graph(graph, runners=["claude", "codex"])
+    assert parsed.loop.interval_seconds == 6 * 60 * 60
+    assert parsed.loop.instruction == loop["loop"]["instruction"]
