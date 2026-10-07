@@ -354,6 +354,7 @@ def test_what_became_of_each_delivery_is_logged(caplog) -> None:
         ingress.accept("issue_comment", _issue_comment(comment_id=1), delivery_id="d-2")
         ingress.accept("issue_comment", dict(_issue_comment(comment_id=2), action="edited"),
                        delivery_id="d-3")
+        ingress.accept("issues", {"action": "closed"}, delivery_id="d-4")
         await ingress.drain()
         await ingress.close()
 
@@ -364,6 +365,7 @@ def test_what_became_of_each_delivery_is_logged(caplog) -> None:
     assert "ignored comment 1 by someone on acme/api#7 (delivery d-2): already queued or handled" in messages
     assert any(m.startswith("ignored GitHub issue_comment delivery d-3 (action edited")
                for m in messages)
+    assert "settled GitHub issues delivery d-4 (action closed): nothing Engine acts on" in messages
     assert any(m.startswith("handled comment 1 by someone on acme/api#7 in ")
                and m.endswith(": ignored, no active work order and Engine was not @mentioned")
                for m in messages)
