@@ -155,8 +155,9 @@ def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
 
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-@pytest.mark.parametrize("lookup_fails", [False, True])
-def test_github_comments_continue_existing_workorders(tmp_path, event, lookup_fails):
+@pytest.mark.parametrize("lookup_fails", [False, True, "recovers"])
+@pytest.mark.parametrize("notice_fails", [False, True])
+def test_github_comments_continue_existing_workorders(tmp_path, event, lookup_fails, notice_fails):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -173,11 +174,14 @@ def test_github_comments_continue_existing_workorders(tmp_path, event, lookup_fa
     )
 
     source_control = MagicMock()
-    source_control.add_comment = AsyncMock()
     source_control.add_reaction = AsyncMock()
+    async def post_comment(_url, text, **kwargs):
+        if notice_fails and "Please retry later." in text:
+            raise RuntimeError("reply service unavailable")
+    source_control.add_comment = AsyncMock(side_effect=post_comment)
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
-    source_control.review_thread = AsyncMock(return_value=MagicMock(thread_id="PRRT_1"), side_effect=RuntimeError("unavailable") if lookup_fails else None)
+    source_control.review_thread = AsyncMock(return_value=MagicMock(thread_id="PRRT_1"), side_effect=([RuntimeError("unavailable"), MagicMock(thread_id="PRRT_1")] * 2) if lookup_fails == "recovers" else RuntimeError("unavailable") if lookup_fails else None)
     object.__setattr__(capabilities, "source_control", source_control)
 
     def deliver(client, comment_id, text):
@@ -207,19 +211,24 @@ def test_github_comments_continue_existing_workorders(tmp_path, event, lookup_fa
         assert runtime.steer.await_args.args[0] == RunId("existing")
         assert runtime.steer.await_args.args[1].startswith("Implement it")
         if event == "pull_request_review_comment":
-            assert f"Requested review thread: {'lookup unavailable' if lookup_fails else 'PRRT_1'}; root comment: 1" in runtime.steer.await_args.args[1]
+            assert f"Requested review thread: {'lookup unavailable' if lookup_fails is True else 'PRRT_1'}; root comment: 1" in runtime.steer.await_args.args[1]
             source_control.review_thread.assert_awaited_with("https://github.com/acme/api/pull/7", 1)
         assert len(provider.clients) == 1
         assert len(provider.clients[0].prompts) == 2
         assert not provider.clients[0].result.get("isError")
     assert provider.clients[0].closed
     assert not communications.posts
-    assert source_control.add_comment.await_count == 2
     source_control.add_reaction.assert_not_awaited()
+    exhausted = event == "pull_request_review_comment" and lookup_fails is True
+    assert source_control.add_comment.await_count == (4 if exhausted else 2)
+    if event == "pull_request_review_comment":
+        assert source_control.review_thread.await_count == (4 if lookup_fails else 2)
     posted = [call.args[1] for call in source_control.add_comment.await_args_list]
     # The comment that asked for nothing, then the one that was forwarded --
     # both fixed text, and the run id is this process's own.
-    assert posted == [NOT_FORWARDED, "Forwarded to work order `existing`."]
+    notices = [text for text in posted if "Please retry later." in text]
+    assert len(notices) == (2 if exhausted else 0)
+    assert [text for text in posted if text not in notices] == [NOT_FORWARDED, "Forwarded to work order `existing`."]
     assert not any(LEAKED in text for text in posted)
     source_control.add_comment.assert_awaited_with(
         "https://github.com/acme/api/pull/7", posted[-1],
@@ -269,7 +278,12 @@ def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body
         client.portal.call(app.state.github_ingress.drain)
     assert response.status_code == 200
     assert len(provider.clients) == expected
-    assert source_control.add_comment.await_count == expected
+    exhausted = expected and event == "pull_request_review_comment" and lookup_failure is not None and not isinstance(lookup_failure, NotImplementedError)
+    assert source_control.add_comment.await_count == expected + bool(exhausted)
+    if expected and event == "pull_request_review_comment":
+        assert source_control.review_thread.await_count == (2 if exhausted else 1)
+    else:
+        source_control.review_thread.assert_not_awaited()
     source_control.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
     if not expected:
         runtime.steer.assert_not_awaited()

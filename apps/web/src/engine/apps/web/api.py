@@ -3952,18 +3952,25 @@ def create_app(
                 return
         thread_id = str(comment.number)
         root_comment = None
+        lookup_unavailable = False
         if comment.event == "pull_request_review_comment":
             root_comment = int(comment.in_reply_to_id or comment.comment_id)
             if not comment.thread_id:
-                try:
-                    async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
-                        thread = await session.capabilities.source_control.review_thread(pull_request_url(found.project, found.number), root_comment)
-                    comment = replace(comment, thread_id=thread.thread_id or "")
-                except Exception:
-                    # Thread metadata is optional enrichment. Authorization has
-                    # already succeeded; retain the root ID so the agent can
-                    # reply or retry lookup without losing the feedback.
-                    log.warning("Review thread lookup failed; forwarding feedback with root comment ID %s", root_comment)
+                for attempt in range(2):
+                    try:
+                        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS / 2):
+                            thread = await session.capabilities.source_control.review_thread(pull_request_url(found.project, found.number), root_comment)
+                        comment = replace(comment, thread_id=thread.thread_id or "")
+                        break
+                    except NotImplementedError:
+                        # An unsupported capability will not recover on retry.
+                        break
+                    except Exception:
+                        if attempt == 0:
+                            await asyncio.sleep(0.25)
+                            continue
+                        lookup_unavailable = True
+                        log.warning("Review thread lookup failed twice; forwarding feedback with root comment ID %s", root_comment)
             thread_id += f"/review/{root_comment}"
         await github_concierge.handle(FeedbackRequest(
             origin=RunOrigin(
@@ -3975,6 +3982,20 @@ def create_app(
             ),
             text=comment.body, comment_id=comment.comment_id, allow_start=mentioned,
         ))
+        if lookup_unavailable:
+            try:
+                async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                    await github_reply(
+                        RunOrigin(channel=f"github:{comment.repository}", thread_id=thread_id),
+                        "Review-thread lookup is temporarily unavailable after two attempts. "
+                        "Your comment was received, but automatic thread resolution may be unavailable. "
+                        "Please retry later.",
+                    )
+            except Exception:
+                # Do not replay already-forwarded work if the reply service is
+                # unavailable too. Keep the retry advice visible in activity.
+                github_activity.ignored("Review-thread service unavailable; please retry later.")
+                log.warning("Could not post review-thread retry advice")
 
     async def github_merge_approves_workorder(merged: GithubMerge) -> None:
         """Merging a pull request is a person accepting its work order.
