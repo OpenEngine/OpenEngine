@@ -75,9 +75,13 @@ route; every step must be reachable and able to finish.
 
 Templates use `${...}`. Expressions support `instruction`, `repository`,
 `inputs.NAME`, `outputs.STEP`, `visits.STEP`, facet `item`, literals,
-comparisons, `&&`, `||`, `!`, `size(...)` and `json(...)`. They cannot execute
-Python. Undeclared inputs, unavailable outputs, unknown runners/tools and
-invalid flow are reported at registration with paths to each problem.
+comparisons, membership with `in`, arithmetic (`+`, `-`, `*`, `/`, `%`),
+indexing (for example, `outputs.STEP.items[0]`), `&&`, `||`, `!`, and the
+functions `size(...)`, `json(...)`, `lower(...)` and `has(...)`. Express
+"not in" as `(!(item in inputs.items))`; Python's `not` keyword is rejected.
+Expressions cannot execute Python. Undeclared inputs, unavailable outputs,
+unknown runners/tools and invalid flow are reported at registration with
+paths to each problem.
 
 `loop` accepts only `every` and `instruction`, defaults for `engine loop add`.
 See `engine loop spec` for cadence, limits and lifecycle.
