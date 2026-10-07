@@ -37,9 +37,7 @@ def graph_spec(_arguments: object = None) -> int:
 
     @GRAPH_FIELDS@
 
-    `apiVersion` is required; `kind` defaults to `@KIND@`. `name` is required:
-    lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit,
-    at most 63 characters. Unknown fields are rejected.
+    Unknown fields are rejected. Scalar constraints and defaults are listed above.
 
     `inputs` maps names to input declarations listed above. The
     instruction is built in; declaring `inputs.instruction` only describes it.
@@ -62,7 +60,7 @@ def graph_spec(_arguments: object = None) -> int:
     - None of these keys: the checkout.
 
     Steps accept `name` and `description`. Agent steps also accept `tools`,
-    `outputs`, `model`, `steering: always-open` and `facets`. Tools must be
+    `outputs`, `model`, `steering` and `facets`. Tools must be
     registered repository tools. Outputs map names to declarations with `type`,
     `enum`, `required`, `description` and `lineage: required` for findings.
     Types are @OUTPUT_TYPES@. A model may be a tier, model name or template. Facets run in
@@ -120,6 +118,8 @@ def loop_spec(_arguments: object = None) -> int:
     `--project` scopes graph lookup, `--repo` selects the repository, and
     `--input NAME=VALUE` supplies graph inputs. `--backend` selects the daemon.
     The first run is due immediately unless `--no-run-now` delays it one interval.
+
+    @LOOP_DETAILS@
 
     ### Scheduling and limits
 

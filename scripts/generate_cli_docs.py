@@ -21,12 +21,22 @@ def specifications() -> dict[str, str]:
         return ", ".join(f"`{value}`" for value in values)
 
     fields = schema["FIELDS"]
+    rules = schema["FIELD_RULES"]
+    field_details = "\n\nScalar field constraints:\n\n| Declaration | Field | Meaning | Constraints |\n| --- | --- | --- | --- |\n"
+    field_details += "\n".join(
+        f"| {declaration} | {name} | {field.description} | {field.constraints()} |"
+        for declaration, fields in rules.items() for name, field in fields.items()
+    )
     replacements = {
         "API_VERSION": schema["API_VERSION"],
         "KIND": schema["KIND"],
         "GRAPH_FIELDS": "Supported YAML fields (from parser validation):\n\n"
         + "| Declaration | Fields |\n| --- | --- |\n"
-        + "\n".join(f"| {name} | {code(sorted(values))} |" for name, values in fields.items()),
+        + "\n".join(f"| {name} | {code(sorted(values))} |" for name, values in fields.items()) + field_details,
+        "LOOP_DETAILS": "\n".join(
+            f"- `{name}`: {field.description} {field.constraints()}."
+            for name, field in rules["loop"].items()
+        ),
         "LOOP_FIELDS": code(sorted(fields["loop"])),
         "OUTPUT_TYPES": code(schema["OUTPUT_TYPES"]),
         "RUNNER_POLICIES": code(schema["RUNNER_POLICIES"]),

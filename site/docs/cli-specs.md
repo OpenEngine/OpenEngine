@@ -49,9 +49,22 @@ Supported YAML fields (from parser validation):
 | route | `to`, `when` |
 | loop | `every`, `instruction` |
 
-`apiVersion` is required; `kind` defaults to `Graph`. `name` is required:
-lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit,
-at most 63 characters. Unknown fields are rejected.
+Scalar field constraints:
+
+| Declaration | Field | Meaning | Constraints |
+| --- | --- | --- | --- |
+| loop | instruction | Default instruction for recurring runs; null or empty values are normalized to empty text. | default: `''`; type: str |
+| graph | apiVersion | Graph language version. | required; choices: `'openengine.dev/v1'` |
+| graph | kind | Definition kind. | default: `'Graph'`; choices: `'Graph'` |
+| graph | name | Project-scoped graph name. | required; type: str; pattern: `^[a-z0-9][a-z0-9._-]{0,62}$` |
+| input | required | Whether the value is required. | default: `False`; type: bool |
+| agent step | prompt | What the agent is asked to do. | required; type: str; nonblank |
+| agent step | model | Model tier, model name, or expression template. | default: `''`; type: str |
+| agent step | steering | Allow steering while the agent runs. | default: `None`; choices: `None`, `'always-open'` |
+| output | required | Whether the value is required. | default: `False`; type: bool |
+| output | type | Output value type. | default: `'string'`; choices: `'string'`, `'number'`, `'integer'`, `'boolean'`, `'list'`, `'object'`, `'findings'` |
+
+Unknown fields are rejected. Scalar constraints and defaults are listed above.
 
 `inputs` maps names to input declarations listed above. The
 instruction is built in; declaring `inputs.instruction` only describes it.
@@ -74,7 +87,7 @@ A step's keys determine its kind:
 - None of these keys: the checkout.
 
 Steps accept `name` and `description`. Agent steps also accept `tools`,
-`outputs`, `model`, `steering: always-open` and `facets`. Tools must be
+`outputs`, `model`, `steering` and `facets`. Tools must be
 registered repository tools. Outputs map names to declarations with `type`,
 `enum`, `required`, `description` and `lineage: required` for findings.
 Types are `string`, `number`, `integer`, `boolean`, `list`, `object`, `findings`. A model may be a tier, model name or template. Facets run in
@@ -136,6 +149,8 @@ Duration units (seconds per unit): `s = 1`, `m = 60`, `h = 3600`, `d = 86400`.
 `--project` scopes graph lookup, `--repo` selects the repository, and
 `--input NAME=VALUE` supplies graph inputs. `--backend` selects the daemon.
 The first run is due immediately unless `--no-run-now` delays it one interval.
+
+- `instruction`: Default instruction for recurring runs; null or empty values are normalized to empty text. default: `''`; type: str.
 
 ### Scheduling and limits
 

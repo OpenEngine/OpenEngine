@@ -249,3 +249,38 @@ def test_spec_generation_tracks_parser_definitions(tmp_path, monkeypatch) -> Non
     assert "`new_field`" in specs["graph"]
     assert "`new_field`" in specs["loop"]
     assert "minimum of 120 seconds" in specs["loop"]
+
+
+def test_field_constraints_drive_parser_and_reference(monkeypatch) -> None:
+    from dataclasses import replace
+    from pathlib import Path
+    from runpy import run_path
+    from engine.graph_service import schema
+    from engine.graph_service.language import GraphError, parse_graph
+
+    graph = {
+        "apiVersion": schema.API_VERSION, "name": "example",
+        "implementation": {"work": {"agent": "claude", "prompt": "Do work",
+                                   "outputs": {"answer": {}}}},
+    }
+    assert parse_graph(graph, runners=["claude"]).nodes[0].outputs[0].required is False
+    monkeypatch.setitem(schema.FIELD_RULES["graph"], "name",
+                        replace(schema.FIELD_RULES["graph"]["name"], pattern=r"^changed$"))
+    monkeypatch.setitem(schema.FIELD_RULES["output"], "required",
+                        replace(schema.FIELD_RULES["output"]["required"], default=True))
+    with pytest.raises(GraphError):
+        parse_graph(graph, runners=["claude"])
+    graph["name"] = "changed"
+    assert parse_graph(graph, runners=["claude"]).nodes[0].outputs[0].required is True
+
+    root = Path(__file__).resolve().parents[1]
+    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
+    original = generator["specifications"].__globals__["run_path"]
+
+    def load(path):
+        return vars(schema) if Path(path).name == "schema.py" else original(path)
+
+    monkeypatch.setitem(generator["specifications"].__globals__, "run_path", load)
+    text = generator["specifications"]()["graph"]
+    assert "pattern: `^changed$`" in text
+    assert "| output | required | Whether the value is required. | default: `True`; type: bool |" in text
