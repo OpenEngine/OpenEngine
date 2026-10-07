@@ -246,6 +246,7 @@ def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body
     source_control = MagicMock(
         add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
         authenticated_login=AsyncMock(return_value="openenginebot"),
+        review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1")),
     )
     object.__setattr__(capabilities, "source_control", source_control)
     payload = _issue_comment(body=body)
