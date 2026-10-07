@@ -820,7 +820,6 @@ def test_issue_publication_normalizes_body_and_head(monkeypatch, tmp_path, resol
             ("branch", "--show-current"): "agent/issue",
             ("status", "--porcelain"): "",
             ("rev-parse", "HEAD"): "abc1234",
-            ("rev-list", "origin/main..HEAD"): "abc1234",
             ("log", "-1", "--format=%B"): f"feat: change\n\nRefs {reference}",
             ("ls-remote", "origin", "refs/heads/agent/issue"): "abc1234\trefs/heads/agent/issue",
         }.get(arguments, "")
@@ -949,7 +948,7 @@ def test_issue_head_amend_is_published_and_keeps_credit_once(tmp_path):
     assert message.count("Resolves #7") == message.count("Refs #7") == 1
     assert message.count("Co-authored-by: Alice <alice@example.test>") == 1
     assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == new
-    asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
+    asyncio.run(source._issue_head(str(root), "agent/issue", "#7", "resolves"))
     assert _git(root, "rev-parse", "HEAD") == new
 
 
@@ -1084,5 +1083,25 @@ def test_issue_head_lease_preserves_a_concurrent_remote_push(tmp_path):
 
     source._git_checked = racing
     with pytest.raises(GitHubSourceControlError):
-        asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
+        asyncio.run(source._issue_head(str(root), "agent/issue", "#7", "resolves"))
     assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == concurrent
+
+
+@pytest.mark.parametrize("branch", ["main", "trunk", "release/stable"])
+def test_issue_head_leaves_branch_policy_to_remote(tmp_path, branch):
+    root = tmp_path / "checkout"
+    source = _checkout(root, branch)
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    _git(root, "remote", "set-url", "origin", str(remote))
+    _git(root, "push", "origin", branch)
+    old = _git(root, "rev-parse", "HEAD")
+
+    # No commits ahead of the remote branch: metadata rewrites are still allowed
+    # when the remote permits them, regardless of the branch's name.
+    asyncio.run(source._issue_head(str(root), branch, "#7", "resolves"))
+
+    new = _git(root, "rev-parse", "HEAD")
+    assert new != old
+    assert _git(root, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == new
+    assert "Resolves #7" in _git(root, "log", "-1", "--format=%B")
