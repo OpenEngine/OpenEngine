@@ -848,6 +848,14 @@ def _thread_page(resolved=False, cursor=None):
     }}}}}
 
 
+def _thread_node(resolved=False, replies=(), cursor=None):
+    node = _thread_page(resolved)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"][0]
+    node["pullRequest"] = {"number": 7, "repository": {"nameWithOwner": "acme/api"}}
+    node["comments"]["nodes"].extend(replies)
+    node["comments"]["pageInfo"] = {"hasNextPage": bool(cursor), "endCursor": cursor}
+    return {"data": {"node": node}}
+
+
 @pytest.mark.parametrize("resolve,enabled", [(True, True), (False, True), (True, False)])
 def test_addressed_review_reply_resolves_only_when_enabled(resolve, enabled):
     from unittest.mock import AsyncMock
@@ -859,7 +867,7 @@ def test_addressed_review_reply_resolves_only_when_enabled(resolve, enabled):
         if path == "/graphql":
             if "mutation" in options["json"]["query"]:
                 return {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_1", "isResolved": True}}}}
-            return _thread_page()
+            return _thread_node()
         return {"id": 42, "html_url": "https://github.com/acme/api/pull/7#discussion_r42"}
     source._api = api
     reply = asyncio.run(source.add_comment("https://github.com/acme/api/pull/7", "Guard the empty input", in_reply_to_id=41, thread_id="PRRT_1", resolve=resolve, commit_sha="abcdef0" if resolve else None))
@@ -890,7 +898,7 @@ def test_view_change_request_exposes_review_ids_and_state():
 def test_resolving_foreign_thread_or_graphql_failure_is_refused():
     from unittest.mock import AsyncMock
     source = GitHubSourceControl("")
-    source._api = AsyncMock(return_value=_thread_page())
+    source._api = AsyncMock(return_value=_thread_node())
     with pytest.raises(ValueError, match="does not belong"):
         asyncio.run(source.resolve_review_thread("https://github.com/acme/api/pull/7", "PRRT_other"))
     assert source._api.await_count == 1
@@ -943,11 +951,13 @@ def test_resolution_retry_reuses_own_posted_reply():
     from unittest.mock import AsyncMock
     from engine.ports.source_control import Discussion
     source = GitHubSourceControl("")
-    source.review_thread = AsyncMock(return_value=Discussion("alice", "Fix", "", comment_id=41, thread_id="PRRT_1"))
+    thread = Discussion("alice", "Fix", "", comment_id=41, thread_id="PRRT_1")
     source._resolve_validated_thread = AsyncMock(side_effect=[RuntimeError("unavailable"), True])
     source.authenticated_login = AsyncMock(return_value="engine")
     posted = {"id": 42, "html_url": "https://github.com/acme/api/pull/7#discussion_r42", "body": "Addressed in abcdef0: Fixed", "in_reply_to_id": 41, "user": {"login": "engine"}}
-    source._paginated_objects = AsyncMock(side_effect=[[], [posted]])
+    source._review_thread_by_id = AsyncMock(side_effect=[(thread, []), (thread, [
+        {"databaseId": 42, "url": posted["html_url"], "body": posted["body"], "author": {"login": "engine"}}
+    ])])
     source._api = AsyncMock(return_value=posted)
     async def reply():
         return await source.add_comment("https://github.com/acme/api/pull/7", "Fixed", in_reply_to_id=41, thread_id="PRRT_1", resolve=True, commit_sha="abcdef0")
@@ -979,3 +989,69 @@ def test_review_threads_follow_graphql_pagination():
     found = asyncio.run(source.review_thread("https://github.com/acme/api/pull/7", 99))
     assert found.thread_id == "PRRT_2"
     assert source._api.await_args.kwargs["json"]["variables"]["cursor"] == "next"
+
+
+@pytest.mark.parametrize("foreign", ["repository", "number", "missing", "root"])
+def test_targeted_reply_rejects_foreign_thread_before_posting(foreign):
+    from unittest.mock import AsyncMock
+    page = _thread_node()
+    node = page["data"]["node"]
+    if foreign == "repository":
+        node["pullRequest"]["repository"]["nameWithOwner"] = "other/api"
+    elif foreign == "number":
+        node["pullRequest"]["number"] = 8
+    elif foreign == "missing":
+        page["data"]["node"] = None
+    else:
+        node["comments"]["nodes"][0]["databaseId"] = 99
+    source = GitHubSourceControl("")
+    source._api = AsyncMock(return_value=page)
+    with pytest.raises(ValueError):
+        asyncio.run(source.add_comment(
+            "https://github.com/acme/api/pull/7", "Fixed", in_reply_to_id=41,
+            thread_id="PRRT_1", resolve=True, commit_sha="abcdef0",
+        ))
+    assert source._api.await_count == 1
+
+
+def test_targeted_retry_paginates_only_thread_comments():
+    from unittest.mock import AsyncMock
+    body = "Addressed in abcdef0: Fixed"
+    other = {"databaseId": 42, "body": body, "url": "other", "author": {"login": "alice"}}
+    own = {"databaseId": 43, "body": body, "url": "own", "author": {"login": "engine"}}
+    first = _thread_node(True, [other], cursor="next")
+    second = _thread_node(True)
+    second["data"]["node"]["comments"]["nodes"] = [own]
+    source = GitHubSourceControl("")
+    source._api = AsyncMock(side_effect=[first, second])
+    source.authenticated_login = AsyncMock(return_value="engine")
+    source._paginated_objects = AsyncMock()
+    result = asyncio.run(source.add_comment(
+        "https://github.com/acme/api/pull/7", "Fixed", in_reply_to_id=41,
+        thread_id="PRRT_1", resolve=True, commit_sha="abcdef0",
+    ))
+    assert result.id == 43
+    assert source._api.await_count == 2
+    source._paginated_objects.assert_not_awaited()
+    for call in source._api.await_args_list:
+        assert call.args == ("POST", "/graphql")
+        assert "reviewThreads(" not in call.kwargs["json"]["query"]
+        assert call.kwargs["json"]["variables"]["thread"] == "PRRT_1"
+    assert source._api.await_args.kwargs["json"]["variables"]["cursor"] == "next"
+
+
+def test_targeted_reply_does_not_reuse_another_authors_comment():
+    from unittest.mock import AsyncMock
+    source = GitHubSourceControl("")
+    source.authenticated_login = AsyncMock(return_value="engine")
+    source._api = AsyncMock(side_effect=[
+        _thread_node(True, [{"databaseId": 42, "body": "Addressed in abcdef0: Fixed",
+                            "url": "other", "author": {"login": "alice"}}]),
+        {"id": 43, "html_url": "own"},
+    ])
+    result = asyncio.run(source.add_comment(
+        "https://github.com/acme/api/pull/7", "Fixed", in_reply_to_id=41,
+        thread_id="PRRT_1", resolve=True, commit_sha="abcdef0",
+    ))
+    assert result.id == 43
+    assert source._api.await_args.args[1].endswith("/41/replies")

@@ -357,8 +357,9 @@ class GitHubSourceControl:
         if resolve and (not thread_id or not commit_sha or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):
             raise ValueError("resolving a reply requires thread_id and commit_sha")
         if thread_id:
-            thread = await self.review_thread(pr_url, in_reply_to_id)
-            if thread.thread_id != thread_id:
+            _positive_number(in_reply_to_id, "in_reply_to_id")
+            thread, replies = await self._review_thread_by_id(pr_url, thread_id, include_replies=resolve)
+            if thread.comment_id != in_reply_to_id:
                 raise ValueError("thread_id does not match the review comment")
         if resolve:
             comment = f"Addressed in {commit_sha}: {comment}"
@@ -368,13 +369,13 @@ class GitHubSourceControl:
             if resolve:
                 # A reply may succeed while resolution fails. Reuse our exact
                 # reply on retry, including after a process restart.
-                comments = await self._paginated_objects(f"/repos/{owner}/{repo}/pulls/{number}/comments")
-                matching = [entry for entry in comments
-                            if entry.get("in_reply_to_id") == in_reply_to_id and entry.get("body") == comment]
+                matching = [entry for entry in replies if entry["body"] == comment]
                 if matching:
                     login = await self.authenticated_login(pr_url)
-                    response = next((entry for entry in matching
-                                     if _nested_string(entry, "user", "login").lower() == login.lower()), None)
+                    match = next((entry for entry in matching
+                                  if (entry.get("author") or {}).get("login", "").lower() == login.lower()), None)
+                    if match:
+                        response = {"id": match["databaseId"], "html_url": match["url"]}
             if response is None:
                 response = await self._api(
                     "POST",
@@ -467,11 +468,57 @@ class GitHubSourceControl:
         raise ValueError("review comment is not a root thread on this pull request")
 
     async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
-        threads = await self._review_threads(pr_url)
-        thread = next((thread for thread in threads if thread.thread_id == thread_id), None)
-        if thread is None:
-            raise ValueError("review thread does not belong to this pull request")
+        thread, _ = await self._review_thread_by_id(pr_url, thread_id)
         return await self._resolve_validated_thread(thread)
+
+    async def _review_thread_by_id(
+        self, pr_url: str, thread_id: str, *, include_replies: bool = False,
+    ) -> tuple[Discussion, list[dict]]:
+        """Validate one thread and optionally fetch only its replies for retries."""
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        query = """query($thread: ID!, $cursor: String, $count: Int!) {
+          node(id: $thread) { ... on PullRequestReviewThread {
+            id isResolved pullRequest { number repository { nameWithOwner } }
+            comments(first: $count, after: $cursor) {
+              nodes { databaseId body url author { login } path line }
+              pageInfo { hasNextPage endCursor }
+            }
+          } }
+        }"""
+        cursor = None
+        discussion = None
+        replies = []
+        while True:
+            data = await self._graphql(
+                query, thread=thread_id, cursor=cursor, count=100 if include_replies else 1,
+            )
+            node = data.get("node")
+            pull = (node or {}).get("pullRequest", {})
+            if (not node or node.get("id") != thread_id
+                    or pull.get("number") != int(number)
+                    or pull.get("repository", {}).get("nameWithOwner", "").lower() != f"{owner}/{repo}".lower()):
+                raise ValueError("review thread does not belong to this pull request")
+            connection = node["comments"]
+            comments = connection["nodes"]
+            if discussion is None:
+                if not comments:
+                    raise ValueError("review thread has no root comment")
+                root = comments[0]
+                discussion = Discussion(
+                    author=(root.get("author") or {}).get("login", ""),
+                    body=root["body"], url=root["url"], path=root.get("path"), line=root.get("line"),
+                    comment_id=root["databaseId"], thread_id=node["id"], is_resolved=node["isResolved"],
+                )
+                replies.extend(comments[1:])
+            else:
+                replies.extend(comments)
+            page = connection["pageInfo"]
+            if not include_replies or not page["hasNextPage"]:
+                return discussion, replies
+            following = page["endCursor"]
+            if not following or following == cursor:
+                raise GitHubSourceControlError("GitHub returned an invalid review comment cursor")
+            cursor = following
 
     async def _resolve_validated_thread(self, thread: Discussion) -> bool:
         """Resolve a thread whose membership the caller has already checked."""

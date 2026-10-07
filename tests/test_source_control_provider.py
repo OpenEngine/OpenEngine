@@ -532,7 +532,7 @@ def test_resolve_review_thread_oauth_graphql(monkeypatch, api_url, expected):
     client = httpx.AsyncClient
     monkeypatch.setattr("engine.adapters.source_control.github.transports.httpx.AsyncClient", lambda: client(transport=httpx.MockTransport(respond)))
     source = GitHubSourceControl("test-token", api_url=api_url)
-    source._review_threads = AsyncMock(return_value=(Discussion("alice", "Fix it", "", comment_id=1, thread_id="PRRT_1", is_resolved=False),))
+    source._review_thread_by_id = AsyncMock(return_value=(Discussion("alice", "Fix it", "", comment_id=1, thread_id="PRRT_1", is_resolved=False), []))
     assert asyncio.run(source.resolve_review_thread("https://github.com/acme/api/pull/7", "PRRT_1"))
     assert str(requests[0].url) == expected
     assert requests[0].headers["Authorization"] == "Bearer test-token"
@@ -548,7 +548,7 @@ def test_resolve_review_thread_cli_graphql():
     transport = GitHubCliTransport()
     transport._run = AsyncMock(return_value=b'{"data":{"resolveReviewThread":{"thread":{"id":"PRRT_1","isResolved":true}}}}')
     source = GitHubSourceControl("", transport=transport)
-    source._review_threads = AsyncMock(return_value=(Discussion("alice", "Fix it", "", comment_id=1, thread_id="PRRT_1", is_resolved=False),))
+    source._review_thread_by_id = AsyncMock(return_value=(Discussion("alice", "Fix it", "", comment_id=1, thread_id="PRRT_1", is_resolved=False), []))
     assert asyncio.run(source.resolve_review_thread("https://github.com/acme/api/pull/7", "PRRT_1"))
     args = transport._run.await_args
     assert args.args[:2] == ("api", "graphql")
