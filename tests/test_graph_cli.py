@@ -208,6 +208,7 @@ def test_generated_spec_documentation_matches_command_documentation() -> None:
     root = Path(__file__).resolve().parents[1]
     generator = run_path(str(root / "scripts/generate_cli_docs.py"))
     assert (root / "site/docs/cli-specs.md").read_text() == generator["render"]()
+    assert (root / "cli/client/src/engine/cli/specs.py").read_text() == generator["render_cli"]()
 
 
 def test_documented_graph_and_loop_examples_match_current_language() -> None:
@@ -224,3 +225,27 @@ def test_documented_graph_and_loop_examples_match_current_language() -> None:
     parsed = parse_graph(graph, runners=["claude", "codex"])
     assert parsed.loop.interval_seconds == 6 * 60 * 60
     assert parsed.loop.instruction == loop["loop"]["instruction"]
+
+
+def test_spec_generation_tracks_parser_definitions(tmp_path, monkeypatch) -> None:
+    from pathlib import Path
+    from runpy import run_path
+
+    root = Path(__file__).resolve().parents[1]
+    source = root / "cli/service/src/engine/graph_service"
+    for name in ("schema.py", "expressions.py", "specification.py"):
+        (tmp_path / name).write_text((source / name).read_text())
+    with (tmp_path / "schema.py").open("a") as file:
+        file.write('\nFIELDS["loop"].add("new_field")\nMIN_INTERVAL_SECONDS = 120\n')
+    with (tmp_path / "expressions.py").open("a") as file:
+        file.write('\nROOTS = ROOTS | {"new_root"}\n')
+
+    parser = run_path(str(tmp_path / "expressions.py"))
+    assert parser["parse"]("new_root").evaluate({"new_root": 42}) == 42
+    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
+    monkeypatch.setitem(generator["specifications"].__globals__, "SERVICE", tmp_path)
+    specs = generator["specifications"]()
+    assert "`new_root`" in specs["graph"]
+    assert "`new_field`" in specs["graph"]
+    assert "`new_field`" in specs["loop"]
+    assert "minimum of 120 seconds" in specs["loop"]
