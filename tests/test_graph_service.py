@@ -300,6 +300,46 @@ def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: 
     asyncio.run(scenario())
 
 
+def test_runs_list_newest_first_whoever_started_them(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("solo", "${instruction}"))
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            await service.add_graph("other", source=single("solo", "${instruction}"))
+            first, _ = await service.submit_run(project="default", graph="solo", instruction="one")
+            await settled(service, first["runId"])
+            clock.advance(minutes=1)
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            await service.tick()
+            looped = (await service.loop_json(loop["loopId"]))["activeRunId"]
+            clock.advance(minutes=1)
+            elsewhere, _ = await service.submit_run(project="other", graph="solo", instruction="two")
+
+            runs = await service.list_runs("default")
+            assert [run["runId"] for run in runs] == [looped, first["runId"]]
+            assert runs[0]["loop"] == "slow" and runs[0]["status"] == "running"
+            assert runs[1]["graph"] == "solo" and runs[1]["loopId"] is None
+            assert runs[1]["status"] == "completed" and runs[1]["usage"]["costUsd"] == pytest.approx(0.5)
+            assert [run["runId"] for run in await service.list_runs(None)] == [
+                elsewhere["runId"], looped, first["runId"],
+            ]
+            assert [run["runId"] for run in await service.list_runs(None, limit=1)] == [elsewhere["runId"]]
+            assert [run["runId"] for run in await service.list_runs("default", graph="solo")] == [first["runId"]]
+            assert [run["runId"] for run in await service.list_runs("default", loop="slow")] == [looped]
+            assert [run["runId"] for run in await service.list_runs("default", status="completed")] == [
+                first["runId"],
+            ]
+            with pytest.raises(ServiceError, match="unknown status"):
+                await service.list_runs("default", status="done")
+            with pytest.raises(Conflict, match="ambiguous"):
+                await service.list_runs(None, graph="solo")
+            await service.runtime.cancel(RunId(looped))
+            await settled(service, looped)
+
+    asyncio.run(scenario())
+
+
 def test_runs_are_refused_without_their_required_inputs(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
@@ -499,6 +539,9 @@ def test_an_added_agent_runs_graphs_and_outlives_the_daemon(tmp_path: Path) -> N
     ({"kind": "claude", "name": "q", "url": "http://localhost:11434/v1", "model": "m"}, "only an opencode"),
     ({"kind": "opencode", "name": "q", "url": "http://localhost:11434/v1"}, "needs a model"),
     ({"kind": "opencode", "name": "q", "url": "ftp://box", "model": "m"}, "http"),
+    ({"kind": "opencode", "name": "q", "url": "http://gpu:8000/v1?api_key=sk-1", "model": "m"}, "api key"),
+    ({"kind": "opencode", "name": "q", "url": "http://gpu:8000/v1?x=1&API-Key=sk-1", "model": "m"}, "api key"),
+    ({"kind": "opencode", "name": "q", "url": "https://gpu/v1?access_token=t", "model": "m"}, "api key"),
     ({"kind": "claude", "name": "stub"}, "built in"),
 ])
 def test_an_agent_that_cannot_run_is_refused(tmp_path: Path, arguments: dict[str, str], refusal: str) -> None:
@@ -508,6 +551,25 @@ def test_an_agent_that_cannot_run_is_refused(tmp_path: Path, arguments: dict[str
             with pytest.raises(ServiceError, match=refusal):
                 await service.add_agent(kind, **arguments)
             assert [agent["name"] for agent in service.agents_json()] == ["stub"]
+
+    asyncio.run(scenario())
+
+
+def test_a_refused_query_string_key_is_not_repeated(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            with pytest.raises(ServiceError) as refused:
+                await service.add_agent("opencode", name="q", model="m", url="http://gpu:8000/v1?key=sk-secret")
+            assert "sk-secret" not in repr(refused.value) and "sk-secret" not in str(vars(refused.value))
+
+    asyncio.run(scenario())
+
+
+def test_a_query_string_without_a_key_is_accepted(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            added = await service.add_agent("opencode", name="q", model="m", url="http://gpu:8000/v1?region=us")
+            assert added["url"] == "http://gpu:8000/v1?region=us"
 
     asyncio.run(scenario())
 
@@ -563,6 +625,8 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
                 assert [graph["name"] for graph in listed.json()["graphs"]] == ["pair"]
                 assert (await client.get("/graphs/pair@1", params={"project": "p"})).json()["version"] == 1
                 assert (await client.get("/runs/run-missing")).status_code == 404
+                assert (await client.get("/runs", params={"project": "p"})).json() == {"runs": []}
+                assert (await client.get("/runs", params={"limit": "many"})).status_code == 400
                 backend = (await client.get("/backend")).json()
                 assert backend["runners"] == ["stub"] and backend["execution"] == "langgraph-acp"
                 added = await client.post("/agents", json={"kind": "claude", "name": "second", "model": "opus"})

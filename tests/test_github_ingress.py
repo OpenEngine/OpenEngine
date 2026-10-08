@@ -354,6 +354,7 @@ def test_what_became_of_each_delivery_is_logged(caplog) -> None:
         ingress.accept("issue_comment", _issue_comment(comment_id=1), delivery_id="d-2")
         ingress.accept("issue_comment", dict(_issue_comment(comment_id=2), action="edited"),
                        delivery_id="d-3")
+        ingress.accept("issues", {"action": "closed"}, delivery_id="d-4")
         await ingress.drain()
         await ingress.close()
 
@@ -364,6 +365,7 @@ def test_what_became_of_each_delivery_is_logged(caplog) -> None:
     assert "ignored comment 1 by someone on acme/api#7 (delivery d-2): already queued or handled" in messages
     assert any(m.startswith("ignored GitHub issue_comment delivery d-3 (action edited")
                for m in messages)
+    assert "settled GitHub issues delivery d-4 (action closed): nothing Engine acts on" in messages
     assert any(m.startswith("handled comment 1 by someone on acme/api#7 in ")
                and m.endswith(": ignored, no active work order and Engine was not @mentioned")
                for m in messages)
@@ -937,3 +939,53 @@ def test_nothing_is_handled_for_a_sender_who_cannot_write() -> None:
         await ingress.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("event,factory", [
+    ("issue_comment", _issue_comment),
+    ("issues", _assigned_issue),
+    ("pull_request", _merged_pull_request),
+])
+def test_multiple_repositories_scope_delivery_deduplication(event, factory):
+    async def scenario():
+        handled = []
+        ingress = GithubIngress(
+            repositories=("acme/api", "other/web"),
+            handle=_record(handled), handle_assignment=_record(handled),
+            handle_merge=_record(handled),
+        )
+        for repository in ("acme/api", "OTHER/WEB", "unconfigured/repo", "other/web"):
+            payload = factory()
+            payload["repository"]["full_name"] = repository
+            assert ingress.accept(event, payload, self_login="OpenEngineBot")
+        await ingress.drain()
+        await ingress.close()
+        assert [item.repository for item in handled] == ["acme/api", "OTHER/WEB"]
+    asyncio.run(scenario())
+
+
+def test_assignment_login_uses_delivery_repository_and_skips_unconfigured():
+    from unittest.mock import AsyncMock, call
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    handled = []
+    lookup = AsyncMock(return_value="OpenEngineBot")
+    ingress = GithubIngress(
+        repositories=("acme/api", "other/web"), webhook_secret=lambda: WEBHOOK_SECRET,
+        authenticated_login=lookup, handle_assignment=_record(handled),
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    with TestClient(app) as client:
+        for repository in ("acme/api", "other/web", "unconfigured/repo"):
+            payload = _assigned_issue()
+            payload["repository"]["full_name"] = repository
+            body = json.dumps(payload).encode()
+            response = client.post("/events", content=body,
+                                   headers=dict(_signed(body), **{"x-github-event": "issues"}))
+            assert response.status_code == 200
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert lookup.await_args_list == [call("acme/api"), call("other/web")]
+    assert len(handled) == 2

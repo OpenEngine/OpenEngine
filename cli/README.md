@@ -1,7 +1,7 @@
 # cli
 
 `engine graph`, `engine loop`, `engine node` and `engine backend`: register
-graphs, execute them, run them on a cadence within limits, and steer their
+graphs, run them once or on a cadence within limits, and steer their
 nodes — on this machine's daemon or on another one, such as a Mac mini.
 
 ```text
@@ -25,7 +25,12 @@ started — a daemon that is up already serves it.
 - A **loop** creates recurring runs of one pinned version.
 - A **node execution ID** identifies one attempt at one node within a run.
 
-Every command uses the selected backend.
+Backend commands use the selected backend. `engine graph spec` and
+`engine loop spec` print the current specifications as Markdown locally, without
+a running daemon. Their specifications and the site reference are generated from
+the parser’s field definitions, expression rules, and accompanying prose. Run
+`python3 scripts/generate_cli_docs.py` from the repository root to regenerate
+both; the site build also runs it automatically. Tests reject stale output.
 
 ## Backends
 
@@ -109,11 +114,13 @@ still works for one release.
 ## Runs
 
 ```bash
-engine graph execute fix-flaky-test "tests/test_slack.py flakes on CI" --wait
+engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
 engine run get run-0123abcd --pretty
+engine runs --pretty
+engine runs --graph fix-flaky-test --status failed
 ```
 
-`execute` returns the run ID immediately; `--wait` polls to completion and
+`graph run` returns the run ID immediately; `--wait` polls to completion and
 exits non-zero if the run failed. Each submission carries an idempotency key
 (`--idempotency-key` to choose it), and the client retries a dropped
 connection with the same key, so a retry never starts a second run. A run
@@ -121,6 +128,10 @@ records status, node executions, each node's result, usage, pull requests
 opened, and failure details. An agent without credentials fails with
 `engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
+
+`engine runs` lists runs newest first, whether submitted or started by a loop,
+filtered by `--graph`, `--loop` and `--status`, at most `--limit` (default 20),
+in the backend's project unless `--project` or `--all-projects` says otherwise.
 
 Runs go through the daemon's WorkOrder path, so they appear in the web UI and
 are approved under its `[approvals]` policy.
@@ -180,7 +191,7 @@ Mounted at `/api/v1` on the daemon:
 | | |
 | --- | --- |
 | `GET /graphs`, `POST /graphs`, `GET /graphs/{ref}` | register and discover |
-| `POST /runs`, `GET /runs/{id}` | execute and inspect |
+| `GET /runs`, `POST /runs`, `GET /runs/{id}` | list, start and inspect |
 | `GET /runs/{id}/nodes`, `GET /nodes/{id}`, `POST /nodes/{id}/steering` | node executions and steering |
 | `GET /loops`, `POST /loops`, `GET /loops/{ref}`, `POST /loops/{ref}/pause`, `POST /loops/{ref}/resume` | loops |
 | `GET /agents`, `POST /agents`, `GET /agents/{name}`, `DELETE /agents/{name}` | agents graphs can name |

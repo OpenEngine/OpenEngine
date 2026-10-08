@@ -504,3 +504,17 @@ def test_cli_transport_pins_every_request_to_its_reported_host(monkeypatch, expl
 ])
 def test_oauth_transport_reports_its_forge_host(api_url, host):
     assert GitHubOAuthTransport("", api_url).host == host
+
+
+@pytest.mark.parametrize("provider", ["gh-cli", "github-oauth"])
+def test_reactions_follow_selected_reply_credentials(tmp_path, provider):
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set(provider)
+    cli = MagicMock(add_reaction=AsyncMock())
+    oauth = MagicMock(add_reaction=AsyncMock())
+    source = RoutingSourceControl(preferences, cli, oauth)
+    asyncio.run(source.add_reaction("https://github.com/acme/api/pull/7", 42, "+1", review_comment=True))
+    selected, other = (cli, oauth) if provider == "gh-cli" else (oauth, cli)
+    selected.add_reaction.assert_awaited_once_with(
+        "https://github.com/acme/api/pull/7", 42, "+1", review_comment=True)
+    other.add_reaction.assert_not_awaited()

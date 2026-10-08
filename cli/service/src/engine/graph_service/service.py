@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 from engine.domain import ApprovalDecision, ApprovalId, RunId
@@ -82,6 +83,8 @@ log = logging.getLogger(__name__)
 #: The harnesses an added agent can run on.
 AGENT_KINDS = ("claude", "codex", "opencode")
 _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: Query parameter names that carry a credential: an agent's url is stored and listed back, so none may ride in it.
+_CREDENTIAL_PARAMETER = re.compile(r"(key|token|secret|password|signature|sig|auth|credential)s?$")
 
 #: The provider an opencode agent with a url reaches its endpoint through.
 OPENCODE_URL_PROVIDER = "engine"
@@ -91,6 +94,7 @@ AgentFactory = Callable[[AgentRow], Any]
 
 DEFAULT_PROJECT = "default"
 TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED})
+DEFAULT_RUN_LIMIT = 20
 
 #: What a runner says when it has no credentials, across the agents ACP drives.
 #: Matched against a run's failure so the answer can be a sign-in instruction
@@ -313,6 +317,9 @@ class GraphService:
             raise ServiceError("an agent with a url needs a model to ask it for")
         if url and not re.match(r"^https?://", url):
             raise ServiceError("url must be http(s)", url=url)
+        if url and _carries_credential(url):
+            # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
+            raise ServiceError("url must not carry an api key in its query string")
         if name in self._builtin_agents:
             raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
         async with self._lock:
@@ -577,6 +584,56 @@ class GraphService:
                 for repository, number in await self.runtime.store.pull_requests(RunId(run_id))
             ],
         }
+
+    async def list_runs(
+        self,
+        project: str | None,
+        *,
+        graph: str = "",
+        loop: str = "",
+        status: str = "",
+        limit: int = DEFAULT_RUN_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """The runs this service started, newest first: a summary of each, not its nodes."""
+        if status and status not in {item.value for item in RunStatus}:
+            raise ServiceError(
+                f"unknown status {status!r}; one of {', '.join(item.value for item in RunStatus)}"
+            )
+        if limit < 1:
+            raise ServiceError("limit must be at least 1")
+        rows = self.store.started_runs(
+            project=_project(project) if project else None,
+            graph_id=self.resolve(project, graph)[0].graph_id if graph else None,
+            loop_id=self.resolve_loop(project, loop).loop_id if loop else None,
+        )
+        runs: list[dict[str, Any]] = []
+        for row in rows:
+            if len(runs) >= limit:
+                break
+            try:
+                snapshot = await self.runtime.snapshot(RunId(row.run_id))
+            except UnknownRunError:
+                snapshot = None
+            if snapshot is None or (status and snapshot.status.value != status):
+                continue
+            version = self.store.version(row.version_id)
+            graph_row = self.store.graph(version.graph_id) if version else None
+            loop_row = self.store.loop(row.loop_id) if row.loop_id else None
+            runs.append({
+                "runId": row.run_id,
+                "graphId": graph_row.graph_id if graph_row else None,
+                "versionId": row.version_id,
+                "graph": graph_row.name if graph_row else row.version_id,
+                "project": graph_row.project if graph_row else None,
+                "version": version.number if version else None,
+                "status": snapshot.status.value,
+                "terminal": snapshot.status in TERMINAL_RUN_STATUSES,
+                "loopId": row.loop_id,
+                "loop": loop_row.name if loop_row else None,
+                "startedAt": row.started_at,
+                "usage": usage_rollup(self.runtime.store.events_since(RunId(row.run_id))).total.json(),
+            })
+        return runs
 
     # --- nodes --------------------------------------------------------------
 
@@ -1323,6 +1380,14 @@ def _progress(
         stages.append({"stage": stage, "status": state, "nodes": [node["id"] for node in members]})
     current = [node["id"] for node in nodes if node["status"] in OPEN_EXECUTION_STATUSES]
     return {"graphNodes": nodes, "edges": edges, "stages": stages, "current": current}
+
+
+def _carries_credential(url: str) -> bool:
+    """Whether `url`'s query string names a key, token or other secret, e.g. `?api_key=...`."""
+    return any(
+        _CREDENTIAL_PARAMETER.search(re.sub(r"[^a-z]", "", name.lower()))
+        for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+    )
 
 
 def session_model(row: AgentRow) -> str:

@@ -361,3 +361,86 @@ def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
     with TestClient(app) as client:
         feed = client.get("/api/runs/existing/github-comments").json()
     assert feed == {"repository": "acme/api", "configured": False, "comments": []}
+
+
+@pytest.mark.parametrize("legacy_repository", ["", "acme/api"])
+@pytest.mark.parametrize("repository_kind", ["project", "name", "path"])
+@pytest.mark.parametrize("webhook_repositories", [("acme/api", "other/web"), ("acme/api",)])
+def test_comment_panel_uses_runs_repository_before_a_pr_is_opened(
+    tmp_path, legacy_repository, repository_kind, webhook_repositories,
+):
+    from starlette.testclient import TestClient
+    from test_web_app import _session_with
+
+    from engine.apps.web.api import create_app
+    from engine.domain import RunId, RunState, TaskId, WorkflowId
+
+    checkout = str(tmp_path / "web")
+    repository = {"project": "other/web", "name": "web", "path": checkout}[repository_kind]
+    runners = {"default": MagicMock()}
+    session = _session_with(runners)
+    app = create_app(
+        session, runners,
+        github_repository=legacy_repository,
+        github_repositories=webhook_repositories,
+        github_webhook_secret=lambda: SIGNING_SECRET,
+        repos={"web": checkout},
+        repository_projects={"web": "other/web"},
+    )
+    with TestClient(app) as client:
+        client.portal.call(session.state_store.save, RunState(
+            run_id=RunId("existing"), task_id=TaskId("task"),
+            workflow_id=WorkflowId("workflow"), repository=repository,
+        ))
+        response = client.get("/api/runs/existing/github-comments")
+    assert response.status_code == 200
+    assert response.json() == {
+        "repository": "other/web", "configured": "other/web" in webhook_repositories,
+        "comments": [],
+    }
+
+
+def test_same_comment_id_in_two_repositories_has_independent_activity():
+    from dataclasses import replace
+
+    log = _ticking()
+    first = _comment()
+    second = replace(first, repository="other/web")
+    log.seen(first)
+    log.started(first)
+    log.dispatched("first-run")
+    log.finished(first)
+    log.seen(second)
+    log.started(second)
+    log.failed("second failed")
+    assert log.entry(first).run_id == "first-run"
+    assert log.entry(second).run_id == ""
+    assert log.entry(second).status == "failed"
+    assert log.entry(replace(first, repository="ACME/API")) == log.entry(first)
+
+
+def test_comment_panel_reports_the_runs_repository_in_a_multi_repo_deployment(tmp_path):
+    from starlette.testclient import TestClient
+    from test_github_concierge import _graph_runtime
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    _, opened = _graph_runtime(repository="other/web")
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        graph_runtime=opened, github_repositories=("acme/api", "other/web"),
+        github_webhook_secret=SIGNING_SECRET, github_comment_handler=AsyncMock(),
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=True))
+    object.__setattr__(capabilities, "source_control", source)
+    payload = _issue_comment()
+    payload["repository"]["full_name"] = "other/web"
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"},
+        )).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        feed = client.get("/api/runs/existing/github-comments").json()
+    assert feed["repository"] == "other/web"
+    assert feed["configured"]
+    assert len(feed["comments"]) == 1
