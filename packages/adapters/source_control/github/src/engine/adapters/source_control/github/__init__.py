@@ -252,6 +252,38 @@ class GitHubSourceControl:
                 tips[name] = sha
         return tips
 
+    async def add_reaction(
+        self, pr_url: str, comment_id: int, content: str, *, review_comment: bool = False,
+    ) -> None:
+        owner, repo, _ = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        _positive_number(comment_id, "comment_id")
+        if content not in ("+1", "-1", "eyes"):
+            raise ValueError("unsupported reaction content")
+        kind = "pulls" if review_comment else "issues"
+        endpoint = f"/repos/{owner}/{repo}/{kind}/comments/{comment_id}/reactions"
+        if content in ("+1", "-1"):
+            login = await self.authenticated_login(pr_url)
+            opposite = "-1" if content == "+1" else "+1"
+            stale = []
+            page = 1
+            while True:
+                reactions = _objects(await self._api(
+                    "GET", endpoint,
+                    params={"content": opposite, "per_page": 100, "page": page},
+                ))
+                stale.extend(
+                    reaction["id"] for reaction in reactions
+                    if _nested_string(reaction, "user", "login").lower() == login.lower()
+                    and reaction.get("content") == opposite
+                )
+                if len(reactions) < 100:
+                    break
+                page += 1
+            # Remove before adding, so a failed deletion cannot leave both verdicts.
+            for reaction_id in stale:
+                await self._api("DELETE", f"{endpoint}/{reaction_id}")
+        await self._api("POST", endpoint, json={"content": content})
+
     async def add_comment(
         self,
         pr_url: str,

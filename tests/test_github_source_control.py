@@ -748,3 +748,61 @@ def test_branch_tips_refuses_invalid_snapshot(monkeypatch, response):
     monkeypatch.setattr(source, "_api", AsyncMock(return_value=response))
     with pytest.raises(GitHubSourceControlError):
         asyncio.run(source.branch_tips("acme/api", ("feature",)))
+
+
+@pytest.mark.parametrize("review_comment,kind", [(False, "issues"), (True, "pulls")])
+@pytest.mark.parametrize("content", ["+1", "-1", "eyes"])
+def test_add_reaction_uses_comment_endpoint_and_replaces_only_own_opposite(review_comment, kind, content):
+    from unittest.mock import AsyncMock, MagicMock, call
+
+    opposite = "-1" if content == "+1" else "+1"
+    responses = [
+        {"login": "Engine"},
+        [{"id": 3, "content": opposite, "user": {"login": "ENGINE"}},
+         {"id": 4, "content": opposite, "user": {"login": "someone"}}],
+        {}, {},
+    ] if content != "eyes" else [{}]
+    transport = MagicMock(host="github.com", request=AsyncMock(side_effect=responses))
+    source = GitHubSourceControl("", transport=transport)
+    asyncio.run(source.add_reaction("https://github.com/acme/api/pull/7", 42, content,
+                                    review_comment=review_comment))
+    endpoint = f"/repos/acme/api/{kind}/comments/42/reactions"
+    expected = [] if content == "eyes" else [
+        call("GET", "/user"),
+        call("GET", endpoint, params={"content": opposite, "per_page": 100, "page": 1}),
+        call("DELETE", endpoint + "/3"),
+    ]
+    assert transport.request.await_args_list == expected + [
+        call("POST", endpoint, json={"content": content})]
+
+
+def test_reactions_are_idempotent_across_outcome_changes():
+    from unittest.mock import MagicMock
+
+    reactions = {}
+    async def request(method, path, **kwargs):
+        if path == "/user":
+            return {"login": "Engine"}
+        if method == "GET":
+            return [r for r in reactions.values() if r["content"] == kwargs["params"]["content"]]
+        if method == "DELETE":
+            del reactions[int(path.rsplit("/", 1)[1])]
+        if method == "POST":
+            content = kwargs["json"]["content"]
+            reaction_id = 1 if content == "+1" else 2
+            reactions[reaction_id] = {"id": reaction_id, "content": content, "user": {"login": "Engine"}}
+        return {}
+    source = GitHubSourceControl("", transport=MagicMock(host="github.com", request=request))
+    for content in ("-1", "-1", "+1", "+1"):
+        asyncio.run(source.add_reaction("https://github.com/acme/api/pull/7", 42, content))
+        assert [r["content"] for r in reactions.values()] == [content]
+
+
+def test_reaction_transport_errors_are_surfaced():
+    from unittest.mock import AsyncMock, MagicMock
+    from engine.adapters.source_control.github.transports import GitHubTransportError
+
+    transport = MagicMock(host="github.com", request=AsyncMock(side_effect=GitHubTransportError("offline")))
+    source = GitHubSourceControl("", transport=transport)
+    with pytest.raises(GitHubSourceControlError, match="offline"):
+        asyncio.run(source.add_reaction("https://github.com/acme/api/pull/7", 42, "eyes"))
