@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 
+import pytest
+
 from engine.apps.cli import __main__ as cli, connect
 from engine.cli.backends import Backend
 
@@ -40,6 +42,22 @@ def test_connect_slack_opens_the_authorization_url_and_waits_for_connection(monk
 
     assert opened == ["https://slack.example/oauth"]
     assert "Connected." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("link", ["file:///etc/passwd", "vscode://open?x=1", "javascript:alert(1)"])
+def test_connect_refuses_to_open_a_link_that_is_not_a_web_page(link, monkeypatch, capsys):
+    ready(monkeypatch)
+    monkeypatch.setattr(connect, "request", lambda _backend, path, body=None, timeout=10.0: {
+        "authorizationUrl": link, "verificationUri": link, "userCode": "CODE", "interval": 0,
+    })
+    opened = []
+    monkeypatch.setattr(connect.webbrowser, "open", opened.append)
+
+    assert connect.main(arguments("slack", open=True)) == 1
+    assert connect.main(arguments("github", open=True)) == 1
+
+    assert opened == []
+    assert "non-http(s)" in capsys.readouterr().err
 
 
 def test_connect_github_explains_the_keychain_and_selects_github_oauth(monkeypatch, capsys):

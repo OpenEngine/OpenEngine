@@ -18,6 +18,7 @@ def parser() -> argparse.ArgumentParser:
     connect.add_parsers(commands)
     daemon.add_parser(commands)
     graph_commands.add_parsers(commands)
+    commands.metavar = "{" + ",".join(name for name in commands.choices if name not in graph_commands.HIDDEN) + "}"
     return result
 
 

@@ -10,7 +10,7 @@ import webbrowser
 from dataclasses import replace
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from engine.apps.cli import daemon
@@ -100,12 +100,19 @@ def request(backend: backends.Backend, path: str, body: dict[str, Any] | None = 
     return payload
 
 
+def open_in_browser(url: str) -> None:
+    """Open a link the backend sent, only if it is a web page: a spoofed backend must not launch file:// or other handlers."""
+    if urlsplit(url).scheme.lower() not in ("http", "https"):
+        raise RuntimeError(f"refusing to open a non-http(s) link from the backend: {url}")
+    webbrowser.open(url)
+
+
 def connect_slack(backend: backends.Backend, arguments: argparse.Namespace) -> None:
     flow = request(backend, "/api/slack/connect", {})
     authorization_url = str(flow["authorizationUrl"])
     print(f"Open {authorization_url} to connect Slack.")
     if arguments.open:
-        webbrowser.open(authorization_url)
+        open_in_browser(authorization_url)
     deadline = time.monotonic() + SLACK_TIMEOUT
     while time.monotonic() < deadline:
         time.sleep(1.0)
@@ -122,7 +129,7 @@ def connect_device_flow(backend: backends.Backend, arguments: argparse.Namespace
     flow = request(backend, f"/api/{provider}/connect", body, timeout=KEYCHAIN_TIMEOUT)
     print(f"Open {flow['verificationUri']} and enter code: {flow['userCode']}")
     if arguments.open:
-        webbrowser.open(str(flow["verificationUri"]))
+        open_in_browser(str(flow["verificationUri"]))
     while True:
         time.sleep(float(flow.get("interval", 5)))
         result = request(backend, f"/api/{provider}/connect/poll", body, timeout=KEYCHAIN_TIMEOUT)

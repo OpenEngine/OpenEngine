@@ -11,8 +11,13 @@ def test_bare_engine_prints_the_top_level_commands(capsys):
     assert cli.main([]) == 0
 
     usage = capsys.readouterr().out
-    for command in ("connect", "connections", "disconnect", "agent", "agents", "daemon", "graph", "graphs", "run", "loop", "loops", "node", "nodes", "runner", "backend", "backends"):
+    for command in ("connect", "connections", "disconnect", "agent", "agents", "daemon", "graph", "graphs", "run", "loop", "loops", "node", "nodes", "backend", "backends"):
         assert command in usage
+    assert "runner" not in usage and "SUPPRESS" not in usage
+
+
+def test_the_hidden_runner_command_still_parses():
+    assert cli.parser().parse_args(["runner", "signin", "codex"]).command == "runner"
 
 
 @pytest.mark.parametrize("command", ["status", "doctor", "review", "init"])

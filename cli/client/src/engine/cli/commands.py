@@ -32,6 +32,8 @@ COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
     "runner",
 })
+#: Commands that still parse but are not advertised in `engine --help`.
+HIDDEN = frozenset({"runner"})
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
@@ -190,7 +192,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     agents.add_argument("--pretty", action="store_true")
 
     # `engine runner signin` before agents had their own command; kept for one release.
-    runner = commands.add_parser("runner", help=argparse.SUPPRESS)
+    # Without `help`, it is left out of the command list; HIDDEN keeps it out of the usage line.
+    runner = commands.add_parser("runner")
     actions = runner.add_subparsers(dest="action", required=True)
     signin = actions.add_parser("signin")
     signin.add_argument("name", choices=sorted(SIGNIN))
