@@ -82,6 +82,8 @@ The binary is `engine`. Run it with no arguments to list its commands:
 
 - `engine daemon` runs the local service in the background; see
   [Background service](docs/releases.md#background-service).
+- `engine connect gh|github|gitlab|slack` connects the selected backend's shared
+  source control or Slack.
 - `engine graph`, `engine run`, `engine loop`, `engine node` and their list
   forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
   graphs; `engine backend` chooses which daemon they talk to, and

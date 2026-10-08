@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from importlib.metadata import version
 
-from engine.apps.cli import daemon
+from engine.apps.cli import connect, daemon
 from engine.cli import commands as graph_commands
 
 EXIT_OK = 0
@@ -15,6 +15,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="engine", description=__doc__)
     result.add_argument("--version", action="version", version=version("engine-cli"))
     commands = result.add_subparsers(dest="command")
+    connect.add_parser(commands)
     daemon.add_parser(commands)
     graph_commands.add_parsers(commands)
     return result
@@ -25,6 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.command is None:
         parser().print_help()
         return EXIT_OK
+    if arguments.command == "connect":
+        return connect.main(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
     if arguments.command in graph_commands.COMMANDS:
