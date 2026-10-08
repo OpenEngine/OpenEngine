@@ -4169,14 +4169,12 @@ def create_app(
             run_id=run_id,
             pull_request=pull_request,
             repository=repository,
-            # Both halves, because either one missing is a webhook that will
-            # never deliver anything here -- and a panel that stayed empty
-            # without saying so is the confusion this is meant to end.
+            # Local readiness only: GitHub's webhook setup and delivery are
+            # independent of whether Engine accepts this repository.
             configured=bool(
-                (github_repository or github_repositories)
-                and (pull_request is None or repository.lower() in {
+                repository.lower() in {
                     repo.lower() for repo in (github_repository, *github_repositories) if repo
-                })
+                }
                 and github_webhook_secret()
             ),
         ))

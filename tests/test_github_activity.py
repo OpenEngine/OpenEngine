@@ -365,8 +365,9 @@ def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
 
 @pytest.mark.parametrize("legacy_repository", ["", "acme/api"])
 @pytest.mark.parametrize("repository_kind", ["project", "name", "path"])
+@pytest.mark.parametrize("webhook_repositories", [("acme/api", "other/web"), ("acme/api",)])
 def test_comment_panel_uses_runs_repository_before_a_pr_is_opened(
-    tmp_path, legacy_repository, repository_kind,
+    tmp_path, legacy_repository, repository_kind, webhook_repositories,
 ):
     from starlette.testclient import TestClient
     from test_web_app import _session_with
@@ -381,7 +382,7 @@ def test_comment_panel_uses_runs_repository_before_a_pr_is_opened(
     app = create_app(
         session, runners,
         github_repository=legacy_repository,
-        github_repositories=("acme/api", "other/web"),
+        github_repositories=webhook_repositories,
         github_webhook_secret=lambda: SIGNING_SECRET,
         repos={"web": checkout},
         repository_projects={"web": "other/web"},
@@ -394,7 +395,8 @@ def test_comment_panel_uses_runs_repository_before_a_pr_is_opened(
         response = client.get("/api/runs/existing/github-comments")
     assert response.status_code == 200
     assert response.json() == {
-        "repository": "other/web", "configured": True, "comments": [],
+        "repository": "other/web", "configured": "other/web" in webhook_repositories,
+        "comments": [],
     }
 
 
