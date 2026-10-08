@@ -1,9 +1,10 @@
 """`engine backend|graph|graphs|run|loop|loops|node|nodes|runner`.
 
-Every command speaks to one backend -- `--backend`, else `ENGINE_BACKEND`, else
-the one `engine backend use` chose -- and prints JSON unless `--pretty` asks
+Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
+the one `engine backend use` chose -- and print JSON unless `--pretty` asks
 for something to read. Errors go to stderr; the exit status is 0 on success,
 1 on a refusal or a failed run, and 2 on a usage mistake.
+`graph spec` and `loop spec` print local Markdown specifications offline.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import time
 import uuid
+from inspect import getdoc
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -24,6 +26,7 @@ import yaml
 from engine.cli import backends, repository
 from engine.cli.backends import Backend, BackendError
 from engine.cli.http import Client, RequestFailed
+from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "loop", "loops", "node", "nodes", "runner",
@@ -75,6 +78,10 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
 
     graph = commands.add_parser("graph", help="register, inspect and execute graphs")
     actions = graph.add_subparsers(dest="action", required=True)
+    actions.add_parser(
+        "spec", help="print the current graph specification",
+        description=getdoc(graph_spec), formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     adding = actions.add_parser("add", parents=[scoped], help="register a graph (YAML or a Python file)")
     adding.add_argument("file", help="the graph file, or - for YAML on stdin")
     getting = actions.add_parser("get", parents=[scoped], help="a graph and its exact definition")
@@ -104,6 +111,10 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
 
     loop = commands.add_parser("loop", help="recurring runs of a graph, within limits")
     actions = loop.add_subparsers(dest="action", required=True)
+    actions.add_parser(
+        "spec", help="print the current loop specification",
+        description=getdoc(loop_spec), formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     adding = actions.add_parser("add", parents=[scoped], help="run a graph on a cadence")
     adding.add_argument("graph")
     adding.add_argument("--name", default="", help="loop name (default: the graph's)")
@@ -607,12 +618,14 @@ _HANDLERS = {
     ("backend", "use"): backend_use,
     ("backend", "remove"): backend_remove,
     ("backends", "list"): backend_list,
+    ("graph", "spec"): graph_spec,
     ("graph", "add"): graph_add,
     ("graph", "get"): graph_get,
     ("graph", "execute"): graph_execute,
     ("graphs", "list"): graphs_list,
     ("run", "get"): run_get,
     ("run", "wait"): run_wait,
+    ("loop", "spec"): loop_spec,
     ("loop", "add"): loop_add,
     ("loop", "get"): loop_get,
     ("loop", "pause"): loop_pause,

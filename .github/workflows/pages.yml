@@ -11,6 +11,8 @@ on:
     paths:
       - "site/**"
       - "scripts/install.sh"
+      - "scripts/generate_cli_docs.py"
+      - "cli/service/src/engine/graph_service/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

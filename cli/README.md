@@ -25,7 +25,12 @@ started — a daemon that is up already serves it.
 - A **loop** creates recurring runs of one pinned version.
 - A **node execution ID** identifies one attempt at one node within a run.
 
-Every command uses the selected backend.
+Backend commands use the selected backend. `engine graph spec` and
+`engine loop spec` print the current specifications as Markdown locally, without
+a running daemon. Their specifications and the site reference are generated from
+the parser’s field definitions, expression rules, and accompanying prose. Run
+`python3 scripts/generate_cli_docs.py` from the repository root to regenerate
+both; the site build also runs it automatically. Tests reject stale output.
 
 ## Backends
 

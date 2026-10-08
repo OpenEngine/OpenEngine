@@ -2,8 +2,8 @@
   "name": "openengine-site",
   "private": true,
   "scripts": {
-    "start": "docusaurus start",
-    "build": "docusaurus build",
+    "start": "python3 ../scripts/generate_cli_docs.py && docusaurus start",
+    "build": "python3 ../scripts/generate_cli_docs.py && docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear"
   },
