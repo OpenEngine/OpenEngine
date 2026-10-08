@@ -1,4 +1,4 @@
-"""`engine backend|graph|graphs|run|loop|loops|node|nodes|runner`.
+"""`engine backend|graph|graphs|run|runs|loop|loops|node|nodes|runner`.
 
 Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
 the one `engine backend use` chose -- and print JSON unless `--pretty` asks
@@ -29,7 +29,7 @@ from engine.cli.http import Client, RequestFailed
 from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
-    "backend", "backends", "graph", "graphs", "run", "loop", "loops", "node", "nodes", "runner",
+    "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "runner",
 })
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -76,7 +76,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     listing.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
     listing.add_argument("--pretty", action="store_true")
 
-    graph = commands.add_parser("graph", help="register, inspect and execute graphs")
+    graph = commands.add_parser("graph", help="register, inspect and run graphs")
     actions = graph.add_subparsers(dest="action", required=True)
     actions.add_parser(
         "spec", help="print the current graph specification",
@@ -86,14 +86,14 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     adding.add_argument("file", help="the graph file, or - for YAML on stdin")
     getting = actions.add_parser("get", parents=[scoped], help="a graph and its exact definition")
     getting.add_argument("graph", help="a name, name@VERSION, graph id or version id")
-    executing = actions.add_parser("execute", parents=[scoped], help="run a graph with an instruction")
-    executing.add_argument("graph")
-    executing.add_argument("instruction")
-    executing.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
-    executing.add_argument("--repo", default="", help="repository to check out")
-    executing.add_argument("--wait", action="store_true", help="wait for the run to finish")
-    executing.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
-    executing.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
+    running = actions.add_parser("run", parents=[scoped], help="run a graph with an instruction")
+    running.add_argument("graph")
+    running.add_argument("instruction")
+    running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
+    running.add_argument("--repo", default="", help="repository to check out")
+    running.add_argument("--wait", action="store_true", help="wait for the run to finish")
+    running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
+    running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
     graphs = commands.add_parser("graphs", help="list graphs")
     graphs.add_argument("action", nargs="?", choices=("list",), default="list")
     graphs.add_argument("--backend", metavar="NAME")
@@ -108,6 +108,16 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     waiting = actions.add_parser("wait", parents=[common], help="wait for a run to finish")
     waiting.add_argument("run_id")
     waiting.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
+    runs = commands.add_parser("runs", help="list runs, newest first")
+    runs.add_argument("action", nargs="?", choices=("list",), default="list")
+    runs.add_argument("--backend", metavar="NAME")
+    runs.add_argument("--pretty", action="store_true")
+    runs.add_argument("--project", metavar="NAME")
+    runs.add_argument("--all-projects", action="store_true")
+    runs.add_argument("--graph", default="", help="only runs of this graph")
+    runs.add_argument("--loop", default="", help="only runs this loop started")
+    runs.add_argument("--status", default="", help="only runs in this status, such as running or failed")
+    runs.add_argument("--limit", type=int, default=20, help="at most this many (default: 20)")
 
     loop = commands.add_parser("loop", help="recurring runs of a graph, within limits")
     actions = loop.add_subparsers(dest="action", required=True)
@@ -267,7 +277,7 @@ def graph_get(arguments: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def graph_execute(arguments: argparse.Namespace) -> int:
+def graph_run(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     key = arguments.idempotency_key or f"cli-{uuid.uuid4()}"
     run = client.post("/runs", {
@@ -285,6 +295,23 @@ def graph_execute(arguments: argparse.Namespace) -> int:
             print(f"started {run['runId']} ({run['graph']} v{run['version']}); waiting...", file=sys.stderr)
         run = _wait_for_run(client, run["runId"], arguments.timeout)
     return _show_run(run, backend, arguments.pretty)
+
+
+def runs_list(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    project = None if arguments.all_projects else _project(arguments, backend)
+    runs = client.get(
+        "/runs", project=project, graph=arguments.graph or None, loop=arguments.loop or None,
+        status=arguments.status or None, limit=str(arguments.limit),
+    )["runs"]
+    if arguments.pretty:
+        _table(runs, [
+            ("RUN ID", "runId"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}"), ("STATUS", "status"),
+            ("LOOP", "loop"), ("STARTED", "startedAt"), ("SPEND", _run_spend),
+        ])
+    else:
+        _print({"runs": runs})
+    return EXIT_OK
 
 
 def run_get(arguments: argparse.Namespace) -> int:
@@ -596,6 +623,11 @@ def _spend(loop: dict[str, Any]) -> str:
     return text
 
 
+def _run_spend(run: dict[str, Any]) -> str | None:
+    cost = run["usage"]["costUsd"]
+    return None if cost is None else f"${cost:.2f}" + ("" if run["usage"]["complete"] else " (+unknown)")
+
+
 def _duration(seconds: int) -> str:
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds % size == 0:
@@ -621,10 +653,11 @@ _HANDLERS = {
     ("graph", "spec"): graph_spec,
     ("graph", "add"): graph_add,
     ("graph", "get"): graph_get,
-    ("graph", "execute"): graph_execute,
+    ("graph", "run"): graph_run,
     ("graphs", "list"): graphs_list,
     ("run", "get"): run_get,
     ("run", "wait"): run_wait,
+    ("runs", "list"): runs_list,
     ("loop", "spec"): loop_spec,
     ("loop", "add"): loop_add,
     ("loop", "get"): loop_get,

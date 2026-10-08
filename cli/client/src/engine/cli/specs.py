@@ -8,7 +8,7 @@ def graph_spec(_arguments: object = None) -> int:
     """Print the current graph specification as Markdown, without contacting a backend.
 
     A graph is a YAML definition or a Python LangGraph file. Register it with
-    `engine graph add FILE`; run it with `engine graph execute GRAPH INSTRUCTION`.
+    `engine graph add FILE`; run it with `engine graph run GRAPH INSTRUCTION`.
     Names belong to projects, versions are immutable, and registering an unchanged
     definition is a no-op. `engine graph get GRAPH --pretty` prints stored source.
 

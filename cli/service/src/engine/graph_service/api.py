@@ -3,6 +3,7 @@
     GET  /graphs                      registered graphs in a project
     POST /graphs                      register {format: yaml|python, source} (a new version if it changed)
     GET  /graphs/{ref}                one graph and its exact definition
+    GET  /runs                        runs started here, newest first (?graph=&loop=&status=&limit=)
     POST /runs                        start a run; `idempotencyKey` makes retries safe
     GET  /runs/{run_id}               status, node executions, results, failure
     GET  /runs/{run_id}/nodes         a run's node executions
@@ -29,7 +30,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from engine.graph_service.language import GraphError
-from engine.graph_service.service import GraphService, ServiceError
+from engine.graph_service.service import DEFAULT_RUN_LIMIT, GraphService, ServiceError
 
 API_VERSION = 1
 
@@ -59,6 +60,16 @@ def create_app(service: GraphService) -> Starlette:
         return JSONResponse(
             service.get_graph(request.query_params.get("project"), request.path_params["ref"])
         )
+
+    async def list_runs(request: Request) -> JSONResponse:
+        query = request.query_params
+        return JSONResponse({"runs": await service.list_runs(
+            query.get("project"),
+            graph=query.get("graph", ""),
+            loop=query.get("loop", ""),
+            status=query.get("status", ""),
+            limit=_count(query.get("limit"), "limit", DEFAULT_RUN_LIMIT),
+        )})
 
     async def submit_run(request: Request) -> JSONResponse:
         body = await _body(request)
@@ -143,6 +154,7 @@ def create_app(service: GraphService) -> Starlette:
             Route("/graphs", _guard(list_graphs)),
             Route("/graphs", _guard(add_graph), methods=["POST"]),
             Route("/graphs/{ref:path}", _guard(get_graph)),
+            Route("/runs", _guard(list_runs)),
             Route("/runs", _guard(submit_run), methods=["POST"]),
             Route("/runs/{run_id}", _guard(get_run)),
             Route("/runs/{run_id}/nodes", _guard(list_nodes)),
@@ -202,6 +214,15 @@ def _text(body: dict[str, Any], key: str) -> str:
     if not isinstance(value, str):
         raise _BadRequest(f"{key} must be a string")
     return value
+
+
+def _count(value: str | None, key: str, default: int) -> int:
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        raise _BadRequest(f"{key} must be a whole number") from None
 
 
 def _object(body: dict[str, Any], key: str) -> dict[str, Any]:
