@@ -1110,3 +1110,16 @@ def test_issue_publication_refuses_base_even_without_remote_protection(tmp_path,
     assert _git(root, "rev-parse", "HEAD") == old
     assert _git(root, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == old
     source._api.assert_not_awaited()
+
+
+@pytest.mark.parametrize("keyword", ["Fixes", "Closes", "Resolves", "Refs"])
+@pytest.mark.parametrize("separator", [" ", ": ", " : ", ":", " :"])
+@pytest.mark.parametrize("resolution", ["refs", "resolves"])
+@pytest.mark.parametrize("reference", ["#7", "acme/api#7"])
+def test_issue_body_normalizes_colon_keywords(keyword, separator, resolution, reference):
+    from engine.runtime.issue_links import issue_body
+
+    body = f"Description\n\n{keyword}{separator}{reference}"
+    assert issue_body(body, "#7", resolution, qualified_reference="acme/api#7") == (
+        f"Description\n\n{resolution.capitalize()} #7"
+    )
