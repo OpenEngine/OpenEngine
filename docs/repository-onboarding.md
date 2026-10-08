@@ -9,7 +9,7 @@ Configuration selection is: explicit `--config`, then `ENGINE_CONFIG`, then the 
 settings when a machine config exists. Only one file is loaded;
 settings and approval policies are not merged.
 
-For a new local deployment, copy [the PATY example](examples/paty.toml) to
+For a new local deployment, adapt [the optional repository example](examples/repository.toml) and save it as
 `.engine/config.toml` (create `.engine` first). For an existing deployment,
 copy its active config instead and add the repository and command approvals
 from the example, preserving the existing settings. Do not overwrite an existing
@@ -19,7 +19,7 @@ Add any repository under `[repos]`, for example:
 
 ```toml
 [repos]
-"spiralsoft-ai/PATY" = "~/code/PATY"
+"owner/repo" = "~/code/repo"
 ```
 
 At web startup (including `engine-web --check`), a missing path whose name is
@@ -57,48 +57,26 @@ against the server's working directory.
    Check that the new checkout exists, select the repository in the web WorkOrder
    form, and create an editing/linting WorkOrder.
 
-## PATY commands and deployment handoff
+## Command approvals and rollout
 
-The PATY example includes the two required `AGENTS.md` lint commands:
+Repository registration is optional. OpenEngine does not require any particular
+repository or project toolchain. Configure only the repositories you want to use;
+omit `[repos]` when none are needed.
 
-```bash
-uv run ruff check agent/ pipecat_outbound/
-uv run --directory mcp ruff check src/
-```
+The example contains two illustrative Python checks. Replace them with the
+commands required by your project's agent instructions and CI. Keep test
+commands exact and target a dedicated test directory, for example
+`uv run pytest tests/`. Bare pytest, outside paths, extra arguments and shell
+suffixes require approval under the example policy. Avoid trailing wildcards.
+These rules match command text; they do not constrain the working directory or
+what test code can execute.
 
-The example approves only exact pytest commands targeting the dedicated
-`tests/` directory or its named suites (`tests/unit`, `tests/http`,
-`tests/simulator`, and `tests/smoke`). The listed flags match PATY's workflows.
-Bare pytest, other paths, extra arguments, and chained shell commands require
-approval. Add further test commands as exact entries, never a trailing wildcard.
-These rules restrict command text, not the process working directory or what
-test code can execute. Exact sync, lint and format-check commands come from
-`tests.yml`, `pipecat_outbound_tests.yml`, `cli_tests.yml` and `ruff.yml`. Commands
-without `--directory` run in the working directory indicated by PATY's workflow
-(root, `mcp`, or `cli`). Mini-app install/build/test commands and
-`node test-local.mjs` come from `AGENTS.md` and `ui-tests.yml` and run in `mcp/ui`.
-System package/browser installation, live telephony, MCP connection setup,
-deployment/release workflows and the separate mobile toolchain are outside this
-onboarding's explicit command additions. The example leaves auto-approval disabled; the listed commands are allowed
-explicitly. These patterns do not constitute sandbox isolation.
+Local deployment settings and access details belong on the host, outside version
+control. If the service uses an external configuration, update that file or point
+its `ENGINE_CONFIG` or `--config` at your local configuration. Preserve existing
+settings when doing so. Merging code does not update or restart a running
+instance: run the startup check, restart, and verify repository selection in the
+live UI as part of rollout.
 
-During issue #710 onboarding, the existing `OpenEngine-worker` account could
-read the private repository and clone it over SSH into `~/code/PATY` without
-credential changes. GitHub reported `pull: true`, **`push: false`**. Editing and
-local checks are possible; a maintainer must resolve publishing permissions
-before expecting WorkOrders to push PATY branches. No credentials or GitHub
-connections were changed.
-
-The worker session selected an external config via
-`ENGINE_CONFIG=/Users/openengine/.config/openengine/engine.toml`. That override
-continues to win over local discovery. A host operator must prepare
-`.engine/config.toml` with the existing deployment settings and PATY additions,
-then point the service's `ENGINE_CONFIG` at it (or remove that override and start
-from the directory containing `.engine`). Update the installed code, run
-`engine-web --check` with that configuration, and restart it.
-The live UI acceptance check remains part of that rollout; merging does not
-update or restart the running instance.
-
-PATY end-to-end execution is not part of onboarding: portaudio, mlx and Daily
-credentials may be unavailable in agent workspaces. Registering PATY does not
-enable its GitHub event routing; multi-repository webhooks are tracked in #709.
+Registering a repository does not configure its GitHub event routing;
+multi-repository webhooks are tracked in #709.

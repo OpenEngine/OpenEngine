@@ -1,0 +1,21 @@
+# Optional example: adapt the repository and commands to your project.
+# Save local deployment settings in .engine/config.toml.
+[repos]
+"owner/repo" = "~/code/repo"
+
+[approvals]
+allow = ["read", "edit"]
+
+[approvals.bash]
+# Exact commands for a Python project; replace with your project's checks.
+allow = [
+  "uv run pytest tests/",
+  "uv run ruff check src/ tests/",
+]
+deny = [
+  "git add **", "git commit **", "git branch **", "git checkout **",
+  "git switch **", "git push **", "gh pr create **",
+]
+
+[workflows]
+directory = "../workflows"

@@ -4100,8 +4100,8 @@ def test_engines_own_info_lines_reach_the_log():
 def test_onboarded_repository_can_be_selected_for_a_workorder(tmp_path, monkeypatch):
     from engine.apps.web.repositories import ensure_repository_checkouts
 
-    checkout = tmp_path / "PATY"
-    repos = {"spiralsoft-ai/PATY": str(checkout)}
+    checkout = tmp_path / "repo"
+    repos = {"owner/repo": str(checkout)}
 
     def clone(args, **kwargs):
         Path(args[-1]).mkdir()
@@ -4109,7 +4109,7 @@ def test_onboarded_repository_can_be_selected_for_a_workorder(tmp_path, monkeypa
     monkeypatch.setattr("engine.apps.web.repositories.subprocess.run", clone)
     ensure_repository_checkouts(repos)
     graph = ScriptedGraph(
-        GraphId("paty-edit"), "Edit PATY",
+        GraphId("repo-edit"), "Edit repo",
         (ScriptedNode(NodeId("work"), (Say("Done"),)),),
     )
     store = InMemoryStateStore()
@@ -4121,11 +4121,11 @@ def test_onboarded_repository_can_be_selected_for_a_workorder(tmp_path, monkeypa
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:
                 config = (await client.get("/api/config")).json()
-                choice = next(r for r in config["repositories"] if r["name"] == "spiralsoft-ai/PATY")
+                choice = next(r for r in config["repositories"] if r["name"] == "owner/repo")
                 assert Path(choice["path"]).is_dir()
                 response = await client.post("/api/runs", json={
-                    "workflowId": "paty-edit", "repository": choice["path"],
-                    "prompt": "Edit and lint PATY",
+                    "workflowId": "repo-edit", "repository": choice["path"],
+                    "prompt": "Edit and lint repo",
                 })
                 assert response.status_code == 201, response.text
                 run = await store.load(RunId(response.json()["runId"]))
