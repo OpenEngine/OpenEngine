@@ -11,8 +11,8 @@ settings and approval policies are not merged.
 
 For a new local deployment, adapt [the optional repository example](examples/repository.toml) and save it as
 `.engine/config.toml` (create `.engine` first). For an existing deployment,
-copy its active config instead and add the repository and command approvals
-from the example, preserving the existing settings. Do not overwrite an existing
+copy its active config instead and add the repository and any verified command
+approvals for your project, preserving the existing settings. Do not overwrite an existing
 local config. The `.engine/` directory is ignored by Git.
 
 Add any repository under `[repos]`, for example:
@@ -63,11 +63,12 @@ Repository registration is optional. OpenEngine does not require any particular
 repository or project toolchain. Configure only the repositories you want to use;
 omit `[repos]` when none are needed.
 
-The example contains two illustrative Python checks. Replace them with the
-commands required by your project's agent instructions and CI. Keep test
-commands exact and target a dedicated test directory, for example
-`uv run pytest tests/`. Bare pytest, outside paths, extra arguments and shell
-suffixes require approval under the example policy. Avoid trailing wildcards.
+The example has an empty shell allow list: all shell commands require approval
+unless explicitly denied. No language or test runner is assumed. Before adding
+a local grant, verify the project manifests, agent instructions, CI commands,
+and required working directory. Keep test commands exact and target a dedicated
+test directory. Avoid trailing wildcards that can match extra paths or shell
+suffixes.
 These rules match command text; they do not constrain the working directory or
 what test code can execute.
 
