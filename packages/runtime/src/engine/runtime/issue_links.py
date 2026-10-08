@@ -20,6 +20,7 @@ def issue_body(
     if not isinstance(resolution, str) or resolution not in {"resolves", "refs"}:
         raise ValueError("issue_resolution is required for issue work: choose resolves or refs")
     references = "|".join(re.escape(value) for value in {reference, qualified_reference} if value)
-    pattern = rf"(?i)\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|refs)(?:\s+:?\s*|:\s*)(?:{references})(?![\w/])"
+    # Possessive whitespace prevents quadratic backtracking on padded nonmatches.
+    pattern = rf"(?i)\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|refs)\s*+:?\s*+(?:{references})(?![\w/])"
     cleaned = re.sub(pattern, "", body).strip()
     return f"{cleaned}\n\n{resolution.capitalize()} {reference}".lstrip()

@@ -1123,7 +1123,7 @@ def test_issue_publication_refuses_base_even_without_remote_protection(tmp_path,
 
 
 @pytest.mark.parametrize("keyword", ["Fixes", "Closes", "Resolves", "Refs"])
-@pytest.mark.parametrize("separator", [" ", ": ", " : ", ":", " :"])
+@pytest.mark.parametrize("separator", ["", " ", ": ", " : ", ":", " :", "\t:\n"])
 @pytest.mark.parametrize("resolution", ["refs", "resolves"])
 @pytest.mark.parametrize("reference", ["#7", "acme/api#7"])
 def test_issue_body_normalizes_colon_keywords(keyword, separator, resolution, reference):
@@ -1206,3 +1206,19 @@ def test_issue_head_recovery_preserves_uncertain_or_concurrent_state(tmp_path, f
     with pytest.raises(GitHubSourceControlError):
         asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
     assert _git(root, "rev-parse", "HEAD") == preserved[0]
+
+
+def test_issue_body_padded_nonmatches_finish_without_backtracking():
+    import sys
+
+    # Isolate the time limit so a regex regression cannot hang the test runner.
+    subprocess.run(
+        [sys.executable, "-c", """
+from engine.runtime.issue_links import issue_body
+for separator in (" " * 100_000, " " * 100_000 + ":" + " " * 100_000):
+    body = "Fixes" + separator + "#8"
+    assert issue_body(body, "#7", "refs") == body + "\\n\\nRefs #7"
+    assert issue_body("Fixes" + separator + "#7", "#7", "refs") == "Refs #7"
+"""],
+        check=True, capture_output=True, timeout=5,
+    )
