@@ -568,6 +568,14 @@ class GithubIngress:
                 "Engine acts on", event, delivery_id or "-", payload.get("action"),
                 user.get("login") if isinstance(user, dict) else "unknown",
             )
+        else:
+            # Named all the same: a 200 in the access log says nothing of what
+            # was delivered, so without this line a comment GitHub never sent
+            # cannot be told apart from one that arrived as some other event.
+            log.info(
+                "settled GitHub %s delivery %s (action %s): nothing Engine acts on",
+                event or "-", delivery_id or "-", payload.get("action"),
+            )
         # Nothing to do with this delivery, whether or not a handler is
         # wired: settle it, so a webhook subscribed to more events than
         # Engine reads does not retry every one of them forever.
