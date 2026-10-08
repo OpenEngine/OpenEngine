@@ -22,12 +22,11 @@ usage() {
   cat <<EOF
 Install OpenEngine for the current user.
 
-Usage: install.sh [--version X.Y.Z] [--prefix DIR] [--no-start] [--no-browser]
+Usage: install.sh [--version X.Y.Z] [--prefix DIR] [--no-start]
 
   --version X.Y.Z  install this release instead of the latest
   --prefix DIR     install under DIR (default: \$XDG_DATA_HOME/openengine)
   --no-start       do not start OpenEngine after installing
-  --no-browser     do not open OpenEngine in a browser
 EOF
 }
 
@@ -38,7 +37,6 @@ die() { printf 'openengine: error: %s\n' "$*" >&2; exit 1; }
 version=""
 prefix=""
 start=1
-browser=1
 while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; version=$2; shift ;;
@@ -46,7 +44,7 @@ while [ $# -gt 0 ]; do
     --prefix) [ $# -ge 2 ] || die "--prefix needs a value"; prefix=$2; shift ;;
     --prefix=*) prefix=${1#*=} ;;
     --no-start) start=0 ;;
-    --no-browser) browser=0 ;;
+    --no-browser) ;; # accepted for older instructions; the installer never opens a browser
     -h | --help) usage; exit 0 ;;
     *) usage >&2; die "unknown option: $1" ;;
   esac
@@ -236,8 +234,7 @@ if [ "$start" = 1 ]; then
   # Registers a LaunchAgent (macOS) or systemd user unit (Linux), or runs a
   # detached process where neither is usable, then waits for /api/health. Run
   # again after an upgrade, it moves the service onto the new version.
-  if [ "$browser" = 1 ]; then set -- daemon setup; else set -- daemon setup --no-browser; fi
-  if ! "$engine_shim" "$@"; then
+  if ! "$engine_shim" daemon setup; then
     "$engine_shim" daemon logs -n 20 >&2 || true
     die "OpenEngine did not start; see $state_dir/logs"
   fi

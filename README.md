@@ -32,9 +32,9 @@ wsl sh -c "curl -LsSf https://openengine.sh/install.sh | sh"
 
 Run subsequent `engine` commands inside WSL.
 
-This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
-opens [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to
-reopen it and rerun the installer to upgrade.
+This installs the `engine` command in `~/.local/bin` and starts OpenEngine at
+[http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to open it
+in a browser and rerun the installer to upgrade.
 
 OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. OpenCode for local inference is offered, too!
 

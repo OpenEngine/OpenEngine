@@ -56,12 +56,12 @@ keeping state in `~/.local/state/openengine`, only when it does not already
 exist. The `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
 `XDG_CACHE_HOME`, and `XDG_BIN_HOME` directories are honoured, and `--prefix DIR`
 replaces the data directory. It then runs `engine daemon setup`, which starts
-OpenEngine in the background and opens it in a browser; `--no-start` and
-`--no-browser` skip those. Running it again reuses an installed version and
+OpenEngine in the background and prints its URL without opening a browser;
+`--no-start` skips that. Running it again reuses an installed version and
 never touches the config or state. The release workflow runs it on clean Ubuntu
 and macOS runners against the bundle it just built (`OPENENGINE_RELEASE_URL`
-names that directory), checks `/api/health`, and then runs `engine daemon setup
---no-browser`, `status`, and `stop`.
+names that directory), checks `/api/health`, and then runs `engine daemon setup`,
+`status`, and `stop`.
 
 ## Background service
 

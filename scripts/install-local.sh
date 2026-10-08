@@ -3,7 +3,7 @@
 # installer does, replacing whichever version `engine` runs now:
 #
 #   scripts/install-local.sh
-#   scripts/install-local.sh --no-browser
+#   scripts/install-local.sh --no-start
 #
 # Options go to scripts/install.sh. The install is labeled with the package
 # version and the checked-out commit, such as 1.2.0-ffdb7cd. A tree with
