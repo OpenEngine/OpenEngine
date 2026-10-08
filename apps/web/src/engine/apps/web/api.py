@@ -3829,7 +3829,7 @@ def create_app(
                     origin=RunOrigin(channel=f"github:{found.project}", thread_id=thread,
                                      author=comment.author),
                     text=comment.body, comment_id=comment.comment_id, allow_start=True,
-                ), "eyes")
+                ), "-1")
         except Exception:
             log.exception("Could not react to refused GitHub comment %s", comment.comment_id)
 

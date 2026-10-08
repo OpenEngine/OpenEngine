@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -545,7 +545,7 @@ def test_a_retried_delivery_does_not_forward_the_same_comment_twice(tmp_path, fa
             "Forwarded to work order `existing`.")
         assert source_control.add_comment.await_count == (2 if failure == "reply" else 1)
         contents = [call.args[2] for call in source_control.add_reaction.await_args_list]
-        assert contents == ["eyes", "eyes"]
+        assert contents == ["eyes", "-1", "eyes", "+1"]
     assert not communications.posts
 
 
@@ -628,7 +628,7 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
         assert not provider.clients
         source.add_comment.assert_not_awaited()
         source.add_reaction.assert_awaited_once_with(
-            "https://github.com/acme/api/pull/7", 1, "eyes", review_comment=False)
+            "https://github.com/acme/api/pull/7", 1, "-1", review_comment=False)
     assert not communications.posts
 
 
@@ -1690,7 +1690,7 @@ def test_issue_progress_survives_a_failed_pull_request_lookup(tmp_path, monkeypa
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
 @pytest.mark.parametrize("outcome", ["started", "forwarded", "not_forwarded", "undelivered", "error"])
-def test_mentioned_comment_acknowledged_and_unacted_outcome_logged(tmp_path, event, outcome, caplog):
+def test_mentioned_comment_reacts_to_delivery_outcome(tmp_path, event, outcome, caplog):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -1717,11 +1717,12 @@ def test_mentioned_comment_acknowledged_and_unacted_outcome_logged(tmp_path, eve
         headers = dict(github_signed(body), **{"x-github-event": event})
         client.post("/api/github/events", content=body, headers=headers)
         client.portal.call(app.state.github_ingress.drain)
-        source.add_reaction.assert_awaited_once_with(
-            "https://github.com/acme/api/pull/7", 42,
-            "eyes",
-            review_comment=event == "pull_request_review_comment",
-        )
+        final_reaction = "+1" if outcome in ("started", "forwarded") else "-1"
+        assert source.add_reaction.await_args_list == [
+            call("https://github.com/acme/api/pull/7", 42, content,
+                 review_comment=event == "pull_request_review_comment")
+            for content in ("eyes", final_reaction)
+        ]
         if outcome in ("not_forwarded", "undelivered"):
             assert "Engine did not act on GitHub mention 42" in caplog.text
         elif outcome == "error":
@@ -1732,7 +1733,7 @@ def test_mentioned_comment_acknowledged_and_unacted_outcome_logged(tmp_path, eve
             source.add_comment.assert_awaited_once()
             client.post("/api/github/events", content=body, headers=headers)
             client.portal.call(app.state.github_ingress.drain)
-            assert source.add_reaction.await_count == 1
+            assert source.add_reaction.await_count == 2
 
 
 def test_failed_reaction_does_not_fail_turn_or_suppress_reply(tmp_path, caplog):
@@ -1750,7 +1751,7 @@ def test_failed_reaction_does_not_fail_turn_or_suppress_reply(tmp_path, caplog):
             await concierge.close()
     asyncio.run(run())
     reply.assert_awaited_once_with(request.origin, NOT_FORWARDED)
-    react.assert_awaited_once_with(request, "eyes")
+    assert react.await_args_list == [call(request, "eyes"), call(request, "-1")]
     assert "Could not react to GitHub comment 42" in caplog.text
 
 
@@ -1785,8 +1786,10 @@ def test_reactions_respect_disconnected_mode(tmp_path, monkeypatch, disconnected
     if disconnected:
         source.add_reaction.assert_not_awaited()
     else:
-        source.add_reaction.assert_awaited_once_with(
-            "https://github.com/acme/api/pull/7", 42, "eyes", review_comment=False)
+        assert source.add_reaction.await_args_list == [
+            call("https://github.com/acme/api/pull/7", 42, content, review_comment=False)
+            for content in (["eyes", "-1"] if pull_request else ["-1"])
+        ]
 
 
 def test_mention_is_acknowledged_before_concierge_turn():
@@ -1809,4 +1812,4 @@ def test_mention_is_acknowledged_before_concierge_turn():
     concierge.graph = MagicMock(ainvoke=AsyncMock(side_effect=turn))
     asyncio.run(concierge.handle(request))
     concierge.graph.ainvoke.assert_awaited_once()
-    react.assert_awaited_once_with(request, "eyes")
+    assert react.await_args_list == [call(request, "eyes"), call(request, "-1")]

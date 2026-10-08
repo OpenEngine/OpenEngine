@@ -230,10 +230,12 @@ class GithubConcierge:
                 async with asyncio.timeout(self.timeout_seconds):
                     await self.graph.ainvoke({"request": request})
             except BaseException:
+                await self._react(request, "-1")
                 if request.allow_start:
                     log.exception("GitHub mention %s failed", request.comment_id)
                 await self._forget(self._key(request.origin))
                 raise
+            await self._react(request, "+1" if self._delivery.run_id else "-1")
             if request.allow_start and not self._delivery.run_id:
                 log.error("Engine did not act on GitHub mention %s: %s",
                           request.comment_id, self._delivery.announcement())
