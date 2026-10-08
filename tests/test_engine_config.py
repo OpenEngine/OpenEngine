@@ -18,6 +18,13 @@ from engine.runtime import (
 )
 
 
+
+@pytest.fixture(autouse=True)
+def isolated_config_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+
 def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     loaded = load_engine_config(environ={}, cwd=tmp_path)
 
@@ -142,7 +149,7 @@ def test_loads_the_repository_webhook_deliveries_are_accepted_from(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "engine.toml"
-    path.write_text('[github]\nrepository = "owner/name"\n')
+    path.write_text('[github]\nrepository = "owner/name"\n[repos]\n"owner/name" = "."\n')
 
     loaded = load_engine_config(path, environ={}, cwd=tmp_path)
 
@@ -393,7 +400,7 @@ def test_github_login_toml_and_secret_rotation(tmp_path, monkeypatch):
     (tmp_path / "engine.toml").write_text(
         'github_login_client_id = "login-client"\n'
         'github_login_redirect_uri = "https://engine.test/api/auth/github/callback"\n'
-        '[github]\nrepository = "acme/api"\n'
+        '[github]\nrepository = "acme/api"\n[repos]\n"acme/api" = "."\n'
     )
     secret_file = tmp_path / ".env"
     secret_file.write_text('ENGINE_GITHUB_LOGIN_CLIENT_SECRET="first-${LITERAL}"\n')
@@ -810,3 +817,59 @@ def test_web_claude_provider_inherits_configured_login(tmp_path, monkeypatch):
 
     events = asyncio.run(prompt())
     assert any(event.data.get("content") == {"type": "text", "text": str(directory)} for event in events)
+
+
+def test_github_repositories_combine_with_legacy_repository():
+    config = parse_engine_config({
+        "github": {"repository": "Acme/API", "repositories": ["acme/api", "other/web"]},
+        "repos": {"acme/api": "/api", "Other/Web": "/web"},
+    })
+    assert config.github.webhook_repositories == ("acme/api", "other/web")
+
+
+@pytest.mark.parametrize("repositories", ["acme/api", [""], ["invalid"], [12]])
+def test_github_repositories_reject_invalid_lists(repositories):
+    with pytest.raises(EngineConfigError, match="github.repositories"):
+        parse_engine_config({"github": {"repositories": repositories}})
+
+
+@pytest.mark.parametrize("github", [
+    {"repository": "acme/api"}, {"repositories": ["acme/api"]},
+])
+def test_github_repositories_require_checkout_mappings(github):
+    with pytest.raises(EngineConfigError, match="acme/api.*checkout path under"):
+        parse_engine_config({"github": github, "repos": {"other/repo": "/other"}})
+
+
+@pytest.mark.parametrize("xdg", [None, "absolute", "relative"])
+def test_machine_configuration_precedes_checkout_without_merging(tmp_path, xdg):
+    config_home = tmp_path / "custom" if xdg == "absolute" else Path.home() / ".config"
+    machine = config_home / "openengine" / "engine.toml"
+    machine.parent.mkdir(parents=True)
+    machine.write_text(
+        '[github]\nrepositories = ["other/web"]\n'
+        '[repos]\n"other/web" = "/srv/web"\n'
+    )
+    (tmp_path / "engine.toml").write_text('[repos]\n"checkout/repo" = "/checkout"\n')
+    environment = {} if xdg is None else {
+        "XDG_CONFIG_HOME": str(config_home) if xdg == "absolute" else "relative"
+    }
+    loaded = load_engine_config(environ=environment, cwd=tmp_path)
+    assert loaded.path == machine.resolve()
+    assert loaded.config.repos == {"other/web": "/srv/web"}
+    assert loaded.config.github.webhook_repositories == ("other/web",)
+
+    override = tmp_path / "override.toml"
+    override.write_text('[repos]\n"explicit/repo" = "/explicit"\n')
+    environment["ENGINE_CONFIG"] = str(override)
+    assert load_engine_config(environ=environment, cwd=tmp_path).path == override
+    assert load_engine_config(machine, environ=environment, cwd=tmp_path).path == machine
+
+
+def test_invalid_machine_config_does_not_fall_back_to_checkout(tmp_path):
+    machine = Path.home() / ".config" / "openengine" / "engine.toml"
+    machine.parent.mkdir(parents=True)
+    machine.write_text('[github]\nrepositories = ["missing/checkout"]\n')
+    (tmp_path / "engine.toml").write_text("")
+    with pytest.raises(EngineConfigError, match="missing/checkout"):
+        load_engine_config(environ={}, cwd=tmp_path)
