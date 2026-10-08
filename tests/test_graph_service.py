@@ -6,6 +6,7 @@ checkpoints -- the same path the daemon takes, minus HTTP and the WorkOrder row.
 """
 
 import asyncio
+import json
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -70,6 +71,16 @@ class Checkouts:
         )
 
 
+class Forge:
+    """Just enough source control for a node to be served the repository tools."""
+
+    async def run_git(self, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("not called")
+
+    async def request_review(self, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("not called")
+
+
 class Clock:
     def __init__(self) -> None:
         self.now = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
@@ -83,7 +94,7 @@ class Clock:
 
 @asynccontextmanager
 async def graph_service(
-    tmp_path: Path, *, clock: Clock | None = None, cost: str = "0.5"
+    tmp_path: Path, *, clock: Clock | None = None, cost: str = "0.5", **options: Any,
 ) -> AsyncIterator[GraphService]:
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -92,13 +103,14 @@ async def graph_service(
     ])
     async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "checkpoints.sqlite3")) as saver:
         store = SqliteGraphRuntimeStore(tmp_path / DATABASE)
-        runtime = LangGraphRuntime(store=store, checkpointer=saver)
+        runtime = LangGraphRuntime(store=store, checkpointer=saver, source_control=Forge())
         service = GraphService(
             runtime, tmp_path / DATABASE,
             workspace_provider=Checkouts(tmp_path / "checkout"),
             registry=registry,
             default_repository="example/repo",
             clock=clock,
+            **options,
         )
         runtime.observe(service.observe)
         await service.open(schedule=False)
@@ -492,6 +504,63 @@ def test_a_loop_pauses_when_its_runner_needs_signing_in(tmp_path: Path) -> None:
             await settled(service, (await service.loop_json(loop["loopId"]))["activeRunId"])
             loop = await paused(service, loop["loopId"])
             assert "engine runner signin stub" in loop["pauseReason"]
+
+    asyncio.run(scenario())
+
+
+# --- sessions -----------------------------------------------------------------
+
+
+async def mcp_tools(server: dict[str, Any]) -> list[str]:
+    """The tools a client launching `server` the way claude does is offered."""
+    process = await asyncio.create_subprocess_exec(
+        server["command"], *server["args"],
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+    )
+    assert process.stdin is not None and process.stdout is not None
+    try:
+        for number, method in enumerate(("initialize", "tools/list"), start=1):
+            params = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}
+            message = {"jsonrpc": "2.0", "id": number, "method": method, "params": params if number == 1 else {}}
+            process.stdin.write((json.dumps(message) + "\n").encode())
+            await process.stdin.drain()
+            response = json.loads(await asyncio.wait_for(process.stdout.readline(), 10))
+        return [tool["name"] for tool in response["result"]["tools"]]
+    finally:
+        process.kill()
+        await process.wait()
+
+
+def test_a_session_is_a_run_whose_implementation_node_is_the_callers_cli(tmp_path: Path) -> None:
+    from engine.runtime.config import ApprovalConfig, BashApprovalConfig
+
+    policy = ApprovalConfig(bash=BashApprovalConfig(deny=("git push **", "rm *.txt")))
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, session_tools=("git_subcommand",), approval_policy=policy) as service:
+            started = await service.start_session(agent="claude", repository="example/repo", base_ref="origin/dev")
+            assert started["status"] == "starting" and started["runId"]
+            deadline = asyncio.get_running_loop().time() + 30
+            while (session := service.session_json(started["sessionId"]))["status"] == "starting":
+                assert asyncio.get_running_loop().time() < deadline
+                await asyncio.sleep(0.05)
+            assert session["status"] == "ready", session
+            assert session["workspace"]["path"] == str(tmp_path / "checkout")
+            arguments = session["mcp"]["args"]
+            assert arguments[arguments.index("--repository-tool") + 1] == "git_subcommand"
+            assert "open_pull_request" not in arguments
+            assert session["settings"] == {"permissions": {"deny": ["Bash(git push:*)"]}}
+            assert "git_subcommand" in session["instructions"]
+            assert "git_subcommand" in await mcp_tools(session["mcp"])
+
+            ended = await service.end_session(started["sessionId"], "added the thing")
+            assert ended["status"] == "ended"
+            run = await settled(service, started["runId"])
+            assert run["status"] == "completed" and run["results"]["implement"] == "added the thing"
+            with pytest.raises(NotFound):
+                service.session_json("s-missing")
+            with pytest.raises(ServiceError, match="agent must be"):
+                await service.start_session(agent="codex", repository="example/repo")
 
     asyncio.run(scenario())
 

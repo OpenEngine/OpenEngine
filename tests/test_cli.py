@@ -11,7 +11,7 @@ def test_bare_engine_prints_the_top_level_commands(capsys):
     assert cli.main([]) == 0
 
     usage = capsys.readouterr().out
-    for command in ("connect", "daemon", "graph", "graphs", "run", "loop", "loops", "node", "nodes", "runner", "backend", "backends"):
+    for command in ("connect", "agent", "daemon", "graph", "graphs", "run", "loop", "loops", "node", "nodes", "runner", "backend", "backends"):
         assert command in usage
 
 

@@ -176,6 +176,7 @@ Mounted at `/api/v1` on the daemon:
 | `GET /runs`, `POST /runs`, `GET /runs/{id}` | list, start and inspect |
 | `GET /runs/{id}/nodes`, `GET /nodes/{id}`, `POST /nodes/{id}/steering` | node executions and steering |
 | `GET /loops`, `POST /loops`, `GET /loops/{ref}`, `POST /loops/{ref}/pause`, `POST /loops/{ref}/resume` | loops |
+| `POST /sessions`, `GET /sessions/{id}`, `POST /sessions/{id}/end` | `engine agent claude`: a run whose implementation node is a terminal's CLI |
 | `GET /backend` | runners available, and the execution engine |
 
 The service's tables live in the graph database and are created by the

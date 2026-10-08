@@ -13,6 +13,9 @@
     POST /nodes/{execution_id}/steering
     POST /loops   GET /loops   GET /loops/{ref}
     POST /loops/{ref}/pause   POST /loops/{ref}/resume
+    POST /sessions                    start {agent, repository, baseRef?}: a run whose implementation node is your CLI
+    GET  /sessions/{id}               starting | ready (workspace, mcp, instructions, settings) | ended | failed
+    POST /sessions/{id}/end           {summary?}: the CLI exited; finish the run
     GET  /backend                     what this backend runs graphs with
 
 `project` is a query parameter on reads and a body field on writes. JSON in
@@ -148,9 +151,27 @@ def create_app(service: GraphService) -> Starlette:
             max_spend_usd=body.get("maxSpendUsd"),
         ))
 
+    async def start_session(request: Request) -> JSONResponse:
+        body = await _body(request)
+        return JSONResponse(await service.start_session(
+            agent=_text(body, "agent") or "claude",
+            repository=_text(body, "repository"),
+            base_ref=_text(body, "baseRef"),
+        ), status_code=201)
+
+    async def get_session(request: Request) -> JSONResponse:
+        return JSONResponse(service.session_json(request.path_params["session_id"]))
+
+    async def end_session(request: Request) -> JSONResponse:
+        body = await _body(request)
+        return JSONResponse(await service.end_session(request.path_params["session_id"], _text(body, "summary")))
+
     app = Starlette(
         routes=[
             Route("/backend", _guard(backend)),
+            Route("/sessions", _guard(start_session), methods=["POST"]),
+            Route("/sessions/{session_id}", _guard(get_session)),
+            Route("/sessions/{session_id}/end", _guard(end_session), methods=["POST"]),
             Route("/graphs", _guard(list_graphs)),
             Route("/graphs", _guard(add_graph), methods=["POST"]),
             Route("/graphs/{ref:path}", _guard(get_graph)),

@@ -84,6 +84,12 @@ The binary is `engine`. Run it with no arguments to list its commands:
   [Background service](docs/releases.md#background-service).
 - `engine connect gh|github|gitlab|slack` connects the selected backend's shared
   source control or Slack.
+- `engine agent claude` starts a run whose implementation node is Claude Code
+  in this terminal: the daemon checks the repository out into a fresh
+  workspace and gives claude the same `git_subcommand` and `open_pull_request`
+  tools an implementation node gets (`[sessions] tools` in `engine.toml`
+  changes which). The run ends when claude exits. Arguments after `--` go to
+  `claude`.
 - `engine graph`, `engine run`, `engine loop`, `engine node` and their list
   forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
   graphs; `engine backend` chooses which daemon they talk to, and

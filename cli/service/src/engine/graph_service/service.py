@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from engine.domain import ApprovalDecision, ApprovalId, RunId
+from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
 from engine.graph_runtime import (
     AmbiguousExecutionError,
     RunNotSteerableError,
@@ -51,9 +51,18 @@ from langgraph_acp import ACPAgentRegistry
 from engine.graph_runtime import GraphId
 from engine.graph_runtime.inputs import resolve_inputs
 from engine.graph_runtime.topology import GraphTopology
+from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig
 from engine.runtime.workflows import WorkflowLoadError, load_workflow_file
 
 from engine.graph_service.compile import compile_graph
+from engine.graph_service.session import (
+    BASE_INPUT,
+    SESSION_AGENTS,
+    SESSION_INPUT,
+    Session,
+    Sessions,
+    session_workflow,
+)
 from engine.graph_service.language import (
     STAGE_GROUPS,
     STAGES,
@@ -197,6 +206,8 @@ class GraphService:
         default_base_ref: str = "origin/HEAD",
         model_tiers: Mapping[str, Mapping[str, str]] | None = None,
         allow_python: bool = True,
+        session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
+        approval_policy: ApprovalConfig | None = None,
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
     ) -> None:
@@ -215,6 +226,12 @@ class GraphService:
         self._tick_seconds = tick_seconds
         self._model_tiers = model_tiers
         self._allow_python = allow_python
+        self._sessions = Sessions()
+        self._session_workflow = session_workflow(
+            workspace_provider, self._sessions,
+            tools=session_tools, policy=approval_policy or ApprovalConfig(),
+            default_base_ref=default_base_ref,
+        )
         self._sources = Path(database).parent / "registered-graphs"
         self._loaded: dict[str, Loaded] = {}
         self._lock = asyncio.Lock()
@@ -234,6 +251,7 @@ class GraphService:
         ids -- and steering still queued in memory is reported undelivered
         rather than left looking like it might still arrive.
         """
+        self.runtime.register(self._session_workflow.compiled(self.runtime.checkpointer))
         for version in self.store.versions():
             try:
                 self._register(version)
@@ -254,6 +272,49 @@ class GraphService:
 
     def runners(self) -> tuple[str, ...]:
         return tuple(self._registry.names)
+
+    # --- sessions -----------------------------------------------------------
+
+    async def start_session(self, *, agent: str, repository: str, base_ref: str = "") -> dict[str, Any]:
+        """Start a run whose implementation node is a CLI the caller drives itself."""
+        if agent not in SESSION_AGENTS:
+            raise ServiceError(f"agent must be one of {', '.join(SESSION_AGENTS)}", agent=agent)
+        repository = self.resolve_repository((repository or self._default_repository).strip())
+        if not repository:
+            raise ServiceError("no repository: run from inside one, pass --repo, or configure a default on the backend")
+        session = self._sessions.create(agent)
+        inputs = {
+            SESSION_INPUT: session.session_id, MODE_INPUT: str(ForgeMode.CONNECTED),
+            **({BASE_INPUT: base_ref} if base_ref else {}),
+        }
+        session.run_id = str(await self._start(
+            self._session_workflow, StartRequest(f"Interactive {agent} session", repository, inputs),
+        ))
+        return self.session_json(session.session_id)
+
+    def session_json(self, session_id: str) -> dict[str, Any]:
+        session = self._session(session_id)
+        body: dict[str, Any] = {
+            "sessionId": session.session_id, "agent": session.agent,
+            "runId": session.run_id, "status": session.status,
+        }
+        if session.status == "failed":
+            body["error"] = str(session.ready.exception())
+        elif session.ready.done():
+            body.update(session.ready.result())
+        return body
+
+    async def end_session(self, session_id: str, summary: str = "") -> dict[str, Any]:
+        session = self._session(session_id)
+        if not session.ended.done():
+            session.ended.set_result(summary.strip())
+        return self.session_json(session_id)
+
+    def _session(self, session_id: str) -> Session:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise NotFound(f"no session {session_id}")
+        return session
 
     # --- graphs -------------------------------------------------------------
 

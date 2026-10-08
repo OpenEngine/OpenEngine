@@ -411,6 +411,8 @@ def build_graph_service(
             repositories=repositories,
             model_tiers=config.model_tiers,
             allow_python=config.graphs.allow_python,
+            session_tools=config.sessions.tools,
+            approval_policy=config.approvals,
         )
 
     return build
