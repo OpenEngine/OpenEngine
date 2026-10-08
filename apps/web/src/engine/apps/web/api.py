@@ -4156,7 +4156,14 @@ def create_app(
         if await run_hidden(request, RunId(run_id)):
             return _error("run not found", 404)
         pull_request = await github_pull_request_for_run(run_id)
-        repository = pull_request[0] if pull_request else github_repository
+        if pull_request:
+            repository = pull_request[0]
+        else:
+            state = await session.state_store.load(RunId(run_id))
+            repository = (
+                run_project(state.repository or work_orders.repository) or ""
+                if state is not None else github_repository
+            )
         return JSONResponse(activity_json(
             github_activity.recent(),
             run_id=run_id,

@@ -363,6 +363,41 @@ def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
     assert feed == {"repository": "acme/api", "configured": False, "comments": []}
 
 
+@pytest.mark.parametrize("legacy_repository", ["", "acme/api"])
+@pytest.mark.parametrize("repository_kind", ["project", "name", "path"])
+def test_comment_panel_uses_runs_repository_before_a_pr_is_opened(
+    tmp_path, legacy_repository, repository_kind,
+):
+    from starlette.testclient import TestClient
+    from test_web_app import _session_with
+
+    from engine.apps.web.api import create_app
+    from engine.domain import RunId, RunState, TaskId, WorkflowId
+
+    checkout = str(tmp_path / "web")
+    repository = {"project": "other/web", "name": "web", "path": checkout}[repository_kind]
+    runners = {"default": MagicMock()}
+    session = _session_with(runners)
+    app = create_app(
+        session, runners,
+        github_repository=legacy_repository,
+        github_repositories=("acme/api", "other/web"),
+        github_webhook_secret=lambda: SIGNING_SECRET,
+        repos={"web": checkout},
+        repository_projects={"web": "other/web"},
+    )
+    with TestClient(app) as client:
+        client.portal.call(session.state_store.save, RunState(
+            run_id=RunId("existing"), task_id=TaskId("task"),
+            workflow_id=WorkflowId("workflow"), repository=repository,
+        ))
+        response = client.get("/api/runs/existing/github-comments")
+    assert response.status_code == 200
+    assert response.json() == {
+        "repository": "other/web", "configured": True, "comments": [],
+    }
+
+
 def test_same_comment_id_in_two_repositories_has_independent_activity():
     from dataclasses import replace
 
