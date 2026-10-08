@@ -1,8 +1,10 @@
 """Missing configured GitHub repositories become usable local checkouts."""
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -34,7 +36,46 @@ def test_startup_clones_missing_repository_and_reuses_it(tmp_path, monkeypatch):
     assert (tmp_path / "code/PATY/AGENTS.md").read_text() == "PATY instructions"
     web_main.read_configuration(config)
     assert len(calls) == 1
-    assert list((tmp_path / "code").iterdir()) == [tmp_path / "code/PATY"]
+    assert set((tmp_path / "code").iterdir()) == {
+        tmp_path / "code/PATY", tmp_path / "code/.engine-clone-PATY.lock",
+    }
+
+
+def test_concurrent_initializers_clone_missing_repository_once(tmp_path, monkeypatch):
+    target = tmp_path / "repos/PATY"
+    ready = Barrier(2)
+    file_lock = repositories.FileLock
+    calls = []
+
+    def synchronized_lock(path):
+        # Both initializers must observe the missing destination before locking.
+        ready.wait(timeout=5)
+        return file_lock(path)
+
+    def clone(args, **kwargs):
+        calls.append(args)
+        destination = Path(args[-1])
+        destination.mkdir()
+        (destination / "AGENTS.md").write_text("complete checkout")
+
+    monkeypatch.setattr(repositories, "FileLock", synchronized_lock)
+    monkeypatch.setattr(repositories.subprocess, "run", clone)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        initializers = [
+            executor.submit(
+                repositories.ensure_repository_checkouts,
+                {"spiralsoft-ai/PATY": str(target)},
+            )
+            for _ in range(2)
+        ]
+        for initializer in initializers:
+            initializer.result(timeout=10)
+
+    assert len(calls) == 1
+    assert (target / "AGENTS.md").read_text() == "complete checkout"
+    assert set(target.parent.iterdir()) == {
+        target, target.parent / ".engine-clone-PATY.lock",
+    }
 
 
 @pytest.mark.parametrize("failure", [
@@ -53,7 +94,7 @@ def test_failed_clone_is_actionable_and_retryable(tmp_path, monkeypatch, failure
     with pytest.raises(EngineConfigError, match="spiralsoft-ai/PATY.*GitHub SSH access"):
         repositories.ensure_repository_checkouts({"spiralsoft-ai/PATY": str(target)})
     assert not target.exists()
-    assert list(target.parent.iterdir()) == []
+    assert list(target.parent.iterdir()) == [target.parent / ".engine-clone-PATY.lock"]
 
 
 def test_existing_paths_and_local_aliases_are_untouched(tmp_path, monkeypatch):
