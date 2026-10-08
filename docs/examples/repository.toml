@@ -1,37 +1,17 @@
-# Optional local configuration example for any project.
-# Replace the repository name and checkout path below before using it.
-# Save as .engine/config.toml in the directory where you start OpenEngine.
-# For an existing deployment, add these settings to your active config instead:
-# configuration files are selected, not merged.
+# Optional repository settings for .engine/config.toml.
+# For an existing installation, add settings to its active configuration:
+# OpenEngine selects one config file; it does not merge files.
 
 [repos]
-# Left: GitHub account or organization/repository name.
-# Right: where its checkout should live on the OpenEngine host.
-# A missing checkout is cloned over SSH using the host's existing credentials.
-# "~" means the home directory of the account running OpenEngine.
-"owner/repo" = "~/code/repo"
-# Add more repositories as additional entries, using their own checkout paths.
-# For a checkout that already exists (including a non-GitHub repository), use:
-# "local-project" = "/absolute/path/to/existing/checkout"
+# Uncomment and customize an entry for each repository you want to use.
 
-[approvals]
-# Permit agents to read and edit files. Remove "edit" for read-only work.
-allow = ["read", "edit"]
+# Any existing checkout, regardless of language or hosting provider:
+# "my-project" = "/absolute/path/to/my-project"
+
+# GitHub checkout (cloned over SSH if the local path is missing):
+# "your-account/your-project" = "~/code/your-project"
 
 [approvals.bash]
-# No shell commands are preapproved; agents must request approval.
-# Add only exact commands verified for your project's tooling.
-# Keep test commands targeted at that project's dedicated test directory.
+# No shell commands are preapproved. Add exact commands only after checking
+# your project's instructions. Test commands should target its test directory.
 allow = []
-# Keep Git changes and PR creation on OpenEngine's structured tools.
-# These patterns deny the equivalent shell commands; "**" matches arguments.
-deny = [
-  "git add **", "git commit **", "git branch **", "git checkout **",
-  "git switch **", "git push **", "gh pr create **",
-]
-
-[workflows]
-# Directory containing OpenEngine workflow definitions, not the target project's
-# CI files. This path is relative to this config file: with .engine/config.toml,
-# "../workflows" selects workflows/ beside .engine/. Adjust to your installation.
-directory = "../workflows"

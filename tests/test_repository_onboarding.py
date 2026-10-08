@@ -147,7 +147,7 @@ def test_relative_checkout_path_uses_working_directory(tmp_path, monkeypatch):
 ])
 def test_example_requires_approval_for_shell_commands(command):
     config = load_engine_config(Path(__file__).parents[1] / "docs/examples/repository.toml", environ={}).config
-    assert config.repos == {"owner/repo": "~/code/repo"}
+    assert config.repos == {}
     assert config.approvals.bash.allow == ()
     assert config.approvals.auto_approve is False
     policy = config.approvals

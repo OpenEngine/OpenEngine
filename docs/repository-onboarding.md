@@ -15,18 +15,31 @@ copy its active config instead and add the repository and any verified command
 approvals for your project, preserving the existing settings. Do not overwrite an existing
 local config. The `.engine/` directory is ignored by Git.
 
-Replace the placeholders in `[repos]` with your own repository and checkout path:
+The starter example has no active repository entries, command grants, or workflow
+path overrides. Uncomment and customize the entries you need. Keep your existing
+workflow definitions and other deployment settings.
+
+For an existing checkout from any hosting provider:
 
 ```toml
 [repos]
-"owner/repo" = "~/code/repo"
+"my-project" = "/absolute/path/to/my-project"
 ```
 
-Here, `owner` is your GitHub account or organization, `repo` is the repository
-name, and `~/code/repo` is its local checkout path on the host running OpenEngine.
-The left side identifies the repository; the right side says where its files live.
-Add another entry for each repository you want to offer in the WorkOrder form.
-The example does not refer to a required or bundled project.
+The left side is the name shown in OpenEngine; the right side is the directory
+containing your project's files on the host running OpenEngine. Add one entry
+per repository.
+
+To let OpenEngine clone a GitHub repository when its checkout is missing, use
+its full GitHub name instead:
+
+```toml
+[repos]
+"your-account/your-project" = "~/code/your-project"
+```
+
+Replace `your-account` with the GitHub user or organization and `your-project`
+with the repository name. The checkout path is yours to choose.
 
 At web startup (including `engine-web --check`), a missing path whose name is
 a GitHub `owner/repo` is cloned from `git@github.com:owner/repo.git`. This uses
@@ -51,12 +64,13 @@ against the server's working directory.
 
 ## Set up your repository
 
-1. Verify repository access as the worker account, including SSH read access.
+1. Verify that the account running OpenEngine can access the checkout.
+   For automatic cloning, also verify GitHub SSH read access.
    Check write access separately if WorkOrders must push branches and open PRs.
 2. Add `"owner/repo" = "/local/checkout/path"` under `[repos]` in
    `.engine/config.toml`. Use the full GitHub name to enable automatic cloning of a missing path.
 3. Read that repository's `AGENTS.md` and CI workflows. Add only the necessary
-   commands to `[approvals.bash].allow`; avoid general `uv **` or `npm **` grants.
+   commands to `[approvals.bash].allow`; avoid broad wildcard grants.
    These rules are deployment-wide, not scoped to a repository or working directory.
 4. Update the host installation, run `engine-web --check` as the worker with the
    same config and working directory as the service, and restart the service.
