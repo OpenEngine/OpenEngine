@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.openengine.mcp</string>
+  <key>Label</key><string>cc.openengine.mcp</string>
   <key>ProgramArguments</key>
   <array>
     <string>/Users/YOU/code/OpenEngine/.venv/bin/engine-mcp-server</string>

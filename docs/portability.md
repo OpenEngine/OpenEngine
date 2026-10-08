@@ -21,7 +21,7 @@ brew install spiralsoft-ai/tap/openengine
 and:
 
 ```bash
-curl -fsSL https://openengine.sh/install | sh
+curl -fsSL https://openengine.cc/install | sh
 ```
 
 Both install an `engine` command. Running `engine daemon` starts the local web
