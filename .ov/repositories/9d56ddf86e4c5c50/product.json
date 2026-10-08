@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "identity": "github.com/openengine/openengine",
+  "facts": [
+    {
+      "category": "product",
+      "statement": "OpenEngine is a graph execution engine. Its documented default graph proceeds through implementation, a pool of reviewers, and reranking to reduce noise.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0002",
+          "path": "README.md",
+          "sha256": "68b81628ab29737269b8856580b9ddc8a4c11363328558308fd8d1686db19c78",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.700820+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "product",
+      "statement": "OpenEngine connects to Codex and Claude over ACP using pinned adapters launched with npx. These adapters use local Codex and Claude logins; OpenCode is also offered for local inference.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0002",
+          "path": "README.md",
+          "sha256": "68b81628ab29737269b8856580b9ddc8a4c11363328558308fd8d1686db19c78",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.701082+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "product",
+      "statement": "The engine owns conversations, while assistant-ui presents them. UI-specific thread metadata includes title, archive status, and selected runner.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0007",
+          "path": "apps/web/src/engine/apps/web/api.py",
+          "sha256": "c314c6075aa71516979b7bc5443d0affc572b2104dd565676a30cb236cfbf298",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.702116+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "product",
+      "statement": "Runs stream as newline-delimited JSON. Their tasks belong to the service, allowing a refreshed browser to reconnect, and a per-thread lock prevents concurrent turns from reading the same stale transcript.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0007",
+          "path": "apps/web/src/engine/apps/web/api.py",
+          "sha256": "c314c6075aa71516979b7bc5443d0affc572b2104dd565676a30cb236cfbf298",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.702691+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "product",
+      "statement": "Approvals have a replayable event feed that loads durable records when a browser subscribes and uses process-local notifications for later transitions.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0007",
+          "path": "apps/web/src/engine/apps/web/api.py",
+          "sha256": "c314c6075aa71516979b7bc5443d0affc572b2104dd565676a30cb236cfbf298",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.703128+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "product",
+      "statement": "A Loop is a standing prompt on one repository. Its agent can create, list, steer, and resume WorkOrders, read the repository, and defer subsequent work until a specified WorkOrder completes.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0008",
+          "path": "apps/web/src/engine/apps/web/loop_runs.py",
+          "sha256": "42f052ddb08e8e10a68a3730370663703ef9ea22fea6a95bbd32bac500e1e87a",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.703634+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "product",
+      "statement": "A Loop waits for WorkOrders it created to finish before prompting its agent again. It stops for the day outside active hours, when its daily WorkOrder allowance is reached, or when its daily spend limit is reached.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0008",
+          "path": "apps/web/src/engine/apps/web/loop_runs.py",
+          "sha256": "42f052ddb08e8e10a68a3730370663703ef9ea22fea6a95bbd32bac500e1e87a",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.703875+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "workflow",
+      "statement": "The demonstrated conversation workflow opens a New conversation page with Runner, Message the agent, and Send controls, submits a message, receives an agent response, and reaches Idle. Reloading the conversation detail page retains its URL and displays the submitted message and response.",
+      "basis": "observed",
+      "sources": [
+        {
+          "tool": "run_journey",
+          "evidence": "E0085",
+          "path": null,
+          "sha256": null,
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.703915+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "environment",
+      "statement": "The documented installer prerequisites are macOS or Linux, Git, Node.js 20.19 or later, and a local Codex or Claude login. The installation command is curl -LsSf https://openengine.sh/install.sh | sh.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0002",
+          "path": "README.md",
+          "sha256": "68b81628ab29737269b8856580b9ddc8a4c11363328558308fd8d1686db19c78",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.704099+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "environment",
+      "statement": "The installer places the engine command in ~/.local/bin, starts OpenEngine, and opens http://127.0.0.1:4364. The documented reopening command is engine daemon; rerunning the installer upgrades the installation.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0002",
+          "path": "README.md",
+          "sha256": "68b81628ab29737269b8856580b9ddc8a4c11363328558308fd8d1686db19c78",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.704280+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "environment",
+      "statement": "Source setup requires uv, Python 3.11 or later, and Node.js 20.19 or later. From the repository root, install workspace packages with uv sync --all-packages, install web dependencies with npm --prefix apps/web install, and build the client with npm --prefix apps/web run build.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0002",
+          "path": "README.md",
+          "sha256": "68b81628ab29737269b8856580b9ddc8a4c11363328558308fd8d1686db19c78",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.704464+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "environment",
+      "statement": "The production service defaults to http://127.0.0.1:4364. Its /api/health endpoint is documented for checking service identity and readiness.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0002",
+          "path": "README.md",
+          "sha256": "68b81628ab29737269b8856580b9ddc8a4c11363328558308fd8d1686db19c78",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.704718+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "environment",
+      "statement": "The web package provides dev, typecheck, test, test:e2e, and build scripts using Vite, TypeScript, Vitest, and Playwright.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0005",
+          "path": "apps/web/package.json",
+          "sha256": "59a3b1cd6d9dfb2e9ec36cc6fd674eb831e95b2ba3cf89489deccc15fe47774c",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.705214+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "environment",
+      "statement": "The documented browser-test setup uses npm --prefix apps/web ci, npx playwright install chromium, and npm --prefix apps/web run test:e2e. The client is built before the run because the Python server serves Vite's output.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0003",
+          "path": "apps/web/e2e/README.md",
+          "sha256": "b13aed22587d3fceb1eb6a42edc3cc689790d7fdeba6e6e8dae47a86acd96306",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.705574+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    },
+    {
+      "category": "environment",
+      "statement": "The browser-test harness composes the real application with isolated fixture repositories and SQLite state, scripted ACP agents, and stubbed GitHub interactions. Scripted agents replace the Codex and Claude providers, so their response text is fixture-controlled.",
+      "basis": "documented",
+      "sources": [
+        {
+          "tool": "read_file",
+          "evidence": "E0003",
+          "path": "apps/web/e2e/README.md",
+          "sha256": "b13aed22587d3fceb1eb6a42edc3cc689790d7fdeba6e6e8dae47a86acd96306",
+          "offset": null
+        },
+        {
+          "tool": "read_file",
+          "evidence": "E0006",
+          "path": "apps/web/e2e/harness/server.py",
+          "sha256": "81f10f750981323ebe64e236bb5a9fe3c48b66ad1e8eccd650c0f02244e7988d",
+          "offset": null
+        }
+      ],
+      "learned_at": "2026-10-08T15:19:13.706207+00:00",
+      "revision": "72a2d243464fde1cd6faa9a801647f6f73795914",
+      "run": "/Users/vadym.vasiuk/Library/Application Support/open-verify/runs/20261008T151218Z-35c10c43"
+    }
+  ],
+  "unknowns": [
+    "Persistence across a server restart, another browser, or another device is not established by the supplied reload journey. [E0085]",
+    "The supplied evidence does not establish an observed WorkOrder creation or Loop configuration workflow. [E0080, E0082, E0008]",
+    "Successful execution with live Codex, Claude, or OpenCode providers is not established by the supplied journey; the documented browser harness uses scripted providers. [E0085, E0003, E0006]",
+    "The conditions enabling Send and Stop, and the behavior of Detach, are not established by the supplied snapshots. [E0080, E0082]",
+    "Approval interaction and replay behavior are source-documented but lack a supplied passed host journey. [E0007, E0085]"
+  ]
+}

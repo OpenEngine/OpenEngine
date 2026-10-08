@@ -13,6 +13,8 @@ class Case(Contract):
     title: str = Field(min_length=1)
     interface: Literal["browser", "terminal", "http", "mixed"]
     verification: Literal["live", "existing_tests"] = "live"
+    interaction: Literal["user", "library"] = Field(default="user",
+        description="user: real application UI/API/CLI actions; library: supporting in-process API checks")
     coverage: Literal["changed_behavior", "regression", "requested_behavior"] = "requested_behavior"
     journey: BrowserJourney | None = None
     prerequisites: list[str] = Field(default_factory=list)
@@ -25,6 +27,8 @@ class Case(Contract):
     @model_validator(mode="after")
     def journey_coverage(self):
         """Reject unusable structured cases before setup or application actions."""
+        if self.interaction == 'library' and self.interface != 'terminal':
+            raise ValueError('Direct library checks require the terminal interface')
         if self.journey is not None:
             if self.interface != "browser" or len(self.id) > 160:
                 raise ValueError("A structured journey requires a browser case ID of at most 160 characters")

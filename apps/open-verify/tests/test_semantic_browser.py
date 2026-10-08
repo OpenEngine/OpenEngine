@@ -217,7 +217,7 @@ def test_node_actions_export_and_cache_only_durable_locators(tmp_path, web_app):
     judge = NoActor()
     _, replayed = asyncio.run(run(judge))
     assert read_steps(replayed)[0]['cache'] == 'hit'
-    assert read_steps(replayed)[0]['model_calls'] == 0
+    assert read_steps(replayed)[0]['model_calls'] == 1
     assert set(judge.judgments[0][1]) <= {'url', 'snapshot', 'truncated'}
     assert 'screen_diff' not in judge.judgments[0][1]
 

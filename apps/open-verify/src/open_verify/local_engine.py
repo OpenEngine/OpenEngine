@@ -40,6 +40,13 @@ def project_root(path: Path) -> Path:
 
 class FileArgs(Contract):
     path: str = "."
+    refresh: bool = False
+
+
+class ReadFileArgs(FileArgs):
+    offset: int = Field(default=0, ge=0, le=10_000_000, strict=True,
+        description="Character offset; use next_offset to read omitted content")
+    limit: int = Field(default=24000, ge=1, le=24000, strict=True)
 
 
 class StartArgs(Contract):
@@ -96,7 +103,7 @@ class TextArgs(Contract):
 
 TOOLS = {
     "list_files": (FileArgs, "List up to 300 project files below a directory."),
-    "read_file": (FileArgs, "Read up to 24000 characters of a UTF-8 project file."),
+    "read_file": (ReadFileArgs, "Read a bounded UTF-8 file section by character offset; truncated results include next_offset."),
     "run_command": (
         CommandArgs,
         "Run an argv command with optional piped stdin; capture exit code and output.",
@@ -266,10 +273,19 @@ class LocalEngine:
                     return {"files": found, "truncated": True}
         return {"files": found, "truncated": False}
 
-    async def read_file(self, args: FileArgs):
+    async def read_file(self, args: ReadFileArgs):
+        """Read bounded character pages without loading an entire large file."""
         with self.path(args.path).open(encoding="utf-8") as stream:
-            content = stream.read(MAX_TEXT + 1)
-        return {"text": content[:MAX_TEXT], "truncated": len(content) > MAX_TEXT}
+            remaining = args.offset
+            while remaining:
+                skipped = stream.read(min(remaining, MAX_TEXT))
+                if not skipped:
+                    break
+                remaining -= len(skipped)
+            content = stream.read(args.limit + 1)
+        truncated = len(content) > args.limit
+        return {"text": content[:args.limit], "truncated": truncated,
+                "offset": args.offset, "next_offset": args.offset + args.limit if truncated else None}
 
     async def _spawn(self, argv, cwd, *, piped=False):
         if not self.allow_exec:
@@ -543,7 +559,7 @@ class LocalEngine:
         try:
             page = await self.browser_page()
             if check.kind == "expect_text":
-                target = expect(page.get_by_text(check.text, exact=True).and_(page.locator(':visible')).first)
+                target = expect(page.get_by_text(check.text, exact=check.match == 'exact').and_(page.locator(':visible')).first)
                 if check.visible:
                     await target.to_be_visible()
                 else:

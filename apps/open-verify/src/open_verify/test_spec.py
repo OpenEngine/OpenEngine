@@ -58,6 +58,7 @@ class Press(Contract):
 class ExpectText(Contract):
     kind: Literal["expect_text"]
     text: str = Field(min_length=1)
+    match: Literal['exact', 'contains'] = 'exact'
     visible: bool = True
 
 

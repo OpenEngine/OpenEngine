@@ -1,6 +1,8 @@
 """Typed HTTP and terminal regression suites; every operation has explicit checks."""
 
 import json
+import re
+from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -50,6 +52,10 @@ class HTTPExpected(Contract):
 class CommandExpected(Contract):
     exit_code: StrictInt
     output: TextCheck | None = None
+    python_harness: bool = Field(default=False,
+        description="Run generated Python stdin assertions with host-owned error classification")
+    checkpoints: list[str] = Field(default_factory=list, max_length=10,
+        description="Ordered completion check names emitted as OV_CHECKPOINT JSON lines after successful assertions")
 
 
 class HTTPTestStep(RequestArgs):
@@ -80,6 +86,8 @@ class BackendTest(Contract):
     interface: Literal['http', 'terminal']
     steps: list[BackendStep] = Field(min_length=1, max_length=30)
     timeout: float = Field(default=60, gt=0, le=300)
+    retry_reason: str = Field(default="", max_length=2000,
+        description="Diagnose a prior harness error and explain the correction without weakening checks")
     checks: dict[str, list[Annotated[StrictInt, Field(ge=0)]]] = Field(default_factory=dict)
 
     @model_validator(mode='after')
@@ -91,6 +99,19 @@ class BackendTest(Contract):
         if any(not name.strip() or not indexes or any(i >= len(self.steps) for i in indexes)
                for name, indexes in self.checks.items()):
             raise ValueError('Completion checks must reference assertion-bearing steps')
+        for index, step in enumerate(self.steps):
+            if step.kind == 'command' and step.expect.python_harness:
+                if (len(step.argv) != 2 or step.argv[1] != '-'
+                        or not re.fullmatch(r'python(?:\d+(?:\.\d+)*)?(?:\.exe)?', Path(step.argv[0]).name)
+                        or not step.stdin or step.expect.exit_code != 0):
+                    raise ValueError('Python harnesses require [python, "-"], stdin source and expected exit 0')
+            if step.kind != 'command' or not step.expect.checkpoints:
+                continue
+            names = step.expect.checkpoints
+            attached = {name for name, indexes in self.checks.items() if index in indexes}
+            if len(set(names)) != len(names) or set(names) != attached or any(
+                    self.checks[name] != [index] for name in names):
+                raise ValueError('Named checkpoints must uniquely cover checks mapped only to that command')
         if len(self.model_dump_json()) > 100_000:
             raise ValueError('Generated test specification exceeds 100000 characters')
         return self

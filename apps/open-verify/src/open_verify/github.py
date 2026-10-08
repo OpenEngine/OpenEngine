@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from open_verify.manifest import Manifest, bundle_file
 from open_verify.media import MAX_VIDEO_BYTES
+from open_verify.reporting import brief, evidence_caption
 
 
 async def command(argv, *, cwd=None, data=None, timeout=120):
@@ -220,7 +221,8 @@ class GitHub:
                 lines.extend(['Observed checkpoints:', ''])
                 for point in test.checkpoints:
                     status = 'not run' if point.code == 'NOT_RUN' else 'inconclusive' if point.code == 'ASSERTION_INCONCLUSIVE' else point.status
-                    lines.append(f'- **{status}**: {safe_text(point.instruction)}')
+                    lines.append(f'- **{status}**: {safe_text(point.instruction)}' +
+                        (f' — {safe_text(point.detail)}' if point.detail else ''))
                 lines.append('')
             elif test.checks:
                 label = 'Verified checks' if test.status == 'passed' else 'Planned checks — not all verified'
@@ -228,6 +230,7 @@ class GitHub:
         if manifest.assumptions:
             lines.extend(["Coverage limits and substitutions:", "",
                           *[f"- {safe_text(a)}" for a in manifest.assumptions], ""])
+        attachments: dict[str, list[str]] = {}
         for item, data, name in files:
             asset = assets.get(name)
             if asset is not None and asset.get("state") == "starter" and type(asset.get("id")) is int:
@@ -256,14 +259,51 @@ class GitHub:
             runner = next((t.runner for t in manifest.tests if t.case_id == item.case_id), 'playwright')
             kind = 'Playwright test' if runner == 'playwright' else 'Backend test'
             label = f"{'Journey summary' if item.media_type == 'image/gif' else kind if item.type == 'test' else 'Screenshot'} — {safe_text(item.case_id)}"
-            lines.extend(["", f"{'!' if item.type == 'screenshot' else ''}[{label}](<{url}>)"])
+            attachments.setdefault(item.case_id, []).append(
+                f"{'!' if item.type == 'screenshot' else ''}[{label}](<{url}>)")
         if manifest.reason:
             lines.extend(["", safe_text(manifest.reason)])
         if manifest.omissions:
             lines.extend(
                 ["", "Evidence omissions:", *[f"- {safe_text(x)}" for x in manifest.omissions]]
             )
-        body = "\n".join(lines)
+        compact = [f"### Open Verify — {manifest.status}", "", f"Revision: `{target.head[:12]}`", ""]
+        if manifest.impact and manifest.impact.decision == 'verify' and not any(
+                t.status == 'passed' and t.coverage == 'changed_behavior' for t in manifest.tests):
+            compact.extend(['**Scope:** changed behavior unverified.', ''])
+        if any(t.scripted_providers for t in manifest.tests):
+            compact.extend(['**Substitutions:** scripted providers; live integrations unverified.', ''])
+        displayed = set()
+        for test in manifest.tests:
+            compact.extend([f"#### {safe_text(brief(test.title or test.case_id, words=14, chars=100))} — {test.status}", ""])
+            media = attachments.get(test.case_id, [])
+            compact.extend(line for line in media if line.startswith("!"))
+            if media:
+                compact.append("")
+            if test.verification == "existing_tests":
+                compact.extend(["Existing repository tests; no independent live journey.", ""])
+            elif test.coverage == "regression":
+                compact.extend(["Regression smoke.", ""])
+            for status, text in evidence_caption(test.detail,
+                    [point.model_dump() for point in test.checkpoints], test.status):
+                compact.append(f"- **{status}**: {safe_text(text)}")
+            compact.append('')
+            if media:
+                lines.extend([f"Evidence — {safe_text(test.title or test.case_id)}:", '', *media, ''])
+            displayed.add(test.case_id)
+        for finding in manifest.findings:
+            if finding.case_id not in displayed:
+                compact.extend([f"#### {safe_text(finding.case_id)} — {finding.status}", "",
+                                safe_text(brief(finding.actual)), ""])
+        for case_id, media in attachments.items():
+            if case_id not in displayed:
+                compact.extend([*media, ""])
+        if manifest.reason:
+            compact.extend([safe_text(brief(manifest.reason)), ""])
+        if manifest.omissions:
+            compact.extend([f"Evidence: {len(manifest.omissions)} omissions (details below).", ''])
+        compact.extend(["<details>", "<summary>Full results and coverage limits</summary>", "", *lines, "", "</details>"])
+        body = "\n".join(compact)
         marker = "<!-- open-verify:" + hashlib.sha256(body.encode()).hexdigest() + " -->"
         await self.ensure_current(target)
         page = 1

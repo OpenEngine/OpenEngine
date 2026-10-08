@@ -4,8 +4,9 @@ import asyncio
 import hashlib
 import json
 from copy import deepcopy
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
+from open_verify.health import HEALTH_CHECK, ApplicationHealth
 from open_verify.journey_spec import (
     ActDecision,
     ActStep,
@@ -26,16 +27,16 @@ from open_verify.replay_cache import (
 from open_verify.step_executor import JourneyExecutor
 from open_verify.test_export import save_browser_test
 from open_verify.test_spec import (
-    ExpectSameURL,
-    ExpectURL,
-    RememberURL,
     BrowserTest,
     Click,
+    ExpectSameURL,
+    ExpectURL,
     Fill,
     Locator,
     NavigateURL,
     Press,
     Reload,
+    RememberURL,
     ReplayBarrier,
     TestResult,
 )
@@ -59,11 +60,21 @@ class StepBudget:
     def __init__(self, step):
         self.step = step
         self.model_calls = 0
+        self.actor_calls = 0
+        self.goal_calls = 0
         self.actions = 0
 
     def model_call(self):
-        if self.model_calls >= self.step.max_model_calls:
+        if self.actor_calls >= self.step.max_model_calls:
             raise StepStopped("STEP_MODEL_LIMIT", "Step exhausted its model-call budget")
+        self.actor_calls += 1
+        self.model_calls += 1
+
+    def goal_call(self):
+        """Reserve host-owned verification capacity independently of actor-selected limits."""
+        if self.goal_calls >= 4:
+            raise StepStopped('ACTION_GOAL_MODEL_LIMIT', 'Action goal exhausted its independent model-call budget')
+        self.goal_calls += 1
         self.model_calls += 1
 
     def action(self):
@@ -88,20 +99,40 @@ class JourneyRunner:
     async def check_readiness(self, case):
         """Check setup through a fresh app session without executing journey actions."""
         results, engine = [], None
-        status, detail = "passed", "Setup readiness confirmed"
+        first = len(self.artifacts.observations)
+        status, detail, code = "passed", "Setup readiness confirmed", None
         cache = ReplaySession(None, "off", case, self.engine, self.artifacts, self.progress)
         try:
+            for probe in case.journey.setup_probes:
+                self.progress(f"  Setup contract: {probe.instruction}")
+                receipt = await self.engine.execute('run_command', probe.model_dump(exclude={'instruction'}))
+                value = receipt['result']
+                passed = receipt['ok'] and value.get('exit_code') == 0 and not value.get('timed_out')
+                results.append({'instruction': probe.instruction,
+                    'status': 'passed' if passed else 'blocked',
+                    'code': 'FIXTURE_SETUP_OK' if passed else 'FIXTURE_SETUP_ERROR',
+                    'detail': f"Fixture probe exit={value.get('exit_code')}; evidence {receipt['id']}",
+                    'evidence': [receipt['id']]})
+                if not passed:
+                    output = str(value.get('output') or value.get('error') or 'No successful probe receipt')
+                    reason = next((line for line in reversed(output.splitlines()) if line.strip()), 'No probe output')[-300:]
+                    return {'case_id': case.id, 'status': 'blocked',
+                        'detail': f"QA fixture setup blocked: {reason} ({receipt['id']})",
+                        'code': 'FIXTURE_SETUP_ERROR', 'checks': results}
             async with asyncio.timeout(30):
                 engine = await self.engine.open_journey(url=case.journey.url,
                     authenticated=case.journey.authenticated, authentication=self.authentication)
                 await self.observe(engine, "browser_open", {"url": case.journey.url})
-            for index, check in enumerate(case.journey.readiness):
+            entry_checks = case.journey.entry.controls if case.journey.entry else []
+            for index, check in enumerate([*entry_checks, *case.journey.readiness]):
                 self.progress(f"  Setup readiness: {check.instruction}")
                 result = await self.run_step(engine, check, index, [], [], {},
                                              case.journey.url, cache)
                 results.append(result.model_dump())
                 if result.status != "passed":
                     status, detail = "blocked", result.detail
+                    if index < len(entry_checks):
+                        code, detail = 'ENTRY_NOT_READY', 'Journey entry unavailable: ' + detail
                     break
         except Exception as exc:
             status, detail = "blocked", f"{type(exc).__name__}: {exc}"
@@ -114,9 +145,11 @@ class JourneyRunner:
                         status, detail = "blocked", "Readiness cleanup failed: " + "; ".join(errors)
                 except Exception as exc:
                     status, detail = "blocked", f"Readiness cleanup failed: {exc}"
-        return {"case_id": case.id, "status": status, "detail": detail, "checks": results}
+        return {"case_id": case.id, "status": status, "detail": detail, "code": code, "checks": results,
+                'screenshots': [e['result']['screenshot'] for e in self.artifacts.observations[first:]
+                                if e['result'].get('screenshot')]}
 
-    async def run(self, case, *, capture_media=False, on_result=None):
+    async def run(self, case, *, capture_media=False, on_result=None, require_user_action=False):
         """Own the case context, preserve partial evidence and never rerun to obtain media."""
         self.attempt += 1
         journey = case.journey.model_copy(deep=True)
@@ -125,15 +158,30 @@ class JourneyRunner:
         engine = None
         cache = ReplaySession(self.replay_cache, self.cache_mode, case, self.engine, self.artifacts, self.progress)
         interrupted = None
+        entry_blocker = None
         status, detail = "blocked", "Journey did not start"
         first_evidence = len(self.artifacts.observations)
+        health = ApplicationHealth(self.engine, self.artifacts, self.executor)
+        health_baseline = {}
         identity = hashlib.sha256(case.id.encode()).hexdigest()[:16]
         try:
             cache.prepare()
+            if require_user_action:
+                health_baseline = await health.baseline()
             async with asyncio.timeout(30):
                 engine = await self.engine.open_journey(url=journey.url,
                     authenticated=journey.authenticated, authentication=self.authentication)
                 await self.observe(engine, "browser_open", {"url": journey.url})
+            if journey.entry:
+                for entry_check in journey.entry.controls:
+                    checked = await self.run_step(engine, entry_check, 0, [], [], {}, journey.url, cache)
+                    self.artifacts.record('entry_readiness', {'case_id': case.id}, checked.model_dump(),
+                                          checked.status == 'passed')
+                    if checked.status != 'passed':
+                        entry_blocker = {'instruction': 'Host: journey entry readiness',
+                            'status': 'blocked', 'code': 'ENTRY_NOT_READY',
+                            'detail': 'Journey entry unavailable: ' + checked.detail}
+                        raise StepStopped('ENTRY_NOT_READY', entry_blocker['detail'])
             for index, step in enumerate(journey.steps):
                 self.progress(f"  {step.kind} {index + 1}/{len(journey.steps)}: {step.instruction}")
                 result = await self.run_step(engine, step, index, results, trace, checks, journey.url, cache, baselines)
@@ -149,9 +197,47 @@ class JourneyRunner:
                 results.append(exc.step_result)
                 self.artifacts.record("journey_step", {"case_id": case.id}, exc.step_result.model_dump(), False)
             status, detail = "blocked", "Journey interrupted"
+        except StepStopped as exc:
+            status, detail = 'blocked', str(exc)
         except Exception as exc:
             status, detail = "blocked", f"{type(exc).__name__}: {exc}"
         finally:
+            # Keep all planned step positions, including the unexecuted tail, before diagnostics.
+            for index in range(len(results), len(journey.steps)):
+                step = journey.steps[index]
+                results.append(StepResult(index=index, kind=step.kind, instruction=step.instruction,
+                    status="blocked", code="NOT_RUN", detail="Not run after the preceding failure or interruption"))
+            if require_user_action and engine is not None and interrupted is None:
+                self.progress('  Observe: application health and new server logs')
+                failed_checks = [
+                    {'instruction': result.instruction, 'status': result.status,
+                     'detail': result.detail, 'code': result.code,
+                     'check': journey.steps[result.index].check.model_dump()
+                         if journey.steps[result.index].check is not None else None}
+                    for result in results if result.kind == 'assert'
+                        and result.status != 'passed' and result.code != 'NOT_RUN']
+                try:
+                    observed = await health.inspect(engine, case, health_baseline,
+                        failed_checks=failed_checks, exercised=any(r.actions for r in results), failed_actions=[
+                            {'instruction': r.instruction, 'code': r.code, 'detail': r.detail}
+                            for r in results if r.kind == 'act' and r.code in {
+                                'ACTION_GOAL_NOT_REACHED', 'ACTION_GOAL_UNCONFIRMED'}])
+                    policy = StepResult(index=len(results), kind='assert', **observed)
+                    results.append(policy)
+                    self.artifacts.record('application_health', {'case_id': case.id},
+                        policy.model_dump(), policy.status == 'passed')
+                    # A healthy screen cannot erase a failed journey requirement.
+                    if (policy.status != 'passed' or status == 'passed') and (
+                            any(r.actions for r in results) or status == 'passed'
+                            or policy.code == 'UNEXPECTED_APP_ERROR'):
+                        status, detail = policy.status, policy.detail
+                    checks.setdefault(HEALTH_CHECK, []).append(len(trace))
+                    trace.append(ReplayBarrier(kind='requires_verification',
+                        reason='Application health requires an independent observer with fresh screen and server logs'))
+                    omissions.append('Full smoke replay requires an independent application-health observer; exact UI checks alone cannot establish health.')
+                except asyncio.CancelledError as exc:
+                    interrupted = exc
+                    status, detail = 'blocked', 'Journey interrupted during application-health observation'
             if engine is not None:
                 try:
                     async with asyncio.timeout(15):
@@ -163,11 +249,17 @@ class JourneyRunner:
                     status, detail = "blocked", "Journey interrupted during cleanup"
                 except Exception as exc:
                     status, detail = "blocked", f"Cleanup failed: {type(exc).__name__}: {exc}"
+            if require_user_action and status == 'passed' and not any(
+                    item['ok'] and item['tool'] in {'browser_click', 'browser_fill', 'browser_press',
+                        'browser_click_node', 'browser_fill_node', 'browser_press_node'}
+                    for item in self.artifacts.observations[first_evidence:]):
+                status, detail = 'blocked', 'Application smoke executed no successful UI action'
+                policy = StepResult(index=len(results), kind='assert',
+                    instruction='Application smoke exercises a real user action',
+                    status=status, detail=detail, code='NO_USER_ACTION')
+                results.append(policy)
+                self.artifacts.record('journey_step', {'case_id': case.id}, policy.model_dump(), False)
             cache.commit(status)
-            for index in range(len(results), len(journey.steps)):
-                step = journey.steps[index]
-                results.append(StepResult(index=index, kind=step.kind, instruction=step.instruction,
-                    status="blocked", code="NOT_RUN", detail="Not run after the preceding failure or interruption"))
             for step in journey.steps:
                 if isinstance(step, AssertStep) and step.instruction not in checks:
                     checks[step.instruction] = [len(trace)]
@@ -175,6 +267,8 @@ class JourneyRunner:
                         reason=f"Unexecuted check requires verification: {step.instruction}"))
             if status != "passed":
                 trace.append(ReplayBarrier(kind="requires_verification", reason=detail))
+            if any(isinstance(s, ActStep) for s in journey.steps):
+                omissions.append('Action completion needs a live independent goal observer; exported replay stops at verification barriers.')
             if len(trace) > 40:
                 omissions.append("Replay exceeded 40 operations; complete actions remain in evidence.jsonl.")
                 trace = [ReplayBarrier(kind="requires_verification", reason=omissions[-1])]
@@ -206,8 +300,9 @@ class JourneyRunner:
                 omissions.append("Exported replay contains an explicit verification barrier; inspect its reason before replay.")
             result = TestResult(case_id=case.id, runner="playwright", status=status, detail=detail,
                 test_file=relative, rerun=rerun, screenshots=screenshots, omissions=omissions,
-                checkpoints=[{key: s.model_dump()[key] for key in ('instruction', 'status', 'detail', 'code')}
-                             for s in results if s.kind == 'assert'])
+                checkpoints=[*([entry_blocker] if entry_blocker else []),
+                             *[{key: s.model_dump()[key] for key in ('instruction', 'status', 'detail', 'code')}
+                               for s in results if s.kind == 'assert']])
             folder = self.artifacts.path / "journeys"
             folder.mkdir(exist_ok=True)
             self.artifacts.write(f"journeys/{identity}.json", {
@@ -294,6 +389,20 @@ class JourneyRunner:
                         else:
                             fresh = (await self.observe(engine))["result"]
                             evidence = {key: fresh[key] for key in ("url", "snapshot", "truncated") if key in fresh}
+                            if step.evidence_requests:
+                                sources = []
+                                for source in step.evidence_requests:
+                                    url = urljoin(entry_url, source.url)
+                                    observed = await self.engine.execute('http_request', {
+                                        'url': url, 'method': 'GET', 'timeout': source.timeout})
+                                    value = observed['result']
+                                    sources.append({'evidence_id': observed['id'], 'url': url,
+                                        'status': value.get('status'), 'body': value.get('body')})
+                                    if (not observed['ok'] or value.get('truncated')
+                                            or not isinstance(value.get('body'), str)):
+                                        raise StepStopped('ASSERTION_EVIDENCE_UNAVAILABLE',
+                                            f'Required HTTP evidence unavailable or truncated: {url} ({observed["id"]})')
+                                evidence['http_evidence'] = sources
                             if step.compare_to:
                                 if step.compare_to not in baselines:
                                     raise StepStopped('BASELINE_UNAVAILABLE', 'Comparison baseline is unavailable')
@@ -327,6 +436,42 @@ class JourneyRunner:
             detail=detail, code=code, model_calls=budget.model_calls, actions=budget.actions,
             evidence=[e["id"] for e in self.artifacts.observations[first:]], **cache.step_info.get(index, {}))
 
+    async def verify_goal(self, engine, step, budget, baseline, trace):
+        """Reject unobserved completion using an independent fresh-screen judgment."""
+        if self.executor is None:
+            raise StepStopped('MODEL_UNAVAILABLE', 'Action completion requires an independent goal observer')
+        fresh = await self.observe(engine)
+        value = fresh['result']
+        if not fresh['ok'] or value.get('truncated') or not isinstance(value.get('snapshot'), str):
+            raise StepStopped('ACTION_GOAL_UNCONFIRMED', 'Fresh action-goal evidence is unavailable or incomplete')
+        evidence = {key: value[key] for key in ('url', 'snapshot', 'truncated') if key in value}
+        evidence['baseline'] = {key: baseline['result'][key]
+            for key in ('url', 'snapshot', 'truncated') if key in baseline['result']}
+        evidence['host_operations'] = [
+            {'tool': e['tool'], 'arguments': e['arguments'], 'ok': e['ok'], 'evidence_id': e['id']}
+            for e in self.artifacts.observations
+            if int(baseline['id'][1:]) < int(e['id'][1:]) < int(fresh['id'][1:]) and e['tool'] in ACT_TOOLS
+            and e['tool'] != 'browser_snapshot']
+        judge = getattr(self.executor, 'judge_goal', None) or self.executor.judge
+        calls = 0
+        def on_goal_call():
+            nonlocal calls
+            if calls >= 2:
+                raise StepStopped('ACTION_GOAL_MODEL_LIMIT', 'Action goal exceeded two provider requests')
+            budget.goal_call()
+            calls += 1
+        response = await judge(step.instruction, deepcopy(evidence), on_call=on_goal_call)
+        judgment = Judgment.model_validate(response.model_dump())
+        self.artifacts.record('action_goal', {'instruction': step.instruction,
+            'screen_evidence': fresh['id'], 'baseline_evidence': baseline['id'],
+            'operation_evidence': [e['evidence_id'] for e in evidence['host_operations']]}, judgment.model_dump(), judgment.verdict == 'holds')
+        trace.append(ReplayBarrier(kind='requires_verification',
+            reason='Action completion requires an independent goal observer'))
+        if judgment.verdict != 'holds':
+            code = 'ACTION_GOAL_NOT_REACHED' if judgment.verdict == 'fails' else 'ACTION_GOAL_UNCONFIRMED'
+            raise StepStopped(code, judgment.explanation)
+        return judgment.explanation
+
     async def act(self, engine, step, budget, completed, trace, entry_url, cache, index):
         """Only the engine's offered browser tools can execute inside an action step."""
         observation = await self.observe(engine)
@@ -334,30 +479,45 @@ class JourneyRunner:
         if cached is not None:
             replayed = await self.replay(engine, cached, budget, trace, entry_url, cache)
             if replayed:
+                await self.verify_goal(engine, step, budget, observation, trace)
                 cache.pending[index] = cached
-                return "passed", "Recorded actions completed; fresh assertions follow"
+                return "passed", "Recorded actions reached the independently checked goal"
             observation = await self.observe(engine)
         if self.executor is None:
             raise StepStopped("MODEL_UNAVAILABLE", "Action step requires a journey executor")
         await self.executor.begin()
+        baseline = deepcopy(observation)
         initial = screen_hash(observation["result"])
         recorded = []
         tools = {name: spec for name, spec in engine.catalog("execute").items() if name in ACT_TOOLS}
         last_signature, repetitions, failures, feedback = None, 0, 0, ""
+        rejected_completions = 0
         while True:
-            if budget.model_calls >= step.max_model_calls:
+            if budget.actor_calls >= step.max_model_calls:
                 raise StepStopped("STEP_MODEL_LIMIT", "Step exhausted its model-call budget")
             response = await self.executor.act(deepcopy({
                 "goal": step.instruction, "observation": observation,
                 "completed_steps": [s.model_dump() for s in completed[-5:]],
                 "tools": tools, "feedback": feedback,
                 "remaining_actions": step.max_actions - budget.actions,
-                "remaining_model_calls": step.max_model_calls - budget.model_calls,
+                "remaining_model_calls": step.max_model_calls - budget.actor_calls,
             }), on_call=budget.model_call)
             decision = ActDecision.model_validate(response.model_dump())
             if decision.kind == "complete":
                 if decision.outcome == "blocked":
                     return "blocked", "Action could not complete: " + decision.summary
+                try:
+                    goal_detail = await self.verify_goal(engine, step, budget, baseline, trace)
+                except StepStopped as exc:
+                    if exc.code != 'ACTION_GOAL_NOT_REACHED' or rejected_completions >= 1:
+                        raise
+                    rejected_completions += 1
+                    feedback = ('Independent goal check rejected completion: ' + str(exc) +
+                        '. Reobserve and correct the mismatch. Do not repeat submissions or '
+                        'irreversible actions with uncertain results. One recovery is allowed.')
+                    observation = await self.observe(engine)
+                    await self.executor.begin()
+                    continue
                 if cache.mode != "off" and cache.eligible:
                     final = screen_hash((await self.observe(engine))["result"])
                     if initial is not None and final is not None:
@@ -365,7 +525,7 @@ class JourneyRunner:
                     else:
                         cache.exclude(index, "Incomplete screen observation")
                 # Completion advances to the fixed assertions; it is not a case verdict.
-                return "passed", decision.summary
+                return "passed", "Action goal independently verified: " + goal_detail
             budget.action()
             action = decision.action
             signature = json.dumps([action.tool, action.arguments], sort_keys=True)

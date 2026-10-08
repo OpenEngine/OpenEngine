@@ -159,7 +159,7 @@ def test_export_preserves_absolute_navigation_after_entry_redirect(tmp_path, red
     replay = subprocess.run([sys.executable, result.test_file], cwd=artifacts.path,
         env={**os.environ, 'PYTHONPATH': str(Path(open_verify.__file__).resolve().parent.parent)},
         capture_output=True, text=True, timeout=30)
-    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert replay.returncode == 2 and 'independent goal observer' in replay.stdout + replay.stderr
     assert ('A', '/done?query=one%20two') in requests
     assert ('B', '/done?query=one%20two') not in requests
 

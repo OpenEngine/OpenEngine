@@ -68,7 +68,7 @@ saved plan and human-readable report. To deliberately recheck repository tests:
 ov "Recheck the existing SQLite regression" --pr https://github.com/OpenEngine/OpenEngine/pull/692 --allow-exec --verification tests
 ```
 
-A backend PR can still receive a live browser smoke test. Browser journeys capture
+A backend PR in a runnable web application requires a live browser smoke test. Browser journeys capture
 screenshots and GIF summaries independently of `material_ui_change`; that flag
 continues to describe the change itself. Final-attempt media is included in the
 publication manifest, while actual uploads/comments still require `--publish`.
@@ -79,8 +79,8 @@ Cases also declare `coverage=changed_behavior`, `regression`, or
 `requested_behavior`. PR comments show those labels, completion checks and
 environment substitutions; a general application smoke is not presented as
 verification of a backend change. Blocked cases list planned checks as unverified.
-Prefer exact browser assertions for literal submitted text and status labels so
-the exported journey can replay without a model judge.
+Prefer exact browser assertions for literal submitted text and status labels. Those checks
+replay without a model; action-goal and health observations still require live independent judges.
 
 Independent terminal harnesses should use `python -` with their source in the
 command's stdin. When a Python helper was created from command stdin during the
@@ -384,7 +384,12 @@ The first uploader supports github.com using documented release asset APIs. It
 creates an `open-verify/pr-<number>/<head>` tag and prerelease for each verified PR
 revision, marked as not latest. This invokes any repository workflows subscribed
 to those tag/release events. Assets inherit repository access; private repository
-assets require GitHub access. PR comments embed PNG screenshots and GIF summaries and link to Python tests.
+assets require GitHub access. PR comments and local reports lead with screenshots/GIFs and a short summary of
+executed behavior: one short evidence caption per case, including its final observed product check.
+Unexecuted checks and blockers stay visible. Changed-behavior gaps and scripted providers are
+disclosed above the cases. Full checks, plans, assumptions and exported test links are expandable.
+The visible summary targets roughly one quarter of the previous prose; this is a presentation
+budget, not a fixed ratio for short or failed runs.
 Legacy MP4 bundles remain supported for publication; new tests emit GIFs only. Another store can implement
 `VerificationUploader.upload` to return a durable HTTPS URL.
 
@@ -498,6 +503,13 @@ Useful options:
   `wss` → `https`), with the same host and port, and are checked before connecting.
 - `--headless`: hide the Chromium window; the default is visible.
 - `--max-steps 60`: bound agent decisions, including rejected decisions and findings.
+  Repository inspection has separate caps: at most 20 requests during discovery and
+  30 overall by default; the final 10 decisions are reserved for setup/execution,
+  not further source reads. Smaller decision budgets scale these limits down.
+  Once capped, inspection tools disappear from model context and the host refuses
+  further requests; use existing evidence to plan/execute or report a concrete blocker.
+  This preserves decision capacity, but cannot force an agent to produce a valid plan.
+  Incomplete runs print their stop reason before the report/manifest paths.
 - `--output PATH`: save a new run below this directory. The default is the user's
   application data directory, outside the project being tested.
 
@@ -535,8 +547,8 @@ self-detaching child services can require manual cleanup.
 ## Architecture
 
 Open Verify uses a deterministic Python runner with replaceable executors and
-application engines. ACP supplies the model conversation; no LangGraph runtime is
-needed inside the CLI. OpenEngine may still invoke the CLI from its outer
+application engines. ACP supplies the model conversation. A typed LangGraph stage
+validates journey entry evidence and live readiness before execution. OpenEngine may still invoke the CLI from its outer
 LangGraph workflow through the existing manifest contract.
 
 Codex and Claude both reach the runner through ACP, whose message stream is
@@ -550,6 +562,7 @@ is rejected and repaired once.
 User request / diff
     -> LLM planner proposes cases, action goals and separate assertions
     -> deterministic runner fixes the plan and schedules setup and cases
+        -> entry graph: validate cited route evidence, then check live starting controls
         -> act: fresh LLM conversation proposes checked browser actions
         -> engine: executes actions and returns screen evidence
         -> assert: exact engine check OR fresh evidence-only LLM judge
@@ -564,6 +577,7 @@ The boundary is explicit:
 | `executor.py` / `StepExecutor` | Propose one typed `Decision` from a detached `DecisionContext` | Optional |
 | `executor.py` / `AgentExecutor` | Default prompt construction, compaction, and separate case sessions | Yes, through ACP |
 | `replay_cache.py` / `ReplayCache`, `ReplaySession` | Versioned action recordings, compatibility, invalidation and commit after verification | No |
+| `entry.py` / `EntryPreparation` | Typed LangGraph evidence and readiness nodes; no case actions | Independent checks through the journey executor |
 | `journey.py` / `JourneyRunner` | Fixed act/assert order, per-step deadlines, action/model limits and trace export | No |
 | `step_executor.py` / `AgentJourneyExecutor` | Fresh acting sessions and independent evidence-only judgments | Yes, through ACP |
 | `agent.py` / `ACPDecisionAgent` | Provider transport, schema repair and native-tool rejection | Model transport |
@@ -749,7 +763,7 @@ assertions and never proves the feature works. The engine executes actions,
 exact checks or a fresh judge verify the result, and the runner assigns the case
 verdict. Custom journey executors must use `outcome` rather than the former
 actor `status` field.
-The default limits are 60 seconds, 12 action requests and 12 model calls, including
+The default limits are 60 seconds, 12 action requests and 12 acting model calls, including
 schema repair. Repeated identical actions or failures stop the step. Prior step
 receipts provide bounded context; the executor receives copies.
 
@@ -917,7 +931,8 @@ exclusion even when a unique locator is available.
 
 The CLI defaults to `--cache auto`. The first successful structured browser
 journey records eligible action steps. A compatible later run dispatches those
-actions through the engine without an acting-model call. Exact assertions and
+actions through the engine without an acting-model call. An independent goal judge still checks
+the resulting screen before the step advances. Exact assertions and
 semantic and visual judges always run again; discovery/planning still uses its normal agent.
 Cache reuse does not reuse a prior verdict or establish coverage of hidden state.
 
@@ -1023,6 +1038,109 @@ Not implemented yet: durable resume, interactive terminal sessions, popup/multi-
 browser workflows, automatic graph evolution, Docker, Maestro, and automatic
 before/after revision environments.
 
+## Manual QA coverage
+
+`ov` defaults to manual QA through the actual application. A backend-only diff
+still needs a basic browser journey for an available web app, or actual commands
+for a CLI app. The host discovers runnable entry points from checkout manifests
+independently of the changed files and rejects plans that omit that application
+smoke. With the default `--max-cases 1`, prioritize a relevant user journey:
+create/open disposable data, assert the visible result, and reload/reopen it.
+Browser journeys retain screenshots/GIFs; CLI journeys retain commands and output.
+Opening a page, starting a process, checking health, or running a test suite alone
+is insufficient.
+
+Plan cases use `interaction=user` for application UI/API/CLI actions and
+`interaction=library` for direct in-process public-API assertions. Library checks
+are supporting coverage when a runnable application exists, even if only library
+files changed. Add them with additional case scope rather than replacing the
+application smoke. A genuinely library-only project can use them as its primary
+coverage. `--verification tests` explicitly permits existing repository suites.
+
+If startup, credentials or another prerequisite blocks the application journey,
+retain its logs and report it blocked. Passing supporting checks cannot replace
+that result. Startup and QA environment recipes come from the tested checkout;
+use `--setup-file OV.md` and explicit helper paths when local recipes are absent
+from the PR. Private setup files are never copied implicitly.
+
+## Independent application health
+
+Manual browser smoke requires a structured journey. Before browser cleanup, including
+when assertions fail or actions are blocked, a host-required observer reads a fresh
+screen and new output from managed servers captured since the journey began. It uses a fresh judge conversation without the
+actor's transcript or success claims. An unexpected failed job, error banner or
+server exception blocks the case for investigation even if prompt/URL assertions
+passed. Existing errors in the pre-action log baseline are not new failures;
+truncated, rotated or unavailable required evidence cannot establish a pass.
+Expected negative-test outcomes are judged in context, not by keyword matching.
+The observer receives failed assertion definitions and host results as evidence, without
+actor conclusions. An evidenced fixture failure (`FIXTURE_ERROR`) or mistaken assertion
+representation (`ASSERTION_INVALID`) blocks the run for QA repair. Healthy observations
+cannot turn a failed requirement into a pass. Original failures and all unexecuted steps
+remain in the saved journey; reports lead with the diagnosis. Cancellation stops model work.
+
+For creation that starts background work, plan and assert a documented healthy
+state appropriate to that application, then check it again after reload when relevant.
+Core guidance does not prescribe particular workflows, status names, labels or provider protocols.
+Those belong to the target project's documentation or explicit setup files (such as `OV.md`).
+If using substitutes, inspect their documented request/response and completion contracts;
+arbitrary text responses are not valid substitutes. Readiness verifies the actual prerequisites
+of the chosen user journey through appropriate observable interfaces.
+Declare `journey.scripted_providers=true` for scripted responses; this requires at least one
+`journey.setup_probes` command. Each probe has `instruction`, `argv`, optional `cwd`, `stdin`
+and `timeout`. Before browser readiness or user actions, the host executes these fixed
+commands under the normal `--allow-exec` policy and requires exit 0 without a timeout.
+Use the target integration's actual request matching, response validators and completion
+contracts against the fixture file. Guessed selectors or a populated UI selector are insufficient. Failed probes retain command/log
+receipts and allow the existing two setup repair opportunities with unchanged probes/checks.
+Prefer a complete shipped fixture; do not add catch-all success responses to mask mismatch.
+
+`expect_text` defaults to `match="exact"`. Use an observed full path for exact equality,
+or explicitly select `match="contains"` when a path suffix is the intended requirement:
+`{"kind":"expect_text","text":"sample-resource","match":"contains"}`.
+Both live execution and exported replay preserve this choice; failures never switch modes.
+A broken fixture is a blocker, not proof that the PR introduced a product defect.
+
+The final health checkpoint and its log/screen receipts appear in the report and
+manifest. The exported browser trace stops at a verification barrier: exact UI
+replay cannot claim the live health observer's result. Standalone legacy browser
+checks remain available outside the required manual application smoke.
+
+## Backend checkpoints
+
+Backend lifecycle commands can declare `expect.checkpoints` as an ordered list
+of planned completion check names, each mapped exclusively to that command in
+`checks`. After an assertion succeeds, the script prints a flushed line such as:
+
+```text
+OV_CHECKPOINT {"check":"Unapproved proposal stays out of the queue","detail":"queue=[]"}
+```
+
+The runner validates the event names, order and payloads from the complete log.
+It assigns checkpoint statuses, retains earlier completions if the command fails,
+and marks unreached checks as not run. Missing or malformed events block the case;
+exit code and output assertions must still pass. HTTP and legacy command suites
+also receive checkpoints derived from their mapped operation results. Checkpoints
+appear in CLI progress, reports and the manifest; the exported test preserves the
+same protocol for replay.
+
+Generated Python assertion scripts use `argv=[python, "-"]`, source in `stdin`,
+`expect.python_harness=true`, and expected exit code zero. The host wraps the source:
+uncaught `AssertionError` produces a failed assertion with its message; other
+exceptions produce a blocked `HARNESS_ERROR` with the exception and retained traceback.
+A crashed harness does not establish a product failure. Product CLI commands retain
+normal exit-code assertions, including expected nonzero exits.
+
+One diagnosed harness repair is allowed through `retry_reason`. Only stdin source
+may change: the plan, step mapping, commands and expectations stay fixed. Both
+attempts and their result files remain in the export; the manifest shows the latest
+result. Assertion failures, HTTP/CLI failures, timeouts and policy refusals do not
+receive retries. Use JSON-native mocked provider responses; `dataclasses.asdict()`
+retains enums, so explicitly serialize their `.value`, including nested values.
+
+These events report the script's assertions, not a
+separate independent judge of the Python harness.
+
 ## Tests
 
 From this directory, with its environment activated:
@@ -1035,3 +1153,143 @@ Tests exercise the real Python runner, custom executor/engine contracts, a local
 execution, failure reporting and browser interaction against a local fixture page.
 Browser tests skip if the optional package or Chromium is unavailable. They do not
 consume provider credits; real Codex/Claude compatibility still needs a live smoke run.
+
+
+## Bounded repository inspection
+
+The planner and each case see an index of source paths, read offsets, pagination
+hints, missing files and evidence IDs, even after an agent conversation reset.
+Repeated identical `read_file`, `list_files` and `read_change_diff` requests return
+`ALREADY_INSPECTED` with retained evidence; they still consume decision/inspection
+allowance. A missing `OV.md` does not need repeated checks. Setup/application
+operations clear this read cache because files may have changed. For an external
+edit, `read_file`/`list_files` accept explicit `refresh=true`; this does not bypass
+inspection limits or the engine's path/secret checks.
+
+`read_file` accepts `path`, `offset` (Unicode characters, default 0) and `limit`
+(1–24000, default 24000). A truncated result includes `next_offset`; request that
+section instead of rereading the prefix. The host bounds offsets to 10 million
+characters and keeps the existing dependency/metadata/secret-file exclusions.
+The cache is a run-local inspection aid, not a test result or application replay.
+
+
+## Evidence sources and project-specific setup
+
+The core owns execution, evidence collection, independent assertions, budgets, diagnosis and
+reporting. Product-specific startup recipes, fixture protocols, labels, healthy states and smoke
+journeys come from the tested project's documentation or explicitly supplied setup files.
+OpenEngine examples elsewhere in this document illustrate one integration; they are not core defaults.
+
+A semantic assertion, including a readiness check, may declare up to three read-only HTTP sources:
+
+```json
+{
+  "kind": "assert",
+  "instruction": "The visible Sample workspace corresponds to workspace id w-17 in the configuration",
+  "evidence_requests": [{"url": "/api/workspaces"}]
+}
+```
+
+The host supplies fresh screen text plus HTTP receipt IDs, URLs, status and body to the independent
+judge without actor conclusions. Relative URLs bind to the journey's application origin; absolute
+HTTP(S) URLs obey the same engine origin policy as ordinary requests. These requests accept no
+credentials, custom headers or mutating methods. Missing or truncated required evidence blocks
+judgment; a non-success HTTP status remains explicit evidence for the stated requirement.
+A relation must have an evidenced shared key. No automatic path rewriting or label-to-ID guesses
+are applied. Exact assertions and visual judgments cannot declare additional HTTP sources.
+Exported replay retains a live-verification barrier for these semantic checks. It cannot claim
+that replaying UI actions has re-established a relationship to backend identity.
+
+
+## Learned product onboarding
+
+QA skills stay in OV. Product onboarding lives separately in readable JSON under `.ov/`.
+OV loads the profile before discovery so the planner can reuse product terminology, basic
+workflows and environment guidance. Prior knowledge is advisory evidence, not instructions,
+permission to execute commands, or proof that the current application passes.
+
+After a first onboarding run, the built-in ACP agent gets one bounded learning pass (the configured ACP response timeout, capped at 180 seconds,
+at most two provider requests including repair). The evidence packet is capped at 24,000 characters and prioritizes completed journeys and product
+documentation over repeated screen dumps. It can propose up to 20 stable facts, separated
+into `product`, `workflow` and `environment`, plus uncertainties. Every fact cites current host
+receipts. The host validates those references and records source paths/hashes, evidence IDs,
+confidence (`documented`, `inferred`, `observed`), timestamp, revision when known and the original
+run location. These labels express evidence basis, not a guarantee that every model inference
+is correct. Review the generated profile. Failed UI runs and process logs are not onboarding
+sources; observed workflows require a passed host journey. Common credential payloads and
+disposable paths/IDs are rejected, but this is not a general secret scanner: do not put secrets
+in product onboarding documents.
+
+Local runs use `<project>/.ov/product.json`. PR runs retain knowledge in the original caller's
+project under `.ov/repositories/<repository-hash>/product.json`, outside the disposable checkout.
+Each GitHub target repository has a separate identity. This first version keeps local-run and
+PR-run profiles separate. `.ov` is excluded from ordinary discovery/change inspection, and
+profiles are not automatically added to published test evidence.
+
+Code/documentation hashes mark changed-source facts stale. Observed facts tied to a known PR
+revision become stale on another revision. UI-only facts in runs without revision information
+remain advisory and require fresh testing; OV does not automatically detect every UI change.
+Supported refreshes update the provenance of unchanged statements; conflicting statements are
+retained for review rather than silently replacing expectations. Existing invalid or mismatched
+profiles are left untouched. Writes are atomic and symlink profiles are refused.
+
+Use `--refresh-knowledge` to request another bounded learning pass from evidence collected in
+that run, or `--no-knowledge` to disable both loading and learning. Normal runs with a current
+profile skip the additional learning call. Learning does not delay beginning useful QA or consume
+its action/decision budget; it runs after the QA report is saved. A learning error cannot turn a
+passing test into a failed test. `knowledge-status.json` records timeout, elapsed time, request count
+and input size when learning fails; missing or empty profiles are retried on the next run. Custom executors without a structured response transport can
+consume saved knowledge but do not automatically generate it in this version.
+
+```bash
+ov "Check the main user journey" --allow-exec
+ov "Check search after this change" --allow-exec
+ov "Check search and refresh onboarding" --allow-exec --refresh-knowledge
+```
+
+Reports show a visible coverage limit when no passing case verifies changed behavior, and disclose
+scripted providers beside the summary. A successful regression smoke does not establish PR coverage
+or live external-provider connectivity.
+
+
+Action completion is independently checked against a fresh screen, the initial observation,
+and host-executed operations. The actor's summary is excluded. A contradicted goal permits one
+recovery within the original action, acting-call and time budgets. Missing or truncated evidence
+blocks completion (`ACTION_GOAL_UNCONFIRMED`); a second mismatch stops the step
+(`ACTION_GOAL_NOT_REACHED`). Cached actions also require a fresh goal
+check. Exported replay stops at a goal-verification barrier instead of claiming the model check
+was reproduced. Fixed case assertions remain independent and unchanged.
+
+Health diagnosis distinguishes `action`, `fixture`, `assertion`, `application` and `unknown` causes.
+Wrong navigation is a QA action problem when evidenced, not proof of an application bug.
+Unattributed failures remain blocked with `APP_HEALTH_INCONCLUSIVE`; `UNEXPECTED_APP_ERROR`
+requires an application diagnosis. Neither recovery nor a healthy final screen erases failed checks.
+
+
+Action-step `max_model_calls` limits the actor (including protocol repair). The host reserves
+up to two provider requests per independent goal check, at most four across the initial check
+and one recovery. Goal checks share the original step deadline and never grant more tool actions.
+Receipts count all actor and goal requests in `model_calls`; exhausting the independent allowance
+blocks with `ACTION_GOAL_MODEL_LIMIT`. A two-call reload step can therefore perform its reload,
+conclude, and still receive independent verification. Blocked report captions also include up to
+three passed product checkpoints, so partial execution is visible without implying a complete pass.
+
+
+Manual browser journeys require `journey.entry`: current source/UI evidence IDs and independent
+`controls` assertions for the first action. `journey.url` supplies the supported direct entry route.
+The first LangGraph stage has two nodes: `validate_entry_evidence` → `verify_entry_readiness`.
+Typed state carries the case, whether an entry is required, and host readiness results; model
+conversation history is not shared through this state. Other QA orchestration remains in the
+existing runner. This graph has no durable checkpointing or automatic browser/process resume.
+
+Failed readiness returns to the planner with at most two repair opportunities. The
+`repair_journey_entry` tool can correct only the current case's route and cited evidence before
+execution. It preserves the application origin, existing entry controls, setup probes, goals and
+case assertions. A missing legacy contract may be supplied during this pre-execution repair.
+Neither the presence of a citation nor saved product knowledge proves that a route is correct:
+live controls must pass, including a fresh check in the case's actual isolated browser session.
+Navigation-only entry paths must first be resolved to a supported direct route in this version.
+Library/custom journeys without a detected runnable application retain optional entry contracts.
+
+Entry blockers remain the reported cause when no user actions were exercised. Application health
+can inspect the current page, but it cannot demand completion or persistence of unexecuted work.

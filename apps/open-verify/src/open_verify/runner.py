@@ -7,19 +7,30 @@ from collections.abc import Awaitable, Callable
 from typing import TypedDict
 from urllib.parse import urlsplit
 
+from open_verify.application import application_surface, inline_harness
 from open_verify.artifacts import Artifacts
 from open_verify.backend_runner import BackendRunner
 from open_verify.backend_spec import BackendTest
 from open_verify.changes import Change, DiffRequest, read_file_diff
-from open_verify.engine import Engine
+from open_verify.engine import READ_TOOLS, Engine
+from open_verify.entry import EntryPreparation, entry_evidence_error
 from open_verify.executor import AgentExecutor, DecisionAgent, DecisionContext, StepExecutor
+from open_verify.inspection import InspectionBudget
 from open_verify.journey import JourneyRunner
-from open_verify.journey_spec import RunJourney
+from open_verify.journey_spec import RepairJourneyEntry, RunJourney
+from open_verify.knowledge import ProductKnowledge
 from open_verify.manifest import write_manifest
 from open_verify.models import Case, Decision, Finding
 from open_verify.procedures import Procedures
 from open_verify.step_executor import AgentJourneyExecutor, JourneyExecutor
-from open_verify.test_spec import BrowserRunner, BrowserTest, LoginRequest
+from open_verify.test_export import save_browser_test
+from open_verify.test_spec import (
+    BrowserRunner,
+    BrowserTest,
+    LoginRequest,
+    ReplayBarrier,
+    TestResult,
+)
 from open_verify.verification import CaseVerifier
 from open_verify.verification_policy import existing_test_command
 
@@ -64,6 +75,10 @@ class VerificationRunner:
         journey_executor: JourneyExecutor | None = None,
         replay_cache=None,
         cache_mode="auto",
+        knowledge_path=None,
+        knowledge_identity=None,
+        knowledge_enabled=True,
+        refresh_knowledge=False,
     ):
         self.executor = executor or (AgentExecutor(agent) if agent is not None else None)
         self.engine = tools
@@ -71,16 +86,26 @@ class VerificationRunner:
         if verification not in {"live", "tests"}:
             raise ValueError("verification must be live or tests")
         self.verification = verification
+        self.application = application_surface(tools.project) if verification == "live" else None
         self.plan_only = plan_only
         self.max_steps = max_steps
+        self.inspection = InspectionBudget(max_steps)
+        self._inspection_notice = False
         self.progress = progress
         self.progress_status = progress_status
         self.ask_user = ask_user
+        self.knowledge_agent = agent
+        self.knowledge = ProductKnowledge(tools.project,
+            knowledge_path or tools.project / '.ov' / 'product.json',
+            knowledge_identity or str(tools.project.resolve()), artifacts,
+            refresh=refresh_knowledge, progress=progress,
+            revision=change.head if change else None) if knowledge_enabled else None
         self.change = change
         self.test_runner = test_runner
         self.verifier = CaseVerifier(
             artifacts, test_runner, change_mode=change is not None,
             check_url=tools.check_url, progress=progress,
+            application_interface=(self.application or {}).get("interface"),
         )
         self.test_results = self.verifier.test_results
         self.backends = BackendRunner(tools, artifacts, progress=progress)
@@ -110,7 +135,9 @@ class VerificationRunner:
 
     async def decide(self, state: QAState):
         if state["steps"] >= self.max_steps:
-            return {"status": "incomplete", "note": "Action/decision budget exhausted."}
+            return {"status": "incomplete", "note": "Action/decision budget exhausted" +
+                (" before any case result was recorded." if not self.test_results and not state.get("findings") else
+                 f" after {len(self.test_results)} case execution(s).")}
         if state["stage"] == "discover":
             waiting_status = "Discovering: asking the QA agent which project file to inspect…"
             self.progress_status(waiting_status)
@@ -135,12 +162,14 @@ class VerificationRunner:
             "state": state,
             "case_instruction": "Complete only the current case. Reuse managed setup; do not stop shared services between cases.",
             "setup_answers": self._setup_answers[-5:],
+            "product_knowledge": self.knowledge.context() if self.knowledge else None,
             "authenticated_session_available": self.authentication.state is not None,
             "recent_evidence": self.artifacts.observations[-6:],
             **self.engine.environment(),
             "execution_enabled": self.engine.allow_exec,
             "max_cases": self.max_cases,
             "verification_mode": self.verification,
+            "application_smoke": self.application,
             "setup_files": list(self.setup_files),
             "tools": self.engine.catalog(state["stage"]),
             "procedure_node": node,
@@ -150,6 +179,7 @@ class VerificationRunner:
                 for item in self.artifacts.observations
             ],
             "decision_schema": Decision.model_json_schema(),
+            "inspection_budget": self.inspection.context(state, self.max_steps),
         }
         if self.change is not None:
             context["tools"]["read_change_diff"] = {
@@ -170,15 +200,27 @@ class VerificationRunner:
                 }
         if state["stage"] == "execute" and case is not None and case["interface"] in {"http", "terminal"}:
             context["tools"]["run_backend_test"] = {
-                "description": "Save and execute this case's HTTP or terminal regression suite once. The host owns its verdict.",
+                "description": "Save and execute this case's HTTP or terminal regression suite. Only a classified Python harness error permits one diagnosed repair; the host owns the verdict.",
                 "arguments": BackendTest.model_json_schema(),
             }
         if case is not None and case.get("journey"):
             context["tools"].pop("run_browser_test", None)
+            context['tools']['repair_journey_entry'] = {
+                'description': 'After failed entry readiness, correct only the current entry route and citations. Preserve existing required controls and every case goal/check.',
+                'arguments': RepairJourneyEntry.model_json_schema(),
+            }
             context["tools"]["run_journey"] = {
                 "description": "Execute this case's fixed act/assert journey after setup. The host owns its verdict.",
                 "arguments": RunJourney.model_json_schema(),
             }
+        if not self.inspection.available(state, self.max_steps):
+            for tool in READ_TOOLS:
+                context['tools'].pop(tool, None)
+            context['inspection_instruction'] = (
+                'Repository inspection is closed to reserve execution decisions. '
+                'Use the indexed evidence: assess impact and submit a focused plan now, '
+                'or continue setup and execute the fixed case. Do not replace reads with shell inspection loops. '
+                'If required evidence is missing, report a concrete blocker rather than inventing it.')
         request = DecisionContext.snapshot(
             context, scope=f"case:{case_id}" if case_id is not None else "discover",
             case_id=case_id, change_mode=self.change is not None,
@@ -220,6 +262,31 @@ class VerificationRunner:
                 command = self.command_progress(action.tool, action.arguments)
                 if command:
                     self.progress(f"    $ {command}")
+            if action.tool in READ_TOOLS:
+                if not self.inspection.available({**state, 'steps': state['steps'] - 1}, self.max_steps):
+                    observation = self.artifacts.record(action.tool, action.arguments, {
+                        'code': 'INSPECTION_BUDGET',
+                        'error': 'Repository inspection budget reached; use existing evidence to plan or execute. '
+                                 'Do not substitute shell reads. Missing evidence requires an explicit blocker.',
+                    }, False)
+                    if not self._inspection_notice:
+                        self.progress('Inspection budget reached — use existing evidence and proceed to execution.')
+                        self._inspection_notice = True
+                    return {'observation': observation}
+                prior = self.inspection.prior(action.tool, action.arguments)
+                if prior is not None:
+                    observation = self.artifacts.record(action.tool, action.arguments, {
+                        'code': 'ALREADY_INSPECTED', 'evidence': prior['id'],
+                        'previous_result': prior['result'],
+                        'error': 'Already inspected. Reuse this evidence; for truncated content use next_offset. '
+                                 'Use refresh=true only after an external file change.',
+                    }, False)
+                    # Refusals still consume decisions and inspection allowance.
+                    self.inspection.total += 1
+                    self.inspection.discovery += state['stage'] == 'discover'
+                    return {'observation': observation}
+            else:
+                self.inspection.invalidate(action.tool)
             if action.tool == "read_change_diff":
                 try:
                     if self.change is None:
@@ -247,11 +314,23 @@ class VerificationRunner:
                     if self.ask_user is not None:
                         answer = await self.ask_user("Login did not complete. Retry or skip authenticated cases?")
                         return {"observation": observation, "feedback": "Login response: " + (answer or "skip")}
+            elif action.tool == 'repair_journey_entry':
+                observation = self.repair_journey_entry(state, action.arguments)
             elif action.tool in {"run_journey", "run_backend_test"}:
                 execute = self.run_journey if action.tool == "run_journey" else self.run_backend_test
                 observation = await execute(state, action.arguments)
                 if observation["ok"]:
                     result = observation["result"]
+                    attempts = [r for r in self.test_results if r.case_id == result["case_id"]]
+                    if (action.tool == "run_backend_test" and result["status"] == "blocked"
+                            and any(p.get("code") == "HARNESS_ERROR" for p in result["checkpoints"])
+                            and len(attempts) < 2):
+                        self.progress("Harness blocked: " + result["detail"] + "; one repair available")
+                        return {"observation": observation, "feedback":
+                            "The generated Python harness crashed. Read its retained command log, "
+                            "diagnose the exception and correct stdin source only. Retry once with "
+                            "retry_reason; preserve all planned checks and expectations. "
+                            "This is not an application assertion failure."}
                     finding = Finding(case_id=result["case_id"], status=result["status"],
                         actual=result["detail"], evidence=[observation["id"]],
                         reproduction=result["rerun"] if result["status"] == "failed" else [])
@@ -278,6 +357,8 @@ class VerificationRunner:
                 observation = await self.engine.execute(
                     action.tool, action.arguments, stage=state["stage"]
                 )
+            if action.tool in READ_TOOLS:
+                self.inspection.remember(action.tool, action.arguments, observation, state['stage'])
             if (
                 action.tool == "start_process"
                 and "uvicorn" in " ".join(action.arguments.get("argv", []))
@@ -331,6 +412,26 @@ class VerificationRunner:
                     case["checks"] = case["checks"] or [case["expected"]]
                 if any(not check.strip() for check in case["checks"]) or len(set(case["checks"])) != len(case["checks"]):
                     return {"feedback": "Completion checks must be nonempty and unique."}
+            if self.application:
+                required = self.application["interface"]
+                smoke = [case for case in plan["cases"]
+                         if case["interaction"] == "user" and (case["interface"] == required
+                             or required == "browser" and case["interface"] == "mixed")]
+                if not smoke:
+                    return {"feedback": f"Manual QA requires a {required} application smoke journey: "
+                        f"{self.application['evidence']} declares a runnable application. "
+                        "Exercise a basic real user action and assert its visible result even for backend-only changes. "
+                        "With max_cases=1 prioritize this smoke; library assertions are supporting coverage. "
+                        "If startup is unavailable, keep the application case and report it blocked."}
+                for case in smoke:
+                    if required == 'browser' and not case.get('journey'):
+                        return {"feedback": "Manual application smoke requires a structured browser journey so the host can independently observe the final screen and new server logs. Supply case.journey with actions and assertions."}
+                    if case.get('journey'):
+                        steps = case['journey']['steps']
+                        if not any(step['kind'] == 'act' and any(
+                                later['kind'] == 'assert' for later in steps[index + 1:])
+                                for index, step in enumerate(steps)):
+                            return {"feedback": "Application smoke requires a user action followed by a result assertion; opening a page alone is insufficient."}
             if (state.get("impact") or {}).get("material_ui_change") and not any(
                 case["interface"] in {"browser", "mixed"} for case in plan["cases"]
             ):
@@ -405,7 +506,7 @@ class VerificationRunner:
         return await self.verifier.run_browser_test(state, arguments, active_case=self._active_case)
 
     async def run_backend_test(self, state: QAState, arguments: dict) -> dict:
-        """Fix case coverage and execute one generated backend suite without automatic retry."""
+        """Fix coverage; permit one diagnosed source repair only after a harness error."""
         try:
             test = BackendTest.model_validate(arguments)
             if state["stage"] != "execute" or not state.get("plan"):
@@ -416,8 +517,23 @@ class VerificationRunner:
                 raise ValueError("Execute only the current HTTP/terminal case with its matching interface")
             if current.get("journey") or set(test.checks) != set(current["checks"]):
                 raise ValueError("Test must cover every planned completion check verbatim")
-            if any(r.case_id == test.case_id for r in self.test_results):
-                raise ValueError("This backend case already ran; automatic retries are not allowed")
+            attempts = [r for r in self.test_results if r.case_id == test.case_id]
+            if attempts:
+                prior = attempts[-1]
+                if (len(attempts) >= 2 or prior.status != "blocked"
+                        or not any(p.code == "HARNESS_ERROR" for p in prior.checkpoints)):
+                    raise ValueError("This backend case already ran; only one harness-error repair is allowed")
+                if not test.retry_reason.strip():
+                    raise ValueError("A harness repair requires retry_reason diagnosing the error and correction")
+                previous = BackendTest.model_validate_json(
+                    (self.artifacts.path / prior.test_file).with_suffix('.json').read_text())
+                if (test.checks != previous.checks or test.timeout != previous.timeout
+                        or len(test.steps) != len(previous.steps)
+                        or any(new.model_dump(exclude={'stdin'}) != old.model_dump(exclude={'stdin'})
+                               for new, old in zip(test.steps, previous.steps, strict=True))):
+                    raise ValueError("Harness repair may change only stdin source; preserve checks and expectations")
+                if all(new.stdin == old.stdin for new, old in zip(test.steps, previous.steps, strict=True)):
+                    raise ValueError("Harness repair must correct the source, not rerun it unchanged")
             if self.verification == "live" and current.get("verification") == "existing_tests":
                 raise ValueError("Existing-test cases require --verification tests")
             if current.get("verification", "live") == "live" and any(
@@ -430,6 +546,22 @@ class VerificationRunner:
                     "API assertions for a library. Existing tests are supporting evidence. "
                     "With --verification tests, declare the case verification=existing_tests."
                 )
+            if (self.application and self.verification == "live"
+                    and current.get("interaction", "user") == "user"
+                    and test.interface == "terminal" and any(
+                        step.expect.python_harness or inline_harness(step.argv) for step in test.steps)):
+                raise ValueError("Application CLI smoke must invoke the real app command and assert its output/state. "
+                    "Python/JavaScript snippets and library harnesses are supporting checks, not user actions.")
+            if (self.application and self.verification == "live"
+                    and current.get("interaction", "user") == "user"):
+                if test.interface == "terminal" and all(any(
+                        arg in {'--help', '-h', '--version', '-V', 'help', 'version'}
+                        for arg in step.argv[1:]) for step in test.steps):
+                    raise ValueError("CLI smoke must exercise a real user action, not only help/version")
+                if test.interface == "http" and all(urlsplit(step.url).path.rstrip('/') in {
+                        '/health', '/api/health', '/healthz', '/ready', '/readyz', '/version', '/openapi.json',
+                } for step in test.steps):
+                    raise ValueError("API smoke must exercise application behavior beyond readiness/health")
             slot = len(self.test_results)
 
             def checkpoint(result):
@@ -446,6 +578,46 @@ class VerificationRunner:
             return self.artifacts.record("run_backend_test", arguments, result.model_dump(), True)
         except Exception as exc:
             return self.artifacts.record("run_backend_test", arguments, {"error": str(exc)}, False)
+
+    def repair_journey_entry(self, state, arguments):
+        """Permit only evidenced route repair after a blocked readiness attempt, before execution."""
+        try:
+            request = RepairJourneyEntry.model_validate(arguments)
+            completed = {f['case_id'] for f in state.get('findings', [])}
+            current = next((c for c in (state.get('plan') or {}).get('cases', [])
+                            if c['id'] not in completed), None)
+            attempts = self._readiness_attempts.get(request.case_id, 0)
+            if (state['stage'] != 'execute' or not current or current['id'] != request.case_id
+                    or not current.get('journey') or not 1 <= attempts < 3
+                    or any(r.case_id == request.case_id for r in self.test_results)):
+                raise ValueError('Entry repair requires the current case and a blocked readiness attempt before execution')
+            last = next((e for e in reversed(self.artifacts.observations)
+                if e['tool'] == 'setup_readiness' and e['arguments'].get('case_id') == request.case_id), None)
+            if not last or last['ok']:
+                raise ValueError('Entry repair requires failed readiness')
+            if any(e['tool'] == 'repair_journey_entry' and e['ok'] and
+                    e['result'].get('readiness_evidence') == last['id'] for e in self.artifacts.observations):
+                raise ValueError('Entry already repaired for this readiness failure; recheck readiness first')
+            old = Case.model_validate(current)
+            if old.journey.entry and old.journey.entry.controls != request.entry.controls:
+                raise ValueError('Entry repair cannot change required controls')
+            error = entry_evidence_error(request.entry, self.artifacts.observations)
+            if error:
+                raise ValueError(error)
+            before, after = urlsplit(old.journey.url), urlsplit(request.url)
+            if bool(before.scheme) != bool(after.scheme) or (before.scheme and
+                    (before.scheme, before.netloc) != (after.scheme, after.netloc)):
+                raise ValueError('Entry repair must preserve the planned application origin and URL kind')
+            candidate = old.model_dump()
+            candidate['journey'].update(url=request.url, entry=request.entry.model_dump())
+            Case.model_validate(candidate)
+            current['journey'].update(url=request.url, entry=request.entry.model_dump())
+            self.artifacts.write('plan.json', state['plan'])
+            result = {'case_id': request.case_id, 'previous_url': old.journey.url,
+                      'url': request.url, 'readiness_evidence': last['id'], 'detail': 'Entry repaired; live readiness must pass before execution'}
+            return self.artifacts.record('repair_journey_entry', arguments, result, True)
+        except Exception as exc:
+            return self.artifacts.record('repair_journey_entry', arguments, {'error': str(exc)}, False)
 
     async def run_journey(self, state: QAState, arguments: dict) -> dict:
         """Execute only the fixed current case; checkpoint evidence before media work."""
@@ -473,10 +645,13 @@ class VerificationRunner:
             elif request.base_url is not None:
                 raise ValueError('base_url applies only to a planned root-relative journey; '
                                  'an absolute journey URL cannot be overridden')
-            if case.journey.readiness:
+            entry_required = bool(self.application and case.interaction == 'user')
+            if entry_required or case.journey.entry or case.journey.readiness or case.journey.setup_probes:
+                if self._readiness_attempts.get(case.id, 0) >= 3:
+                    raise ValueError('Entry/setup readiness repair budget exhausted; report the existing blocker')
                 attempt = self._readiness_attempts.get(case.id, 0) + 1
                 self._readiness_attempts[case.id] = attempt
-                readiness = await self.journeys.check_readiness(case)
+                readiness = await EntryPreparation(self.journeys, self.artifacts).run(case, required=entry_required)
                 receipt = self.artifacts.record("setup_readiness", {"case_id": case.id,
                     "attempt": attempt}, readiness, readiness["status"] == "passed")
                 if not receipt["ok"]:
@@ -486,12 +661,29 @@ class VerificationRunner:
                             "error": "Setup readiness failed; journey has not started.",
                             "code": "SETUP_NOT_READY", "readiness_evidence": receipt["id"],
                             "detail": readiness["detail"], "remaining_repairs": 3 - attempt,
-                            "recovery": "Inspect app process_output and the app's API/UI; check fixture visibility, state locations, configuration and application indexes. Correct setup, then call run_journey again. Preserve all readiness checks and journey assertions.",
+                            "recovery": "For an entry mismatch, inspect source/docs or live UI/API for a supported route, then call repair_journey_entry with new evidence. Never replace a missing control with a similarly named one. Inspect app process_output and the app's API/UI; check fixture visibility, state locations, configuration and application indexes. Correct setup, then call run_journey again. Preserve all readiness checks and journey assertions.",
                         }, False)
+                    if readiness.get('screenshots'):
+                        detail = 'Journey entry/setup blocked: ' + readiness['detail'] + '. Case actions not run.'
+                        blocked_test = BrowserTest(case_id=case.id, url=case.journey.url,
+                            authenticated=case.journey.authenticated,
+                            steps=[ReplayBarrier(kind='requires_verification', reason=detail)])
+                        path, _ = save_browser_test(blocked_test, self.artifacts, attempt=0)
+                        result = TestResult(case_id=case.id, status='blocked', detail=detail,
+                            test_file=path.relative_to(self.artifacts.path).as_posix(), rerun=[],
+                            screenshots=readiness['screenshots'], checkpoints=[
+                                {'instruction': 'Host: journey entry readiness', 'status': 'blocked',
+                                 'detail': readiness['detail'], 'code': readiness.get('code') or 'SETUP_NOT_READY'},
+                                *[{'instruction': check, 'status': 'blocked', 'code': 'NOT_RUN',
+                                   'detail': 'Case actions not run: entry/setup readiness blocked'} for check in case.checks]])
+                        self.test_results.append(result)
+                        return self.artifacts.record('run_journey', arguments, result.model_dump(), True)
                     return self.artifacts.record("run_journey", arguments, {
                         "case_id": case.id, "status": "blocked", "rerun": [],
-                        "detail": "Setup readiness failed after two repair opportunities: "
-                                  + readiness["detail"] + " (" + receipt["id"] + "). Journey not run.",
+                        "screenshots": readiness.get('screenshots', []),
+                        "detail": (readiness["detail"] if readiness.get('code') == 'FIXTURE_SETUP_ERROR'
+                            else "Entry/setup blocked after two repair opportunities: "
+                                + readiness["detail"]) + " (" + receipt["id"] + "). Journey not run.",
                     }, True)
             slot = len(self.test_results)
 
@@ -503,6 +695,7 @@ class VerificationRunner:
 
             result = await self.journeys.run(case,
                 capture_media=True,
+                require_user_action=bool(self.application and case.interaction == 'user'),
                 on_result=checkpoint)
             checkpoint(result)
             summaries = [p for p in result.screenshots if p.endswith(".gif")]
@@ -523,7 +716,7 @@ class VerificationRunner:
                 self.progress(f"  {summary}")
                 shown.add(summary)
         for case in plan["cases"]:
-            label = "Existing tests" if case.get("verification") == "existing_tests" else "Live behavior"
+            label = "Existing tests" if case.get("verification") == "existing_tests" else "Supporting library check" if case.get("interaction") == "library" else "Live behavior"
             self.progress(f"  {label}: {case['id']} — {self.short_text(case['title'])}")
 
     def action_progress(self, tool: str, arguments: dict) -> str | None:
@@ -819,7 +1012,10 @@ class VerificationRunner:
             state = {**self.state, "status": status, "note": f"{type(exc).__name__}: {exc}"}
             self.finish(state)
             raise
-        return self.finish(dict(result))
+        report = self.finish(dict(result))
+        if self.knowledge is not None:
+            await self.knowledge.learn(self.knowledge_agent, self.change.head if self.change else None)
+        return report
 
 
 def exit_code(report: dict) -> int:

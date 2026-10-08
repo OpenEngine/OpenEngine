@@ -2,18 +2,19 @@
 
 import argparse
 import asyncio
-import shlex
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import shlex
 import stat
 from pathlib import Path
 from uuid import uuid4
 
 from open_verify import __version__
 from open_verify.backend_spec import BackendTest
+from open_verify.reporting import brief
 from open_verify.test_spec import TestResult
 
 MAX_CHECK_BYTES = 1_000_000
@@ -21,6 +22,53 @@ MAX_CHECK_BYTES = 1_000_000
 
 class BackendBlocked(ValueError):
     """Required execution or complete assertion evidence is unavailable."""
+
+
+class BackendHarnessError(BackendBlocked):
+    """Generated harness could not establish an application assertion result."""
+
+
+def harness_arguments(step):
+    """Wrap opted-in Python stdin harnesses with host-owned exception classification."""
+    arguments = step.model_dump(exclude={'kind', 'expect'})
+    if step.kind != 'command' or not step.expect.python_harness:
+        return arguments
+    wrapper = (
+        'def _ov_run_harness():\n'
+        '    import json as _ov_json, traceback as _ov_traceback\n'
+        '    try:\n'
+        f'        exec(compile({step.stdin!r}, "<ov-harness>", "exec"), globals())\n'
+        '    except (Exception, SystemExit) as error:\n'
+        '        if isinstance(error, SystemExit) and error.code in (None, 0):\n'
+        '            raise\n'
+        '        _ov_traceback.print_exc()\n'
+        '        kind = "assertion" if isinstance(error, AssertionError) else "error"\n'
+        '        print("OV_HARNESS_RESULT " + _ov_json.dumps({"kind": kind, '
+        '"detail": (type(error).__name__ + ": " + str(error))[:1000]}), flush=True)\n'
+        '        raise SystemExit(1 if kind == "assertion" else 2)\n'
+        '_ov_run_harness()\n'
+    )
+    arguments['stdin'] = wrapper
+    return arguments
+
+
+def harness_failure(result, artifacts):
+    """Use wrapper evidence to separate assertion failures from execution errors."""
+    log = complete_text(artifacts.path, result, 'log')
+    prefix = 'OV_HARNESS_RESULT '
+    events = [line[len(prefix):] for line in log.splitlines() if line.startswith(prefix)]
+    if len(events) == 1:
+        try:
+            event = json.loads(events[0])
+        except ValueError:
+            event = None
+        if (isinstance(event, dict) and set(event) == {'kind', 'detail'}
+                and isinstance(event['detail'], str) and event['detail']):
+            if event['kind'] == 'assertion':
+                raise AssertionError(event['detail'])
+            if event['kind'] == 'error':
+                raise BackendHarnessError('Python harness error: ' + event['detail'])
+    raise BackendHarnessError('Python harness exited without valid assertion evidence; see command log')
 
 
 def complete_text(root, receipt, field):
@@ -67,6 +115,8 @@ def check_result(step, result, artifacts):
         if type(result['exit_code']) is not int:
             raise BackendBlocked('Command exit evidence is invalid')
         if result['exit_code'] != expected.exit_code:
+            if expected.python_harness:
+                harness_failure(result, artifacts)
             raise AssertionError(f'Expected exit {expected.exit_code}, observed {result["exit_code"]}')
         if expected.output is not None:
             check_text(complete_text(artifacts.path, result, 'log'), expected.output)
@@ -122,11 +172,72 @@ def preflight(test: BackendTest, engine):
             raise BackendBlocked('Command execution requires --allow-exec')
 
 
+def read_command_checkpoints(step, result, artifacts, completed):
+    """Validate declared completion events from complete command evidence, in order."""
+    if step.kind != 'command' or not step.expect.checkpoints:
+        return
+    names = step.expect.checkpoints
+    seen = 0
+    for line in complete_text(artifacts.path, result, 'log').splitlines():
+        if not line.startswith('OV_CHECKPOINT '):
+            continue
+        try:
+            event = json.loads(line[len('OV_CHECKPOINT '):])
+        except ValueError as exc:
+            raise BackendBlocked('Malformed backend checkpoint JSON') from exc
+        if (not isinstance(event, dict) or set(event) != {'check', 'detail'}
+                or not isinstance(event['check'], str) or not isinstance(event['detail'], str)
+                or not event['detail'].strip() or len(event['detail']) > 1000):
+            raise BackendBlocked('Backend checkpoints require only check and bounded nonempty detail')
+        if seen >= len(names) or event['check'] != names[seen]:
+            raise BackendBlocked('Backend checkpoint is duplicate, undeclared or out of order')
+        completed[event['check']] = event['detail']
+        seen += 1
+
+
+def backend_checkpoints(test, results, completed, status, detail):
+    """Derive per-check outcomes without promoting unexecuted operations to passes."""
+    checkpoints = []
+    named = {name for step in test.steps if step.kind == 'command'
+             for name in step.expect.checkpoints}
+    for name, indexes in test.checks.items():
+        if name in completed:
+            point = {'instruction': name, 'status': 'passed', 'detail': completed[name]}
+        elif name in named:
+            index = indexes[0]
+            step = results[index]
+            missing = [n for n in test.steps[index].expect.checkpoints if n not in completed]
+            if step.get('code') != 'NOT_RUN' and name == missing[0]:
+                point = {'instruction': name, 'status': step['status'], 'detail': step['detail']}
+                if step.get('code'):
+                    point['code'] = step['code']
+            else:
+                point = {'instruction': name, 'status': 'blocked', 'detail': 'Not run', 'code': 'NOT_RUN'}
+        else:
+            failed = next((results[i] for i in indexes if results[i]['status'] != 'passed'
+                           and results[i].get('code') != 'NOT_RUN'), None)
+            if failed:
+                point = {'instruction': name, 'status': failed['status'], 'detail': failed['detail']}
+                if failed.get('code'):
+                    point['code'] = failed['code']
+            elif all(results[i]['status'] == 'passed' for i in indexes):
+                point = {'instruction': name, 'status': 'passed', 'detail': 'Mapped operation assertions passed'}
+            else:
+                point = {'instruction': name, 'status': 'blocked', 'detail': 'Not run', 'code': 'NOT_RUN'}
+        checkpoints.append(point)
+    if status != 'passed' and checkpoints and not any(
+            p['status'] == status and p.get('code') != 'NOT_RUN' for p in checkpoints):
+        checkpoints.append({'instruction': 'Backend execution completed', 'status': status, 'detail': detail,
+                            **({'code': 'HARNESS_ERROR'} if any(r.get('code') == 'HARNESS_ERROR' for r in results) else {})})
+    return checkpoints
+
+
 async def execute_backend(test: BackendTest, engine, artifacts, *, progress=print):
     """Execute the saved typed sequence once, checkpointing failure and interruption."""
-    results = []
+    results, completed = [], {}
     status, detail = 'blocked', 'Test did not start'
     index = None
+    failure_code = None
     try:
         async with asyncio.timeout(test.timeout):
             preflight(test, engine)
@@ -138,14 +249,19 @@ async def execute_backend(test: BackendTest, engine, artifacts, *, progress=prin
                 else:
                     progress(f'    {step.method} {step.url}')
                 tool = 'http_request' if step.kind == 'http' else 'run_command'
-                receipt = await engine.execute(tool, step.model_dump(exclude={'kind', 'expect'}))
+                receipt = await engine.execute(tool, harness_arguments(step))
                 if not receipt['ok']:
                     raise BackendBlocked(str(receipt['result'].get('error', 'Engine action failed')))
+                read_command_checkpoints(step, receipt['result'], artifacts, completed)
                 check_result(step, receipt['result'], artifacts)
+                if step.kind == 'command' and any(name not in completed for name in step.expect.checkpoints):
+                    raise BackendBlocked('Command completed without all declared checkpoints')
                 results.append({'index': index, 'status': 'passed', 'detail': 'All explicit assertions passed',
                                 'evidence': [e['id'] for e in artifacts.observations[first:]]})
                 artifacts.record('backend_assert', {'case_id': test.case_id}, results[-1], True)
             status, detail = 'passed', 'All backend assertions passed'
+    except BackendHarnessError as exc:
+        status, detail, failure_code = 'blocked', str(exc), 'HARNESS_ERROR'
     except AssertionError as exc:
         status, detail = 'failed', str(exc)
     except TimeoutError:
@@ -161,13 +277,18 @@ async def execute_backend(test: BackendTest, engine, artifacts, *, progress=prin
                 active = remaining == index
                 result = {'index': remaining, 'status': status if active else 'blocked',
                           'detail': detail if active else 'Not run after interruption, failure or preflight refusal',
+                          'code': failure_code if active else 'NOT_RUN',
                           'evidence': [e['id'] for e in artifacts.observations[first:]] if active else []}
                 results.append(result)
                 artifacts.record('backend_assert', {'case_id': test.case_id}, result, False)
+        checkpoints = backend_checkpoints(test, results, completed, status, detail)
+        for point in checkpoints:
+            artifacts.record('backend_checkpoint', {'case_id': test.case_id}, point, point['status'] == 'passed')
+            progress(f"  {point['status'] if point.get('code') != 'NOT_RUN' else 'not run'}: {brief(point['instruction'], words=12)} — {brief(point['detail'], words=14)}")
         identity = hashlib.sha256(test.case_id.encode()).hexdigest()[:16]
         artifacts.write(f'backend-{identity}.json', {'case_id': test.case_id, 'status': status,
-                        'detail': detail, 'steps': results})
-    return {'status': status, 'detail': detail}
+                        'detail': detail, 'steps': results, 'checkpoints': checkpoints})
+    return {'status': status, 'detail': detail, 'checkpoints': checkpoints}
 
 
 def write_backend_support(folder):
@@ -197,6 +318,10 @@ def save_backend_test(test: BackendTest, artifacts):
     folder = artifacts.path / 'tests'
     folder.mkdir(exist_ok=True)
     path = folder / f'test_backend_{identity}.py'
+    attempt = 1
+    while path.exists():
+        attempt += 1
+        path = folder / f'test_backend_{identity}_{attempt}.py'
     source = ('"""Generated backend regression test. Start required services before replay."""\n'
         'import json\nfrom open_verify.backend_spec import BackendTest\n'
         'from open_verify.backend_runner import execute_backend, replay_main\n\n'
@@ -280,12 +405,17 @@ class BackendRunner:
             spec.loader.exec_module(module)
             outcome = await module.test_backend(self.engine, self.artifacts, progress=self.progress)
         except asyncio.CancelledError:
+            identity = hashlib.sha256(test.case_id.encode()).hexdigest()[:16]
+            saved = self.artifacts.path / f'backend-{identity}.json'
+            if saved.exists():
+                outcome['checkpoints'] = json.loads(saved.read_text())['checkpoints']
             raise
         except Exception as exc:
             outcome = {'status': 'blocked', 'detail': f'{type(exc).__name__}: {exc}'}
         finally:
             result = TestResult(case_id=test.case_id, runner=test.interface,
                 test_file=relative, rerun=rerun, **outcome)
+            self.artifacts.write(str(path.relative_to(self.artifacts.path).with_suffix('.result.json')), result.model_dump())
             if on_result:
                 on_result(result)
         return result

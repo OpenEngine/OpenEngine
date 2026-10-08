@@ -63,7 +63,7 @@ def render_test(test: BrowserTest, *, login: dict | None = None) -> str:
             line = f"await {locator_code(step.locator)}.press({step.key!r})"
         elif step.kind == "expect_text":
             assertion = "to_be_visible" if step.visible else "not_to_be_visible"
-            line = f"await expect(page.get_by_text({step.text!r}, exact=True).and_(page.locator(':visible')).first).{assertion}()"
+            line = f"await expect(page.get_by_text({step.text!r}, exact={step.match == 'exact'!r}).and_(page.locator(':visible')).first).{assertion}()"
         elif step.kind == "reload":
             line = "await page.reload(wait_until='domcontentloaded')"
         elif step.kind == "navigate":

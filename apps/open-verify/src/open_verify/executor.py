@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from open_verify.models import Decision
-from open_verify.prompts import CHANGE_INSTRUCTIONS, INSTRUCTIONS
+from open_verify.prompts import CHANGE_INSTRUCTIONS, INSPECTION_INSTRUCTIONS, INSTRUCTIONS
 
 
 class DecisionAgent(Protocol):
@@ -61,7 +61,7 @@ class AgentExecutor:
 def compact(value, limit=2500):
     """Bound historical evidence; a fresh observation gets its full tool read limit."""
     if isinstance(value, str):
-        return value if len(value) <= limit else value[:limit] + " [truncated; reread source if needed]"
+        return value if len(value) <= limit else value[:limit] + " [truncated; use a targeted source section if needed]"
     if isinstance(value, dict):
         return {key: compact(item, limit) for key, item in value.items()}
     if isinstance(value, list):
@@ -80,5 +80,5 @@ def build_prompt(context: DecisionContext) -> str:
         patch = payload["change"]["diff"]
         payload["change"]["diff"] = patch[:40000]
         payload["change"]["truncated"] |= len(patch) > 40000
-    instructions = INSTRUCTIONS + (CHANGE_INSTRUCTIONS if context.change_mode else "")
+    instructions = INSTRUCTIONS + INSPECTION_INSTRUCTIONS + (CHANGE_INSTRUCTIONS if context.change_mode else "")
     return instructions + "\n" + json.dumps(payload)

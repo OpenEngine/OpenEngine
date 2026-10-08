@@ -11,7 +11,7 @@ from pydantic import Field
 from open_verify.changes import Change, ChangeReference
 from open_verify.media import MAX_VIDEO_BYTES
 from open_verify.models import Contract, Finding, Impact
-from open_verify.test_spec import TestResult, Checkpoint
+from open_verify.test_spec import Checkpoint, TestResult
 
 
 class Attachment(Contract):
@@ -33,6 +33,8 @@ class ManifestTest(Contract):
     title: str = ""
     coverage: Literal["changed_behavior", "regression", "requested_behavior"] = "requested_behavior"
     verification: Literal["live", "existing_tests"] = "live"
+    interaction: Literal["user", "library"] = "user"
+    scripted_providers: bool = False
     checks: list[str] = Field(default_factory=list)
     checkpoints: list[Checkpoint] = Field(default_factory=list)
 
@@ -146,6 +148,8 @@ def write_manifest(
                     title=case.get("title", ""),
                     coverage=case.get("coverage", "requested_behavior"),
                     verification=case.get("verification", "live"),
+                    interaction=case.get("interaction", "user"),
+                    scripted_providers=(case.get("journey") or {}).get("scripted_providers", False),
                     checks=case.get("checks", []),
                     checkpoints=result.checkpoints,
                 )

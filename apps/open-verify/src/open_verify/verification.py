@@ -10,10 +10,11 @@ class CaseVerifier:
     """Own actual test results; model proposals cannot replace execution evidence."""
 
     def __init__(self, artifacts: Artifacts, test_runner: BrowserRunner | None, *,
-                 change_mode: bool, check_url, progress=print):
+                 change_mode: bool, check_url, progress=print, application_interface=None):
         self.artifacts = artifacts
         self.test_runner = test_runner
         self.change_mode = change_mode
+        self.application_interface = application_interface
         self.check_url = check_url
         self.progress = progress
         self.test_results: list[TestResult] = []
@@ -42,7 +43,7 @@ class CaseVerifier:
         backend = case["interface"] in {"http", "terminal"}
         has_backend_run = any(item["tool"] == "run_backend_test" and item["ok"]
                               and item["result"]["case_id"] == finding.case_id for item in self.artifacts.observations)
-        if case.get("journey") or self.change_mode or has_backend_run:
+        if case.get("journey") or self.change_mode or has_backend_run or self.application_interface is not None:
             tool = "run_backend_test" if backend else ("run_journey" if case.get("journey") else "run_browser_test")
             runs = [item for item in self.artifacts.observations
                     if item["tool"] == tool and item["ok"]
@@ -70,6 +71,11 @@ class CaseVerifier:
                 raise ValueError("Use run_journey for a structured case; its checks are fixed")
             if set(test.checks) != set(cases[test.case_id]["checks"]):
                 raise ValueError("Test must cover every planned completion check, mapped verbatim to assertion step indexes")
+            if (self.application_interface == 'browser'
+                    and cases[test.case_id].get('interaction', 'user') == 'user'):
+                actions = [i for i, step in enumerate(test.steps) if step.kind in {'click', 'fill', 'press'}]
+                if not actions or not any(i > actions[0] for indexes in test.checks.values() for i in indexes):
+                    raise ValueError('Application smoke requires a real UI action followed by a result assertion')
             previous = [r for r in self.test_results if r.case_id == test.case_id]
             if any(r.status == "passed" for r in previous) or len(previous) >= 2:
                 raise ValueError("Case is finished; additional browser runs are not allowed")

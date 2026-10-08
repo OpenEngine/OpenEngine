@@ -81,3 +81,15 @@ def test_only_final_journey_summary_and_test_are_publishable(tmp_path):
     manifest = write_manifest(tmp_path, report, None, results)
     assert [item.path for item in manifest.artifacts] == ['test-2.py', 'final-2.png']
     assert any('GIF unavailable' in reason for reason in manifest.omissions)
+
+
+def test_manifest_carries_scripted_provider_disclosure_from_journey(tmp_path):
+    (tmp_path / 'test.py').write_text('pass')
+    manifest = write_manifest(tmp_path, {
+        'status': 'complete', 'findings': [],
+        'plan': {'cases': [{'id': 'smoke', 'journey': {'scripted_providers': True}}]},
+    }, None, [RunnerResult(case_id='smoke', status='passed', detail='Reload retained message',
+        test_file='test.py', rerun=['python', 'test.py'])])
+    assert manifest.tests[0].scripted_providers is True
+    saved = Manifest.model_validate_json((tmp_path / 'manifest.json').read_text())
+    assert saved.tests[0].scripted_providers is True

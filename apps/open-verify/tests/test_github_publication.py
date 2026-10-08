@@ -295,3 +295,71 @@ def test_real_gh_upload_uses_content_length(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+
+def test_comment_leads_with_images_and_only_observed_checks(tmp_path):
+    path = bundle(tmp_path)
+    data = json.loads(path.read_text())
+    data['tests'][0].update(title='Sign-in survives reload',
+        detail=' '.join(['Long model explanation.'] * 160),
+        checkpoints=[
+            {'instruction': 'Signed-in identity is visible', 'status': 'passed', 'detail': 'Visible'},
+            {'instruction': 'Reload preserves app access', 'status': 'passed', 'detail': 'Visible'},
+            {'instruction': 'Logout clears session', 'status': 'blocked', 'code': 'NOT_RUN',
+             'detail': 'Not executed'},
+        ])
+    data['assumptions'] = [' '.join(['Full coverage note.'] * 60)]
+    path.write_text(json.dumps(data))
+    github = FakeGitHub()
+    asyncio.run(github.publish(path, TARGET))
+    body = github.comments[0]['body']
+    visible, details = body.split('<details>', 1)
+    assert visible.index('![Screenshot') < visible.index('Reload preserves app access')
+    assert 'Reload preserves app access' in visible
+    assert '**not run**: 1 check' in visible
+    assert 'Logout clears session' not in visible and 'Logout clears session' in details
+    assert 'Long model explanation' not in visible and 'Long model explanation' in details
+    assert '[Playwright test' not in visible and '[Playwright test' in details
+    assert len(visible.split()) <= len(details.split()) / 4
+
+
+def test_compact_comment_keeps_blocker_and_existing_test_provenance_visible(tmp_path):
+    path = bundle(tmp_path)
+    data = json.loads(path.read_text())
+    data['status'] = 'blocked'
+    data['tests'][0].update(status='blocked', verification='existing_tests', checkpoints=[
+        {'instruction': 'Fixture is available', 'status': 'blocked',
+         'detail': 'WorkOrders list is empty'},
+        {'instruction': 'Detach workspace', 'status': 'blocked', 'detail': 'Not executed', 'code': 'NOT_RUN'},
+    ])
+    path.write_text(json.dumps(data))
+    github = FakeGitHub()
+    asyncio.run(github.publish(path, TARGET))
+    visible = github.comments[0]['body'].split('<details>', 1)[0]
+    assert 'WorkOrders list is empty' in visible
+    assert 'Existing repository tests; no independent live journey' in visible
+    assert '**not run**' in visible
+
+
+def test_visual_caption_has_a_small_word_budget_and_visible_substitutions(tmp_path):
+    path = bundle(tmp_path)
+    data = json.loads(path.read_text())
+    data['tests'][0].update(title='Send a message and reload its conversation',
+        coverage='regression', scripted_providers=True,
+        detail='Verbose explanation. ' * 100,
+        checkpoints=[{'instruction': f'Check {i}', 'status': 'passed', 'detail': 'Verbose details. ' * 20}
+                     for i in range(9)] + [
+            {'instruction': 'Reload preserves the message and response', 'status': 'passed', 'detail': 'Matched'},
+            {'instruction': 'Host: application health after user actions', 'status': 'passed', 'detail': 'Healthy'}])
+    data['assumptions'] = ['Verbose assumption. ' * 40]
+    path.write_text(json.dumps(data))
+    github = FakeGitHub()
+    asyncio.run(github.publish(path, TARGET))
+    visible, details = github.comments[0]['body'].split('<details>', 1)
+    assert len(visible.split()) <= 60
+    assert 'scripted providers; live integrations unverified' in visible
+    assert 'changed behavior unverified' in visible
+    assert visible.index('![Screenshot') < visible.index('11 checks.')
+    assert 'Check 0' not in visible and 'Check 0' in details
+    assert 'Verbose' not in visible

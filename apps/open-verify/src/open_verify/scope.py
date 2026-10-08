@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-OMIT = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build", ".cache"}
+OMIT = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build", ".cache", ".ov"}
 
 
 def inspectable(path: str) -> bool:

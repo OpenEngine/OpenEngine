@@ -1,6 +1,7 @@
 """PR orchestration without switching or modifying the user's checkout."""
 
 import copy
+import hashlib
 import os
 import shutil
 import tempfile
@@ -141,6 +142,11 @@ async def run_pull_request(args, verify, *, github=None, workspace_factory=PullR
         local = copy.copy(args)
         local.project, local.base, local.head = project, target.merge_base, target.head
         local.include_working_tree = False
+        # Keep onboarding outside disposable checkouts and isolate unrelated target repositories.
+        identity = 'github.com/' + target.repository.lower()
+        key = hashlib.sha256(identity.encode()).hexdigest()[:16]
+        local.knowledge_path = args.project.resolve() / '.ov' / 'repositories' / key / 'product.json'
+        local.knowledge_identity = identity
 
         def prepare():
             if files:

@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from open_verify.reporting import brief, evidence_caption
+
 
 class Artifacts:
     def __init__(self, parent: Path):
@@ -27,7 +29,7 @@ class Artifacts:
             "ok": ok,
             "result": result,
         }
-        if tool in {"http_request", "run_command", "start_process", "process_output", "run_browser_test", "run_backend_test", "backend_assert", "run_journey", "journey_step", "replay_cache", "assert_check", "assisted_login"}:
+        if tool in {"http_request", "run_command", "start_process", "process_output", "run_browser_test", "run_backend_test", "backend_assert", "backend_checkpoint", "application_health", "action_goal", "entry_contract", "entry_readiness", "repair_journey_entry", "setup_readiness", "run_journey", "journey_step", "replay_cache", "assert_check", "assisted_login"}:
             relative = Path("actions") / f"{entry['id']}.json"
             receipt = self.path / relative
             receipt.parent.mkdir(exist_ok=True)
@@ -59,7 +61,7 @@ class Artifacts:
         if plan:
             lines.extend([plan["project_summary"], "", "## Plan", ""])
             for case in plan["cases"]:
-                kind = "Existing repository tests" if case.get("verification") == "existing_tests" else "Independent live behavior"
+                kind = "Existing repository tests" if case.get("verification") == "existing_tests" else "Supporting library check" if case.get("interaction") == "library" else "Independent live behavior"
                 lines.extend([f"- {case['id']}: {case['title']} — {case['expected']}",
                               f"  Verification: {kind}. Coverage: {case.get('coverage', 'requested_behavior').replace('_', ' ')}."])
             if plan["questions"] or plan["assumptions"]:
@@ -92,7 +94,8 @@ class Artifacts:
                 lines.extend(['', 'Observed checkpoints:', ''])
                 for point in checkpoints:
                     status = 'not run' if point.get('code') == 'NOT_RUN' else 'inconclusive' if point.get('code') == 'ASSERTION_INCONCLUSIVE' else point['status']
-                    lines.append(f"- **{status}**: {point['instruction']}")
+                    lines.append(f"- **{status}**: {point['instruction']}" +
+                        (f" — {point['detail']}" if point.get('detail') else ''))
             elif case.get("checks"):
                 label = "Verified checks" if result["status"] == "passed" else "Planned checks (not all verified)"
                 lines.extend(["", label + ":", ""])
@@ -105,7 +108,36 @@ class Artifacts:
                 "",
             ]
         )
-        (self.path / "report.md").write_text("\n".join(lines), encoding="utf-8")
+        summary = [f"# Open Verify — {outcome(state, [])}", "", brief(state['request']), ""]
+        cases = {c['id']: c for c in (plan or {}).get('cases', [])}
+        passed = [cases[f['case_id']] for f in state.get('findings', [])
+                  if f['status'] == 'passed' and f['case_id'] in cases]
+        if impact and impact.get('decision') == 'verify' and not any(
+                c.get('coverage') == 'changed_behavior' for c in passed):
+            summary.extend(['**Scope:** changed behavior unverified.', ''])
+        if any((c.get('journey') or {}).get('scripted_providers') for c in passed):
+            summary.extend(['**Substitutions:** scripted providers; live integrations unverified.', ''])
+        for finding in state.get("findings", []):
+            title = cases.get(finding['case_id'], {}).get('title', finding['case_id'])
+            summary.extend([f"## {brief(title, words=14, chars=100)} — {finding['status']}", ""])
+            executed = next((e['result'] for e in reversed(self.observations)
+                             if e['id'] in finding['evidence'] and e['result'].get('case_id') == finding['case_id']), {})
+            # Only display files inside this run; labels never become path components.
+            images = []
+            for relative in executed.get('screenshots', []):
+                image = (self.path / relative).resolve()
+                if image.is_relative_to(self.path.resolve()) and image.is_file():
+                    images.append(image.relative_to(self.path.resolve()).as_posix())
+            gifs = [image for image in images if image.endswith('.gif')]
+            for image in (gifs[-1:] or images[-1:]):
+                summary.extend([f"![Observed journey](<{image}>)", ""])
+            for status, text in evidence_caption(finding['actual'], executed.get('checkpoints', []), finding['status']):
+                summary.append(f"- **{status}**: {text}")
+            summary.extend(["", "Evidence: " + (", ".join(self.evidence_link(e) for e in finding['evidence']) or "none"), ""])
+        if state.get('note'):
+            summary.extend([brief(state['note']), ""])
+        summary.extend(["<details>", "<summary>Full results, plan and evidence</summary>", "", *lines, "", "</details>"])
+        (self.path / "report.md").write_text("\n".join(summary), encoding="utf-8")
 
     def case_receipt(self, plan: dict | None, finding: dict) -> str:
         case_id = finding["case_id"]

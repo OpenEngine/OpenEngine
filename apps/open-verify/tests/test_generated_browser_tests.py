@@ -324,3 +324,34 @@ def test_cancelling_encoding_preserves_completed_evidence(
     (receipt,) = artifacts.path.glob("executions/*/*/result.json")
     saved = json.loads(receipt.read_text(encoding="utf-8"))
     assert all(reason in manifest["omissions"] for reason in saved["omissions"])
+
+
+@pytest.mark.parametrize('match,expected_status', [('exact', 'failed'), ('contains', 'passed')])
+def test_explicit_fragment_matching_agrees_in_live_checks_and_export(tmp_path, web_app, match, expected_status):
+    from open_verify.test_spec import ExpectText
+
+    artifacts = Artifacts(tmp_path / 'runs')
+    engine = LocalTools(tmp_path, artifacts, headless=True)
+    check = ExpectText(kind='expect_text', text='Ada', match=match)
+    test = test_spec(web_app)
+    test.steps[3] = check
+    namespace = {'__name__': 'generated_test'}
+    exec(compile(render_test(test), 'generated_test.py', 'exec'), namespace)
+
+    async def run():
+        try:
+            page = await engine.browser_page()
+            await page.goto(web_app)
+            await page.get_by_label('Name').fill('Ada')
+            await page.get_by_role('button', name='Greet').click()
+            receipt = await engine.assert_check(check)
+            assert receipt['result']['status'] == expected_status
+            if expected_status == 'failed':
+                with pytest.raises(AssertionError):
+                    await namespace['test_change'](page, progress=lambda _: None)
+            else:
+                await namespace['test_change'](page, progress=lambda _: None)
+        finally:
+            await engine.close()
+
+    asyncio.run(run())

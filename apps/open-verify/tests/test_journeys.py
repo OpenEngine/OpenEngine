@@ -60,7 +60,7 @@ def test_recorded_url_comparison_and_exported_replay(tmp_path, web_app, changed)
         replay = subprocess.run([sys.executable, result.test_file], cwd=artifacts.path,
             env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')},
             capture_output=True, text=True, timeout=30)
-        assert replay.returncode == 0, replay.stdout + replay.stderr
+        assert replay.returncode != 0 and 'independent goal observer' in replay.stdout + replay.stderr, replay.stdout + replay.stderr
 
 
 def test_semantic_comparison_gets_host_baseline_without_actor_claims(tmp_path, web_app):
@@ -118,7 +118,7 @@ def test_relative_entry_binds_discovered_origin_and_exports_absolute_replay(tmp_
     replay = subprocess.run([sys.executable, result.test_file], cwd=artifacts.path,
         env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')},
         capture_output=True, text=True, timeout=30)
-    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert replay.returncode == 2 and 'independent goal observer' in replay.stdout + replay.stderr, replay.stdout + replay.stderr
 
 
 @pytest.mark.parametrize('origin', ['https://user:pass@example.com', '//example.com',
@@ -161,6 +161,10 @@ class Actor:
         self.contexts.append(context)
         return next(self.decisions)
 
+    async def judge_goal(self, instruction, observation, *, on_call):
+        on_call()
+        return Judgment(explanation='Measured action goal reached', verdict='holds')
+
     async def judge(self, instruction, observation, *, on_call):
         on_call()
         self.judgments.append((instruction, observation))
@@ -178,12 +182,12 @@ def test_real_journey_and_exported_replay(tmp_path, web_app, text, expected):
     assert actor.sessions == 1
     receipt = json.loads(next((artifacts.path / 'journeys').glob('*.json')).read_text())
     assert [s['kind'] for s in receipt['steps']] == ['act', 'assert']
-    assert [s['model_calls'] for s in receipt['steps']] == [2, 0]
+    assert [s['model_calls'] for s in receipt['steps']] == [3, 0]
     assert [s['actions'] for s in receipt['steps']] == [1, 0]
     replay = subprocess.run([sys.executable, result.test_file], cwd=artifacts.path,
         env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / 'src')},
         capture_output=True, text=True, timeout=30)
-    assert replay.returncode == (0 if expected == 'passed' else 1), replay.stdout + replay.stderr
+    assert replay.returncode != 0 and 'independent goal observer' in replay.stdout + replay.stderr, replay.stdout + replay.stderr
 
 
 @pytest.mark.parametrize(("verdict", "status"), [('holds', 'passed'), ('fails', 'failed'), ('inconclusive', 'blocked')])
@@ -613,5 +617,7 @@ def test_real_browser_readiness_gates_fixed_journey(tmp_path, web_app, visible):
     if visible:
         assert actor.contexts and len(runner.test_results) == 1
     else:
-        assert not actor.contexts and not runner.test_results
-        assert not list((artifacts.path / "tests").glob("*.py"))
+        assert not actor.contexts and len(runner.test_results) == 1
+        assert runner.test_results[0].status == 'blocked'
+        assert runner.test_results[0].screenshots
+        assert all(p.code == 'NOT_RUN' for p in runner.test_results[0].checkpoints[1:])

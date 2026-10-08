@@ -126,7 +126,7 @@ def test_strict_replay_uses_fresh_visual_judge_and_invalidates_on_failure(tmp_pa
     judge = VisualNoActor()
     second, artifacts = asyncio.run(run(judge, 'strict'))
     assert second.status == 'passed'
-    assert read_steps(artifacts)[0]['model_calls'] == 0 and read_steps(artifacts)[0]['cache'] == 'hit'
+    assert read_steps(artifacts)[0]['model_calls'] == 1 and read_steps(artifacts)[0]['cache'] == 'hit'
     assert len(judge.judgments) == 1
     failed, artifacts = asyncio.run(run(VisualNoActor(verdict='fails'), 'auto'))
     assert failed.status == 'failed'

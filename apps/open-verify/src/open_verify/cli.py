@@ -70,6 +70,8 @@ def parser():
     cli.add_argument(
         "--agent-command", help='Custom ACP launch command as JSON, e.g. ["my-agent", "--acp"]'
     )
+    cli.add_argument('--no-knowledge', action='store_true', help='Disable project onboarding knowledge')
+    cli.add_argument('--refresh-knowledge', action='store_true', help='Gather additional product onboarding facts')
     cli.add_argument("--model", help="Provider-specific model ID; omission uses its default")
     cli.add_argument("--base", help="Base revision for change-based verification (no checkout/fetch)")
     cli.add_argument("--head", help="Changed revision, which must match the checkout (default: HEAD)")
@@ -101,14 +103,14 @@ def parser():
                      help="Local recording storage, isolated by project; excluded from run bundles")
     cli.add_argument(
         "--verification", choices=["live", "tests"], default="live",
-        help="live: independently exercise behavior (default); tests: permit existing test suites",
+        help="live: manual QA through app UI/API/CLI (default); tests: permit existing test suites",
     )
     cli.add_argument("--headless", action="store_true", help="Hide the browser window")
     cli.add_argument(
         "--max-steps", type=positive_int, default=60, help="Maximum agent decisions (default: 60)"
     )
     cli.add_argument("--max-cases", type=positive_int, default=1,
-                     help="Maximum planned journeys (default: 1; increase for a broader suite)")
+                     help="Maximum planned journeys (default: 1 application smoke; increase for supporting checks)")
     cli.add_argument(
         "--agent-timeout", type=positive_int, default=180, help="Seconds per agent decision"
     )
@@ -218,6 +220,10 @@ async def run_local(args, *, artifacts=None, prepare=None):
         replay_cache=ReplayCache(args.cache_dir.resolve(), project) if args.cache != "off" else None,
         cache_mode=args.cache,
         change=change,
+        knowledge_enabled=not getattr(args, 'no_knowledge', False),
+        refresh_knowledge=getattr(args, 'refresh_knowledge', False),
+        knowledge_path=getattr(args, 'knowledge_path', None),
+        knowledge_identity=getattr(args, 'knowledge_identity', None),
         test_runner=(
             PlaywrightRunner(
                 project, artifacts, allow_origins=args.allow_origin, headless=args.headless,
@@ -246,6 +252,9 @@ async def run_local(args, *, artifacts=None, prepare=None):
         final_report = report or (json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else None)
         if final_report is not None:
             verification.publish(final_report, cleanup_errors=cleanup_errors)
+    if report and (report.get('note') or report.get('status') in {'incomplete', 'blocked', 'interrupted'}):
+        reason = ' '.join(str(report.get('note') or 'Verification did not complete.').split())
+        print(f"Run {report['status']}: {reason}", flush=True)
     print(f"Report: {artifacts.path / 'report.md'}")
     print(f"Manifest: {artifacts.path / 'manifest.json'}")
     return 2 if cleanup_errors else exit_code(report)

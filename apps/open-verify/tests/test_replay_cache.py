@@ -75,7 +75,7 @@ def test_verified_recording_replays_actions_and_runs_fresh_assertions(tmp_path):
     assert first.status == second.status == 'passed'
     assert read_steps(initial)[0]['cache'] == 'miss'
     assert read_steps(replayed)[0]['cache'] == 'hit'
-    assert read_steps(replayed)[0]['model_calls'] == 0
+    assert read_steps(replayed)[0]['model_calls'] == 1
     assert read_steps(replayed)[0]['actions'] == 1
     assert engine.calls.count('browser_click') == 1
     assert any(e['tool'] == 'assert_check' for e in replayed.observations)
@@ -99,7 +99,7 @@ def test_real_browser_replays_without_actor_but_keeps_semantic_judge(tmp_path, w
     assert first.status == second.status == 'passed'
     assert len(actor.judgments) == len(judge.judgments) == 1
     assert 'Cart: 1' in judge.judgments[0][1]['snapshot']
-    assert read_steps(artifacts)[0]['model_calls'] == 0
+    assert read_steps(artifacts)[0]['model_calls'] == 1
     assert read_steps(artifacts)[1]['model_calls'] == 1
     assert 'raise RuntimeError' in (artifacts.path / second.test_file).read_text()
 
@@ -237,7 +237,7 @@ def test_ineligible_journeys_do_not_persist_recordings(tmp_path, reason):
     else:
         options['assertion'] = 'failed'
     result, _, _ = execute(tmp_path, cache, actor=actor, target=target, **options)
-    assert result.status == ('failed' if reason == 'failed-assertion' else 'passed')
+    assert result.status == ('failed' if reason == 'failed-assertion' else 'blocked' if reason == 'truncated' else 'passed')
     assert not entries(cache)
 
 
@@ -358,7 +358,7 @@ def test_cli_acp_cold_then_strict_replay_keeps_judge_and_manifest(tmp_path, web_
         decisions = [planned, action('run_journey', case_id=target.id)]
         if mode == 'auto':
             decisions += [d.model_dump() for d in acting]
-        decisions.append(judge)
+        decisions.extend([judge, judge])
         script = tmp_path / f'{mode}.json'
         script.write_text(json.dumps(decisions))
         command = [sys.executable, str(Path(__file__).with_name('fake_agent.py')), str(script)]
@@ -370,7 +370,7 @@ def test_cli_acp_cold_then_strict_replay_keeps_judge_and_manifest(tmp_path, web_
         manifest = json.loads((run / 'manifest.json').read_text())
         receipt = json.loads(next((run / 'journeys').glob('*.json')).read_text())
         assert manifest['status'] == 'passed' and manifest['schema_version'] == 1
-        assert receipt['steps'][0]['model_calls'] == (2 if mode == 'auto' else 0)
+        assert receipt['steps'][0]['model_calls'] == (3 if mode == 'auto' else 1)
         assert receipt['steps'][1]['model_calls'] == 1
         assert not any('cache' in a['path'] for a in manifest['artifacts'])
 
@@ -410,8 +410,8 @@ def test_real_replay_export_retains_executed_click_and_exact_check(tmp_path, web
         assert result.status == 'passed'
     source = artifacts.path / result.test_file
     specification = json.loads(source.with_suffix('.json').read_text())
-    assert [s['kind'] for s in specification['steps']] == ['click', 'expect_text']
+    assert [s['kind'] for s in specification['steps']] == ['click', 'requires_verification', 'expect_text']
     completed = subprocess.run([sys.executable, str(source)], cwd=artifacts.path,
         env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')},
         capture_output=True, text=True, timeout=30)
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed.returncode == 2 and 'independent goal observer' in completed.stdout + completed.stderr
