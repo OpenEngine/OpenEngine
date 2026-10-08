@@ -196,7 +196,7 @@ class GitHubSourceControl:
             reference = issue_reference(issue, f"{owner}/{repo}")
             qualified = f"{issue['repository']}#{issue['number']}"
             body = issue_body(body, reference, issue_resolution, qualified_reference=qualified)
-            await self._issue_head(root_path, branch, reference, issue_resolution, qualified)
+            await self._issue_head(root_path, branch, base, reference, issue_resolution, qualified)
 
         response = _object(await self._api(
             "POST",
@@ -215,10 +215,12 @@ class GitHubSourceControl:
         return url
 
     async def _issue_head(
-        self, root: str, branch: str, reference: str,
+        self, root: str, branch: str, base: str, reference: str,
         resolution: str, qualified_reference: str = "",
     ) -> None:
         """Amend only this published head, refusing concurrent remote changes."""
+        if branch == base:
+            raise ValueError("issue publishing must not rewrite the pull request base branch")
         current = await self._git_checked(root, ("branch", "--show-current"))
         if current != branch or await self._git_checked(root, ("-c", "core.fsmonitor=false", "status", "--porcelain")):
             raise ValueError("issue publishing requires the named branch checked out with a clean workspace")
@@ -233,7 +235,7 @@ class GitHubSourceControl:
             raise ValueError("push the current head before opening the issue pull request")
         if old.strip() == updated.strip():
             return
-        # GitHub enforces branch protection; the lease guards concurrent updates.
+        # The base guard is independent of GitHub protection; the lease guards concurrent updates.
         # This host-side metadata rewrite preserves existing credit trailers.
         # Do not execute checkout-controlled hooks while amending or publishing it.
         no_hooks = ("-c", f"core.hooksPath={os.devnull}")

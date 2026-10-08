@@ -948,7 +948,7 @@ def test_issue_head_amend_is_published_and_keeps_credit_once(tmp_path):
     assert message.count("Resolves #7") == message.count("Refs #7") == 1
     assert message.count("Co-authored-by: Alice <alice@example.test>") == 1
     assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == new
-    asyncio.run(source._issue_head(str(root), "agent/issue", "#7", "resolves"))
+    asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
     assert _git(root, "rev-parse", "HEAD") == new
 
 
@@ -1083,12 +1083,14 @@ def test_issue_head_lease_preserves_a_concurrent_remote_push(tmp_path):
 
     source._git_checked = racing
     with pytest.raises(GitHubSourceControlError):
-        asyncio.run(source._issue_head(str(root), "agent/issue", "#7", "resolves"))
+        asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
     assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == concurrent
 
 
 @pytest.mark.parametrize("branch", ["main", "trunk", "release/stable"])
-def test_issue_head_leaves_branch_policy_to_remote(tmp_path, branch):
+@pytest.mark.parametrize("prefix", ["", "origin/"])
+def test_issue_publication_refuses_base_even_without_remote_protection(tmp_path, branch, prefix):
+    from unittest.mock import AsyncMock
     root = tmp_path / "checkout"
     source = _checkout(root, branch)
     remote = tmp_path / "remote.git"
@@ -1096,12 +1098,15 @@ def test_issue_head_leaves_branch_policy_to_remote(tmp_path, branch):
     _git(root, "remote", "set-url", "origin", str(remote))
     _git(root, "push", "origin", branch)
     old = _git(root, "rev-parse", "HEAD")
+    source._repo_coords = AsyncMock(return_value=("acme", "api"))
+    source._api = AsyncMock()
 
-    # No commits ahead of the remote branch: metadata rewrites are still allowed
-    # when the remote permits them, regardless of the branch's name.
-    asyncio.run(source._issue_head(str(root), branch, "#7", "resolves"))
+    with pytest.raises(ValueError, match="must not rewrite.*base branch"):
+        asyncio.run(source.request_review(
+            WORKSPACE, branch, prefix + branch, "feat: change", "Body",
+            issue={"repository": "acme/api", "number": 7}, issue_resolution="resolves",
+        ))
 
-    new = _git(root, "rev-parse", "HEAD")
-    assert new != old
-    assert _git(root, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == new
-    assert "Resolves #7" in _git(root, "log", "-1", "--format=%B")
+    assert _git(root, "rev-parse", "HEAD") == old
+    assert _git(root, "ls-remote", "origin", f"refs/heads/{branch}").split()[0] == old
+    source._api.assert_not_awaited()
