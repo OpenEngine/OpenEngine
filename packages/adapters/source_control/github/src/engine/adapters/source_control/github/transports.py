@@ -123,9 +123,10 @@ class GitHubOAuthTransport:
 
     async def download(self, path: str) -> bytes:
         token = self._token
+        url = f"{self._api_url}{path}"
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.get(
-                f"{self._api_url}{path}", headers=self._headers(token)
+                url, headers=self._headers(token)
             )
         if await self._refresh_after_unauthorized(response, token):
             async with httpx.AsyncClient(follow_redirects=True) as client:

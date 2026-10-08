@@ -554,3 +554,32 @@ def test_resolve_review_thread_cli_graphql():
     assert args.args[:2] == ("api", "graphql")
     assert args.args[-2:] == ("--input", "-")
     assert json.loads(args.kwargs["input_bytes"])["variables"] == {"thread": "PRRT_1"}
+
+
+@pytest.mark.parametrize("status", [200, 401, 503])
+def test_download_retries_same_url_with_refreshed_token(monkeypatch, status):
+    requests = []
+    token = {"value": "old"}
+
+    async def refresh(failed_token):
+        assert failed_token == "old"
+        token["value"] = "new"
+        return True
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(401 if len(requests) == 1 else status, content=b"download")
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    transport = GitHubOAuthTransport(lambda: token["value"], on_token_unauthorized=refresh)
+    if status == 200:
+        assert asyncio.run(transport.download("/logs")) == b"download"
+    else:
+        with pytest.raises(GitHubTransportError):
+            asyncio.run(transport.download("/logs"))
+    assert [str(request.url) for request in requests] == ["https://api.github.com/logs"] * 2
+    assert [request.headers["Authorization"] for request in requests] == ["Bearer old", "Bearer new"]

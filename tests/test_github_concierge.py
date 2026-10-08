@@ -1779,6 +1779,7 @@ def test_mentioned_comment_reacts_to_delivery_outcome(tmp_path, event, outcome, 
         provider=provider, graph_runtime=opened, github_webhook_secret=SIGNING_SECRET,
     )
     source = MagicMock(add_comment=AsyncMock(), add_reaction=AsyncMock(),
+                       review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1")),
                        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
                        can_write_repository=AsyncMock(return_value=True))
     object.__setattr__(capabilities, "source_control", source)
