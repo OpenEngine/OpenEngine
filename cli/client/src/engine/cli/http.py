@@ -2,7 +2,7 @@
 
 A read is retried on a dropped connection. A write is retried only when it
 carries an idempotency key, because only then can the backend tell a retry
-from a second request: `graph execute` and `node steer` always send one.
+from a second request: `graph run` and `node steer` always send one.
 """
 
 from __future__ import annotations

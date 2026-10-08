@@ -101,14 +101,28 @@ def test_every_command_goes_to_the_selected_backend_with_its_token(monkeypatch, 
     assert second["url"].startswith("http://127.0.0.1:4364/api/v1/graphs")
 
 
-def test_execute_retries_a_dropped_connection_under_the_same_key(monkeypatch, capsys) -> None:
+def test_graph_run_retries_a_dropped_connection_under_the_same_key(monkeypatch, capsys) -> None:
     recorded = serve(monkeypatch, URLError("connection reset"), {**RUN, "created": True})
-    assert main(["graph", "execute", "pair", "fix the flaky test", "-i", "tone=terse", "--repo", "o/r"]) == 0
+    assert main(["graph", "run", "pair", "fix the flaky test", "-i", "tone=terse", "--repo", "o/r"]) == 0
     first, retry = recorded.requests
     assert first["body"] == retry["body"]
     assert first["body"]["idempotencyKey"].startswith("cli-")
     assert first["body"]["inputs"] == {"tone": "terse"}
     assert json.loads(capsys.readouterr().out)["runId"] == "run-1"
+
+
+def test_runs_sends_its_filters_and_prints_a_table(monkeypatch, capsys) -> None:
+    listed = {**RUN, "loop": None, "startedAt": "2026-10-05T12:00:00+00:00",
+              "usage": {"costUsd": 1.25, "complete": True}}
+    recorded = serve(monkeypatch, {"runs": [listed]}, {"runs": [listed]})
+    assert main(["runs", "--graph", "pair", "--status", "running", "--limit", "5"]) == 0
+    assert json.loads(capsys.readouterr().out)["runs"][0]["runId"] == "run-1"
+    assert main(["runs", "--all-projects", "--pretty"]) == 0
+    filtered, everywhere = recorded.requests
+    assert filtered["url"].endswith("/api/v1/runs?project=default&graph=pair&status=running&limit=5")
+    assert everywhere["url"].endswith("/api/v1/runs?limit=20")
+    table = capsys.readouterr().out
+    assert "RUN ID" in table and "pair v1" in table and "$1.25" in table
 
 
 def test_a_failed_run_names_the_signin_command_for_its_backend(monkeypatch, capsys) -> None:
@@ -170,13 +184,13 @@ def test_signing_in_on_a_remote_backend_says_where(monkeypatch, capsys) -> None:
     assert "codex login" in out and "ssh -t mac-mini.local codex login" in out
 
 
-def test_execute_sends_the_repository_it_is_run_from(tmp_path, monkeypatch) -> None:
+def test_graph_run_sends_the_repository_it_is_run_from(tmp_path, monkeypatch) -> None:
     import subprocess
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     monkeypatch.chdir(tmp_path)
     recorded = serve(monkeypatch, RUN)
-    assert main(["graph", "execute", "pair", "say hello"]) == 0
+    assert main(["graph", "run", "pair", "say hello"]) == 0
     assert recorded.requests[0]["body"]["repository"] == str(tmp_path.resolve())
 
 
