@@ -73,6 +73,14 @@ class SubmissionRow:
 
 
 @dataclass(frozen=True)
+class StartedRunRow:
+    run_id: str
+    version_id: str
+    started_at: str
+    loop_id: str | None
+
+
+@dataclass(frozen=True)
 class LoopRow:
     loop_id: str
     project: str
@@ -254,6 +262,41 @@ class GraphServiceStore:
             "INSERT INTO cli_run_submissions VALUES (?, ?, ?, ?, ?)",
             (row.idempotency_key, row.request_digest, row.run_id, row.version_id, row.created_at),
         )
+
+    def started_runs(
+        self,
+        *,
+        project: str | None = None,
+        graph_id: str | None = None,
+        loop_id: str | None = None,
+    ) -> tuple[StartedRunRow, ...]:
+        """Every run this service started, submitted or by a loop, newest first."""
+        clauses, parameters = [], []
+        for column, value in (("g.project", project), ("g.graph_id", graph_id), ("started.loop_id", loop_id)):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                parameters.append(value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._connection.execute(
+            f"""
+            SELECT started.run_id, started.version_id, started.started_at, started.loop_id
+            FROM (
+                SELECT run_id, version_id, created_at AS started_at, NULL AS loop_id
+                FROM cli_run_submissions
+                UNION ALL
+                -- A claimed tick has no run until it starts one.
+                SELECT r.run_id, l.version_id, r.started_at, r.loop_id
+                FROM cli_loop_runs r JOIN cli_loops l ON l.loop_id = r.loop_id
+                WHERE r.run_id != ''
+            ) started
+            JOIN cli_graph_versions v ON v.version_id = started.version_id
+            JOIN cli_graphs g ON g.graph_id = v.graph_id
+            {where}
+            ORDER BY started.started_at DESC, started.run_id DESC
+            """,
+            parameters,
+        )
+        return tuple(StartedRunRow(**dict(row)) for row in rows)
 
     # --- loops --------------------------------------------------------------
 

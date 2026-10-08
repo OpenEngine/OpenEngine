@@ -123,7 +123,7 @@ class CommunicationsConfig:
 
 @dataclass(frozen=True, slots=True)
 class GitHubConfig:
-    """Which repository on GitHub this deployment answers events from.
+    """Which repositories on GitHub this deployment answers events from.
 
     The shared secret that signs those deliveries is deliberately absent: like
     the login client secret it belongs in a server-local `.env` beside this
@@ -135,12 +135,21 @@ class GitHubConfig:
     repository: str = ""
     """`owner/name` of the repository whose webhooks are accepted, or empty.
 
-    Empty leaves the webhook route unconfigured rather than open: a deployment
-    that never named a repository has nothing to compare a delivery against.
+    Together with `repositories`, this forms the webhook allowlist. An empty
+    allowlist leaves the route unconfigured rather than accepting any repository.
     """
 
     host_aliases: Mapping[str, str] = field(default_factory=dict)
     """Web authorities mapped to their GitHub transport authority, including ports."""
+
+    repositories: tuple[str, ...] = ()
+    """Additional repositories whose webhooks are accepted."""
+
+    @property
+    def webhook_repositories(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            repo.lower() for repo in (self.repository, *self.repositories) if repo
+        ))
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,7 +267,9 @@ def load_engine_config(
     """Load the selected TOML file, or return defaults when none is selected.
 
     Selection is intentionally singular: an explicit path wins over
-    ``ENGINE_CONFIG``, which wins over ``engine.toml`` in the current directory.
+    ``ENGINE_CONFIG``, then the machine configuration at
+    ``$XDG_CONFIG_HOME/openengine/engine.toml`` (defaulting to
+    ``~/.config/openengine/engine.toml``), then ``engine.toml`` in the current directory.
     Files are not merged, so the effective permission policy always has one
     inspectable source.
     """
@@ -272,8 +283,14 @@ def load_engine_config(
     elif configured := environment.get(CONFIG_ENVIRONMENT_VARIABLE):
         selected = _relative_to(Path(configured), directory)
     else:
+        xdg_config = environment.get("XDG_CONFIG_HOME", "")
+        config_home = (
+            Path(xdg_config) if xdg_config and Path(xdg_config).is_absolute()
+            else Path.home() / ".config"
+        )
+        machine = config_home / "openengine" / DEFAULT_CONFIG_NAME
         default = directory / DEFAULT_CONFIG_NAME
-        selected = default if default.is_file() else None
+        selected = machine if machine.is_file() else default if default.is_file() else None
 
     if selected is None:
         return LoadedEngineConfig()
@@ -343,9 +360,17 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "host_aliases"}, "github")
+    _reject_unknown(github, {"repository", "repositories", "host_aliases"}, "github")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
+    )
+
+    repository_list = github.get("repositories", [])
+    if not isinstance(repository_list, list):
+        raise EngineConfigError("github.repositories must be a list of owner/name strings")
+    github_repositories = tuple(
+        _repository_slug(_nonblank_string(value, "github.repositories"), "github.repositories")
+        for value in repository_list
     )
 
     access = _table(document.get("access", {}), "access")
@@ -485,6 +510,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
         for name, path in _table(document.get("repos", {}), "repos").items()
     }
+    repo_names = {name.lower() for name in repos}
+    for repository in (github_repository, *github_repositories):
+        if repository and repository.lower() not in repo_names:
+            raise EngineConfigError(
+                f"GitHub webhook repository {repository!r} requires a checkout path under [repos]"
+            )
     repo_modes = {}
     for name, mode in _table(document.get("repo_modes", {}), "repo_modes").items():
         if name not in repos:
@@ -522,6 +553,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         state=state_config,
         github=GitHubConfig(
             repository=github_repository,
+            repositories=github_repositories,
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()

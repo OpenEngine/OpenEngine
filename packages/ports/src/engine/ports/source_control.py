@@ -213,6 +213,16 @@ class SourceControl(Protocol):
         """
         ...
 
+    async def add_reaction(
+        self, pr_url: str, comment_id: int, content: str, *, review_comment: bool = False,
+    ) -> None:
+        """React to a conversation or review comment using the reply credentials.
+
+        Adding +1 or -1 replaces this account's opposite reaction. Repeated
+        additions are idempotent. Unsupported providers raise NotImplementedError.
+        """
+        ...
+
     async def add_comment(
         self,
         pr_url: str,

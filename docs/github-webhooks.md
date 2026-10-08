@@ -10,24 +10,53 @@ Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, 
 `issue_comment`, `pull_request_review_comment`, `issues`, and `pull_request` events, and
 give it a secret.
 
-## Naming the repository
+## Naming the repositories
 
-Name the repository whose deliveries this deployment answers in `engine.toml`:
+Keep the deployment's repository list in its machine configuration,
+`~/.config/openengine/engine.toml` (or
+`$XDG_CONFIG_HOME/openengine/engine.toml`). Repository additions do not
+require a commit to OpenEngine.
+
+Configuration selection is: explicit `--config`, then `ENGINE_CONFIG`, then
+the machine file, then `engine.toml` in the working directory. Files are
+selected as a whole, never merged.
+
+When migrating an existing deployment, copy its configuration to the machine
+location and move its `.env` alongside it. Update relative paths such as
+`workflows.directory` and state locations to preserve their existing targets.
+An explicit service config path still takes precedence; update that path if
+it points to the checkout. Restart the service after configuration changes.
+
+In the machine file, name the repositories whose deliveries it accepts:
 
 ```toml
 [github]
-repository = "owner/name"
+repositories = ["owner/name", "other/project"]
+
+[repos]
+"owner/name" = "~/code/name"
+"other/project" = "~/code/project"
 ```
 
-The slug format is validated at startup. Comments from other repositories are
+The single-repository form, `repository = "owner/name"`, remains supported;
+when both forms are present their repositories are combined. Names are
+case-insensitive and duplicates are accepted only once. Every configured slug
+must have a matching key and nonblank checkout path in `[repos]`; missing
+mappings fail startup with the repository name. Those paths select the checkout
+for work started by assignments, PR mentions, and review requests.
+
+All repositories use the same `work_orders.workflow` default (or the sole
+available workflow) and the same webhook secret. Configure that secret on each
+repository's webhook, pointing them all at the same endpoint.
+
+The slug format is validated at startup. Deliveries from other repositories are
 acknowledged and ignored, even when signed with the same secret. Repository
 names are compared without regard to case. Without a configured repository,
 actionable comment deliveries receive 503 until setup is complete.
 
 ## Storing the secret
 
-The webhook's shared secret is not written in `engine.toml`, which is
-committed. Store it as `ENGINE_GITHUB_WEBHOOK_SECRET=your-secret` in a
+The webhook's shared secret is not written in `engine.toml`. Store it as `ENGINE_GITHUB_WEBHOOK_SECRET=your-secret` in a
 server-local `.env` beside the loaded `engine.toml` (or in the working
 directory when no config file is loaded) — the same file the
 [GitHub login](github-login.md) secret uses. It is gitignored; restrict its
@@ -38,7 +67,7 @@ and the file is reread per delivery, so rotating the secret in GitHub's webhook
 settings and on disk takes effect without a restart. Secrets are not accepted
 in TOML.
 
-`engine-web --check` reports both halves — the repository and whether a secret
+`engine-web --check` reports both halves — the repositories and whether a secret
 is readable — so a half-finished setup is visible before the first delivery
 arrives.
 
@@ -47,7 +76,11 @@ arrives.
 Engine resolves its account using its authenticated GitHub credentials. That
 identity is used to match issue assignments and ignore Engine's own comments
 and merges. No bot-login environment variable is needed. A GitHub app is also
-recognised by its user type.
+recognised by its user type. The posting account must have write access to every
+configured repository, including repositories in other organizations.
+`engine-web --check` checks access separately for each repository and reports
+missing write access or a failed lookup by name. Failed lookups may indicate
+missing credentials, installation access, or a connectivity problem.
 
 ## What the route does with a delivery
 
@@ -64,7 +97,7 @@ figure.
 
 A verified delivery is queued and acknowledged immediately, because GitHub gives
 a webhook ten seconds before it considers the delivery failed. Each comment is
-handled once no matter how often GitHub redelivers it.
+identified by repository, event type, and comment ID and handled once no matter how often GitHub redelivers it.
 
 The route answers 503 while no secret is set or while the queue is full. In each case the comment is not lost: the
 delivery stays visible as failed in the webhook's delivery log and can be

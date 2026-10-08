@@ -223,6 +223,7 @@ def _app(
     graph_runtime=None,
     github_comment_handler=None,
     github_webhook_secret="",
+    github_repositories=(),
     approval_policy=None,
     repos=None,
 ):
@@ -263,6 +264,7 @@ def _app(
         github_comment_handler=github_comment_handler,
         github_webhook_secret=lambda: github_webhook_secret,
         github_repository="acme/api",
+        github_repositories=github_repositories,
     ), capabilities, slack_store
 
 def _mention_graph():

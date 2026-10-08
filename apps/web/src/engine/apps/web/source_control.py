@@ -227,6 +227,16 @@ class RoutingSourceControl:
             pr_url=repository_url,
         )
 
+    async def add_reaction(
+        self, pr_url: str, comment_id: int, content: str, *, review_comment: bool = False,
+    ) -> None:
+        await self._call(
+            lambda source: source.add_reaction(
+                pr_url, comment_id, content, review_comment=review_comment,
+            ),
+            pr_url=pr_url,
+        )
+
     async def add_comment(
         self,
         pr_url: str,

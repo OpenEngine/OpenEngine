@@ -93,6 +93,11 @@ class GitLabSourceControl:
                 tips[name] = sha
         return tips
 
+    async def add_reaction(
+        self, pr_url: str, comment_id: int, content: str, *, review_comment: bool = False,
+    ) -> None:
+        raise NotImplementedError("GitLab comment reactions are not supported")
+
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")
