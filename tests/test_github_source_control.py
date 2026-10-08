@@ -1085,6 +1085,7 @@ def test_issue_head_lease_preserves_a_concurrent_remote_push(tmp_path):
     with pytest.raises(GitHubSourceControlError):
         asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
     assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == concurrent
+    assert _git(root, "rev-parse", "HEAD") == head
 
 
 @pytest.mark.parametrize("branch", ["main", "trunk", "release/stable"])
@@ -1123,3 +1124,70 @@ def test_issue_body_normalizes_colon_keywords(keyword, separator, resolution, re
     assert issue_body(body, "#7", resolution, qualified_reference="acme/api#7") == (
         f"Description\n\n{resolution.capitalize()} #7"
     )
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+def test_issue_head_failed_push_can_be_retried(tmp_path, accepted):
+    root = tmp_path / "checkout"
+    source = _checkout(root, "agent/issue")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    _git(root, "remote", "set-url", "origin", str(remote))
+    _git(root, "push", "origin", "agent/issue")
+    original = _git(root, "rev-parse", "HEAD")
+    checked = source._git_checked
+
+    async def failing(root_path, arguments):
+        if "push" in arguments:
+            if accepted:
+                await checked(root_path, arguments)
+            raise GitHubSourceControlError("connection lost")
+        return await checked(root_path, arguments)
+
+    source._git_checked = failing
+    with pytest.raises(GitHubSourceControlError, match="connection lost"):
+        asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
+    local = _git(root, "rev-parse", "HEAD")
+    assert (local != original) == accepted
+    assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == local
+    source._git_checked = checked
+    asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
+    assert "Resolves #7" in _git(root, "log", "-1", "--format=%B")
+    assert _git(root, "ls-remote", "origin", "refs/heads/agent/issue").split()[0] == _git(root, "rev-parse", "HEAD")
+
+
+def test_review_thread_stops_after_matching_page():
+    from unittest.mock import AsyncMock
+    source = GitHubSourceControl("")
+    page = _thread_page(cursor="next")
+    comment_id = page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"][0]["comments"]["nodes"][0]["databaseId"]
+    source._api = AsyncMock(side_effect=[page, AssertionError("unnecessary page")])
+    assert asyncio.run(source.review_thread("https://github.com/acme/api/pull/7", comment_id)).comment_id == comment_id
+    source._api.assert_awaited_once()
+
+
+@pytest.mark.parametrize("failure", ["remote_unavailable", "local_move"])
+def test_issue_head_recovery_preserves_uncertain_or_concurrent_state(tmp_path, failure):
+    root = tmp_path / "checkout"
+    source = _checkout(root, "agent/issue")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    _git(root, "remote", "set-url", "origin", str(remote))
+    _git(root, "push", "origin", "agent/issue")
+    checked = source._git_checked
+    preserved = []
+
+    async def failing(root_path, arguments):
+        if "push" in arguments:
+            if failure == "local_move":
+                _git(root, "commit", "--allow-empty", "-m", "feat: concurrent local work")
+            preserved.append(_git(root, "rev-parse", "HEAD"))
+            raise GitHubSourceControlError("push failed")
+        if "ls-remote" in arguments and preserved and failure == "remote_unavailable":
+            raise GitHubSourceControlError("remote unavailable")
+        return await checked(root_path, arguments)
+
+    source._git_checked = failing
+    with pytest.raises(GitHubSourceControlError):
+        asyncio.run(source._issue_head(str(root), "agent/issue", "main", "#7", "resolves"))
+    assert _git(root, "rev-parse", "HEAD") == preserved[0]

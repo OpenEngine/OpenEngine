@@ -240,8 +240,19 @@ class GitHubSourceControl:
         # Do not execute checkout-controlled hooks while amending or publishing it.
         no_hooks = ("-c", f"core.hooksPath={os.devnull}")
         await self._git_checked(root, (*no_hooks, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", "commit", "--amend", "--only", "--allow-empty", "--message", updated))
-        await self._git_checked(root, (*no_hooks, "push", f"--force-with-lease=refs/heads/{branch}:{head}",
-                                       "origin", f"HEAD:refs/heads/{branch}"))
+        amended = await self._git_checked(root, ("rev-parse", "HEAD"))
+        try:
+            await self._git_checked(root, (*no_hooks, "push", f"--force-with-lease=refs/heads/{branch}:{head}",
+                                           "origin", f"HEAD:refs/heads/{branch}"))
+        except GitHubSourceControlError:
+            # A transport error can arrive after the remote accepted the push.
+            # If reconciliation fails, preserve HEAD rather than guess its state.
+            remote = await self._git_checked(root, ("ls-remote", "origin", f"refs/heads/{branch}"))
+            if remote.split()[:1] != [amended]:
+                # The amend changes only metadata. Restore the ref without touching
+                # the index/worktree, and refuse to overwrite a concurrent local move.
+                await self._git_checked(root, (*no_hooks, "update-ref", f"refs/heads/{branch}", head, amended))
+            raise
 
     async def can_write_repository(
         self, pr_url: str, username: str, *, user_id: int | None = None
@@ -429,7 +440,7 @@ class GitHubSourceControl:
             raise GitHubSourceControlError("GitHub GraphQL returned no data")
         return response["data"]
 
-    async def _review_threads(self, pr_url: str) -> tuple[Discussion, ...]:
+    async def _review_threads(self, pr_url: str, *, comment_id: int | None = None) -> tuple[Discussion, ...]:
         owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
         query = """query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
           repository(owner: $owner, name: $repo) { pullRequest(number: $number) {
@@ -453,6 +464,8 @@ class GitHubSourceControl:
                     body=root["body"], url=root["url"], path=root.get("path"), line=root.get("line"),
                     comment_id=root["databaseId"], thread_id=thread["id"], is_resolved=thread["isResolved"],
                 ))
+                if comment_id == root["databaseId"]:
+                    return (threads[-1],)
             page = connection["pageInfo"]
             if not page["hasNextPage"]:
                 return tuple(threads)
@@ -463,7 +476,7 @@ class GitHubSourceControl:
 
     async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
         _positive_number(comment_id, "comment_id")
-        for thread in await self._review_threads(pr_url):
+        for thread in await self._review_threads(pr_url, comment_id=comment_id):
             if thread.comment_id == comment_id:
                 return thread
         raise ValueError("review comment is not a root thread on this pull request")
