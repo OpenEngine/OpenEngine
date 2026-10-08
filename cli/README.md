@@ -39,9 +39,7 @@ engine graphs list --backend mini      # one-off override; ENGINE_BACKEND also w
 `local` (`http://127.0.0.1:4364`) always exists. A backend records its URL,
 the project names resolve in (`--project`), a default repository (`--repo`),
 and the *name* of the environment variable holding its bearer token — never
-the token. Without `--token-env`, `ENGINE_SERVICE_TOKEN` is sent. Once a
-non-local backend is selected, the older commands (`engine status`,
-`engine review`, ...) follow it too.
+the token. Without `--token-env`, `ENGINE_SERVICE_TOKEN` is sent.
 
 Reaching a Mac mini: `engine daemon` binds loopback only, so expose it over
 something you trust — an SSH tunnel (`ssh -NL 4365:127.0.0.1:4364 mac-mini`,

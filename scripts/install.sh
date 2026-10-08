@@ -7,8 +7,7 @@
 # Needs curl, tar, and a SHA-256 tool. Python comes from a pinned uv that is
 # kept apart from any uv, Python, or configuration already on the machine.
 # Running it again is safe: an installed version is reused, and an existing
-# engine.toml or state directory is never touched. At a terminal it then
-# offers to run `engine init` on a repository you want to work on.
+# engine.toml or state directory is never touched.
 #
 # OPENENGINE_RELEASE_URL names a directory holding release-manifest.json and
 # the archive (https:// or file://), in place of the GitHub release.
@@ -244,21 +243,3 @@ if [ "$start" = 1 ]; then
   fi
 fi
 
-# WorkOrders run on the repositories `engine init` onboards, so offer to
-# onboard one now. Piped into sh, stdin is this script: ask the terminal.
-project=""
-if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
-  printf 'openengine: path of a repository to work on with OpenEngine (blank to skip): ' >/dev/tty
-  IFS= read -r project </dev/tty || project=""
-fi
-case $project in
-  "~") project=$HOME ;;
-  "~/"*) project=$HOME/${project#"~/"} ;;
-esac
-if [ -n "$project" ]; then
-  if (cd "$project" 2>/dev/null && "$engine_shim" init </dev/tty); then
-    exit 0
-  fi
-  warn "could not onboard $project"
-fi
-say "next: run 'engine init' in each repository you want OpenEngine to work on"

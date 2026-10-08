@@ -52,8 +52,8 @@ any of this deployment's repositories: the `[github] repository` named in
 `engine.toml`, and the GitHub repository behind each `[repos]` checkout (read
 from its `origin` remote). Team and organization grants count. The check uses
 the server's own GitHub connection, the one selected under **GitHub** in
-Settings: the host's `gh` login for **GH CLI**, or the token saved by
-`engine connect github` for **GitHub OAuth**. It binds GitHub's answer to the
+Settings: the host's `gh` login for **GH CLI**, or the device-flow token
+connected in Settings for **GitHub OAuth**. It binds GitHub's answer to the
 signed-in account's numeric user ID, so a renamed login cannot inherit another
 account's access. An account without write access is sent to
 `/login?error=forbidden` and receives no session.
@@ -111,8 +111,14 @@ log under `could not check repository access for <login>`. To recover:
 - From the web UI, anyone signed in can switch **GitHub** in Settings to a
   login that works. For example, choose **GH CLI** when the host's `gh` login
   is valid.
-- On the server, run `engine connect github` to reconnect **GitHub OAuth**, or
-  `gh auth login` to fix **GH CLI**. Run `gh auth status` to diagnose.
+- On the server, run `gh auth login` to fix **GH CLI**, and `gh auth status`
+  to diagnose.
+- To reconnect **GitHub OAuth**, turn browser login off by removing all three
+  login values: the client ID and callback from `engine.toml` or the
+  environment, and the secret from `.env` or the environment (any one left
+  alone is a configuration error). Restart with `engine daemon stop` and
+  `engine daemon start`, connect GitHub in Settings, then restore the values
+  and restart again. The server accepts unauthenticated requests until you do.
 
 While browser login is on, the web UI cannot replace the server's GitHub OAuth
 token. A token connected in Settings belongs to the signed-in user (see
@@ -158,9 +164,8 @@ reports `loginRequired: false`; starting the OAuth flow returns 503.
 Agent GitHub API actions in the web composition follow the GitHub choice in
 Settings. **GH CLI** uses the host's `gh auth` login: the account shown by
 `gh auth status` for the OS user that runs the web process. **GitHub OAuth**
-uses the host's device-flow token saved by `engine connect github` (or by
-Settings while browser login is off), and that account is the PR/comment
-author for every user's WorkOrders. The web process reads that token from
+uses the host's device-flow token saved by Settings while browser login is
+off, and that account is the PR/comment author for every user's WorkOrders. The web process reads that token from
 the OS keychain once and keeps it in memory, so connecting is the only
 keychain prompt until the service restarts. GitLab routing is unchanged.
 Neither the browser login nor `GITHUB_TOKEN` is used for agent actions.
