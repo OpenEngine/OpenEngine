@@ -66,8 +66,13 @@ uv run ruff check agent/ pipecat_outbound/
 uv run --directory mcp ruff check src/
 ```
 
-The example's `uv run pytest **` rule also matches bare `uv run pytest` and PATY's
-test-directory variants. Exact sync, lint and format-check commands come from
+The example approves only exact pytest commands targeting the dedicated
+`tests/` directory or its named suites (`tests/unit`, `tests/http`,
+`tests/simulator`, and `tests/smoke`). The listed flags match PATY's workflows.
+Bare pytest, other paths, extra arguments, and chained shell commands require
+approval. Add further test commands as exact entries, never a trailing wildcard.
+These rules restrict command text, not the process working directory or what
+test code can execute. Exact sync, lint and format-check commands come from
 `tests.yml`, `pipecat_outbound_tests.yml`, `cli_tests.yml` and `ruff.yml`. Commands
 without `--directory` run in the working directory indicated by PATY's workflow
 (root, `mcp`, or `cli`). Mini-app install/build/test commands and
