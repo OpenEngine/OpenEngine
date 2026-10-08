@@ -11,7 +11,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 
 import pytest
-from engine.apps.cli.__main__ import main, selected_server
+from engine.apps.cli.__main__ import main
 from engine.cli import backends, http
 
 
@@ -99,8 +99,6 @@ def test_every_command_goes_to_the_selected_backend_with_its_token(monkeypatch, 
     assert first["url"] == "http://mini:4364/api/v1/graphs?project=team"
     assert first["authorization"] == "Bearer secret"
     assert second["url"].startswith("http://127.0.0.1:4364/api/v1/graphs")
-    # The older commands follow the selected backend too.
-    assert selected_server(type("A", (), {"server": None})(), None) == "http://mini:4364"
 
 
 def test_execute_retries_a_dropped_connection_under_the_same_key(monkeypatch, capsys) -> None:

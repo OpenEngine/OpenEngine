@@ -76,60 +76,18 @@ until startup completes, if the configured graph runtime cannot open, or during
 shutdown; otherwise it returns HTTP 200. This public endpoint requires no browser
 login and does not check external provider credentials.
 
-## Terminal diagnostics
+## Terminal commands
 
-CLI v1 contract: the binary is `engine`; its local service default is
-`http://127.0.0.1:4364`; `--server` and profiles select remote services;
-interactive terminals enter the workbench while all subcommands remain
-scriptable. Specification authoring is outside this CLI contract.
+The binary is `engine`. Run it with no arguments to list its commands:
 
-The `engine` terminal client inspects a local or remote service:
-
-```bash
-engine status
-engine doctor --json
-engine status --server https://engine.example
-```
-
-It defaults to `http://127.0.0.1:4364`. When the selected server is the
-default local address and no compatible service is responding, `engine
-status` starts one `engine-web` process and waits for its health endpoint. An
-explicit `--server` is always probe-only. `engine daemon` runs the local
-service in the background instead; see
-[Background service](docs/releases.md#background-service).
-`engine connect gh|github|gitlab|slack` connects shared source control or Slack.
-`engine init`, run inside a git checkout, adds it under `[repos]` in the
-service's `engine.toml` (named after its `origin`, or `--name`) and restarts a
-running service so the repository appears in the WorkOrder dropdown. With
-GitHub sign-in enabled it warns that the repository's writers can now sign in.
-It asks how the repository's WorkOrders reach GitHub -- Git OAuth (connected,
-recommended), Git CLI (connected) or disconnected, or `--mode oauth|cli|disconnected`
--- and prints the next step for a connected choice. Disconnected is recorded
-under `[repo_modes]`, and every WorkOrder on that repository then runs
-disconnected. It then asks how WorkOrders' requests are approved -- auto-approve
-(every repository), trusted repos (only repositories under `[trusted_repos]`,
-this one included) or manual, or `--approval auto|trusted|manual`. The installer
-offers to run it on a repository when it finishes.
-
-`engine review [path | pull-request-url]` starts the WorkOrder workflow in its
-review state (`engine.domain.states`), skipping planning and implementation.
-A path (default: the current directory, local service only) reviews its
-committed branch; a GitHub pull request URL provisions a new workspace on the
-pull request's branch in the matching `[repos]` checkout, and fixes are pushed
-back to that branch. Pull requests from forks are refused, since their code
-would run the review's agents; check one out and review the path instead. The surviving
-findings are presented one at a time with the relevant diff, highlighting
-additions and deletions. Choose **Fix**, **Post to PR** (when a pull request is
-available), or **Ignore** for each finding. Fixes are queued until every finding
-has been reviewed, then sent together to implementation with progress shown;
-the resulting change is reviewed again. Posting uses `gh` and posts only that
-finding. `--json` prints the findings and leaves the review waiting.
-
-In an interactive terminal, running `engine` opens the workbench. Type `/` to
-search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,
-`/review`, `/settings`, `/web`, or `/quit`. Typing a message starts a new work order and
-streams its progress; Ctrl-C detaches the terminal stream only and never sends
-the service a cancel request.
+- `engine daemon` runs the local service in the background; see
+  [Background service](docs/releases.md#background-service).
+- `engine connect gh|github|gitlab|slack` connects the selected backend's shared
+  source control or Slack.
+- `engine graph`, `engine run`, `engine loop`, `engine node` and their list
+  forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
+  graphs; `engine backend` chooses which daemon they talk to, and
+  `engine runner signin` signs a runner in. See [cli/README.md](cli/README.md).
 
 While working on OpenEngine itself, run the development server instead:
 ```bash
