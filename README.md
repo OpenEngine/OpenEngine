@@ -83,11 +83,15 @@ The binary is `engine`. Run it with no arguments to list its commands:
 - `engine daemon` runs the local service in the background; see
   [Background service](docs/releases.md#background-service).
 - `engine connect gh|github|gitlab|slack` connects the selected backend's shared
-  source control or Slack.
+  source control or Slack; `engine connections` shows them and
+  `engine disconnect` undoes one.
+- `engine agent add|get|remove|signin` and `engine agents` manage the agents
+  graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
+  such as `engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
 - `engine graph`, `engine run`, `engine loop`, `engine node` and their list
   forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
-  graphs; `engine backend` chooses which daemon they talk to, and
-  `engine runner signin` signs a runner in. See [cli/README.md](cli/README.md).
+  graphs; `engine backend` chooses which daemon they talk to. See
+  [cli/README.md](cli/README.md).
 
 While working on OpenEngine itself, run the development server instead:
 ```bash

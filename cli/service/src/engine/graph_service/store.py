@@ -42,6 +42,16 @@ class GraphRow:
 
 
 @dataclass(frozen=True)
+class AgentRow:
+    name: str
+    kind: str
+    model: str
+    url: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class VersionRow:
     version_id: str
     graph_id: str
@@ -134,6 +144,27 @@ class GraphServiceStore:
             raise
         else:
             self._connection.execute("COMMIT")
+
+    # --- agents -------------------------------------------------------------
+
+    def agents(self) -> tuple[AgentRow, ...]:
+        rows = self._connection.execute("SELECT * FROM cli_agents ORDER BY name")
+        return tuple(AgentRow(**dict(row)) for row in rows)
+
+    def agent(self, name: str) -> AgentRow | None:
+        row = self._connection.execute("SELECT * FROM cli_agents WHERE name = ?", (name,)).fetchone()
+        return AgentRow(**dict(row)) if row else None
+
+    def upsert_agent(self, row: AgentRow) -> None:
+        """Insert `row`, or replace the agent of that name and keep when it was added."""
+        self._connection.execute(
+            "INSERT INTO cli_agents VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET "
+            "kind = excluded.kind, model = excluded.model, url = excluded.url, updated_at = excluded.updated_at",
+            (row.name, row.kind, row.model, row.url, row.created_at, row.updated_at),
+        )
+
+    def delete_agent(self, name: str) -> None:
+        self._connection.execute("DELETE FROM cli_agents WHERE name = ?", (name,))
 
     # --- graphs -------------------------------------------------------------
 
@@ -442,6 +473,7 @@ def _loop(row: sqlite3.Row) -> LoopRow:
 
 
 __all__ = [
+    "AgentRow",
     "ExecutionRow",
     "GraphRow",
     "GraphServiceStore",

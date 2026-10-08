@@ -21,10 +21,11 @@ restart without requiring an external database service.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from langgraph_acp.providers import (
@@ -33,6 +34,7 @@ from langgraph_acp.providers import (
     OPENCODE_ACP_COMMAND,
     ClaudeACPProvider,
     CodexACPProvider,
+    OpenCodeACPProvider,
 )
 
 from engine.adapters.agent_runner.acp import (
@@ -83,9 +85,11 @@ from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
-from engine.graph_runtime_langgraph import LangGraphRuntime
+from engine.graph_runtime_langgraph import LangGraphRuntime, answer_permission
 from engine.graph_runtime_langgraph.workflows import RUNS, agent_registry, sqlite_runtime
 from engine.graph_service import GraphService, StartRun
+from engine.graph_service.service import opencode_config
+from engine.graph_service.store import AgentRow
 from engine.ports import AgentRunner, Communications, SourceControl
 from engine.runtime import (
     AgentSession,
@@ -404,7 +408,8 @@ def build_graph_service(
             runtime,
             Path(settings.graph_state_directory) / RUNS,
             workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
-            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider()]),
+            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]),
+            agent_factory=added_agent,
             start=start,
             session_config=claude_session_config_for(settings),
             default_repository=default_repository,
@@ -414,6 +419,19 @@ def build_graph_service(
         )
 
     return build
+
+
+def added_agent(row: AgentRow) -> object:
+    """The provider an agent added with `engine agent add` runs as, answering permissions like the built-ins."""
+    if row.kind == "claude":
+        provider: object = ClaudeACPProvider(name=row.name)
+    elif row.kind == "codex":
+        provider = CodexACPProvider(name=row.name)
+    else:
+        config = opencode_config(row)
+        env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)} if config else None
+        provider = OpenCodeACPProvider(name=row.name, env=env)
+    return replace(provider, permissions=answer_permission)
 
 
 def claude_session_config_for(settings: Settings) -> dict[str, object] | None:

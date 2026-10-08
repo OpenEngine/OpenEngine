@@ -41,6 +41,9 @@ class Client:
     def post(self, path: str, body: dict[str, Any], *, idempotent: bool = False) -> dict[str, Any]:
         return self.request("POST", path, body=body, retry=idempotent)
 
+    def delete(self, path: str) -> dict[str, Any]:
+        return self.request("DELETE", path)
+
     def request(
         self,
         method: str,
