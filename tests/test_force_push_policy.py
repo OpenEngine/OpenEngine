@@ -95,16 +95,6 @@ def test_force_push_fails_closed_when_eligibility_cannot_be_verified(failure):
     source._git.assert_not_awaited()
 
 
-def test_metadata_amend_requires_ownership_before_modifying_checkout():
-    source = source_for()
-    async def git(root, args):
-        return {("branch", "--show-current"): "agent/change", ("rev-parse", "HEAD"): "abc", ("log", "-1", "--format=%B"): "feat: change", ("ls-remote", "origin", "refs/heads/agent/change"): "abc\trefs/heads/agent/change"}.get(args, "")
-    source._git_checked.side_effect = git
-    with pytest.raises(ValueError, match="work-order-owned"):
-        asyncio.run(source._issue_head("/checkout", "agent/change", "main", "#7", "resolves"))
-    assert not any("--amend" in call.args[1] or "push" in call.args[1] for call in source._git_checked.await_args_list)
-
-
 def test_normal_push_needs_no_pr_and_disables_configured_mirroring():
     source = source_for()
     asyncio.run(source.run_git(WorkspaceId("ws"), ["push", "origin", "agent/change"]))
@@ -113,7 +103,7 @@ def test_normal_push_needs_no_pr_and_disables_configured_mirroring():
 
 
 @pytest.mark.parametrize("owned", [(), OWNED])
-def test_metadata_rewrite_checks_same_policy_as_explicit_force_push(owned):
+def test_metadata_uses_normal_push_without_requiring_an_existing_pr(owned):
     source = source_for()
     async def git(root, args):
         return {
@@ -125,13 +115,12 @@ def test_metadata_rewrite_checks_same_policy_as_explicit_force_push(owned):
         }.get(args, "")
     source._git_checked.side_effect = git
     call = source._issue_head("/checkout", "agent/change", "main", "#7", "resolves", owned_pull_requests=owned)
-    if owned:
-        asyncio.run(call)
-        assert any("--amend" in call.args[1] for call in source._git_checked.await_args_list)
-    else:
-        with pytest.raises(ValueError, match="work-order-owned"):
-            asyncio.run(call)
-        assert not any("--amend" in call.args[1] for call in source._git_checked.await_args_list)
+    asyncio.run(call)
+    commands = [call.args[1] for call in source._git_checked.await_args_list]
+    assert any("commit" in args and "--allow-empty" in args for args in commands)
+    assert any("push" in args for args in commands)
+    assert not any("--amend" in args or any(arg.startswith("--force") for arg in args) for args in commands)
+    source._api.assert_not_awaited()
 
 
 def test_prepared_initial_issue_head_needs_no_force_push():

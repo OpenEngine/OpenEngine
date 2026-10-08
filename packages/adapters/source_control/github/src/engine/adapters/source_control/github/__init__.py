@@ -231,7 +231,7 @@ class GitHubSourceControl:
         resolution: str, qualified_reference: str = "",
         *, owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> None:
-        """Amend only this published head, refusing concurrent remote changes."""
+        """Publish issue metadata with a fast-forward commit, preserving history."""
         if branch == base:
             raise ValueError("issue publishing must not rewrite the pull request base branch")
         current = await self._git_checked(root, ("branch", "--show-current"))
@@ -248,24 +248,22 @@ class GitHubSourceControl:
             raise ValueError("push the current head before opening the issue pull request")
         if old.strip() == updated.strip():
             return
-        await self._require_owned_feature(root, "origin", (branch,), owned_pull_requests)
-        # Ownership and branch eligibility are checked before any local amendment.
-        # This host-side metadata rewrite preserves existing credit trailers.
-        # Do not execute checkout-controlled hooks while amending or publishing it.
+        # A new PR cannot establish ownership before it exists. Append metadata
+        # instead of rewriting published history, so no force permission is needed.
+        # Preserve credit and bypass checkout-controlled hooks and signing helpers.
         no_hooks = ("-c", f"core.hooksPath={os.devnull}")
-        await self._git_checked(root, (*no_hooks, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", "commit", "--amend", "--only", "--allow-empty", "--message", updated))
-        amended = await self._git_checked(root, ("rev-parse", "HEAD"))
+        await self._git_checked(root, (*no_hooks, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", "commit", "--only", "--allow-empty", "--message", updated))
+        published = await self._git_checked(root, ("rev-parse", "HEAD"))
         try:
-            await self._git_checked(root, (*no_hooks, "push", "--no-mirror", f"--force-with-lease=refs/heads/{branch}:{head}",
-                                           "origin", f"HEAD:refs/heads/{branch}"))
+            await self._git_checked(root, (*no_hooks, "push", "--no-mirror", "origin", f"HEAD:refs/heads/{branch}"))
         except GitHubSourceControlError:
             # A transport error can arrive after the remote accepted the push.
             # If reconciliation fails, preserve HEAD rather than guess its state.
             remote = await self._git_checked(root, ("ls-remote", "origin", f"refs/heads/{branch}"))
-            if remote.split()[:1] != [amended]:
-                # The amend changes only metadata. Restore the ref without touching
+            if remote.split()[:1] != [published]:
+                # The empty commit changes only metadata. Restore the ref without touching
                 # the index/worktree, and refuse to overwrite a concurrent local move.
-                await self._git_checked(root, (*no_hooks, "update-ref", f"refs/heads/{branch}", head, amended))
+                await self._git_checked(root, (*no_hooks, "update-ref", f"refs/heads/{branch}", head, published))
             raise
 
     async def _require_owned_feature(
@@ -275,7 +273,7 @@ class GitHubSourceControl:
         """Fail closed: only recorded open PRs on explicit feature namespaces."""
         denied = "force push requires a work-order-owned open PR on an unprotected agent/ or feature/ branch"
         if not owned:
-            raise ValueError(denied + "; prepare issue trailers before the first push and PR creation")
+            raise ValueError(denied)
         if not branches or any(not name.startswith(("agent/", "feature/")) for name in branches):
             raise ValueError(denied)
         if remote_project(remote) is None:

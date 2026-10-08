@@ -282,16 +282,18 @@ is in the same repository and has an `agent/` or `feature/` branch name. GitHub
 must confirm that the branch is unprotected and is neither the repository's
 default branch nor the base of an open PR. Unknown ownership or
 unavailable branch information denies the push. Approval does not override
-these checks. This applies to explicit force flags, `+` refspecs, and automatic
-issue-metadata rewrites; GitLab force pushes are refused until it can verify
-the same conditions.
+these checks. This applies to explicit force flags and `+` refspecs; GitLab
+force pushes are refused until it can verify the same conditions.
 
-Prepare the head commit's issue trailers before the first push and PR creation:
-`Refs #N` for partial work, or `Resolves #N` plus `Refs #N` for complete work.
-No automatic amendment is needed when these already match. Metadata rewrites
-for an eligible owned PR require a clean checkout and use an explicit lease on
-the previously pushed SHA. If somebody changed the remote head, publishing
-stops so their work is not overwritten.
+Issue publication requires a clean checkout with the current head already
+pushed. When the head's issue trailers need updating, Engine appends an empty
+metadata commit and pushes it normally before creating the PR. This preserves
+published commits and works for the first PR without granting force-push
+permission or recording a PR that does not yet exist. A correctly prepared
+head needs no extra commit. Concurrent remote updates are never overwritten;
+failed pushes reconcile the remote before restoring the local ref, preserving
+concurrent local work and uncertain remote state. The PR is recorded to the
+work order after GitHub successfully creates it.
 
 Review feedback includes the root comment ID and GraphQL thread ID. Both IDs,
 and each thread's resolution state, are also available through

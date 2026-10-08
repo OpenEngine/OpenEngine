@@ -725,8 +725,7 @@ class TerminalMcpBroker:
             resolution = arguments.get("issue_resolution")
             if not isinstance(resolution, str) or resolution not in {"resolves", "refs"}:
                 raise ValueError("issue_resolution is required for issue work: choose resolves or refs")
-            options = {"issue": self._issue, "issue_resolution": resolution,
-                       "owned_pull_requests": await self._owned_force_push_prs()}
+            options = {"issue": self._issue, "issue_resolution": resolution}
             approved = await self._approve_forge("open_pull_request", arguments, request_id)
             if approved is not None:
                 return approved
@@ -963,15 +962,11 @@ class TerminalMcpBroker:
         reason = "Publish changes to GitHub."
         if name == "open_pull_request" and self._issue:
             reason = (
-                "Open an issue-linked pull request on GitHub. On the host, update the "
-                "head commit's issue trailers with git commit --amend --only --allow-empty "
-                "--message, then rewrite the published branch with git push "
-                "--force-with-lease=refs/heads/<branch>:<current-head> origin "
-                "HEAD:refs/heads/<branch> if the message changed. Both commands disable "
-                "all repository hooks with -c core.hooksPath=/dev/null; existing credit "
-                "trailers are preserved. Git transport and credential helpers still run "
-                "on the host. Rewrites require an open PR owned by this work order on an "
-                "unprotected agent/ or feature/ branch, never a default or base branch. "
+                "Open an issue-linked pull request on GitHub. If issue trailers need "
+                "updating, append an empty metadata commit and push it normally before "
+                "creating the PR. Existing commits and credit trailers are preserved; "
+                "repository hooks and signing helpers are disabled for the metadata "
+                "commit. Git transport and credential helpers still run on the host. "
                 "The branch and issue resolution are supplied in the arguments."
             )
         request = ApprovalRequest(
@@ -1207,16 +1202,16 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
         "name": "open_pull_request",
         "description": (
             "Open a pull request for a branch already pushed to the remote, "
-            "and return its URL. Push the branch with git_subcommand first. Prepare "
-            "issue trailers before the first push: automatic metadata rewrites "
-            "require an existing PR owned by this work order on a feature branch."
+            "and return its URL. Push the branch with git_subcommand first. Issue "
+            "trailers are normalized through an empty metadata commit and normal "
+            "push when needed; an existing PR is not required."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "branch": {"type": "string", "minLength": 1},
                 "base_ref": {"type": "string", "minLength": 1},
-                "issue_resolution": {"enum": ["resolves", "refs"], "description": "Required for issue work. The host normalizes the PR body and, for resolves, amends and republishes the head commit with a closing reference."},
+                "issue_resolution": {"enum": ["resolves", "refs"], "description": "Required for issue work. The host normalizes the PR body and, for resolves, appends and publishes an empty metadata commit with a closing reference when needed."},
                 "title": {"type": "string", "minLength": 1},
                 "body": {"type": "string"},
             },

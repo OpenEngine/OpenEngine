@@ -813,9 +813,6 @@ def test_reaction_transport_errors_are_surfaced():
 def test_issue_publication_normalizes_body_and_head(monkeypatch, tmp_path, resolution, keyword, issue_repo, reference):
     from unittest.mock import AsyncMock
     source = _checkout(tmp_path / "checkout", "agent/issue")
-    # These tests isolate the amendment/recovery after authorization.
-    from unittest.mock import AsyncMock
-    source._require_owned_feature = AsyncMock()
     calls = []
     async def git(root, arguments):
         calls.append(arguments)
@@ -832,12 +829,12 @@ def test_issue_publication_normalizes_body_and_head(monkeypatch, tmp_path, resol
     result = asyncio.run(source.request_review(WORKSPACE, "agent/issue", "main", "feat: change", f"Description\n\nFixes {reference}", issue={"repository": issue_repo, "number": 7}, issue_resolution=resolution))
     assert result.endswith("/8")
     assert source._api.await_args.kwargs["json"]["body"] == f"Description\n\n{keyword} {reference}"
-    amends = [call for call in calls if "--amend" in call]
+    amends = [call for call in calls if "commit" in call]
     if resolution == "resolves":
         assert len(amends) == 1
         assert f"Resolves {reference}" in amends[0][-1]
         assert f"Refs {reference}" in amends[0][-1]
-        assert ("-c", "core.hooksPath=/dev/null", "push", "--no-mirror", "--force-with-lease=refs/heads/agent/issue:abc1234", "origin", "HEAD:refs/heads/agent/issue") in calls
+        assert ("-c", "core.hooksPath=/dev/null", "push", "--no-mirror", "origin", "HEAD:refs/heads/agent/issue") in calls
     else:
         assert not amends
 
@@ -909,14 +906,11 @@ def test_resolving_foreign_thread_or_graphql_failure_is_refused():
         asyncio.run(source.resolve_review_thread("https://github.com/acme/api/pull/7", "PRRT_1"))
 
 
-def test_issue_head_amend_is_published_and_keeps_credit_once(tmp_path):
+def test_first_issue_pr_appends_metadata_and_keeps_credit_once(tmp_path):
     from unittest.mock import AsyncMock
     from engine.adapters.workspace_provider.git_worktree import _credit
     root = tmp_path / "checkout"
     source = _checkout(root, "main")
-    # These tests isolate the amendment/recovery after authorization.
-    from unittest.mock import AsyncMock
-    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))
@@ -949,6 +943,7 @@ def test_issue_head_amend_is_published_and_keeps_credit_once(tmp_path):
     new = _git(root, "rev-parse", "HEAD")
     message = _git(root, "log", "-1", "--format=%B")
     assert old != new
+    assert _git(root, "rev-parse", "HEAD^") == old
     assert not marker.exists()
     assert _git(root, "rev-parse", "HEAD^{tree}") == tree
     assert message.count("Resolves #7") == message.count("Refs #7") == 1
@@ -1068,12 +1063,9 @@ def test_targeted_reply_does_not_reuse_another_authors_comment():
     assert source._api.await_args.args[1].endswith("/41/replies")
 
 
-def test_issue_head_lease_preserves_a_concurrent_remote_push(tmp_path):
+def test_issue_head_fast_forward_preserves_a_concurrent_remote_push(tmp_path):
     root = tmp_path / "checkout"
     source = _checkout(root)
-    # These tests isolate the amendment/recovery after authorization.
-    from unittest.mock import AsyncMock
-    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))
@@ -1086,7 +1078,7 @@ def test_issue_head_lease_preserves_a_concurrent_remote_push(tmp_path):
     checked = source._git_checked
 
     async def racing(root_path, arguments):
-        if "--amend" in arguments:
+        if "commit" in arguments:
             _git(root, "push", "origin", f"{concurrent}:refs/heads/agent/issue")
         return await checked(root_path, arguments)
 
@@ -1139,9 +1131,6 @@ def test_issue_body_normalizes_colon_keywords(keyword, separator, resolution, re
 def test_issue_head_failed_push_can_be_retried(tmp_path, accepted):
     root = tmp_path / "checkout"
     source = _checkout(root, "agent/issue")
-    # These tests isolate the amendment/recovery after authorization.
-    from unittest.mock import AsyncMock
-    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))
@@ -1182,9 +1171,6 @@ def test_review_thread_stops_after_matching_page():
 def test_issue_head_recovery_preserves_uncertain_or_concurrent_state(tmp_path, failure):
     root = tmp_path / "checkout"
     source = _checkout(root, "agent/issue")
-    # These tests isolate the amendment/recovery after authorization.
-    from unittest.mock import AsyncMock
-    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))

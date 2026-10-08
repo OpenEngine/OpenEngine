@@ -1750,6 +1750,10 @@ def test_issue_publication_requires_explicit_resolution_and_approval(accepted):
         broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
         broker.enable_repository_tools(source, ("open_pull_request",), WorkspaceId("ws"), approval)
         broker.enable_issue({"repository": "acme/api", "number": 7})
+        lookup = AsyncMock(side_effect=RuntimeError("no existing ownership"))
+        broker.enable_pull_request_ownership(lookup)
+        record = AsyncMock()
+        broker.enable_pull_request_records(record)
         args = {"branch": "agent/issue", "title": "feat: fix", "body": "Change"}
         result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
         assert not result["ok"] and "issue_resolution" in result["error"]
@@ -1758,13 +1762,15 @@ def test_issue_publication_requires_explicit_resolution_and_approval(accepted):
         result = await broker._submit(_direct_request(broker, "2", "open_pull_request", args))
         assert result["ok"] is accepted
         assert source.request_review.await_count == int(accepted)
+        lookup.assert_not_awaited()
+        assert record.await_count == int(accepted)
         if accepted:
-            assert source.request_review.await_args.kwargs == {"issue": {"repository": "acme/api", "number": 7}, "issue_resolution": "resolves", "owned_pull_requests": ()}
+            assert source.request_review.await_args.kwargs == {"issue": {"repository": "acme/api", "number": 7}, "issue_resolution": "resolves"}
         approval.assert_awaited_once()
         request = approval.await_args.args[0]
-        assert "git commit --amend" in request.reason
-        assert "git push --force-with-lease" in request.reason
-        assert "core.hooksPath=/dev/null" in request.reason
+        assert "append an empty metadata commit" in request.reason
+        assert "push it normally" in request.reason
+        assert "repository hooks and signing helpers are disabled" in request.reason
         assert "helpers still run on the host" in request.reason
         assert json.loads(request.arguments) == args
     asyncio.run(scenario())
