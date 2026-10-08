@@ -539,6 +539,9 @@ def test_an_added_agent_runs_graphs_and_outlives_the_daemon(tmp_path: Path) -> N
     ({"kind": "claude", "name": "q", "url": "http://localhost:11434/v1", "model": "m"}, "only an opencode"),
     ({"kind": "opencode", "name": "q", "url": "http://localhost:11434/v1"}, "needs a model"),
     ({"kind": "opencode", "name": "q", "url": "ftp://box", "model": "m"}, "http"),
+    ({"kind": "opencode", "name": "q", "url": "http://gpu:8000/v1?api_key=sk-1", "model": "m"}, "api key"),
+    ({"kind": "opencode", "name": "q", "url": "http://gpu:8000/v1?x=1&API-Key=sk-1", "model": "m"}, "api key"),
+    ({"kind": "opencode", "name": "q", "url": "https://gpu/v1?access_token=t", "model": "m"}, "api key"),
     ({"kind": "claude", "name": "stub"}, "built in"),
 ])
 def test_an_agent_that_cannot_run_is_refused(tmp_path: Path, arguments: dict[str, str], refusal: str) -> None:
@@ -548,6 +551,25 @@ def test_an_agent_that_cannot_run_is_refused(tmp_path: Path, arguments: dict[str
             with pytest.raises(ServiceError, match=refusal):
                 await service.add_agent(kind, **arguments)
             assert [agent["name"] for agent in service.agents_json()] == ["stub"]
+
+    asyncio.run(scenario())
+
+
+def test_a_refused_query_string_key_is_not_repeated(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            with pytest.raises(ServiceError) as refused:
+                await service.add_agent("opencode", name="q", model="m", url="http://gpu:8000/v1?key=sk-secret")
+            assert "sk-secret" not in repr(refused.value) and "sk-secret" not in str(vars(refused.value))
+
+    asyncio.run(scenario())
+
+
+def test_a_query_string_without_a_key_is_accepted(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            added = await service.add_agent("opencode", name="q", model="m", url="http://gpu:8000/v1?region=us")
+            assert added["url"] == "http://gpu:8000/v1?region=us"
 
     asyncio.run(scenario())
 

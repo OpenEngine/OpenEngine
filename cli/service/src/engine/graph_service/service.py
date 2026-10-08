@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 from engine.domain import ApprovalDecision, ApprovalId, RunId
@@ -82,6 +83,8 @@ log = logging.getLogger(__name__)
 #: The harnesses an added agent can run on.
 AGENT_KINDS = ("claude", "codex", "opencode")
 _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: Query parameter names that carry a credential: an agent's url is stored and listed back, so none may ride in it.
+_CREDENTIAL_PARAMETER = re.compile(r"(key|token|secret|password|signature|sig|auth|credential)s?$")
 
 #: The provider an opencode agent with a url reaches its endpoint through.
 OPENCODE_URL_PROVIDER = "engine"
@@ -314,6 +317,9 @@ class GraphService:
             raise ServiceError("an agent with a url needs a model to ask it for")
         if url and not re.match(r"^https?://", url):
             raise ServiceError("url must be http(s)", url=url)
+        if url and _carries_credential(url):
+            # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
+            raise ServiceError("url must not carry an api key in its query string")
         if name in self._builtin_agents:
             raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
         async with self._lock:
@@ -1374,6 +1380,14 @@ def _progress(
         stages.append({"stage": stage, "status": state, "nodes": [node["id"] for node in members]})
     current = [node["id"] for node in nodes if node["status"] in OPEN_EXECUTION_STATUSES]
     return {"graphNodes": nodes, "edges": edges, "stages": stages, "current": current}
+
+
+def _carries_credential(url: str) -> bool:
+    """Whether `url`'s query string names a key, token or other secret, e.g. `?api_key=...`."""
+    return any(
+        _CREDENTIAL_PARAMETER.search(re.sub(r"[^a-z]", "", name.lower()))
+        for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+    )
 
 
 def session_model(row: AgentRow) -> str:
