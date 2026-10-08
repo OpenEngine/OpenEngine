@@ -1208,3 +1208,29 @@ for separator in (" " * 100_000, " " * 100_000 + ":" + " " * 100_000):
 """],
         check=True, capture_output=True, timeout=5,
     )
+
+
+@pytest.mark.parametrize("rewrite", ["insteadOf", "pushInsteadOf"])
+@pytest.mark.parametrize("remote", ["https://github.com/acme/api.git", "git@github.com:acme/api.git", "origin"])
+def test_force_push_checks_rewritten_destination(tmp_path, rewrite, remote):
+    from unittest.mock import AsyncMock
+
+    root = tmp_path / "checkout"
+    source = _checkout(root, "agent/change")
+    literal = remote if remote != "origin" else "https://github.com/acme/api.git"
+    _git(root, "remote", "set-url", "origin", literal)
+    _git(root, "config", f"url.https://github.com/acme/other.git.{rewrite}", literal)
+    source._api = AsyncMock(side_effect=AssertionError("must refuse before API calls"))
+    checked = source._git_checked
+
+    async def no_push(root_path, arguments):
+        assert "push" not in arguments, "must refuse before pushing"
+        return await checked(root_path, arguments)
+
+    source._git_checked = no_push
+    with pytest.raises(ValueError, match="named remote|work-order-owned"):
+        asyncio.run(source.run_git(
+            WORKSPACE, ["push", "--force", remote, "HEAD:refs/heads/agent/change"],
+            owned_pull_requests=(("acme/api", 7),),
+        ))
+    source._api.assert_not_awaited()

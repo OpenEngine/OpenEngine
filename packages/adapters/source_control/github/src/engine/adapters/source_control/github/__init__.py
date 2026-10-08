@@ -276,8 +276,11 @@ class GitHubSourceControl:
             raise ValueError(denied)
         if not branches or any(not name.startswith(("agent/", "feature/")) for name in branches):
             raise ValueError(denied)
-        if remote_project(remote) is None:
-            remote = await self._git_checked(root, ("remote", "get-url", "--push", "--all", remote))
+        # Literal URLs can be redirected by insteadOf/pushInsteadOf after validation.
+        # Require a named remote and let Git expand its effective push URLs.
+        if remote_project(remote) is not None:
+            raise ValueError("force push requires a named remote, not a literal URL")
+        remote = await self._git_checked(root, ("remote", "get-url", "--push", "--all", remote))
         if len(remote.splitlines()) != 1:
             raise ValueError(denied)
         project = remote_project(remote)
