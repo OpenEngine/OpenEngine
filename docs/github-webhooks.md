@@ -295,13 +295,20 @@ stops so their work is not overwritten.
 
 Review feedback includes the root comment ID and GraphQL thread ID. Both IDs,
 and each thread's resolution state, are also available through
-`view_change_request`. Review replies through `add_comment` require `thread_id`,
-`in_reply_to_id`, and an explicit `resolve` choice. For addressed work, use
-`resolve=true` and `commit_sha`: Engine formats `Addressed in <sha>: <comment>`,
+`view_change_request`. For an ordinary review reply through `add_comment`, supply
+`pr_url`, `comment`, and `in_reply_to_id`. The resolution options are optional:
+`resolve` defaults to `false`, and neither `thread_id` nor `commit_sha` is
+required. Ordinary replies leave the thread open and do not pass through the
+resolution approval gate. Use this form for discussion or disagreement.
+
+For addressed work, supply `in_reply_to_id`, `thread_id`, `resolve=true`, and a
+`commit_sha` of 7–40 hexadecimal characters, along with `pr_url` and `comment`.
+Engine requires approval for this operation, validates that the thread belongs
+to the PR and matches the root comment, formats `Addressed in <sha>: <comment>`,
 posts the reply, then resolves the thread through the configured GitHub
-transport and Engine's approval gate. Disagreements use `resolve=false` and
-leave the thread open. Retrying the same addressed reply after a resolution
-failure reuses the posted reply.
+transport. Missing resolution metadata is rejected for `resolve=true` replies.
+Retrying the same addressed reply after a resolution failure reuses the posted
+reply.
 
 `[github] resolve_addressed_threads = false` leaves addressed threads open for
 reviewers to resolve themselves. The default is `true`. Disconnected runs do
