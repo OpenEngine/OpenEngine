@@ -1,0 +1,39 @@
+# Copy to .engine/config.toml for a new local deployment.
+[repos]
+"spiralsoft-ai/PATY" = "~/code/PATY"
+
+[approvals]
+allow = ["read", "edit"]
+
+[approvals.bash]
+allow = [
+  "uv run pytest **",
+  # PATY agent/MCP/CLI checks; exact commands, not a general uv or npm grant.
+  "uv run ruff check agent/ pipecat_outbound/",
+  "uv run --directory mcp ruff check src/",
+  "uv run ruff check src/",
+  "uv run ruff format --check src/",
+  "uv run ruff check .",
+  "uv run ruff check paty/ tests/",
+  "uv run ruff format --check paty/ tests/",
+  "uv run --directory cli ruff check --output-format=github .",
+  "uv run --directory cli ruff format --check --diff .",
+  "uv sync",
+  "uv sync --dev",
+  "uv sync --extra dev",
+  "uv sync --extra dev --directory cli",
+  "uv sync --all-extras",
+  "uv run python -m pipecat_outbound.bot --help",
+  "npm install",
+  "npm ci",
+  "npm run build",
+  "npm test",
+  "node test-local.mjs",
+]
+deny = [
+  "git add **", "git commit **", "git branch **", "git checkout **",
+  "git switch **", "git push **", "gh pr create **",
+]
+
+[workflows]
+directory = "../workflows"

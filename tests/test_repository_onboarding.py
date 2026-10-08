@@ -17,7 +17,10 @@ from engine.runtime.approval_policy import PolicyDecision, policy_decision_for
 
 def test_startup_clones_missing_repository_and_reuses_it(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config = tmp_path / "engine.toml"
+    monkeypatch.delenv("ENGINE_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config-home"))
+    config = tmp_path / ".engine/config.toml"
+    config.parent.mkdir()
     config.write_text(f'[repos]\n"spiralsoft-ai/PATY" = "{tmp_path}/code/PATY"\n')
     calls = []
 
@@ -31,10 +34,10 @@ def test_startup_clones_missing_repository_and_reuses_it(tmp_path, monkeypatch):
         (destination / "AGENTS.md").write_text("PATY instructions")
 
     monkeypatch.setattr(repositories.subprocess, "run", clone)
-    loaded, _ = web_main.read_configuration(config)
+    loaded, _ = web_main.read_configuration(None)
     assert loaded.config.repos["spiralsoft-ai/PATY"] == str(tmp_path / "code/PATY")
     assert (tmp_path / "code/PATY/AGENTS.md").read_text() == "PATY instructions"
-    web_main.read_configuration(config)
+    web_main.read_configuration(None)
     assert len(calls) == 1
     assert set((tmp_path / "code").iterdir()) == {
         tmp_path / "code/PATY", tmp_path / "code/.engine-clone-PATY.lock",
@@ -140,7 +143,7 @@ def test_relative_checkout_path_uses_working_directory(tmp_path, monkeypatch):
     "node test-local.mjs",
 ])
 def test_paty_commands_have_explicit_approval(command):
-    config = load_engine_config(Path(__file__).parents[1] / "engine.toml", environ={}).config
+    config = load_engine_config(Path(__file__).parents[1] / "docs/examples/paty.toml", environ={}).config
     assert config.repos["spiralsoft-ai/PATY"] == "~/code/PATY"
     policy = replace(config.approvals, auto_approve=False)
     assert policy_decision_for(policy, PermissionScope(ApprovalCapability.BASH, command)) is PolicyDecision.ALLOW
@@ -148,6 +151,6 @@ def test_paty_commands_have_explicit_approval(command):
 
 @pytest.mark.parametrize("command", ["uv run arbitrary", "npm run deploy", "node arbitrary.mjs"])
 def test_paty_approvals_do_not_grant_arbitrary_commands(command):
-    config = load_engine_config(Path(__file__).parents[1] / "engine.toml", environ={}).config
+    config = load_engine_config(Path(__file__).parents[1] / "docs/examples/paty.toml", environ={}).config
     policy = replace(config.approvals, auto_approve=False)
     assert policy_decision_for(policy, PermissionScope(ApprovalCapability.BASH, command)) is PolicyDecision.ASK
