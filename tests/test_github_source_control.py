@@ -813,6 +813,9 @@ def test_reaction_transport_errors_are_surfaced():
 def test_issue_publication_normalizes_body_and_head(monkeypatch, tmp_path, resolution, keyword, issue_repo, reference):
     from unittest.mock import AsyncMock
     source = _checkout(tmp_path / "checkout", "agent/issue")
+    # These tests isolate the amendment/recovery after authorization.
+    from unittest.mock import AsyncMock
+    source._require_owned_feature = AsyncMock()
     calls = []
     async def git(root, arguments):
         calls.append(arguments)
@@ -834,7 +837,7 @@ def test_issue_publication_normalizes_body_and_head(monkeypatch, tmp_path, resol
         assert len(amends) == 1
         assert f"Resolves {reference}" in amends[0][-1]
         assert f"Refs {reference}" in amends[0][-1]
-        assert ("-c", "core.hooksPath=/dev/null", "push", "--force-with-lease=refs/heads/agent/issue:abc1234", "origin", "HEAD:refs/heads/agent/issue") in calls
+        assert ("-c", "core.hooksPath=/dev/null", "push", "--no-mirror", "--force-with-lease=refs/heads/agent/issue:abc1234", "origin", "HEAD:refs/heads/agent/issue") in calls
     else:
         assert not amends
 
@@ -911,6 +914,9 @@ def test_issue_head_amend_is_published_and_keeps_credit_once(tmp_path):
     from engine.adapters.workspace_provider.git_worktree import _credit
     root = tmp_path / "checkout"
     source = _checkout(root, "main")
+    # These tests isolate the amendment/recovery after authorization.
+    from unittest.mock import AsyncMock
+    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))
@@ -1065,6 +1071,9 @@ def test_targeted_reply_does_not_reuse_another_authors_comment():
 def test_issue_head_lease_preserves_a_concurrent_remote_push(tmp_path):
     root = tmp_path / "checkout"
     source = _checkout(root)
+    # These tests isolate the amendment/recovery after authorization.
+    from unittest.mock import AsyncMock
+    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))
@@ -1130,6 +1139,9 @@ def test_issue_body_normalizes_colon_keywords(keyword, separator, resolution, re
 def test_issue_head_failed_push_can_be_retried(tmp_path, accepted):
     root = tmp_path / "checkout"
     source = _checkout(root, "agent/issue")
+    # These tests isolate the amendment/recovery after authorization.
+    from unittest.mock import AsyncMock
+    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))
@@ -1170,6 +1182,9 @@ def test_review_thread_stops_after_matching_page():
 def test_issue_head_recovery_preserves_uncertain_or_concurrent_state(tmp_path, failure):
     root = tmp_path / "checkout"
     source = _checkout(root, "agent/issue")
+    # These tests isolate the amendment/recovery after authorization.
+    from unittest.mock import AsyncMock
+    source._require_owned_feature = AsyncMock()
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(root, "remote", "set-url", "origin", str(remote))

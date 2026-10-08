@@ -156,13 +156,18 @@ class SourceControl(Protocol):
     """Publishes work produced in a workspace and opens it for review."""
 
     async def run_git(
-        self, workspace_id: WorkspaceId, arguments: Sequence[str]
+        self, workspace_id: WorkspaceId, arguments: Sequence[str],
+        *, owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> GitResult:
         """Run `git` with these arguments inside the workspace's checkout.
 
         `arguments` is an argument vector, not a command line: no shell is
         involved, so nothing here is quoted, split, or expanded, and a commit
         message with newlines in it is simply one element.
+
+        `owned_pull_requests` is trusted run-bound provenance, never tool input.
+        Force pushes must fail closed unless the provider verifies an owned
+        open PR and an eligible feature head; approval alone is insufficient.
         """
         ...
 
@@ -185,6 +190,7 @@ class SourceControl(Protocol):
         title: str,
         body: str,
         *, issue: dict[str, object] | None = None, issue_resolution: str | None = None,
+        owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> str:
         """Open a review (pull request). Returns its URL.
 

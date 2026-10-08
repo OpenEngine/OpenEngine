@@ -42,8 +42,9 @@ from engine.ports.source_control import (
     WorkItem,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.change_requests import change_request, names_a_project_step, pull_request_url
+from engine.runtime.change_requests import change_request, names_a_project_step, pull_request_url, remote_project
 from engine.runtime.issue_links import issue_body, issue_reference
+from engine.runtime.push_policy import push_spec
 
 #: The branch prefix `GitWorktreeWorkspaceProvider` gives every workspace. It
 #: is Engine's bookkeeping, not anybody's proposed change, and a remote branch
@@ -135,23 +136,32 @@ class GitHubSourceControl:
         self._git_binary_path = git_binary_path
 
     async def run_git(
-        self, workspace_id: WorkspaceId, arguments: Sequence[str]
+        self, workspace_id: WorkspaceId, arguments: Sequence[str],
+        *, owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> GitResult:
         """Run any git subcommand inside one workspace's checkout.
 
         The broker obtains approval before this method is called. The adapter
-        still owns two hard invariants: global options may not redirect git's
-        implementation, and a push must explicitly name a non-internal remote
-        branch.
+        rejects global execution overrides and ambiguous or internal push
+        targets. Force pushes additionally require trusted work order ownership
+        and a live check of feature branch eligibility.
         """
 
         arguments = tuple(str(argument) for argument in arguments)
         if not arguments:
             raise ValueError("git needs at least one argument")
         subcommand = _subcommand_index(arguments)
+        if subcommand is not None and arguments[subcommand] in {"send-pack", "http-push"}:
+            raise ValueError("use git push so branch ownership can be checked")
         root_path = await self._root_path(workspace_id)
         if subcommand is not None and arguments[subcommand] == "push":
             self._refuse_internal_publication(arguments[subcommand:])
+            remote, branches, force = push_spec(arguments[subcommand:])
+            if force:
+                await self._require_owned_feature(root_path, remote, branches, owned_pull_requests)
+            # Explicit refspecs and no mirror prevent local remote configuration
+            # from expanding a checked push into unrelated branch rewrites.
+            arguments = (*arguments[:subcommand + 1], "--no-mirror", *arguments[subcommand + 1:])
         return await self._git(root_path, arguments)
 
     async def create_branch(
@@ -168,9 +178,10 @@ class GitHubSourceControl:
         return await self._git_checked(root_path, ("rev-parse", "HEAD"))
 
     async def publish(self, workspace_id: WorkspaceId, branch: str) -> None:
-        root_path = await self._root_path(workspace_id)
         _refuse_internal_branch(branch)
-        await self._git_checked(root_path, ("push", "--set-upstream", "origin", branch))
+        result = await self.run_git(workspace_id, ("push", "--set-upstream", "origin", branch))
+        if not result.ok:
+            raise GitHubSourceControlError(result.stderr or result.stdout)
 
     async def request_review(
         self,
@@ -180,6 +191,7 @@ class GitHubSourceControl:
         title: str,
         body: str,
         *, issue: dict[str, object] | None = None, issue_resolution: str | None = None,
+        owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> str:
         """Open a pull request via the GitHub API and return its URL."""
 
@@ -196,7 +208,7 @@ class GitHubSourceControl:
             reference = issue_reference(issue, f"{owner}/{repo}")
             qualified = f"{issue['repository']}#{issue['number']}"
             body = issue_body(body, reference, issue_resolution, qualified_reference=qualified)
-            await self._issue_head(root_path, branch, base, reference, issue_resolution, qualified)
+            await self._issue_head(root_path, branch, base, reference, issue_resolution, qualified, owned_pull_requests=owned_pull_requests)
 
         response = _object(await self._api(
             "POST",
@@ -217,6 +229,7 @@ class GitHubSourceControl:
     async def _issue_head(
         self, root: str, branch: str, base: str, reference: str,
         resolution: str, qualified_reference: str = "",
+        *, owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> None:
         """Amend only this published head, refusing concurrent remote changes."""
         if branch == base:
@@ -235,14 +248,15 @@ class GitHubSourceControl:
             raise ValueError("push the current head before opening the issue pull request")
         if old.strip() == updated.strip():
             return
-        # The base guard is independent of GitHub protection; the lease guards concurrent updates.
+        await self._require_owned_feature(root, "origin", (branch,), owned_pull_requests)
+        # Ownership and branch eligibility are checked before any local amendment.
         # This host-side metadata rewrite preserves existing credit trailers.
         # Do not execute checkout-controlled hooks while amending or publishing it.
         no_hooks = ("-c", f"core.hooksPath={os.devnull}")
         await self._git_checked(root, (*no_hooks, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", "commit", "--amend", "--only", "--allow-empty", "--message", updated))
         amended = await self._git_checked(root, ("rev-parse", "HEAD"))
         try:
-            await self._git_checked(root, (*no_hooks, "push", f"--force-with-lease=refs/heads/{branch}:{head}",
+            await self._git_checked(root, (*no_hooks, "push", "--no-mirror", f"--force-with-lease=refs/heads/{branch}:{head}",
                                            "origin", f"HEAD:refs/heads/{branch}"))
         except GitHubSourceControlError:
             # A transport error can arrive after the remote accepted the push.
@@ -253,6 +267,54 @@ class GitHubSourceControl:
                 # the index/worktree, and refuse to overwrite a concurrent local move.
                 await self._git_checked(root, (*no_hooks, "update-ref", f"refs/heads/{branch}", head, amended))
             raise
+
+    async def _require_owned_feature(
+        self, root: str, remote: str, branches: Sequence[str],
+        owned: Sequence[tuple[str, int]],
+    ) -> None:
+        """Fail closed: only recorded open PRs on explicit feature namespaces."""
+        denied = "force push requires a work-order-owned open PR on an unprotected agent/ or feature/ branch"
+        if not owned:
+            raise ValueError(denied + "; prepare issue trailers before the first push and PR creation")
+        if not branches or any(not name.startswith(("agent/", "feature/")) for name in branches):
+            raise ValueError(denied)
+        if remote_project(remote) is None:
+            remote = await self._git_checked(root, ("remote", "get-url", "--push", "--all", remote))
+        if len(remote.splitlines()) != 1:
+            raise ValueError(denied)
+        project = remote_project(remote)
+        numbers = [number for owner, number in owned if owner == project]
+        if not numbers:
+            raise ValueError(denied)
+        owner, repo, _ = _pull_request_parts(pull_request_url(project, 1), self._hosts | {self._transport.host})
+        path = f"/repos/{owner}/{repo}"
+        repository = _object(await self._api("GET", path))
+        default = repository.get("default_branch")
+        repository_id = repository.get("id")
+        if not default or repository_id is None:
+            raise ValueError(denied)
+        pulls = [_object(await self._api("GET", f"{path}/pulls/{number}")) for number in numbers]
+        for branch in branches:
+            if branch == default or any(_nested_string(pull, "base", "ref") == branch for pull in pulls):
+                raise ValueError(denied)
+            details = _object(await self._api("GET", f"{path}/branches/{quote(branch, safe='')}"))
+            if details.get("name") != branch or details.get("protected") is not False:
+                raise ValueError(denied)
+            # A branch receiving other PRs is an integration target, even if
+            # its name happens to use the feature namespace.
+            targets = _objects(await self._api(
+                "GET", f"{path}/pulls", params={"state": "open", "base": branch, "per_page": 1}
+            ))
+            if targets:
+                raise ValueError(denied)
+            if not any(
+                pull.get("state") == "open"
+                and _nested_string(pull, "head", "ref") == branch
+                and pull.get("head", {}).get("repo", {}).get("id") == repository_id
+                and pull.get("base", {}).get("repo", {}).get("id") == repository_id
+                for pull in pulls
+            ):
+                raise ValueError(denied)
 
     async def can_write_repository(
         self, pr_url: str, username: str, *, user_id: int | None = None

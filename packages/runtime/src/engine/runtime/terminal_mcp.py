@@ -43,6 +43,7 @@ from engine.runtime.change_requests import (
     change_request,
     remote_project,
 )
+from engine.runtime.push_policy import push_spec
 from engine.runtime.step_results import (
     InvalidStepResultError,
     run_failed_from_arguments,
@@ -633,11 +634,18 @@ class TerminalMcpBroker:
             approved = await self._approve_git(git_arguments, request_id)
             if approved is not None:
                 return approved
+            push_options = {}
+            if _git_subcommand(git_arguments) == "push":
+                _, _, force = push_spec(git_arguments[git_arguments.index("push"):])
+                if force:
+                    push_options["owned_pull_requests"] = await self._owned_force_push_prs()
+                    if not push_options["owned_pull_requests"]:
+                        return {"ok": False, "error": "force push requires a PR owned by this work order"}
             expected = await self._push_source_tips(git_arguments)
             before = await self._push_snapshot(git_arguments)
             try:
                 result = await self._source_control.run_git(
-                    self._workspace_id, git_arguments
+                    self._workspace_id, git_arguments, **push_options
                 )
             except Exception as error:
                 return {"ok": False, "error": f"could not run git: {error}"}
@@ -717,7 +725,8 @@ class TerminalMcpBroker:
             resolution = arguments.get("issue_resolution")
             if not isinstance(resolution, str) or resolution not in {"resolves", "refs"}:
                 raise ValueError("issue_resolution is required for issue work: choose resolves or refs")
-            options = {"issue": self._issue, "issue_resolution": resolution}
+            options = {"issue": self._issue, "issue_resolution": resolution,
+                       "owned_pull_requests": await self._owned_force_push_prs()}
             approved = await self._approve_forge("open_pull_request", arguments, request_id)
             if approved is not None:
                 return approved
@@ -732,6 +741,16 @@ class TerminalMcpBroker:
             self._opened.add(opened)
         await self._record_pull_request(url)
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _owned_force_push_prs(self) -> tuple[tuple[str, int], ...]:
+        # Only the run-bound store and PRs this broker opened establish ownership.
+        owned = {(pr.project, pr.number) for pr in self._opened}
+        if self._pull_request_lookup is not None:
+            try:
+                owned.update(await self._pull_request_lookup())
+            except Exception as error:
+                raise ValueError("could not verify work order PR ownership; force push refused") from error
+        return tuple(sorted(owned))
 
     async def _foreign_pull_request(self, url: str) -> str | None:
         """Why `url` is not one of this run's pull requests, or `None` if it is.
@@ -951,7 +970,9 @@ class TerminalMcpBroker:
                 "HEAD:refs/heads/<branch> if the message changed. Both commands disable "
                 "all repository hooks with -c core.hooksPath=/dev/null; existing credit "
                 "trailers are preserved. Git transport and credential helpers still run "
-                "on the host. The branch and issue resolution are supplied in the arguments."
+                "on the host. Rewrites require an open PR owned by this work order on an "
+                "unprotected agent/ or feature/ branch, never a default or base branch. "
+                "The branch and issue resolution are supplied in the arguments."
             )
         request = ApprovalRequest(
             approval_id=f"terminal:{self._agent_run_id}:{request_id}",
@@ -1165,7 +1186,9 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "that select config or executables are refused. Pushes must name "
             "an explicit destination branch; implicit, HEAD, wildcard, --all, "
             "--branches and --mirror pushes are refused, as is any destination "
-            "under Engine's internal engine/ prefix."
+            "under Engine's internal engine/ prefix. Force pushes require an open PR "
+            "owned by this work order on an unprotected agent/ or feature/ branch; "
+            "default and PR base branches are never eligible."
         ),
         "inputSchema": {
             "type": "object",
@@ -1184,7 +1207,9 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
         "name": "open_pull_request",
         "description": (
             "Open a pull request for a branch already pushed to the remote, "
-            "and return its URL. Push the branch with git_subcommand first."
+            "and return its URL. Push the branch with git_subcommand first. Prepare "
+            "issue trailers before the first push: automatic metadata rewrites "
+            "require an existing PR owned by this work order on a feature branch."
         ),
         "inputSchema": {
             "type": "object",

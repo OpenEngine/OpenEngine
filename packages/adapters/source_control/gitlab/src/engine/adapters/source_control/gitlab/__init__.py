@@ -29,13 +29,17 @@ class GitLabSourceControl:
         self._origin_source = origin
         self._workspace_provider = workspace_provider
 
-    async def run_git(self, workspace_id: WorkspaceId, arguments: Sequence[str]) -> GitResult:
+    async def run_git(self, workspace_id: WorkspaceId, arguments: Sequence[str], *, owned_pull_requests: Sequence[tuple[str, int]] = ()) -> GitResult:
         arguments = tuple(str(argument) for argument in arguments)
         if not arguments:
             raise ValueError("git needs at least one argument")
         if arguments[0].startswith("-"):
             raise ValueError("git global options are not permitted")
         if arguments[0] == "push":
+            from engine.runtime.push_policy import push_spec
+            if push_spec(arguments)[2]:
+                raise ValueError("GitLab cannot verify owned feature branches for force pushes")
+            arguments = ("push", "--no-mirror", *arguments[1:])
             for argument in arguments[1:]:
                 destination = argument.split(":")[-1].removeprefix("refs/heads/")
                 if destination.startswith("engine/"):
@@ -52,9 +56,11 @@ class GitLabSourceControl:
 
     async def publish(self, workspace_id: WorkspaceId, branch: str) -> None:
         self._public(branch)
-        await self._checked(workspace_id, ("push", "--set-upstream", "origin", branch))
+        result = await self.run_git(workspace_id, ("push", "--set-upstream", "origin", branch))
+        if not result.ok:
+            raise GitLabSourceControlError(result.stderr or result.stdout)
 
-    async def request_review(self, workspace_id: WorkspaceId, branch: str, base_ref: str, title: str, body: str, *, issue: dict[str, object] | None = None, issue_resolution: str | None = None) -> str:
+    async def request_review(self, workspace_id: WorkspaceId, branch: str, base_ref: str, title: str, body: str, *, issue: dict[str, object] | None = None, issue_resolution: str | None = None, owned_pull_requests: Sequence[tuple[str, int]] = ()) -> str:
         if issue is not None or issue_resolution is not None:
             raise NotImplementedError("GitLab issue-linked publishing is not supported")
         self._public(branch)

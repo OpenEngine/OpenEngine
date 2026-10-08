@@ -277,10 +277,21 @@ commit. Engine normalizes the PR body's issue line for either choice, including
 an agent-written `Fixes #N`. The closing keyword takes effect when merged to the
 default branch.
 
-Publishing a closing reference amends the head and pushes it with an explicit
-lease on the previously pushed SHA. The named branch must be checked out and
-clean. If somebody changed the remote head, publishing stops so their work is
-not overwritten.
+Force pushes require an open PR recorded to the current work order, whose head
+is in the same repository and has an `agent/` or `feature/` branch name. GitHub
+must confirm that the branch is unprotected and is neither the repository's
+default branch nor the base of an open PR. Unknown ownership or
+unavailable branch information denies the push. Approval does not override
+these checks. This applies to explicit force flags, `+` refspecs, and automatic
+issue-metadata rewrites; GitLab force pushes are refused until it can verify
+the same conditions.
+
+Prepare the head commit's issue trailers before the first push and PR creation:
+`Refs #N` for partial work, or `Resolves #N` plus `Refs #N` for complete work.
+No automatic amendment is needed when these already match. Metadata rewrites
+for an eligible owned PR require a clean checkout and use an explicit lease on
+the previously pushed SHA. If somebody changed the remote head, publishing
+stops so their work is not overwritten.
 
 Review feedback includes the root comment ID and GraphQL thread ID. Both IDs,
 and each thread's resolution state, are also available through

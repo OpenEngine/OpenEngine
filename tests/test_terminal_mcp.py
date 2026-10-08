@@ -685,7 +685,7 @@ def test_a_failing_git_command_is_reported_with_what_git_said() -> None:
         )
         async with broker:
             response = await broker._submit(
-                _request(broker, "git-1", "git_subcommand", {"arguments": ["push"]})
+                _request(broker, "git-1", "git_subcommand", {"arguments": ["push", "origin", "agent/topic"]})
             )
 
         assert response["ok"] is False
@@ -1759,7 +1759,7 @@ def test_issue_publication_requires_explicit_resolution_and_approval(accepted):
         assert result["ok"] is accepted
         assert source.request_review.await_count == int(accepted)
         if accepted:
-            assert source.request_review.await_args.kwargs == {"issue": {"repository": "acme/api", "number": 7}, "issue_resolution": "resolves"}
+            assert source.request_review.await_args.kwargs == {"issue": {"repository": "acme/api", "number": 7}, "issue_resolution": "resolves", "owned_pull_requests": ()}
         approval.assert_awaited_once()
         request = approval.await_args.args[0]
         assert "git commit --amend" in request.reason
@@ -1800,4 +1800,34 @@ def test_plain_reply_accepts_omitted_resolution_metadata(url):
         assert result["ok"]
         source.add_comment.assert_awaited_once_with(url, "Needs a decision", None, None, 1)
         approval.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("recorded", [(), (("acme/api", 7),)])
+def test_force_push_ownership_is_bound_to_work_order(recorded):
+    async def scenario():
+        from engine.ports import GitResult
+        source = AsyncMock()
+        source.run_git.return_value = GitResult(exit_code=0, stdout="", stderr="")
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("git_subcommand",), WorkspaceId("ws"), AsyncMock(return_value=ApprovalDecision.ACCEPT))
+        broker.enable_pull_request_ownership(AsyncMock(return_value=recorded))
+        result = await broker._submit(_direct_request(broker, "1", "git_subcommand", {"arguments": ["push", "--force-with-lease", "origin", "agent/change"]}))
+        assert result["ok"] == bool(recorded)
+        if recorded:
+            assert source.run_git.await_args.kwargs == {"owned_pull_requests": recorded}
+        else:
+            source.run_git.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_force_push_refused_when_ownership_lookup_fails():
+    async def scenario():
+        source = AsyncMock()
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("git_subcommand",), WorkspaceId("ws"), AsyncMock(return_value=ApprovalDecision.ACCEPT))
+        broker.enable_pull_request_ownership(AsyncMock(side_effect=RuntimeError("store offline")))
+        result = await broker._submit(_direct_request(broker, "1", "git_subcommand", {"arguments": ["push", "origin", "+HEAD:agent/change"]}))
+        assert not result["ok"]
+        source.run_git.assert_not_awaited()
     asyncio.run(scenario())
