@@ -55,7 +55,7 @@ GRAPHS = ("implementation-review-rerank",)
 def configured_checkouts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep composition checks independent of host checkouts and SSH access."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    for path in tomllib.loads(CONFIG.read_text())["repos"].values():
+    for path in tomllib.loads(CONFIG.read_text()).get("repos", {}).values():
         Path(path).expanduser().mkdir(parents=True, exist_ok=True)
 
 
