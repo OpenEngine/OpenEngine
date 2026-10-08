@@ -1856,3 +1856,34 @@ def test_mention_is_acknowledged_before_concierge_turn():
     asyncio.run(concierge.handle(request))
     concierge.graph.ainvoke.assert_awaited_once()
     assert react.await_args_list == [call(request, "eyes"), call(request, "-1")]
+
+
+def test_assignments_from_multiple_repositories_use_their_configured_checkouts(tmp_path):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    repos = {"acme/api": str(tmp_path / "api"), "other/web": str(tmp_path / "web")}
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="unused", workflow="implementation-review-v1"),
+        _workflow_catalog(), graph_runtime=opened, repos=repos,
+        github_webhook_secret=SIGNING_SECRET, github_repositories=tuple(repos),
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=True),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source)
+    with TestClient(app) as client:
+        for repository in repos:
+            payload = _assigned_issue()
+            payload["issue"]["html_url"] = f"https://github.com/{repository}/issues/7"
+            payload["repository"]["full_name"] = repository
+            body = json.dumps(payload).encode()
+            assert client.post("/api/github/events", content=body, headers=dict(
+                github_signed(body), **{"x-github-event": "issues"},
+            )).status_code == 200
+            client.portal.call(app.state.github_ingress.drain)
+    assert [c.args[1]["repository"] for c in runtime.start.await_args_list] == list(repos.values())
+    assert source.can_write_repository.await_args_list == [
+        call(f"https://github.com/{repo}/pull/7", "maintainer") for repo in repos
+    ]

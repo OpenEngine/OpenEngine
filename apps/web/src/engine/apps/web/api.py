@@ -1101,6 +1101,7 @@ def create_app(
     slack_credential_store: SlackCredentialStore | None = None,
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
+    github_repositories: tuple[str, ...] = (),
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
@@ -3528,13 +3529,15 @@ def create_app(
     async def github_checkout(project: str) -> str:
         """The local checkout a forge `project` key is worked on in.
 
-        A webhook names a repository on the forge, but a work order checks one
-        out from disk, and git reads the bare key as a relative directory that
-        does not exist. So the configured checkouts are asked which of them has
-        `project` as its `origin`. A forge on a non-default web port keys its
+        A matching `[repos]` slug selects its configured path directly. For
+        checkouts named with a local alias, ask which has `project` as its
+        `origin`. A forge on a non-default web port keys its
         projects by that port, which a remote does not carry, so the comparison
         ignores it.
         """
+        for name, path in (repos or {}).items():
+            if name.lower() == project.lower():
+                return str(Path(path).expanduser())
         authority, _, rest = project.partition("/")
         wanted = f"{authority.partition(':')[0]}/{rest}" if "/" in rest else project
 
@@ -3771,10 +3774,8 @@ def create_app(
     async def github_posting_login(repository: str) -> str:
         """The account Engine replies as, asked once per repository.
 
-        Keyed rather than global: a deployment answers one repository today,
-        but a resolved login is a property of the credentials *on that forge
-        repository*, and an unkeyed cache would quietly hand the first
-        repository's answer to the second one's comments.
+        A resolved login is a property of the credentials on that repository,
+        so each repository keeps its own answer.
 
         A token held by a machine user posts comments that look like anybody
         else's: without knowing who this process posts as, the concierge answers
@@ -4123,6 +4124,7 @@ def create_app(
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
+        repositories=github_repositories,
         authenticated_login=github_posting_login,
         may_act=github_sender_may_act,
         handle=github_comment_handler or github_concierge_turn,
@@ -4153,15 +4155,23 @@ def create_app(
         run_id = request.path_params["run_id"]
         if await run_hidden(request, RunId(run_id)):
             return _error("run not found", 404)
+        pull_request = await github_pull_request_for_run(run_id)
+        repository = pull_request[0] if pull_request else github_repository
         return JSONResponse(activity_json(
             github_activity.recent(),
             run_id=run_id,
-            pull_request=await github_pull_request_for_run(run_id),
-            repository=github_repository,
+            pull_request=pull_request,
+            repository=repository,
             # Both halves, because either one missing is a webhook that will
             # never deliver anything here -- and a panel that stayed empty
             # without saying so is the confusion this is meant to end.
-            configured=bool(github_repository and github_webhook_secret()),
+            configured=bool(
+                (github_repository or github_repositories)
+                and (pull_request is None or repository.lower() in {
+                    repo.lower() for repo in (github_repository, *github_repositories) if repo
+                })
+                and github_webhook_secret()
+            ),
         ))
 
     def _mentioned_workflow() -> GraphWorkflow | None:
@@ -4200,7 +4210,7 @@ def create_app(
     # may sign in: the webhook repository and the configured checkouts. What
     # they see is the WorkOrders of the repositories they can push to.
     access_repositories = tuple(dict.fromkeys(
-        project.lower() for project in (github_repository, *login_repositories) if project
+        project.lower() for project in (github_repository, *github_repositories, *login_repositories) if project
     ))
 
     async def github_repository_access(user_id: int, login: str) -> dict[str, bool | None]:

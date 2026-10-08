@@ -361,3 +361,49 @@ def test_the_route_answers_a_deployment_with_no_webhook(tmp_path) -> None:
     with TestClient(app) as client:
         feed = client.get("/api/runs/existing/github-comments").json()
     assert feed == {"repository": "acme/api", "configured": False, "comments": []}
+
+
+def test_same_comment_id_in_two_repositories_has_independent_activity():
+    from dataclasses import replace
+
+    log = _ticking()
+    first = _comment()
+    second = replace(first, repository="other/web")
+    log.seen(first)
+    log.started(first)
+    log.dispatched("first-run")
+    log.finished(first)
+    log.seen(second)
+    log.started(second)
+    log.failed("second failed")
+    assert log.entry(first).run_id == "first-run"
+    assert log.entry(second).run_id == ""
+    assert log.entry(second).status == "failed"
+    assert log.entry(replace(first, repository="ACME/API")) == log.entry(first)
+
+
+def test_comment_panel_reports_the_runs_repository_in_a_multi_repo_deployment(tmp_path):
+    from starlette.testclient import TestClient
+    from test_github_concierge import _graph_runtime
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    _, opened = _graph_runtime(repository="other/web")
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+        graph_runtime=opened, github_repositories=("acme/api", "other/web"),
+        github_webhook_secret=SIGNING_SECRET, github_comment_handler=AsyncMock(),
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=True))
+    object.__setattr__(capabilities, "source_control", source)
+    payload = _issue_comment()
+    payload["repository"]["full_name"] = "other/web"
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        assert client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"},
+        )).status_code == 200
+        client.portal.call(app.state.github_ingress.drain)
+        feed = client.get("/api/runs/existing/github-comments").json()
+    assert feed["repository"] == "other/web"
+    assert feed["configured"]
+    assert len(feed["comments"]) == 1

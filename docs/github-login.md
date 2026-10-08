@@ -48,7 +48,7 @@ session status every 30 seconds and unmounts the app if the session is invalid.
 A GitHub account alone does not open the app: WorkOrder links are posted to
 GitHub issues, which anyone can read. At the callback, the server asks GitHub
 whether the signed-in account has write access (write, maintain, or admin) to
-any of this deployment's repositories: the `[github] repository` named in
+any of this deployment's repositories: the `[github] repository` or `repositories` named in
 `engine.toml`, and the GitHub repository behind each `[repos]` checkout (read
 from its `origin` remote). Team and organization grants count. The check uses
 the server's own GitHub connection, the one selected under **GitHub** in
@@ -122,7 +122,7 @@ anyone who gets past the access check change who the agents act as, including
 someone admitted only by their own token's answer. Replacing it takes shell
 access on the server.
 
-Configuring GitHub login with no `[github] repository`, no GitHub checkout in
+Configuring GitHub login with no `[github] repository` or `repositories`, no GitHub checkout in
 `[repos]`, and no operators is a configuration error, and the server does not
 start.
 

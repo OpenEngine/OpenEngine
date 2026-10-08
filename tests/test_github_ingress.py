@@ -939,3 +939,53 @@ def test_nothing_is_handled_for_a_sender_who_cannot_write() -> None:
         await ingress.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("event,factory", [
+    ("issue_comment", _issue_comment),
+    ("issues", _assigned_issue),
+    ("pull_request", _merged_pull_request),
+])
+def test_multiple_repositories_scope_delivery_deduplication(event, factory):
+    async def scenario():
+        handled = []
+        ingress = GithubIngress(
+            repositories=("acme/api", "other/web"),
+            handle=_record(handled), handle_assignment=_record(handled),
+            handle_merge=_record(handled),
+        )
+        for repository in ("acme/api", "OTHER/WEB", "unconfigured/repo", "other/web"):
+            payload = factory()
+            payload["repository"]["full_name"] = repository
+            assert ingress.accept(event, payload, self_login="OpenEngineBot")
+        await ingress.drain()
+        await ingress.close()
+        assert [item.repository for item in handled] == ["acme/api", "OTHER/WEB"]
+    asyncio.run(scenario())
+
+
+def test_assignment_login_uses_delivery_repository_and_skips_unconfigured():
+    from unittest.mock import AsyncMock, call
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    handled = []
+    lookup = AsyncMock(return_value="OpenEngineBot")
+    ingress = GithubIngress(
+        repositories=("acme/api", "other/web"), webhook_secret=lambda: WEBHOOK_SECRET,
+        authenticated_login=lookup, handle_assignment=_record(handled),
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    with TestClient(app) as client:
+        for repository in ("acme/api", "other/web", "unconfigured/repo"):
+            payload = _assigned_issue()
+            payload["repository"]["full_name"] = repository
+            body = json.dumps(payload).encode()
+            response = client.post("/events", content=body,
+                                   headers=dict(_signed(body), **{"x-github-event": "issues"}))
+            assert response.status_code == 200
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert lookup.await_args_list == [call("acme/api"), call("other/web")]
+    assert len(handled) == 2

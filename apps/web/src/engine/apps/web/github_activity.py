@@ -109,14 +109,14 @@ class GithubActivityLog:
     """
 
     def __init__(self, *, limit: int = ACTIVITY_LIMIT, now: Callable[[], float] = time.time) -> None:
-        self._entries: OrderedDict[tuple[str, str], CommentActivity] = OrderedDict()
-        self._current: tuple[str, str] | None = None
+        self._entries: OrderedDict[tuple[str, str, str], CommentActivity] = OrderedDict()
+        self._current: tuple[str, str, str] | None = None
         self._limit = limit
         self._now = now
 
     @staticmethod
-    def _key(comment: GithubComment) -> tuple[str, str]:
-        return (comment.event, comment.comment_id)
+    def _key(comment: GithubComment) -> tuple[str, str, str]:
+        return (comment.repository.lower(), comment.event, comment.comment_id)
 
     def seen(self, comment: GithubComment) -> None:
         """A delivery got past the signature and into the queue.

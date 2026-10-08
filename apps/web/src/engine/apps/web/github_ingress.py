@@ -393,6 +393,7 @@ class GithubIngress:
         *,
         webhook_secret: Callable[[], str] = lambda: "",
         repository: str = "",
+        repositories: tuple[str, ...] = (),
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
@@ -408,7 +409,7 @@ class GithubIngress:
         stall_warning_seconds: float = STALL_WARNING_SECONDS,
     ) -> None:
         self._webhook_secret = webhook_secret
-        self._repository = repository
+        self._repositories = {repo.lower() for repo in (repository, *repositories) if repo}
         self._authenticated_login = authenticated_login
         # Whether whoever sent a comment or assignment can write to its
         # repository. Asked before any handler sees it, so nothing -- a work
@@ -484,16 +485,20 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
+        repository = payload.get("repository")
+        repository = repository.get("full_name", "") if isinstance(repository, dict) else ""
+        if not isinstance(repository, str):
+            repository = ""
         self_login = ""
         if (
             _asks_for_self_login(event, payload)
             and self._authenticated_login is not None
-            and self._repository
+            and repository.lower() in self._repositories
         ):
             try:
                 # Leave time to acknowledge within GitHub's ten-second deadline.
                 async with asyncio.timeout(5):
-                    self_login = await self._authenticated_login(self._repository)
+                    self_login = await self._authenticated_login(repository)
             except Exception:
                 log.warning(
                     "a GitHub %s delivery needed the self-login, but its lookup failed; "
@@ -518,6 +523,11 @@ class GithubIngress:
         full queue, no handler wired, or an unresolved assignment login. A failed
         delivery GitHub can redeliver beats a 200 that loses the work.
         """
+        repository = payload.get("repository")
+        name = repository.get("full_name") if isinstance(repository, dict) else None
+        if self._repositories and isinstance(name, str) and name.lower() not in self._repositories:
+            log.info("ignored delivery from %s: this deployment answers %s", name, sorted(self._repositories))
+            return True
         if _asks_for_self_login(event, payload) and not self_login:
             log.warning(
                 "a GitHub %s delivery needed the self-login, but none could be resolved; "
@@ -544,7 +554,7 @@ class GithubIngress:
         comment = comment_from_payload(event, payload, self_login=self_login)
         if comment is not None:
             return self._enqueue(
-                comment, "comment", (comment.event, comment.comment_id),
+                comment, "comment", (comment.event, f"{comment.repository.lower()}#{comment.comment_id}"),
                 wired=self._handle is not None, delivery_id=delivery_id,
             )
         merged = merge_from_payload(event, payload, self_login=self_login)
@@ -592,15 +602,15 @@ class GithubIngress:
     ) -> bool:
         """Queue one read delivery, or say why it is being refused."""
         named = f"{describe(delivery)} (delivery {delivery_id or '-'})"
-        if not self._repository:
+        if not self._repositories:
             log.warning(
                 "a GitHub %s was delivered but no target repository is configured", subject
             )
             return False
-        if delivery.repository.lower() != self._repository.lower():
+        if delivery.repository.lower() not in self._repositories:
             # A shared App secret authenticates deliveries from other repos too.
             # Ignore them before queueing or remembering their identities.
-            log.info("ignored %s: this deployment answers %s", named, self._repository)
+            log.info("ignored %s: this deployment answers %s", named, sorted(self._repositories))
             return True
         if not wired:
             log.warning(

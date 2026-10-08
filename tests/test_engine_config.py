@@ -142,7 +142,7 @@ def test_loads_the_repository_webhook_deliveries_are_accepted_from(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "engine.toml"
-    path.write_text('[github]\nrepository = "owner/name"\n')
+    path.write_text('[github]\nrepository = "owner/name"\n[repos]\n"owner/name" = "."\n')
 
     loaded = load_engine_config(path, environ={}, cwd=tmp_path)
 
@@ -393,7 +393,7 @@ def test_github_login_toml_and_secret_rotation(tmp_path, monkeypatch):
     (tmp_path / "engine.toml").write_text(
         'github_login_client_id = "login-client"\n'
         'github_login_redirect_uri = "https://engine.test/api/auth/github/callback"\n'
-        '[github]\nrepository = "acme/api"\n'
+        '[github]\nrepository = "acme/api"\n[repos]\n"acme/api" = "."\n'
     )
     secret_file = tmp_path / ".env"
     secret_file.write_text('ENGINE_GITHUB_LOGIN_CLIENT_SECRET="first-${LITERAL}"\n')
@@ -810,3 +810,25 @@ def test_web_claude_provider_inherits_configured_login(tmp_path, monkeypatch):
 
     events = asyncio.run(prompt())
     assert any(event.data.get("content") == {"type": "text", "text": str(directory)} for event in events)
+
+
+def test_github_repositories_combine_with_legacy_repository():
+    config = parse_engine_config({
+        "github": {"repository": "Acme/API", "repositories": ["acme/api", "other/web"]},
+        "repos": {"acme/api": "/api", "Other/Web": "/web"},
+    })
+    assert config.github.webhook_repositories == ("acme/api", "other/web")
+
+
+@pytest.mark.parametrize("repositories", ["acme/api", [""], ["invalid"], [12]])
+def test_github_repositories_reject_invalid_lists(repositories):
+    with pytest.raises(EngineConfigError, match="github.repositories"):
+        parse_engine_config({"github": {"repositories": repositories}})
+
+
+@pytest.mark.parametrize("github", [
+    {"repository": "acme/api"}, {"repositories": ["acme/api"]},
+])
+def test_github_repositories_require_checkout_mappings(github):
+    with pytest.raises(EngineConfigError, match="acme/api.*checkout path under"):
+        parse_engine_config({"github": github, "repos": {"other/repo": "/other"}})
