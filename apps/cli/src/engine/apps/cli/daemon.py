@@ -813,7 +813,8 @@ def command_setup(arguments: argparse.Namespace) -> int:
     print(f"Registered OpenEngine with {backend.name}; logs go to {spec.log}")
     for name in TOOLS:
         print(f"  {name}: {spec.tools.get(name, 'not found')}")
-    result = command_open(arguments)
+    # Unlike `engine daemon open`, first boot leaves the browser alone.
+    result = command_start(arguments)
     if result != EXIT_OK:
         # Leave nothing restarting in the background after a failed setup.
         try:
@@ -1008,13 +1009,12 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     daemon = commands.add_parser("daemon", help="run the local OpenEngine service in the background")
     daemon.add_argument("--no-browser", action="store_true", help="start without opening a browser")
     actions = daemon.add_subparsers(dest="daemon_command")
-    for name, help_text in (
-        ("open", "start the service if needed and open it in a browser"),
-        ("setup", "register the service to run at login, then start it"),
-    ):
-        action = actions.add_parser(name, help=help_text)
-        # SUPPRESS keeps `engine daemon --no-browser open` from being reset here.
-        action.add_argument("--no-browser", action="store_true", default=argparse.SUPPRESS, help="do not open a browser")
+    opening = actions.add_parser("open", help="start the service if needed and open it in a browser")
+    # SUPPRESS keeps `engine daemon --no-browser open` from being reset here.
+    opening.add_argument("--no-browser", action="store_true", default=argparse.SUPPRESS, help="do not open a browser")
+    setup = actions.add_parser("setup", help="register the service to run at login, then start it")
+    # Setup never opens a browser; the flag stays accepted for older installers.
+    setup.add_argument("--no-browser", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     actions.add_parser("start", help="start the service if it is not running")
     actions.add_parser("stop", help="stop the service gracefully")
     status = actions.add_parser("status", help="show version, health and URL")

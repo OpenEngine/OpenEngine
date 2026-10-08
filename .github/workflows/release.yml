@@ -99,7 +99,7 @@ jobs:
       - name: Install and start OpenEngine
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
-        run: sh scripts/install.sh --no-browser
+        run: sh scripts/install.sh
       - name: engine is on PATH and healthy
         run: |
           set -eu
@@ -114,7 +114,7 @@ jobs:
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
-          engine daemon setup --no-browser || { engine daemon logs; exit 1; }
+          engine daemon setup || { engine daemon logs; exit 1; }
           engine daemon status
           engine daemon doctor || true
           engine daemon stop

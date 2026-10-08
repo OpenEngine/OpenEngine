@@ -181,7 +181,7 @@ def test_setup_records_tools_and_falls_back_to_a_detached_process(home: Path, mo
     monkeypatch.setattr(daemon, "start_service", lambda: ("ready", {"version": "1.0"}, "http://127.0.0.1:4411"))
     monkeypatch.setattr(daemon.webbrowser, "open", lambda _url: (_ for _ in ()).throw(AssertionError("no browser")))
 
-    assert cli.main(["daemon", "setup", "--no-browser"]) == 0
+    assert cli.main(["daemon", "setup"]) == 0
 
     record = daemon.read_record()
     assert record is not None and record.backend == "process"
@@ -317,7 +317,7 @@ def test_setup_unregisters_the_service_when_it_falls_back_to_a_process(home: Pat
     monkeypatch.setattr(daemon, "health", lambda _url, timeout=2.0: ("down", None))
     monkeypatch.setattr(daemon, "start_service", lambda: ("ready", {}, "http://127.0.0.1:4413"))
 
-    assert cli.main(["daemon", "setup", "--no-browser"]) == 0
+    assert cli.main(["daemon", "setup"]) == 0
 
     assert daemon.read_record().backend == "process"
     assert not daemon.launch_agent_path().exists()
