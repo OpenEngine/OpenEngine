@@ -24,6 +24,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Self-hosted safety requires approval for all external contributors in Actions
+# settings: fork PRs can edit the runner expressions below. Admin verification:
+# https://github.com/OpenEngine/OpenEngine/pull/663#discussion_r4189423649
 jobs:
   pr-title:
     name: Validate PR title

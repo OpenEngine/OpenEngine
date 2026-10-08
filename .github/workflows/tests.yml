@@ -18,6 +18,9 @@ env:
   # Pinned so a uv release cannot change what CI means without a commit saying so.
   UV_VERSION: "0.9.28"
 
+# Self-hosted safety requires approval for all external contributors in Actions
+# settings: fork PRs can edit the runner expressions below. Admin verification:
+# https://github.com/OpenEngine/OpenEngine/pull/663#discussion_r4189423649
 jobs:
   fresh-install:
     name: README fresh install
