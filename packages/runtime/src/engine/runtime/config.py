@@ -267,7 +267,9 @@ def load_engine_config(
     """Load the selected TOML file, or return defaults when none is selected.
 
     Selection is intentionally singular: an explicit path wins over
-    ``ENGINE_CONFIG``, which wins over ``engine.toml`` in the current directory.
+    ``ENGINE_CONFIG``, then the machine configuration at
+    ``$XDG_CONFIG_HOME/openengine/engine.toml`` (defaulting to
+    ``~/.config/openengine/engine.toml``), then ``engine.toml`` in the current directory.
     Files are not merged, so the effective permission policy always has one
     inspectable source.
     """
@@ -281,8 +283,14 @@ def load_engine_config(
     elif configured := environment.get(CONFIG_ENVIRONMENT_VARIABLE):
         selected = _relative_to(Path(configured), directory)
     else:
+        xdg_config = environment.get("XDG_CONFIG_HOME", "")
+        config_home = (
+            Path(xdg_config) if xdg_config and Path(xdg_config).is_absolute()
+            else Path.home() / ".config"
+        )
+        machine = config_home / "openengine" / DEFAULT_CONFIG_NAME
         default = directory / DEFAULT_CONFIG_NAME
-        selected = default if default.is_file() else None
+        selected = machine if machine.is_file() else default if default.is_file() else None
 
     if selected is None:
         return LoadedEngineConfig()

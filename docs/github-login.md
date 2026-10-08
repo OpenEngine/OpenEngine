@@ -28,7 +28,10 @@ with the client ID and callback but no secret refuses to start. Give the
 deployment its own config outside the checkout, such as
 `~/.config/openengine/engine.toml` with its `.env` beside it, and point the
 service at it with `ENGINE_CONFIG` or `engine-web --config`. `ENGINE_CONFIG`
-wins over `engine.toml` in the working directory.
+wins over the machine config. Without an explicit selection, Engine prefers
+`$XDG_CONFIG_HOME/openengine/engine.toml` (default
+`~/.config/openengine/engine.toml`) over `engine.toml` in the working directory.
+These files are not merged.
 
 Visit `/login` and select **Sign in with GitHub** to start the browser
 authorization flow. It requests only `read:user`, uses OAuth state and PKCE,

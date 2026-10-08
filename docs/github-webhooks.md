@@ -12,7 +12,22 @@ give it a secret.
 
 ## Naming the repositories
 
-Name the repositories whose deliveries this deployment answers in `engine.toml`:
+Keep the deployment's repository list in its machine configuration,
+`~/.config/openengine/engine.toml` (or
+`$XDG_CONFIG_HOME/openengine/engine.toml`). Repository additions do not
+require a commit to OpenEngine.
+
+Configuration selection is: explicit `--config`, then `ENGINE_CONFIG`, then
+the machine file, then `engine.toml` in the working directory. Files are
+selected as a whole, never merged.
+
+When migrating an existing deployment, copy its configuration to the machine
+location and move its `.env` alongside it. Update relative paths such as
+`workflows.directory` and state locations to preserve their existing targets.
+An explicit service config path still takes precedence; update that path if
+it points to the checkout. Restart the service after configuration changes.
+
+In the machine file, name the repositories whose deliveries it accepts:
 
 ```toml
 [github]
@@ -41,8 +56,7 @@ actionable comment deliveries receive 503 until setup is complete.
 
 ## Storing the secret
 
-The webhook's shared secret is not written in `engine.toml`, which is
-committed. Store it as `ENGINE_GITHUB_WEBHOOK_SECRET=your-secret` in a
+The webhook's shared secret is not written in `engine.toml`. Store it as `ENGINE_GITHUB_WEBHOOK_SECRET=your-secret` in a
 server-local `.env` beside the loaded `engine.toml` (or in the working
 directory when no config file is loaded) — the same file the
 [GitHub login](github-login.md) secret uses. It is gitignored; restrict its

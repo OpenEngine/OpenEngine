@@ -18,6 +18,13 @@ from engine.runtime import (
 )
 
 
+
+@pytest.fixture(autouse=True)
+def isolated_config_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+
 def test_defaults_allow_reads_without_selecting_a_file(tmp_path: Path) -> None:
     loaded = load_engine_config(environ={}, cwd=tmp_path)
 
@@ -832,3 +839,37 @@ def test_github_repositories_reject_invalid_lists(repositories):
 def test_github_repositories_require_checkout_mappings(github):
     with pytest.raises(EngineConfigError, match="acme/api.*checkout path under"):
         parse_engine_config({"github": github, "repos": {"other/repo": "/other"}})
+
+
+@pytest.mark.parametrize("xdg", [None, "absolute", "relative"])
+def test_machine_configuration_precedes_checkout_without_merging(tmp_path, xdg):
+    config_home = tmp_path / "custom" if xdg == "absolute" else Path.home() / ".config"
+    machine = config_home / "openengine" / "engine.toml"
+    machine.parent.mkdir(parents=True)
+    machine.write_text(
+        '[github]\nrepositories = ["other/web"]\n'
+        '[repos]\n"other/web" = "/srv/web"\n'
+    )
+    (tmp_path / "engine.toml").write_text('[repos]\n"checkout/repo" = "/checkout"\n')
+    environment = {} if xdg is None else {
+        "XDG_CONFIG_HOME": str(config_home) if xdg == "absolute" else "relative"
+    }
+    loaded = load_engine_config(environ=environment, cwd=tmp_path)
+    assert loaded.path == machine.resolve()
+    assert loaded.config.repos == {"other/web": "/srv/web"}
+    assert loaded.config.github.webhook_repositories == ("other/web",)
+
+    override = tmp_path / "override.toml"
+    override.write_text('[repos]\n"explicit/repo" = "/explicit"\n')
+    environment["ENGINE_CONFIG"] = str(override)
+    assert load_engine_config(environ=environment, cwd=tmp_path).path == override
+    assert load_engine_config(machine, environ=environment, cwd=tmp_path).path == machine
+
+
+def test_invalid_machine_config_does_not_fall_back_to_checkout(tmp_path):
+    machine = Path.home() / ".config" / "openengine" / "engine.toml"
+    machine.parent.mkdir(parents=True)
+    machine.write_text('[github]\nrepositories = ["missing/checkout"]\n')
+    (tmp_path / "engine.toml").write_text("")
+    with pytest.raises(EngineConfigError, match="missing/checkout"):
+        load_engine_config(environ={}, cwd=tmp_path)
