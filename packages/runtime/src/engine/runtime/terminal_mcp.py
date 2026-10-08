@@ -602,7 +602,7 @@ class TerminalMcpBroker:
                     raise ValueError("addressed review replies require commit_sha")
                 if any(key in arguments for key in ("thread_id", "resolve", "commit_sha")):
                     options = {"thread_id": thread_id, "resolve": arguments.get("resolve", False), "commit_sha": commit_sha}
-                approved = await self._approve_forge("add_comment", arguments, request_id)
+                approved = await self._approve_forge("add_comment", arguments, request_id) if arguments.get("resolve", False) else None
                 if approved is not None:
                     return approved
             elif any(key in arguments for key in ("resolve", "thread_id", "commit_sha")):

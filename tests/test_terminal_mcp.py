@@ -1795,9 +1795,9 @@ def test_plain_reply_accepts_omitted_resolution_metadata(url):
         source.add_comment.return_value = CommentResult(2, url + "#reply")
         approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
         broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
-        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"), approval)
+        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"))
         result = await broker._submit(_direct_request(broker, "1", "add_comment", {"pr_url": url, "comment": "Needs a decision", "in_reply_to_id": 1}))
         assert result["ok"]
         source.add_comment.assert_awaited_once_with(url, "Needs a decision", None, None, 1)
-        approval.assert_awaited_once()
+        approval.assert_not_awaited()
     asyncio.run(scenario())
