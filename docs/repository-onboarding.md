@@ -15,12 +15,18 @@ copy its active config instead and add the repository and any verified command
 approvals for your project, preserving the existing settings. Do not overwrite an existing
 local config. The `.engine/` directory is ignored by Git.
 
-Add any repository under `[repos]`, for example:
+Replace the placeholders in `[repos]` with your own repository and checkout path:
 
 ```toml
 [repos]
 "owner/repo" = "~/code/repo"
 ```
+
+Here, `owner` is your GitHub account or organization, `repo` is the repository
+name, and `~/code/repo` is its local checkout path on the host running OpenEngine.
+The left side identifies the repository; the right side says where its files live.
+Add another entry for each repository you want to offer in the WorkOrder form.
+The example does not refer to a required or bundled project.
 
 At web startup (including `engine-web --check`), a missing path whose name is
 a GitHub `owner/repo` is cloned from `git@github.com:owner/repo.git`. This uses
@@ -31,7 +37,7 @@ sibling directory; failure stops startup with a configuration error and leaves
 the configured destination absent so startup can be retried.
 
 Existing paths are left untouched: no fetch, pull, reset or dependency install.
-Local aliases such as `n8n` still require a pre-existing checkout; their remote
+Local aliases such as `local-project` still require a pre-existing checkout; their remote
 cannot be inferred. Other forges likewise need a pre-existing checkout. Paths
 expand `~` and resolve relative to the server's working directory, not the
 configuration file. The host needs write permission on the destination's parent.
@@ -43,7 +49,7 @@ configuration also follow the selected config location; preserve the existing
 deployment's locations when migrating. Repository checkout paths still resolve
 against the server's working directory.
 
-## Repeat for another repository
+## Set up your repository
 
 1. Verify repository access as the worker account, including SSH read access.
    Check write access separately if WorkOrders must push branches and open PRs.
