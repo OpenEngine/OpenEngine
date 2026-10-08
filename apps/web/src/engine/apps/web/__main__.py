@@ -34,6 +34,7 @@ from engine.apps.web.composition import (
     claude_session_config_for,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.repositories import ensure_repository_checkouts
 from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
@@ -325,6 +326,7 @@ def read_configuration(
         if loaded.workflows_directory is not None
         else None
     )
+    ensure_repository_checkouts(loaded.config.repos)
     return loaded, catalog
 
 
