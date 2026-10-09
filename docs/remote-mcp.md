@@ -131,12 +131,12 @@ control. Rotate it by changing the private env file and restarting the gateway.
    and public health checks below. Leave OE's `public_url` on its private origin.
    [Funnel command reference](https://tailscale.com/docs/reference/tailscale-cli/funnel).
 6. For automatic startup at login, edit every `/Users/YOU` and checkout path in
-   [cc.openengine.mcp.plist](examples/cc.openengine.mcp.plist), copy it to
+   [com.openengine.mcp.plist](examples/com.openengine.mcp.plist), copy it to
    `~/Library/LaunchAgents/`, stop the foreground gateway, then run:
 
    ```sh
-   launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/cc.openengine.mcp.plist"
-   launchctl kickstart -k "gui/$(id -u)/cc.openengine.mcp"
+   launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.openengine.mcp.plist"
+   launchctl kickstart -k "gui/$(id -u)/com.openengine.mcp"
    ```
 
    This is a user LaunchAgent, so the user must be logged in. Keep the mini awake
