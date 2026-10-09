@@ -78,7 +78,8 @@ def test_timeout_kills_descendants_after_parent_exit():
     asyncio.run(asyncio.wait_for(run(), 10))
 
 
-def test_cancellation_during_spawn_is_cleaned_up(monkeypatch):
+@pytest.mark.parametrize("cancellations", [1, 2, 3])
+def test_cancellation_during_spawn_is_cleaned_up(monkeypatch, cancellations):
     import engine.adapters.sandbox.process as adapter
 
     original = asyncio.create_subprocess_exec
@@ -87,6 +88,7 @@ def test_cancellation_during_spawn_is_cleaned_up(monkeypatch):
         spawned = asyncio.Event()
         release = asyncio.Event()
         child = None
+        root = None
 
         async def delayed_spawn(*args, **kwargs):
             nonlocal child
@@ -98,16 +100,29 @@ def test_cancellation_during_spawn_is_cleaned_up(monkeypatch):
         monkeypatch.setattr(adapter.asyncio, "create_subprocess_exec", delayed_spawn)
 
         async def body():
+            nonlocal root
             async with ProcessSandbox().create(SandboxSpec()) as sandbox:
+                root = sandbox._root
                 await sandbox.exec([sys.executable, "-c", "import time; time.sleep(60)"])
 
         task = asyncio.create_task(body())
-        await spawned.wait()
-        task.cancel()
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert child.returncode is not None
+        try:
+            await spawned.wait()
+            for _ in range(cancellations):
+                task.cancel()
+                # Deliver each cancellation while spawn recovery is pending.
+                await asyncio.sleep(0)
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert child.returncode is not None
+            assert not root.exists()
+        finally:
+            # A failing regression must not leave its real subprocess behind.
+            release.set()
+            if child is not None and child.returncode is None:
+                adapter._kill(child)
+                await child.communicate()
 
     asyncio.run(asyncio.wait_for(run(), 10))
 

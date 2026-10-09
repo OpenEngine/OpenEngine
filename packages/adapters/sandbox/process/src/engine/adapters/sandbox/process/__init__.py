@@ -101,15 +101,18 @@ class ProcessSandboxInstance:
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, start_new_session=os.name == "posix",
             ))
-            try:
-                process = await asyncio.shield(spawning)
-            except asyncio.CancelledError:
-                # Track a process even if cancellation arrives during creation,
-                # so context teardown cannot miss it.
-                process = await spawning
-                self._track(process)
-                raise
-            return self._track(process)
+            cancelled = False
+            while not spawning.done():
+                try:
+                    await asyncio.shield(spawning)
+                except asyncio.CancelledError:
+                    cancelled = True
+            # Keep ownership through repeated cancellation and register the
+            # child before propagating it, so teardown cannot miss a process.
+            execution = self._track(spawning.result())
+            if cancelled:
+                raise asyncio.CancelledError
+            return execution
 
     def _track(self, process: asyncio.subprocess.Process) -> ProcessExecution:
         execution = ProcessExecution(process, self._spec.timeout)
