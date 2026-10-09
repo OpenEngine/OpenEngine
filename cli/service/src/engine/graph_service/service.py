@@ -39,6 +39,7 @@ from engine.graph_runtime import (
     AmbiguousExecutionError,
     RunNotSteerableError,
     RunStatus,
+    UnknownGraphError,
     UnknownRunError,
 )
 from engine.graph_runtime.control import CANCELLED
@@ -577,6 +578,8 @@ class GraphService:
     async def run_json(self, run_id: str) -> dict[str, Any]:
         try:
             snapshot = await self.runtime.snapshot(RunId(run_id))
+        except UnknownGraphError as unloadable:
+            raise NotFound(str(unloadable)) from unloadable
         except UnknownRunError:
             snapshot = None
         if snapshot is None:
@@ -673,7 +676,7 @@ class GraphService:
                 break
             try:
                 snapshot = await self.runtime.snapshot(RunId(row.run_id))
-            except UnknownRunError:
+            except (UnknownRunError, UnknownGraphError):
                 snapshot = None
             if snapshot is None or (status and snapshot.status.value != status):
                 continue
@@ -986,7 +989,7 @@ class GraphService:
         if row.active_run_id:
             try:
                 snapshot = await self.runtime.snapshot(RunId(row.active_run_id))
-            except UnknownRunError:
+            except (UnknownRunError, UnknownGraphError):
                 snapshot = None
             if snapshot is not None and snapshot.status not in TERMINAL_RUN_STATUSES:
                 return

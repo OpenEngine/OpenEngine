@@ -1,0 +1,78 @@
+apiVersion: openengine.cc/v1
+kind: Graph
+name: dead-code
+description: Find dead code with static analysis, have a second agent try to prove each candidate is still used, and remove what survives.
+
+inputs:
+  instruction:
+    description: Where to look and anything to leave alone
+  runner:
+    description: The runner that scans and removes (the challenger uses a different one)
+    default: claude
+    choices: [claude, codex, round-robin]
+
+plan:
+  scan:
+    name: Scan
+    agent: ${inputs.runner}
+    prompt: |
+      Find dead code in this repository with static analysis. Only report it:
+      a later step removes what survives review, so do not change any files.
+
+      ${instruction}
+
+      Run the analyzers that fit the languages here, for example
+      `uvx vulture <paths> --min-confidence 80` and
+      `uvx ruff check --select F401,F811,F841 <paths>` for Python, or
+      `npx knip` for TypeScript. Report each unused function, class, import,
+      variable or file the tools flag, with its file, line and the tool that
+      flagged it. Skip anything under tests, migrations or generated code.
+    outputs:
+      findings: {type: findings, required: true}
+
+  challenge:
+    name: Challenge
+    agent: {not: scan}
+    prompt: |
+      A static analyzer flagged these as dead code. Static analysis misses
+      dynamic use, so try to prove each one is still alive: search for string
+      references, entry points in pyproject.toml or package.json, plugin and
+      CLI registration, decorators, __all__, getattr, reflection, templates and
+      public API that other repositories may import. Drop every finding you
+      can show is used, or cannot rule out. Keep only code you are confident
+      is dead. Do not edit anything.
+
+      ${json(outputs.scan.findings)}
+    outputs:
+      findings: {type: findings, required: true, lineage: required}
+
+implementation:
+  remove:
+    name: Remove
+    agent: {same: scan}
+    tools: [git_subcommand, open_pull_request]
+    prompt: |
+      Delete this confirmed dead code, and nothing else.
+
+      ${json(outputs.challenge.findings)}
+
+      Remove imports and helpers that become unused as a result. Run the
+      linters and the tests that cover the touched files. If a removal breaks
+      a test, restore it and say why.
+
+      Then, using git_subcommand, create an agent/remove-dead-code branch,
+      commit only these removals as `refactor: remove dead code`, push it,
+      and call open_pull_request, listing each removal and the analyzer that
+      flagged it. Finish with the pull request URL.
+
+flow:
+  - scan -> challenge
+  - from: challenge
+    route:
+      - {when: "size(outputs.challenge.findings) > 0", to: remove}
+      - {to: end}
+  - remove -> end
+
+loop:
+  every: 1d
+  instruction: Look for dead code under packages/ and cli/.
