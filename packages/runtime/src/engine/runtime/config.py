@@ -187,6 +187,11 @@ class WorkOrdersConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SandboxConfig:
+    backend: str = "process"
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     """All configuration understood by this version of Engine."""
 
@@ -206,6 +211,7 @@ class EngineConfig:
     workflows: WorkflowsConfig = WorkflowsConfig()
     orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
+    sandbox: SandboxConfig = SandboxConfig()
     graphs: GraphsConfig = GraphsConfig()
     model_tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     """`[runners.<runner>.models]`: tier name to model, per runner.
@@ -342,12 +348,19 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "runners",
             "trusted_repos",
             "server",
+            "sandbox",
             "state",
             "work_orders",
             "workflows",
         },
         "configuration",
     )
+    sandbox = _table(document.get("sandbox", {}), "sandbox")
+    _reject_unknown(sandbox, {"backend"}, "sandbox")
+    sandbox_backend = sandbox.get("backend", "process")
+    if sandbox_backend not in ("process", "smolvm"):
+        raise EngineConfigError("sandbox.backend must be process or smolvm")
+
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
         raise EngineConfigError("attribution must be a boolean")
@@ -543,6 +556,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             trusted_repos.add(name)
 
     return EngineConfig(
+        sandbox=SandboxConfig(backend=sandbox_backend),
         attribution=attribution,
         repos=repos,
         repo_modes=repo_modes,
@@ -750,6 +764,7 @@ __all__ = [
     "LoadedEngineConfig",
     "ResponseStyle",
     "ServerConfig",
+    "SandboxConfig",
     "StateConfig",
     "WorkOrdersConfig",
     "WorkflowsConfig",

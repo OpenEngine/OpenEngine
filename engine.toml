@@ -76,3 +76,7 @@ deny = [
 
 [workflows]
 directory = "workflows"
+
+# Host process execution; smolvm is reserved for the VM adapter.
+[sandbox]
+backend = "process"

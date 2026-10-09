@@ -28,6 +28,7 @@ dependencies = [
     # Two agents behind one capability: the chat page offers a choice between
     # them, and the composition root is the only thing that knows their names.
     "engine-adapter-agent-runner-acp",
+    "engine-adapter-sandbox-process",
     "engine-adapter-communications-buzz",
     "engine-adapter-communications-slack",
     "engine-adapter-source-control-github",
@@ -61,6 +62,7 @@ packages = ["src/engine"]
 path = "hatch_build.py"
 
 [tool.uv.sources]
+engine-adapter-sandbox-process = { workspace = true }
 engine-runtime = { workspace = true }
 engine-github-concierge = { workspace = true }
 engine-slack-concierge = { workspace = true }
