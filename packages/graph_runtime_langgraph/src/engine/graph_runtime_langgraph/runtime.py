@@ -46,6 +46,7 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -768,7 +769,11 @@ class LangGraphRuntime:
             self._acquire(live, execution_id, node_id)
             self._entries[node_id] = self._entries.get(node_id, 0) + 1
             await self.publish(
-                live.run_id, EventKind.NODE_STARTED, None, node_id, execution_id
+                live.run_id,
+                EventKind.NODE_STARTED,
+                {"startedAt": datetime.now(UTC).isoformat()},
+                node_id,
+                execution_id,
             )
 
     async def _on_task(self, live: _Live, chunk: Mapping[str, Any]) -> NodeId | None:
@@ -776,12 +781,19 @@ class LangGraphRuntime:
         if "input" in chunk:
             # A task LangGraph scheduled after publishing the checkpoint -- a
             # `Send` accepted mid-superstep. Adopting it here keeps it
-            # addressable; a task already registered is left alone.
-            self._acquire(
-                live,
-                ExecutionId(str(chunk.get("id"))),
-                NodeId(str(chunk.get("name"))),
-            )
+            # addressable and announces its start; a task already registered
+            # (and announced) at the checkpoint is left alone.
+            node_id = NodeId(str(chunk.get("name")))
+            execution_id = ExecutionId(str(chunk.get("id")))
+            if execution_id not in live.executions:
+                self._acquire(live, execution_id, node_id)
+                await self.publish(
+                    live.run_id,
+                    EventKind.NODE_STARTED,
+                    {"startedAt": datetime.now(UTC).isoformat()},
+                    node_id,
+                    execution_id,
+                )
             return None
         node_id = NodeId(str(chunk.get("name")))
         execution_id = ExecutionId(str(chunk.get("id")))

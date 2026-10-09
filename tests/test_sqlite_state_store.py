@@ -1,6 +1,7 @@
 """SQLite conversation persistence."""
 
 import asyncio
+from datetime import UTC, datetime
 import json
 import sqlite3
 
@@ -444,3 +445,20 @@ def test_requester_survives_reopening(tmp_path) -> None:
         assert connection.execute("SELECT requester FROM run_states").fetchall() == [
             ("github:42:alice",)
         ]
+
+
+def test_start_time_survives_reopening(tmp_path) -> None:
+    path = tmp_path / "started.sqlite3"
+    state = RunState(
+        run_id=RunId("started"), task_id=TaskId("task"),
+        workflow_id=WorkflowId("workflow"),
+        started_at=datetime(2026, 10, 9, 14, 30, tzinfo=UTC),
+    )
+    store = SQLiteStateStore(path)
+    asyncio.run(store.save(state))
+    store.close()
+    store = SQLiteStateStore(path)
+    try:
+        assert asyncio.run(store.load(state.run_id)) == state
+    finally:
+        store.close()

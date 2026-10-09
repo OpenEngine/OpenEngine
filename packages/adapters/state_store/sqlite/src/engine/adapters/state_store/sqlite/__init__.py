@@ -637,6 +637,9 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
         "parent_run_id": state.parent_run_id,
         "depends_on_run_id": state.depends_on_run_id,
         "inputs": state.inputs,
+        "started_at": (
+            state.started_at.isoformat() if state.started_at is not None else None
+        ),
         "origin": (
             {
                 "channel": state.origin.channel,
@@ -675,6 +678,11 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         depends_on_run_id=(RunId(str(value["depends_on_run_id"])) if value.get("depends_on_run_id") else None),
         inputs=dict(value.get("inputs", {})),
         parent_run_id=(RunId(str(value["parent_run_id"])) if value.get("parent_run_id") else None),
+        started_at=(
+            datetime.fromisoformat(str(value["started_at"]))
+            if value.get("started_at")
+            else None
+        ),
     )
 
 

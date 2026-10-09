@@ -72,6 +72,8 @@ export type ApiRunStep = {
   group?: string;
   summary: string;
   outputs: { name: string; value: string }[];
+  /** When the node last started, as ISO-8601; absent until it has. */
+  startedAt?: string;
 };
 
 /** One WorkOrder as `GET /api/runs` lists it.
@@ -98,6 +100,8 @@ export type ApiWorkflowRunListing = {
     nextNodeIds: string[];
   };
   terminalOutcome: string | null;
+  /** When the graph engine was handed it, as ISO-8601; null while scheduled. */
+  startedAt?: string | null;
 };
 
 /** One whole WorkOrder, as `GET /api/runs/{runId}` answers for the page about

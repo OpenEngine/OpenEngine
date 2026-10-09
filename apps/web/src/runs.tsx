@@ -104,6 +104,14 @@ export function usageLabel(usage: ApiUsage) {
   return `${usage.estimated ? "≈ " : ""}${dollars}${usage.complete ? "" : " (partial)"}`;
 }
 
+/** An ISO-8601 instant as a date and time in the reader's own zone. */
+export function startedLabel(iso: string) {
+  const when = new Date(iso);
+  return Number.isNaN(when.getTime()) ? iso : when.toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  });
+}
+
 export function requesterLabel(requester: string) {
   const [provider, , account] = requester.split(":");
   const source = { github: "GitHub", slack: "Slack" }[provider];
@@ -667,6 +675,11 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             {phaseLabel(step.status)}
           </span>
         </header>
+        {step.startedAt && (
+          <p className="step-outcome">
+            Started: <time dateTime={step.startedAt}>{startedLabel(step.startedAt)}</time>
+          </p>
+        )}
         {step.outcome && (
           <p className="step-outcome">
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
@@ -939,6 +952,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
     const completed = new Set(
       graphEvents.filter((event) => event.type === "node.finished").map((event) => event.nodeId),
     );
+    // The latest start wins, so a retried node reads as when it began again.
+    const started = new Map<string, string>();
+    for (const event of graphEvents) {
+      if (event.type === "node.started" && event.nodeId && typeof event.payload.startedAt === "string")
+        started.set(event.nodeId, event.payload.startedAt);
+    }
     const active = new Set(graph.activeExecutions.map((execution) => execution.nodeId));
     const waiting = new Set(graph.pendingApprovals.map((approval) => approval.nodeId));
     return {
@@ -964,6 +983,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           ))
             ? graphConversationUrl(runId, node.nodeId) : null,
           waiting: waiting.has(node.nodeId),
+          startedAt: started.get(node.nodeId),
           group: node.group || undefined,
           summary: typeof value === "string" ? value
             : typeof fields?.summary === "string" ? fields.summary : "",
@@ -1013,6 +1033,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Repository" value={run.repository} />
             {run.requester && (
               <Stat label="Requested by" value={requesterLabel(run.requester)} />
+            )}
+            {run.startedAt && (
+              <Stat label="Started" value={
+                <time dateTime={run.startedAt}>{startedLabel(run.startedAt)}</time>
+              } />
             )}
             {run.parentRunId && (
               <Stat label="Created by" value={

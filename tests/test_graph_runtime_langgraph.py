@@ -308,6 +308,49 @@ def test_an_execution_id_is_the_langgraph_task_id() -> None:
     assert started == [values["execution"]]
 
 
+def test_a_send_scheduled_mid_superstep_announces_its_start() -> None:
+    """A task first seen on the `tasks` stream is announced once, with a time.
+
+    The UI takes a step's start time only from `node.started`, so a `Send`
+    LangGraph accepts after the checkpoint would otherwise show none.
+    """
+    from engine.graph_runtime_langgraph.runtime import _Live
+
+    async def scenario() -> list[Any]:
+        builder: StateGraph = StateGraph(State)
+        builder.add_node(str(FAST), lambda _state: {})
+        builder.add_edge(START, str(FAST))
+        builder.add_edge(str(FAST), END)
+        runtime = LangGraphRuntime(
+            LangGraphDefinition(
+                graph_id=GRAPH,
+                name="One node",
+                graph=builder.compile(checkpointer=InMemorySaver()),
+            )
+        )
+        log = EventLog()
+        runtime.observe(log.append)
+        live = _Live(run_id=RunId("run-send"), graph_id=GRAPH)
+        chunk = {"id": "task-sent", "name": str(FAST), "input": {}}
+        await runtime._on_task(live, chunk)
+        # Seen again, it is the same execution and is not announced twice.
+        await runtime._on_task(live, chunk)
+        started = [
+            event
+            for event in log.since(live.run_id)
+            if event.kind is EventKind.NODE_STARTED
+        ]
+        await runtime.aclose()
+        return started
+
+    started = asyncio.run(scenario())
+
+    assert [(e.node_id, e.execution_id) for e in started] == [
+        (FAST, ExecutionId("task-sent"))
+    ]
+    assert started[0].payload["startedAt"]
+
+
 # --- what a failure leaves behind --------------------------------------------
 
 
