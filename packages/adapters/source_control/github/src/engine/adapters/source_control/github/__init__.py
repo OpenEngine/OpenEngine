@@ -377,6 +377,7 @@ class GitHubSourceControl:
 
         if resolve and (not thread_id or not commit_sha or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):
             raise ValueError("resolving a reply requires thread_id and commit_sha")
+        # Validation above ensures resolve implies thread_id, binding thread and replies.
         if thread_id:
             _positive_number(in_reply_to_id, "in_reply_to_id")
             thread, replies = await self._review_thread_by_id(pr_url, thread_id, include_replies=resolve)
@@ -390,7 +391,7 @@ class GitHubSourceControl:
             if resolve:
                 # A reply may succeed while resolution fails. Reuse our exact
                 # reply on retry, including after a process restart.
-                matching = [entry for entry in replies if entry["body"] == comment]
+                matching = [entry for entry in replies if entry["body"] == comment]  # pyright: ignore[reportPossiblyUnboundVariable]  # Baseline: see docs/pyright.md
                 if matching:
                     login = await self.authenticated_login(pr_url)
                     match = next((entry for entry in matching
@@ -405,7 +406,7 @@ class GitHubSourceControl:
                 )
             if resolve:
                 try:
-                    await self._resolve_validated_thread(thread)
+                    await self._resolve_validated_thread(thread)  # pyright: ignore[reportPossiblyUnboundVariable]  # Baseline: see docs/pyright.md
                 except Exception as error:
                     raise GitHubSourceControlError(
                         f"Reply posted at {response['html_url']}, but thread resolution failed; "  # pyright: ignore[reportIndexIssue]  # Baseline: see docs/pyright.md

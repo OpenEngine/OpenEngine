@@ -423,7 +423,7 @@ class BuiltClient(StaticFiles):
 
     def file_response(
         self,
-        full_path: os.PathLike[str],
+        full_path: str | os.PathLike[str],
         stat_result: os.stat_result,
         scope: Scope,
         status_code: int = 200,

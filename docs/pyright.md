@@ -9,7 +9,7 @@ uv run --locked pyright
 
 The dependency-boundaries CI job runs the same check. Pyright is pinned in the
 root dev group; upgrades must recheck the baseline. `pyrightconfig.json` enables
-basic mode for every `engine` namespace source tree under apps, CLI and packages,
+standard mode for every `engine` namespace source tree under apps, CLI and packages,
 plus `tests/typecheck`. Explicit `extraPaths` join the namespace packages for
 static import resolution; add an entry when adding a distribution. Dependencies
 are resolved from the root `.venv`. Analysis targets Python 3.11 (the packages'
