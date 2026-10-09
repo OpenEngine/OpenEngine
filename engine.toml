@@ -9,6 +9,7 @@ default_branch = "main"
 [repos]
 "OpenEngine/OpenEngine" = "~/code/OpenEngine"
 "n8n" = "~/code/n8n"
+"spiralsoft-ai/PATY" = "~/code/PATY"
 
 # Whose GitHub events this deployment answers. The secret that signs those
 # deliveries is not written here -- engine.toml is committed -- it lives in a
