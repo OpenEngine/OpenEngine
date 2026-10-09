@@ -1233,6 +1233,8 @@ class GraphService:
             resolved = resolve_inputs(tuple(loaded.workflow.inputs), given)
         except ValueError as error:
             raise ServiceError(str(error)) from None
+        if loaded.spec is not None:
+            self._check_runner_inputs(loaded.spec, resolved)
         repository = self.resolve_repository(
             (repository or (loaded.spec.repository if loaded.spec else "") or self._default_repository).strip()
         )
@@ -1242,6 +1244,24 @@ class GraphService:
                 "or configure a default on the backend"
             )
         return StartRequest(instruction, repository, resolved)
+
+    def _check_runner_inputs(self, spec: GraphSpec, inputs: Mapping[str, str]) -> None:
+        """Refuse a run whose input names an agent this backend does not offer.
+
+        Registration leaves these unchecked, so a graph whose default is an
+        agent this backend lacks still registers and runs with another one.
+        """
+        available = self.runners()
+        names = {node.runner.value for node in spec.nodes if node.runner is not None and node.runner.kind == "input"}
+        for name in sorted(names):
+            chosen = inputs.get(name, "")
+            if chosen and chosen not in RUNNER_POLICIES and chosen not in available:
+                how = "--agent NAME" if name == "agent" else f"--input {name}=NAME"
+                raise ServiceError(
+                    f"agent {chosen!r} is not available on this backend "
+                    f"(available: {', '.join(available) or 'none'}); choose one with {how}",
+                    available=list(available),
+                )
 
     def resolve_repository(self, repository: str) -> str:
         """A `[repos]` name or `owner/repo` as the checkout it names; a path as itself.

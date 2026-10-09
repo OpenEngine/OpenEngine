@@ -153,7 +153,10 @@ and registered graphs are one set of formats.
 YAML: unknown fields, undeclared inputs, unknown runners or tools, expression
 errors, references to outputs of nodes that cannot have run yet, unreachable
 nodes, nodes that cannot reach `end`, unconditional cycles — all reported at
-once with a path (`review.reviewers.outputs.findings`).
+once with a path (`review.reviewers.outputs.findings`). A runner taken from
+an input (`agent: ${inputs.agent}`) is checked when a run starts instead, so a
+graph whose default runner a backend lacks still registers there; a run naming
+a runner the backend does not offer is refused with the ones it does.
 
 Python: the file must import and export `workflow`; LangGraph must compile it
 against the backend's checkpointer. Its import error or compile error is

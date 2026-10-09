@@ -25,6 +25,7 @@ from engine.graph_runtime_langgraph import (
     SqliteGraphRuntimeStore,
     agent_registry,
 )
+from engine.cli import starters
 from engine.graph_service import GraphError, GraphService, create_app, parse_graph
 from engine.graph_service.service import Conflict, NotFound, ServiceError
 from engine.ports import Workspace
@@ -218,6 +219,10 @@ def test_the_instruction_is_builtin_and_runners_must_exist() -> None:
         parse_graph(yaml.safe_load(single("solo", "x")), runners=["codex"])
 
 
+def test_a_runner_input_is_not_checked_at_registration() -> None:
+    parse_graph(yaml.safe_load(starters.source("adversarial-review")), runners=["codex"])
+
+
 # --- graphs and runs ----------------------------------------------------------
 
 
@@ -255,6 +260,25 @@ def test_registering_discovering_and_running_a_graph(tmp_path: Path) -> None:
             assert nodes["implement"]["runner"] == "stub" and nodes["implement"]["attempt"] == 1
             assert done["usage"]["costUsd"] == pytest.approx(1.0)
             assert await service.list_nodes(run["runId"]) == done["nodes"]
+
+    asyncio.run(scenario())
+
+
+def test_a_built_in_graph_registers_without_its_default_agent(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            _, created = await service.add_graph("default", source=starters.source("adversarial-review"))
+            assert created
+            with pytest.raises(ServiceError, match=r"agent 'claude' is not available .*available: stub.*--agent"):
+                await service.submit_run(
+                    project="default", graph="adversarial-review", instruction="x",
+                    inputs={"branch": "feat/x"},
+                )
+            run, created = await service.submit_run(
+                project="default", graph="adversarial-review", instruction="x",
+                inputs={"branch": "feat/x", "agent": "stub"},
+            )
+            assert created and run["runId"]
 
     asyncio.run(scenario())
 

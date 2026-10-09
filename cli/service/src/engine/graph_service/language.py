@@ -34,7 +34,7 @@ from engine.runtime.terminal_mcp import REPOSITORY_TOOL_NAMES
 
 from engine.graph_service.expressions import Expression, ExpressionError, Template, parse, template
 from engine.graph_service.schema import (
-    API_VERSION, FIELDS, FIELD_RULES, KIND, MIN_INTERVAL_SECONDS, OUTPUT_TYPES, RUNNER_POLICIES,
+    API_VERSION, FIELDS, FIELD_RULES, KIND, MIN_INTERVAL_SECONDS, OUTPUT_TYPES,
     SECTIONS, _UNITS,
 )
 
@@ -511,9 +511,8 @@ def _runner(
             return None
         if not declared.default and not declared.choices:
             problem(f"inputs.{declared.name}", "a runner input needs a default or choices")
-        for choice in (*declared.choices, *((declared.default,) if declared.default else ())):
-            if choice not in RUNNER_POLICIES:
-                check(choice, f"inputs.{declared.name}")
+        # Not checked against this backend's runners: an input is a run's to
+        # choose, so the run is refused if it names one that is not there.
         return RunnerRule("input", declared.name)
     if isinstance(raw, str) and raw.strip():
         check(raw.strip(), where)
