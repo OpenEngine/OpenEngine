@@ -913,6 +913,24 @@ def test_invalid_machine_config_does_not_fall_back_to_checkout(tmp_path):
         load_engine_config(environ={}, cwd=tmp_path)
 
 
+def test_shadowed_local_config_is_reported(tmp_path, caplog):
+    override = tmp_path / "override.toml"
+    override.write_text("[repos]\n")
+    local = tmp_path / ".engine/config.toml"
+    local.parent.mkdir()
+    local.write_text('[repos]\n"local/repo" = "/local"\n')
+
+    with caplog.at_level("WARNING", logger="engine.runtime.config"):
+        loaded = load_engine_config(environ={"ENGINE_CONFIG": str(override)}, cwd=tmp_path)
+    assert loaded.config.repos == {}
+    assert f"Ignoring {local.resolve()}" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="engine.runtime.config"):
+        load_engine_config(local, environ={}, cwd=tmp_path)
+    assert caplog.text == ""
+
+
 def test_invalid_local_config_does_not_fall_back_to_root(tmp_path):
     (tmp_path / "engine.toml").write_text("[repos]\n")
     local = tmp_path / ".engine/config.toml"

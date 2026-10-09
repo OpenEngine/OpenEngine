@@ -7,6 +7,7 @@ evaluation remains a separate concern.
 
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from collections.abc import Mapping, Sequence
@@ -321,6 +322,16 @@ def load_engine_config(
         return LoadedEngineConfig()
 
     path = selected.resolve()
+    local = directory / ".engine" / "config.toml"
+    if local.is_file() and local.resolve() != path:
+        # Selection never merges, so a shadowed local file would otherwise
+        # look as if its [repos] and approvals were silently dropped.
+        logging.getLogger(__name__).warning(
+            "Ignoring %s: configuration is loaded from %s only. Move its "
+            "settings there or select it with --config.",
+            local.resolve(),
+            path,
+        )
     try:
         with path.open("rb") as config_file:
             document = tomllib.load(config_file)
