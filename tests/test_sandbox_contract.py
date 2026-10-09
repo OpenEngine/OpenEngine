@@ -3,23 +3,35 @@
 import asyncio
 from pathlib import Path
 import sys
+import os
 
 import pytest
 
 from engine.adapters.sandbox.process import ProcessSandbox
+from engine.adapters.sandbox.smolvm import SmolvmSandbox
 from engine.ports import Sandbox, SandboxInstance, SandboxProcess, SandboxSpec
 
 
-@pytest.fixture(params=[ProcessSandbox], ids=["process"])
+@pytest.fixture(params=["process", "smolvm-fake", "smolvm"], ids=["process", "smolvm-fake", "smolvm"])
 def sandbox_backend(request) -> Sandbox:
-    return request.param()
+    if request.param == "process":
+        return ProcessSandbox()
+    if request.param == "smolvm-fake":
+        launcher, _ = request.getfixturevalue("smolvm_cli")
+        return SmolvmSandbox(image="fixture", executable=str(launcher))
+    image = os.environ.get("OE_SMOLVM_TEST_IMAGE")
+    if not image:
+        pytest.skip("set OE_SMOLVM_TEST_IMAGE to run the contract on real SmolVM hardware")
+    return SmolvmSandbox(image=image, executable=os.environ.get("OE_SMOLVM_EXECUTABLE", "smolvm"))
 
 
-def command(script: str) -> list[str]:
-    return [sys.executable, "-u", "-c", script]
+@pytest.fixture
+def command(sandbox_backend):
+    python = sys.executable if isinstance(sandbox_backend, ProcessSandbox) or sandbox_backend.image == "fixture" else "python3"
+    return lambda script: [python, "-u", "-c", script]
 
 
-def test_streaming_stdio_and_status(sandbox_backend):
+def test_streaming_stdio_and_status(sandbox_backend, command):
     async def run():
         async with sandbox_backend.create(SandboxSpec()) as sandbox:
             assert isinstance(sandbox, SandboxInstance)
@@ -37,10 +49,10 @@ def test_streaming_stdio_and_status(sandbox_backend):
                 process.stdout.read(), process.stderr.read(), process.wait()
             )
             assert (out, err, code) == (b"hello\n", b"error\n", 7)
-    asyncio.run(asyncio.wait_for(run(), 10))
+    asyncio.run(asyncio.wait_for(run(), 120))
 
 
-def test_workspace_copy_and_transfers(sandbox_backend, tmp_path):
+def test_workspace_copy_and_transfers(sandbox_backend, tmp_path, command):
     source = tmp_path / "source"
     source.mkdir()
     (source / "input").write_text("original")
@@ -62,7 +74,20 @@ def test_workspace_copy_and_transfers(sandbox_backend, tmp_path):
     asyncio.run(run())
 
 
-def test_environment_and_secrets(sandbox_backend):
+def test_absolute_command_with_path_excluding_python(sandbox_backend):
+    async def run():
+        async with sandbox_backend.create(SandboxSpec()) as sandbox:
+            process = await sandbox.exec(
+                ["/bin/sh", "-c", 'printf "%s" "$PATH"'],
+                env={"PATH": "/custom-tools"},
+            )
+            assert await process.stdout.read() == b"/custom-tools"
+            assert await process.stderr.read() == b""
+            assert await process.wait() == 0
+    asyncio.run(asyncio.wait_for(run(), 120))
+
+
+def test_environment_and_secrets(sandbox_backend, command):
     async def run():
         spec = SandboxSpec(secrets={"SANDBOX_TEST_SECRET": "private"})
         assert "private" not in repr(spec)
@@ -77,7 +102,7 @@ def test_environment_and_secrets(sandbox_backend):
 
 
 @pytest.mark.parametrize("exit_kind", ["normal", "exception", "cancel"])
-def test_context_always_destroys(sandbox_backend, exit_kind):
+def test_context_always_destroys(sandbox_backend, exit_kind, command):
     async def run():
         sandbox = None
         process = None
@@ -104,10 +129,10 @@ def test_context_always_destroys(sandbox_backend, exit_kind):
         await sandbox.destroy()
         with pytest.raises(RuntimeError, match="destroyed"):
             await sandbox.exec(command("pass"))
-    asyncio.run(asyncio.wait_for(run(), 10))
+    asyncio.run(asyncio.wait_for(run(), 120))
 
 
-def test_timeout_starts_at_exec(sandbox_backend):
+def test_timeout_starts_at_exec(sandbox_backend, command):
     async def run():
         async with sandbox_backend.create(SandboxSpec(timeout=0.1)) as sandbox:
             process = await sandbox.exec(command("import time; time.sleep(60)"))
@@ -115,10 +140,10 @@ def test_timeout_starts_at_exec(sandbox_backend):
             assert await process.stdout.read() == b""
             with pytest.raises(TimeoutError):
                 await process.wait()
-    asyncio.run(asyncio.wait_for(run(), 10))
+    asyncio.run(asyncio.wait_for(run(), 120))
 
 
-def test_path_escape_rejected(sandbox_backend, tmp_path):
+def test_path_escape_rejected(sandbox_backend, tmp_path, command):
     async def run():
         async with sandbox_backend.create(SandboxSpec()) as sandbox:
             for path in ("../escape", str(tmp_path)):
@@ -131,7 +156,7 @@ def test_path_escape_rejected(sandbox_backend, tmp_path):
     asyncio.run(run())
 
 
-def test_failed_exec_does_not_break_context(sandbox_backend):
+def test_failed_exec_does_not_break_context(sandbox_backend, command):
     async def run():
         async with sandbox_backend.create(SandboxSpec()) as sandbox:
             with pytest.raises(FileNotFoundError):

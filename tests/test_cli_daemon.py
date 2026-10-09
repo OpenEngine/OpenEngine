@@ -205,7 +205,7 @@ def test_doctor_reports_config_port_and_tools_without_requiring_an_agent(home: P
     assert cli.main(["daemon", "doctor", "--json"]) == 0
 
     checks = {check["name"]: check for check in json.loads(capsys.readouterr().out)["checks"]}
-    assert list(checks) == ["config", "port", "engine-web", "git", "node", "npx", "claude", "codex"]
+    assert list(checks) == ["config", "port", "engine-web", "git", "node", "npx", "claude", "codex", "smolvm"]
     assert checks["port"]["level"] == "ok"
     assert checks["claude"]["level"] == checks["codex"]["level"] == "warn"
 
@@ -214,9 +214,42 @@ def test_doctor_fails_without_a_config(home: Path, monkeypatch, capsys):
     monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path("/venv/bin/engine-web"))
 
     assert cli.main(["daemon", "doctor"]) == 1
-
     assert "error  config:" in capsys.readouterr().out
 
+
+@pytest.mark.parametrize("backend,expected_level,expected_status", [
+    ("process", "warn", 0), ("smolvm", "error", 1),
+])
+def test_doctor_explains_smolvm_availability(home, monkeypatch, capsys, backend, expected_level, expected_status):
+    from engine.adapters.sandbox.smolvm import SmolvmSupport
+
+    config = home / "config/openengine/engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f'[sandbox]\nbackend = "{backend}"\nimage = "/images/guest.tar"\n')
+    monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path("/venv/bin/engine-web"))
+    monkeypatch.setattr(daemon, "_port_finding", lambda _: daemon.Finding("port", "ok", "free"))
+    monkeypatch.setattr(daemon, "_path_tools", lambda: {"node": "/tools/node"})
+    monkeypatch.setattr(daemon, "detect_support", lambda **kwargs: SmolvmSupport(False, "KVM is unavailable: permission denied"))
+    assert cli.main(["doctor", "--json"]) == expected_status
+    checks = {entry["name"]: entry for entry in json.loads(capsys.readouterr().out)["checks"]}
+    assert checks["smolvm"]["level"] == expected_level
+    assert "permission denied" in checks["smolvm"]["detail"]
+
+
+def test_doctor_reports_missing_guest_image(home, monkeypatch, capsys):
+    from engine.adapters.sandbox.smolvm import SmolvmSupport
+
+    config = home / "config/openengine/engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[sandbox]\nbackend = "smolvm"\n')
+    monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path("/venv/bin/engine-web"))
+    monkeypatch.setattr(daemon, "_port_finding", lambda _: daemon.Finding("port", "ok", "free"))
+    monkeypatch.setattr(daemon, "_path_tools", lambda: {"node": "/tools/node"})
+    monkeypatch.setattr(daemon, "detect_support", lambda **kwargs: SmolvmSupport(True, "available", "/tools/smolvm"))
+    assert cli.main(["doctor", "--json"]) == 1
+    checks = {entry["name"]: entry for entry in json.loads(capsys.readouterr().out)["checks"]}
+    assert checks["smolvm"]["level"] == "ok"
+    assert checks["sandbox image"]["level"] == "error"
 
 FAKE_SERVICE = """\
 import json, os, signal, sys

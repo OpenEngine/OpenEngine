@@ -35,6 +35,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from engine.runtime.config import load_engine_config
+from engine.adapters.sandbox.smolvm.support import detect_support
 
 LABEL = "sh.openengine.engine"
 SYSTEMD_UNIT = "openengine.service"
@@ -992,6 +993,16 @@ def diagnose() -> list[Finding]:
             program="", config=str(config), port=port, log="", tools=found,
         )
         findings.append(_claude_login_finding(spec))
+    # Optional with the process backend; actionable failure when selected.
+    backend, image = "process", ""
+    if port is not None:
+        sandbox = load_engine_config(config).config.sandbox
+        backend, image = sandbox.backend, sandbox.image
+    support = detect_support(path=record.spec.environment()["PATH"] if record else None)
+    level = "ok" if support.available else ("error" if backend == "smolvm" else "warn")
+    findings.append(Finding("smolvm", level, support.reason))
+    if backend == "smolvm" and not image:
+        findings.append(Finding("sandbox image", "error", "set sandbox.image to the built guest image; see docs/sandbox.md"))
     return findings
 
 

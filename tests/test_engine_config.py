@@ -843,14 +843,20 @@ def test_invalid_sandbox_configuration(sandbox):
 def test_sandbox_backend_composition(app, tmp_path):
     from dataclasses import replace
     from engine.adapters.sandbox.process import ProcessSandbox
+    from engine.adapters.sandbox.smolvm import SmolvmSandbox
 
     settings = app.Settings()
     if hasattr(settings, "sqlite_path"):
         settings = replace(settings, sqlite_path=str(tmp_path / "state.sqlite"))
     assert isinstance(app.build_capabilities(settings).sandbox, ProcessSandbox)
     settings = replace(settings, engine_config=parse_engine_config({"sandbox": {"backend": "smolvm"}}))
-    with pytest.raises(NotImplementedError, match="smolvm"):
-        app.build_capabilities(settings)
+    assert isinstance(app.build_capabilities(settings).sandbox, SmolvmSandbox)
+
+
+def test_sandbox_image_configuration():
+    assert parse_engine_config({"sandbox": {"image": " ./guest.tar "}}).sandbox.image == "./guest.tar"
+    with pytest.raises(EngineConfigError, match="sandbox.image"):
+        parse_engine_config({"sandbox": {"image": 42}})
 
 
 def test_github_repositories_combine_with_legacy_repository():

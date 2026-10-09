@@ -14,6 +14,7 @@ from layout import PACKAGES, Package
 #: five packages and calling it a day would pass a discovery-driven test.
 EXPECTED_PACKAGE_ROOTS = [
     "packages/adapters/sandbox/process",
+    "packages/adapters/sandbox/smolvm",
     "packages/domain",
     "packages/ports",
     "packages/runtime",

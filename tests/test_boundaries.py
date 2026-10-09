@@ -251,10 +251,14 @@ def test_apps_actually_wire_adapters() -> None:
     for package in by_layer(APP):
         # The remote MCP gateway and terminal client delegate over HTTP to the
         # web composition root. Neither may instantiate a second runtime or
-        # its adapters.
+        # its adapters. CLI doctor may import the read-only SmolVM support
+        # probe, but cannot import the adapter that provisions machines.
         if package.dist_name in {"engine-mcp-server", "engine-cli"}:
             assert not any(
-                m.startswith("engine.adapters")
+                m.startswith("engine.adapters") and not (
+                    package.dist_name == "engine-cli"
+                    and m == "engine.adapters.sandbox.smolvm.support"
+                )
                 for modules in engine_imports(package).values() for m in modules
             )
             continue
