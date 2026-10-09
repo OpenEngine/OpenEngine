@@ -25,7 +25,9 @@ started — a daemon that is up already serves it.
 - A **loop** creates recurring runs of one pinned version.
 - A **node execution ID** identifies one attempt at one node within a run.
 
-Backend commands use the selected backend. `engine graph spec` and
+Backend commands use the selected backend. List commands (`engine graphs`,
+`runs`, `loops`, `nodes`, `agents`, `backends`, `connections`) print a table;
+add `--json` for JSON. Other commands print JSON unless `--pretty` is given. `engine graph spec` and
 `engine loop spec` print the current specifications as Markdown locally, without
 a running daemon. Their specifications and the site reference are generated from
 the parser’s field definitions, expression rules, and accompanying prose. Run
@@ -36,7 +38,7 @@ both; the site build also runs it automatically. Tests reject stale output.
 
 ```bash
 engine backend add mini http://mac-mini.local:4364 --token-env MINI_ENGINE_TOKEN --use
-engine backends list --check --pretty
+engine backends list --check
 engine backend use local
 engine graphs list --backend mini      # one-off override; ENGINE_BACKEND also works
 ```
@@ -96,7 +98,7 @@ runners the backend does not have — all problems at once, each with its path.
 ## Agents
 
 ```bash
-engine agents --pretty
+engine agents
 engine agent add claude --name reviewer --model opus
 engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1
 engine agent signin reviewer
@@ -116,7 +118,7 @@ still works for one release.
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
 engine run get run-0123abcd --pretty
-engine runs --pretty
+engine runs
 engine runs --graph fix-flaky-test --status failed
 ```
 
@@ -140,7 +142,7 @@ are approved under its `[approvals]` policy.
 
 ```bash
 engine loop add fix-flaky-test --max-prs 5 --max-spend 20 --every 6h
-engine loops list --pretty
+engine loops list
 engine loop pause fix-flaky-test --reason "release freeze"
 engine loop resume fix-flaky-test --max-spend 40
 ```
@@ -169,7 +171,7 @@ engine loop resume fix-flaky-test --max-spend 40
 ## Nodes and steering
 
 ```bash
-engine nodes list --run run-0123abcd --pretty
+engine nodes list --run run-0123abcd
 engine node steer 1a0055fa-... "Use the existing retry helper instead" --wait
 engine node get 1a0055fa-... --pretty
 ```
