@@ -89,7 +89,7 @@ export const test = base.extend<{
   devServer: string;
 }>({
   seededDatabase: [false, { option: true }],
-  engine: async ({ seededDatabase }, use, testInfo) => {
+  engine: async ({ seededDatabase }, provide, testInfo) => {
     const root = mkdtempSync(path.join(tmpdir(), "engine-e2e-"));
     const state = path.join(root, "state");
     mkdirSync(state);
@@ -109,7 +109,7 @@ export const test = base.extend<{
       engine.script({
         scenarios: [{ steps: [{ type: "say", text: "This turn was not scripted." }] }],
       });
-      await use(engine);
+      await provide(engine);
     } finally {
       await stop(server);
       if (testInfo.status !== testInfo.expectedStatus) {
@@ -135,7 +135,7 @@ export const test = base.extend<{
    *
    *  `ENGINE_API_URL` is how `engine-dev` tells the proxy which port the API
    *  actually took, and it is how the test does too. */
-  devServer: async ({ engine }, use, testInfo) => {
+  devServer: async ({ engine }, provide, testInfo) => {
     const url = `http://127.0.0.1:${await freePort()}`;
     const started = spawn(
       VITE,
@@ -157,7 +157,7 @@ export const test = base.extend<{
       // alone -- a dev server answering while the API behind it is still
       // starting is the one state this fixture must not hand a test.
       await waitUntilServing(url, server);
-      await use(url);
+      await provide(url);
     } finally {
       await stop(server);
       if (testInfo.status !== testInfo.expectedStatus) {
@@ -168,8 +168,8 @@ export const test = base.extend<{
       }
     }
   },
-  baseURL: async ({ engine }, use) => {
-    await use(engine.url);
+  baseURL: async ({ engine }, provide) => {
+    await provide(engine.url);
   },
 });
 

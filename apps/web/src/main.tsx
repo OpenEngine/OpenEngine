@@ -228,7 +228,7 @@ function currentRoute(): Route {
  *  The chat runtime is mounted around every page so conversation routes can
  *  render their thread while workflow pages keep their own run UI. */
 function App() {
-  const route = useMemo(currentRoute, []);
+  const route = useMemo(() => currentRoute(), []);
   const [config, setConfig] = useState<EngineConfig | null>(null);
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
