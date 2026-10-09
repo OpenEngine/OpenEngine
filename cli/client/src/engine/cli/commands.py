@@ -51,8 +51,12 @@ SIGNIN = {
 }
 
 
-def add_parsers(commands: argparse._SubParsersAction) -> None:
-    """Add these commands to the `engine` parser."""
+def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAction:
+    """Add these commands to the `engine` parser.
+
+    Answers `engine agent`'s actions, so the terminal app can add the ones that
+    run here rather than on a backend, such as `engine agent claude`.
+    """
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--backend", metavar="NAME", help="the backend to use (default: the selected one)")
     common.add_argument("--pretty", action="store_true", help="human-readable output instead of JSON")
@@ -173,7 +177,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     steering.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
 
     agent = commands.add_parser("agent", help="add, inspect, remove and sign in the agents graphs name")
-    actions = agent.add_subparsers(dest="action", required=True)
+    actions = agent_actions = agent.add_subparsers(dest="action", required=True)
     adding = actions.add_parser("add", parents=[common], help="offer claude, codex or opencode under a name")
     adding.add_argument("kind", choices=AGENT_KINDS)
     adding.add_argument("--name", default="", help="what graphs call it (default: the kind)")
@@ -198,6 +202,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     signin = actions.add_parser("signin")
     signin.add_argument("name", choices=sorted(SIGNIN))
     signin.add_argument("--backend", metavar="NAME")
+    return agent_actions
 
 
 def main(arguments: argparse.Namespace) -> int:

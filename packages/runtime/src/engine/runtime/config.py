@@ -16,6 +16,7 @@ from pathlib import Path
 from engine.domain import ForgeMode
 from engine.ports.agent_runner import ResponseStyle
 from engine.ports.permissions import ApprovalCapability
+from engine.runtime.terminal_mcp import REPOSITORY_TOOL_NAMES
 
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
@@ -52,6 +53,18 @@ class WorkflowsConfig:
     """Where trusted repository-owned Python workflow definitions live."""
 
     directory: str = ""
+
+
+#: What `engine agent claude` serves when `[sessions] tools` says nothing: an implementation node's tools.
+DEFAULT_SESSION_TOOLS: tuple[str, ...] = ("git_subcommand", "open_pull_request")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionsConfig:
+    """`[sessions]`: what an interactive `engine agent claude` session is given."""
+
+    tools: tuple[str, ...] = DEFAULT_SESSION_TOOLS
+    """The repository tools its agent reaches through Engine, as an implementation node's `tools`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +226,7 @@ class EngineConfig:
     claude: ClaudeConfig = ClaudeConfig()
     sandbox: SandboxConfig = SandboxConfig()
     graphs: GraphsConfig = GraphsConfig()
+    sessions: SessionsConfig = SessionsConfig()
     model_tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     """`[runners.<runner>.models]`: tier name to model, per runner.
 
@@ -349,6 +363,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "trusted_repos",
             "server",
             "sandbox",
+            "sessions",
             "state",
             "work_orders",
             "workflows",
@@ -489,6 +504,14 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     allow_python = graphs.get("allow_python", True)
     if not isinstance(allow_python, bool):
         raise EngineConfigError("graphs.allow_python must be a boolean")
+    sessions = _table(document.get("sessions", {}), "sessions")
+    _reject_unknown(sessions, {"tools"}, "sessions")
+    session_tools = _strings(sessions.get("tools", DEFAULT_SESSION_TOOLS), "sessions.tools")
+    for tool in session_tools:
+        if tool not in REPOSITORY_TOOL_NAMES:
+            raise EngineConfigError(
+                f"sessions.tools contains unknown tool {tool!r}; expected one of: {', '.join(REPOSITORY_TOOL_NAMES)}"
+            )
     model_tiers: dict[str, dict[str, str]] = {}
     for runner, settings in _table(document.get("runners", {}), "runners").items():
         settings = _table(settings, f"runners.{runner}")
@@ -598,6 +621,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         ),
         claude=ClaudeConfig(output_style=output_style, config_dir=config_dir),
         graphs=GraphsConfig(allow_python=allow_python),
+        sessions=SessionsConfig(tools=tuple(session_tools)),
         model_tiers=model_tiers,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
@@ -761,6 +785,8 @@ __all__ = [
     "EngineConfigError",
     "GitHubConfig",
     "GraphsConfig",
+    "SessionsConfig",
+    "DEFAULT_SESSION_TOOLS",
     "LoadedEngineConfig",
     "ResponseStyle",
     "ServerConfig",

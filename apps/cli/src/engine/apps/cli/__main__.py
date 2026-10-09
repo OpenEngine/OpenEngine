@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from importlib.metadata import version
 
-from engine.apps.cli import connect, daemon
+from engine.apps.cli import connect, daemon, session
 from engine.cli import commands as graph_commands
 
 EXIT_OK = 0
@@ -17,7 +17,7 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command")
     connect.add_parsers(commands)
     daemon.add_parser(commands)
-    graph_commands.add_parsers(commands)
+    session.add_parser(graph_commands.add_parsers(commands))
     commands.metavar = "{" + ",".join(name for name in commands.choices if name not in graph_commands.HIDDEN) + "}"
     return result
 
@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         return connect.disconnect(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
+    if arguments.command == "agent" and arguments.action == "claude":
+        return session.main(arguments)
     if arguments.command in graph_commands.COMMANDS:
         return graph_commands.main(arguments)
     raise AssertionError("unreachable command")
