@@ -101,7 +101,7 @@ def test_connections_mark_the_active_provider(monkeypatch, capsys):
     }
     monkeypatch.setattr(connect, "request", lambda _backend, path, body=None, timeout=10.0: answers[path])
 
-    assert cli.main(["connections", "--pretty"]) == 0
+    assert cli.main(["connections"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines == [
         "  gh      connected  octo",
