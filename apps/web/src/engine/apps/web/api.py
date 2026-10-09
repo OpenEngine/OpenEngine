@@ -2020,6 +2020,7 @@ def create_app(
                 depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
                 inputs=inputs,
                 requester=requester,
+                started_at=datetime.now(UTC),
             )
             await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
@@ -4611,6 +4612,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "dependsOnRunId": str(run.depends_on_run_id) if run.depends_on_run_id else None,
         "phase": run.phase,
         "terminalOutcome": run.terminal_outcome,
+        "startedAt": run.started_at.isoformat() if run.started_at else None,
     }
     if listing:
         return result

@@ -46,6 +46,7 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -768,7 +769,11 @@ class LangGraphRuntime:
             self._acquire(live, execution_id, node_id)
             self._entries[node_id] = self._entries.get(node_id, 0) + 1
             await self.publish(
-                live.run_id, EventKind.NODE_STARTED, None, node_id, execution_id
+                live.run_id,
+                EventKind.NODE_STARTED,
+                {"startedAt": datetime.now(UTC).isoformat()},
+                node_id,
+                execution_id,
             )
 
     async def _on_task(self, live: _Live, chunk: Mapping[str, Any]) -> NodeId | None:

@@ -7,6 +7,7 @@ nothing that would have to be kept in step with a running graph.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from engine.domain import (
     RunId,
@@ -32,6 +33,7 @@ class WorkflowRunView:
     parent_run_id: RunId | None = None
     depends_on_run_id: RunId | None = None
     requester: str | None = None
+    started_at: datetime | None = None
 
 
 class RunReader:
@@ -80,6 +82,7 @@ class RunReader:
             parent_run_id=state.parent_run_id,
             depends_on_run_id=state.depends_on_run_id,
             requester=state.requester,
+            started_at=state.started_at,
         )
 
 

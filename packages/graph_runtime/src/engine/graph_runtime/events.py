@@ -45,6 +45,7 @@ class EventKind(Enum):
     the ids a resume can name.
     """
     NODE_STARTED = "node.started"
+    """A node began an execution: `startedAt`, an ISO-8601 UTC timestamp."""
     NODE_FINISHED = "node.finished"
     CONVERSATION_STARTED = "conversation.started"
     """An agent session is established and ready for its first prompt."""
