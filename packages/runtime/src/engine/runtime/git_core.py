@@ -215,7 +215,14 @@ def guard_push(
     if arguments[subcommand] in {"send-pack", "http-push"}:
         raise ValueError("use git push so branch ownership can be checked")
     if arguments[subcommand] != "push":
-        return arguments, None
+        # Stored aliases can hide a push (including inside an arbitrary shell
+        # program). An empty command-scoped override prevents expansion without
+        # changing repository config; built-in commands ignore aliases. Disable
+        # autocorrection too, so a typo cannot select a different stored alias.
+        return (
+            "-c", f"alias.{arguments[subcommand]}=",
+            "-c", "help.autocorrect=0", *arguments,
+        ), None
     for destination in _push_destinations(arguments[subcommand:]):
         refuse_internal_branch(destination)
     spec = push_spec(arguments[subcommand:])
