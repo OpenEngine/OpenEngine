@@ -42,6 +42,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Collect the shared forge contract alongside the default test filename patterns.
+python_files = ["test_*.py", "*_test.py", "source_control_git.py"]
 # Live provider runs are deselected by default and opted into with
 # `-m compatibility`, which is what the scheduled ACP compatibility workflow
 # does. They need a real agent, real credentials, and somebody else's uptime, so
