@@ -158,16 +158,16 @@ class ConciergeBroker(SingleToolBroker):
         self._credential: TextIO | None = None
 
     async def __aenter__(self) -> ConciergeBroker:
-        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-", delete=False)
-        self._credential.write(self._token)
+        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-", delete=False)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        self._credential.write(self._token)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         # Close before the MCP subprocess reopens it (required on Windows).
-        self._credential.close()
+        self._credential.close()  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         try:
             self._server = await asyncio.start_server(
                 self._handle_connection, "127.0.0.1", 0
             )
         except BaseException:
-            Path(self._credential.name).unlink(missing_ok=True)
+            Path(self._credential.name).unlink(missing_ok=True)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             raise
         return self
 

@@ -650,7 +650,7 @@ class ACPNode:
             _TURNS[session.session_id] = turn
             execution.attach(session)
             terminal_tasks = [
-                asyncio.create_task(result()) for result in terminal_results
+                asyncio.create_task(result()) for result in terminal_results  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             ]
             try:
                 if resuming is None:
@@ -808,14 +808,14 @@ class ACPNode:
                 registry=self.registry,
                 cwd=cwd,
                 mcp_servers=mcp_servers,
-                session_config=session_config,
+                session_config=session_config,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             )
         provider = (self.registry or default_registry()).resolve(self.agent)
         client = await provider.connect()
         try:
             return client, await client.new_session(
                 cwd=cwd, mcp_servers=mcp_servers,
-                session_config=session_config,
+                session_config=session_config,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             )
         except BaseException:
             await client.close()
@@ -886,7 +886,7 @@ class ACPNode:
             return await self._speak(turn, session, prompt)
         speaking = asyncio.create_task(self._speak(turn, session, prompt))
         clarification_tasks = [
-            asyncio.create_task(clarification()) for clarification in clarifications
+            asyncio.create_task(clarification()) for clarification in clarifications  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         ]
         try:
             done, _ = await asyncio.wait(
@@ -1121,7 +1121,7 @@ class ACPNode:
             for name in ("inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens"):
                 value = usage.get(name)
                 if _finite(value):
-                    payload[name] = int(value)
+                    payload[name] = int(value)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             return payload
         cost = event.data.get("cost")
         if not isinstance(cost, Mapping) or cost.get("currency") not in (None, "USD"):
@@ -1129,7 +1129,7 @@ class ACPNode:
         amount = cost.get("amount")
         if not _finite(amount):
             return None
-        payload["sessionCostUsd"] = float(amount)
+        payload["sessionCostUsd"] = float(amount)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         return payload
 
     def _prompt(self, state: Mapping[str, object]) -> ACPPrompt:

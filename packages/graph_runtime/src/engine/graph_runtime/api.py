@@ -76,7 +76,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
     # Installed here rather than by the caller: the feed only replays what it
     # was told about, and a runtime whose observer was never wired would answer
     # every subscription with silence and no error to explain it.
-    runtime.observe(log.append)
+    runtime.observe(log.append)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     async def list_graphs(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -232,7 +232,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _error(str(error), 400)
         try:
             run = await runtime.set_auto_approve(
-                _run_id(request), node, body["autoApprove"]
+                _run_id(request), node, body["autoApprove"]  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             )
         except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)

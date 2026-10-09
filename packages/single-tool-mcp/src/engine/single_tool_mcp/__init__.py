@@ -64,15 +64,15 @@ class SingleToolBroker(ABC):
         self._credential: TextIO | None = None
 
     async def __aenter__(self) -> SingleToolBroker:
-        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-")
-        self._credential.write(self._token)
-        self._credential.flush()
+        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        self._credential.write(self._token)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
+        self._credential.flush()  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         try:
             self._server = await asyncio.start_server(
                 self._handle_connection, "127.0.0.1", 0
             )
         except BaseException:
-            self._credential.close()
+            self._credential.close()  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             raise
         return self
 

@@ -757,7 +757,7 @@ class ThreadService:
         withdrew this turn.
         """
         store = self.session.state_store
-        agent_run = await store.agent_run(agent_run_id)
+        agent_run = await store.agent_run(agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if agent_run is None or agent_run.status is AgentRunStatus.CANCELLED:
             return
         await store.record_agent_run(
@@ -1629,69 +1629,69 @@ def create_app(
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
-            thread.workflow_run_id is not None
-            and thread.workflow_run_id in workflow_tasks
+            thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            and thread.workflow_run_id in workflow_tasks  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         )
 
     async def interrupt_workflow(thread: ChatThread) -> None:
         """Stop the active process for an editable step without failing its run."""
 
-        if not thread.editable or thread.workflow_run_id is None:
+        if not thread.editable or thread.workflow_run_id is None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             raise RuntimeError("this workflow conversation is read-only")
-        state = await session.state_store.load(thread.workflow_run_id)
+        state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if (
             state is None
             or state.phase is not RunPhase.RUNNING_AGENT
-            or state.current_step_id != thread.workflow_step_id
+            or state.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         ):
             raise RuntimeError("this workflow step is no longer active")
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task = workflow_tasks.get(thread.workflow_run_id)
+        if state.current_agent_run_id is not None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            await service.approvals.cancel_run(state.current_agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        task = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        assert thread.workflow_step_id is not None
-        await workflow_executor.pause_agent_step(
-            thread.workflow_run_id, thread.workflow_step_id
+        assert thread.workflow_step_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        await workflow_executor.pause_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+            thread.workflow_run_id, thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         )
 
     async def switch_workflow_runner(thread: ChatThread) -> None:
         """Restart an active workflow turn on its conversation's new runner."""
 
-        assert thread.workflow_run_id is not None
-        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
+        assert thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         async with lock:
-            task = workflow_tasks.get(thread.workflow_run_id)
+            task = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
             if task is None or task.done():
                 return
-            state = await session.state_store.load(thread.workflow_run_id)
+            state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             if (
                 state is None
                 or state.phase is not RunPhase.RUNNING_AGENT
-                or state.current_step_id != thread.workflow_step_id
+                or state.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 return
-            if state.current_agent_run_id is not None:
-                await service.approvals.cancel_run(state.current_agent_run_id)
+            if state.current_agent_run_id is not None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                await service.approvals.cancel_run(state.current_agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
             # The completed turn may have advanced to another agent between the
             # first state read and cancellation. Resume whichever conversation is
             # now current, without applying this conversation's choice to another.
-            state = await session.state_store.load(thread.workflow_run_id)
+            state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             if (
                 state is None
                 or state.phase is not RunPhase.RUNNING_AGENT
-                or state.agent_paused
+                or state.agent_paused  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 return
-            runner_name = await workflow_runner_for(state)
-            track_workflow(
+            runner_name = await workflow_runner_for(state)  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+            track_workflow(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                 state.run_id,
                 asyncio.create_task(
-                    workflow_executor.resume_agent_step(
+                    workflow_executor.resume_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                         state.run_id, runner_name=runner_name
                     )
                 ),
@@ -1701,8 +1701,8 @@ def create_app(
         thread: ChatThread, text: str, *, active_only: bool = False, resume_only: bool = False,
     ) -> None:
         """Serialize web and Slack continuations for the same WorkOrder."""
-        assert thread.workflow_run_id is not None
-        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
+        assert thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         async with lock:
             await continue_workflow_locked(thread, text, active_only=active_only, resume_only=resume_only)
 
@@ -1711,19 +1711,19 @@ def create_app(
     ) -> None:
         """Interrupt, append a human message, and resume the same workflow step."""
 
-        assert thread.workflow_run_id is not None
-        if not thread.editable:
+        assert thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        if not thread.editable:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             raise RuntimeError("this workflow conversation is read-only")
         await service.require_somewhere_to_run(thread.instance_id)
         before = len(await service.history(thread.instance_id))
-        state = await session.state_store.load(thread.workflow_run_id)
+        state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if state is None:
             raise RuntimeError("this workflow step is no longer active")
         if resume_only:
-            executing = workflow_tasks.get(thread.workflow_run_id)
+            executing = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
             if executing is not None and not executing.done():
                 raise RuntimeError("this work order already has an execution in progress; use steering")
-            if state.phase not in (RunPhase.SUCCEEDED, RunPhase.FAILED, RunPhase.AWAITING_HUMAN_REVIEW):
+            if state.phase not in (RunPhase.SUCCEEDED, RunPhase.FAILED, RunPhase.AWAITING_HUMAN_REVIEW):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 raise RuntimeError("this work order has not finished; use steering for running work or the WorkOrder page for paused work")
             pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
             if any(record.status.value == "pending" for record in pending):
@@ -1731,47 +1731,47 @@ def create_app(
         if active_only:
             if (
                 state.phase is not RunPhase.RUNNING_AGENT
-                or state.current_step_id != thread.workflow_step_id
-                or state.agent_paused
+                or state.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                or state.agent_paused  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 raise RuntimeError("this work order is not running an agent; continue it on the WorkOrder page")
             pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
             if any(record.status.value == "pending" for record in pending):
                 raise RuntimeError("this agent needs a decision on the WorkOrder page before Slack steering")
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task = workflow_tasks.get(thread.workflow_run_id)
+        if state.current_agent_run_id is not None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            await service.approvals.cancel_run(state.current_agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        task = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        latest = await session.state_store.load(thread.workflow_run_id)
+        latest = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if active_only and (
             latest is None or latest.phase is not RunPhase.RUNNING_AGENT
-            or latest.current_step_id != thread.workflow_step_id
+            or latest.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         ):
             # The run may advance while cancellation is in progress. Do not
             # reopen the old step, or strand a newer one we interrupted.
-            if latest is not None and latest.phase is RunPhase.RUNNING_AGENT and not latest.agent_paused:
-                track_workflow(latest.run_id, asyncio.create_task(
-                    workflow_executor.resume_agent_step(latest.run_id)
+            if latest is not None and latest.phase is RunPhase.RUNNING_AGENT and not latest.agent_paused:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                track_workflow(latest.run_id, asyncio.create_task(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                    workflow_executor.resume_agent_step(latest.run_id)  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                 ))
             raise RuntimeError("the workflow moved to another step before the instruction could be delivered; try again")
         if (
             state.phase is RunPhase.RUNNING_AGENT
-            and state.current_step_id == thread.workflow_step_id
+            and state.current_step_id == thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         ):
-            await workflow_executor.pause_agent_step(
-                thread.workflow_run_id, thread.workflow_step_id
+            await workflow_executor.pause_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                thread.workflow_run_id, thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             )
         task = asyncio.create_task(
-            workflow_executor.resume_agent_step(
-                thread.workflow_run_id,
+            workflow_executor.resume_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                thread.workflow_run_id,  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 text,
                 thread.runner,
-                step_id=thread.workflow_step_id,
+                step_id=thread.workflow_step_id,  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             )
         )
-        track_workflow(thread.workflow_run_id, task)
+        track_workflow(thread.workflow_run_id, task)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         if active_only or resume_only:
             while True:
                 history = await service.history(thread.instance_id)
@@ -1797,11 +1797,11 @@ def create_app(
         previous_approvals: dict[str, dict[str, object]] = {}
         while True:
             history = await service.history(instance_id)
-            content = _latest_assistant_content(history)
+            content = _latest_assistant_content(history)  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
             approvals = await session.state_store.list_approvals(
                 instance_id=instance_id
             )
-            active = run_id in workflow_tasks
+            active = run_id in workflow_tasks  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
             for record in approvals:
                 approval = _approval_json(record)
                 approval_id = str(record.approval_id)
@@ -1855,7 +1855,7 @@ def create_app(
                         "id": str(graph.graph_id),
                         "name": graph.name,
                         **(
-                            {"inputs": [asdict(item) for item in graph.inputs]}
+                            {"inputs": [asdict(item) for item in graph.inputs]}  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                             if getattr(graph, "inputs", ()) else {}
                         ),
                     }
@@ -2329,31 +2329,31 @@ def create_app(
         if not isinstance(approved, bool):
             return _error("approved must be a boolean", 400)
         summary = str(body.get("summary", "")).strip()
-        lock = workflow_restart_locks.setdefault(run_id, asyncio.Lock())
+        lock = workflow_restart_locks.setdefault(run_id, asyncio.Lock())  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
         async with lock:
             state = await session.state_store.load(run_id)
             if state is None:
                 return _error("run not found", 404)
             if (
-                state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
-                or state.current_step_id is None
+                state.phase is not RunPhase.AWAITING_HUMAN_REVIEW  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                or state.current_step_id is None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 return _error("run is not awaiting human review", 409)
             try:
-                next_state = await workflow_executor.complete_human_review(
-                    HumanReviewCompleted(
+                next_state = await workflow_executor.complete_human_review(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                    HumanReviewCompleted(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                         run_id=run_id,
-                        step_id=state.current_step_id,
+                        step_id=state.current_step_id,  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                         approved=approved,
                         summary=summary,
                     )
                 )
                 if next_state.phase is RunPhase.RUNNING_AGENT:
-                    track_workflow(
+                    track_workflow(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                         run_id,
-                        asyncio.create_task(workflow_executor.resume_agent_step(run_id)),
+                        asyncio.create_task(workflow_executor.resume_agent_step(run_id)),  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                     )
-            except WorkflowExecutionError as error:
+            except WorkflowExecutionError as error:  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                 return _error(str(error), 409)
         run = await run_reader.get(run_id)
         assert run is not None
@@ -2645,12 +2645,12 @@ def create_app(
         if user is None:
             # Session middleware normally rejects this before routing.
             raise RuntimeError("GitHub connection requires a browser session")
-        return GitHubCredentialStore(user_id=int(user["id"]))
+        return GitHubCredentialStore(user_id=int(user["id"]))  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     def _web_requester(request: Request) -> str | None:
         """The signed-in GitHub account, or ``None`` without one to name."""
         user = github_login._read_session(request) if github_login.configured else None
-        return github_requester(int(user["id"]), str(user["login"])) if user else None
+        return github_requester(int(user["id"]), str(user["login"])) if user else None  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     async def _co_author(requester: str | None) -> str:
         """Who the WorkOrder's commits credit as co-author, or empty for nobody.
@@ -2835,7 +2835,7 @@ def create_app(
         return await session.state_store.load(RunId(run_id))
 
     def loop_spend(run_id: str) -> float:
-        return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0
+        return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
 
     async def loop_may_act(loop: Loop) -> bool:
         """Whether the loop's creator can still write to its repository, asked
@@ -3084,7 +3084,7 @@ def create_app(
             active = (flow, flow.interval)
             _gitlab_flows[origin] = active
         flow, interval = active
-        return JSONResponse({"origin": origin, "userCode": flow.user_code, "verificationUri": flow.verification_uri, "expiresIn": flow.expires_in, "interval": interval})
+        return JSONResponse({"origin": origin, "userCode": flow.user_code, "verificationUri": flow.verification_uri, "expiresIn": flow.expires_in, "interval": interval})  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
 
     async def gitlab_connect_poll(request: Request) -> JSONResponse:
         if not _is_local_request(request):
@@ -3103,7 +3103,7 @@ def create_app(
             _gitlab_flows.pop(origin, None)
             return _error("GitLab client ID is not configured for this instance.", 503)
         try:
-            result = await poll_gitlab_device_flow(origin, client_id, flow.device_code, interval)
+            result = await poll_gitlab_device_flow(origin, client_id, flow.device_code, interval)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         except GitLabAuthError as error:
             _gitlab_flows.pop(origin, None)
             return _error(str(error), 502)
@@ -3529,7 +3529,7 @@ def create_app(
         except UnknownGraphError:
             # A saved work order can outlive the graph it was started from.
             return run_id, False
-        return run_id, snapshot.status in STEERABLE_RUN_STATUSES
+        return run_id, snapshot.status in STEERABLE_RUN_STATUSES  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
 
     async def github_checkout(project: str) -> str:
         """The local checkout a forge `project` key is worked on in.
@@ -3761,7 +3761,7 @@ def create_app(
                 requester=origin.requester or None,
             )
         else:
-            reached = await github_steer_workorder(run_id, prompt)
+            reached = await github_steer_workorder(run_id, prompt)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         return reached
 
     async def github_react(request: FeedbackRequest, content: str) -> None:
@@ -4043,7 +4043,7 @@ def create_app(
                 merged.repository, merged.number, run_id,
             )
             return
-        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             log.info(
                 "%s#%s was merged, but work order %s has already stopped",
                 merged.repository, merged.number, run_id,
@@ -4082,13 +4082,13 @@ def create_app(
         except UnknownGraphError:
             merges_awaiting_review.pop(run_id, None)
             return
-        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             merges_awaiting_review.pop(run_id, None)
             return
         pending = next(
             (
                 approval
-                for approval in snapshot.pending_approvals
+                for approval in snapshot.pending_approvals  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
                 if approval.tool_name == HUMAN_REVIEW_TOOL
             ),
             None,
@@ -4564,7 +4564,7 @@ def create_app(
     app.state.github_ingress = github_ingress
     # Enforce session auth on API routes when GitHub login is configured.
     app = github_login.middleware(app)
-    return app
+    return app  # pyright: ignore[reportReturnType]  # Baseline: see docs/pyright.md
 
 
 def _with_workspace(thread: ChatThread, state: WorkspaceState | None) -> ChatThread:
@@ -4755,7 +4755,7 @@ def _merge_message(
                 content.append({"type": "text", "text": clarification})
             changed = True
     elif message.role is Role.TOOL and message.tool_call_id:
-        part = tool_calls.get(message.tool_call_id)
+        part = tool_calls.get(message.tool_call_id)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
         if part is not None:
             part["result"] = message.content
             changed = any(candidate is part for candidate in content)

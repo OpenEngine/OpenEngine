@@ -60,7 +60,7 @@ class GitLabOAuthTransport:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         async with httpx.AsyncClient() as client:
-            return await client.request(method, f"{self._origin}/api/v4{path}", headers=headers, **kwargs)
+            return await client.request(method, f"{self._origin}/api/v4{path}", headers=headers, **kwargs)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     @staticmethod
     def _error(method: str, path: str, response: httpx.Response) -> GitLabTransportError:

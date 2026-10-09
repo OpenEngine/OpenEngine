@@ -144,7 +144,7 @@ def _node_version(node: str) -> tuple[int, int, int] | None:
     match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", result.stdout.strip())
     if result.returncode != 0 or match is None:
         return None
-    return tuple(int(part) for part in match.groups())
+    return tuple(int(part) for part in match.groups())  # pyright: ignore[reportReturnType]  # Baseline: see docs/pyright.md
 
 
 def _node_manager_homes() -> list[tuple[str, Path]]:
@@ -260,7 +260,7 @@ def _healing_notice(check: NodeCheck, *, verbose: bool = False) -> str:
         "nodenv": f"nodenv global {release}",
         "fnm": f"fnm default {release}",
     }
-    command = commands.get(check.shim_manager) if release and check.shim_manager == check.install_manager else None
+    command = commands.get(check.shim_manager) if release and check.shim_manager == check.install_manager else None  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     manager = check.shim_manager or "your version manager"
     restore = f"run {command}" if command else f"set a global Node 20.19+ default in {manager}"
     notice = (f"degraded: using {check.tools['node']}; project Node pins are ignored until you "

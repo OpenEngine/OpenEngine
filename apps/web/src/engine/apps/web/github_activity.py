@@ -193,7 +193,7 @@ class GithubActivityLog:
     def finished(self, comment: GithubComment) -> None:
         """The worker is done with this comment, however it went."""
         if self._current == self._key(comment):
-            entry = self._entries.get(self._current)
+            entry = self._entries.get(self._current)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             if entry is not None and entry.status == WORKING:
                 self._update(status=HANDLED)
             self._current = None

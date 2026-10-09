@@ -156,7 +156,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             settings.allowed_emails, transport=oidc_transport,
         ) if settings.oidc_issuer else None,
         auth=AuthSettings(
-            issuer_url=settings.oidc_issuer, resource_server_url=settings.resource_url,
+            issuer_url=settings.oidc_issuer, resource_server_url=settings.resource_url,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             required_scopes=list(settings.oidc_required_scopes), validate_token_resource=True,
         ) if settings.oidc_issuer else None,
     )

@@ -271,7 +271,7 @@ class LangGraphRuntime:
     ) -> WorkspaceState:
         definition = await self._definition_for(run_id)
         live = self._live.setdefault(run_id, _Live(run_id, definition.graph_id))
-        async with live.control:
+        async with live.control:  # pyright: ignore[reportOptionalContextManager]  # Baseline: see docs/pyright.md
             snapshot = await self._snapshot(run_id)
             if snapshot.status in (RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL):
                 raise RunNotSteerableError("stop the run before changing its workspace")
@@ -309,7 +309,7 @@ class LangGraphRuntime:
         # Held across the stop as well as the fork. Two of these arriving at
         # once are serialised rather than dropped: both are honoured, and the
         # second one's first act is stopping the driver the first one started.
-        async with live.control:
+        async with live.control:  # pyright: ignore[reportOptionalContextManager]  # Baseline: see docs/pyright.md
             position = await definition.graph.aget_state(at)
             if (node_id is None) != (message is None):
                 raise ValueError("give both node_id and message")
@@ -345,7 +345,7 @@ class LangGraphRuntime:
                 {},
             )
             position = await self._position(definition, forked)
-            live.published.add(position.checkpoint_id)
+            live.published.add(position.checkpoint_id)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             await self.publish(
                 run_id,
                 EventKind.RUN_FORKED,
@@ -360,12 +360,12 @@ class LangGraphRuntime:
             # position it asked for rather than about whatever the restarted
             # superstep has already got to.
             answer = await self._snapshot(run_id)
-            live.pending_steers.clear()
+            live.pending_steers.clear()  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             if message is not None:
                 await self.publish(
                     run_id, EventKind.STEERING_RECEIVED, {"message": message}, node_id,
                 )
-                live.pending_steers[node_id] = [message]
+                live.pending_steers[node_id] = [message]  # pyright: ignore[reportArgumentType, reportOptionalSubscript]  # Baseline: see docs/pyright.md
             self._launch(live, definition, forked)
             return answer
 
@@ -491,7 +491,7 @@ class LangGraphRuntime:
         # The same lock a fork holds, for the same reason: stopping is
         # asynchronous, and a resume arriving inside it would start a driver for
         # a run that is being ended.
-        async with live.control:
+        async with live.control:  # pyright: ignore[reportOptionalContextManager]  # Baseline: see docs/pyright.md
             # Read before anything is stopped, because stopping changes the
             # answer: releasing the executions settles the approvals a waiting
             # run is waiting on, and a run read afterwards would look like one
@@ -565,7 +565,7 @@ class LangGraphRuntime:
         addressable rather than silently uncontrollable.
         """
         live = self._live.setdefault(run_id, _Live(run_id, GraphId("")))
-        found = live.executions.get(execution_id)
+        found = live.executions.get(execution_id)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         if found is not None:
             return found
         return self._acquire(live, execution_id, NodeId(""))
@@ -761,7 +761,7 @@ class LangGraphRuntime:
         """
         checkpoint = self._checkpoint_from_stream(definition, chunk)
         await self._release_all(live)
-        if checkpoint.checkpoint_id not in live.published:
+        if checkpoint.checkpoint_id not in live.published:  # pyright: ignore[reportOperatorIssue]  # Baseline: see docs/pyright.md
             await self._announce(live, checkpoint)
         for task in chunk.get("tasks", ()):
             node_id = NodeId(str(task.get("name")))
@@ -785,7 +785,7 @@ class LangGraphRuntime:
             # (and announced) at the checkpoint is left alone.
             node_id = NodeId(str(chunk.get("name")))
             execution_id = ExecutionId(str(chunk.get("id")))
-            if execution_id not in live.executions:
+            if execution_id not in live.executions:  # pyright: ignore[reportOperatorIssue]  # Baseline: see docs/pyright.md
                 self._acquire(live, execution_id, node_id)
                 await self.publish(
                     live.run_id,
@@ -805,7 +805,7 @@ class LangGraphRuntime:
         return None
 
     async def _announce(self, live: _Live, checkpoint: Checkpoint) -> None:
-        live.published.add(checkpoint.checkpoint_id)
+        live.published.add(checkpoint.checkpoint_id)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         await self.publish(
             live.run_id,
             EventKind.CHECKPOINT,
@@ -957,25 +957,25 @@ class LangGraphRuntime:
         await self._release_all(live)
 
     async def _release_all(self, live: _Live) -> None:
-        for execution_id, execution in tuple(live.executions.items()):
+        for execution_id, execution in tuple(live.executions.items()):  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             execution.abandon()
             self._registry.release(live.run_id, execution_id)
-            live.executions.pop(execution_id, None)
+            live.executions.pop(execution_id, None)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
 
     def _acquire(
         self, live: _Live, execution_id: ExecutionId, node_id: NodeId
     ) -> NodeExecution:
-        found = live.executions.get(execution_id)
+        found = live.executions.get(execution_id)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         if found is not None:
             return found
         execution = NodeExecution(self, live.run_id, execution_id, node_id)
-        live.executions[execution_id] = execution
+        live.executions[execution_id] = execution  # pyright: ignore[reportOptionalSubscript]  # Baseline: see docs/pyright.md
         self._registry.register(live.run_id, execution_id, node_id, execution)
         # Deliver any messages queued by a steer that triggered a resume.
         # Done here so the message is on the queue before the node's coroutine
         # runs a line -- _acquire is called from the checkpoint handler, which
         # fires before LangGraph schedules the task.
-        pending = live.pending_steers.pop(node_id, None)
+        pending = live.pending_steers.pop(node_id, None)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         if pending:
             for msg in pending:
                 execution._steering.put_nowait(msg)

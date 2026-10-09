@@ -100,7 +100,7 @@ class GitHubOAuthTransport:
         token = self._token
         async with httpx.AsyncClient() as client:
             response = await client.request(
-                method, url, headers=self._headers(token), **kwargs
+                method, url, headers=self._headers(token), **kwargs  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             )
         if await self._refresh_after_unauthorized(response, token):
             async with httpx.AsyncClient() as client:
@@ -108,7 +108,7 @@ class GitHubOAuthTransport:
                     method,
                     url,
                     headers=self._headers(self._token),
-                    **kwargs,
+                    **kwargs,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 )
         if response.is_error:
             raise self._request_error(method, path, response)

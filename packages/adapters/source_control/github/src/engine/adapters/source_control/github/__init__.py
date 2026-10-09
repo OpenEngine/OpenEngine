@@ -154,7 +154,7 @@ class GitHubSourceControl:
             reference = issue_reference(issue, f"{owner}/{repo}")
             qualified = f"{issue['repository']}#{issue['number']}"
             body = issue_body(body, reference, issue_resolution, qualified_reference=qualified)
-            await self._issue_head(root_path, branch, base, reference, issue_resolution, qualified, owned_pull_requests=owned_pull_requests)
+            await self._issue_head(root_path, branch, base, reference, issue_resolution, qualified, owned_pull_requests=owned_pull_requests)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
         response = _object(await self._api(
             "POST",
@@ -233,7 +233,7 @@ class GitHubSourceControl:
         numbers = [number for owner, number in owned if owner == project]
         if not numbers:
             raise ValueError(denied)
-        owner, repo, _ = _pull_request_parts(pull_request_url(project, 1), self._hosts | {self._transport.host})
+        owner, repo, _ = _pull_request_parts(pull_request_url(project, 1), self._hosts | {self._transport.host})  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         path = f"/repos/{owner}/{repo}"
         repository = _object(await self._api("GET", path))
         default = repository.get("default_branch")
@@ -273,11 +273,11 @@ class GitHubSourceControl:
         )
         # GitHub maps maintain to write and triage to read, including custom
         # roles' base permissions. Unknown/missing permissions never grant access.
-        if response.get("permission") not in ("write", "admin"):
+        if response.get("permission") not in ("write", "admin"):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             return False
         if user_id is None:
             return True
-        user = response.get("user")
+        user = response.get("user")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         return isinstance(user, dict) and type(user.get("id")) is int and user["id"] == user_id
 
     async def authenticated_login(self, repository_url: str) -> str:
@@ -408,10 +408,10 @@ class GitHubSourceControl:
                     await self._resolve_validated_thread(thread)
                 except Exception as error:
                     raise GitHubSourceControlError(
-                        f"Reply posted at {response['html_url']}, but thread resolution failed; "
+                        f"Reply posted at {response['html_url']}, but thread resolution failed; "  # pyright: ignore[reportIndexIssue]  # Baseline: see docs/pyright.md
                         f"repeat the same add_comment to retry without duplicating it: {error}"
                     ) from error
-            return CommentResult(response["id"], response["html_url"])
+            return CommentResult(response["id"], response["html_url"])  # pyright: ignore[reportIndexIssue]  # Baseline: see docs/pyright.md
 
         if file is None:
             response = await self._api(
@@ -419,11 +419,11 @@ class GitHubSourceControl:
                 f"/repos/{owner}/{repo}/issues/{number}/comments",
                 json={"body": comment},
             )
-            return CommentResult(response["id"], response["html_url"])
+            return CommentResult(response["id"], response["html_url"])  # pyright: ignore[reportIndexIssue]  # Baseline: see docs/pyright.md
 
         # Inline comment: resolve the PR head SHA first.
         pr_data = await self._api("GET", f"/repos/{owner}/{repo}/pulls/{number}")
-        head_sha = pr_data.get("head", {}).get("sha", "")
+        head_sha = pr_data.get("head", {}).get("sha", "")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if not head_sha:
             raise GitHubSourceControlError(
                 "GitHub API returned an empty pull-request head SHA"
@@ -439,7 +439,7 @@ class GitHubSourceControl:
                 "side": "RIGHT",
             },
         )
-        return CommentResult(response["id"], response["html_url"])
+        return CommentResult(response["id"], response["html_url"])  # pyright: ignore[reportIndexIssue]  # Baseline: see docs/pyright.md
 
     async def _graphql(self, query: str, **variables: object) -> dict:
         response = _object(await self._api("POST", "/graphql", json={"query": query, "variables": variables}))

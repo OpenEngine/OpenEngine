@@ -24,12 +24,12 @@ class GraphProgress:
             self.active.clear()
             self.waiting.clear()
             self.next_nodes = (
-                list(event.payload.get("nodes", ()))
+                list(event.payload.get("nodes", ()))  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 if kind is EventKind.RUN_FORKED else []
             )
         elif kind is EventKind.CHECKPOINT:
             self.active.clear()
-            self.next_nodes = list(event.payload.get("nextNodes", ()))
+            self.next_nodes = list(event.payload.get("nextNodes", ()))  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         elif kind is EventKind.NODE_STARTED and event.node_id is not None:
             # Match snapshots: while running, approximate successors from the
             # topology; the next checkpoint supplies the actual routed frontier.

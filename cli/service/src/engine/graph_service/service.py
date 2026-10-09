@@ -526,7 +526,7 @@ class GraphService:
                 f"graph name {name!r} is ambiguous; name a project or use a graph id",
                 candidates=[{"graphId": graph.graph_id, "project": graph.project} for graph in matches],
             )
-        graph = matches[0]
+        graph = matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
         if not number:
             return graph, self._version(graph.latest_version_id)
         if not number.isdigit():
@@ -605,8 +605,8 @@ class GraphService:
             failed = next((row for row in reversed(executions) if row.status == "failed"), None)
             node_id = failed.node_id if failed else ""
             failure = {"error": snapshot.error, "node": node_id or None}
-            runner = _runner_of(node_id, values, overrides, topology)
-            if auth := auth_required(snapshot.error, runner):
+            runner = _runner_of(node_id, values, overrides, topology)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
+            if auth := auth_required(snapshot.error, runner):  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 failure["authRequired"] = auth
 
         def runner(node_id: str) -> str:
@@ -870,7 +870,7 @@ class GraphService:
                 f"loop name {reference!r} is ambiguous; name a project or use a loop id",
                 candidates=[{"loopId": row.loop_id, "project": row.project} for row in matches],
             )
-        return matches[0]
+        return matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
 
     async def loop_json(self, loop_id: str) -> dict[str, Any]:
         row = self.store.loop(loop_id)
@@ -1370,7 +1370,7 @@ def _runner_of(
     if isinstance(used, str) and used:
         return used
     if node_id in overrides:
-        return overrides[node_id]  # type: ignore[index]
+        return overrides[node_id]
     node = topology.node(node_id) if topology else None  # type: ignore[arg-type]
     return node.runner if node else ""
 

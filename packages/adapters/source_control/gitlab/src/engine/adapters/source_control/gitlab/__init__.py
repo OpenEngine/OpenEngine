@@ -184,7 +184,7 @@ class GitLabSourceControl:
                 raise GitLabSourceControlError("GitLab returned no completed jobs for pipeline")
             job_id = candidates[0]["id"]
         data = await self._transport.download(f"/projects/{project}/jobs/{job_id}/trace"); text = data.decode(errors="replace"); truncated = len(text)>_MAX_LOG_CHARACTERS
-        return JobLogs(pipeline_id, job_id, text[-_MAX_LOG_CHARACTERS:] if truncated else text, truncated)
+        return JobLogs(pipeline_id, job_id, text[-_MAX_LOG_CHARACTERS:] if truncated else text, truncated)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     async def retry_pipeline(self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None) -> PipelineRetry:
         project = await self._project(workspace_id)
@@ -212,7 +212,7 @@ class GitLabSourceControl:
 
     async def _api(self,*args: object,**kwargs: object) -> dict:
         try:
-            result=await self._transport.request(*args,**kwargs)
+            result=await self._transport.request(*args,**kwargs)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         except GitLabTransportError as error: raise GitLabSourceControlError(str(error)) from error
         return result if isinstance(result,dict) else {}
     async def _list(self,path: str,params: dict | None=None, *, strict: bool = False) -> list[dict]:

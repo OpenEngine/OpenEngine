@@ -676,7 +676,7 @@ def _state_from_dict(value: dict[str, object]) -> RunState:
         failure_reason=str(value.get("failure_reason", "")),
         origin=_origin_from_dict(value.get("origin")),
         depends_on_run_id=(RunId(str(value["depends_on_run_id"])) if value.get("depends_on_run_id") else None),
-        inputs=dict(value.get("inputs", {})),
+        inputs=dict(value.get("inputs", {})),  # pyright: ignore[reportArgumentType, reportCallIssue]  # Baseline: see docs/pyright.md
         parent_run_id=(RunId(str(value["parent_run_id"])) if value.get("parent_run_id") else None),
         started_at=(
             datetime.fromisoformat(str(value["started_at"]))

@@ -95,7 +95,7 @@ class SlackIngress:
         if not isinstance(thread, str):
             return True
         key = (channel, thread)
-        if kind == "message" and not (known_thread or self.concierge.has_thread(*key) or key in self._pending):
+        if kind == "message" and not (known_thread or self.concierge.has_thread(*key) or key in self._pending):  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             return True
         identity = (channel, ts)
         if identity in self._seen:
@@ -107,16 +107,16 @@ class SlackIngress:
         team = event.get("team") or payload.get("team_id")
         message = IncomingMessage(
             RunOrigin(
-                channel=channel, thread_id=thread, author=author,
+                channel=channel, thread_id=thread, author=author,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 requester=f"slack:{team}:{author}" if isinstance(team, str) and team else "",
             ),
-            text or "Hello", message_ts=ts, raw_text=raw_text,
+            text or "Hello", message_ts=ts, raw_text=raw_text,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             mentioned_users=tuple(re.findall(r"<@([^>|]+)(?:\|[^>]+)?>", raw_text)),
             event_type=kind,
         )
         self._queue.put_nowait(message)
-        self._pending.add(key)
-        self._seen[identity] = None
+        self._pending.add(key)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
+        self._seen[identity] = None  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         while len(self._seen) > 4096:
             self._seen.popitem(last=False)
         if self._worker is None:
