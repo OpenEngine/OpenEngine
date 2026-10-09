@@ -48,14 +48,14 @@ class SlackCredentialStore:
         try:
             if keyring.get_keyring().priority < 1:
                 raise SlackAuthError("no secure keyring backend available on this system")
-        except (keyring.errors.NoKeyringError, NotImplementedError):
+        except (keyring.errors.NoKeyringError, NotImplementedError):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             raise SlackAuthError("no secure keyring backend available on this system")
 
     def credentials(self) -> SlackCredentials | None:
         try:
             client_id = keyring.get_password(_SERVICE, _CLIENT_ID)
             client_secret = keyring.get_password(_SERVICE, _CLIENT_SECRET)
-        except keyring.errors.NoKeyringError:
+        except keyring.errors.NoKeyringError:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             return None
         if not client_id or not client_secret:
             return None
@@ -70,14 +70,14 @@ class SlackCredentialStore:
         try:
             keyring.set_password(_SERVICE, _CLIENT_ID, client_id)
             keyring.set_password(_SERVICE, _CLIENT_SECRET, client_secret)
-        except keyring.errors.KeyringError as error:
+        except keyring.errors.KeyringError as error:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             for username, value in previous.items():
                 try:
                     if value is None:
                         keyring.delete_password(_SERVICE, username)
                     else:
                         keyring.set_password(_SERVICE, username, value)
-                except keyring.errors.KeyringError:
+                except keyring.errors.KeyringError:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                     pass
             raise SlackAuthError("could not securely save Slack credentials") from error
         # A token belongs to the app that issued it. Changing apps requires a
@@ -87,13 +87,13 @@ class SlackCredentialStore:
         self.disconnect()
         try:
             keyring.delete_password(_SERVICE, _SIGNING_SECRET)
-        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
+        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             pass
 
     def token(self) -> str | None:
         try:
             return keyring.get_password(_SERVICE, _ACCESS_TOKEN)
-        except keyring.errors.NoKeyringError:
+        except keyring.errors.NoKeyringError:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             return None
 
     def set_token(self, token: str) -> None:
@@ -108,7 +108,7 @@ class SlackCredentialStore:
         """
         try:
             return keyring.get_password(_SERVICE, _SIGNING_SECRET)
-        except keyring.errors.NoKeyringError:
+        except keyring.errors.NoKeyringError:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             return None
 
     def set_signing_secret(self, secret: str) -> None:
@@ -119,7 +119,7 @@ class SlackCredentialStore:
         for username in (_ACCESS_TOKEN,):
             try:
                 keyring.delete_password(_SERVICE, username)
-            except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
+            except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 pass
 
 

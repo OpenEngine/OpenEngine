@@ -108,7 +108,7 @@ def compile_graph(
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
     tiers = {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}
     runners = tuple(registry.names)
-    builder: Any = StateGraph(State)
+    builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(
         spec.checkout,
         WorkspaceNode(
@@ -209,14 +209,14 @@ def _node(
         "graph_node_group": STAGE_GROUPS[node.stage],
     }
     if node.kind == "human":
-        return GraphHumanNode(state_key=key, **({"prompt": node.prompt} if node.prompt else {}), **common)
+        return GraphHumanNode(state_key=key, **({"prompt": node.prompt} if node.prompt else {}), **common)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     if node.kind == "triage":
         return GraphTriageNode(
             findings_key=f"_choose.{key}", output_key=key, state_key=key, choose=node.choose,
-            groups=groups, **common,
+            groups=groups, **common,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         )
     if node.kind == "ci":
-        return GraphCINode(output_key=key, state_key=key, **common)
+        return GraphCINode(output_key=key, state_key=key, **common)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     assert node.runner is not None
     default = _default_runner(node.runner, runners)
     prompt_template = template(node.prompt)
@@ -254,7 +254,7 @@ def _node(
         tiers=tiers,
         agent_models=agent_models,
         runners=runners,
-        **common,
+        **common,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     )
 
 
@@ -302,7 +302,7 @@ class GraphAgentNode(ACPNode):
         update = await ACPNode.__call__(node, state)
         return {
             **update,
-            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,
+            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             runner_key(self.state_key): runner,
         }
 
@@ -364,7 +364,7 @@ class GraphHumanNode(HumanReviewNode):
         return {
             **update,
             self.state_key: {"decision": update.get("decision"), "note": update.get("decisionNote", "")},
-            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,
+            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         }
 
 
@@ -381,7 +381,7 @@ class GraphTriageNode(TriageNode):
         return {
             **update,
             self.findings_key: offered,
-            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,
+            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         }
 
 
@@ -391,7 +391,7 @@ class GraphCINode(CICheck):
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         update = await CICheck.__call__(self, state)
-        return {**update, visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1}
+        return {**update, visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1}  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
 
 @dataclass(frozen=True, slots=True)

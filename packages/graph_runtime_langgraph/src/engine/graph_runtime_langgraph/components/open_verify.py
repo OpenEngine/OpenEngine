@@ -103,7 +103,7 @@ class OpenVerify:
         result = await publish_verification(
             manifests[0],
             workspace_id=WorkspaceId(workspace),
-            pr_url=pr_url,
+            pr_url=pr_url,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             source_control=source,
             uploader=self.uploader,
         )

@@ -238,7 +238,7 @@ def build_capabilities(
     )
 
     def _gitlab_origin() -> str:
-        return (
+        return (  # pyright: ignore[reportReturnType]  # Baseline: see docs/pyright.md
             settings.source_control_preferences.gitlab_origin()
             if settings.source_control_preferences is not None
             and settings.source_control_preferences.gitlab_origin()
@@ -299,7 +299,7 @@ def build_capabilities(
     return Capabilities(
         sandbox=ProcessSandbox(),
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
-        source_control=source_control,
+        source_control=source_control,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         agent_runner=codex_acp_runner(
             command=settings.codex_acp_command,
             timeout_seconds=settings.codex_timeout_seconds,
@@ -388,7 +388,7 @@ def build_graph_runtime(
     if not graphs:
         return None
     return sqlite_runtime(
-        tuple(graphs),
+        tuple(graphs),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         settings.graph_state_directory,
         source_control=source_control,
     )

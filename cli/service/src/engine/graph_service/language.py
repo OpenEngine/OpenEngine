@@ -420,7 +420,7 @@ def _nodes(
             _known(value, FIELDS["human step"], f"{where}.", problem)
             human = value["human"]
             if isinstance(human, str) and human.strip():
-                found.append(NodeSpec(node_id, "human", stage, prompt=human.strip(), **common))
+                found.append(NodeSpec(node_id, "human", stage, prompt=human.strip(), **common))  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             elif isinstance(human, Mapping):
                 _known(human, FIELDS["human"], f"{where}.human.", problem)
                 choose = human.get("choose")
@@ -434,7 +434,7 @@ def _nodes(
                         problem(f"{where}.human.choose", str(error))
                 found.append(NodeSpec(
                     node_id, "triage" if choose else "human", stage,
-                    prompt=str(human.get("prompt") or "").strip(), choose=choose or "", **common,
+                    prompt=str(human.get("prompt") or "").strip(), choose=choose or "", **common,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 ))
             else:
                 problem(f"{where}.human", "the question to ask, or {prompt, choose}")
@@ -442,7 +442,7 @@ def _nodes(
             _known(value, FIELDS["ci step"], f"{where}.", problem)
             if value["ci"] is not True:
                 problem(f"{where}.ci", "must be true")
-            found.append(NodeSpec(node_id, "ci", stage, **common))
+            found.append(NodeSpec(node_id, "ci", stage, **common))  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     return tuple(found)
 
 

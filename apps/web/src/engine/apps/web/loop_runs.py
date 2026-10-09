@@ -91,7 +91,7 @@ class Loop:
     @classmethod
     def from_json(cls, value: Mapping[str, object]) -> Loop:
         workorders = tuple(LoopWorkOrder(**one) for one in value.get("workorders", ()))  # type: ignore[arg-type]
-        return cls(**{**value, "workorders": workorders})  # type: ignore[arg-type]
+        return cls(**{**value, "workorders": workorders})
 
     def workorders_on(self, day: datetime) -> list[LoopWorkOrder]:
         return [one for one in self.workorders
@@ -396,7 +396,7 @@ class LoopRunner:
         loop = self.store.get(loop_id)
         if loop is None:
             return None
-        loop = replace(loop, **changes)  # type: ignore[arg-type]
+        loop = replace(loop, **changes)
         self.store.save(loop)
         return loop
 
@@ -490,7 +490,7 @@ class LoopRunner:
             cwd = opened.enter_context(TemporaryDirectory(prefix="loop-"))
             client = await self.provider.connect()
             opened.push_async_callback(client.close)
-            session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])
+            session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             spend = f"${loop.max_daily_spend:g}" if loop.max_daily_spend else "no limit"
             message = (
                 f"{INSTRUCTIONS}\nRepository: {loop.repository}\n"

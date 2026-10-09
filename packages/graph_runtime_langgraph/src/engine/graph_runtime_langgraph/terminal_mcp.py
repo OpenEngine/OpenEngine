@@ -107,7 +107,7 @@ class TerminalMcpServer:
             validate_completion=self.validate_completion,
         )
         if isinstance(state.get("issue"), dict):
-            broker.enable_issue(state["issue"])
+            broker.enable_issue(state["issue"])  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         if self.create_workorder and execution.runtime.workorder_creator is not None:
             broker.enable_workorder_creation(execution.runtime.workorder_creator)
         served = tuple(

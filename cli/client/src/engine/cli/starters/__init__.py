@@ -21,7 +21,7 @@ def source(name: str, *, runner: str = "") -> str:
     """A starter graph's YAML; `runner` changes which runner it starts with."""
     if name not in NAMES:
         raise KeyError(f"no starter graph named {name!r}; choose from {', '.join(NAMES)}")
-    text = files(__package__).joinpath(f"{name}.yaml").read_text(encoding="utf-8")
+    text = files(__package__).joinpath(f"{name}.yaml").read_text(encoding="utf-8")  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     if runner:
         text = text.replace(
             "    default: claude\n    choices: [claude, codex, least-utilized]",

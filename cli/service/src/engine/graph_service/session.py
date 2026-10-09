@@ -157,7 +157,7 @@ def session_workflow(
     policy: ApprovalConfig,
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
-    builder: Any = StateGraph(State)
+    builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(CHECKOUT_NODE, WorkspaceNode(workspace_provider, base_ref=default_base_ref, ref_input=BASE_INPUT))
     builder.add_node(SESSION_NODE, SessionNode(sessions, tuple(tools), policy))
     builder.add_edge(START, CHECKOUT_NODE)

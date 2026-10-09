@@ -249,16 +249,16 @@ class GitHubLogin:
         user_id, login = user["id"], user["login"]
         if self.authorize is None:
             return frozenset()
-        lock = self._access_locks.setdefault(user_id, asyncio.Lock())
+        lock = self._access_locks.setdefault(user_id, asyncio.Lock())  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         async with lock:
-            cached = self._access.get(user_id)
+            cached = self._access.get(user_id)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             if not fresh and cached is not None and cached[1] > time.monotonic():
                 return cached[0]
             # One deadline for the server's lookup and any fallback after it.
             deadline = asyncio.get_running_loop().time() + self.access_timeout
             try:
                 async with asyncio.timeout_at(deadline):
-                    answers = await self.authorize(user_id, login)
+                    answers = await self.authorize(user_id, login)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             except Exception:
                 log.exception("could not check repository access for %s", login)
                 answers = None
@@ -270,7 +270,7 @@ class GitHubLogin:
             if self.access_check_failing:
                 # The user's own tokens may add what the server could not
                 # answer, never take away what it did.
-                confirmed = await self._confirmed_by_user(user_id, login, unanswered, deadline)
+                confirmed = await self._confirmed_by_user(user_id, login, unanswered, deadline)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 writable |= confirmed
                 if unanswered is None or confirmed < unanswered:
                     # Access that cannot be confirmed is not granted, but
@@ -279,8 +279,8 @@ class GitHubLogin:
                     return writable or None
             if not writable:
                 # Access is gone, so no session needs a fallback for it.
-                self._user_tokens.pop(user_id, None)
-            self._access[user_id] = (writable, time.monotonic() + _ACCESS_TTL)
+                self._user_tokens.pop(user_id, None)  # pyright: ignore[reportArgumentType, reportCallIssue]  # Baseline: see docs/pyright.md
+            self._access[user_id] = (writable, time.monotonic() + _ACCESS_TTL)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             return writable
 
     def access_known(self, user_id: int) -> bool:
@@ -405,8 +405,8 @@ class GitHubLogin:
             request.query_params.get("state", "").encode(), pending[0].encode()
         )
         response = await self._callback(request, pending)
-        if owns_cookie and pending[3] != "/" and response.headers.get("location", "").startswith("/login?error="):
-            response.headers["location"] += "&" + urlencode({"return_to": pending[3]})
+        if owns_cookie and pending[3] != "/" and response.headers.get("location", "").startswith("/login?error="):  # pyright: ignore[reportOptionalSubscript]  # Baseline: see docs/pyright.md
+            response.headers["location"] += "&" + urlencode({"return_to": pending[3]})  # pyright: ignore[reportOptionalSubscript]  # Baseline: see docs/pyright.md
         response.headers.update(_HEADERS)
         if owns_cookie:
             response.delete_cookie(_COOKIE, path=_PATH, httponly=True, samesite="lax",
@@ -509,7 +509,7 @@ class GitHubLogin:
         session = self._session(request)
         if session is None:
             return JSONResponse({"ok": True}, headers=_HEADERS)
-        self._drop_user_token(int(session[0]["id"]), session[1])
+        self._drop_user_token(int(session[0]["id"]), session[1])  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         response = JSONResponse({"ok": True}, headers=_HEADERS)
         response.delete_cookie(_SESSION_COOKIE, path="/", httponly=True,
                                samesite="lax", secure=self._is_secure())

@@ -103,6 +103,7 @@ from engine.ports.agent_runner import (
     TurnObserver,
     UserInputResponse,
 )
+from engine.ports.permissions import PermissionTranslator
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.session_grants import PATH_COLLECTION_FIELDS, PATH_FIELDS
 from engine.runtime.transcript import flatten
@@ -201,7 +202,7 @@ class ACPAgentRunner:
     runners do: `cancel` is how one ends early.
     """
 
-    permission_translator: ACPPermissionTranslator = ACP_PERMISSION_TRANSLATOR
+    permission_translator: PermissionTranslator = ACP_PERMISSION_TRANSLATOR
 
     def __init__(
         self,
@@ -512,7 +513,7 @@ class _Turn:
                 self._flush()
                 tool_call = data.get("toolCall")
                 if isinstance(tool_call, Mapping) and tool_call.get("toolCallId"):
-                    self._merge(tool_call)
+                    self._merge(tool_call)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                     self._announce(str(tool_call["toolCallId"]))
                 async with self._progress:
                     self._observed += 1
@@ -527,7 +528,7 @@ class _Turn:
                 stop = data.get("stopReason")
                 self._stop_reason = stop if isinstance(stop, str) else None
                 usage = data.get("usage")
-                self._usage = usage if isinstance(usage, Mapping) else None
+                self._usage = usage if isinstance(usage, Mapping) else None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
 
     async def close(self) -> None:
         """Release any permission request still waiting on the stream."""

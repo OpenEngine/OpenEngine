@@ -207,7 +207,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
 def main(arguments: argparse.Namespace) -> int:
     try:
-        handler = _HANDLERS[(arguments.command, getattr(arguments, "action", None))]
+        handler = _HANDLERS[(arguments.command, getattr(arguments, "action", None))]  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         return handler(arguments)
     except (BackendError, RequestFailed, _UsageError, OSError) as error:
         if isinstance(error, _UsageError):

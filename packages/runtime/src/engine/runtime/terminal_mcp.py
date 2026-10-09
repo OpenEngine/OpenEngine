@@ -593,20 +593,20 @@ class TerminalMcpBroker:
                 return {"ok": False, "error": foreign}
             options = {}
             if in_reply_to_id is not None:
-                if "resolve" in arguments and not isinstance(arguments["resolve"], bool):
+                if "resolve" in arguments and not isinstance(arguments["resolve"], bool):  # pyright: ignore[reportIndexIssue, reportOperatorIssue]  # Baseline: see docs/pyright.md
                     raise ValueError("resolve must be true for addressed work or false to leave the thread open")
-                thread_id = arguments.get("thread_id")
+                thread_id = arguments.get("thread_id")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 if thread_id is not None and (not isinstance(thread_id, str) or not thread_id.strip()):
                     raise ValueError("thread_id must be a non-empty string from view_change_request when provided")
-                commit_sha = arguments.get("commit_sha")
-                if arguments.get("resolve", False) and (not isinstance(commit_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):
+                commit_sha = arguments.get("commit_sha")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                if arguments.get("resolve", False) and (not isinstance(commit_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                     raise ValueError("addressed review replies require commit_sha")
-                if any(key in arguments for key in ("thread_id", "resolve", "commit_sha")):
-                    options = {"thread_id": thread_id, "resolve": arguments.get("resolve", False), "commit_sha": commit_sha}
-                approved = await self._approve_forge("add_comment", arguments, request_id) if arguments.get("resolve", False) else None
+                if any(key in arguments for key in ("thread_id", "resolve", "commit_sha")):  # pyright: ignore[reportOperatorIssue]  # Baseline: see docs/pyright.md
+                    options = {"thread_id": thread_id, "resolve": arguments.get("resolve", False), "commit_sha": commit_sha}  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                approved = await self._approve_forge("add_comment", arguments, request_id) if arguments.get("resolve", False) else None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 if approved is not None:
                     return approved
-            elif any(key in arguments for key in ("resolve", "thread_id", "commit_sha")):
+            elif any(key in arguments for key in ("resolve", "thread_id", "commit_sha")):  # pyright: ignore[reportOperatorIssue]  # Baseline: see docs/pyright.md
                 raise ValueError("review resolution options require in_reply_to_id")
             try:
                 result = await self._source_control.add_comment(
@@ -722,7 +722,7 @@ class TerminalMcpBroker:
         branch, base_ref, title, body = _review_arguments(arguments)
         options = {}
         if self._issue:
-            resolution = arguments.get("issue_resolution")
+            resolution = arguments.get("issue_resolution")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             if not isinstance(resolution, str) or resolution not in {"resolves", "refs"}:
                 raise ValueError("issue_resolution is required for issue work: choose resolves or refs")
             options = {"issue": self._issue, "issue_resolution": resolution}
@@ -1283,7 +1283,7 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
 
 def _repository_result(result: object) -> dict[str, object]:
     if dataclasses.is_dataclass(result):
-        value = dataclasses.asdict(result)
+        value = dataclasses.asdict(result)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     elif isinstance(result, tuple) and all(dataclasses.is_dataclass(item) for item in result):
         value = [dataclasses.asdict(item) for item in result]
     else:
