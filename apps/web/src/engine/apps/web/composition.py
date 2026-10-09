@@ -21,10 +21,11 @@ restart without requiring an external database service.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from langgraph_acp.providers import (
@@ -33,6 +34,7 @@ from langgraph_acp.providers import (
     OPENCODE_ACP_COMMAND,
     ClaudeACPProvider,
     CodexACPProvider,
+    OpenCodeACPProvider,
 )
 
 from engine.adapters.agent_runner.acp import (
@@ -47,6 +49,7 @@ from engine.adapters.communications.slack import (
     SlackCommunications,
     SlackCredentialStore,
 )
+from engine.adapters.sandbox.process import ProcessSandbox
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
@@ -83,9 +86,11 @@ from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
-from engine.graph_runtime_langgraph import LangGraphRuntime
+from engine.graph_runtime_langgraph import LangGraphRuntime, answer_permission
 from engine.graph_runtime_langgraph.workflows import RUNS, agent_registry, sqlite_runtime
 from engine.graph_service import GraphService, StartRun
+from engine.graph_service.service import opencode_config
+from engine.graph_service.store import AgentRow
 from engine.ports import AgentRunner, Communications, SourceControl
 from engine.runtime import (
     AgentSession,
@@ -199,6 +204,7 @@ def build_capabilities(
     )
     github = GitHubSourceControl(
         "",
+        resolve_addressed_threads=settings.engine_config.github.resolve_addressed_threads,
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
         transport=GitHubCliTransport(),
@@ -223,6 +229,7 @@ def build_capabilities(
 
     github_oauth = GitHubSourceControl(
         _github_token,
+        resolve_addressed_threads=settings.engine_config.github.resolve_addressed_threads,
         host_aliases=settings.engine_config.github.host_aliases,
         workspace_provider=workspace_provider,
         transport=GitHubOAuthTransport(
@@ -287,7 +294,10 @@ def build_capabilities(
             gitlab,
         )
     Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
+    if settings.engine_config.sandbox.backend != "process":
+        raise NotImplementedError("smolvm sandbox backend is not installed")
     return Capabilities(
+        sandbox=ProcessSandbox(),
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=source_control,
         agent_runner=codex_acp_runner(
@@ -404,7 +414,8 @@ def build_graph_service(
             runtime,
             Path(settings.graph_state_directory) / RUNS,
             workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
-            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider()]),
+            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]),
+            agent_factory=added_agent,
             start=start,
             session_config=claude_session_config_for(settings),
             default_repository=default_repository,
@@ -416,6 +427,19 @@ def build_graph_service(
         )
 
     return build
+
+
+def added_agent(row: AgentRow) -> object:
+    """The provider an agent added with `engine agent add` runs as, answering permissions like the built-ins."""
+    if row.kind == "claude":
+        provider: object = ClaudeACPProvider(name=row.name)
+    elif row.kind == "codex":
+        provider = CodexACPProvider(name=row.name)
+    else:
+        config = opencode_config(row)
+        env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)} if config else None
+        provider = OpenCodeACPProvider(name=row.name, env=env)
+    return replace(provider, permissions=answer_permission)
 
 
 def claude_session_config_for(settings: Settings) -> dict[str, object] | None:

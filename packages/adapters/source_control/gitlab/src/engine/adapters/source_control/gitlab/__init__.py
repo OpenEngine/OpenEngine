@@ -29,13 +29,17 @@ class GitLabSourceControl:
         self._origin_source = origin
         self._workspace_provider = workspace_provider
 
-    async def run_git(self, workspace_id: WorkspaceId, arguments: Sequence[str]) -> GitResult:
+    async def run_git(self, workspace_id: WorkspaceId, arguments: Sequence[str], *, owned_pull_requests: Sequence[tuple[str, int]] = ()) -> GitResult:
         arguments = tuple(str(argument) for argument in arguments)
         if not arguments:
             raise ValueError("git needs at least one argument")
         if arguments[0].startswith("-"):
             raise ValueError("git global options are not permitted")
         if arguments[0] == "push":
+            from engine.runtime.push_policy import push_spec
+            if push_spec(arguments)[2]:
+                raise ValueError("GitLab cannot verify owned feature branches for force pushes")
+            arguments = ("push", "--no-mirror", *arguments[1:])
             for argument in arguments[1:]:
                 destination = argument.split(":")[-1].removeprefix("refs/heads/")
                 if destination.startswith("engine/"):
@@ -52,9 +56,13 @@ class GitLabSourceControl:
 
     async def publish(self, workspace_id: WorkspaceId, branch: str) -> None:
         self._public(branch)
-        await self._checked(workspace_id, ("push", "--set-upstream", "origin", branch))
+        result = await self.run_git(workspace_id, ("push", "--set-upstream", "origin", branch))
+        if not result.ok:
+            raise GitLabSourceControlError(result.stderr or result.stdout)
 
-    async def request_review(self, workspace_id: WorkspaceId, branch: str, base_ref: str, title: str, body: str) -> str:
+    async def request_review(self, workspace_id: WorkspaceId, branch: str, base_ref: str, title: str, body: str, *, issue: dict[str, object] | None = None, issue_resolution: str | None = None, owned_pull_requests: Sequence[tuple[str, int]] = ()) -> str:
+        if issue is not None or issue_resolution is not None:
+            raise NotImplementedError("GitLab issue-linked publishing is not supported")
         self._public(branch)
         project = await self._project(workspace_id)
         result = await self._api("POST", f"/projects/{project}/merge_requests", json={"source_branch": branch, "target_branch": base_ref, "title": title, "description": body})
@@ -98,7 +106,9 @@ class GitLabSourceControl:
     ) -> None:
         raise NotImplementedError("GitLab comment reactions are not supported")
 
-    async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None) -> CommentResult:
+    async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None, *, thread_id: str | None = None, resolve: bool = False, commit_sha: str | None = None) -> CommentResult:
+        if thread_id is not None or resolve or commit_sha is not None:
+            raise NotImplementedError("GitLab review thread resolution is not supported")
         if in_reply_to_id is not None:
             raise NotImplementedError("GitLab comment replies are not supported")
         project, iid = self._merge_request(pr_url)
@@ -133,6 +143,12 @@ class GitLabSourceControl:
 
         note = discussion["notes"][0]
         return CommentResult(note["id"], f"{pr_url}#note_{note['id']}")
+
+    async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
+        raise NotImplementedError("GitLab review thread lookup is not supported")
+
+    async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
+        raise NotImplementedError("GitLab review thread resolution is not supported")
 
     async def view_change_request(self, workspace_id: WorkspaceId, number: int) -> ChangeRequest:
         project = await self._project(workspace_id); mr = await self._api("GET", f"/projects/{project}/merge_requests/{number}")

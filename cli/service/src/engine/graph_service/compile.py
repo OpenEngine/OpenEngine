@@ -102,6 +102,7 @@ def compile_graph(
     registry: ACPAgentRegistry,
     session_config: Mapping[str, object] | None = None,
     model_tiers: Mapping[str, Mapping[str, str]] | None = None,
+    agent_models: Mapping[str, str] | None = None,
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
@@ -122,6 +123,7 @@ def compile_graph(
             builder.add_node(key, _node(
                 node, key, branch.item if branch else None, groups,
                 registry=registry, runners=runners, tiers=tiers, session_config=session_config,
+                agent_models={} if agent_models is None else agent_models,
             ))
 
     def keys_of(name: str) -> list[str]:
@@ -194,6 +196,7 @@ def _node(
     registry: ACPAgentRegistry,
     runners: tuple[str, ...],
     tiers: Mapping[str, Mapping[str, str]],
+    agent_models: Mapping[str, str],
     session_config: Mapping[str, object] | None,
 ) -> Any:
     label = node.name or node.id
@@ -249,6 +252,7 @@ def _node(
         facet_id=facet["id"] if isinstance(facet, Mapping) else node.id,
         groups=groups,
         tiers=tiers,
+        agent_models=agent_models,
         runners=runners,
         **common,
     )
@@ -274,6 +278,8 @@ class GraphAgentNode(ACPNode):
     facet_id: str = ""
     groups: Groups = field(default_factory=dict)
     tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    agent_models: Mapping[str, str] = field(default_factory=dict)
+    """An added agent's own model, for a node that names none or a tier it has no entry for."""
     runners: tuple[str, ...] = ()
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
@@ -320,11 +326,12 @@ class GraphAgentNode(ACPNode):
         return next((runner for runner in pool if runner != other), self.agent)
 
     def model_for(self, state: Mapping[str, object], runner: str) -> str:
+        fallback = self.agent_models.get(runner, "")
         if not self.model_template:
-            return ""
+            return fallback
         chosen = template(self.model_template).render(environment(state, self.groups, self.item)).strip()
         named = {tier for tiers in self.tiers.values() for tier in tiers}
-        return self.tiers.get(runner, {}).get(chosen, "" if chosen in named else chosen)
+        return self.tiers.get(runner, {}).get(chosen, fallback if chosen in named else chosen)
 
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         base = ACPNode._terminal_update(self, event)

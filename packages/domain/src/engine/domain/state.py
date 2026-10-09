@@ -45,6 +45,10 @@ class RunOrigin:
     author: str = ""
     requester: str = ""
     """``author`` qualified by provider, as `RunState.requester` records it."""
+    issue_repository: str = ""
+    issue_number: int | None = None
+    review_thread_id: str = ""
+    review_comment_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

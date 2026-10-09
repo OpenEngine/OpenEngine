@@ -98,9 +98,10 @@ async def graph_service(
 ) -> AsyncIterator[GraphService]:
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-    registry = agent_registry([
-        StdioACPProvider(name="stub", command=[sys.executable, str(AGENT)], env={"STUB_COST": cost}),
-    ])
+    def stub(name: str) -> StdioACPProvider:
+        return StdioACPProvider(name=name, command=[sys.executable, str(AGENT)], env={"STUB_COST": cost})
+
+    registry = agent_registry([stub("stub")])
     async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "checkpoints.sqlite3")) as saver:
         store = SqliteGraphRuntimeStore(tmp_path / DATABASE)
         runtime = LangGraphRuntime(store=store, checkpointer=saver, source_control=Forge())
@@ -109,6 +110,7 @@ async def graph_service(
             workspace_provider=Checkouts(tmp_path / "checkout"),
             registry=registry,
             default_repository="example/repo",
+            agent_factory=lambda row: stub(row.name),
             clock=clock,
             **options,
         )
@@ -305,7 +307,7 @@ def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: 
             failed = await settled(service, run["runId"])
             assert failed["status"] == "failed"
             assert failed["failure"]["node"] == "work"
-            assert failed["failure"]["authRequired"]["command"] == "engine runner signin stub"
+            assert failed["failure"]["authRequired"]["command"] == "engine agent signin stub"
 
     asyncio.run(scenario())
 
@@ -503,7 +505,7 @@ def test_a_loop_pauses_when_its_runner_needs_signing_in(tmp_path: Path) -> None:
             await service.tick()
             await settled(service, (await service.loop_json(loop["loopId"]))["activeRunId"])
             loop = await paused(service, loop["loopId"])
-            assert "engine runner signin stub" in loop["pauseReason"]
+            assert "engine agent signin stub" in loop["pauseReason"]
 
     asyncio.run(scenario())
 
@@ -565,6 +567,115 @@ def test_a_session_is_a_run_whose_implementation_node_is_the_callers_cli(tmp_pat
     asyncio.run(scenario())
 
 
+# --- agents -------------------------------------------------------------------
+
+
+def test_an_added_agent_runs_graphs_and_outlives_the_daemon(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            added = await service.add_agent("claude", name="reviewer", model="opus")
+            assert added["kind"] == "claude" and added["model"] == "opus" and not added["builtin"]
+            assert [agent["name"] for agent in service.agents_json()] == ["reviewer", "stub"]
+            assert service.agent_json("stub")["builtin"]
+            with pytest.raises(Conflict, match="already exists"):
+                await service.add_agent("claude", name="reviewer")
+            changed = await service.add_agent("codex", name="reviewer", model="", overwrite=True)
+            assert changed["kind"] == "codex" and changed["createdAt"] == added["createdAt"]
+
+            await service.add_graph("default", source=single("solo", "check ${instruction}").replace("agent: stub", "agent: reviewer"))
+            run, _ = await service.submit_run(project="default", graph="solo", instruction="it", idempotency_key="r1")
+            done = await settled(service, run["runId"])
+            runners = {node["node"]: node["runner"] for node in done["nodes"]}
+            assert done["status"] == "completed" and runners["work"] == "reviewer"
+
+        async with graph_service(tmp_path) as service:
+            assert service.agent_json("reviewer")["kind"] == "codex"
+            assert "reviewer" in service.runners()
+            removed = await service.remove_agent("reviewer")
+            assert removed["removed"] and "reviewer" not in service.runners()
+            with pytest.raises(NotFound):
+                service.agent_json("reviewer")
+            with pytest.raises(Conflict, match="built in"):
+                await service.remove_agent("stub")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("arguments", "refusal"), [
+    ({"kind": "gemini"}, "kind must be one of"),
+    ({"kind": "claude", "name": "Bad Name"}, "lowercase"),
+    ({"kind": "claude", "name": "round-robin"}, "runner policy"),
+    ({"kind": "claude", "name": "q", "url": "http://localhost:11434/v1", "model": "m"}, "only an opencode"),
+    ({"kind": "opencode", "name": "q", "url": "http://localhost:11434/v1"}, "needs a model"),
+    ({"kind": "opencode", "name": "q", "url": "ftp://box", "model": "m"}, "http"),
+    ({"kind": "opencode", "name": "q", "url": "http://gpu:8000/v1?api_key=sk-1", "model": "m"}, "api key"),
+    ({"kind": "opencode", "name": "q", "url": "http://gpu:8000/v1?x=1&API-Key=sk-1", "model": "m"}, "api key"),
+    ({"kind": "opencode", "name": "q", "url": "https://gpu/v1?access_token=t", "model": "m"}, "api key"),
+    ({"kind": "claude", "name": "stub"}, "built in"),
+])
+def test_an_agent_that_cannot_run_is_refused(tmp_path: Path, arguments: dict[str, str], refusal: str) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            kind = arguments.pop("kind")
+            with pytest.raises(ServiceError, match=refusal):
+                await service.add_agent(kind, **arguments)
+            assert [agent["name"] for agent in service.agents_json()] == ["stub"]
+
+    asyncio.run(scenario())
+
+
+def test_a_refused_query_string_key_is_not_repeated(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            with pytest.raises(ServiceError) as refused:
+                await service.add_agent("opencode", name="q", model="m", url="http://gpu:8000/v1?key=sk-secret")
+            assert "sk-secret" not in repr(refused.value) and "sk-secret" not in str(vars(refused.value))
+
+    asyncio.run(scenario())
+
+
+def test_a_query_string_without_a_key_is_accepted(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            added = await service.add_agent("opencode", name="q", model="m", url="http://gpu:8000/v1?region=us")
+            assert added["url"] == "http://gpu:8000/v1?region=us"
+
+    asyncio.run(scenario())
+
+
+def test_an_opencode_agent_on_a_model_server_gets_its_own_provider() -> None:
+    from engine.graph_service.service import opencode_config, session_model
+    from engine.graph_service.store import AgentRow
+
+    row = AgentRow("qwen", "opencode", "qwen3-coder", "http://gpu.local:8000/v1", "", "")
+    assert session_model(row) == "engine/qwen3-coder"
+    assert opencode_config(row) == {
+        "model": "engine/qwen3-coder",
+        "provider": {"engine": {
+            "npm": "@ai-sdk/openai-compatible", "name": "qwen",
+            "options": {"baseURL": "http://gpu.local:8000/v1"},
+            "models": {"qwen3-coder": {"name": "qwen3-coder"}},
+        }},
+    }
+    assert opencode_config(AgentRow("o", "opencode", "", "", "", "")) == {}
+
+
+def test_an_added_agents_model_applies_when_a_node_names_none_or_an_unknown_tier() -> None:
+    from engine.graph_service.compile import GraphAgentNode
+    from engine.graph_service.language import RunnerRule
+
+    def node(model: str) -> GraphAgentNode:
+        return GraphAgentNode(
+            agent="qwen", prompt="p", cwd=".", state_key="k", rule=RunnerRule("literal", "qwen"), model_template=model,
+            tiers={"claude": {"default": "sonnet"}}, agent_models={"qwen": "engine/qwen3"},
+        )
+
+    assert node("").model_for({}, "qwen") == "engine/qwen3"
+    assert node("default").model_for({}, "qwen") == "engine/qwen3"
+    assert node("other-model").model_for({}, "qwen") == "other-model"
+    assert node("default").model_for({}, "claude") == "sonnet"
+
+
 # --- HTTP ---------------------------------------------------------------------
 
 
@@ -587,6 +698,14 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
                 assert (await client.get("/runs", params={"limit": "many"})).status_code == 400
                 backend = (await client.get("/backend")).json()
                 assert backend["runners"] == ["stub"] and backend["execution"] == "langgraph-acp"
+                added = await client.post("/agents", json={"kind": "claude", "name": "second", "model": "opus"})
+                assert added.status_code == 201 and added.json()["name"] == "second"
+                assert (await client.post("/agents", json={"kind": "claude", "name": "second"})).status_code == 409
+                assert (await client.post("/agents", json={"kind": "claude", "replace": "yes"})).status_code == 400
+                assert [agent["name"] for agent in (await client.get("/agents")).json()["agents"]] == ["second", "stub"]
+                assert (await client.get("/agents/second")).json()["model"] == "opus"
+                assert (await client.delete("/agents/second")).json()["removed"]
+                assert (await client.get("/agents/second")).status_code == 404
 
     asyncio.run(scenario())
 

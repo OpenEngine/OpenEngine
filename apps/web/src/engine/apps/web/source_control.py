@@ -16,6 +16,7 @@ from engine.apps.web.settings_file import atomic_write_json
 from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import (
     ChangeRequest,
+    Discussion,
     CommentResult,
     GitResult,
     JobLogs,
@@ -205,10 +206,12 @@ class RoutingSourceControl:
         base_ref: str,
         title: str,
         body: str,
+        *, issue: dict[str, object] | None = None, issue_resolution: str | None = None,
     ) -> str:
         return await self._call(
             lambda source: source.request_review(
-                workspace_id, branch, base_ref, title, body
+                workspace_id, branch, base_ref, title, body,
+                **({"issue": issue, "issue_resolution": issue_resolution} if issue else {}),
             )
         )
 
@@ -244,11 +247,19 @@ class RoutingSourceControl:
         file: str | None = None,
         line: int | None = None,
         in_reply_to_id: int | None = None,
+        *, thread_id: str | None = None, resolve: bool = False, commit_sha: str | None = None,
     ) -> CommentResult:
         return await self._call(
-            lambda source: source.add_comment(pr_url, comment, file, line, in_reply_to_id),
+            lambda source: source.add_comment(pr_url, comment, file, line, in_reply_to_id,
+                **({"thread_id": thread_id, "resolve": resolve, "commit_sha": commit_sha} if thread_id is not None or resolve or commit_sha is not None else {})),
             pr_url=pr_url,
         )
+
+    async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
+        return await self._call(lambda source: source.review_thread(pr_url, comment_id), pr_url=pr_url)
+
+    async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
+        return await self._call(lambda source: source.resolve_review_thread(pr_url, thread_id), pr_url=pr_url)
 
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int

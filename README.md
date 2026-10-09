@@ -83,7 +83,11 @@ The binary is `engine`. Run it with no arguments to list its commands:
 - `engine daemon` runs the local service in the background; see
   [Background service](docs/releases.md#background-service).
 - `engine connect gh|github|gitlab|slack` connects the selected backend's shared
-  source control or Slack.
+  source control or Slack; `engine connections` shows them and
+  `engine disconnect` undoes one.
+- `engine agent add|get|remove|signin` and `engine agents` manage the agents
+  graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
+  such as `engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
 - `engine agent claude` starts a run whose implementation node is Claude Code
   in this terminal: the daemon checks the repository out into a fresh
   workspace and gives claude the same `git_subcommand` and `open_pull_request`
@@ -92,8 +96,8 @@ The binary is `engine`. Run it with no arguments to list its commands:
   `claude`.
 - `engine graph`, `engine run`, `engine loop`, `engine node` and their list
   forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
-  graphs; `engine backend` chooses which daemon they talk to, and
-  `engine runner signin` signs a runner in. See [cli/README.md](cli/README.md).
+  graphs; `engine backend` chooses which daemon they talk to. See
+  [cli/README.md](cli/README.md).
 
 While working on OpenEngine itself, run the development server instead:
 ```bash
@@ -219,6 +223,8 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
 To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
+To add a repository and command approvals locally in `.engine/config.toml`, see
+[repository onboarding](docs/repository-onboarding.md).
 
 ## What is it.
 

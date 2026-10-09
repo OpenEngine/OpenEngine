@@ -62,6 +62,9 @@ class Discussion:
     url: str
     path: str | None = None
     line: int | None = None
+    comment_id: int | None = None
+    thread_id: str | None = None
+    is_resolved: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,13 +156,18 @@ class SourceControl(Protocol):
     """Publishes work produced in a workspace and opens it for review."""
 
     async def run_git(
-        self, workspace_id: WorkspaceId, arguments: Sequence[str]
+        self, workspace_id: WorkspaceId, arguments: Sequence[str],
+        *, owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> GitResult:
         """Run `git` with these arguments inside the workspace's checkout.
 
         `arguments` is an argument vector, not a command line: no shell is
         involved, so nothing here is quoted, split, or expanded, and a commit
         message with newlines in it is simply one element.
+
+        `owned_pull_requests` is trusted run-bound provenance, never tool input.
+        Force pushes must fail closed unless the provider verifies an owned
+        open PR and an eligible feature head; approval alone is insufficient.
         """
         ...
 
@@ -181,6 +189,8 @@ class SourceControl(Protocol):
         base_ref: str,
         title: str,
         body: str,
+        *, issue: dict[str, object] | None = None, issue_resolution: str | None = None,
+        owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> str:
         """Open a review (pull request). Returns its URL.
 
@@ -230,12 +240,23 @@ class SourceControl(Protocol):
         file: str | None = None,
         line: int | None = None,
         in_reply_to_id: int | None = None,
+        *, thread_id: str | None = None, resolve: bool = False, commit_sha: str | None = None,
     ) -> CommentResult:
         """Comment on a review and return its provenance.
 
         GitHub replies target a top-level review comment ID and cannot specify
         file or line. Providers without reply support raise NotImplementedError.
+        With ``resolve``, prefix the reply with its ``commit_sha`` and resolve
+        the matching ``thread_id`` unless team configuration disables it.
         """
+        ...
+
+    async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
+        """Find the thread and root comment for a review reply."""
+        ...
+
+    async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
+        """Resolve a thread belonging to this PR, unless disabled by configuration."""
         ...
 
     async def view_change_request(

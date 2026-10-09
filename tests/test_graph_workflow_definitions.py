@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import tomllib
 from pathlib import Path
 
 import httpx
@@ -48,6 +49,14 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
 CONFIG = Path(__file__).resolve().parents[1] / "engine.toml"
 
 GRAPHS = ("implementation-review-rerank",)
+
+
+@pytest.fixture
+def configured_checkouts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep composition checks independent of host checkouts and SSH access."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    for path in tomllib.loads(CONFIG.read_text()).get("repos", {}).values():
+        Path(path).expanduser().mkdir(parents=True, exist_ok=True)
 
 
 class RecordingWorkspaceProvider:
@@ -735,7 +744,7 @@ def test_the_catalog_answers_for_the_workflow_by_id() -> None:
 
 
 def test_the_interface_offers_the_graphs_by_their_own_names(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured_checkouts: None
 ) -> None:
     """The dropdown itself, through the endpoint the client reads it from.
 
@@ -788,7 +797,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
 
 
 def test_every_composition_root_still_starts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured_checkouts: None
 ) -> None:
     """All three read the workflow directory at startup, so all three are here.
 

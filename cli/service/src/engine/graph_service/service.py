@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
@@ -49,7 +50,7 @@ from engine.ports import WorkspaceProvider
 from langgraph_acp import ACPAgentRegistry
 
 from engine.graph_runtime import GraphId
-from engine.graph_runtime.inputs import resolve_inputs
+from engine.graph_runtime.inputs import RUNNER_POLICIES, resolve_inputs
 from engine.graph_runtime.topology import GraphTopology
 from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig
 from engine.runtime.workflows import WorkflowLoadError, load_workflow_file
@@ -74,6 +75,7 @@ from engine.graph_service.language import (
 )
 from engine.graph_service.store import (
     OPEN_EXECUTION_STATUSES,
+    AgentRow,
     ExecutionRow,
     GraphRow,
     GraphServiceStore,
@@ -86,6 +88,18 @@ from engine.graph_service.store import (
 )
 
 log = logging.getLogger(__name__)
+
+#: The harnesses an added agent can run on.
+AGENT_KINDS = ("claude", "codex", "opencode")
+_AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: Query parameter names that carry a credential: an agent's url is stored and listed back, so none may ride in it.
+_CREDENTIAL_PARAMETER = re.compile(r"(key|token|secret|password|signature|sig|auth|credential)s?$")
+
+#: The provider an opencode agent with a url reaches its endpoint through.
+OPENCODE_URL_PROVIDER = "engine"
+
+AgentFactory = Callable[[AgentRow], Any]
+"""Builds the ACP provider an added agent runs as: one registered under `row.name`."""
 
 DEFAULT_PROJECT = "default"
 TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED})
@@ -206,6 +220,7 @@ class GraphService:
         default_base_ref: str = "origin/HEAD",
         model_tiers: Mapping[str, Mapping[str, str]] | None = None,
         allow_python: bool = True,
+        agent_factory: AgentFactory | None = None,
         session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
         approval_policy: ApprovalConfig | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -226,6 +241,12 @@ class GraphService:
         self._tick_seconds = tick_seconds
         self._model_tiers = model_tiers
         self._allow_python = allow_python
+        self._agent_factory = agent_factory
+        #: What the registry held before any added agent: these cannot be replaced or removed.
+        self._builtin_agents = tuple(registry.names)
+        #: Added agents' models, by name. Compiled graphs hold this dict, not a copy,
+        #: so a model changed here reaches graphs registered before the change.
+        self._agent_models: dict[str, str] = {}
         self._sessions = Sessions()
         self._session_workflow = session_workflow(
             workspace_provider, self._sessions,
@@ -251,6 +272,11 @@ class GraphService:
         ids -- and steering still queued in memory is reported undelivered
         rather than left looking like it might still arrive.
         """
+        for agent in self.store.agents():
+            try:
+                self._offer_agent(agent)
+            except Exception:
+                log.exception("added agent %s could not be offered", agent.name)
         self.runtime.register(self._session_workflow.compiled(self.runtime.checkpointer))
         for version in self.store.versions():
             try:
@@ -272,6 +298,77 @@ class GraphService:
 
     def runners(self) -> tuple[str, ...]:
         return tuple(self._registry.names)
+
+    # --- agents -------------------------------------------------------------
+
+    def agents_json(self) -> list[dict[str, Any]]:
+        added = {row.name: row for row in self.store.agents()}
+        return [self.agent_json(name, added.get(name)) for name in self._registry.names]
+
+    def agent_json(self, name: str, row: AgentRow | None = None) -> dict[str, Any]:
+        row = row or self.store.agent(name)
+        if row is not None:
+            return {
+                "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
+                "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
+            }
+        if name in self._builtin_agents:
+            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+        raise NotFound(f"no agent named {name!r}", agent=name)
+
+    async def add_agent(
+        self, kind: str, *, name: str = "", model: str = "", url: str = "", overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """Offer a harness under a name graphs can use, with its own model or endpoint."""
+        if self._agent_factory is None:
+            raise Unavailable("this backend does not support adding agents")
+        name = name or kind
+        if kind not in AGENT_KINDS:
+            raise ServiceError(f"kind must be one of {', '.join(AGENT_KINDS)}", kind=kind)
+        if not _AGENT_NAME.match(name) or name in RUNNER_POLICIES:
+            raise ServiceError(
+                "an agent name is lowercase letters, digits, - and _, and is not a runner policy", name=name,
+            )
+        if url and kind != "opencode":
+            raise ServiceError("only an opencode agent takes a url", kind=kind)
+        if url and not model:
+            raise ServiceError("an agent with a url needs a model to ask it for")
+        if url and not re.match(r"^https?://", url):
+            raise ServiceError("url must be http(s)", url=url)
+        if url and _carries_credential(url):
+            # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
+            raise ServiceError("url must not carry an api key in its query string")
+        if name in self._builtin_agents:
+            raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
+        async with self._lock:
+            existing = self.store.agent(name)
+            if existing is not None and not overwrite:
+                raise Conflict(f"an agent named {name} already exists; pass replace to change it", agent=name)
+            at = self._now_iso()
+            row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at)
+            self._offer_agent(row)
+            self.store.upsert_agent(row)
+        return self.agent_json(name, row)
+
+    async def remove_agent(self, name: str) -> dict[str, Any]:
+        if name in self._builtin_agents:
+            raise Conflict(f"{name} is built in and cannot be removed", agent=name)
+        async with self._lock:
+            row = self.store.agent(name)
+            if row is None:
+                raise NotFound(f"no agent named {name!r}", agent=name)
+            self.store.delete_agent(name)
+            self._registry.unregister(name)
+            self._agent_models.pop(name, None)
+        return {**self.agent_json(name, row), "removed": True}
+
+    def _offer_agent(self, row: AgentRow) -> None:
+        assert self._agent_factory is not None
+        self._registry.register(self._agent_factory(row), replace=True)
+        if row.model:
+            self._agent_models[row.name] = session_model(row)
+        else:
+            self._agent_models.pop(row.name, None)
 
     # --- sessions -----------------------------------------------------------
 
@@ -1059,6 +1156,7 @@ class GraphService:
                     registry=self._registry,
                     session_config=self._session_config,
                     model_tiers=self._model_tiers,
+                    agent_models=self._agent_models,
                     default_base_ref=self._default_base_ref,
                 ),
                 spec,
@@ -1345,6 +1443,34 @@ def _progress(
     return {"graphNodes": nodes, "edges": edges, "stages": stages, "current": current}
 
 
+def _carries_credential(url: str) -> bool:
+    """Whether `url`'s query string names a key, token or other secret, e.g. `?api_key=...`."""
+    return any(
+        _CREDENTIAL_PARAMETER.search(re.sub(r"[^a-z]", "", name.lower()))
+        for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+    )
+
+
+def session_model(row: AgentRow) -> str:
+    """The model an added agent's sessions ask for: on its own endpoint, OpenCode's `provider/model`."""
+    return f"{OPENCODE_URL_PROVIDER}/{row.model}" if row.url else row.model
+
+
+def opencode_config(row: AgentRow) -> dict[str, Any]:
+    """The `OPENCODE_CONFIG_CONTENT` an opencode agent runs with: its model, and its endpoint if any."""
+    config: dict[str, Any] = {"model": session_model(row)} if row.model else {}
+    if row.url:
+        config["provider"] = {
+            OPENCODE_URL_PROVIDER: {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": row.name,
+                "options": {"baseURL": row.url},
+                "models": {row.model: {"name": row.model}},
+            },
+        }
+    return config
+
+
 def _parse_yaml(source: str, *, runners: Sequence[str] | None) -> GraphSpec:
     try:
         raw = yaml.safe_load(source)
@@ -1360,10 +1486,10 @@ def auth_required(error: str, runner: str) -> dict[str, str] | None:
     target = runner or "<runner>"
     return {
         "runner": runner or "",
-        "command": f"engine runner signin {target}",
+        "command": f"engine agent signin {target}",
         "message": (
-            f"runner {target} is not signed in on this backend; run "
-            f"`engine runner signin {target}` and retry"
+            f"agent {target} is not signed in on this backend; run "
+            f"`engine agent signin {target}` and retry"
         ),
     }
 
@@ -1424,7 +1550,9 @@ def _digest(value: object) -> str:
 
 
 __all__ = [
+    "AGENT_KINDS",
     "Accounting",
+    "AgentFactory",
     "Conflict",
     "DEFAULT_PROJECT",
     "GraphService",
@@ -1435,4 +1563,6 @@ __all__ = [
     "StartRun",
     "Unavailable",
     "auth_required",
+    "opencode_config",
+    "session_model",
 ]

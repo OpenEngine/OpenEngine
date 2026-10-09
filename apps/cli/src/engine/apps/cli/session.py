@@ -36,12 +36,11 @@ EXIT_FAILED = 1
 POLL_SECONDS = 0.5
 
 
-def add_parser(commands: argparse._SubParsersAction) -> None:
-    agent = commands.add_parser("agent", help="drive an implementation node from this terminal")
-    harnesses = agent.add_subparsers(dest="harness", required=True)
-    claude = harnesses.add_parser(
+def add_parser(agent_actions: argparse._SubParsersAction) -> None:
+    """Add `claude` to `engine agent`, beside the actions that manage a backend's agents."""
+    claude = agent_actions.add_parser(
         "claude",
-        help="Claude Code in a fresh workspace, with the run's git and pull request tools",
+        help="drive an implementation node with Claude Code in this terminal",
         description=(
             "Start a run whose implementation node is Claude Code in this terminal, working in a "
             "fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to claude."
