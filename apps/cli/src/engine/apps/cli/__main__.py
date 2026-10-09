@@ -9,10 +9,18 @@ from engine.apps.cli import connect, daemon, session
 from engine.cli import commands as graph_commands
 
 EXIT_OK = 0
+OUTPUT = """\
+output:
+  List commands (backends, graphs, runs, loops, nodes, agents, connections)
+  print a table; add --json for JSON, such as `engine runs --json`.
+  Other commands print JSON; add --pretty for readable output.
+"""
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(prog="engine", description=__doc__)
+    result = argparse.ArgumentParser(
+        prog="engine", description=__doc__, epilog=OUTPUT, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     result.add_argument("--version", action="version", version=version("engine-cli"))
     commands = result.add_subparsers(dest="command")
     connect.add_parsers(commands)

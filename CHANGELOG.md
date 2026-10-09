@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.5.0](https://github.com/OpenEngine/OpenEngine/compare/v1.4.0...v1.5.0) (2026-10-09)
+
+
+### Features
+
+* **cli:** add built-in adversarial-review graph ([#723](https://github.com/OpenEngine/OpenEngine/issues/723)) ([8095b47](https://github.com/OpenEngine/OpenEngine/commit/8095b47c659fc84e42e61311795cda69df359dfa))
+* record and show when workorders and graph nodes start ([#721](https://github.com/OpenEngine/OpenEngine/issues/721)) ([ff1ce26](https://github.com/OpenEngine/OpenEngine/commit/ff1ce265399abe6cb12a45077f489fc0292bb312))
+
+
+### Bug Fixes
+
+* graph runs tolerate unloadable versions ([#783](https://github.com/OpenEngine/OpenEngine/issues/783)) ([3871556](https://github.com/OpenEngine/OpenEngine/commit/38715561204ce5bb547100406ce2971e9749b714))
+
+
+### Documentation
+
+* **site:** replace workflows/workorders with graphs and loops, add CLI reference ([#786](https://github.com/OpenEngine/OpenEngine/issues/786)) ([a713171](https://github.com/OpenEngine/OpenEngine/commit/a7131715674328eeb31ea15f9fd34abc31255db7))
+* **skills:** add a skill for managing graphs ([#784](https://github.com/OpenEngine/OpenEngine/issues/784)) ([17c982b](https://github.com/OpenEngine/OpenEngine/commit/17c982b338d45683ab8c06edd885122ad62e2851))
+
 ## [1.4.0](https://github.com/OpenEngine/OpenEngine/compare/v1.3.0...v1.4.0) (2026-10-09)
 
 
