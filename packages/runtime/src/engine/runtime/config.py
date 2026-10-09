@@ -299,6 +299,7 @@ def load_engine_config(
 
     environment = os.environ if environ is None else environ
     directory = Path.cwd() if cwd is None else Path(cwd)
+    local = directory / ".engine" / "config.toml"
     selected: Path | None
 
     if explicit_path is not None:
@@ -313,7 +314,6 @@ def load_engine_config(
         )
         machine = config_home / "openengine" / DEFAULT_CONFIG_NAME
         default = directory / DEFAULT_CONFIG_NAME
-        local = directory / ".engine" / "config.toml"
         selected = next(
             (path for path in (machine, local, default) if path.is_file()), None
         )
@@ -322,7 +322,6 @@ def load_engine_config(
         return LoadedEngineConfig()
 
     path = selected.resolve()
-    local = directory / ".engine" / "config.toml"
     if local.is_file() and local.resolve() != path:
         # Selection never merges, so a shadowed local file would otherwise
         # look as if its [repos] and approvals were silently dropped.
