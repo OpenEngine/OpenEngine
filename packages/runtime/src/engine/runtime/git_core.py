@@ -44,11 +44,10 @@ _PERMITTED_GLOBAL_OPTIONS = frozenset(
     }
 )
 
-#: `git push` options that consume the argument after them. Needed only so a
-#: value like `--receive-pack /usr/bin/git-receive-pack` is not mistaken for a
-#: refspec while working out what a push would actually create.
+#: `git push` options that consume the argument after them, so their values
+#: are not mistaken for refspecs while determining what a push would create.
 _PUSH_OPTIONS_TAKING_A_VALUE = frozenset(
-    {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
+    {"-o", "--push-option", "--repo"}
 )
 
 #: `git push` options that push every local branch rather than a named one, so
@@ -212,6 +211,26 @@ def guard_push(
     subcommand = _subcommand_index(arguments)
     if subcommand is None:
         return arguments, None
+    # Exec options launch commands outside the publication guard. Include Git's
+    # long-option abbreviations and rebase's short/attached/clustered -x forms.
+    for argument in arguments[subcommand + 1:]:
+        if argument == "--":
+            break
+        option = argument.partition("=")[0]
+        exec_option = option.startswith("--") and "--exec".startswith(option)
+        if arguments[subcommand] == "rebase":
+            exec_option |= (
+                argument.startswith("-")
+                and not argument.startswith("--")
+                and "x" in argument
+            )
+        if arguments[subcommand] == "push":
+            exec_option |= option.startswith("--") and "--receive-pack".startswith(option)
+        if exec_option:
+            raise ValueError(
+                "git exec options are not available through git_subcommand; "
+                "run ordinary git operations separately so publication is guarded"
+            )
     if arguments[subcommand] in {"send-pack", "http-push"}:
         raise ValueError("use git push so branch ownership can be checked")
     if arguments[subcommand] != "push":

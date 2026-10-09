@@ -105,6 +105,30 @@ def test_global_options_cannot_bypass_the_boundary(source, spawn, arguments):
 
 
 @pytest.mark.parametrize("prefix", [[], ["--no-pager"]])
+@pytest.mark.parametrize("arguments", [
+    ["rebase", "--exec", "git push origin HEAD:engine/x", "HEAD~1"],
+    ["rebase", "--exec=git push origin HEAD:engine/x", "HEAD~1"],
+    ["rebase", "--ex=git push origin HEAD:engine/x", "HEAD~1"],
+    ["rebase", "-x", "git push --force origin HEAD:agent/topic", "HEAD~1"],
+    ["rebase", "-xgit push origin HEAD:engine/x", "HEAD~1"],
+    ["rebase", "-ix", "git push origin HEAD:engine/x", "HEAD~1"],
+    ["push", "--exec=custom-command", "origin", "agent/topic"],
+    ["push", "--receive-pack", "custom-command", "origin", "agent/topic"],
+])
+def test_exec_options_cannot_bypass_publication_guard(source, spawn, prefix, arguments):
+    with pytest.raises(ValueError, match="run ordinary git operations separately"):
+        asyncio.run(source.run_git(WORKSPACE, [*prefix, *arguments]))
+    spawn.assert_not_called()
+
+
+def test_ordinary_rebase_remains_available(source, spawn):
+    result = asyncio.run(source.run_git(WORKSPACE, ["rebase", "main"]))
+    assert result.ok
+    spawn.assert_awaited_once()
+    assert spawn.call_args.args[-2:] == ("rebase", "main")
+
+
+@pytest.mark.parametrize("prefix", [[], ["--no-pager"]])
 @pytest.mark.parametrize("command", ["ship", "shpi"])
 @pytest.mark.parametrize("alias", [
     "!git push origin HEAD:engine/x",
