@@ -7,6 +7,7 @@ checkpoints -- the same path the daemon takes, minus HTTP and the WorkOrder row.
 
 import asyncio
 import json
+import sqlite3
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -195,6 +196,13 @@ def test_a_graph_reports_every_problem_at_once() -> None:
         parse_graph(yaml.safe_load(single("solo", "${inputs.missing}")))
 
 
+def test_the_example_graphs_parse() -> None:
+    examples = sorted((Path(__file__).parents[1] / "docs/examples/graphs").glob("*.yaml"))
+    assert examples
+    for example in examples:
+        parse_graph(yaml.safe_load(example.read_text()), runners=["claude", "codex"])
+
+
 def test_a_prompt_may_only_read_nodes_that_can_run_before_it() -> None:
     graph = {
         "apiVersion": "openengine.cc/v1",
@@ -348,6 +356,29 @@ def test_runs_list_newest_first_whoever_started_them(tmp_path: Path) -> None:
                 await service.list_runs(None, graph="solo")
             await service.runtime.cancel(RunId(looped))
             await settled(service, looped)
+
+    asyncio.run(scenario())
+
+
+def test_runs_of_a_version_that_no_longer_loads_are_left_out(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            await service.add_graph("default", source=single("solo", "${instruction}"))
+            await service.add_graph("default", source=single("kept", "${instruction}"))
+            stale, _ = await service.submit_run(project="default", graph="solo", instruction="one")
+            await settled(service, stale["runId"])
+            kept, _ = await service.submit_run(project="default", graph="kept", instruction="two")
+            await settled(service, kept["runId"])
+        # A version stored under a graph language the daemon no longer parses.
+        with sqlite3.connect(tmp_path / DATABASE) as connection:
+            connection.execute(
+                "UPDATE cli_graph_versions SET source = replace(source, 'openengine.cc/v1', 'openengine.dev/v1') "
+                "WHERE version_id = ?", (stale["versionId"],),
+            )
+        async with graph_service(tmp_path) as service:
+            assert [run["runId"] for run in await service.list_runs("default")] == [kept["runId"]]
+            with pytest.raises(NotFound, match="which this runtime does not have"):
+                await service.run_json(stale["runId"])
 
     asyncio.run(scenario())
 

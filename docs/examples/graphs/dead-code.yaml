@@ -1,0 +1,60 @@
+apiVersion: openengine.cc/v1
+kind: Graph
+name: dead-code
+description: Find dead code with static analysis, have a second agent try to prove each candidate is still used, and report what could be removed. Changes nothing.
+
+inputs:
+  instruction:
+    description: Where to look and anything to leave alone
+  runner:
+    description: The runner that scans (the challenger uses a different one)
+    default: claude
+    choices: [claude, codex, round-robin]
+
+plan:
+  scan:
+    name: Scan
+    agent: ${inputs.runner}
+    prompt: |
+      Find dead code in this repository with static analysis. Only report it;
+      do not change any files.
+
+      ${instruction}
+
+      Run the analyzers that fit the languages here, for example
+      `uvx vulture <paths> --min-confidence 60` and
+      `uvx ruff check --select F401,F811,F841 <paths>` for Python, or
+      `npx knip` for TypeScript. Report each unused function, class, import,
+      variable or file the tools flag, with its file, line and the tool that
+      flagged it. Skip anything under tests, migrations or generated code.
+    outputs:
+      findings: {type: findings, required: true}
+
+  challenge:
+    name: Report
+    agent: {not: scan}
+    prompt: |
+      A static analyzer flagged these as dead code. Static analysis misses
+      dynamic use, so try to prove each one is still alive: search for string
+      references, entry points in pyproject.toml or package.json, plugin and
+      CLI registration, decorators, __all__, getattr, reflection, templates and
+      public API that other repositories may import. Do not edit anything.
+
+      ${json(outputs.scan.findings)}
+
+      Then write today's report as Markdown in the `report` output:
+
+      - a one-line verdict: how many candidates could be removed
+      - "Could be removed": each candidate you could not prove is used, with
+        file:line, what it is, the analyzer that flagged it, your confidence
+        (high, medium or low) and the evidence you checked
+      - "Still used": each candidate you ruled out, with the reference that
+        keeps it alive, in one line
+
+      If nothing was flagged, say so in one line.
+    outputs:
+      report: {type: string, required: true}
+
+loop:
+  every: 1d
+  instruction: Look for dead code under packages/ and cli/.
