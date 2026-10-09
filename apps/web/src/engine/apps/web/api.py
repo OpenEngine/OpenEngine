@@ -309,7 +309,7 @@ class ActiveRun:
             ):
                 self.content.append({"type": "text", "text": answer})
             await self._finish()
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: agent task publishes error in the completed run
             self.error = f"{type(error).__name__}: {error}"
             await self._finish()
         except asyncio.CancelledError:
@@ -1308,7 +1308,7 @@ def create_app(
                         EventKind.NODE_STARTED, EventKind.NODE_FINISHED, EventKind.RUN_FINISHED,
                     ),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 -- #779: notification boundary reports NOTIFICATION_FAILED
                 # Exceptions may contain credentials or request bodies. Record
                 # only a fixed diagnostic in OE's replayable event feed.
                 await graph_events.append(RuntimeEvent(
@@ -1944,7 +1944,7 @@ def create_app(
                     readings = await _utilization.recent(
                         tuple(runners), UTILIZATION_MAX_AGE_SECONDS
                     )
-            except Exception:  # noqa: BLE001 -- placement must not fail the run
+            except Exception:  # Placement must not fail the run; log before falling back.
                 log.warning("utilization refresh failed; using cached readings", exc_info=True)
                 readings = _utilization.cached()
             return {
@@ -2496,7 +2496,7 @@ def create_app(
             title = await service.generate_title(instance_id, opening_text, runner)
         except ValueError as error:
             return _error(str(error), 400)
-        except Exception as failure:
+        except Exception as failure:  # noqa: BLE001 -- #779: title endpoint returns the provider error to the client
             # A provider that cannot name the chat has not cost anybody
             # anything yet, and must not be allowed to. The client asks for a
             # name *before* sending the message being named, so a failure
@@ -3968,7 +3968,7 @@ def create_app(
                     except NotImplementedError:
                         # An unsupported capability will not recover on retry.
                         break
-                    except Exception:
+                    except Exception:  # noqa: BLE001 -- #779: webhook boundary retries then logs and reports unavailable lookup
                         if attempt == 0:
                             await asyncio.sleep(0.25)
                             continue
@@ -3994,7 +3994,7 @@ def create_app(
                         "Your comment was received, but automatic thread resolution may be unavailable. "
                         "Please retry later.",
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001 -- #779: webhook boundary logs and records failed retry advice
                 # Do not replay already-forwarded work if the reply service is
                 # unavailable too. Keep the retry advice visible in activity.
                 github_activity.ignored("Review-thread service unavailable; please retry later.")

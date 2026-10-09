@@ -110,7 +110,7 @@ def report_wiring(settings: Settings) -> None:
                             f"{url}/pull/1", login,
                         )
                     status = "write access" if writable else "missing write access"
-                except Exception:
+                except Exception:  # noqa: BLE001 -- #779: startup access probe reports failed status
                     status = "access check failed; verify the posting account's repository access"
                 print(f"  github {repository}: {status}")
         asyncio.run(check_repository_access())

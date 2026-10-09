@@ -17,6 +17,7 @@ half a connection.
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from itertools import count
 
@@ -153,7 +154,7 @@ class JSONRPCPeer:
     async def _read_until_eof(self) -> None:
         try:
             await self._read()
-        except Exception:
+        except Exception:  # noqa: BLE001 -- #779: reader task reports connection failure to pending requests below
             # A transport failure and a clean EOF are the same event to a caller
             # waiting on a request: no answer is coming. `on_closed` describes
             # both, and it can see the exit status and stderr that explain it.
@@ -227,7 +228,7 @@ class JSONRPCPeer:
             raise
         except JSONRPCError as exc:
             reply: JSONObject = {"error": exc.as_response_error()}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- #779: request callback boundary reports JSON-RPC INTERNAL_ERROR
             reply = {"error": {"code": INTERNAL_ERROR, "message": str(exc)}}
         else:
             reply = {"result": result}
@@ -235,8 +236,9 @@ class JSONRPCPeer:
             await self._send({"jsonrpc": "2.0", "id": message_id, **reply})
         except Exception:
             # Nothing is listening for this answer any more, and the request that
-            # provoked it has already failed on its own account.
-            pass
+            # provoked it has already failed on its own account. Report the
+            # task failure so a serialization bug is not silently discarded.
+            logging.getLogger(__name__).exception("Could not send JSON-RPC response")
 
     def _fail_pending(self, reason: BaseException | None) -> None:
         for future in tuple(self._pending.values()):

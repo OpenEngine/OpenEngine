@@ -104,7 +104,7 @@ class SingleToolBroker(ABC):
         try:
             request = json.loads(await reader.readline())
             response = await self._submit(request)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: connection boundary returns invalid-request error
             response = {"ok": False, "error": f"invalid concierge request: {error}"}
         writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
         with suppress(ConnectionError):
@@ -257,7 +257,7 @@ async def serve_stdio(
             )
             if response is None:
                 continue
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: stdio boundary reports JSON-RPC error
             response = rpc_error(None, -32700, f"Parse error: {error}")
         sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
         sys.stdout.flush()

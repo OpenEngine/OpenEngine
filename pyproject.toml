@@ -37,6 +37,7 @@ dev = [
     "langgraph-checkpoint-sqlite>=2.0",
     "pytest>=8.0",
     "pytest-cov>=7.0",
+    "ruff==0.16.10",
     "watchfiles>=1.0",
 ]
 
@@ -63,3 +64,142 @@ include = ["*/src/engine/*", "migrations/*", "workflows/*"]
 precision = 2
 # Initial full-suite line coverage is 85.12%; allow a small platform/version margin.
 fail_under = 84
+
+[tool.ruff]
+target-version = "py311"
+# Pin the analyzer as well as its dependency: upgrades must recheck the baseline.
+required-version = "==0.16.10"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "C901", "PLR0912", "PLR0913", "PLR0915", "BLE001", "TRY"]
+
+# Measured with Ruff 0.16.10; ratchet down in #779 as the owning refactors land.
+[tool.ruff.lint.mccabe]
+max-complexity = 534  # web.api.create_app; #748
+
+[tool.ruff.lint.pylint]
+max-branches = 35  # TerminalMcpBroker._repository_call; #755
+max-args = 33  # web.api.create_app; #743
+max-statements = 1459  # web.api.create_app; #748
+
+[tool.ruff.lint.per-file-ignores]
+# Existing diagnostics only: no directory globs or whole rule-family ignores.
+# #779 removes each entry below. See docs/ruff-baseline.md for the ratchet policy.
+"apps/cli/src/engine/apps/cli/__main__.py" = ["TRY003"]  # #779
+"apps/cli/src/engine/apps/cli/connect.py" = ["TRY003", "TRY004", "TRY300"]  # #779
+"apps/cli/src/engine/apps/cli/daemon.py" = ["TRY003", "TRY301"]  # #779
+"apps/cli/src/engine/apps/cli/session.py" = ["TRY003", "TRY301"]  # #779
+"apps/mcp_server/src/engine/apps/mcp_server/__main__.py" = ["TRY003", "TRY301"]  # #779
+"apps/mcp_server/src/engine/apps/mcp_server/auth.py" = ["TRY003", "TRY004"]  # #779
+"apps/mcp_server/src/engine/apps/mcp_server/server.py" = ["TRY003", "TRY004", "TRY301"]  # #779
+"apps/web/e2e/harness/server.py" = ["F401"]  # #779
+"apps/web/hatch_build.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/__main__.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/api.py" = ["F821", "TRY003", "TRY301"]  # #779
+"apps/web/src/engine/apps/web/composition.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/github_activity.py" = ["F401"]  # #779
+"apps/web/src/engine/apps/web/github_auth.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/github_communications.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/github_login.py" = ["TRY003", "TRY301"]  # #779
+"apps/web/src/engine/apps/web/gitlab_auth.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/loop_runs.py" = ["TRY003", "TRY004"]  # #779
+"apps/web/src/engine/apps/web/loops.py" = ["TRY003", "TRY004"]  # #779
+"apps/web/src/engine/apps/web/oauth_credentials.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/repositories.py" = ["TRY003"]  # #779
+"apps/web/src/engine/apps/web/source_control.py" = ["E731", "TRY003"]  # #779
+"apps/web/src/engine/apps/web/utilization.py" = ["TRY003"]  # #779
+"cli/client/src/engine/cli/backends.py" = ["TRY003"]  # #779
+"cli/client/src/engine/cli/commands.py" = ["E741", "TRY003"]  # #779
+"cli/client/src/engine/cli/http.py" = ["TRY003"]  # #779
+"cli/client/src/engine/cli/starters/__init__.py" = ["TRY003"]  # #779
+"cli/service/src/engine/graph_service/api.py" = ["TRY003"]  # #779
+"cli/service/src/engine/graph_service/compile.py" = ["TRY003"]  # #779
+"cli/service/src/engine/graph_service/expressions.py" = ["TRY003", "TRY300"]  # #779
+"cli/service/src/engine/graph_service/language.py" = ["F401", "TRY003", "TRY004"]  # #779
+"cli/service/src/engine/graph_service/service.py" = ["TRY003"]  # #779
+"cli/service/src/engine/graph_service/session.py" = ["TRY003"]  # #779
+"langgraph-acp/src/langgraph_acp/_json.py" = ["TRY003"]  # #779
+"langgraph-acp/src/langgraph_acp/_stdio.py" = ["TRY003", "TRY300"]  # #779
+"langgraph-acp/src/langgraph_acp/agent.py" = ["TRY003"]  # #779
+"langgraph-acp/src/langgraph_acp/continuation.py" = ["TRY003"]  # #779
+"langgraph-acp/src/langgraph_acp/events.py" = ["TRY003"]  # #779
+"langgraph-acp/src/langgraph_acp/session.py" = ["TRY003"]  # #779
+"langgraph-acp/tests/test_client.py" = ["TRY003"]  # #779
+"migrations/migration.py" = ["TRY003"]  # #779
+"packages/adapters/agent_runner/acp/src/engine/adapters/agent_runner/acp/__init__.py" = ["TRY003"]  # #779
+"packages/adapters/agent_runner/acp/src/engine/adapters/agent_runner/acp/codex_policy.py" = ["TRY003"]  # #779
+"packages/adapters/communications/slack/src/engine/adapters/communications/slack/__init__.py" = ["TRY003"]  # #779
+"packages/adapters/sandbox/process/src/engine/adapters/sandbox/process/__init__.py" = ["TRY003"]  # #779
+"packages/adapters/source_control/github/src/engine/adapters/source_control/github/__init__.py" = ["TRY003"]  # #779
+"packages/adapters/source_control/github/src/engine/adapters/source_control/github/transports.py" = ["TRY003", "TRY300"]  # #779
+"packages/adapters/source_control/github/src/engine/adapters/source_control/github/verification.py" = ["TRY003"]  # #779
+"packages/adapters/source_control/gitlab/src/engine/adapters/source_control/gitlab/__init__.py" = ["E701", "E702", "F401", "TRY003"]  # #779
+"packages/adapters/source_control/gitlab/src/engine/adapters/source_control/gitlab/transports.py" = ["TRY003"]  # #779
+"packages/adapters/state_store/memory/src/engine/adapters/state_store/memory/__init__.py" = ["TRY003"]  # #779
+"packages/adapters/state_store/sqlite/src/engine/adapters/state_store/sqlite/__init__.py" = ["TRY003"]  # #779
+"packages/adapters/workspace_provider/git_worktree/src/engine/adapters/workspace_provider/git_worktree/__init__.py" = ["TRY003"]  # #779
+"packages/github-concierge/src/engine/github_concierge/github_concierge.py" = ["TRY003", "TRY301"]  # #779
+"packages/graph_runtime/src/engine/graph_runtime/api.py" = ["TRY003", "TRY004"]  # #779
+"packages/graph_runtime/src/engine/graph_runtime/executions.py" = ["TRY003"]  # #779
+"packages/graph_runtime/src/engine/graph_runtime/inputs.py" = ["TRY003", "TRY004"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/acp.py" = ["F402", "TRY003", "TRY004"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/ci_check.py" = ["TRY003"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/findings.py" = ["TRY003", "TRY004"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/name.py" = ["TRY003", "TRY301"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/open_verify.py" = ["TRY003"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/workspace.py" = ["TRY003"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/executions.py" = ["TRY003"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/graphs.py" = ["TRY003"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/runtime.py" = ["TRY003"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/terminal_mcp.py" = ["TRY003"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/workflows.py" = ["TRY003"]  # #779
+"packages/orchestrator/src/engine/orchestrator/temporal/service.py" = ["TRY003"]  # #779
+"packages/ports/src/engine/ports/sandbox.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/approvals.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/config.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/git_core.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/issue_links.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/push_policy.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/session.py" = ["TRY003", "TRY004"]  # #779
+"packages/runtime/src/engine/runtime/step_results.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/terminal_mcp.py" = ["TRY003", "TRY004"]  # #779
+"packages/runtime/src/engine/runtime/transcript.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/verification.py" = ["TRY003"]  # #779
+"packages/runtime/src/engine/runtime/workflows.py" = ["TRY003"]  # #779
+"packages/scoper/src/engine/scoper/__init__.py" = ["TRY003", "TRY004"]  # #779
+"packages/single-tool-mcp/src/engine/single_tool_mcp/__init__.py" = ["TRY003"]  # #779
+"packages/slack-concierge/src/engine/slack_concierge/repository.py" = ["TRY003"]  # #779
+"packages/slack-concierge/src/engine/slack_concierge/slack_concierge.py" = ["TRY003", "TRY301"]  # #779
+"packages/slack-concierge/src/engine/slack_concierge/slack_egress.py" = ["TRY003"]  # #779
+"scripts/build_release.py" = ["TRY003"]  # #779
+"tests/acp_stub_agent.py" = ["TRY003"]  # #779
+"tests/graph_runtime_backends.py" = ["TRY003"]  # #779
+"tests/graph_runtime_fakes.py" = ["TRY003"]  # #779
+"tests/layout.py" = ["TRY003"]  # #779
+"tests/provider_fakes.py" = ["TRY003"]  # #779
+"tests/test_agent_chat.py" = ["TRY003"]  # #779
+"tests/test_approvals.py" = ["TRY003"]  # #779
+"tests/test_cli_session.py" = ["TRY003"]  # #779
+"tests/test_github_auth.py" = ["TRY003"]  # #779
+"tests/test_github_concierge.py" = ["E402", "F401", "TRY003"]  # #779
+"tests/test_github_ingress.py" = ["TRY003"]  # #779
+"tests/test_github_login.py" = ["TRY003"]  # #779
+"tests/test_github_source_control.py" = ["TRY003"]  # #779
+"tests/test_graph_components.py" = ["TRY003"]  # #779
+"tests/test_graph_runtime_langgraph.py" = ["TRY003"]  # #779
+"tests/test_graph_runtime_langgraph_acp.py" = ["TRY003"]  # #779
+"tests/test_graph_service.py" = ["F401", "TRY003"]  # #779
+"tests/test_graph_workflow_inputs.py" = ["TRY003"]  # #779
+"tests/test_layout_helpers.py" = ["F401"]  # #779
+"tests/test_remote_mcp.py" = ["TRY003"]  # #779
+"tests/test_runner_utilization.py" = ["TRY003"]  # #779
+"tests/test_sandbox_contract.py" = ["F401", "TRY003"]  # #779
+"tests/test_single_tool_mcp.py" = ["TRY003"]  # #779
+"tests/test_slack_controls.py" = ["TRY003"]  # #779
+"tests/test_slack_transcript_mirroring.py" = ["TRY003"]  # #779
+"tests/test_slack_work_orders.py" = ["TRY003"]  # #779
+"tests/test_source_control_provider.py" = ["TRY003"]  # #779
+"tests/test_temporal_service_integration.py" = ["TRY003"]  # #779
+"tests/test_terminal_mcp.py" = ["TRY003"]  # #779
+"tests/test_web_app.py" = ["TRY003"]  # #779
+"workflows/implementation_review_graph.py" = ["TRY003"]  # #779

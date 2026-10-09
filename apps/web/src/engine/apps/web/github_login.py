@@ -594,7 +594,7 @@ class _SessionAuthMiddleware:
                 nonlocal error
                 try:
                     await self.app(scope, receive, tracked)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 -- #779: ASGI task boundary re-raises the saved error after task-group exit
                     # Raised as itself below, not inside an exception group.
                     error = exc
                 finally:
