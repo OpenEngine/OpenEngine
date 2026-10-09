@@ -75,7 +75,11 @@ from engine.graph_runtime.executions import ExecutionRegistry
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
 from engine.graph_runtime_langgraph.components.workspace import CO_AUTHOR
-from engine.graph_runtime_langgraph.executions import NodeExecution, driving
+from engine.graph_runtime_langgraph.executions import (
+    NodeExecution,
+    SteeringMessage,
+    driving,
+)
 from engine.graph_runtime_langgraph.graphs import START, LangGraphDefinition
 from engine.graph_runtime_langgraph.store import (
     ApprovalRecord,
@@ -144,8 +148,16 @@ class LangGraphRuntime:
         *graphs: LangGraphDefinition,
         store: GraphRuntimeStore | None = None,
         source_control: SourceControl | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
+        self.checkpointer = checkpointer
+        """What a graph added after construction is compiled against.
+
+        The one the deployment's own graphs share, so a graph registered at
+        runtime keeps its history in the same file and survives the same
+        restarts. `None` when the caller compiled everything up front.
+        """
         # What a graph used to be called, pointing at what it is called now. A
         # run keeps the id it was started under forever, so without this a
         # rename would strand every WorkOrder made before it. A retired id that
@@ -178,6 +190,19 @@ class LangGraphRuntime:
 
     def observe(self, observer: EventObserver) -> None:
         self._observer = observer
+
+    def register(self, definition: LangGraphDefinition) -> None:
+        """Offer one more graph from now on, under an id nothing else holds.
+
+        For graphs defined while the process runs -- a registry of versioned
+        definitions -- rather than read from a workflow directory at start.
+        An id is never rebound: a run remembers the id it was started under,
+        so replacing the graph behind it would change a run in flight.
+        """
+        if definition.graph_id in self._definitions:
+            raise ValueError(f"graph already registered: {definition.graph_id}")
+        self._definitions[definition.graph_id] = definition
+        self._renamed.pop(definition.graph_id, None)
 
     def graphs(self) -> tuple[GraphTopology, ...]:
         return tuple(graph.topology for graph in self._definitions.values())
@@ -260,6 +285,7 @@ class LangGraphRuntime:
                         node.repository or str(snapshot.values.get("repository") or "."),
                         node.base_ref,
                         co_author=str(snapshot.values.get(CO_AUTHOR) or ""),
+                        **({"issue": snapshot.values["issue"]} if snapshot.values.get("issue") else {}),
                     )
                 else:
                     await node.provider.detach(workspace.workspace_id)
@@ -348,22 +374,36 @@ class LangGraphRuntime:
         message: str,
         execution_id: ExecutionId | None = None,
         node_id: NodeId | None = None,
+        *,
+        steering_id: str = "",
     ) -> RunSnapshot:
+        """Queue a message for a running execution.
+
+        `steering_id` makes the message traceable past this call: the turn that
+        sends it raises `steering.delivered`, and `steering.applied` once that
+        turn finishes, both naming it. Without one, only receipt is reported.
+        """
         await self._require(run_id)
         try:
             target, execution = self._registry.resolve(run_id, execution_id, node_id)
         except (RunNotSteerableError, AmbiguousExecutionError):
-            if node_id is not None and await self._is_always_open(run_id, node_id):
+            if (
+                not steering_id
+                and node_id is not None
+                and await self._is_always_open(run_id, node_id)
+            ):
                 return await self._steer_always_open(run_id, node_id, message)
             raise
-        await execution.steer(message)
+        await execution.steer(
+            SteeringMessage(message, steering_id) if steering_id else message
+        )
         # Accepted for delivery, not delivered: the execution takes it at its
         # next interruption point and says so itself. Blocking until then would
         # mean an agent waiting on an approval could never be redirected.
         await self.publish(
             run_id,
             EventKind.STEERING_RECEIVED,
-            {"message": message},
+            {"message": message, **({"steeringId": steering_id} if steering_id else {})},
             target.node_id,
             target.execution_id,
         )

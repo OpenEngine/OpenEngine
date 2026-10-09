@@ -19,6 +19,9 @@ dependencies = [
     # for that reason alone.)
     "engine-graph-runtime",
     "engine-graph-runtime-langgraph",
+    # Registered graphs, loops and node steering under `/api/v1`, for the
+    # `engine graph|loop|node` commands.
+    "engine-graph-service",
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second. SQLite gives chat durable conversations
     # without requiring an external database service.
@@ -66,6 +69,7 @@ engine-slack-concierge = { workspace = true }
 engine-single-tool-mcp = { workspace = true }
 engine-graph-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }
+engine-graph-service = { workspace = true }
 engine-adapter-agent-runner-acp = { workspace = true }
 engine-adapter-communications-buzz = { workspace = true }
 engine-adapter-communications-slack = { workspace = true }

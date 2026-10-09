@@ -449,3 +449,26 @@ def test_no_co_author_adds_no_trailer(tmp_path: Path) -> None:
     workspace = asyncio.run(provider.provision(str(repository), "HEAD"))
 
     assert "Co-authored-by" not in _commit(Path(workspace.root_path), "-m", "feat: x")
+
+
+@pytest.mark.parametrize("issue_repo,reference", [("acme/api", "#7"), ("acme/other", "acme/other#7")])
+def test_issue_references_survive_commit_amend_snapshot_and_reattach(tmp_path, issue_repo, reference):
+    repository = tmp_path / "repository"
+    _repository(repository)
+    _git(repository, "remote", "add", "origin", "https://github.com/acme/api.git")
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    issue = {"repository": issue_repo, "number": 7}
+    workspace = asyncio.run(provider.provision(str(repository), "main", co_author="Alice <alice@example.test>", issue=issue))
+    root = Path(workspace.root_path)
+    _git(root, *_IDENTITY, "commit", "--allow-empty", "-m", f"feat: change\n\nRefs {reference}")
+    _git(root, *_IDENTITY, "commit", "--amend", "--allow-empty", "--no-edit")
+    message = _git(root, "log", "-1", "--format=%B")
+    assert message.count(f"Refs {reference}") == 1
+    assert message.count("Co-authored-by: Alice <alice@example.test>") == 1
+    (root / "new.txt").write_text("uncommitted")
+    asyncio.run(provider.detach(workspace.workspace_id))
+    workspace = asyncio.run(provider.attach(workspace.workspace_id, str(repository), "main", co_author="Alice <alice@example.test>", issue=issue))
+    root = Path(workspace.root_path)
+    assert f"Refs {reference}" in _git(root, "log", "-1", "--format=%B")
+    _git(root, *_IDENTITY, "commit", "--allow-empty", "-m", "feat: follow up")
+    assert _git(root, "log", "-1", "--format=%B").count(f"Refs {reference}") == 1

@@ -10,24 +10,53 @@ Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, 
 `issue_comment`, `pull_request_review_comment`, `issues`, and `pull_request` events, and
 give it a secret.
 
-## Naming the repository
+## Naming the repositories
 
-Name the repository whose deliveries this deployment answers in `engine.toml`:
+Keep the deployment's repository list in its machine configuration,
+`~/.config/openengine/engine.toml` (or
+`$XDG_CONFIG_HOME/openengine/engine.toml`). Repository additions do not
+require a commit to OpenEngine.
+
+Configuration selection is: explicit `--config`, then `ENGINE_CONFIG`, then
+the machine file, then `engine.toml` in the working directory. Files are
+selected as a whole, never merged.
+
+When migrating an existing deployment, copy its configuration to the machine
+location and move its `.env` alongside it. Update relative paths such as
+`workflows.directory` and state locations to preserve their existing targets.
+An explicit service config path still takes precedence; update that path if
+it points to the checkout. Restart the service after configuration changes.
+
+In the machine file, name the repositories whose deliveries it accepts:
 
 ```toml
 [github]
-repository = "owner/name"
+repositories = ["owner/name", "other/project"]
+
+[repos]
+"owner/name" = "~/code/name"
+"other/project" = "~/code/project"
 ```
 
-The slug format is validated at startup. Comments from other repositories are
+The single-repository form, `repository = "owner/name"`, remains supported;
+when both forms are present their repositories are combined. Names are
+case-insensitive and duplicates are accepted only once. Every configured slug
+must have a matching key and nonblank checkout path in `[repos]`; missing
+mappings fail startup with the repository name. Those paths select the checkout
+for work started by assignments, PR mentions, and review requests.
+
+All repositories use the same `work_orders.workflow` default (or the sole
+available workflow) and the same webhook secret. Configure that secret on each
+repository's webhook, pointing them all at the same endpoint.
+
+The slug format is validated at startup. Deliveries from other repositories are
 acknowledged and ignored, even when signed with the same secret. Repository
 names are compared without regard to case. Without a configured repository,
 actionable comment deliveries receive 503 until setup is complete.
 
 ## Storing the secret
 
-The webhook's shared secret is not written in `engine.toml`, which is
-committed. Store it as `ENGINE_GITHUB_WEBHOOK_SECRET=your-secret` in a
+The webhook's shared secret is not written in `engine.toml`. Store it as `ENGINE_GITHUB_WEBHOOK_SECRET=your-secret` in a
 server-local `.env` beside the loaded `engine.toml` (or in the working
 directory when no config file is loaded) — the same file the
 [GitHub login](github-login.md) secret uses. It is gitignored; restrict its
@@ -38,7 +67,7 @@ and the file is reread per delivery, so rotating the secret in GitHub's webhook
 settings and on disk takes effect without a restart. Secrets are not accepted
 in TOML.
 
-`engine-web --check` reports both halves — the repository and whether a secret
+`engine-web --check` reports both halves — the repositories and whether a secret
 is readable — so a half-finished setup is visible before the first delivery
 arrives.
 
@@ -47,7 +76,11 @@ arrives.
 Engine resolves its account using its authenticated GitHub credentials. That
 identity is used to match issue assignments and ignore Engine's own comments
 and merges. No bot-login environment variable is needed. A GitHub app is also
-recognised by its user type.
+recognised by its user type. The posting account must have write access to every
+configured repository, including repositories in other organizations.
+`engine-web --check` checks access separately for each repository and reports
+missing write access or a failed lookup by name. Failed lookups may indicate
+missing credentials, installation access, or a connectivity problem.
 
 ## What the route does with a delivery
 
@@ -64,7 +97,7 @@ figure.
 
 A verified delivery is queued and acknowledged immediately, because GitHub gives
 a webhook ten seconds before it considers the delivery failed. Each comment is
-handled once no matter how often GitHub redelivers it.
+identified by repository, event type, and comment ID and handled once no matter how often GitHub redelivers it.
 
 The route answers 503 while no secret is set or while the queue is full. In each case the comment is not lost: the
 delivery stays visible as failed in the webhook's delivery log and can be
@@ -233,3 +266,52 @@ deliberate: it is a window on what is happening, and GitHub's delivery log and
 the pull request are the durable record.
 
 It is served from `GET /api/runs/{run_id}/github-comments`.
+
+## Issue references and review replies
+
+An issue assignment carries the issue repository and number as run data. Engine
+adds `Refs #N` to workspace commits and snapshots (or `owner/repo#N` for an issue
+in another repository). `open_pull_request` requires `issue_resolution` for these
+runs: `refs` keeps the issue open; `resolves` also adds `Resolves #N` to the head
+commit. Engine normalizes the PR body's issue line for either choice, including
+an agent-written `Fixes #N`. The closing keyword takes effect when merged to the
+default branch.
+
+Force pushes require an open PR recorded to the current work order, whose head
+is in the same repository and has an `agent/` or `feature/` branch name. GitHub
+must confirm that the branch is unprotected and is neither the repository's
+default branch nor the base of an open PR. Unknown ownership or
+unavailable branch information denies the push. Approval does not override
+these checks. This applies to explicit force flags and `+` refspecs; GitLab
+force pushes are refused until it can verify the same conditions.
+
+Issue publication requires a clean checkout with the current head already
+pushed. When the head's issue trailers need updating, Engine appends an empty
+metadata commit and pushes it normally before creating the PR. This preserves
+published commits and works for the first PR without granting force-push
+permission or recording a PR that does not yet exist. A correctly prepared
+head needs no extra commit. Concurrent remote updates are never overwritten;
+failed pushes reconcile the remote before restoring the local ref, preserving
+concurrent local work and uncertain remote state. The PR is recorded to the
+work order after GitHub successfully creates it.
+
+Review feedback includes the root comment ID and GraphQL thread ID. Both IDs,
+and each thread's resolution state, are also available through
+`view_change_request`. For an ordinary review reply through `add_comment`, supply
+`pr_url`, `comment`, and `in_reply_to_id`. The resolution options are optional:
+`resolve` defaults to `false`, and neither `thread_id` nor `commit_sha` is
+required. Ordinary replies leave the thread open and do not pass through the
+resolution approval gate. Use this form for discussion or disagreement.
+
+For addressed work, supply `in_reply_to_id`, `thread_id`, `resolve=true`, and a
+`commit_sha` of 7–40 hexadecimal characters, along with `pr_url` and `comment`.
+Engine requires approval for this operation, validates that the thread belongs
+to the PR and matches the root comment, formats `Addressed in <sha>: <comment>`,
+posts the reply, then resolves the thread through the configured GitHub
+transport. Missing resolution metadata is rejected for `resolve=true` replies.
+Retrying the same addressed reply after a resolution failure reuses the posted
+reply.
+
+`[github] resolve_addressed_threads = false` leaves addressed threads open for
+reviewers to resolve themselves. The default is `true`. Disconnected runs do
+not expose review replies or resolution.

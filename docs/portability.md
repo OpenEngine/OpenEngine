@@ -25,7 +25,7 @@ curl -fsSL https://openengine.sh/install | sh
 ```
 
 Both install an `engine` command. Running `engine daemon` starts the local web
-interface, while `engine doctor` reports missing runtime integrations and
+interface, while `engine daemon doctor` reports missing runtime integrations and
 how to install them. The existing `engine-web`, `engine-worker`, and
 `engine-control-server` commands remain available for operators and backwards
 compatibility.
@@ -43,7 +43,7 @@ and independently authenticated:
   brings its own Codex, so no `codex` executable is needed; each provider still
   needs its own credentials (`codex login`, or a Claude login or API key).
 
-`engine doctor` distinguishes required tools from optional integrations so
+`engine daemon doctor` distinguishes required tools from optional integrations so
 installation can succeed before the user chooses an agent provider.
 
 ## One artifact, two installers
@@ -58,7 +58,7 @@ The release archive is the boundary all installers consume:
 1. CI builds the web client once and embeds it as package data beside the web
    server module instead of relying on `apps/web/dist` in a checkout.
 2. CI freezes the Python application and interpreter into a versioned archive.
-3. CI runs the archive in a clean machine, calls `engine doctor`, starts the
+3. CI runs the archive in a clean machine, calls `engine daemon doctor`, starts the
    server, and requests `/api/config`.
 4. CI publishes the archives, a SHA-256 checksum manifest, and build
    attestations on a GitHub release.
@@ -88,9 +88,9 @@ those minimums, not only the newest hosted images.
 The portable CLI adds these stable commands before either installer ships:
 
 - `engine daemon` starts the web interface.
-- `engine doctor` checks the platform, external commands, writable data
-  directory, configuration, and whether `npx` can launch the ACP adapters and
-  at least one provider has credentials.
+- `engine daemon doctor` checks the configuration, the service port, the
+  `engine-web` executable, the external commands (`git`, `node` and `npx`
+  required; `claude` and `codex` optional), and the Claude login.
 - `engine --version` prints the application version and build commit.
 
 Portable installs stop writing `conversations.sqlite3` in the launch directory.
@@ -119,7 +119,7 @@ versioned in this repository. It:
    and atomically updates `~/.local/bin/engine`;
 6. changes a shell profile only after explaining the change, and only when the
    bin directory is not already on `PATH`; and
-7. prints the exact removal instructions and recommends `engine doctor`.
+7. prints the exact removal instructions and recommends `engine daemon doctor`.
 
 It never requires `sudo`, executes an unverified download, collects telemetry,
 or installs an agent CLI. Re-running the same version is idempotent. Installing
@@ -139,8 +139,8 @@ formula installs the same archives as the shell installer and exposes
 
 The formula has no Python or Node build dependency. It declares only runtime
 dependencies that are truly universal; Node.js for the ACP adapters and provider
-credentials are reported by `engine doctor`, not forced on every user. Formula tests run
-`engine --version`, `engine doctor --json`, start the server on
+credentials are reported by `engine daemon doctor`, not forced on every user. Formula tests run
+`engine --version`, `engine daemon doctor --json`, start the server on
 an ephemeral port, and request its health endpoint.
 
 Formula updates are opened automatically only after all release-archive smoke
@@ -153,7 +153,7 @@ Each slice is independently releasable and has a focused acceptance test.
 
 ### 1. Define the installed application
 
-- Add the `engine` CLI with `daemon`, `doctor`, and `--version`.
+- Add the `engine` CLI with `daemon` (including `daemon doctor`) and `--version`.
 - Move the built frontend under the Python package and include it in wheels.
 - Resolve configuration and mutable data outside the installation directory.
 - Build a wheel, install it into a clean environment, start it outside the
@@ -204,7 +204,7 @@ A version is portable only when all of these are true:
 
 - No build tool or repository checkout is required on a supported host.
 - The packaged UI and API work when launched from an arbitrary directory.
-- `engine doctor` identifies every missing external runtime dependency.
+- `engine daemon doctor` identifies every missing external runtime dependency.
 - Archive checksum verification and clean-host smoke tests pass for every
   advertised target.
 - Shell and Homebrew installations report the same version and build commit.

@@ -6,7 +6,9 @@ import json
 import pytest
 from langgraph.graph import END, START, StateGraph
 
-from engine.domain import AgentRunId, RunId, StepCompleted, StepId, StepOutput
+from engine.domain import (
+    REVIEW_PUBLISH_INPUT, AgentRunId, RunId, StepCompleted, StepId, StepOutput, publishes_review,
+)
 from engine.graph_runtime_langgraph.components import Finding, ReviewNode, RerankerNode
 from engine.graph_runtime_langgraph.workflows import State
 from test_graph_workflow_definitions import definition_module, nodes_of
@@ -19,6 +21,16 @@ def completed(findings):
         summary="Summary is deliberately not the findings.",
         outputs=(StepOutput("findings", json.dumps(findings)),),
     )
+
+
+@pytest.mark.parametrize(("inputs", "publishes"), [
+    (None, False),
+    ({}, False),
+    ({REVIEW_PUBLISH_INPUT: "false"}, False),
+    ({REVIEW_PUBLISH_INPUT: "true"}, True),
+])
+def test_a_review_is_published_only_when_its_inputs_ask(inputs, publishes):
+    assert publishes_review(inputs) is publishes
 
 
 def test_finding_round_trip_and_comment():

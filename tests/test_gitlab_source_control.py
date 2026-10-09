@@ -243,3 +243,23 @@ def test_gitlab_branch_tips_refuses_invalid_snapshot(response):
     source = GitLabSourceControl("token", transport=transport)
     with pytest.raises(GitLabSourceControlError):
         asyncio.run(source.branch_tips("gitlab.com/group/project", ("feature",)))
+
+
+@pytest.mark.parametrize("options", [
+    {"thread_id": None, "resolve": False, "commit_sha": None},
+    {"thread_id": "thread", "resolve": True, "commit_sha": "abcdef0"},
+])
+def test_gitlab_optional_review_keywords_fail_explicitly(options):
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(NotImplementedError):
+        asyncio.run(source.add_comment("https://gitlab.com/group/project/-/merge_requests/7", "Reply", in_reply_to_id=123, **options))
+    transport.request.assert_not_awaited()
+
+
+def test_gitlab_issue_publication_fails_explicitly():
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(NotImplementedError, match="issue-linked"):
+        asyncio.run(source.request_review("ws", "feature", "main", "Fix", "Body", issue={"repository": "group/project", "number": 7}, issue_resolution="resolves"))
+    transport.request.assert_not_awaited()

@@ -1,0 +1,92 @@
+apiVersion: openengine.dev/v1
+kind: Graph
+name: implement-review
+description: Implement a change, review it from four angles with a different agent, and fix what survives once.
+
+inputs:
+  instruction:
+    description: The change to make
+  runner:
+    description: The runner that implements (review uses a different one)
+    default: claude
+    choices: [claude, codex, least-utilized]
+
+implementation:
+  implementer:
+    name: Implement
+    agent: ${inputs.runner}
+    prompt: |
+      Implement this change in the checkout you are in:
+
+      ${instruction}
+
+      Read the relevant code before editing. Make the smallest complete change,
+      match the surrounding style, and add or update tests where the repository
+      has them. Run the tests that cover what you changed.
+
+      Leave your changes uncommitted so the reviewers see them with `git diff`.
+      Finish with a short summary of what you changed and how you verified it.
+
+review:
+  reviewers:
+    name: Review
+    agent: {not: implementer}
+    facets:
+      - {facet: security, model: elevated}
+      - {facet: bugs, model: default}
+      - {facet: performance, model: default}
+      - {facet: dryness, model: default}
+    prompt: |
+      Review the uncommitted changes in this checkout (`git status`, `git diff`,
+      and any new files), focusing only on **${item.facet.name}**.
+
+      ${item.facet.focus}
+
+      They were made for this request:
+      ${instruction}
+
+      The implementer reported:
+      ${outputs.implementer}
+
+      Read the changed code and the code around it before judging. Inspect only:
+      do not edit anything.
+    outputs:
+      findings: {type: findings, required: true}
+
+  reranker:
+    name: Consolidate
+    agent: {same: implementer}
+    prompt: |
+      ${size(outputs.reviewers)} reviewers examined the same change, each from one
+      angle. Consolidate their findings, somewhat aggressively squashing noise.
+
+      Remove a finding that is a nitpick or a matter of taste, a duplicate of
+      another (even across angles), an unlikely hypothetical, not actionable, or
+      already handled by code the reviewer missed. Keep what a senior engineer
+      would want fixed before merging. Keep each finding's agent and facet
+      unchanged.
+
+      The request: ${instruction}
+
+      The reviews:
+      ${json(outputs.reviewers)}
+    outputs:
+      findings: {type: findings, required: true, lineage: required}
+
+  fix:
+    name: Fix
+    agent: {same: implementer}
+    prompt: |
+      Address these review findings on the uncommitted changes in this checkout.
+      Make the smallest complete fix for each, run the relevant tests, and leave
+      the changes uncommitted. Say which findings you fixed and which you did
+      not, and why.
+
+      ${json(outputs.reranker.findings)}
+
+flow:
+  - from: reranker
+    route:
+      - {when: "size(outputs.reranker.findings) > 0 && visits.fix < 1", to: fix}
+      - {to: end}
+  - fix -> reviewers

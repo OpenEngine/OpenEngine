@@ -61,6 +61,7 @@ def build_capabilities(settings: Settings) -> Capabilities:
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host, task_queue=settings.task_queue),
         source_control=GitHubSourceControl(
             settings.github_token, workspace_provider=workspace_provider,
+            resolve_addressed_threads=settings.engine_config.github.resolve_addressed_threads,
             host_aliases=settings.engine_config.github.host_aliases
         ),
         agent_runner=codex_acp_runner(

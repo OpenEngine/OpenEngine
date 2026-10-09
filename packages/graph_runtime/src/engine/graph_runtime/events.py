@@ -65,6 +65,18 @@ class EventKind(Enum):
     APPROVAL_RESOLVED = "approval.resolved"
     STEERING_RECEIVED = "steering.received"
     """A message was routed to an execution that was already running."""
+    STEERING_DELIVERED = "steering.delivered"
+    """A steering message was sent to the agent as a turn: `steeringId`.
+
+    Raised only for messages that carried an id. Distinct from received: a
+    message can sit queued behind an approval for as long as a person takes.
+    """
+    STEERING_APPLIED = "steering.applied"
+    """The turn that delivered a steering message finished: `steeringId`.
+
+    Not raised for a turn that was cancelled -- by later steering, or by the
+    node ending -- because the agent did not finish acting on it.
+    """
     RUN_FORKED = "run.forked"
     """A resume was asked for: `from`, `checkpointId`, `nodes`.
 

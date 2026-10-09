@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
@@ -43,6 +44,9 @@ MERGE_EVENT = "pull_request"
 #: Initial affiliation filter. These labels do not prove write access; the
 #: concierge checks effective repository permissions before steering a run.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+# Avoid reading email addresses as mentions; include GitHub App bot logins.
+_MENTION = re.compile(r"(?<![\w@])@([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:\[bot\])?)(?![\w-])")
 
 #: The most a delivery may weigh. The route is reachable without a session, so
 #: a body is buffered before anything about it is trusted: without a ceiling,
@@ -79,6 +83,7 @@ class GithubComment:
     in_reply_to_id: str = ""
     #: GitHub's numeric id for ``author``, which outlives a renamed login.
     author_id: int = 0
+    thread_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -243,6 +248,12 @@ def verify_signature(webhook_secret: str, signature: str, body: bytes) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def mentions_other_accounts(body: str, self_login: str) -> bool:
+    """Whether a comment addresses other accounts without also addressing Engine."""
+    mentions = {match.lower() for match in _MENTION.findall(body)}
+    return bool(self_login and mentions and self_login.lower() not in mentions)
+
+
 def comment_from_payload(
     event: str, payload: Mapping[str, object], *, self_login: str = ""
 ) -> GithubComment | None:
@@ -256,6 +267,9 @@ def comment_from_payload(
     personal access token belonging to a machine user is not: such an account is
     an ordinary ``User`` and typically a collaborator, so it would pass every
     other check here and Engine would answer itself forever.
+
+    Comments mentioning other accounts are ignored unless they also mention
+    ``self_login``. Without a configured login, this filter is not applied.
     """
     if event not in COMMENT_EVENTS or payload.get("action") != "created":
         return None
@@ -288,13 +302,16 @@ def comment_from_payload(
         return None
     if not isinstance(comment_id, (int, str)) or isinstance(comment_id, bool) or comment_id == "":
         return None
+    body = str(comment.get("body") or "")
+    if mentions_other_accounts(body, self_login):
+        return None
     in_reply_to = comment.get("in_reply_to_id")
     return GithubComment(
         comment_id=str(comment_id),
         repository=full_name,
         number=number,
         author=author,
-        body=str(comment.get("body") or ""),
+        body=body,
         url=str(comment.get("html_url") or ""),
         event=event,
         is_pull_request=(
@@ -303,6 +320,7 @@ def comment_from_payload(
         ),
         in_reply_to_id=str(in_reply_to) if isinstance(in_reply_to, (int, str)) else "",
         author_id=_account_id(user),
+        thread_id=str(comment.get("thread_id") or ""),
     )
 
 
@@ -377,6 +395,7 @@ class GithubIngress:
         *,
         webhook_secret: Callable[[], str] = lambda: "",
         repository: str = "",
+        repositories: tuple[str, ...] = (),
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
@@ -392,7 +411,7 @@ class GithubIngress:
         stall_warning_seconds: float = STALL_WARNING_SECONDS,
     ) -> None:
         self._webhook_secret = webhook_secret
-        self._repository = repository
+        self._repositories = {repo.lower() for repo in (repository, *repositories) if repo}
         self._authenticated_login = authenticated_login
         # Whether whoever sent a comment or assignment can write to its
         # repository. Asked before any handler sees it, so nothing -- a work
@@ -468,16 +487,20 @@ class GithubIngress:
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid GitHub event"}, status_code=400)
+        repository = payload.get("repository")
+        repository = repository.get("full_name", "") if isinstance(repository, dict) else ""
+        if not isinstance(repository, str):
+            repository = ""
         self_login = ""
         if (
             _asks_for_self_login(event, payload)
             and self._authenticated_login is not None
-            and self._repository
+            and repository.lower() in self._repositories
         ):
             try:
                 # Leave time to acknowledge within GitHub's ten-second deadline.
                 async with asyncio.timeout(5):
-                    self_login = await self._authenticated_login(self._repository)
+                    self_login = await self._authenticated_login(repository)
             except Exception:
                 log.warning(
                     "a GitHub %s delivery needed the self-login, but its lookup failed; "
@@ -502,6 +525,11 @@ class GithubIngress:
         full queue, no handler wired, or an unresolved assignment login. A failed
         delivery GitHub can redeliver beats a 200 that loses the work.
         """
+        repository = payload.get("repository")
+        name = repository.get("full_name") if isinstance(repository, dict) else None
+        if self._repositories and isinstance(name, str) and name.lower() not in self._repositories:
+            log.info("ignored delivery from %s: this deployment answers %s", name, sorted(self._repositories))
+            return True
         if _asks_for_self_login(event, payload) and not self_login:
             log.warning(
                 "a GitHub %s delivery needed the self-login, but none could be resolved; "
@@ -528,7 +556,7 @@ class GithubIngress:
         comment = comment_from_payload(event, payload, self_login=self_login)
         if comment is not None:
             return self._enqueue(
-                comment, "comment", (comment.event, comment.comment_id),
+                comment, "comment", (comment.event, f"{comment.repository.lower()}#{comment.comment_id}"),
                 wired=self._handle is not None, delivery_id=delivery_id,
             )
         merged = merge_from_payload(event, payload, self_login=self_login)
@@ -552,6 +580,14 @@ class GithubIngress:
                 "Engine acts on", event, delivery_id or "-", payload.get("action"),
                 user.get("login") if isinstance(user, dict) else "unknown",
             )
+        else:
+            # Named all the same: a 200 in the access log says nothing of what
+            # was delivered, so without this line a comment GitHub never sent
+            # cannot be told apart from one that arrived as some other event.
+            log.info(
+                "settled GitHub %s delivery %s (action %s): nothing Engine acts on",
+                event or "-", delivery_id or "-", payload.get("action"),
+            )
         # Nothing to do with this delivery, whether or not a handler is
         # wired: settle it, so a webhook subscribed to more events than
         # Engine reads does not retry every one of them forever.
@@ -568,15 +604,15 @@ class GithubIngress:
     ) -> bool:
         """Queue one read delivery, or say why it is being refused."""
         named = f"{describe(delivery)} (delivery {delivery_id or '-'})"
-        if not self._repository:
+        if not self._repositories:
             log.warning(
                 "a GitHub %s was delivered but no target repository is configured", subject
             )
             return False
-        if delivery.repository.lower() != self._repository.lower():
+        if delivery.repository.lower() not in self._repositories:
             # A shared App secret authenticates deliveries from other repos too.
             # Ignore them before queueing or remembering their identities.
-            log.info("ignored %s: this deployment answers %s", named, self._repository)
+            log.info("ignored %s: this deployment answers %s", named, sorted(self._repositories))
             return True
         if not wired:
             log.warning(

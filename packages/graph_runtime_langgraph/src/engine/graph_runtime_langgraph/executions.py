@@ -102,6 +102,28 @@ def current_execution() -> "NodeExecution":
     return driven.runtime.execution(driven.run_id, ExecutionId(task_id))
 
 
+class SteeringMessage(str):
+    """A steering message that remembers which request it came from.
+
+    A `str` so that every path a message already travels -- the queue, the
+    pending prompts, the transcript -- carries it unchanged, and only the turn
+    that sends it to the agent has to look for `steering_id` to report its
+    delivery and whether it was carried out.
+    """
+
+    steering_id: str
+
+    def __new__(cls, text: str, steering_id: str) -> "SteeringMessage":
+        message = super().__new__(cls, text)
+        message.steering_id = steering_id
+        return message
+
+
+def steering_id_of(message: object) -> str:
+    """The id a steering message was sent with, or empty for any other text."""
+    return str(getattr(message, "steering_id", "") or "")
+
+
 class NodeExecution:
     """One in-flight LangGraph task, as external control sees it.
 

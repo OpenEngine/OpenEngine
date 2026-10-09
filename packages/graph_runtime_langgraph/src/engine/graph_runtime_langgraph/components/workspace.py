@@ -81,7 +81,8 @@ class WorkspaceNode:
         base_ref = requested if isinstance(requested, str) and requested.strip() else self.base_ref
         await execution.say(f"Checking {repository} out at {base_ref}.")
         workspace = await self.provider.provision(
-            repository, base_ref, co_author=str(state.get(CO_AUTHOR) or "")
+            repository, base_ref, co_author=str(state.get(CO_AUTHOR) or ""),
+            **({"issue": state["issue"]} if state.get("issue") else {}),
         )
         # Checked here rather than left for whoever reads the state, so the
         # complaint names the provider that answered rather than the node three

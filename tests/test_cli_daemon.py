@@ -15,6 +15,8 @@ import pytest
 from engine.apps.cli import __main__ as cli
 from engine.apps.cli import daemon
 
+REAL_NODE_INSTALLS = daemon._node_installs
+
 
 @pytest.fixture
 def home(monkeypatch, tmp_path: Path) -> Path:
@@ -22,6 +24,8 @@ def home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
+    monkeypatch.setattr(daemon, "_node_version", lambda _node: (24, 21, 0))
+    monkeypatch.setattr(daemon, "_node_installs", lambda: [])
     return tmp_path
 
 
@@ -177,7 +181,7 @@ def test_setup_records_tools_and_falls_back_to_a_detached_process(home: Path, mo
     monkeypatch.setattr(daemon, "start_service", lambda: ("ready", {"version": "1.0"}, "http://127.0.0.1:4411"))
     monkeypatch.setattr(daemon.webbrowser, "open", lambda _url: (_ for _ in ()).throw(AssertionError("no browser")))
 
-    assert cli.main(["daemon", "setup", "--no-browser"]) == 0
+    assert cli.main(["daemon", "setup"]) == 0
 
     record = daemon.read_record()
     assert record is not None and record.backend == "process"
@@ -313,7 +317,7 @@ def test_setup_unregisters_the_service_when_it_falls_back_to_a_process(home: Pat
     monkeypatch.setattr(daemon, "health", lambda _url, timeout=2.0: ("down", None))
     monkeypatch.setattr(daemon, "start_service", lambda: ("ready", {}, "http://127.0.0.1:4413"))
 
-    assert cli.main(["daemon", "setup", "--no-browser"]) == 0
+    assert cli.main(["daemon", "setup"]) == 0
 
     assert daemon.read_record().backend == "process"
     assert not daemon.launch_agent_path().exists()
@@ -415,3 +419,340 @@ def test_doctor_claude_auth_failure_is_a_warning(home, monkeypatch, error):
 
     monkeypatch.setattr(daemon.subprocess, "run", run)
     assert daemon._claude_login_finding(spec).level == "warn"
+
+
+@pytest.mark.parametrize('version', [(24, 21, 0), None, (20, 18, 0)])
+def test_detect_node(home, monkeypatch, capsys, version):
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name: f'/shims/{name}')
+    monkeypatch.setattr(daemon, '_node_version', lambda node: (26, 10, 0) if node == '/real/bin/node' else version)
+    monkeypatch.setattr(daemon, '_node_installs', lambda: [daemon.NodeInstall(Path('/real/bin'), None)] if version is None else [])
+    tools = daemon.detect_tools()
+    directory = '/real/bin' if version is None else '/shims'
+    assert tools['node'] == directory + '/node'
+    assert tools['npx'] == directory + '/npx'
+    output = capsys.readouterr().err
+    if version == (24, 21, 0):
+        assert not output
+    elif version:
+        assert '20.18.0' in output and daemon.NODE_HELP in output
+    else:
+        assert 'degraded: using /real/bin/node' in output
+
+
+def test_node_installs_across_managers(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    for variable, directory in [('XDG_DATA_HOME', 'data'), ('MISE_DATA_DIR', 'mise'),
+                                ('ASDF_DATA_DIR', 'asdf'), ('NVM_DIR', 'nvm')]:
+        monkeypatch.setenv(variable, str(tmp_path / directory))
+    paths = ['mise/installs/node/26.1.0/bin', 'asdf/installs/nodejs/24.1.0/bin',
+             'nvm/versions/node/v22.1.0/bin', '.nodenv/versions/23.1.0/bin',
+             '.volta/tools/image/node/21.1.0/bin', 'data/fnm/node-versions/v25.1.0/installation/bin',
+             'Library/Application Support/fnm/node-versions/v20.19.0/installation/bin',
+             'mise/installs/node/28.1.0/bin', 'mise/installs/node/20.18.0/bin',
+             'mise/installs/node/27.1.0/bin']
+    versions = {}
+    for path in paths:
+        directory = tmp_path / path
+        directory.mkdir(parents=True)
+        (directory / 'node').touch()
+        if '27.1.0' not in path:
+            (directory / 'npx').touch()
+        release = directory.parent.name if directory.parent.name != 'installation' else directory.parent.parent.name
+        versions[str(directory / 'node')] = None if release == '28.1.0' else tuple(map(int, release.lstrip('v').split('.')))
+    root = tmp_path / 'mise/installs/node'
+    for alias in ('latest', '26', '29.0.0'):
+        (root / alias).symlink_to(root / '26.1.0', target_is_directory=True)
+    monkeypatch.setattr(daemon, '_node_version', lambda node: versions.get(node))
+    installs = daemon._node_installs()
+    assert [item.directory for item in installs[:9]] == [tmp_path / paths[i] for i in (7, 0, 5, 1, 3, 2, 4, 6, 8)]
+    assert [item.manager for item in installs[:9]] == ["mise", "mise", "fnm", "asdf", "nodenv", "nvm", "volta", "fnm", "mise"]
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name: f'/shims/{name}')
+    probes = []
+    def probe(node):
+        probes.append(node)
+        return versions.get(node)
+    monkeypatch.setattr(daemon, '_node_version', probe)
+    check = daemon._check_node(daemon._path_tools())
+    tools, problem = check.tools, check.problem
+    assert tools['node'] == str(installs[1].directory / 'node')
+    assert probes == ['/shims/node', str(installs[0].directory / 'node'), str(installs[1].directory / 'node')]
+    assert problem
+
+
+
+@pytest.mark.parametrize('healable', [True, False])
+@pytest.mark.parametrize('recorded', [True, False])
+def test_start_heals_node(home, monkeypatch, capsys, healable, recorded):
+    spec = _spec(home, tools={'git': '/usr/bin/git', 'node': '/shims/node', 'npx': '/shims/npx'})
+    Path(spec.config).parent.mkdir(parents=True)
+    Path(spec.config).write_text('[server]\nport = 4364\n')
+    daemon.prepare_directories()
+    if recorded:
+        daemon.write_record(daemon.Record('process', spec))
+    monkeypatch.setattr(daemon, 'engine_web_executable', lambda: Path(spec.program))
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name: spec.tools.get(name))
+    monkeypatch.setattr(daemon, '_node_version', lambda node: (26, 10, 0) if node == '/real/bin/node' else None)
+    monkeypatch.setattr(daemon, '_node_installs', lambda: [daemon.NodeInstall(Path('/real/bin'), None)] if healable else [])
+    monkeypatch.setattr(daemon, 'health', lambda _url: ('down', None))
+    monkeypatch.setattr(daemon, 'wait_for', lambda *_args: ('ready', {}))
+    events = []
+    monkeypatch.setattr(daemon.ProcessBackend, 'stop', lambda _self: events.append('stop'))
+    monkeypatch.setattr(daemon.ProcessBackend, 'install', lambda _self, spec: events.append(('install', spec)))
+    monkeypatch.setattr(daemon.ProcessBackend, 'start', lambda _self, spec: events.append(('start', spec)))
+    assert cli.main(['daemon', 'start']) == 0
+    record = daemon.read_record()
+    if healable:
+        assert record is not None
+        assert events == ['stop', ('install', record.spec), ('start', record.spec)]
+        assert record.spec.tools['node'] == '/real/bin/node'
+        assert record.spec.tools['npx'] == '/real/bin/npx'
+        assert record.spec.environment()['PATH'].split(':')[:2] == ['/real/bin', '/shims']
+        detail = 'degraded: using /real/bin/node'
+    else:
+        assert record == (daemon.Record('process', spec) if recorded else None)
+        assert events == [('start', spec)]
+        detail = f'warning: /shims/node is missing; {daemon.NODE_HELP}'
+    output = capsys.readouterr().err.splitlines()
+    assert len(output) == 1
+    assert detail in output[0]
+    if healable:
+        assert 'project Node pins are ignored until you' in output[0]
+
+
+@pytest.mark.parametrize('recorded', [True, False])
+@pytest.mark.parametrize('healable', [True, False])
+def test_doctor_probes_node(home, monkeypatch, capsys, recorded, healable):
+    spec = _spec(home)
+    Path(spec.config).parent.mkdir(parents=True)
+    Path(spec.config).write_text('[server]\nport = 4364\n')
+    if recorded:
+        daemon.prepare_directories()
+        daemon.write_record(daemon.Record('process', spec))
+    monkeypatch.setattr(daemon, 'engine_web_executable', lambda: Path(spec.program))
+    monkeypatch.setattr(daemon, '_port_finding', lambda _port: daemon.Finding('port', 'ok', 'free'))
+    monkeypatch.setattr(daemon.shutil, 'which', lambda name, **_kwargs: f'/shims/{name}' if name != 'claude' else None)
+    monkeypatch.setattr(daemon, '_node_version', lambda node: (26, 10, 0) if node == '/real/bin/node' else None)
+    monkeypatch.setattr(daemon, '_node_installs', lambda: [daemon.NodeInstall(Path('/real/bin'), None)] if healable else [])
+    assert cli.main(['daemon', 'doctor', '--json']) == (0 if healable else 1)
+    nodes = [check for check in json.loads(capsys.readouterr().out)['checks'] if check['name'] == 'node']
+    assert len(nodes) == 1
+    assert nodes[0]['level'] == ('warn' if healable else 'error')
+    assert ('engine daemon start will use /real/bin/node' if healable else daemon.NODE_HELP) in nodes[0]['detail']
+    if healable:
+        assert 'degraded' in nodes[0]['detail']
+        assert 'project Node pins are ignored until you' in nodes[0]['detail']
+
+
+@pytest.mark.parametrize('result', ['v20.19.0', 'invalid', 'failure', 'timeout', 'missing'])
+def test_node_probe_uses_home_and_timeout(tmp_path, monkeypatch, result):
+    monkeypatch.setenv('HOME', str(tmp_path))
+
+    def run(command, **kwargs):
+        assert command == ['/shims/node', '--version']
+        assert kwargs['cwd'] == tmp_path
+        assert kwargs['timeout'] == 5
+        if result == 'timeout':
+            raise subprocess.TimeoutExpired(command, 5)
+        if result == 'missing':
+            raise FileNotFoundError()
+        return subprocess.CompletedProcess(command, int(result == 'failure'), result, '')
+
+    monkeypatch.setattr(daemon.subprocess, 'run', run)
+    assert daemon._node_version('/shims/node') == ((20, 19, 0) if result == 'v20.19.0' else None)
+
+
+@pytest.mark.parametrize("manager,command", [
+    ("mise", "mise use -g node@26.10.0"),
+    ("asdf", "asdf set -u nodejs 26.10.0"),
+    ("nvm", "nvm alias default 26.10.0"),
+    ("nodenv", "nodenv global 26.10.0"),
+])
+def test_healed_doctor_retains_degraded_state(home, monkeypatch, manager, command):
+    homes = dict(daemon._node_manager_homes())
+    manager_home = homes[manager]
+    monkeypatch.setattr(daemon, "_node_installs", lambda: [daemon.NodeInstall(Path("/real/bin"), manager)])
+    tools = {"node": "/real/bin/node", "npx": "/real/bin/npx",
+             "original_node": str(manager_home / "shims/node"),
+             "original_npx": str(manager_home / "shims/npx")}
+    spec = _spec(home, tools=tools)
+    Path(spec.config).parent.mkdir(parents=True)
+    Path(spec.config).write_text("[server]\nport = 4364\n")
+    daemon.prepare_directories()
+    daemon.write_record(daemon.Record("process", spec))
+    monkeypatch.setattr(daemon, "_port_finding", lambda _port: daemon.Finding("port", "ok", "free"))
+    monkeypatch.setattr(daemon, "_node_version", lambda node: (26, 10, 0))
+    node = next(f for f in daemon.diagnose() if f.name == "node")
+    assert node.level == "warn"
+    assert "degraded" in node.detail
+    assert "project Node pins are ignored until you" in node.detail
+    assert command in node.detail
+    assert "engine daemon setup" in node.detail
+
+
+def test_working_shim_keeps_project_switching(home, monkeypatch):
+    tools = {"git": "/usr/bin/git", "node": "/mise/shims/node", "npx": "/mise/shims/npx"}
+    check = daemon._check_node(tools)
+    checked, problem = check.tools, check.problem
+    assert checked == tools
+    assert problem is None
+    assert _spec(home, tools=checked).environment()["PATH"].split(":")[:2] == ["/usr/bin", "/mise/shims"]
+
+
+def test_candidate_probe_skips_old_and_broken(home, monkeypatch):
+    candidates = [Path("/broken/bin"), Path("/old/bin"), Path("/good/bin"), Path("/unused/bin")]
+    monkeypatch.setattr(daemon, "_node_installs", lambda: [daemon.NodeInstall(path, None) for path in candidates])
+    versions = {"/old/bin/node": (20, 18, 0), "/good/bin/node": (20, 19, 0)}
+    probes = []
+    def probe(node):
+        probes.append(node)
+        return versions.get(node)
+    monkeypatch.setattr(daemon, "_node_version", probe)
+    check = daemon._check_node({"node": "/shims/node", "npx": "/shims/npx"})
+    tools = check.tools
+    assert tools["node"] == "/good/bin/node"
+    assert probes == ["/shims/node", "/broken/bin/node", "/old/bin/node", "/good/bin/node"]
+
+
+@pytest.mark.parametrize("operation", ["detect", "start", "doctor"])
+@pytest.mark.parametrize("already_healed", [False, True])
+def test_node_diagnostics_reuse_verified_version(home, monkeypatch, capsys, operation, already_healed):
+    monkeypatch.setenv("MISE_DATA_DIR", "/mise")
+    tools = {"node": "/mise/shims/node", "npx": "/mise/shims/npx"}
+    if already_healed:
+        tools = {**tools, "original_node": tools["node"], "original_npx": tools["npx"],
+                 "node": "/real/bin/node", "npx": "/real/bin/npx"}
+    spec = _spec(home, tools=tools)
+    Path(spec.config).parent.mkdir(parents=True)
+    Path(spec.config).write_text("[server]\nport = 4364\n")
+    daemon.prepare_directories()
+    daemon.write_record(daemon.Record("process", spec))
+    probes = []
+
+    def probe(node):
+        probes.append(node)
+        return (26, 10, 0) if node == "/real/bin/node" else None
+
+    monkeypatch.setattr(daemon, "_node_version", probe)
+    monkeypatch.setattr(daemon, "_node_installs", lambda: [daemon.NodeInstall(Path("/real/bin"), "mise"), daemon.NodeInstall(Path("/unused/bin"), "nvm")])
+    monkeypatch.setattr(daemon, "_path_tools", lambda: tools)
+    monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path(spec.program))
+    monkeypatch.setattr(daemon, "_port_finding", lambda _port: daemon.Finding("port", "ok", "free"))
+    monkeypatch.setattr(daemon, "health", lambda _url: ("down", None))
+    monkeypatch.setattr(daemon, "wait_for", lambda *_args: ("ready", {}))
+    for method in ("stop", "install", "start"):
+        monkeypatch.setattr(daemon.ProcessBackend, method, lambda *_args: None)
+    if operation == "detect":
+        daemon.detect_tools()
+        detail = capsys.readouterr().err
+    elif operation == "start":
+        daemon.start_service()
+        detail = capsys.readouterr().err
+    else:
+        finding = next(f for f in daemon.diagnose() if f.name == "node")
+        assert finding.level == "warn"
+        detail = finding.detail
+    assert probes == (["/real/bin/node"] if already_healed else ["/mise/shims/node", "/real/bin/node"])
+    assert "degraded" in detail
+    assert "project Node pins are ignored until you" in detail
+    assert "mise use -g node@26.10.0" in detail
+
+
+@pytest.mark.parametrize("other_version", [(26, 10, 0), (22, 0, 0), None])
+@pytest.mark.parametrize("manager", ["mise", "asdf"])
+def test_healing_uses_newest_working_install_and_provenance(home, monkeypatch, manager, other_version):
+    for variable, directory in (("XDG_DATA_HOME", "data"), ("MISE_DATA_DIR", "mise"),
+                                ("ASDF_DATA_DIR", "asdf"), ("NVM_DIR", "nvm")):
+        monkeypatch.setenv(variable, str(home / directory))
+    manager_home = home / "manager-data"
+    monkeypatch.setenv("MISE_DATA_DIR" if manager == "mise" else "ASDF_DATA_DIR", str(manager_home))
+    monkeypatch.setenv("NVM_DIR", str(home / "old-manager"))
+    shim = str(manager_home / "shims/node")
+    own = manager_home / ("installs/node" if manager == "mise" else "installs/nodejs") / "24.21.0/bin"
+    release = "22.0.0" if other_version == (22, 0, 0) else "26.10.0"
+    other = home / f"old-manager/versions/node/v{release}/bin"
+    for directory in (own, other):
+        directory.mkdir(parents=True)
+        (directory / "npx").touch()
+    probes = []
+    def probe(node):
+        probes.append(node)
+        return {str(own / "node"): (24, 21, 0), str(other / "node"): other_version}.get(node)
+    monkeypatch.setattr(daemon, "_node_version", probe)
+    # Restore the real scanner, normally stubbed by the home fixture.
+    monkeypatch.setattr(daemon, "_node_installs", REAL_NODE_INSTALLS)
+    check = daemon._check_node({"node": shim, "npx": str(manager_home / "shims/npx")})
+    own_selected = other_version != (26, 10, 0)
+    chosen = own if own_selected else other
+    assert check.tools["node"] == str(chosen / "node")
+    assert check.install_manager == (manager if own_selected else "nvm")
+    notice = daemon._healing_notice(check)
+    expected = [shim, str(other / "node"), str(own / "node")] if other_version is None else [shim, str(chosen / "node")]
+    assert probes == expected
+    if own_selected:
+        command = "mise use -g node@24.21.0" if manager == "mise" else "asdf set -u nodejs 24.21.0"
+        assert command in notice
+    else:
+        assert f"set a global Node 20.19+ default in {manager}" in notice
+        assert "mise use" not in notice and "asdf set" not in notice and "nvm alias" not in notice
+    assert "\n" not in notice
+    assert notice.endswith(", then engine daemon setup")
+    assert "global default applies only" not in notice
+    assert "global default applies only" in daemon._healing_notice(check, verbose=True)
+
+
+def test_manager_names_in_unrelated_paths_are_not_provenance(home, monkeypatch):
+    monkeypatch.setenv("NVM_DIR", str(home / "actual-nvm"))
+    monkeypatch.setenv("MISE_DATA_DIR", str(home / "actual-mise"))
+    node = str(home / "nvm-and-fnm-project/bin/node")
+    assert daemon._shim_manager(node) is None
+    monkeypatch.setattr(daemon, "_node_installs", lambda: [daemon.NodeInstall(Path("/real/bin"), "nvm")])
+    monkeypatch.setattr(daemon, "_node_version", lambda path: (26, 10, 0) if path == "/real/bin/node" else None)
+    check = daemon._check_node({"node": node})
+    notice = daemon._healing_notice(check)
+    assert "in your version manager" in notice
+    assert "nvm alias" not in notice and "fnm default" not in notice
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_node_failure_message_distinguishes_missing_binary(home, monkeypatch, missing):
+    node = home / "node"
+    node.touch()
+    if missing:
+        node.unlink()
+    monkeypatch.setattr(daemon, "_node_version", lambda _node: None)
+    tools = {"node": str(node)}
+    check = daemon._check_node(tools)
+    assert check.tools == tools
+    assert check.problem == (
+        f"{node} is missing" if missing
+        else f"{node} failed the Node version check from {home}"
+    )
+
+
+@pytest.mark.parametrize("node_directory", ["/mise/shims", "/opt/node/bin"])
+def test_healthy_path_preserves_recorded_order(home, node_directory):
+    tools = {"git": "/usr/bin/git", "claude": "/agents/bin/claude",
+             "node": f"{node_directory}/node", "npx": f"{node_directory}/npx"}
+    expected = ["/usr/bin", "/agents/bin", node_directory]
+    expected += [path for path in daemon.SYSTEM_PATH if path not in expected]
+    assert _spec(home, tools=tools).environment()["PATH"] == os.pathsep.join(expected)
+
+
+def test_healed_dedicated_path_preserves_remaining_tool_order(home):
+    directory = home / ".local/share/mise/installs/node/26.10.0/bin"
+    tools = {"git": "/usr/bin/git", "claude": "/agents/bin/claude",
+             "node": str(directory / "node"), "npx": str(directory / "npx"),
+             "original_node": "/mise/shims/node", "original_npx": "/mise/shims/npx"}
+    expected = [str(directory), "/mise/shims", "/usr/bin", "/agents/bin"]
+    expected += [path for path in daemon.SYSTEM_PATH if path not in expected]
+    assert _spec(home, tools=tools).environment()["PATH"] == os.pathsep.join(expected)
+
+
+@pytest.mark.parametrize("directory", ["/opt/homebrew/bin", "/usr/local/bin"])
+def test_healed_shared_directory_does_not_shadow_recorded_git(home, directory):
+    tools = {"git": "/usr/bin/git", "claude": "/agents/bin/claude",
+             "node": f"{directory}/node", "npx": f"{directory}/npx",
+             "original_node": "/mise/shims/node", "original_npx": "/mise/shims/npx"}
+    path = _spec(home, tools=tools).environment()["PATH"]
+    assert path.split(os.pathsep)[:4] == ["/usr/bin", "/agents/bin", directory, "/mise/shims"]
+    assert daemon.shutil.which("git", path=path) == "/usr/bin/git"

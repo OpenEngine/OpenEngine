@@ -1,0 +1,40 @@
+name: open-verify
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/open-verify/**", "langgraph-acp/**", ".github/workflows/open-verify.yml"]
+  pull_request:
+    paths: ["apps/open-verify/**", "langgraph-acp/**", ".github/workflows/open-verify.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+          enable-cache: true
+      - name: Install standalone CLI and test dependencies
+        run: |
+          uv sync --project apps/open-verify --python 3.12 --locked --extra browser
+          uv pip install --python apps/open-verify/.venv/bin/python --no-deps -e ./langgraph-acp
+      - name: Install Chromium and MP4 encoder
+        run: |
+          apps/open-verify/.venv/bin/python -m playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Lint
+        run: apps/open-verify/.venv/bin/ruff check apps/open-verify/src apps/open-verify/tests
+      - name: Test CLI, browser guards, generated tests, and actual MP4 export
+        run: apps/open-verify/.venv/bin/python -m pytest apps/open-verify/tests

@@ -55,6 +55,15 @@ class WorkflowsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphsConfig:
+    """How this backend treats graphs registered through `engine graph add`."""
+
+    allow_python: bool = True
+    """Whether a Python graph may be uploaded. Python runs with the daemon's
+    privileges, so a backend that wants YAML only turns this off."""
+
+
+@dataclass(frozen=True, slots=True)
 class ServerConfig:
     """Where the web interface listens."""
 
@@ -114,7 +123,7 @@ class CommunicationsConfig:
 
 @dataclass(frozen=True, slots=True)
 class GitHubConfig:
-    """Which repository on GitHub this deployment answers events from.
+    """Which repositories on GitHub this deployment answers events from.
 
     The shared secret that signs those deliveries is deliberately absent: like
     the login client secret it belongs in a server-local `.env` beside this
@@ -123,15 +132,25 @@ class GitHubConfig:
     two out of the handler's source.
     """
 
+    resolve_addressed_threads: bool = True
     repository: str = ""
     """`owner/name` of the repository whose webhooks are accepted, or empty.
 
-    Empty leaves the webhook route unconfigured rather than open: a deployment
-    that never named a repository has nothing to compare a delivery against.
+    Together with `repositories`, this forms the webhook allowlist. An empty
+    allowlist leaves the route unconfigured rather than accepting any repository.
     """
 
     host_aliases: Mapping[str, str] = field(default_factory=dict)
     """Web authorities mapped to their GitHub transport authority, including ports."""
+
+    repositories: tuple[str, ...] = ()
+    """Additional repositories whose webhooks are accepted."""
+
+    @property
+    def webhook_repositories(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            repo.lower() for repo in (self.repository, *self.repositories) if repo
+        ))
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +212,13 @@ class EngineConfig:
     orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
     sandbox: SandboxConfig = SandboxConfig()
+    graphs: GraphsConfig = GraphsConfig()
+    model_tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    """`[runners.<runner>.models]`: tier name to model, per runner.
+
+    What a graph's `model: elevated` means on this backend, so graphs name a
+    tier and each backend decides which model that is.
+    """
     attribution: bool = True
     repos: Mapping[str, str] = field(default_factory=dict)
     repo_modes: Mapping[str, str] = field(default_factory=dict)
@@ -248,7 +274,10 @@ def load_engine_config(
     """Load the selected TOML file, or return defaults when none is selected.
 
     Selection is intentionally singular: an explicit path wins over
-    ``ENGINE_CONFIG``, which wins over ``engine.toml`` in the current directory.
+    ``ENGINE_CONFIG``, then the machine configuration at
+    ``$XDG_CONFIG_HOME/openengine/engine.toml`` (defaulting to
+    ``~/.config/openengine/engine.toml``), then ``.engine/config.toml`` and
+    ``engine.toml`` in the current directory.
     Files are not merged, so the effective permission policy always has one
     inspectable source.
     """
@@ -262,8 +291,17 @@ def load_engine_config(
     elif configured := environment.get(CONFIG_ENVIRONMENT_VARIABLE):
         selected = _relative_to(Path(configured), directory)
     else:
+        xdg_config = environment.get("XDG_CONFIG_HOME", "")
+        config_home = (
+            Path(xdg_config) if xdg_config and Path(xdg_config).is_absolute()
+            else Path.home() / ".config"
+        )
+        machine = config_home / "openengine" / DEFAULT_CONFIG_NAME
         default = directory / DEFAULT_CONFIG_NAME
-        selected = default if default.is_file() else None
+        local = directory / ".engine" / "config.toml"
+        selected = next(
+            (path for path in (machine, local, default) if path.is_file()), None
+        )
 
     if selected is None:
         return LoadedEngineConfig()
@@ -302,10 +340,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_login_client_id",
             "github_login_redirect_uri",
             "github_token",
+            "graphs",
             "orchestrator",
             "public_url",
             "repo_modes",
             "repos",
+            "runners",
             "trusted_repos",
             "server",
             "sandbox",
@@ -338,9 +378,20 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "host_aliases"}, "github")
+    _reject_unknown(github, {"repository", "repositories", "host_aliases", "resolve_addressed_threads"}, "github")
+    resolve_addressed_threads = github.get("resolve_addressed_threads", True)
+    if not isinstance(resolve_addressed_threads, bool):
+        raise EngineConfigError("github.resolve_addressed_threads must be a boolean")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
+    )
+
+    repository_list = github.get("repositories", [])
+    if not isinstance(repository_list, list):
+        raise EngineConfigError("github.repositories must be a list of owner/name strings")
+    github_repositories = tuple(
+        _repository_slug(_nonblank_string(value, "github.repositories"), "github.repositories")
+        for value in repository_list
     )
 
     access = _table(document.get("access", {}), "access")
@@ -433,6 +484,20 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     bash = _table(approvals.get("bash", {}), "approvals.bash")
     _reject_unknown(bash, {"allow", "ask", "deny"}, "approvals.bash")
 
+    graphs = _table(document.get("graphs", {}), "graphs")
+    _reject_unknown(graphs, {"allow_python"}, "graphs")
+    allow_python = graphs.get("allow_python", True)
+    if not isinstance(allow_python, bool):
+        raise EngineConfigError("graphs.allow_python must be a boolean")
+    model_tiers: dict[str, dict[str, str]] = {}
+    for runner, settings in _table(document.get("runners", {}), "runners").items():
+        settings = _table(settings, f"runners.{runner}")
+        _reject_unknown(settings, {"models"}, f"runners.{runner}")
+        model_tiers[runner] = {
+            tier: _nonblank_string(model, f"runners.{runner}.models.{tier}")
+            for tier, model in _table(settings.get("models", {}), f"runners.{runner}.models").items()
+        }
+
     workflows = _table(document.get("workflows", {}), "workflows")
     _reject_unknown(workflows, {"directory"}, "workflows")
     workflow_directory = workflows.get("directory", "")
@@ -466,6 +531,12 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
         for name, path in _table(document.get("repos", {}), "repos").items()
     }
+    repo_names = {name.lower() for name in repos}
+    for repository in (github_repository, *github_repositories):
+        if repository and repository.lower() not in repo_names:
+            raise EngineConfigError(
+                f"GitHub webhook repository {repository!r} requires a checkout path under [repos]"
+            )
     repo_modes = {}
     for name, mode in _table(document.get("repo_modes", {}), "repo_modes").items():
         if name not in repos:
@@ -504,6 +575,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         state=state_config,
         github=GitHubConfig(
             repository=github_repository,
+            repositories=github_repositories,
+            resolve_addressed_threads=resolve_addressed_threads,
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()
@@ -524,6 +597,8 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             slack_operators=work_order_slack_operators,
         ),
         claude=ClaudeConfig(output_style=output_style, config_dir=config_dir),
+        graphs=GraphsConfig(allow_python=allow_python),
+        model_tiers=model_tiers,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -685,6 +760,7 @@ __all__ = [
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
+    "GraphsConfig",
     "LoadedEngineConfig",
     "ResponseStyle",
     "ServerConfig",

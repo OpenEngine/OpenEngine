@@ -1,7 +1,7 @@
 """Where a GitHub webhook delivery is checked against, and with what.
 
 Split the way the login credentials are split: `engine.toml` names the
-repository this deployment answers, and the shared secret that signs its
+repositories this deployment answers, and the shared secret that signs its
 deliveries lives in a server-local `.env` beside that file. `engine.toml` is
 committed, so a secret written there is published; the `.env` is gitignored and
 is read directly, with dotenv interpolation disabled, rather than sourced into a
@@ -25,10 +25,17 @@ SECRET_VARIABLE = "ENGINE_GITHUB_WEBHOOK_SECRET"
 
 @dataclass(frozen=True)
 class GitHubWebhookConfig:
-    """The repository to accept deliveries from, and how to read their secret."""
+    """The repositories to accept deliveries from, and how to read their secret."""
 
-    repository: str
+    repository: str = ""
     secret_file: Path | None = field(default=None, repr=False)
+    repositories: tuple[str, ...] = ()
+
+    @property
+    def webhook_repositories(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            repo.lower() for repo in (self.repository, *self.repositories) if repo
+        ))
 
     def current_secret(self) -> str:
         """The secret as it is written right now, or empty when unconfigured.
@@ -56,8 +63,10 @@ def github_webhook_config(loaded: LoadedEngineConfig) -> GitHubWebhookConfig | N
     """
 
     secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
-    config = GitHubWebhookConfig(loaded.config.github.repository, secret_file)
-    if not config.repository and not config.current_secret():
+    config = GitHubWebhookConfig(
+        loaded.config.github.repository, secret_file, loaded.config.github.repositories,
+    )
+    if not config.webhook_repositories and not config.current_secret():
         return None
     return config
 

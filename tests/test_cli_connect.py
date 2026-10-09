@@ -1,0 +1,73 @@
+"""`engine connect`."""
+
+from __future__ import annotations
+
+import argparse
+
+from engine.apps.cli import __main__ as cli, connect
+from engine.cli.backends import Backend
+
+
+def arguments(provider: str, **overrides) -> argparse.Namespace:
+    return argparse.Namespace(**{"provider": provider, "server": None, "backend": None, "origin": "https://gitlab.com", "open": False, **overrides})
+
+
+def ready(monkeypatch) -> None:
+    monkeypatch.setattr(connect, "selected_backend", lambda _arguments: Backend("local", "http://engine.test"))
+    monkeypatch.setattr(connect.daemon, "check_health", lambda _url: ("ready", {}, "OpenEngine is ready"))
+
+
+def test_connect_is_a_top_level_command(monkeypatch):
+    called = []
+    monkeypatch.setattr(connect, "main", lambda parsed: called.append(parsed.provider) or 0)
+
+    assert cli.main(["connect", "github"]) == 0
+    assert called == ["github"]
+
+
+def test_connect_slack_opens_the_authorization_url_and_waits_for_connection(monkeypatch, capsys):
+    ready(monkeypatch)
+    monkeypatch.setattr(connect.time, "sleep", lambda _seconds: None)
+
+    def request(_backend, path, body=None, timeout=10.0):
+        return {"authorizationUrl": "https://slack.example/oauth"} if path == "/api/slack/connect" else {"connected": True}
+
+    monkeypatch.setattr(connect, "request", request)
+    opened = []
+    monkeypatch.setattr(connect.webbrowser, "open", opened.append)
+
+    assert connect.main(arguments("slack", open=True)) == 0
+
+    assert opened == ["https://slack.example/oauth"]
+    assert "Connected." in capsys.readouterr().out
+
+
+def test_connect_github_explains_the_keychain_and_selects_github_oauth(monkeypatch, capsys):
+    ready(monkeypatch)
+    requests = []
+
+    def request(_backend, path, body=None, timeout=10.0):
+        requests.append((path, body, timeout))
+        if path == "/api/github/connect":
+            return {"verificationUri": "https://github.com/login/device", "userCode": "CODE", "interval": 0}
+        return {"status": "complete"} if path.endswith("/poll") else {}
+
+    monkeypatch.setattr(connect, "request", request)
+
+    assert connect.main(arguments("github")) == 0
+
+    assert requests == [
+        ("/api/github/connect", {}, 60.0),
+        ("/api/github/connect/poll", {}, 60.0),
+        ("/api/source-control/provider", {"provider": "github-oauth"}, 10.0),
+    ]
+    out = capsys.readouterr().out
+    assert "system keychain" in out and "login password" in out and "CODE" in out
+
+
+def test_connect_reports_an_unreachable_service(monkeypatch, capsys):
+    monkeypatch.setattr(connect, "selected_backend", lambda _arguments: Backend("mini", "http://mini.test"))
+    monkeypatch.setattr(connect.daemon, "check_health", lambda _url: ("down", None, "cannot reach http://mini.test"))
+
+    assert connect.main(arguments("gh")) == 1
+    assert "cannot reach http://mini.test" in capsys.readouterr().err
