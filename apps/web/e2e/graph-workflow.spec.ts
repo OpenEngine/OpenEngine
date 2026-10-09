@@ -490,7 +490,6 @@ test("a graph agent responds when steered during an executing turn", async ({
   engine.script(STEERING_SCRIPT);
 
   const runUrl = await create(page, engine.repository, INTERRUPT_TASK);
-  const runId = runUrl.split("/").pop() ?? "";
   await expect
     .poll(async () => String((await graphRun(page, runUrl)).values?.workspace ?? ""))
     .not.toBe("");

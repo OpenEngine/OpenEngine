@@ -106,6 +106,9 @@ jobs:
       - name: Install web client
         run: npm --prefix apps/web ci
 
+      - name: Lint web client
+        run: npm --prefix apps/web run lint
+
       - name: Typecheck web client
         run: npm --prefix apps/web run typecheck
 

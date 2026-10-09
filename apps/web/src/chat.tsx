@@ -227,6 +227,7 @@ export function QueuedMessagePersistence({ draftRestored }: { draftRestored: boo
     if (saved.length && aui.composer.getState().queue.length === 0) {
       const draft = aui.composer.getState().text;
       aui.composer.setText(saved[0]!);
+      // oxlint-disable-next-line react/set-state-in-effect -- Track restoration of the queue read from localStorage after history loads.
       setRestoringQueue({ key: queueKey, messages: saved, index: 0, draft });
       return;
     }
@@ -241,6 +242,7 @@ export function QueuedMessagePersistence({ draftRestored }: { draftRestored: boo
     const next = restoringQueue.messages[index];
     if (next !== undefined) {
       aui.composer.setText(next);
+      // oxlint-disable-next-line react/set-state-in-effect -- Advance restoration only after the external composer accepts the queued message.
       setRestoringQueue({ ...restoringQueue, index });
       return;
     }
@@ -282,6 +284,7 @@ export function Composer() {
     if (aui.composer.getState().text !== savedDraft) {
       aui.composer.setText(savedDraft);
     }
+    // oxlint-disable-next-line react/set-state-in-effect -- Mark the localStorage draft as restored before enabling persistence and queue replay.
     setRestoredDraftKey(draftKey);
   }, [aui, draftKey]);
 
@@ -748,6 +751,7 @@ export function ApprovalEntry({
     // Answered, so it stops being the thing under your eyes. Reopening is one
     // click, and a manual reopen survives because this only fires on the
     // transition.
+    // oxlint-disable-next-line react/set-state-in-effect -- Collapse on the external approval status transition while preserving manual reopening.
     setOpen(pending);
   }, [pending]);
 

@@ -887,6 +887,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const workflowId = baseRun?.workflowId;
   useEffect(() => {
     let cancelled = false;
+    // oxlint-disable-next-line react/set-state-in-effect -- Clear stale topology when fetching a different workflow or retrying a failed request.
     setTopology(undefined);
     setWorkflowGone(false);
     setTopologyError("");
@@ -905,6 +906,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   useEffect(() => {
     let cancelled = false;
     let cursor = 0;
+    // oxlint-disable-next-line react/set-state-in-effect -- Reset the event stream when subscribing to a different run.
     setGraphEvents([]);
     let timer: number | undefined;
     // Kept up even once the run has finished, the way the rail's list is: an
