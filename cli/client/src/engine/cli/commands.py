@@ -2,7 +2,7 @@
 
 Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
 the one `engine backend use` chose -- and print JSON unless `--pretty` asks
-for something to read. Errors go to stderr; the exit status is 0 on success,
+for something to read. List commands print a table unless `--json` asks for JSON. Errors go to stderr; the exit status is 0 on success,
 1 on a refusal or a failed run, and 2 on a usage mistake.
 `graph spec` and `loop spec` print local Markdown specifications offline.
 """
@@ -61,6 +61,10 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     common.add_argument("--backend", metavar="NAME", help="the backend to use (default: the selected one)")
     common.add_argument("--pretty", action="store_true", help="human-readable output instead of JSON")
     scoped = argparse.ArgumentParser(add_help=False, parents=[common])
+    # List commands print a table by default; `--pretty` is still accepted so older scripts keep working.
+    listed = argparse.ArgumentParser(add_help=False)
+    listed.add_argument("--json", action="store_true", help="JSON instead of a table")
+    listed.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
     scoped.add_argument("--project", metavar="NAME", help="the project names resolve in (default: the backend's)")
 
     backend = commands.add_parser("backend", help="choose which engine daemon commands talk to")
@@ -75,16 +79,15 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--replace", action="store_true", help="overwrite a backend with this name")
     adding.add_argument("--pretty", action="store_true")
     for name, help_text in (("list", "list backends"), ("use", "select a backend"), ("remove", "forget a backend")):
-        action = actions.add_parser(name, help=help_text)
+        action = actions.add_parser(name, parents=[listed] if name == "list" else [], help=help_text)
         if name != "list":
             action.add_argument("name")
+            action.add_argument("--pretty", action="store_true")
         else:
             action.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
-        action.add_argument("--pretty", action="store_true")
-    listing = commands.add_parser("backends", help="list backends")
+    listing = commands.add_parser("backends", parents=[listed], help="list backends")
     listing.add_argument("action", nargs="?", choices=("list",), default="list")
     listing.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
-    listing.add_argument("--pretty", action="store_true")
 
     graph = commands.add_parser("graph", help="register, inspect and run graphs")
     actions = graph.add_subparsers(dest="action", required=True)
@@ -106,10 +109,9 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     running.add_argument("--wait", action="store_true", help="wait for the run to finish")
     running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
     running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
-    graphs = commands.add_parser("graphs", help="list graphs")
+    graphs = commands.add_parser("graphs", parents=[listed], help="list graphs")
     graphs.add_argument("action", nargs="?", choices=("list",), default="list")
     graphs.add_argument("--backend", metavar="NAME")
-    graphs.add_argument("--pretty", action="store_true")
     graphs.add_argument("--project", metavar="NAME")
     graphs.add_argument("--all-projects", action="store_true")
 
@@ -120,10 +122,9 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     waiting = actions.add_parser("wait", parents=[common], help="wait for a run to finish")
     waiting.add_argument("run_id")
     waiting.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
-    runs = commands.add_parser("runs", help="list runs, newest first")
+    runs = commands.add_parser("runs", parents=[listed], help="list runs, newest first")
     runs.add_argument("action", nargs="?", choices=("list",), default="list")
     runs.add_argument("--backend", metavar="NAME")
-    runs.add_argument("--pretty", action="store_true")
     runs.add_argument("--project", metavar="NAME")
     runs.add_argument("--all-projects", action="store_true")
     runs.add_argument("--graph", default="", help="only runs of this graph")
@@ -155,18 +156,16 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
         if name == "resume":
             action.add_argument("--max-prs", type=int, default=None)
             action.add_argument("--max-spend", type=float, default=None, metavar="USD")
-    loops = commands.add_parser("loops", help="list loops")
+    loops = commands.add_parser("loops", parents=[listed], help="list loops")
     loops.add_argument("action", nargs="?", choices=("list",), default="list")
     loops.add_argument("--backend", metavar="NAME")
-    loops.add_argument("--pretty", action="store_true")
     loops.add_argument("--project", metavar="NAME")
     loops.add_argument("--all-projects", action="store_true")
 
-    nodes = commands.add_parser("nodes", help="list a run's node executions")
+    nodes = commands.add_parser("nodes", parents=[listed], help="list a run's node executions")
     nodes.add_argument("action", nargs="?", choices=("list",), default="list")
     nodes.add_argument("--run", required=True, metavar="RUN_ID")
     nodes.add_argument("--backend", metavar="NAME")
-    nodes.add_argument("--pretty", action="store_true")
     node = commands.add_parser("node", help="inspect or steer one node execution")
     actions = node.add_subparsers(dest="action", required=True)
     getting = actions.add_parser("get", parents=[common], help="one node execution and its steering")
@@ -192,10 +191,9 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     signin = actions.add_parser("signin", help="sign an agent in where the backend runs")
     signin.add_argument("name", help="an agent name, such as claude")
     signin.add_argument("--backend", metavar="NAME")
-    agents = commands.add_parser("agents", help="list agents")
+    agents = commands.add_parser("agents", parents=[listed], help="list agents")
     agents.add_argument("action", nargs="?", choices=("list",), default="list")
     agents.add_argument("--backend", metavar="NAME")
-    agents.add_argument("--pretty", action="store_true")
 
     # `engine runner signin` before agents had their own command; kept for one release.
     # Without `help`, it is left out of the command list; HIDDEN keeps it out of the usage line.
@@ -240,7 +238,7 @@ def backend_list(arguments: argparse.Namespace) -> int:
         if getattr(arguments, "check", False):
             row["health"] = _health(backend)
         rows.append(row)
-    if arguments.pretty:
+    if not arguments.json:
         _table(rows, [("", lambda r: "*" if r["current"] else " "), ("NAME", "name"), ("URL", "url"),
                       ("PROJECT", "project"), ("TOKEN", lambda r: r["token_env"] or "-"),
                       *([("HEALTH", "health")] if getattr(arguments, "check", False) else [])])
@@ -286,7 +284,7 @@ def graphs_list(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     project = None if arguments.all_projects else _project(arguments, backend)
     graphs = client.get("/graphs", project=project)["graphs"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(graphs, [("NAME", "name"), ("VERSION", "version"), ("PROJECT", "project"),
                         ("GRAPH ID", "graphId"), ("UPDATED", "updatedAt"), ("DESCRIPTION", "description")])
     else:
@@ -351,7 +349,7 @@ def runs_list(arguments: argparse.Namespace) -> int:
         "/runs", project=project, graph=arguments.graph or None, loop=arguments.loop or None,
         status=arguments.status or None, limit=str(arguments.limit),
     )["runs"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(runs, [
             ("RUN ID", "runId"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}"), ("STATUS", "status"),
             ("LOOP", "loop"), ("STARTED", "startedAt"), ("SPEND", _run_spend),
@@ -399,7 +397,7 @@ def loops_list(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     project = None if arguments.all_projects else _project(arguments, backend)
     loops = client.get("/loops", project=project)["loops"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(loops, [
             ("NAME", "name"), ("GRAPH", lambda l: f"{l['graph']} v{l['version']}"), ("STATE", "state"),
             ("EVERY", lambda l: _duration(l["everySeconds"])),
@@ -444,7 +442,7 @@ def loop_resume(arguments: argparse.Namespace) -> int:
 def nodes_list(arguments: argparse.Namespace) -> int:
     _backend, client = _connect(arguments)
     nodes = client.get(f"/runs/{quote(arguments.run)}/nodes")["nodes"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(nodes, _NODE_COLUMNS)
     else:
         _print({"nodes": nodes})
@@ -493,7 +491,7 @@ def agent_add(arguments: argparse.Namespace) -> int:
 def agents_list(arguments: argparse.Namespace) -> int:
     _backend, client = _connect(arguments)
     agents = client.get("/agents")["agents"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(agents, _AGENT_COLUMNS)
     else:
         _print({"agents": agents})

@@ -70,7 +70,7 @@ RUN = {
 def test_backends_are_added_selected_and_listed(capsys) -> None:
     assert main(["backend", "add", "mini", "mac-mini.local:4364", "--token-env", "MINI_TOKEN", "--use"]) == 0
     capsys.readouterr()
-    assert main(["backends", "list"]) == 0
+    assert main(["backends", "list", "--json"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["current"] == "mini"
     assert {b["name"]: b["url"] for b in listed["backends"]} == {
@@ -141,9 +141,9 @@ def test_runs_sends_its_filters_and_prints_a_table(monkeypatch, capsys) -> None:
     listed = {**RUN, "loop": None, "startedAt": "2026-10-05T12:00:00+00:00",
               "usage": {"costUsd": 1.25, "complete": True}}
     recorded = serve(monkeypatch, {"runs": [listed]}, {"runs": [listed]})
-    assert main(["runs", "--graph", "pair", "--status", "running", "--limit", "5"]) == 0
+    assert main(["runs", "--graph", "pair", "--status", "running", "--limit", "5", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["runs"][0]["runId"] == "run-1"
-    assert main(["runs", "--all-projects", "--pretty"]) == 0
+    assert main(["runs", "--all-projects"]) == 0
     filtered, everywhere = recorded.requests
     assert filtered["url"].endswith("/api/v1/runs?project=default&graph=pair&status=running&limit=5")
     assert everywhere["url"].endswith("/api/v1/runs?limit=20")
@@ -240,7 +240,7 @@ def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys)
         {**qwen, "removed": True},
     )
     assert main(["agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1"]) == 0
-    assert main(["agents", "--pretty"]) == 0
+    assert main(["agents"]) == 0
     assert main(["agent", "remove", "qwen", "--pretty"]) == 0
     assert [(r["method"], r["url"].removeprefix("http://127.0.0.1:4364/api/v1")) for r in backend.requests] == [
         ("POST", "/agents"), ("GET", "/agents"), ("DELETE", "/agents/qwen"),

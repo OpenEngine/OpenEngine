@@ -51,7 +51,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     listing.add_argument("--server", metavar="URL", help="override the selected backend's URL")
     listing.add_argument("--backend", metavar="NAME", help="the backend to ask (default: the selected one)")
     listing.add_argument("--origin", default="https://gitlab.com", help="the GitLab instance to report")
-    listing.add_argument("--pretty", action="store_true", help="human-readable output instead of JSON")
+    listing.add_argument("--json", action="store_true", help="JSON instead of a table")
+    listing.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
     removing = commands.add_parser("disconnect", help="disconnect shared source control or Slack")
     removing.add_argument("provider", choices=DISCONNECTABLE)
     removing.add_argument("--server", metavar="URL", help="override the selected backend's URL")
@@ -167,7 +168,7 @@ def connections(arguments: argparse.Namespace) -> int:
     except (ValueError, RuntimeError) as error:
         print(f"engine: {error}", file=sys.stderr)
         return EXIT_FAILED
-    if not arguments.pretty:
+    if arguments.json:
         print(json.dumps({"connections": rows}))
         return EXIT_OK
     for row in rows:

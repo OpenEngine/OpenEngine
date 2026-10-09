@@ -61,6 +61,7 @@ const config = {
         items: [
           {type: 'docSidebar', sidebarId: 'docs', position: 'right', label: 'Docs'},
           {to: '/blog', position: 'right', label: 'Blog'},
+          {href: REPO, position: 'right', label: 'GitHub'},
           {href: 'mailto:hello@openengine.cc', position: 'right', label: 'Contact Us', className: 'navbar-cta'},
         ],
       },
