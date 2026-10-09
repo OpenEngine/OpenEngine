@@ -289,6 +289,7 @@ def test_generated_spec_documentation_matches_command_documentation() -> None:
     generator = run_path(str(root / "scripts/generate_cli_docs.py"))
     assert (root / "site/docs/cli-specs.md").read_text() == generator["render"]()
     assert (root / "cli/client/src/engine/cli/specs.py").read_text() == generator["render_cli"]()
+    assert (root / "site/docs/cli-reference.md").read_text() == generator["render_reference"]()
 
 
 def test_documented_graph_and_loop_examples_match_current_language() -> None:

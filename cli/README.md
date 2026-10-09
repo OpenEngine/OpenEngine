@@ -28,9 +28,12 @@ started — a daemon that is up already serves it.
 Backend commands use the selected backend. `engine graph spec` and
 `engine loop spec` print the current specifications as Markdown locally, without
 a running daemon. Their specifications and the site reference are generated from
-the parser’s field definitions, expression rules, and accompanying prose. Run
-`python3 scripts/generate_cli_docs.py` from the repository root to regenerate
-both; the site build also runs it automatically. Tests reject stale output.
+the parser’s field definitions, expression rules, and accompanying prose; the
+site's CLI reference is generated from the `engine` argument parser. Run
+`uv run python scripts/generate_cli_docs.py` from the repository root to
+regenerate them; the site build also runs it, keeping the committed CLI
+reference when the parser's dependencies are not installed. Tests reject stale
+output.
 
 ## Backends
 
