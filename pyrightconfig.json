@@ -36,7 +36,7 @@
     "packages/single-tool-mcp/src",
     "packages/slack-concierge/src"
   ],
-  "typeCheckingMode": "basic",
+  "typeCheckingMode": "standard",
   "pythonVersion": "3.11",
   "pythonPlatform": "All",
   "venvPath": ".",
