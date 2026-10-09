@@ -1983,6 +1983,8 @@ def create_app(
                 usage=lambda: usage,
                 turns=round_robin_turns,
             )
+            # Taken before start(), which may already run nodes.
+            started_at = datetime.now(UTC)
             snapshot = await runtime.start(
                 GraphId(str(graph.graph_id)),
                 {
@@ -2020,7 +2022,7 @@ def create_app(
                 depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
                 inputs=inputs,
                 requester=requester,
-                started_at=datetime.now(UTC),
+                started_at=started_at,
             )
             await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
