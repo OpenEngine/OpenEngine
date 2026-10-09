@@ -23,7 +23,7 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
-from engine.cli import backends, repository
+from engine.cli import backends, repository, starters
 from engine.cli.backends import Backend, BackendError
 from engine.cli.http import Client, RequestFailed
 from engine.cli.specs import graph_spec, loop_spec
@@ -97,9 +97,11 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     getting = actions.add_parser("get", parents=[scoped], help="a graph and its exact definition")
     getting.add_argument("graph", help="a name, name@VERSION, graph id or version id")
     running = actions.add_parser("run", parents=[scoped], help="run a graph with an instruction")
-    running.add_argument("graph")
-    running.add_argument("instruction")
+    running.add_argument("graph", help=f"a graph, or a built-in one: {', '.join(starters.NAMES)}")
+    running.add_argument("instruction", nargs="?", default="", help="what to do (default: run the graph)")
     running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
+    running.add_argument("--branch", default="", help="the branch to check out (sets the branch input)")
+    running.add_argument("--agent", default="", help="the agent to run (sets the agent input)")
     running.add_argument("--repo", default="", help="repository to check out")
     running.add_argument("--wait", action="store_true", help="wait for the run to finish")
     running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
@@ -312,14 +314,27 @@ def graph_get(arguments: argparse.Namespace) -> int:
 def graph_run(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     key = arguments.idempotency_key or f"cli-{uuid.uuid4()}"
-    run = client.post("/runs", {
+    inputs = _inputs(arguments.input)
+    for name in ("branch", "agent"):
+        if getattr(arguments, name):
+            inputs[name] = getattr(arguments, name)
+    request = {
         "project": _project(arguments, backend),
         "graph": arguments.graph,
-        "instruction": arguments.instruction,
-        "inputs": _inputs(arguments.input),
+        "instruction": arguments.instruction or _default_instruction(arguments),
+        "inputs": inputs,
         "repository": _repository(arguments, backend),
         "idempotencyKey": key,
-    }, idempotent=True)
+    }
+    try:
+        run = client.post("/runs", request, idempotent=True)
+    except RequestFailed as refused:
+        if refused.status != 404 or arguments.graph not in starters.NAMES:
+            raise
+        # A built-in graph this project has not run yet: register it, then run it.
+        client.post("/graphs", {"project": request["project"], "format": "yaml",
+                                "source": starters.source(arguments.graph)})
+        run = client.post("/runs", request, idempotent=True)
     if arguments.wait:
         if not arguments.pretty:
             print(json.dumps({"runId": run["runId"], "status": run["status"]}), file=sys.stderr)
@@ -575,6 +590,11 @@ def _read_graph(file: str) -> tuple[str, str]:
     if not isinstance(manifest, dict):
         raise _UsageError(f"{file} must hold a mapping")
     return "yaml", text
+
+
+def _default_instruction(arguments: argparse.Namespace) -> str:
+    """What a run is asked when no instruction is given: just to run the graph."""
+    return f"Run {arguments.graph}" + (f" on {arguments.branch}" if arguments.branch else "") + "."
 
 
 def _inputs(pairs: list[str]) -> dict[str, str]:

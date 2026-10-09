@@ -121,6 +121,13 @@ def test_every_starter_parses() -> None:
         assert spec.node("reviewers") is not None and spec.node("reranker") is not None
 
 
+def test_adversarial_review_checks_out_the_branch_and_runs_the_agent_input() -> None:
+    spec = parse_graph(yaml.safe_load(starters.source("adversarial-review")))
+    assert spec.ref_input == "branch"
+    assert {item.name for item in spec.inputs} == {"branch", "agent"}
+    assert spec.node("reviewers").runner.kind == spec.node("reranker").runner.kind == "input"
+
+
 def test_mistakes_are_reported_with_their_section() -> None:
     raw = yaml.safe_load(SKETCH)
     raw["implementation"]["setup"] = {"base_ref": "origin/main"}
