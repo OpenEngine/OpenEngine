@@ -294,3 +294,88 @@ def test_retirement_stops_descendants_with_closed_pipes(tmp_path):
             await asyncio.sleep(0.5)
             assert not marker.exists()
     asyncio.run(asyncio.wait_for(run(), 10))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory permissions")
+@pytest.mark.parametrize("readonly", [".", "nested", "both"])
+def test_readonly_workspace_teardown(tmp_path, readonly):
+    import stat
+
+    source = tmp_path / "source"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (source / "file").write_text("root")
+    (nested / "file").write_text("nested")
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "file").write_text("untouched")
+    external.chmod(0o555)
+    (nested / "link").symlink_to(external, target_is_directory=True)
+    directories = [source, nested] if readonly == "both" else [source / readonly]
+    for directory in directories:
+        directory.chmod(0o555)
+
+    async def run():
+        async with ProcessSandbox().create(SandboxSpec(workspace=source)) as sandbox:
+            root = sandbox._root
+            for directory in directories:
+                assert stat.S_IMODE((root / directory.relative_to(source)).stat().st_mode) == 0o555
+        assert not root.exists()
+        await sandbox.destroy()
+        for directory in directories:
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o555
+        assert stat.S_IMODE(external.stat().st_mode) == 0o555
+        assert (external / "file").read_text() == "untouched"
+
+    try:
+        asyncio.run(run())
+    finally:
+        source.chmod(0o755)
+        nested.chmod(0o755)
+        external.chmod(0o755)
+
+
+def test_destroy_survives_repeated_cancellation_during_copy(tmp_path, monkeypatch):
+    import threading
+    import engine.adapters.sandbox.process as adapter
+
+    source = tmp_path / "input"
+    source.write_text("data")
+    release = threading.Event()
+    original = adapter._copy
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        async with ProcessSandbox().create(SandboxSpec()) as sandbox:
+            process = await sandbox.exec([sys.executable, "-u", "-c",
+                "import time; print('ready'); time.sleep(60)"])
+            assert await process.stdout.readline() == b"ready\n"
+
+            def blocked(*args):
+                loop.call_soon_threadsafe(started.set)
+                assert release.wait(5)
+                original(*args)
+
+            monkeypatch.setattr(adapter, "_copy", blocked)
+            copying = asyncio.create_task(sandbox.copy_in(source, "input"))
+            try:
+                await asyncio.wait_for(started.wait(), 2)
+                destroying = asyncio.create_task(sandbox.destroy())
+                await asyncio.sleep(0)
+                for _ in range(3):
+                    destroying.cancel()
+                    await asyncio.sleep(0)
+                assert not destroying.done()
+                assert not sandbox._cleanup.cancelled()
+                assert sandbox._root.exists()
+            finally:
+                release.set()
+            await copying
+            with pytest.raises(asyncio.CancelledError):
+                await destroying
+            assert not sandbox._root.exists()
+            assert await process.wait() != 0
+            await sandbox.destroy()
+
+    asyncio.run(asyncio.wait_for(run(), 10))
