@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.0](https://github.com/OpenEngine/OpenEngine/compare/v1.5.0...v2.0.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** list commands print a table unless --json is given.
+
+### Features
+
+* **cli:** print tables by default for list commands, add --json ([#724](https://github.com/OpenEngine/OpenEngine/issues/724)) ([b88e338](https://github.com/OpenEngine/OpenEngine/commit/b88e338567b51b569292b4a506e63e39578f00ef))
+* **site:** add a GitHub link to the navbar ([#791](https://github.com/OpenEngine/OpenEngine/issues/791)) ([af823a1](https://github.com/OpenEngine/OpenEngine/commit/af823a1f62ff18100daa289a7741b9727d086c30))
+
 ## [1.5.0](https://github.com/OpenEngine/OpenEngine/compare/v1.4.0...v1.5.0) (2026-10-09)
 
 
