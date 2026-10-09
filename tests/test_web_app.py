@@ -134,6 +134,7 @@ def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / "engine.toml"
     path.write_text('[repos]\n"OpenEngine/OpenEngine" = "~/code/OpenEngine"\nn8n = "code/n8n"\n')
+    (tmp_path / "code/OpenEngine").mkdir(parents=True)
     app = build_app(path)
 
     async def ask():
@@ -4094,3 +4095,40 @@ def test_engines_own_info_lines_reach_the_log():
         assert logging.getLogger("engine.apps.web.github_ingress").isEnabledFor(logging.INFO)
     finally:
         engine.setLevel(before)
+
+
+def test_onboarded_repository_can_be_selected_for_a_workorder(tmp_path, monkeypatch):
+    from engine.apps.web.repositories import ensure_repository_checkouts
+
+    checkout = tmp_path / "repo"
+    repos = {"owner/repo": str(checkout)}
+
+    def clone(args, **kwargs):
+        Path(args[-1]).mkdir()
+
+    monkeypatch.setattr("engine.apps.web.repositories.subprocess.run", clone)
+    ensure_repository_checkouts(repos)
+    graph = ScriptedGraph(
+        GraphId("repo-edit"), "Edit repo",
+        (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+    )
+    store = InMemoryStateStore()
+    app, _ = _graph_app(store, graph, repos=repos)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                config = (await client.get("/api/config")).json()
+                choice = next(r for r in config["repositories"] if r["name"] == "owner/repo")
+                assert Path(choice["path"]).is_dir()
+                response = await client.post("/api/runs", json={
+                    "workflowId": "repo-edit", "repository": choice["path"],
+                    "prompt": "Edit and lint repo",
+                })
+                assert response.status_code == 201, response.text
+                run = await store.load(RunId(response.json()["runId"]))
+                assert run.repository == str(checkout)
+
+    asyncio.run(scenario())

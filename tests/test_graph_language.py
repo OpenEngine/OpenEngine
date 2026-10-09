@@ -9,7 +9,7 @@ from engine.cli import starters
 from engine.graph_service.language import GraphError, parse_graph
 
 SKETCH = """
-apiVersion: openengine.dev/v1
+apiVersion: openengine.cc/v1
 kind: Graph
 name: sketch
 
@@ -209,7 +209,7 @@ def test_the_sketch_compiles_to_langgraph(tmp_path) -> None:
 ])
 def test_invalid_graph_fields_report_their_location(field, value, path):
     raw = {
-        "apiVersion": "openengine.dev/v1", "name": "validation",
+        "apiVersion": "openengine.cc/v1", "name": "validation",
         "implementation": {"work": {"agent": "claude", "prompt": "go"}},
         field: value,
     }
@@ -246,7 +246,7 @@ def test_invalid_graph_fields_report_their_location(field, value, path):
 ])
 def test_invalid_agent_settings_report_their_location(fields, path):
     raw = {
-        "apiVersion": "openengine.dev/v1", "name": "validation",
+        "apiVersion": "openengine.cc/v1", "name": "validation",
         "implementation": {"work": {"agent": "claude", "prompt": "go", **fields}},
     }
     with pytest.raises(GraphError) as raised:

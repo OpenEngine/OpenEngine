@@ -9,6 +9,7 @@ which constructs the same application again in every fresh child process.
 """
 
 import argparse
+import asyncio
 import ipaddress
 import logging
 import os
@@ -33,6 +34,7 @@ from engine.apps.web.composition import (
     claude_session_config_for,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
+from engine.apps.web.repositories import ensure_repository_checkouts
 from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
@@ -93,10 +95,25 @@ def report_wiring(settings: Settings) -> None:
         + (
             "not configured"
             if webhook is None
-            else f"{webhook.repository or 'no repository named'}, "
+            else f"{', '.join(webhook.webhook_repositories) or 'no repository named'}, "
             + ("secret saved" if webhook.current_secret() else "secret missing")
         )
     )
+    if webhook is not None:
+        async def check_repository_access() -> None:
+            for repository in webhook.webhook_repositories:
+                url = f"https://github.com/{repository}"
+                try:
+                    async with asyncio.timeout(5):
+                        login = await capabilities.source_control.authenticated_login(url)
+                        writable = bool(login) and await capabilities.source_control.can_write_repository(
+                            f"{url}/pull/1", login,
+                        )
+                    status = "write access" if writable else "missing write access"
+                except Exception:
+                    status = "access check failed; verify the posting account's repository access"
+                print(f"  github {repository}: {status}")
+        asyncio.run(check_repository_access())
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
 
 
@@ -183,7 +200,7 @@ def _github_login_config(loaded: LoadedEngineConfig) -> GitHubLoginConfig | None
     except ValueError as error:
         raise EngineConfigError(str(error)) from error
     if not (
-        loaded.config.github.repository
+        loaded.config.github.webhook_repositories
         or _login_repositories(loaded, _repository_projects(loaded))
         or loaded.config.access.operators
     ):
@@ -309,6 +326,7 @@ def read_configuration(
         if loaded.workflows_directory is not None
         else None
     )
+    ensure_repository_checkouts(loaded.config.repos)
     return loaded, catalog
 
 
@@ -356,6 +374,7 @@ def compose_app(
         slack_credential_store=slack_credential_store,
         github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
         github_repository=settings.github_webhook.repository if settings.github_webhook else "",
+        github_repositories=settings.github_webhook.webhook_repositories if settings.github_webhook else (),
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         work_orders=loaded.config.work_orders,

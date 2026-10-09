@@ -1,6 +1,6 @@
 [project]
 name = "engine-worker"
-version = "1.3.0"
+version = "1.4.0"
 description = "Worker: executes engine commands against real capabilities."
 requires-python = ">=3.11"
 # Composition root: the only layer allowed to depend on concrete adapters.
@@ -10,6 +10,7 @@ dependencies = [
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second.
     "engine-adapter-agent-runner-acp",
+    "engine-adapter-sandbox-process",
     "engine-adapter-communications-buzz",
     "engine-adapter-source-control-github",
     "engine-adapter-state-store-postgres",
@@ -28,6 +29,7 @@ build-backend = "hatchling.build"
 packages = ["src/engine"]
 
 [tool.uv.sources]
+engine-adapter-sandbox-process = { workspace = true }
 engine-runtime = { workspace = true }
 engine-graph-runtime-langgraph = { workspace = true }
 engine-adapter-agent-runner-acp = { workspace = true }

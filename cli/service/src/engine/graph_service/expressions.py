@@ -22,7 +22,7 @@ from __future__ import annotations
 import ast
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,10 +31,16 @@ FUNCTIONS = frozenset({"size", "json", "lower", "has"})
 _TEMPLATE = re.compile(r"\$\{([^{}]*)\}")
 _WORDS = {"true": "True", "false": "False", "null": "None"}
 
+# Public spellings also define the operator nodes admitted by the parser.
+OPERATORS = {
+    ast.And: "&&", ast.Or: "||", ast.Not: "!", ast.USub: "-",
+    ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Mod: "%",
+    ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=",
+    ast.Gt: ">", ast.GtE: ">=", ast.In: "in",
+}
 _ALLOWED = (
-    ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not, ast.USub,
-    ast.BinOp, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod,
-    ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.In, ast.NotIn,
+    ast.Expression, ast.BoolOp, ast.UnaryOp, ast.BinOp, ast.Compare,
+    *OPERATORS, ast.NotIn,
     ast.Name, ast.Attribute, ast.Subscript, ast.Constant, ast.Call, ast.List, ast.Load,
 )
 
@@ -154,13 +160,13 @@ def _translate(source: str) -> str:
         elif char in "'\"":
             quote = char
             out.append(char)
-        elif source.startswith("&&", index):
+        elif source.startswith(OPERATORS[ast.And], index):
             out.append(" and ")
             index += 1
-        elif source.startswith("||", index):
+        elif source.startswith(OPERATORS[ast.Or], index):
             out.append(" or ")
             index += 1
-        elif char == "!" and not source.startswith("!=", index):
+        elif char == OPERATORS[ast.Not] and not source.startswith("!=", index):
             out.append(" not ")
         elif char.isalpha() or char == "_":
             end = index
@@ -308,3 +314,28 @@ def _call(name: str, arguments: list[Any]) -> Any:
 
 
 __all__ = ["Expression", "ExpressionError", "Template", "as_text", "parse", "template"]
+
+
+def specification() -> str:
+    """Render the public expression syntax from the parser's admission rules."""
+    def code(values: Iterable[str]) -> str:
+        return ", ".join(f"`{value}`" for value in values)
+
+    lines = [
+        "Templates use `${...}`. Expression roots: " + code(sorted(ROOTS)) + ".",
+        "Operators: " + code(dict.fromkeys(OPERATORS.values())) + ".",
+        "Functions: " + code(f"{name}(...)" for name in sorted(FUNCTIONS)) + ".",
+        "Literal words: " + code(_WORDS) + "; text and numeric literals are supported.",
+    ]
+    for node, example in ((ast.Attribute, "outputs.STEP.field"),
+                          (ast.Subscript, "outputs.STEP.items[0]"),
+                          (ast.List, "[1, 2]")):
+        if node in _ALLOWED:
+            parse(example)
+            lines.append(f"{node.__name__}: `{example}`.")
+    lines.append(
+        "Express \"not in\" as `(!(item in inputs.items))`; Python's `not` keyword is rejected. "
+        "Expressions cannot execute Python. Undeclared inputs and unavailable outputs "
+        "are reported at registration."
+    )
+    return "\n".join(lines)

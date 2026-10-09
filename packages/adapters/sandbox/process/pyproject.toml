@@ -1,0 +1,16 @@
+[project]
+name = "engine-adapter-sandbox-process"
+version = "1.4.0"
+description = "Sandbox capability using host processes."
+requires-python = ">=3.11"
+dependencies = ["engine-ports"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]
+
+[tool.uv.sources]
+engine-ports = { workspace = true }

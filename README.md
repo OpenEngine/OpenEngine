@@ -2,7 +2,7 @@
 
 [![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
 [![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
-[![Docs](https://img.shields.io/badge/docs-openengine.sh-blue)](https://openengine.sh/docs/)
+[![Docs](https://img.shields.io/badge/docs-openengine.cc-blue)](https://openengine.cc/docs/)
 
 OpenEngine is a graph execution engine that meets you where you work.
 
@@ -18,12 +18,23 @@ On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
 logged in on this machine, run:
 
 ```bash
-curl -LsSf https://openengine.sh/install.sh | sh
+curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
-This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
-opens [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to
-reopen it and rerun the installer to upgrade.
+On Windows, use Windows Subsystem for Linux (WSL). If needed, run
+`wsl --install` in an administrator PowerShell, restart when prompted, and
+complete the Linux distribution's first-run setup. Install Git and Node.js
+20.19+ and log in to Codex or Claude inside WSL, then run from PowerShell:
+
+```powershell
+wsl sh -c "curl -LsSf https://openengine.cc/install.sh | sh"
+```
+
+Run subsequent `engine` commands inside WSL.
+
+This installs the `engine` command in `~/.local/bin` and starts OpenEngine at
+[http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to open it
+in a browser and rerun the installer to upgrade.
 
 OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. OpenCode for local inference is offered, too!
 
@@ -65,60 +76,28 @@ until startup completes, if the configured graph runtime cannot open, or during
 shutdown; otherwise it returns HTTP 200. This public endpoint requires no browser
 login and does not check external provider credentials.
 
-## Terminal diagnostics
+## Terminal commands
 
-CLI v1 contract: the binary is `engine`; its local service default is
-`http://127.0.0.1:4364`; `--server` and profiles select remote services;
-interactive terminals enter the workbench while all subcommands remain
-scriptable. Specification authoring is outside this CLI contract.
+The binary is `engine`. Run it with no arguments to list its commands:
 
-The `engine` terminal client inspects a local or remote service:
-
-```bash
-engine status
-engine doctor --json
-engine status --server https://engine.example
-```
-
-It defaults to `http://127.0.0.1:4364`. When the selected server is the
-default local address and no compatible service is responding, `engine
-status` starts one `engine-web` process and waits for its health endpoint. An
-explicit `--server` is always probe-only. `engine daemon` runs the local
-service in the background instead; see
-[Background service](docs/releases.md#background-service).
-`engine connect gh|github|gitlab|slack` connects shared source control or Slack.
-`engine init`, run inside a git checkout, adds it under `[repos]` in the
-service's `engine.toml` (named after its `origin`, or `--name`) and restarts a
-running service so the repository appears in the WorkOrder dropdown. With
-GitHub sign-in enabled it warns that the repository's writers can now sign in.
-It asks how the repository's WorkOrders reach GitHub -- Git OAuth (connected,
-recommended), Git CLI (connected) or disconnected, or `--mode oauth|cli|disconnected`
--- and prints the next step for a connected choice. Disconnected is recorded
-under `[repo_modes]`, and every WorkOrder on that repository then runs
-disconnected. It then asks how WorkOrders' requests are approved -- auto-approve
-(every repository), trusted repos (only repositories under `[trusted_repos]`,
-this one included) or manual, or `--approval auto|trusted|manual`. The installer
-offers to run it on a repository when it finishes.
-
-`engine review [path | pull-request-url]` starts the WorkOrder workflow in its
-review state (`engine.domain.states`), skipping planning and implementation.
-A path (default: the current directory, local service only) reviews its
-committed branch; a GitHub pull request URL provisions a new workspace on the
-pull request's branch in the matching `[repos]` checkout, and fixes are pushed
-back to that branch. Pull requests from forks are refused, since their code
-would run the review's agents; check one out and review the path instead. The surviving
-findings are presented one at a time with the relevant diff, highlighting
-additions and deletions. Choose **Fix**, **Post to PR** (when a pull request is
-available), or **Ignore** for each finding. Fixes are queued until every finding
-has been reviewed, then sent together to implementation with progress shown;
-the resulting change is reviewed again. Posting uses `gh` and posts only that
-finding. `--json` prints the findings and leaves the review waiting.
-
-In an interactive terminal, running `engine` opens the workbench. Type `/` to
-search the palette, then choose `/status`, `/threads`, `/new`, `/approvals`,
-`/review`, `/settings`, `/web`, or `/quit`. Typing a message starts a new work order and
-streams its progress; Ctrl-C detaches the terminal stream only and never sends
-the service a cancel request.
+- `engine daemon` runs the local service in the background; see
+  [Background service](docs/releases.md#background-service).
+- `engine connect gh|github|gitlab|slack` connects the selected backend's shared
+  source control or Slack; `engine connections` shows them and
+  `engine disconnect` undoes one.
+- `engine agent add|get|remove|signin` and `engine agents` manage the agents
+  graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
+  such as `engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
+- `engine agent claude` starts a run whose implementation node is Claude Code
+  in this terminal: the daemon checks the repository out into a fresh
+  workspace and gives claude the same `git_subcommand` and `open_pull_request`
+  tools an implementation node gets (`[sessions] tools` in `engine.toml`
+  changes which). The run ends when claude exits. Arguments after `--` go to
+  `claude`.
+- `engine graph`, `engine run`, `engine loop`, `engine node` and their list
+  forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
+  graphs; `engine backend` chooses which daemon they talk to. See
+  [cli/README.md](cli/README.md).
 
 While working on OpenEngine itself, run the development server instead:
 ```bash
@@ -244,6 +223,8 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
 To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
+To add a repository and command approvals locally in `.engine/config.toml`, see
+[repository onboarding](docs/repository-onboarding.md).
 
 ## What is it.
 

@@ -7,7 +7,7 @@ holds the bearer token. The token itself is never written to the file.
 
     engine backend add mini http://mac-mini.local:4364 --token-env MINI_ENGINE_TOKEN --use
     engine backends list
-    engine graph execute triage "..." --backend local
+    engine graph run triage "..." --backend local
 
 With nothing configured there is one backend, `local`, at the daemon's default
 address, so a fresh install works without any of this.

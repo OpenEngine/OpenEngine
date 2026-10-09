@@ -42,6 +42,16 @@ class GraphRow:
 
 
 @dataclass(frozen=True)
+class AgentRow:
+    name: str
+    kind: str
+    model: str
+    url: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class VersionRow:
     version_id: str
     graph_id: str
@@ -60,6 +70,14 @@ class SubmissionRow:
     run_id: str
     version_id: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class StartedRunRow:
+    run_id: str
+    version_id: str
+    started_at: str
+    loop_id: str | None
 
 
 @dataclass(frozen=True)
@@ -134,6 +152,27 @@ class GraphServiceStore:
             raise
         else:
             self._connection.execute("COMMIT")
+
+    # --- agents -------------------------------------------------------------
+
+    def agents(self) -> tuple[AgentRow, ...]:
+        rows = self._connection.execute("SELECT * FROM cli_agents ORDER BY name")
+        return tuple(AgentRow(**dict(row)) for row in rows)
+
+    def agent(self, name: str) -> AgentRow | None:
+        row = self._connection.execute("SELECT * FROM cli_agents WHERE name = ?", (name,)).fetchone()
+        return AgentRow(**dict(row)) if row else None
+
+    def upsert_agent(self, row: AgentRow) -> None:
+        """Insert `row`, or replace the agent of that name and keep when it was added."""
+        self._connection.execute(
+            "INSERT INTO cli_agents VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET "
+            "kind = excluded.kind, model = excluded.model, url = excluded.url, updated_at = excluded.updated_at",
+            (row.name, row.kind, row.model, row.url, row.created_at, row.updated_at),
+        )
+
+    def delete_agent(self, name: str) -> None:
+        self._connection.execute("DELETE FROM cli_agents WHERE name = ?", (name,))
 
     # --- graphs -------------------------------------------------------------
 
@@ -223,6 +262,41 @@ class GraphServiceStore:
             "INSERT INTO cli_run_submissions VALUES (?, ?, ?, ?, ?)",
             (row.idempotency_key, row.request_digest, row.run_id, row.version_id, row.created_at),
         )
+
+    def started_runs(
+        self,
+        *,
+        project: str | None = None,
+        graph_id: str | None = None,
+        loop_id: str | None = None,
+    ) -> tuple[StartedRunRow, ...]:
+        """Every run this service started, submitted or by a loop, newest first."""
+        clauses, parameters = [], []
+        for column, value in (("g.project", project), ("g.graph_id", graph_id), ("started.loop_id", loop_id)):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                parameters.append(value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._connection.execute(
+            f"""
+            SELECT started.run_id, started.version_id, started.started_at, started.loop_id
+            FROM (
+                SELECT run_id, version_id, created_at AS started_at, NULL AS loop_id
+                FROM cli_run_submissions
+                UNION ALL
+                -- A claimed tick has no run until it starts one.
+                SELECT r.run_id, l.version_id, r.started_at, r.loop_id
+                FROM cli_loop_runs r JOIN cli_loops l ON l.loop_id = r.loop_id
+                WHERE r.run_id != ''
+            ) started
+            JOIN cli_graph_versions v ON v.version_id = started.version_id
+            JOIN cli_graphs g ON g.graph_id = v.graph_id
+            {where}
+            ORDER BY started.started_at DESC, started.run_id DESC
+            """,
+            parameters,
+        )
+        return tuple(StartedRunRow(**dict(row)) for row in rows)
 
     # --- loops --------------------------------------------------------------
 
@@ -442,6 +516,7 @@ def _loop(row: sqlite3.Row) -> LoopRow:
 
 
 __all__ = [
+    "AgentRow",
     "ExecutionRow",
     "GraphRow",
     "GraphServiceStore",

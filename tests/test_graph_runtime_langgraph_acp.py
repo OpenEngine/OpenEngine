@@ -257,6 +257,11 @@ class RecordingSourceControl:
     async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
         raise AssertionError("not called")
 
+    async def add_reaction(
+        self, pr_url: str, comment_id: int, content: str, *, review_comment: bool = False,
+    ) -> None:
+        raise AssertionError("not called")
+
     async def add_comment(
         self,
         _pr_url: str,
@@ -265,6 +270,12 @@ class RecordingSourceControl:
         _line: int | None = None,
     ) -> None:
         pass
+
+    async def review_thread(self, pr_url, comment_id):
+        raise AssertionError("not called")
+
+    async def resolve_review_thread(self, pr_url, thread_id):
+        raise AssertionError("not called")
 
     async def view_change_request(
         self, _workspace_id: WorkspaceId, _number: int

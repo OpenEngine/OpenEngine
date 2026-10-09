@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -155,7 +155,9 @@ def test_the_github_webhook_route_is_mounted_once_a_handler_is_wired(tmp_path):
 
 
 @pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
-def test_github_comments_continue_existing_workorders(tmp_path, event):
+@pytest.mark.parametrize("lookup_fails", [False, True, "recovers"])
+@pytest.mark.parametrize("notice_fails", [False, True])
+def test_github_comments_continue_existing_workorders(tmp_path, event, lookup_fails, notice_fails):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -172,9 +174,14 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     )
 
     source_control = MagicMock()
-    source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
+    async def post_comment(_url, text, **kwargs):
+        if notice_fails and "Please retry later." in text:
+            raise RuntimeError("reply service unavailable")
+    source_control.add_comment = AsyncMock(side_effect=post_comment)
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    source_control.review_thread = AsyncMock(return_value=MagicMock(thread_id="PRRT_1"), side_effect=([RuntimeError("unavailable"), MagicMock(thread_id="PRRT_1")] * 2) if lookup_fails == "recovers" else RuntimeError("unavailable") if lookup_fails else None)
     object.__setattr__(capabilities, "source_control", source_control)
 
     def deliver(client, comment_id, text):
@@ -200,18 +207,28 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
         # feedback reaches it by name rather than by reading every saved run.
         assert not client.portal.call(capabilities.state_store.list_runs)
         runtime.store.run_for_pull_request.assert_awaited_with("acme/api", 7)
-        runtime.steer.assert_awaited_once_with(
-            RunId("existing"), "Implement it", node_id=NodeId("implementation"))
+        runtime.steer.assert_awaited_once()
+        assert runtime.steer.await_args.args[0] == RunId("existing")
+        assert runtime.steer.await_args.args[1].startswith("Implement it")
+        if event == "pull_request_review_comment":
+            assert f"Requested review thread: {'lookup unavailable' if lookup_fails is True else 'PRRT_1'}; root comment: 1" in runtime.steer.await_args.args[1]
+            source_control.review_thread.assert_awaited_with("https://github.com/acme/api/pull/7", 1)
         assert len(provider.clients) == 1
         assert len(provider.clients[0].prompts) == 2
         assert not provider.clients[0].result.get("isError")
     assert provider.clients[0].closed
     assert not communications.posts
-    assert source_control.add_comment.await_count == 2
+    source_control.add_reaction.assert_not_awaited()
+    exhausted = event == "pull_request_review_comment" and lookup_fails is True
+    assert source_control.add_comment.await_count == (4 if exhausted else 2)
+    if event == "pull_request_review_comment":
+        assert source_control.review_thread.await_count == (4 if lookup_fails else 2)
     posted = [call.args[1] for call in source_control.add_comment.await_args_list]
     # The comment that asked for nothing, then the one that was forwarded --
     # both fixed text, and the run id is this process's own.
-    assert posted == [NOT_FORWARDED, "Forwarded to work order `existing`."]
+    notices = [text for text in posted if "Please retry later." in text]
+    assert len(notices) == (2 if exhausted else 0)
+    assert [text for text in posted if text not in notices] == [NOT_FORWARDED, "Forwarded to work order `existing`."]
     assert not any(LEAKED in text for text in posted)
     source_control.add_comment.assert_awaited_with(
         "https://github.com/acme/api/pull/7", posted[-1],
@@ -226,7 +243,8 @@ def test_github_comments_continue_existing_workorders(tmp_path, event):
     ("@someone-else @OpenEngineBot please check this", 1),
     ("please check this", 1),
 ])
-def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body, expected):
+@pytest.mark.parametrize("lookup_failure", [None, RuntimeError("unavailable"), TimeoutError(), NotImplementedError(), "slow"])
+def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body, expected, lookup_failure, monkeypatch):
     from starlette.testclient import TestClient
     from test_github_ingress import _issue_comment, _signed as github_signed
 
@@ -239,7 +257,13 @@ def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body
     source_control = MagicMock(
         add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
         authenticated_login=AsyncMock(return_value="openenginebot"),
+        review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1"), side_effect=lookup_failure),
     )
+    if lookup_failure == "slow":
+        async def slow_lookup(*args):
+            await asyncio.sleep(10)
+        source_control.review_thread.side_effect = slow_lookup
+        monkeypatch.setattr("engine.apps.web.api.GITHUB_AUTHORIZATION_TIMEOUT_SECONDS", 0.05)
     object.__setattr__(capabilities, "source_control", source_control)
     payload = _issue_comment(body=body)
     payload["issue"]["pull_request"] = {}
@@ -254,7 +278,12 @@ def test_comment_webhook_filters_mentions_before_concierge(tmp_path, event, body
         client.portal.call(app.state.github_ingress.drain)
     assert response.status_code == 200
     assert len(provider.clients) == expected
-    assert source_control.add_comment.await_count == expected
+    exhausted = expected and event == "pull_request_review_comment" and lookup_failure is not None and not isinstance(lookup_failure, NotImplementedError)
+    assert source_control.add_comment.await_count == expected + bool(exhausted)
+    if expected and event == "pull_request_review_comment":
+        assert source_control.review_thread.await_count == (2 if exhausted else 1)
+    else:
+        source_control.review_thread.assert_not_awaited()
     source_control.authenticated_login.assert_awaited_once_with("https://github.com/acme/api")
     if not expected:
         runtime.steer.assert_not_awaited()
@@ -283,6 +312,7 @@ def test_a_comment_reaches_no_agent_without_write_access(tmp_path, access):
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     source_control.can_write_repository = AsyncMock(
         return_value=False,
@@ -320,6 +350,7 @@ def test_a_comment_authors_access_is_answered_from_the_login_cache(tmp_path):
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     source_control.can_write_repository = AsyncMock(return_value=False)
     object.__setattr__(capabilities, "source_control", source_control)
@@ -367,6 +398,7 @@ def test_a_stalled_forge_lookup_does_not_stop_the_queue_behind_it(tmp_path, stal
 
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     source_control.can_write_repository = AsyncMock(return_value=True)
     # The login is cached per repository, so it is the first comment that
@@ -426,6 +458,7 @@ def test_github_sessions_do_not_cross_authors(tmp_path):
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
@@ -507,6 +540,7 @@ def test_failed_github_concierge_turn_can_be_redelivered(tmp_path, failure):
                      provider=provider, github_webhook_secret=SIGNING_SECRET)
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
@@ -550,13 +584,14 @@ def test_a_retried_delivery_does_not_forward_the_same_comment_twice(tmp_path, fa
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     if failure == "reply":
         source_control.add_comment.side_effect = [RuntimeError("GitHub unavailable"), None]
     object.__setattr__(capabilities, "source_control", source_control)
 
-    payload = _issue_comment(1, "new workorder please")
+    payload = _issue_comment(1, "@OpenEngineBot new workorder please")
     payload["issue"]["pull_request"] = {}
     body = json.dumps(payload).encode()
     headers = dict(github_signed(body), **{"x-github-event": "issue_comment"})
@@ -577,6 +612,8 @@ def test_a_retried_delivery_does_not_forward_the_same_comment_twice(tmp_path, fa
         assert source_control.add_comment.await_args.args[1] == (
             "Forwarded to work order `existing`.")
         assert source_control.add_comment.await_count == (2 if failure == "reply" else 1)
+        contents = [call.args[2] for call in source_control.add_reaction.await_args_list]
+        assert contents == ["eyes", "-1", "eyes", "+1"]
     assert not communications.posts
 
 
@@ -603,6 +640,7 @@ def test_a_second_tool_call_in_one_turn_does_not_forward_the_comment_again(tmp_p
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
@@ -645,10 +683,10 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
     communications = RecordingCommunications()
     app, capabilities, _ = _app(tmp_path, communications, WorkOrdersConfig(),
                                provider=provider, github_webhook_secret=SIGNING_SECRET)
-    source = MagicMock(add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+    source = MagicMock(add_comment=AsyncMock(), add_reaction=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
               authenticated_login=AsyncMock(return_value="OpenEngineBot"))
     object.__setattr__(capabilities, "source_control", source)
-    payload = _issue_comment(1, "new workorder please")
+    payload = _issue_comment(1, "@OpenEngineBot new workorder please")
     body = json.dumps(payload).encode()
     with TestClient(app) as client:
         assert client.post("/api/github/events", content=body, headers=dict(
@@ -657,6 +695,8 @@ def test_github_does_not_answer_comments_on_issues(tmp_path):
         assert not client.portal.call(capabilities.state_store.list_runs)
         assert not provider.clients
         source.add_comment.assert_not_awaited()
+        source.add_reaction.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/7", 1, "-1", review_comment=False)
     assert not communications.posts
 
 
@@ -700,7 +740,8 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, h
     )
     source_control = MagicMock(
         add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
-        authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+        review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1")))
     object.__setattr__(capabilities, "source_control", source_control)
 
     payload = _issue_comment(1, f"{mention} new workorder please")
@@ -723,8 +764,10 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(tmp_path, absent, h
             return
         # Started in the checkout of the repository the comment arrived from,
         # which is where the pull request is, rather than the configured default.
-        assert runtime.start.await_args.args[1] == {
-            "task": "Implement it", "repository": checkout}
+        assert runtime.start.await_args.args[1]["repository"] == checkout
+        assert runtime.start.await_args.args[1]["task"].startswith("Implement it")
+        if event == "pull_request_review_comment":
+            assert "Requested review thread: PRRT_1; root comment: 1" in runtime.start.await_args.args[1]["task"]
         runs = client.portal.call(capabilities.state_store.list_runs)
         assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
         # No chat origin: this conversation is the pull request, which the
@@ -926,6 +969,7 @@ def test_github_never_answers_its_own_reply(tmp_path, identity):
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(
         side_effect=RuntimeError("GitHub API unavailable") if identity == "unavailable"
@@ -934,7 +978,7 @@ def test_github_never_answers_its_own_reply(tmp_path, identity):
     )
     object.__setattr__(capabilities, "source_control", source_control)
 
-    payload = _issue_comment(1, "I have addressed that")
+    payload = _issue_comment(1, "@OpenEngineBot I have addressed that")
     payload["issue"]["pull_request"] = {}
     payload["comment"]["user"]["login"] = (
         "openenginebot" if identity == "cased" else "OpenEngineBot"
@@ -947,6 +991,7 @@ def test_github_never_answers_its_own_reply(tmp_path, identity):
         # Never answered, and never replied to: no loop can start from here.
         assert not provider.clients
         source_control.add_comment.assert_not_awaited()
+        source_control.add_reaction.assert_not_awaited()
         assert not client.portal.call(capabilities.state_store.list_runs)
         source_control.authenticated_login.assert_awaited_once_with(
             "https://github.com/acme/api")
@@ -970,6 +1015,7 @@ def test_github_asks_who_it_posts_as_only_once(tmp_path):
     )
     source_control = MagicMock()
     source_control.add_comment = AsyncMock()
+    source_control.add_reaction = AsyncMock()
     source_control.can_write_repository = AsyncMock(return_value=True)
     source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
     object.__setattr__(capabilities, "source_control", source_control)
@@ -1389,12 +1435,14 @@ def test_assigning_issue_to_engine_starts_workorder(tmp_path, may_write, caplog)
             assert "Fix the bug" in inputs["task"]
             assert "Reproduction steps" in inputs["task"]
             assert "https://github.com/acme/api/issues/7" in inputs["task"]
-            assert "Fixes #7" in inputs["task"]
+            assert "issue_resolution" in inputs["task"]
+            assert inputs["issue"] == {"repository": "acme/api", "number": 7}
             runs = client.portal.call(capabilities.state_store.list_runs)
             assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
             # Progress is reported back to the issue, addressed to the assigner.
             assert runs[0].origin == RunOrigin(
                 channel="github:acme/api", thread_id="issue/7",
+                issue_repository="acme/api", issue_number=7,
                 author="maintainer", requester=runs[0].requester or "",
             )
         else:
@@ -1713,3 +1761,162 @@ def test_issue_progress_survives_a_failed_pull_request_lookup(tmp_path, monkeypa
     message = posted.await_args.args[1]
     assert message.text == "Work order finished."
     assert not any(link.label == "View pull request" for link in message.links)
+
+
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+@pytest.mark.parametrize("outcome", ["started", "forwarded", "not_forwarded", "undelivered", "error"])
+def test_mentioned_comment_reacts_to_delivery_outcome(tmp_path, event, outcome, caplog):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime(pr_number=99 if outcome == "started" else 7)
+    if outcome == "undelivered":
+        runtime.steer.side_effect = RuntimeError("unreachable")
+    provider = FakeACPProvider(create=outcome != "not_forwarded", fail=outcome == "error")
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(workflow="implementation-review-v1"), _workflow_catalog(),
+        provider=provider, graph_runtime=opened, github_webhook_secret=SIGNING_SECRET,
+    )
+    source = MagicMock(add_comment=AsyncMock(), add_reaction=AsyncMock(),
+                       review_thread=AsyncMock(return_value=MagicMock(thread_id="PRRT_1")),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+                       can_write_repository=AsyncMock(return_value=True))
+    object.__setattr__(capabilities, "source_control", source)
+    payload = _issue_comment(42, "@openenginebot new workorder please")
+    payload["issue"]["pull_request"] = {}
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
+        payload["comment"]["in_reply_to_id"] = 1
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        headers = dict(github_signed(body), **{"x-github-event": event})
+        client.post("/api/github/events", content=body, headers=headers)
+        client.portal.call(app.state.github_ingress.drain)
+        final_reaction = "+1" if outcome in ("started", "forwarded") else "-1"
+        assert source.add_reaction.await_args_list == [
+            call("https://github.com/acme/api/pull/7", 42, content,
+                 review_comment=event == "pull_request_review_comment")
+            for content in ("eyes", final_reaction)
+        ]
+        if outcome in ("not_forwarded", "undelivered"):
+            assert "Engine did not act on GitHub mention 42" in caplog.text
+        elif outcome == "error":
+            assert "GitHub mention 42 failed" in caplog.text
+        else:
+            assert "Engine did not act on GitHub mention" not in caplog.text
+        if outcome != "error":
+            source.add_comment.assert_awaited_once()
+            client.post("/api/github/events", content=body, headers=headers)
+            client.portal.call(app.state.github_ingress.drain)
+            assert source.add_reaction.await_count == 2
+
+
+def test_failed_reaction_does_not_fail_turn_or_suppress_reply(tmp_path, caplog):
+    from engine.github_concierge import FeedbackRequest, GithubConcierge
+
+    reply, react = AsyncMock(), AsyncMock(side_effect=RuntimeError("offline"))
+    concierge = GithubConcierge(provider=FakeACPProvider(), continue_workorder=AsyncMock(),
+                                reply=reply, react=react)
+    request = FeedbackRequest(RunOrigin(channel="github:acme/api", thread_id="7", author="person"),
+                              "hello", comment_id="42", allow_start=True)
+    async def run():
+        try:
+            await concierge.handle(request)
+        finally:
+            await concierge.close()
+    asyncio.run(run())
+    reply.assert_awaited_once_with(request.origin, NOT_FORWARDED)
+    assert react.await_args_list == [call(request, "eyes"), call(request, "-1")]
+    assert "Could not react to GitHub comment 42" in caplog.text
+
+
+@pytest.mark.parametrize("disconnected", [False, True])
+@pytest.mark.parametrize("pull_request", [False, True])
+def test_reactions_respect_disconnected_mode(tmp_path, monkeypatch, disconnected, pull_request):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _issue_comment, _signed as github_signed
+    import engine.apps.web.api as api
+    from engine.domain import ForgeMode
+
+    create_app = api.create_app
+    def configured_app(*args, **kwargs):
+        return create_app(*args, **kwargs, repo_modes={
+            "acme/api": ForgeMode.DISCONNECTED if disconnected else ForgeMode.CONNECTED,
+        })
+    monkeypatch.setattr(api, "create_app", configured_app)
+    app, capabilities, _ = _app(tmp_path, RecordingCommunications(), WorkOrdersConfig(),
+                                github_webhook_secret=SIGNING_SECRET)
+    source = MagicMock(add_comment=AsyncMock(), add_reaction=AsyncMock(),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+                       can_write_repository=AsyncMock(return_value=True))
+    object.__setattr__(capabilities, "source_control", source)
+    payload = _issue_comment(42, "@OpenEngineBot hello")
+    if pull_request:
+        payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with TestClient(app) as client:
+        client.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"}))
+        client.portal.call(app.state.github_ingress.drain)
+    if disconnected:
+        source.add_reaction.assert_not_awaited()
+    else:
+        assert source.add_reaction.await_args_list == [
+            call("https://github.com/acme/api/pull/7", 42, content, review_comment=False)
+            for content in (["eyes", "-1"] if pull_request else ["-1"])
+        ]
+
+
+def test_mention_is_acknowledged_before_concierge_turn():
+    from engine.github_concierge import FeedbackRequest, GithubConcierge
+
+    react = AsyncMock()
+    request = FeedbackRequest(
+        RunOrigin(channel="github:acme/api", thread_id="7", author="person"),
+        "@Engine please help", comment_id="42", allow_start=True,
+    )
+    concierge = GithubConcierge(
+        provider=FakeACPProvider(), continue_workorder=AsyncMock(),
+        reply=AsyncMock(), react=react,
+    )
+
+    async def turn(state):
+        react.assert_awaited_once_with(request, "eyes")
+        assert state["request"] == request
+
+    concierge.graph = MagicMock(ainvoke=AsyncMock(side_effect=turn))
+    asyncio.run(concierge.handle(request))
+    concierge.graph.ainvoke.assert_awaited_once()
+    assert react.await_args_list == [call(request, "eyes"), call(request, "-1")]
+
+
+def test_assignments_from_multiple_repositories_use_their_configured_checkouts(tmp_path):
+    from starlette.testclient import TestClient
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    repos = {"acme/api": str(tmp_path / "api"), "other/web": str(tmp_path / "web")}
+    app, capabilities, _ = _app(
+        tmp_path, RecordingCommunications(),
+        WorkOrdersConfig(repository="unused", workflow="implementation-review-v1"),
+        _workflow_catalog(), graph_runtime=opened, repos=repos,
+        github_webhook_secret=SIGNING_SECRET, github_repositories=tuple(repos),
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=True),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source)
+    with TestClient(app) as client:
+        for repository in repos:
+            payload = _assigned_issue()
+            payload["issue"]["html_url"] = f"https://github.com/{repository}/issues/7"
+            payload["repository"]["full_name"] = repository
+            body = json.dumps(payload).encode()
+            assert client.post("/api/github/events", content=body, headers=dict(
+                github_signed(body), **{"x-github-event": "issues"},
+            )).status_code == 200
+            client.portal.call(app.state.github_ingress.drain)
+    assert [c.args[1]["repository"] for c in runtime.start.await_args_list] == list(repos.values())
+    assert source.can_write_repository.await_args_list == [
+        call(f"https://github.com/{repo}/pull/7", "maintainer") for repo in repos
+    ]

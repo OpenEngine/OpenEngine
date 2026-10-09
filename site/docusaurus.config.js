@@ -8,7 +8,7 @@ const config = {
   title: 'OpenEngine',
   tagline: 'Your Software Factory',
   favicon: 'favicon.svg',
-  url: 'https://openengine.sh',
+  url: 'https://openengine.cc',
   baseUrl: '/',
   organizationName: 'OpenEngine',
   projectName: 'OpenEngine',
@@ -61,7 +61,7 @@ const config = {
         items: [
           {type: 'docSidebar', sidebarId: 'docs', position: 'right', label: 'Docs'},
           {to: '/blog', position: 'right', label: 'Blog'},
-          {href: 'mailto:hello@openengine.sh', position: 'right', label: 'Contact Us', className: 'navbar-cta'},
+          {href: 'mailto:hello@openengine.cc', position: 'right', label: 'Contact Us', className: 'navbar-cta'},
         ],
       },
       footer: {

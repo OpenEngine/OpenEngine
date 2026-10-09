@@ -33,31 +33,26 @@ from engine.graph_runtime_langgraph.components.findings import REVIEW_FACETS
 from engine.runtime.terminal_mcp import REPOSITORY_TOOL_NAMES
 
 from engine.graph_service.expressions import Expression, ExpressionError, Template, parse, template
+from engine.graph_service.schema import (
+    API_VERSION, FIELDS, FIELD_RULES, KIND, MIN_INTERVAL_SECONDS, OUTPUT_TYPES, RUNNER_POLICIES,
+    SECTIONS, _UNITS,
+)
 
-API_VERSION = "openengine.dev/v1"
-KIND = "Graph"
 WORKSPACE_NODE = "workspace"
 START, END = "start", "end"
 STAGES = ("plan", "implement", "review")
-SECTIONS = {"plan": "plan", "implementation": "implement", "review": "review"}
-"""Each stage section of a graph, in the order they run, and the stage it holds."""
 SECTION_OF = {stage: section for section, stage in SECTIONS.items()}
 STAGE_GROUPS = {"plan": "Planning", "implement": "Implementation", "review": "Review"}
 INSTRUCTION = "instruction"
-OUTPUT_TYPES = ("string", "number", "integer", "boolean", "list", "object", "findings")
 TOOLS = REPOSITORY_TOOL_NAMES
-RUNNER_POLICIES = ("least-utilized", "round-robin")
-MIN_INTERVAL_SECONDS = 60
 FACETS = {
     facet.id: {"id": facet.id, "name": facet.name, "focus": facet.focus, "elevated": facet.elevated}
     for facet in REVIEW_FACETS
 }
 
-_SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,40}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,30}$")
 _DURATION = re.compile(r"^(\d+)\s*(s|m|h|d)$")
-_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _ARROW = re.compile(r"^\s*(\[[^\]]*\]|[^\s\[\]>-]+)\s*->\s*(\[[^\]]*\]|[^\s\[\]>-]+)\s*$")
 
 
@@ -249,18 +244,11 @@ def parse_graph(raw: object, *, runners: Sequence[str] | None = None) -> GraphSp
 
     if not isinstance(raw, Mapping):
         raise GraphError([Problem("$", "a graph must be a mapping")])
-    _known(raw, {
-        "apiVersion", "kind", "name", "description", "inputs", "repository",
-        *SECTIONS, "flow", "loop",
-    }, "", problem)
-    if raw.get("apiVersion") != API_VERSION:
-        problem("apiVersion", f"required; must be {API_VERSION}")
-    if raw.get("kind", KIND) != KIND:
-        problem("kind", f"must be {KIND}")
-    name = raw.get("name")
-    if not isinstance(name, str) or not _SLUG.match(name):
-        problem("name", "required; lowercase letters, digits, '.', '_' and '-'")
-        name = ""
+    _known(raw, FIELDS["graph"], "", problem)
+    graph_fields = FIELD_RULES["graph"]
+    graph_fields["apiVersion"].read(raw, "apiVersion", "apiVersion", problem)
+    graph_fields["kind"].read(raw, "kind", "kind", problem)
+    name = graph_fields["name"].read(raw, "name", "name", problem)
     description = _text(raw, "description", "description", problem)
     repository = _text(raw, "repository", "repository", problem)
     instruction, inputs = _inputs(raw.get("inputs"), problem)
@@ -308,7 +296,7 @@ def _inputs(raw: object, problem: Any) -> tuple[str, tuple[InputSpec, ...]]:
         if not isinstance(value, Mapping):
             problem(where, "must be a mapping")
             continue
-        _known(value, {"description", "required", "default", "choices"}, f"{where}.", problem)
+        _known(value, FIELDS["input"], f"{where}.", problem)
         if name == INSTRUCTION:
             # Built in: every run is given one. Declaring it only describes it.
             instruction = str(value.get("description") or "").strip()
@@ -316,10 +304,8 @@ def _inputs(raw: object, problem: Any) -> tuple[str, tuple[InputSpec, ...]]:
         if not isinstance(name, str) or not _IDENTIFIER.match(name):
             problem(where, "an input name is letters, digits and '_', starting with a letter")
             continue
-        required = value.get("required", False)
-        if not isinstance(required, bool):
-            problem(f"{where}.required", "must be true or false")
-            required = False
+        required = FIELD_RULES["input"]["required"].read(
+            value, "required", f"{where}.required", problem)
         default = value.get("default", "")
         default = "" if default is None else default
         if not isinstance(default, (str, int, float)) or isinstance(default, bool):
@@ -395,7 +381,7 @@ def _checkout(steps: Sequence[Step], input_names: set[str], problem: Any) -> tup
     if not isinstance(value, Mapping):
         problem(where, "a checkout is a mapping such as {base_ref: origin/HEAD}")
         return step_id, "", ""
-    _known(value, {"base_ref", "ref", "name", "description"}, f"{where}.", problem)
+    _known(value, FIELDS["checkout"], f"{where}.", problem)
     base_ref = _text(value, "base_ref", f"{where}.base_ref", problem)
     ref = _text(value, "ref", f"{where}.ref", problem)
     ref_input = ""
@@ -431,12 +417,12 @@ def _nodes(
         if kind == "agent":
             found.append(_agent(node_id, value, stage, common, inputs, runners, agents, problem))
         elif kind == "human":
-            _known(value, {"human", "name", "description"}, f"{where}.", problem)
+            _known(value, FIELDS["human step"], f"{where}.", problem)
             human = value["human"]
             if isinstance(human, str) and human.strip():
                 found.append(NodeSpec(node_id, "human", stage, prompt=human.strip(), **common))
             elif isinstance(human, Mapping):
-                _known(human, {"prompt", "choose"}, f"{where}.human.", problem)
+                _known(human, FIELDS["human"], f"{where}.human.", problem)
                 choose = human.get("choose")
                 if choose is not None and not isinstance(choose, str):
                     problem(f"{where}.human.choose", "must be an expression such as outputs.reranker.findings")
@@ -453,7 +439,7 @@ def _nodes(
             else:
                 problem(f"{where}.human", "the question to ask, or {prompt, choose}")
         else:
-            _known(value, {"ci", "name", "description"}, f"{where}.", problem)
+            _known(value, FIELDS["ci step"], f"{where}.", problem)
             if value["ci"] is not True:
                 problem(f"{where}.ci", "must be true")
             found.append(NodeSpec(node_id, "ci", stage, **common))
@@ -471,14 +457,10 @@ def _agent(
     problem: Any,
 ) -> NodeSpec:
     where = f"{SECTION_OF[stage]}.{node_id}"
-    _known(value, {
-        "agent", "prompt", "name", "description", "tools", "outputs", "model", "steering", "facets",
-    }, f"{where}.", problem)
+    _known(value, FIELDS["agent step"], f"{where}.", problem)
     parallel = _facets(value.get("facets"), f"{where}.facets", problem)
-    prompt = value.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-        problem(f"{where}.prompt", "required; what the agent is asked to do")
-        prompt = ""
+    fields = FIELD_RULES["agent step"]
+    prompt = fields["prompt"].read(value, "prompt", f"{where}.prompt", problem)
     runner = _runner(value["agent"], f"{where}.agent", node_id, inputs, runners, agents, problem)
     tools = value.get("tools") or []
     if not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
@@ -488,17 +470,12 @@ def _agent(
         if tool not in TOOLS:
             problem(f"{where}.tools[{index}]", f"unknown tool {tool!r}; available: {', '.join(TOOLS)}")
     outputs = _outputs(value.get("outputs"), f"{where}.outputs", problem)
-    model = value.get("model", "")
-    if not isinstance(model, str):
-        problem(f"{where}.model", "must be a tier such as default or elevated, a model, or ${...}")
-        model = ""
+    model = fields["model"].read(value, "model", f"{where}.model", problem)
     if any("model" in branch.item for branch in parallel):
         if model:
             problem(f"{where}.model", "give a model here or on each facet, not both")
         model = "${item.model}"
-    steering = value.get("steering")
-    if steering not in (None, "always-open"):
-        problem(f"{where}.steering", "must be always-open")
+    steering = fields["steering"].read(value, "steering", f"{where}.steering", problem)
     return NodeSpec(
         node_id, "agent", stage, prompt=prompt.strip(), runner=runner, model=model.strip(),
         tools=tuple(tools), outputs=outputs, always_open=steering == "always-open",
@@ -542,7 +519,7 @@ def _runner(
         check(raw.strip(), where)
         return RunnerRule("literal", raw.strip())
     if isinstance(raw, Mapping):
-        _known(raw, {"not", "same", "choices"}, f"{where}.", problem)
+        _known(raw, FIELDS["runner"], f"{where}.", problem)
         relation = [key for key in ("not", "same") if key in raw]
         if len(relation) != 1:
             problem(where, "must be a runner, ${inputs.NAME}, {not: NODE} or {same: NODE}")
@@ -581,24 +558,19 @@ def _outputs(raw: object, where: str, problem: Any) -> tuple[OutputSpec, ...]:
         if not isinstance(value, Mapping):
             problem(path, "must be a mapping")
             continue
-        _known(value, {"type", "enum", "required", "lineage", "description"}, f"{path}.", problem)
+        _known(value, FIELDS["output"], f"{path}.", problem)
         enum = value.get("enum") or []
         if not isinstance(enum, list) or not all(isinstance(item, str) for item in enum):
             problem(f"{path}.enum", "must be a list of text")
             enum = []
-        kind = value.get("type", "string")
-        if kind not in OUTPUT_TYPES:
-            problem(f"{path}.type", f"must be one of {', '.join(OUTPUT_TYPES)}")
-            kind = "string"
+        kind = FIELD_RULES["output"]["type"].read(value, "type", f"{path}.type", problem)
         if enum and kind != "string":
             problem(f"{path}.enum", "only a string output can have an enum")
         lineage = value.get("lineage", False) in (True, "required")
         if lineage and kind != "findings":
             problem(f"{path}.lineage", "only findings carry lineage")
-        required = value.get("required", False)
-        if not isinstance(required, bool):
-            problem(f"{path}.required", "must be true or false")
-            required = False
+        required = FIELD_RULES["output"]["required"].read(
+            value, "required", f"{path}.required", problem)
         found.append(OutputSpec(
             name, kind, tuple(enum), required, lineage, str(value.get("description") or ""),
         ))
@@ -692,7 +664,7 @@ def _flow(raw: object, ids: set[str], problem: Any) -> tuple[FlowRule, ...]:
                     continue
                 rules.append(FlowRule(tuple(sources), tuple(targets), join=join))
         elif isinstance(entry, Mapping):
-            _known(entry, {"from", "to", "route"}, f"{path}.", problem)
+            _known(entry, FIELDS["flow"], f"{path}.", problem)
             sources, join = _names(entry.get("from"))
             if not sources or not all(endpoint(s, f"{path}.from", source=True) for s in sources):
                 if not sources:
@@ -727,7 +699,7 @@ def _routes(raw: object, where: str, endpoint: Any, problem: Any) -> tuple[Route
         if not isinstance(branch, Mapping) or "to" not in branch:
             problem(path, "must be {when, to} or {to}")
             continue
-        _known(branch, {"when", "to"}, f"{path}.", problem)
+        _known(branch, FIELDS["route"], f"{path}.", problem)
         when = branch.get("when") or ""
         if not isinstance(when, str):
             problem(f"{path}.when", "must be an expression")
@@ -753,17 +725,15 @@ def _loop(raw: object, problem: Any) -> LoopDefaults:
     if not isinstance(raw, Mapping):
         problem("loop", "must be a mapping such as {every: 6h, instruction: ...}")
         return LoopDefaults()
-    _known(raw, {"every", "instruction"}, "loop.", problem)
+    _known(raw, FIELDS["loop"], "loop.", problem)
     interval = None
     if raw.get("every") is not None:
         try:
             interval = parse_duration(raw["every"])
         except ValueError as error:
             problem("loop.every", str(error))
-    instruction = raw.get("instruction") or ""
-    if not isinstance(instruction, str):
-        problem("loop.instruction", "must be text")
-        instruction = ""
+    instruction = FIELD_RULES["loop"]["instruction"].read(
+        {"instruction": raw.get("instruction") or ""}, "instruction", "loop.instruction", problem)
     return LoopDefaults(instruction.strip(), interval)
 
 

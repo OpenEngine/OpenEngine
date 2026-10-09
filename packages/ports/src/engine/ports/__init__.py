@@ -1,4 +1,4 @@
-"""The six capabilities the engine needs from the outside world.
+"""The capabilities the engine needs from the outside world.
 
 Each port is a `Protocol` -- structural, so an adapter satisfies it by shape
 alone with no import of this package required at runtime and no base class to
@@ -50,11 +50,16 @@ from engine.ports.source_control import (
     StatusCheck,
     WorkItem,
 )
+from engine.ports.sandbox import Sandbox, SandboxInstance, SandboxProcess, SandboxSpec
 from engine.ports.state_store import StateStore
 from engine.ports.workflow_runtime import WorkflowRuntime
 from engine.ports.workspace_provider import Workspace, WorkspaceProvider, WorkspaceState
 
 __all__ = [
+    "Sandbox",
+    "SandboxInstance",
+    "SandboxProcess",
+    "SandboxSpec",
     "AgentRunner",
     "AgentTurn",
     "ApprovalDecision",

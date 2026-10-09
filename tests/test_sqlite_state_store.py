@@ -297,7 +297,7 @@ def test_a_work_order_and_its_conversations_survive_reopening(tmp_path) -> None:
         prompt="Fix the race.",
         name="Fix shared counter race",
         failure_reason="the reviewer could not reach the repository",
-        origin=RunOrigin(channel="C1", thread_id="17.5", author="U9"),
+        origin=RunOrigin(channel="C1", thread_id="17.5", author="U9", requester="github:1:alice", issue_repository="acme/api", issue_number=7, review_thread_id="PRRT_1", review_comment_id=41),
     )
 
     first = SQLiteStateStore(path)

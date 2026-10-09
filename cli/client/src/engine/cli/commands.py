@@ -1,9 +1,10 @@
-"""`engine backend|graph|graphs|run|loop|loops|node|nodes|runner`.
+"""`engine backend|graph|graphs|run|runs|loop|loops|node|nodes|agent|agents|runner`.
 
-Every command speaks to one backend -- `--backend`, else `ENGINE_BACKEND`, else
-the one `engine backend use` chose -- and prints JSON unless `--pretty` asks
+Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
+the one `engine backend use` chose -- and print JSON unless `--pretty` asks
 for something to read. Errors go to stderr; the exit status is 0 on success,
 1 on a refusal or a failed run, and 2 on a usage mistake.
+`graph spec` and `loop spec` print local Markdown specifications offline.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import time
 import uuid
+from inspect import getdoc
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -24,17 +26,24 @@ import yaml
 from engine.cli import backends, repository
 from engine.cli.backends import Backend, BackendError
 from engine.cli.http import Client, RequestFailed
+from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
-    "backend", "backends", "graph", "graphs", "run", "loop", "loops", "node", "nodes", "runner",
+    "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
+    "runner",
 })
+#: Commands that still parse but are not advertised in `engine --help`.
+HIDDEN = frozenset({"runner"})
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 WAIT_INTERVAL_SECONDS = 2.0
 TERMINAL_STEERING = frozenset({"applied", "rejected", "undelivered"})
 
-#: How each runner signs in on the machine its daemon runs on.
+#: The harnesses an agent runs on.
+AGENT_KINDS = ("claude", "codex", "opencode")
+
+#: How each kind of agent signs in on the machine its daemon runs on.
 SIGNIN = {
     "codex": (["codex", "login"], ""),
     "claude": (["claude"], "type /login, finish signing in, then /exit"),
@@ -42,8 +51,12 @@ SIGNIN = {
 }
 
 
-def add_parsers(commands: argparse._SubParsersAction) -> None:
-    """Add these commands to the `engine` parser."""
+def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAction:
+    """Add these commands to the `engine` parser.
+
+    Answers `engine agent`'s actions, so the terminal app can add the ones that
+    run here rather than on a backend, such as `engine agent claude`.
+    """
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--backend", metavar="NAME", help="the backend to use (default: the selected one)")
     common.add_argument("--pretty", action="store_true", help="human-readable output instead of JSON")
@@ -73,20 +86,24 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     listing.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
     listing.add_argument("--pretty", action="store_true")
 
-    graph = commands.add_parser("graph", help="register, inspect and execute graphs")
+    graph = commands.add_parser("graph", help="register, inspect and run graphs")
     actions = graph.add_subparsers(dest="action", required=True)
+    actions.add_parser(
+        "spec", help="print the current graph specification",
+        description=getdoc(graph_spec), formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     adding = actions.add_parser("add", parents=[scoped], help="register a graph (YAML or a Python file)")
     adding.add_argument("file", help="the graph file, or - for YAML on stdin")
     getting = actions.add_parser("get", parents=[scoped], help="a graph and its exact definition")
     getting.add_argument("graph", help="a name, name@VERSION, graph id or version id")
-    executing = actions.add_parser("execute", parents=[scoped], help="run a graph with an instruction")
-    executing.add_argument("graph")
-    executing.add_argument("instruction")
-    executing.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
-    executing.add_argument("--repo", default="", help="repository to check out")
-    executing.add_argument("--wait", action="store_true", help="wait for the run to finish")
-    executing.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
-    executing.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
+    running = actions.add_parser("run", parents=[scoped], help="run a graph with an instruction")
+    running.add_argument("graph")
+    running.add_argument("instruction")
+    running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
+    running.add_argument("--repo", default="", help="repository to check out")
+    running.add_argument("--wait", action="store_true", help="wait for the run to finish")
+    running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
+    running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
     graphs = commands.add_parser("graphs", help="list graphs")
     graphs.add_argument("action", nargs="?", choices=("list",), default="list")
     graphs.add_argument("--backend", metavar="NAME")
@@ -101,9 +118,23 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     waiting = actions.add_parser("wait", parents=[common], help="wait for a run to finish")
     waiting.add_argument("run_id")
     waiting.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
+    runs = commands.add_parser("runs", help="list runs, newest first")
+    runs.add_argument("action", nargs="?", choices=("list",), default="list")
+    runs.add_argument("--backend", metavar="NAME")
+    runs.add_argument("--pretty", action="store_true")
+    runs.add_argument("--project", metavar="NAME")
+    runs.add_argument("--all-projects", action="store_true")
+    runs.add_argument("--graph", default="", help="only runs of this graph")
+    runs.add_argument("--loop", default="", help="only runs this loop started")
+    runs.add_argument("--status", default="", help="only runs in this status, such as running or failed")
+    runs.add_argument("--limit", type=int, default=20, help="at most this many (default: 20)")
 
     loop = commands.add_parser("loop", help="recurring runs of a graph, within limits")
     actions = loop.add_subparsers(dest="action", required=True)
+    actions.add_parser(
+        "spec", help="print the current loop specification",
+        description=getdoc(loop_spec), formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     adding = actions.add_parser("add", parents=[scoped], help="run a graph on a cadence")
     adding.add_argument("graph")
     adding.add_argument("--name", default="", help="loop name (default: the graph's)")
@@ -145,11 +176,33 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     steering.add_argument("--wait", action="store_true", help="wait until it is applied or cannot be")
     steering.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
 
-    runner = commands.add_parser("runner", help="runner credentials on a backend")
-    actions = runner.add_subparsers(dest="action", required=True)
-    signin = actions.add_parser("signin", help="sign a runner in where the backend runs")
-    signin.add_argument("runner", choices=sorted(SIGNIN))
+    agent = commands.add_parser("agent", help="add, inspect, remove and sign in the agents graphs name")
+    actions = agent_actions = agent.add_subparsers(dest="action", required=True)
+    adding = actions.add_parser("add", parents=[common], help="offer claude, codex or opencode under a name")
+    adding.add_argument("kind", choices=AGENT_KINDS)
+    adding.add_argument("--name", default="", help="what graphs call it (default: the kind)")
+    adding.add_argument("--model", default="", help="the model it runs when a node names none")
+    adding.add_argument("--url", default="", help="an OpenAI-compatible endpoint (opencode only; needs --model)")
+    adding.add_argument("--replace", action="store_true", help="overwrite an agent with this name")
+    for name, help_text in (("get", "one agent"), ("remove", "stop offering an added agent")):
+        action = actions.add_parser(name, parents=[common], help=help_text)
+        action.add_argument("name")
+    signin = actions.add_parser("signin", help="sign an agent in where the backend runs")
+    signin.add_argument("name", help="an agent name, such as claude")
     signin.add_argument("--backend", metavar="NAME")
+    agents = commands.add_parser("agents", help="list agents")
+    agents.add_argument("action", nargs="?", choices=("list",), default="list")
+    agents.add_argument("--backend", metavar="NAME")
+    agents.add_argument("--pretty", action="store_true")
+
+    # `engine runner signin` before agents had their own command; kept for one release.
+    # Without `help`, it is left out of the command list; HIDDEN keeps it out of the usage line.
+    runner = commands.add_parser("runner")
+    actions = runner.add_subparsers(dest="action", required=True)
+    signin = actions.add_parser("signin")
+    signin.add_argument("name", choices=sorted(SIGNIN))
+    signin.add_argument("--backend", metavar="NAME")
+    return agent_actions
 
 
 def main(arguments: argparse.Namespace) -> int:
@@ -256,7 +309,7 @@ def graph_get(arguments: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def graph_execute(arguments: argparse.Namespace) -> int:
+def graph_run(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     key = arguments.idempotency_key or f"cli-{uuid.uuid4()}"
     run = client.post("/runs", {
@@ -274,6 +327,23 @@ def graph_execute(arguments: argparse.Namespace) -> int:
             print(f"started {run['runId']} ({run['graph']} v{run['version']}); waiting...", file=sys.stderr)
         run = _wait_for_run(client, run["runId"], arguments.timeout)
     return _show_run(run, backend, arguments.pretty)
+
+
+def runs_list(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    project = None if arguments.all_projects else _project(arguments, backend)
+    runs = client.get(
+        "/runs", project=project, graph=arguments.graph or None, loop=arguments.loop or None,
+        status=arguments.status or None, limit=str(arguments.limit),
+    )["runs"]
+    if arguments.pretty:
+        _table(runs, [
+            ("RUN ID", "runId"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}"), ("STATUS", "status"),
+            ("LOOP", "loop"), ("STARTED", "startedAt"), ("SPEND", _run_spend),
+        ])
+    else:
+        _print({"runs": runs})
+    return EXIT_OK
 
 
 def run_get(arguments: argparse.Namespace) -> int:
@@ -392,17 +462,59 @@ def node_steer(arguments: argparse.Namespace) -> int:
     return EXIT_OK if steering["status"] not in ("rejected", "undelivered") else EXIT_FAILED
 
 
-# --- runners ----------------------------------------------------------------
+# --- agents -----------------------------------------------------------------
 
 
-def runner_signin(arguments: argparse.Namespace) -> int:
-    backend = backends.load().selected(arguments.backend)
-    command, follow_up = SIGNIN[arguments.runner]
+def agent_add(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    agent = client.post("/agents", {
+        "kind": arguments.kind, "name": arguments.name, "model": arguments.model,
+        "url": arguments.url, "replace": arguments.replace,
+    })
+    _emit(agent, arguments.pretty, _agent_line)
+    return EXIT_OK
+
+
+def agents_list(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    agents = client.get("/agents")["agents"]
+    if arguments.pretty:
+        _table(agents, _AGENT_COLUMNS)
+    else:
+        _print({"agents": agents})
+    return EXIT_OK
+
+
+def agent_get(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    _emit(client.get(f"/agents/{quote(arguments.name)}"), arguments.pretty, _agent_line)
+    return EXIT_OK
+
+
+def agent_remove(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    removed = client.delete(f"/agents/{quote(arguments.name)}")
+    _emit(removed, arguments.pretty, lambda body: f"removed {body['name']}")
+    return EXIT_OK
+
+
+def agent_signin(arguments: argparse.Namespace) -> int:
+    """Sign in the harness an agent runs on, on the machine its backend runs on."""
+    backend, client = _connect(arguments)
+    if arguments.name in SIGNIN:
+        kind, url = arguments.name, ""
+    else:
+        agent = client.get(f"/agents/{quote(arguments.name)}")
+        kind, url = agent["kind"], agent["url"]
+    if url:
+        print(f"{arguments.name} reaches its model at {url}; it has nothing to sign in to.")
+        return EXIT_OK
+    command, follow_up = SIGNIN[kind]
     shown = " ".join(command)
     if not backend.is_local:
         host = urlsplit(backend.url).hostname
         print(
-            f"{arguments.runner} signs in on the machine backend {backend.name} runs on. There, as the "
+            f"{arguments.name} signs in on the machine backend {backend.name} runs on. There, as the "
             f"user its daemon runs as, run:\n\n    {shown}\n"
             + (f"\nthen {follow_up}.\n" if follow_up else "")
             + f"\nFor example: ssh -t {host} {shown}"
@@ -415,6 +527,11 @@ def runner_signin(arguments: argparse.Namespace) -> int:
     if follow_up:
         print(f"Starting {shown}: {follow_up}.", file=sys.stderr)
     return subprocess.call(command)
+
+
+def runner_signin(arguments: argparse.Namespace) -> int:
+    print(f"engine: `engine runner signin` is now `engine agent signin {arguments.name}`", file=sys.stderr)
+    return agent_signin(arguments)
 
 
 # --- helpers ----------------------------------------------------------------
@@ -564,6 +681,11 @@ def _backend_line(body: dict[str, Any]) -> str:
     return f"{'* ' if body['current'] else ''}{body['name']}  {body['url']}  project {body['project']}"
 
 
+def _agent_line(body: dict[str, Any]) -> str:
+    detail = " ".join(part for part in (body.get("model") or "", body.get("url") or "") if part)
+    return f"{body['name']}  {body['kind']}{'  ' + detail if detail else ''}{'  (built in)' if body.get('builtin') else ''}"
+
+
 def _loop_summary(loop: dict[str, Any]) -> str:
     lines = [
         f"{loop['name']} ({loop['loopId']})  {loop['state']}"
@@ -585,6 +707,11 @@ def _spend(loop: dict[str, Any]) -> str:
     return text
 
 
+def _run_spend(run: dict[str, Any]) -> str | None:
+    cost = run["usage"]["costUsd"]
+    return None if cost is None else f"${cost:.2f}" + ("" if run["usage"]["complete"] else " (+unknown)")
+
+
 def _duration(seconds: int) -> str:
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds % size == 0:
@@ -592,6 +719,10 @@ def _duration(seconds: int) -> str:
     return f"{seconds}s"
 
 
+_AGENT_COLUMNS: list[tuple[str, Any]] = [
+    ("NAME", "name"), ("KIND", "kind"), ("MODEL", "model"), ("URL", "url"),
+    ("", lambda row: "built in" if row.get("builtin") else ""),
+]
 _NODE_COLUMNS: list[tuple[str, Any]] = [
     ("NODE", "node"), ("EXECUTION", "executionId"), ("ATTEMPT", "attempt"), ("STATUS", "status"),
     ("RUNNER", "runner"), ("STARTED", "startedAt"), ("FINISHED", "finishedAt"),
@@ -607,12 +738,15 @@ _HANDLERS = {
     ("backend", "use"): backend_use,
     ("backend", "remove"): backend_remove,
     ("backends", "list"): backend_list,
+    ("graph", "spec"): graph_spec,
     ("graph", "add"): graph_add,
     ("graph", "get"): graph_get,
-    ("graph", "execute"): graph_execute,
+    ("graph", "run"): graph_run,
     ("graphs", "list"): graphs_list,
     ("run", "get"): run_get,
     ("run", "wait"): run_wait,
+    ("runs", "list"): runs_list,
+    ("loop", "spec"): loop_spec,
     ("loop", "add"): loop_add,
     ("loop", "get"): loop_get,
     ("loop", "pause"): loop_pause,
@@ -621,6 +755,11 @@ _HANDLERS = {
     ("nodes", "list"): nodes_list,
     ("node", "get"): node_get,
     ("node", "steer"): node_steer,
+    ("agent", "add"): agent_add,
+    ("agent", "get"): agent_get,
+    ("agent", "remove"): agent_remove,
+    ("agent", "signin"): agent_signin,
+    ("agents", "list"): agents_list,
     ("runner", "signin"): runner_signin,
 }
 

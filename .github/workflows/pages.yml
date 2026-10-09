@@ -1,7 +1,7 @@
 name: pages
 
 # Builds the Docusaurus site in site/ and publishes it to GitHub Pages, which
-# serves it at https://openengine.sh, with scripts/install.sh at /install.sh.
+# serves it at https://openengine.cc, with scripts/install.sh at /install.sh.
 # The custom domain lives in Settings -> Pages; site/static/CNAME records it in the
 # repository as well, so the domain is visible from a checkout.
 
@@ -11,6 +11,8 @@ on:
     paths:
       - "site/**"
       - "scripts/install.sh"
+      - "scripts/generate_cli_docs.py"
+      - "cli/service/src/engine/graph_service/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -41,7 +43,7 @@ jobs:
           cache: npm
           cache-dependency-path: site/package-lock.json
 
-      # Served as https://openengine.sh/install.sh for `curl ... | sh`.
+      # Served as https://openengine.cc/install.sh for `curl ... | sh`.
       - name: Publish the installer
         run: cp scripts/install.sh site/static/install.sh
 
