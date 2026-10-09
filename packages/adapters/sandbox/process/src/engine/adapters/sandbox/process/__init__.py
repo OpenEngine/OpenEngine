@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import stat
 import tempfile
 
 from engine.ports.sandbox import SandboxSpec
@@ -137,11 +138,17 @@ class ProcessSandboxInstance:
         if self._cleanup is None:
             self._destroyed = True
             self._cleanup = asyncio.create_task(self._destroy())
+        cancelled = False
+        while not self._cleanup.done():
+            try:
+                await asyncio.shield(self._cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
         try:
-            await asyncio.shield(self._cleanup)
-        except asyncio.CancelledError:
-            await self._cleanup
-            raise
+            self._cleanup.result()
+        finally:
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def _destroy(self) -> None:
         async with self._spawn_lock:
@@ -160,7 +167,22 @@ class ProcessSandboxInstance:
             ), return_exceptions=True)
             await asyncio.gather(*(execution._waiter for execution in executions))
         finally:
-            await _filesystem_work(shutil.rmtree, self._root)
+            await _filesystem_work(_remove_workspace, self._root)
+
+
+def _remove_workspace(root: Path) -> None:
+    # Copies preserve directory modes. Restore owner access before traversal
+    # and deletion, without changing permissions through preserved symlinks.
+    def make_accessible(path: Path) -> None:
+        mode = path.lstat().st_mode
+        if stat.S_ISDIR(mode):
+            path.chmod(mode | stat.S_IRWXU)
+
+    make_accessible(root)
+    for directory, children, _ in os.walk(root, followlinks=False):
+        for child in children:
+            make_accessible(Path(directory) / child)
+    shutil.rmtree(root)
 
 
 def _copy(source: Path, destination: Path) -> None:
