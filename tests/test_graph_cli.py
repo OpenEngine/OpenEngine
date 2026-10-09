@@ -203,6 +203,27 @@ def test_loop_add_sends_limits_and_explains_what_spend_counts(monkeypatch, capsy
     assert "max-spend counts agent usage" in capsys.readouterr().err
 
 
+def test_loop_get_prints_the_latest_output(monkeypatch, capsys) -> None:
+    loop = {
+        "loopId": "loop-1", "name": "dead-code", "state": "active", "pauseReason": None,
+        "graph": "dead-code", "version": 5, "everySeconds": 86400, "nextRunAt": "2026-10-10T18:00:00+00:00",
+        "activeRunId": None, "prCount": 0, "spend": {"usd": 0.0, "complete": True},
+        "limits": {"maxPrs": None, "maxSpendUsd": None},
+        "latestOutput": {
+            "runId": "run-1", "node": "challenge", "finishedAt": "2026-10-09T18:26:25+00:00",
+            "value": {"summary": "One candidate survived.", "runner": "codex",
+                      "report": "# Dead code\n\n- packages/x.py:3 unused helper"},
+        },
+    }
+    serve(monkeypatch, loop)
+    assert main(["loop", "get", "dead-code", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert "latest output: challenge of run-1, finished 2026-10-09T18:26:25+00:00" in out
+    assert "summary: One candidate survived." in out
+    assert "report:\n# Dead code\n\n- packages/x.py:3 unused helper" in out
+    assert "codex" not in out
+
+
 def test_signing_in_on_a_remote_backend_says_where(monkeypatch, capsys) -> None:
     backends.add("mini", "http://mac-mini.local:4364", use=True)
     assert main(["agent", "signin", "codex"]) == 0

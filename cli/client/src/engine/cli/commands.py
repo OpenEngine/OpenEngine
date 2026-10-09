@@ -713,7 +713,28 @@ def _loop_summary(loop: dict[str, Any]) -> str:
     ]
     if loop.get("activeRunId"):
         lines.append(f"active run {loop['activeRunId']}")
+    latest = loop.get("latestOutput")
+    if latest:
+        lines.append(f"\nlatest output: {latest['node']} of {latest['runId']}, finished {latest['finishedAt']}")
+        lines.append(_output_text(latest["value"]))
+    elif "latestOutput" in loop:
+        lines.append("latest output: none yet")
     return "\n".join(lines)
+
+
+def _output_text(value: object) -> str:
+    """A node's result for reading: text as written, anything else as indented JSON."""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return json.dumps(value, indent=2)
+    blocks = []
+    for key, item in value.items():
+        if key == "runner":
+            continue
+        text = item if isinstance(item, str) else json.dumps(item, indent=2)
+        blocks.append(f"{key}:\n{text}" if "\n" in text else f"{key}: {text}")
+    return "\n\n".join(blocks)
 
 
 def _spend(loop: dict[str, Any]) -> str:

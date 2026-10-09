@@ -503,6 +503,37 @@ def test_a_loop_needs_a_cadence_and_never_overlaps_its_runs(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_a_loop_shows_the_output_of_its_latest_completed_run(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=PAIR)
+            # Each run spends $1.00, so the cap lets the first finish and stops the second.
+            loop = await service.add_loop(
+                project="default", graph="pair", instruction="it", every="1h", max_spend_usd=1.4,
+            )
+            assert (await service.loop_json(loop["loopId"]))["latestOutput"] is None
+
+            await service.tick()
+            first = (await service.loop_json(loop["loopId"]))["activeRunId"]
+            run = await settled(service, first)
+            assert run["output"]["node"] == "review"
+            assert run["output"]["value"] == "echo: review echo: do it (plain)"
+
+            # A run that does not complete leaves the last completed output in place.
+            clock.advance(hours=1)
+            await service.tick()
+            second = (await service.loop_json(loop["loopId"]))["activeRunId"]
+            assert second != first
+            stopped = await settled(service, second)
+            assert stopped["status"] == "failed" and stopped["output"] is None
+
+            latest = (await service.loop_json(loop["loopId"]))["latestOutput"]
+            assert latest == {"runId": first, **run["output"]}
+
+    asyncio.run(scenario())
+
+
 def test_reaching_max_spend_stops_the_run_and_survives_a_restart(tmp_path: Path) -> None:
     async def scenario() -> None:
         clock = Clock()

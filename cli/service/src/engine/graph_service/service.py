@@ -592,11 +592,7 @@ class GraphService:
         record = await self.runtime.store.run(RunId(run_id))
         overrides = record.runner_overrides if record else {}
         values = snapshot.values or {}
-        results = {
-            str(node.node_id): values[node.node_id]
-            for node in (topology.nodes if topology else ())
-            if node.kind not in ("workspace", "join") and node.node_id in values
-        }
+        results = _results(topology, values)
         events = self.runtime.store.events_since(RunId(run_id))
         usage = usage_rollup(events)
         activity = _latest_activity(events)
@@ -641,6 +637,7 @@ class GraphService:
                 for item in snapshot.pending_approvals
             ],
             "results": results,
+            "output": _output(executions, results) if snapshot.status is RunStatus.COMPLETED else None,
             "failure": failure,
             "usage": usage.total.json(),
             "pullRequests": [
@@ -883,6 +880,10 @@ class GraphService:
             max(row.max_spend_usd - accounting.spend_usd, 0.0)
             if row.max_spend_usd is not None else None
         )
+        latest: dict[str, Any] | None = None
+        for _tick, run_id in reversed(self.store.loop_runs(row.loop_id)):
+            if latest := await self._completed_output(run_id):
+                break
         return {
             "loopId": row.loop_id,
             "name": row.name,
@@ -914,9 +915,22 @@ class GraphService:
                 ),
                 "spendScope": SPEND_SCOPE,
             },
+            "latestOutput": latest,
             "createdAt": row.created_at,
             "updatedAt": row.updated_at,
         }
+
+    async def _completed_output(self, run_id: str) -> dict[str, Any] | None:
+        """What a run produced, with its id, once it has completed; otherwise nothing."""
+        try:
+            snapshot = await self.runtime.snapshot(RunId(run_id))
+        except (UnknownRunError, UnknownGraphError):
+            return None
+        if snapshot is None or snapshot.status is not RunStatus.COMPLETED:
+            return None
+        results = _results(self.runtime.topology(snapshot.graph_id), snapshot.values or {})
+        output = _output(self.store.executions(run_id), results)
+        return {"runId": run_id, **output} if output else None
 
     async def pause_loop(self, project: str | None, reference: str, reason: str = "") -> dict[str, Any]:
         row = self.resolve_loop(project, reference)
@@ -1341,6 +1355,28 @@ class GraphService:
 
     def _now_iso(self) -> str:
         return now_iso(self._clock())
+
+
+def _results(topology: Any, values: Mapping[str, Any]) -> dict[str, Any]:
+    """Each node's result in a run's state, leaving out checkouts and joins."""
+    return {
+        str(node.node_id): values[node.node_id]
+        for node in (topology.nodes if topology else ())
+        if node.kind not in ("workspace", "join") and node.node_id in values
+    }
+
+
+def _output(executions: Sequence[ExecutionRow], results: Mapping[str, Any]) -> dict[str, Any] | None:
+    """A run's output: the result of the node that completed last.
+
+    That is the node the run ended on, so a graph that ends in a report has the
+    report as its output, whichever route it took to get there.
+    """
+    finished = [row for row in executions if row.status == "completed" and row.node_id in results]
+    if not finished:
+        return None
+    last = max(reversed(finished), key=lambda row: row.finished_at or "")
+    return {"node": last.node_id, "finishedAt": last.finished_at, "value": results[last.node_id]}
 
 
 def _latest_activity(events: Sequence[RuntimeEvent]) -> dict[str, dict[str, str]]:
