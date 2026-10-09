@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/OpenEngine/OpenEngine/compare/v1.6.0...v1.7.0) (2026-10-09)
+
+
+### Features
+
+* **graph-service:** show a loop's latest run output ([#785](https://github.com/OpenEngine/OpenEngine/issues/785)) ([a7a3895](https://github.com/OpenEngine/OpenEngine/commit/a7a38955bde21340222d6f4fad4953b02c47d203))
+
 ## [1.6.0](https://github.com/OpenEngine/OpenEngine/compare/v1.5.0...v1.6.0) (2026-10-09)
 
 
