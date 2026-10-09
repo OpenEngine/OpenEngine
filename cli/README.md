@@ -93,6 +93,24 @@ fields, unknown or reserved node ids, dangling or duplicate edges, cycles,
 placeholders naming undeclared inputs or nodes that do not run first, and
 runners the backend does not have — all problems at once, each with its path.
 
+## Agents
+
+```bash
+engine agents --pretty
+engine agent add claude --name reviewer --model opus
+engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1
+engine agent signin reviewer
+engine agent remove qwen
+```
+
+A graph node's `agent:` names an agent on the backend. `claude`, `codex` and
+`opencode` are built in; `agent add` offers one of those harnesses under a name
+of its own, stored on the backend. `--model` is what it runs when a node names
+no model, or a tier the backend has no entry for. `--url` points an opencode
+agent at an OpenAI-compatible endpoint, which needs `--model` and no sign-in.
+`agent signin` signs in the harness an agent runs on; `engine runner signin`
+still works for one release.
+
 ## Runs
 
 ```bash
@@ -107,8 +125,8 @@ exits non-zero if the run failed. Each submission carries an idempotency key
 (`--idempotency-key` to choose it), and the client retries a dropped
 connection with the same key, so a retry never starts a second run. A run
 records status, node executions, each node's result, usage, pull requests
-opened, and failure details. A runner without credentials fails with
-`engine runner signin <runner>`; on a remote backend that command says what
+opened, and failure details. An agent without credentials fails with
+`engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
 
 `engine runs` lists runs newest first, whether submitted or started by a loop,
@@ -176,6 +194,7 @@ Mounted at `/api/v1` on the daemon:
 | `GET /runs`, `POST /runs`, `GET /runs/{id}` | list, start and inspect |
 | `GET /runs/{id}/nodes`, `GET /nodes/{id}`, `POST /nodes/{id}/steering` | node executions and steering |
 | `GET /loops`, `POST /loops`, `GET /loops/{ref}`, `POST /loops/{ref}/pause`, `POST /loops/{ref}/resume` | loops |
+| `GET /agents`, `POST /agents`, `GET /agents/{name}`, `DELETE /agents/{name}` | agents graphs can name |
 | `GET /backend` | runners available, and the execution engine |
 
 The service's tables live in the graph database and are created by the

@@ -130,12 +130,12 @@ def test_a_failed_run_names_the_signin_command_for_its_backend(monkeypatch, caps
     failed = {
         **RUN, "status": "failed", "terminal": True,
         "failure": {"error": "Authentication required", "node": "work", "authRequired": {
-            "runner": "claude", "command": "engine runner signin claude", "message": "",
+            "runner": "claude", "command": "engine agent signin claude", "message": "",
         }},
     }
     serve(monkeypatch, failed)
     assert main(["run", "get", "run-1"]) == 1
-    assert "engine runner signin claude --backend mini" in capsys.readouterr().err
+    assert "engine agent signin claude --backend mini" in capsys.readouterr().err
 
 
 def test_an_invalid_manifest_lists_each_problem(tmp_path, monkeypatch, capsys) -> None:
@@ -179,9 +179,51 @@ def test_loop_add_sends_limits_and_explains_what_spend_counts(monkeypatch, capsy
 
 def test_signing_in_on_a_remote_backend_says_where(monkeypatch, capsys) -> None:
     backends.add("mini", "http://mac-mini.local:4364", use=True)
-    assert main(["runner", "signin", "codex"]) == 0
+    assert main(["agent", "signin", "codex"]) == 0
     out = capsys.readouterr().out
     assert "codex login" in out and "ssh -t mac-mini.local codex login" in out
+
+
+def test_runner_signin_still_works_and_names_its_replacement(monkeypatch, capsys) -> None:
+    backends.add("mini", "http://mac-mini.local:4364", use=True)
+    assert main(["runner", "signin", "codex"]) == 0
+    captured = capsys.readouterr()
+    assert "ssh -t mac-mini.local codex login" in captured.out
+    assert "engine agent signin codex" in captured.err
+
+
+def test_an_added_agent_signs_in_as_its_kind(monkeypatch, capsys) -> None:
+    backends.add("mini", "http://mac-mini.local:4364", use=True)
+    backend = serve(monkeypatch, {"name": "reviewer", "kind": "claude", "model": "opus", "url": "", "builtin": False})
+    assert main(["agent", "signin", "reviewer"]) == 0
+    assert backend.requests[0]["url"] == "http://mac-mini.local:4364/api/v1/agents/reviewer"
+    assert "ssh -t mac-mini.local claude" in capsys.readouterr().out
+
+
+def test_an_agent_on_a_model_server_has_nothing_to_sign_in_to(monkeypatch, capsys) -> None:
+    serve(monkeypatch, {"name": "qwen", "kind": "opencode", "model": "q", "url": "http://gpu:8000/v1", "builtin": False})
+    assert main(["agent", "signin", "qwen"]) == 0
+    assert "nothing to sign in to" in capsys.readouterr().out
+
+
+def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys) -> None:
+    qwen = {"name": "qwen", "kind": "opencode", "model": "qwen3", "url": "http://gpu:8000/v1", "builtin": False}
+    backend = serve(
+        monkeypatch, qwen,
+        {"agents": [{"name": "claude", "kind": "claude", "model": "", "url": "", "builtin": True}, qwen]},
+        {**qwen, "removed": True},
+    )
+    assert main(["agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1"]) == 0
+    assert main(["agents", "--pretty"]) == 0
+    assert main(["agent", "remove", "qwen", "--pretty"]) == 0
+    assert [(r["method"], r["url"].removeprefix("http://127.0.0.1:4364/api/v1")) for r in backend.requests] == [
+        ("POST", "/agents"), ("GET", "/agents"), ("DELETE", "/agents/qwen"),
+    ]
+    assert backend.requests[0]["body"] == {
+        "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://gpu:8000/v1", "replace": False,
+    }
+    out = capsys.readouterr().out
+    assert "built in" in out and "http://gpu:8000/v1" in out and "removed qwen" in out
 
 
 def test_graph_run_sends_the_repository_it_is_run_from(tmp_path, monkeypatch) -> None:

@@ -15,9 +15,10 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="engine", description=__doc__)
     result.add_argument("--version", action="version", version=version("engine-cli"))
     commands = result.add_subparsers(dest="command")
-    connect.add_parser(commands)
+    connect.add_parsers(commands)
     daemon.add_parser(commands)
     graph_commands.add_parsers(commands)
+    commands.metavar = "{" + ",".join(name for name in commands.choices if name not in graph_commands.HIDDEN) + "}"
     return result
 
 
@@ -28,6 +29,10 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
     if arguments.command == "connect":
         return connect.main(arguments)
+    if arguments.command == "connections":
+        return connect.connections(arguments)
+    if arguments.command == "disconnect":
+        return connect.disconnect(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
     if arguments.command in graph_commands.COMMANDS:

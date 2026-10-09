@@ -13,6 +13,8 @@
     POST /nodes/{execution_id}/steering
     POST /loops   GET /loops   GET /loops/{ref}
     POST /loops/{ref}/pause   POST /loops/{ref}/resume
+    GET  /agents   POST /agents       agents graphs can name; add {kind, name?, model?, url?, replace?}
+    GET  /agents/{name}   DELETE /agents/{name}
     GET  /backend                     what this backend runs graphs with
 
 `project` is a query parameter on reads and a body field on writes. JSON in
@@ -148,9 +150,35 @@ def create_app(service: GraphService) -> Starlette:
             max_spend_usd=body.get("maxSpendUsd"),
         ))
 
+    async def list_agents(_request: Request) -> JSONResponse:
+        return JSONResponse({"agents": service.agents_json()})
+
+    async def add_agent(request: Request) -> JSONResponse:
+        body = await _body(request)
+        overwrite = body.get("replace", False)
+        if not isinstance(overwrite, bool):
+            raise _BadRequest("replace must be a boolean")
+        return JSONResponse(await service.add_agent(
+            _text(body, "kind"),
+            name=_text(body, "name"),
+            model=_text(body, "model"),
+            url=_text(body, "url"),
+            overwrite=overwrite,
+        ), status_code=201)
+
+    async def get_agent(request: Request) -> JSONResponse:
+        return JSONResponse(service.agent_json(request.path_params["name"]))
+
+    async def remove_agent(request: Request) -> JSONResponse:
+        return JSONResponse(await service.remove_agent(request.path_params["name"]))
+
     app = Starlette(
         routes=[
             Route("/backend", _guard(backend)),
+            Route("/agents", _guard(list_agents)),
+            Route("/agents", _guard(add_agent), methods=["POST"]),
+            Route("/agents/{name}", _guard(get_agent)),
+            Route("/agents/{name}", _guard(remove_agent), methods=["DELETE"]),
             Route("/graphs", _guard(list_graphs)),
             Route("/graphs", _guard(add_graph), methods=["POST"]),
             Route("/graphs/{ref:path}", _guard(get_graph)),

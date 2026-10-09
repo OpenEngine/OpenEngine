@@ -240,3 +240,5 @@ if [ "$start" = 1 ]; then
   fi
 fi
 
+
+printf '\ninstalled! run `engine`\n'
