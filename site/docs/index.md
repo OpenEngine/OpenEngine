@@ -12,7 +12,7 @@ On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
 logged in on this machine, run:
 
 ```sh
-curl -LsSf https://openengine.sh/install.sh | sh
+curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
 This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and

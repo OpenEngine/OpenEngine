@@ -2,7 +2,7 @@
 
 [![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
 [![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
-[![Docs](https://img.shields.io/badge/docs-openengine.sh-blue)](https://openengine.sh/docs/)
+[![Docs](https://img.shields.io/badge/docs-openengine.cc-blue)](https://openengine.cc/docs/)
 
 OpenEngine is a graph execution engine that meets you where you work.
 
@@ -18,7 +18,7 @@ On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
 logged in on this machine, run:
 
 ```bash
-curl -LsSf https://openengine.sh/install.sh | sh
+curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
 On Windows, use Windows Subsystem for Linux (WSL). If needed, run
@@ -27,7 +27,7 @@ complete the Linux distribution's first-run setup. Install Git and Node.js
 20.19+ and log in to Codex or Claude inside WSL, then run from PowerShell:
 
 ```powershell
-wsl sh -c "curl -LsSf https://openengine.sh/install.sh | sh"
+wsl sh -c "curl -LsSf https://openengine.cc/install.sh | sh"
 ```
 
 Run subsequent `engine` commands inside WSL.

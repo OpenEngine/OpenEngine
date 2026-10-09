@@ -11,10 +11,10 @@ A graph is a YAML definition or a Python LangGraph file. Register it with
 Names belong to projects, versions are immutable, and registering an unchanged
 definition is a no-op. `engine graph get GRAPH --pretty` prints stored source.
 
-### YAML graph specification (openengine.dev/v1)
+### YAML graph specification (openengine.cc/v1)
 
 ```yaml
-apiVersion: openengine.dev/v1
+apiVersion: openengine.cc/v1
 kind: Graph
 name: implement-review
 inputs:
@@ -54,7 +54,7 @@ Scalar field constraints:
 | Declaration | Field | Meaning | Constraints |
 | --- | --- | --- | --- |
 | loop | instruction | Default instruction for recurring runs; null or empty values are normalized to empty text. | default: `''`; type: str |
-| graph | apiVersion | Graph language version. | required; choices: `'openengine.dev/v1'` |
+| graph | apiVersion | Graph language version. | required; choices: `'openengine.cc/v1'` |
 | graph | kind | Definition kind. | default: `'Graph'`; choices: `'Graph'` |
 | graph | name | Project-scoped graph name. | required; type: str; pattern: `^[a-z0-9][a-z0-9._-]{0,62}$` |
 | input | required | Whether the value is required. | default: `False`; type: bool |

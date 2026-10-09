@@ -46,7 +46,7 @@ code and is always accepted.
 ## YAML files
 
 ```yaml
-apiVersion: openengine.dev/v1
+apiVersion: openengine.cc/v1
 kind: Graph
 name: spec-tdd-review
 description: Spec it, test it first, implement, wait for CI, then review.

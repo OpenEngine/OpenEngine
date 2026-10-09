@@ -32,7 +32,7 @@ from langgraph_acp import StdioACPProvider
 AGENT = Path(__file__).parent / "graph_service_agent.py"
 DATABASE = "graph-runs.sqlite3"
 
-PAIR = """apiVersion: openengine.dev/v1
+PAIR = """apiVersion: openengine.cc/v1
 name: pair
 description: Implement, then review.
 inputs:
@@ -50,7 +50,7 @@ review:
 
 def single(name: str, prompt: str) -> str:
     return yaml.safe_dump({
-        "apiVersion": "openengine.dev/v1",
+        "apiVersion": "openengine.cc/v1",
         "name": name,
         "implementation": {"work": {"agent": "stub", "prompt": prompt}},
     })
@@ -159,7 +159,7 @@ def test_a_graph_reports_every_problem_at_once() -> None:
     with pytest.raises(GraphError) as raised:
         parse_graph(
             {
-                "apiVersion": "openengine.dev/v1",
+                "apiVersion": "openengine.cc/v1",
                 "name": "Bad Name",
                 "implementation": {
                     "a": {"agent": "stub", "prompt": "go"},
@@ -185,7 +185,7 @@ def test_a_graph_reports_every_problem_at_once() -> None:
 
 def test_a_prompt_may_only_read_nodes_that_can_run_before_it() -> None:
     graph = {
-        "apiVersion": "openengine.dev/v1",
+        "apiVersion": "openengine.cc/v1",
         "name": "fan",
         "implementation": {
             "a": {"agent": "stub", "prompt": "x"},
@@ -615,7 +615,7 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
         async with graph_service(tmp_path) as service:
             transport = httpx.ASGITransport(app=create_app(service))
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                refused = await client.post("/graphs", json={"source": "apiVersion: openengine.dev/v1\nname: x\nimplementation: {}\n"})
+                refused = await client.post("/graphs", json={"source": "apiVersion: openengine.cc/v1\nname: x\nimplementation: {}\n"})
                 assert refused.status_code == 400
                 assert refused.json()["problems"][0]["path"] == "implementation"
                 added = await client.post("/graphs", json={"project": "p", "source": PAIR})

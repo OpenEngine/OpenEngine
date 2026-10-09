@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install an OpenEngine release for the current user:
 #
-#   curl -LsSf https://openengine.sh/install.sh | sh
-#   curl -LsSf https://openengine.sh/install.sh | sh -s -- --version 0.3.0
+#   curl -LsSf https://openengine.cc/install.sh | sh
+#   curl -LsSf https://openengine.cc/install.sh | sh -s -- --version 0.3.0
 #
 # Needs curl, tar, and a SHA-256 tool. Python comes from a pinned uv that is
 # kept apart from any uv, Python, or configuration already on the machine.
