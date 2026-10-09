@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.4.0](https://github.com/OpenEngine/OpenEngine/compare/v1.3.0...v1.4.0) (2026-10-09)
+
+
+### Features
+
+* agents, and connections ([#714](https://github.com/OpenEngine/OpenEngine/issues/714)) ([6eda259](https://github.com/OpenEngine/OpenEngine/commit/6eda259d17c342a3dc9ae8b3e20cc493ead2210d))
+* cli commands for graph and loop management ([564e1e6](https://github.com/OpenEngine/OpenEngine/commit/564e1e66a942f4f2d4449e2455edc1b6ce25dde8))
+* **cli:** add engine agent claude interactive sessions ([#716](https://github.com/OpenEngine/OpenEngine/issues/716)) ([2fdd39e](https://github.com/OpenEngine/OpenEngine/commit/2fdd39e5895e44df2160ca9fc1266afba4c869fe))
+* **cli:** add graph and loop specification commands ([#703](https://github.com/OpenEngine/OpenEngine/issues/703)) ([a191c39](https://github.com/OpenEngine/OpenEngine/commit/a191c392a095124d8b2f78da4527649ee8c266df))
+* **cli:** rename graph execute to graph run and add engine runs ([#713](https://github.com/OpenEngine/OpenEngine/issues/713)) ([c1688e3](https://github.com/OpenEngine/OpenEngine/commit/c1688e3ad6c43bc39f129408302c2434fcda6ac3))
+* **github:** accept webhooks from multiple repositories ([#711](https://github.com/OpenEngine/OpenEngine/issues/711)) ([a4879bd](https://github.com/OpenEngine/OpenEngine/commit/a4879bdb8df919e0738507e10cd46371979bec21))
+* **github:** react to Engine mentions with delivery outcomes ([#661](https://github.com/OpenEngine/OpenEngine/issues/661)) ([ccaa260](https://github.com/OpenEngine/OpenEngine/commit/ccaa2604fd9cd9b337f8b2839809ad6a9fba0551))
+* link issue commits and resolve addressed review threads ([#658](https://github.com/OpenEngine/OpenEngine/issues/658)) ([88bd7f3](https://github.com/OpenEngine/OpenEngine/commit/88bd7f36ccb1e4d18b4893cf3f808f5f9974e130))
+* **mcp:** add tools to create loops and check their status ([#638](https://github.com/OpenEngine/OpenEngine/issues/638)) ([b8d6c53](https://github.com/OpenEngine/OpenEngine/commit/b8d6c535f803a33e650249d6cfac0a1692c42605))
+* **open-verify:** add agent-powered CLI for browser and terminal QA ([#598](https://github.com/OpenEngine/OpenEngine/issues/598)) ([65dec07](https://github.com/OpenEngine/OpenEngine/commit/65dec0726aef6dd20c1dc6ed92c0c5425fd7fc08))
+* **ports:** add sandbox contract and process backend ([#691](https://github.com/OpenEngine/OpenEngine/issues/691)) ([b0d1f48](https://github.com/OpenEngine/OpenEngine/commit/b0d1f48e785be37f25432c72afef0924b89dfe80))
+* post findings and impact analysis when Engine is requested as reviewer ([#695](https://github.com/OpenEngine/OpenEngine/issues/695)) ([9882112](https://github.com/OpenEngine/OpenEngine/commit/988211251c247abd8a762f7935899afe1f6dc2d2))
+* **repos:** support optional local repository onboarding ([#712](https://github.com/OpenEngine/OpenEngine/issues/712)) ([9ba6a52](https://github.com/OpenEngine/OpenEngine/commit/9ba6a52ada33557b90ea97d712e7acfe9cfa1097))
+
+
+### Bug Fixes
+
+* **cli:** heal daemon Node version-manager shims ([#654](https://github.com/OpenEngine/OpenEngine/issues/654)) ([ee94c23](https://github.com/OpenEngine/OpenEngine/commit/ee94c231a45f81e9acbfdf2473e9af0d7d3a06ef))
+* **cli:** preserve daemon identity and configure Claude account ([#656](https://github.com/OpenEngine/OpenEngine/issues/656)) ([dcd5695](https://github.com/OpenEngine/OpenEngine/commit/dcd5695772e24c6b59626f5bd9dbaa0a0025ca65))
+* ignore GitHub comments mentioning other users ([#659](https://github.com/OpenEngine/OpenEngine/issues/659)) ([49b2ab9](https://github.com/OpenEngine/OpenEngine/commit/49b2ab9e5e0541ae3582f124b590527647075871))
+* **web:** log every GitHub delivery the ingress settles without acting ([#704](https://github.com/OpenEngine/OpenEngine/issues/704)) ([6046dcf](https://github.com/OpenEngine/OpenEngine/commit/6046dcf230670bba0bb6592adb4e50347ade75be))
+
+
+### Documentation
+
+* add Windows installation command to README ([#702](https://github.com/OpenEngine/OpenEngine/issues/702)) ([a1e22d0](https://github.com/OpenEngine/OpenEngine/commit/a1e22d0f313f910bc11c0ae507873972fdb60e73))
+* **site:** enable blog and add "AI Skeptic to AI Pilled" post ([#641](https://github.com/OpenEngine/OpenEngine/issues/641)) ([c077bf2](https://github.com/OpenEngine/OpenEngine/commit/c077bf2b7222cfdaf5668aaa2740d48f31e0af04))
+
 ## [1.3.0](https://github.com/OpenEngine/OpenEngine/compare/v1.2.0...v1.3.0) (2026-10-02)
 
 
