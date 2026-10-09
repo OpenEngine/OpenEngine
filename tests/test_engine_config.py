@@ -180,6 +180,14 @@ def test_selection_is_explicit_then_environment_then_working_directory(
     explicit.write_text('[approvals]\nallow = ["web"]\n')
 
     from_default = load_engine_config(environ={}, cwd=tmp_path)
+    local = tmp_path / ".engine/config.toml"
+    local.parent.mkdir()
+    local.write_text('default_branch = "local"\n')
+    from_local = load_engine_config(environ={}, cwd=tmp_path)
+    assert from_local.path == local.resolve()
+    assert from_local.config.default_branch == "local"
+    assert from_local.config.approvals.allow == (ApprovalCapability.READ,)
+
     from_environment = load_engine_config(
         environ={"ENGINE_CONFIG": environment.name}, cwd=tmp_path
     )
@@ -851,6 +859,9 @@ def test_machine_configuration_precedes_checkout_without_merging(tmp_path, xdg):
         '[repos]\n"other/web" = "/srv/web"\n'
     )
     (tmp_path / "engine.toml").write_text('[repos]\n"checkout/repo" = "/checkout"\n')
+    local = tmp_path / ".engine/config.toml"
+    local.parent.mkdir()
+    local.write_text('[repos]\n"local/repo" = "/local"\n')
     environment = {} if xdg is None else {
         "XDG_CONFIG_HOME": str(config_home) if xdg == "absolute" else "relative"
     }
@@ -864,6 +875,7 @@ def test_machine_configuration_precedes_checkout_without_merging(tmp_path, xdg):
     environment["ENGINE_CONFIG"] = str(override)
     assert load_engine_config(environ=environment, cwd=tmp_path).path == override
     assert load_engine_config(machine, environ=environment, cwd=tmp_path).path == machine
+    assert load_engine_config(local, environ=environment, cwd=tmp_path).path == local
 
 
 def test_invalid_machine_config_does_not_fall_back_to_checkout(tmp_path):
@@ -874,6 +886,29 @@ def test_invalid_machine_config_does_not_fall_back_to_checkout(tmp_path):
     with pytest.raises(EngineConfigError, match="missing/checkout"):
         load_engine_config(environ={}, cwd=tmp_path)
 
+
+def test_invalid_local_config_does_not_fall_back_to_root(tmp_path):
+    (tmp_path / "engine.toml").write_text("[repos]\n")
+    local = tmp_path / ".engine/config.toml"
+    local.parent.mkdir()
+    local.write_text("[repos")
+    with pytest.raises(EngineConfigError, match="invalid TOML"):
+        load_engine_config(environ={}, cwd=tmp_path)
+
+
+def test_local_config_works_without_root_config(tmp_path):
+    local = tmp_path / ".engine/config.toml"
+    local.parent.mkdir()
+    local.write_text(
+        '[repos]\n"owner/repo" = "~/code/repo"\n'
+        '[workflows]\ndirectory = "../workflows"\n'
+        '[approvals.bash]\nallow = ["uv run pytest"]\n'
+    )
+    loaded = load_engine_config(environ={}, cwd=tmp_path)
+    assert loaded.path == local.resolve()
+    assert loaded.config.repos == {"owner/repo": "~/code/repo"}
+    assert loaded.workflows_directory == (tmp_path / "workflows").resolve()
+    assert loaded.config.approvals.bash.allow == ("uv run pytest",)
 
 def test_review_resolution_configuration():
     assert parse_engine_config({}).github.resolve_addressed_threads is True

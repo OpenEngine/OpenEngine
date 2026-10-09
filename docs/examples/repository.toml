@@ -1,0 +1,17 @@
+# Optional repository settings for .engine/config.toml.
+# For an existing installation, add settings to its active configuration:
+# OpenEngine selects one config file; it does not merge files.
+
+[repos]
+# Uncomment and customize an entry for each repository you want to use.
+
+# Any existing checkout, regardless of language or hosting provider:
+# "my-project" = "/absolute/path/to/my-project"
+
+# GitHub checkout (cloned over SSH if the local path is missing):
+# "your-account/your-project" = "~/code/your-project"
+
+[approvals.bash]
+# No shell commands are preapproved. Add exact commands only after checking
+# your project's instructions. Test commands should target its test directory.
+allow = []
