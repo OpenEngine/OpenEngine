@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
 import re
 from collections.abc import Callable, Sequence
 from urllib.parse import quote, urlparse
@@ -13,6 +11,7 @@ from engine.domain.ids import WorkspaceId
 from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.change_requests import change_request, names_a_project_step
+from engine.runtime.git_core import DEFAULT_GIT_BINARY, GitInvoker, guard_push, refuse_internal_branch
 
 _MAX_LOG_CHARACTERS = 48_000
 
@@ -24,26 +23,24 @@ class GitLabSourceControlError(RuntimeError):
 class GitLabSourceControl:
     """Publishes git changes and manages merge requests through GitLab's API."""
 
-    def __init__(self, token: str | Callable[[], str | None], origin: str | Callable[[], str] = "https://gitlab.com", workspace_provider: WorkspaceProvider | None = None, transport: GitLabOAuthTransport | None = None) -> None:
+    def __init__(
+        self,
+        token: str | Callable[[], str | None],
+        origin: str | Callable[[], str] = "https://gitlab.com",
+        workspace_provider: WorkspaceProvider | None = None,
+        transport: GitLabOAuthTransport | None = None,
+        git_binary_path: str = DEFAULT_GIT_BINARY,
+    ) -> None:
         self._transport = transport or GitLabOAuthTransport(token, origin)
         self._origin_source = origin
         self._workspace_provider = workspace_provider
+        self._git_invoker = GitInvoker(git_binary_path, GitLabSourceControlError)
+        self._git = self._git_invoker.run
 
     async def run_git(self, workspace_id: WorkspaceId, arguments: Sequence[str], *, owned_pull_requests: Sequence[tuple[str, int]] = ()) -> GitResult:
-        arguments = tuple(str(argument) for argument in arguments)
-        if not arguments:
-            raise ValueError("git needs at least one argument")
-        if arguments[0].startswith("-"):
-            raise ValueError("git global options are not permitted")
-        if arguments[0] == "push":
-            from engine.runtime.push_policy import push_spec
-            if push_spec(arguments)[2]:
-                raise ValueError("GitLab cannot verify owned feature branches for force pushes")
-            arguments = ("push", "--no-mirror", *arguments[1:])
-            for argument in arguments[1:]:
-                destination = argument.split(":")[-1].removeprefix("refs/heads/")
-                if destination.startswith("engine/"):
-                    raise ValueError("branch must be a non-internal branch")
+        arguments, push = guard_push(arguments)
+        if push is not None and push[2]:
+            raise ValueError("GitLab cannot verify owned feature branches for force pushes")
         return await self._git(await self._root(workspace_id), arguments)
 
     async def create_branch(self, workspace_id: WorkspaceId, name: str, base_ref: str) -> None:
@@ -55,7 +52,7 @@ class GitLabSourceControl:
         return await self._checked(workspace_id, ("rev-parse", "HEAD"))
 
     async def publish(self, workspace_id: WorkspaceId, branch: str) -> None:
-        self._public(branch)
+        refuse_internal_branch(branch)
         result = await self.run_git(workspace_id, ("push", "--set-upstream", "origin", branch))
         if not result.ok:
             raise GitLabSourceControlError(result.stderr or result.stdout)
@@ -63,7 +60,7 @@ class GitLabSourceControl:
     async def request_review(self, workspace_id: WorkspaceId, branch: str, base_ref: str, title: str, body: str, *, issue: dict[str, object] | None = None, issue_resolution: str | None = None, owned_pull_requests: Sequence[tuple[str, int]] = ()) -> str:
         if issue is not None or issue_resolution is not None:
             raise NotImplementedError("GitLab issue-linked publishing is not supported")
-        self._public(branch)
+        refuse_internal_branch(branch)
         project = await self._project(workspace_id)
         result = await self._api("POST", f"/projects/{project}/merge_requests", json={"source_branch": branch, "target_branch": base_ref, "title": title, "description": body})
         url = self._str(result, "web_url")
@@ -196,8 +193,10 @@ class GitLabSourceControl:
         return PipelineRetry(pipeline_id, job_id)
 
     async def _root(self, workspace_id: WorkspaceId) -> str:
-        if self._workspace_provider is None: raise GitLabSourceControlError("source control was composed without a workspace provider")
+        if self._workspace_provider is None:
+            raise GitLabSourceControlError("source control was composed without a workspace provider")
         return await self._workspace_provider.root_path(workspace_id)
+
     async def _project(self, workspace_id: WorkspaceId) -> str:
         remote = await self._checked(workspace_id,("remote","get-url","origin")); value=remote.removesuffix(".git")
         path = value.split(":",1)[1] if value.startswith("git@") else urlparse(value).path.lstrip("/")
@@ -207,12 +206,10 @@ class GitLabSourceControl:
         if not all(names_a_project_step(step) for step in path.split("/")):
             raise GitLabSourceControlError(f"cannot determine the project from remote URL: {remote!r}")
         return quote(path, safe="")
-    async def _git(self, root: str, args: Sequence[str]) -> GitResult:
-        process=await asyncio.create_subprocess_exec("git","-C",root,*args,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env={k:v for k,v in os.environ.items() if k not in {"GITLAB_TOKEN","GH_TOKEN","GITHUB_TOKEN"}}); out,err=await process.communicate(); return GitResult(process.returncode or 0,out.decode(errors="replace").strip(),err.decode(errors="replace").strip())
-    async def _checked(self, workspace_id: WorkspaceId,args: Sequence[str]) -> str:
-        result=await self._git(await self._root(workspace_id),args)
-        if not result.ok: raise GitLabSourceControlError(result.stderr or result.stdout)
-        return result.stdout
+
+    async def _checked(self, workspace_id: WorkspaceId, args: Sequence[str]) -> str:
+        return await self._git_invoker.checked(await self._root(workspace_id), args)
+
     async def _api(self,*args: object,**kwargs: object) -> dict:
         try:
             result=await self._transport.request(*args,**kwargs)
@@ -240,9 +237,6 @@ class GitLabSourceControl:
     def _discussion(cls,value: dict) -> Discussion: return Discussion(cls._nested(value,"author","username"),cls._str(value,"body"),cls._str(value,"web_url"))
     @classmethod
     def _work_item(cls,value: dict, comments: tuple[Discussion,...]=()) -> WorkItem: return WorkItem(int(value.get("iid",0)),cls._str(value,"title"),cls._str(value,"state"),cls._str(value,"description"),cls._nested(value,"author","username"),cls._str(value,"web_url"),tuple(str(x) for x in value.get("labels",[]) if isinstance(x,str)),comments)
-    @staticmethod
-    def _public(branch: str) -> None:
-        if not branch.strip() or branch.startswith("engine/"): raise ValueError("branch must be a non-internal branch")
     @staticmethod
     def _merge_request(url: str) -> tuple[str,int]:
         # Read by the reader CICheck and the recorders use, so a URL they bind
