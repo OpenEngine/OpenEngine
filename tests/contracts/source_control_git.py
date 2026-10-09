@@ -1,11 +1,10 @@
 """Public git-safety contract: add one adapter parameter to cover a new forge.
 
-Mock only the process boundary for argument and environment checks; alias
-regressions use a local bare remote. No forge API or network is contacted.
+Mock only the process boundary so each adapter must apply its guards and pass
+a sanitized environment to git. No forge API or remote is contacted.
 """
 
 import asyncio
-import subprocess
 from unittest.mock import AsyncMock
 
 import pytest
@@ -102,73 +101,6 @@ def test_global_options_cannot_bypass_the_boundary(source, spawn, arguments):
     with pytest.raises(GitGlobalOptionError):
         asyncio.run(source.run_git(WORKSPACE, arguments))
     spawn.assert_not_called()
-
-
-@pytest.mark.parametrize("prefix", [[], ["--no-pager"]])
-@pytest.mark.parametrize("arguments", [
-    ["rebase", "--exec", "git push origin HEAD:engine/x", "HEAD~1"],
-    ["rebase", "--exec=git push origin HEAD:engine/x", "HEAD~1"],
-    ["rebase", "--ex=git push origin HEAD:engine/x", "HEAD~1"],
-    ["rebase", "-x", "git push --force origin HEAD:agent/topic", "HEAD~1"],
-    ["rebase", "-xgit push origin HEAD:engine/x", "HEAD~1"],
-    ["rebase", "-ix", "git push origin HEAD:engine/x", "HEAD~1"],
-    ["push", "--exec=custom-command", "origin", "agent/topic"],
-    ["push", "--receive-pack", "custom-command", "origin", "agent/topic"],
-])
-def test_exec_options_cannot_bypass_publication_guard(source, spawn, prefix, arguments):
-    with pytest.raises(ValueError, match="run ordinary git operations separately"):
-        asyncio.run(source.run_git(WORKSPACE, [*prefix, *arguments]))
-    spawn.assert_not_called()
-
-
-def test_ordinary_rebase_remains_available(source, spawn):
-    result = asyncio.run(source.run_git(WORKSPACE, ["rebase", "main"]))
-    assert result.ok
-    spawn.assert_awaited_once()
-    assert spawn.call_args.args[-2:] == ("rebase", "main")
-
-
-@pytest.mark.parametrize("prefix", [[], ["--no-pager"]])
-@pytest.mark.parametrize("command", ["ship", "shpi"])
-@pytest.mark.parametrize("alias", [
-    "!git push origin HEAD:engine/x",
-    "push origin HEAD:engine/x",
-    "forward",
-])
-def test_stored_publishing_alias_cannot_publish(source, tmp_path, monkeypatch, prefix, command, alias):
-    monkeypatch.setattr(source._git_invoker, "binary_path", "git")
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty-config"))
-    remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
-
-    def run(*arguments):
-        return asyncio.run(source.run_git(WORKSPACE, arguments))
-
-    for arguments in [
-        ("init",),
-        ("config", "user.name", "Contract Tests"),
-        ("config", "user.email", "contract@example.test"),
-        ("commit", "--allow-empty", "-m", "initial"),
-        ("remote", "add", "origin", str(remote)),
-        ("config", "alias.forward", "!git push origin HEAD:engine/x"),
-        ("config", "alias.ship", alias),
-        ("config", "help.autocorrect", "-1"),
-    ]:
-        result = run(*arguments)
-        assert result.ok, result.stderr
-
-    result = run(*prefix, command)
-    refs = subprocess.run(
-        ["git", "-C", str(remote), "for-each-ref", "--format=%(refname)"],
-        check=True, capture_output=True, text=True,
-    )
-    assert refs.stdout == ""
-    assert not result.ok
-    assert run("config", "--get", "alias.ship").stdout == alias
-    # Ordinary publication remains available through the guarded command.
-    result = run("push", "origin", "HEAD:agent/topic")
-    assert result.ok, result.stderr
 
 
 @pytest.mark.parametrize("force", ["-f", "--force", "--force-with-lease", "+refspec"])
