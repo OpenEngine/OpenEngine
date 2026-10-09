@@ -202,6 +202,9 @@ jobs:
       - name: Install workspace
         run: uv sync --locked --all-packages
 
+      - name: Lint Python
+        run: uv run ruff check
+
       - name: Dependency direction holds
         # domain <- ports <- runtime <- adapters, apps compose.
         # Verbose so a violation names the offending package and import.

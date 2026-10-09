@@ -98,7 +98,7 @@ class FeedbackBroker(SingleToolBroker):
             return {"ok": False, "error": "unknown feedback arguments"}
         try:
             reached = await self._continue_workorder(prompt.strip())
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns feedback delivery error
             return {"ok": False, "error": f"could not deliver the feedback: {error}"}
         delivered = (
             f"Started work order `{reached.run_id}` for this pull request."

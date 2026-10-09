@@ -699,7 +699,7 @@ class ScriptedGraphRuntime:
             await self._walk(run, checkpoint)
         except asyncio.CancelledError:
             raise
-        except Exception as failure:  # pragma: no cover - a bug in the fake
+        except Exception as failure:  # noqa: BLE001 -- #779: fake executor reports a failed run; pragma: no cover - a bug in the fake
             await self._fail(run, str(failure), None)
 
     async def _walk(self, run: _Run, checkpoint: Checkpoint) -> None:
@@ -800,7 +800,7 @@ class ScriptedGraphRuntime:
                         return _Outcome(node_id, refused=True)
             except asyncio.CancelledError:
                 raise
-            except Exception as failure:
+            except Exception as failure:  # noqa: BLE001 -- #779: fake node reports error in its outcome
                 return _Outcome(node_id, error=str(failure))
             await self.emit(
                 run,

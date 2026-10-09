@@ -277,7 +277,7 @@ class LoopBroker(SingleToolBroker):
             return {"ok": False, "error": "arguments must be an object"}
         try:
             return {"ok": True, "text": await self._handle(str(name), arguments)}
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns an error response
             return {"ok": False, "error": f"{name} failed: {error}"}
 
 
@@ -294,7 +294,7 @@ async def _serve_stdio(host: str, port: int, token: str) -> None:
                 )
             if response is None:
                 continue
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: stdio boundary reports JSON-RPC error
             response = rpc_error(None, -32700, f"Parse error: {error}")
         sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
         sys.stdout.flush()

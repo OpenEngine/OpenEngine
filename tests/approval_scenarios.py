@@ -20,6 +20,7 @@ started a second turn would pass without any of our persistence existing.
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,7 +214,7 @@ class Chat:
         try:
             await self.client.delete(f"/api/threads/{self.thread_id}/runs/current")
         except Exception:  # pragma: no cover - teardown of an already-broken run
-            pass
+            logging.getLogger(__name__).exception("Could not stop approval scenario run")
 
     async def grants(self):
         return await self.store.list_session_grants()

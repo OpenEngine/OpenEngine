@@ -725,7 +725,7 @@ class LangGraphRuntime:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as failure:
+        except Exception as failure:  # noqa: BLE001 -- #779: executor boundary records failed run and releases resources
             await self._release_all(live)
             blamed = await self._blamed(definition, live.run_id) or failed_at
             await self._fail(live, str(failure), blamed, failure)

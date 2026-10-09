@@ -35,6 +35,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
       - name: Lint
-        run: apps/open-verify/.venv/bin/ruff check apps/open-verify/src apps/open-verify/tests
+        working-directory: apps/open-verify
+        run: .venv/bin/ruff check src tests
       - name: Test CLI, browser guards, generated tests, and actual MP4 export
         run: apps/open-verify/.venv/bin/python -m pytest apps/open-verify/tests

@@ -432,7 +432,7 @@ class TerminalMcpBroker:
                 raw = await reader.readline()
                 request = json.loads(raw)
                 response = await self._submit(request)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 response = {"ok": False, "error": f"invalid terminal request: {error}"}
             writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
             with suppress(ConnectionError):
@@ -478,7 +478,7 @@ class TerminalMcpBroker:
                         self._run_id, arguments["prompt"].strip(),
                         RunId(arguments["depends_on_run_id"].strip()) if arguments.get("depends_on_run_id") else None
                     )
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                     return {"ok": False, "error": f"could not create workorder: {error}"}
                 return {"ok": True, "output": json.dumps({"url": url, "run_id": run_id})}
             if name == "update_status":
@@ -493,7 +493,7 @@ class TerminalMcpBroker:
                     return {"ok": False, "error": str(error)}
                 try:
                     await self._status_reporter(status)
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                     # Reporting is not the work, so this does not end the step
                     # -- but the step is told the truth about it. A provider
                     # that is down and an acknowledgement saying "posted" is
@@ -612,7 +612,7 @@ class TerminalMcpBroker:
                 result = await self._source_control.add_comment(
                     pr_url, comment, file, line, in_reply_to_id, **options
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not add comment: {error}"}
             # Which id space GitHub drew the id from follows from how the
             # comment was addressed, the same way the adapter routes it.
@@ -647,7 +647,7 @@ class TerminalMcpBroker:
                 result = await self._source_control.run_git(
                     self._workspace_id, git_arguments, **push_options
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not run git: {error}"}
             if result.ok and before is not None:
                 after = await self._push_snapshot(git_arguments)
@@ -680,7 +680,7 @@ class TerminalMcpBroker:
                 result = await self._source_control.view_change_request(
                     self._workspace_id, _number_arguments(name, arguments, "number")
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not view change request: {error}"}
             return _repository_result(result)
         if name == "list_work_items":
@@ -689,7 +689,7 @@ class TerminalMcpBroker:
                 result = await self._source_control.list_work_items(
                     self._workspace_id, state, labels, limit
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not list work items: {error}"}
             return _repository_result(result)
         if name == "view_work_item":
@@ -697,7 +697,7 @@ class TerminalMcpBroker:
                 result = await self._source_control.view_work_item(
                     self._workspace_id, _number_arguments(name, arguments, "number")
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not view work item: {error}"}
             return _repository_result(result)
         if name == "list_pipeline_status":
@@ -706,7 +706,7 @@ class TerminalMcpBroker:
                 result = await self._source_control.list_pipeline_status(
                     self._workspace_id, ref=ref, change_request_number=number
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not list pipeline status: {error}"}
             return _repository_result(result)
         if name in {"get_job_logs", "retry_pipeline"}:
@@ -714,7 +714,7 @@ class TerminalMcpBroker:
                 pipeline_id, job_id = _pipeline_arguments(name, arguments)
                 method = getattr(self._source_control, name)
                 result = await method(self._workspace_id, pipeline_id, job_id)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 action = "get job logs" if name == "get_job_logs" else "retry pipeline"
                 return {"ok": False, "error": f"could not {action}: {error}"}
             return _repository_result(result)
@@ -733,7 +733,7 @@ class TerminalMcpBroker:
             url = await self._source_control.request_review(
                 self._workspace_id, branch, base_ref, title, body, **options
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
             return {"ok": False, "error": f"could not open the pull request: {error}"}
         opened = change_request(url)
         if opened is not None:
@@ -978,7 +978,7 @@ class TerminalMcpBroker:
         )
         try:
             decision = await self._git_approval(request)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
             return {"ok": False, "error": f"could not approve {name}: {error}"}
         if decision is not ApprovalDecision.ACCEPT:
             return {"ok": False, "error": f"{name} was not approved"}
@@ -1025,7 +1025,7 @@ class TerminalMcpBroker:
         )
         try:
             decision = await self._git_approval(request)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
             return {"ok": False, "error": f"could not approve git: {error}"}
         if decision is not ApprovalDecision.ACCEPT:
             return {"ok": False, "error": "git_subcommand was not approved"}
@@ -1533,7 +1533,7 @@ async def _serve_stdio(
             )
             if response is None:
                 continue
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: stdio boundary reports JSON-RPC error
             response = {
                 "jsonrpc": "2.0",
                 "id": None,
