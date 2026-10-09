@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 from engine.apps.cli.__main__ import main
-from engine.cli import backends, http
+from engine.cli import backends, http, starters
 
 
 class Backend:
@@ -109,6 +109,32 @@ def test_graph_run_retries_a_dropped_connection_under_the_same_key(monkeypatch, 
     assert first["body"]["idempotencyKey"].startswith("cli-")
     assert first["body"]["inputs"] == {"tone": "terse"}
     assert json.loads(capsys.readouterr().out)["runId"] == "run-1"
+
+
+def test_a_built_in_graph_is_registered_the_first_time_it_is_run(monkeypatch, capsys) -> None:
+    missing = HTTPError("http://x", 404, "Not Found", {}, io.BytesIO(json.dumps({
+        "error": "no graph named 'adversarial-review' in project 'default'",
+    }).encode()))
+    registered = {"name": "adversarial-review", "version": 1, "created": True}
+    recorded = serve(monkeypatch, missing, registered, {**RUN, "created": True})
+    assert main([
+        "graph", "run", "adversarial-review", "--branch", "feat/my_feat", "--agent", "codex", "--repo", "o/r",
+    ]) == 0
+    first, adding, retry = recorded.requests
+    assert first["body"] == retry["body"]
+    assert first["body"]["inputs"] == {"branch": "feat/my_feat", "agent": "codex"}
+    assert first["body"]["instruction"] == "Run adversarial-review on feat/my_feat."
+    assert adding["url"].endswith("/api/v1/graphs")
+    assert adding["body"]["source"] == starters.source("adversarial-review")
+
+
+def test_an_unknown_graph_is_not_registered(monkeypatch, capsys) -> None:
+    missing = HTTPError("http://x", 404, "Not Found", {}, io.BytesIO(json.dumps({
+        "error": "no graph named 'mine'",
+    }).encode()))
+    recorded = serve(monkeypatch, missing)
+    assert main(["graph", "run", "mine", "go", "--repo", "o/r"]) == 1
+    assert len(recorded.requests) == 1
 
 
 def test_runs_sends_its_filters_and_prints_a_table(monkeypatch, capsys) -> None:

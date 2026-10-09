@@ -82,7 +82,9 @@ def graph_spec(_arguments: object = None) -> int:
     - `agent` and `prompt`: an agent session. `agent` names a configured runner,
       uses `${inputs.NAME}`, or selects `{same: STEP}` or `{not: STEP}`.
       Runner inputs need a default or choices; `least-utilized`, `round-robin`
-      are supported selection policies in those inputs.
+      are supported selection policies in those inputs. A runner input is
+      checked when a run starts, not at registration, so a graph registers
+      on any backend and a run naming an absent runner is refused.
     - `human`: a question, or `{prompt, choose}` for a person to select findings.
     - `ci: true`: wait for CI on the change.
     - None of these keys: the checkout.

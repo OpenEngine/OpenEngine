@@ -115,6 +115,7 @@ still works for one release.
 
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
+engine graph run adversarial-review --branch feat/my_feat --agent codex
 engine run get run-0123abcd --pretty
 engine runs --pretty
 engine runs --graph fix-flaky-test --status failed
@@ -128,6 +129,14 @@ records status, node executions, each node's result, usage, pull requests
 opened, and failure details. An agent without credentials fails with
 `engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
+
+The instruction is optional. `--branch` and `--agent` set the `branch` and
+`agent` inputs, as `-i branch=...` would. The built-in graphs (`review`,
+`adversarial-review`, `implement-review`, `spec-implement-review`) need no
+`graph add`: the first `graph run` of one in a project registers it.
+`adversarial-review` checks out a new workspace on `--branch`, has `--agent`
+attack the change from three angles, then has it try to refute every finding,
+and reports what survives. It changes nothing.
 
 `engine runs` lists runs newest first, whether submitted or started by a loop,
 filtered by `--graph`, `--loop` and `--status`, at most `--limit` (default 20),
