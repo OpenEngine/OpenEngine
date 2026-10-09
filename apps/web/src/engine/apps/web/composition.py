@@ -48,6 +48,7 @@ from engine.adapters.communications.slack import (
     SlackCredentialStore,
 )
 from engine.adapters.sandbox.process import ProcessSandbox
+from engine.adapters.sandbox.smolvm import SmolvmSandbox
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.source_control.github.transports import (
     GitHubCliTransport,
@@ -290,10 +291,12 @@ def build_capabilities(
             gitlab,
         )
     Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
-    if settings.engine_config.sandbox.backend != "process":
-        raise NotImplementedError("smolvm sandbox backend is not installed")
+    sandbox = (
+        SmolvmSandbox(image=settings.engine_config.sandbox.image or None)
+        if settings.engine_config.sandbox.backend == "smolvm" else ProcessSandbox()
+    )
     return Capabilities(
-        sandbox=ProcessSandbox(),
+        sandbox=sandbox,
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
         source_control=source_control,
         agent_runner=codex_acp_runner(

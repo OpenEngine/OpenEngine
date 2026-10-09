@@ -17,6 +17,8 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command")
     connect.add_parser(commands)
     daemon.add_parser(commands)
+    doctor = commands.add_parser("doctor", help="check local configuration, tools and SmolVM support")
+    doctor.add_argument("--json", action="store_true")
     graph_commands.add_parsers(commands)
     return result
 
@@ -30,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
         return connect.main(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
+    if arguments.command == "doctor":
+        return daemon.command_doctor(arguments)
     if arguments.command in graph_commands.COMMANDS:
         return graph_commands.main(arguments)
     raise AssertionError("unreachable command")

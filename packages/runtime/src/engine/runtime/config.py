@@ -189,6 +189,7 @@ class WorkOrdersConfig:
 @dataclass(frozen=True, slots=True)
 class SandboxConfig:
     backend: str = "process"
+    image: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,10 +357,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         "configuration",
     )
     sandbox = _table(document.get("sandbox", {}), "sandbox")
-    _reject_unknown(sandbox, {"backend"}, "sandbox")
+    _reject_unknown(sandbox, {"backend", "image"}, "sandbox")
     sandbox_backend = sandbox.get("backend", "process")
     if sandbox_backend not in ("process", "smolvm"):
         raise EngineConfigError("sandbox.backend must be process or smolvm")
+    sandbox_image = sandbox.get("image", "")
+    if not isinstance(sandbox_image, str):
+        raise EngineConfigError("sandbox.image must be a string")
 
     attribution = document.get("attribution", True)
     if not isinstance(attribution, bool):
@@ -556,7 +560,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             trusted_repos.add(name)
 
     return EngineConfig(
-        sandbox=SandboxConfig(backend=sandbox_backend),
+        sandbox=SandboxConfig(backend=sandbox_backend, image=sandbox_image.strip()),
         attribution=attribution,
         repos=repos,
         repo_modes=repo_modes,
