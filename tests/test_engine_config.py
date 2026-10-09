@@ -873,3 +873,10 @@ def test_invalid_machine_config_does_not_fall_back_to_checkout(tmp_path):
     (tmp_path / "engine.toml").write_text("")
     with pytest.raises(EngineConfigError, match="missing/checkout"):
         load_engine_config(environ={}, cwd=tmp_path)
+
+
+def test_review_resolution_configuration():
+    assert parse_engine_config({}).github.resolve_addressed_threads is True
+    assert parse_engine_config({"github": {"resolve_addressed_threads": False}}).github.resolve_addressed_threads is False
+    with pytest.raises(EngineConfigError, match="must be a boolean"):
+        parse_engine_config({"github": {"resolve_addressed_threads": "false"}})

@@ -285,6 +285,7 @@ class LangGraphRuntime:
                         node.repository or str(snapshot.values.get("repository") or "."),
                         node.base_ref,
                         co_author=str(snapshot.values.get(CO_AUTHOR) or ""),
+                        **({"issue": snapshot.values["issue"]} if snapshot.values.get("issue") else {}),
                     )
                 else:
                     await node.provider.detach(workspace.workspace_id)

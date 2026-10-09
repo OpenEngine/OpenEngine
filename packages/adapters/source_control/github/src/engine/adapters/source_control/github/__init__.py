@@ -16,8 +16,10 @@ import asyncio
 import io
 import logging
 import os
+import re
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.github.transports import (
@@ -40,7 +42,9 @@ from engine.ports.source_control import (
     WorkItem,
 )
 from engine.ports.workspace_provider import WorkspaceProvider
-from engine.runtime.change_requests import change_request, names_a_project_step, pull_request_url
+from engine.runtime.change_requests import change_request, names_a_project_step, pull_request_url, remote_project
+from engine.runtime.issue_links import issue_body, issue_reference
+from engine.runtime.push_policy import push_spec
 
 #: The branch prefix `GitWorktreeWorkspaceProvider` gives every workspace. It
 #: is Engine's bookkeeping, not anybody's proposed change, and a remote branch
@@ -117,7 +121,9 @@ class GitHubSourceControl:
         git_binary_path: str = "git",
         transport: GitHubApiTransport | None = None,
         host_aliases: Mapping[str, str] | None = None,
+        resolve_addressed_threads: bool = True,
     ) -> None:
+        self._resolve_addressed_threads = resolve_addressed_threads
         self._transport = transport or GitHubOAuthTransport(token, api_url)
         # Aliases explicitly name the transport they belong to. An alias of
         # another forge must never authorize posting through this transport.
@@ -130,23 +136,32 @@ class GitHubSourceControl:
         self._git_binary_path = git_binary_path
 
     async def run_git(
-        self, workspace_id: WorkspaceId, arguments: Sequence[str]
+        self, workspace_id: WorkspaceId, arguments: Sequence[str],
+        *, owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> GitResult:
         """Run any git subcommand inside one workspace's checkout.
 
         The broker obtains approval before this method is called. The adapter
-        still owns two hard invariants: global options may not redirect git's
-        implementation, and a push must explicitly name a non-internal remote
-        branch.
+        rejects global execution overrides and ambiguous or internal push
+        targets. Force pushes additionally require trusted work order ownership
+        and a live check of feature branch eligibility.
         """
 
         arguments = tuple(str(argument) for argument in arguments)
         if not arguments:
             raise ValueError("git needs at least one argument")
         subcommand = _subcommand_index(arguments)
+        if subcommand is not None and arguments[subcommand] in {"send-pack", "http-push"}:
+            raise ValueError("use git push so branch ownership can be checked")
         root_path = await self._root_path(workspace_id)
         if subcommand is not None and arguments[subcommand] == "push":
             self._refuse_internal_publication(arguments[subcommand:])
+            remote, branches, force = push_spec(arguments[subcommand:])
+            if force:
+                await self._require_owned_feature(root_path, remote, branches, owned_pull_requests)
+            # Explicit refspecs and no mirror prevent local remote configuration
+            # from expanding a checked push into unrelated branch rewrites.
+            arguments = (*arguments[:subcommand + 1], "--no-mirror", *arguments[subcommand + 1:])
         return await self._git(root_path, arguments)
 
     async def create_branch(
@@ -163,9 +178,10 @@ class GitHubSourceControl:
         return await self._git_checked(root_path, ("rev-parse", "HEAD"))
 
     async def publish(self, workspace_id: WorkspaceId, branch: str) -> None:
-        root_path = await self._root_path(workspace_id)
         _refuse_internal_branch(branch)
-        await self._git_checked(root_path, ("push", "--set-upstream", "origin", branch))
+        result = await self.run_git(workspace_id, ("push", "--set-upstream", "origin", branch))
+        if not result.ok:
+            raise GitHubSourceControlError(result.stderr or result.stdout)
 
     async def request_review(
         self,
@@ -174,6 +190,8 @@ class GitHubSourceControl:
         base_ref: str,
         title: str,
         body: str,
+        *, issue: dict[str, object] | None = None, issue_resolution: str | None = None,
+        owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> str:
         """Open a pull request via the GitHub API and return its URL."""
 
@@ -186,6 +204,11 @@ class GitHubSourceControl:
         root_path = await self._root_path(workspace_id)
         owner, repo = await self._repo_coords(root_path)
         base = _base_branch(base_ref)
+        if issue:
+            reference = issue_reference(issue, f"{owner}/{repo}")
+            qualified = f"{issue['repository']}#{issue['number']}"
+            body = issue_body(body, reference, issue_resolution, qualified_reference=qualified)
+            await self._issue_head(root_path, branch, base, reference, issue_resolution, qualified, owned_pull_requests=owned_pull_requests)
 
         response = _object(await self._api(
             "POST",
@@ -202,6 +225,97 @@ class GitHubSourceControl:
             type(self._transport).__name__,
         )
         return url
+
+    async def _issue_head(
+        self, root: str, branch: str, base: str, reference: str,
+        resolution: str, qualified_reference: str = "",
+        *, owned_pull_requests: Sequence[tuple[str, int]] = (),
+    ) -> None:
+        """Publish issue metadata with a fast-forward commit, preserving history."""
+        if branch == base:
+            raise ValueError("issue publishing must not rewrite the pull request base branch")
+        current = await self._git_checked(root, ("branch", "--show-current"))
+        if current != branch or await self._git_checked(root, ("-c", "core.fsmonitor=false", "status", "--porcelain")):
+            raise ValueError("issue publishing requires the named branch checked out with a clean workspace")
+        head = await self._git_checked(root, ("rev-parse", "HEAD"))
+        old = await self._git_checked(root, ("log", "-1", "--format=%B"))
+        updated = issue_body(old, reference, resolution, qualified_reference=qualified_reference)
+        # Keep Refs on every issue commit, including the closing head.
+        if resolution == "resolves":
+            updated += f"\n\nRefs {reference}"
+        remote = await self._git_checked(root, ("ls-remote", "origin", f"refs/heads/{branch}"))
+        if remote.split()[:1] != [head]:
+            raise ValueError("push the current head before opening the issue pull request")
+        if old.strip() == updated.strip():
+            return
+        # A new PR cannot establish ownership before it exists. Append metadata
+        # instead of rewriting published history, so no force permission is needed.
+        # Preserve credit and bypass checkout-controlled hooks and signing helpers.
+        no_hooks = ("-c", f"core.hooksPath={os.devnull}")
+        await self._git_checked(root, (*no_hooks, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false", "commit", "--only", "--allow-empty", "--message", updated))
+        published = await self._git_checked(root, ("rev-parse", "HEAD"))
+        try:
+            await self._git_checked(root, (*no_hooks, "push", "--no-mirror", "origin", f"HEAD:refs/heads/{branch}"))
+        except GitHubSourceControlError:
+            # A transport error can arrive after the remote accepted the push.
+            # If reconciliation fails, preserve HEAD rather than guess its state.
+            remote = await self._git_checked(root, ("ls-remote", "origin", f"refs/heads/{branch}"))
+            if remote.split()[:1] != [published]:
+                # The empty commit changes only metadata. Restore the ref without touching
+                # the index/worktree, and refuse to overwrite a concurrent local move.
+                await self._git_checked(root, (*no_hooks, "update-ref", f"refs/heads/{branch}", head, published))
+            raise
+
+    async def _require_owned_feature(
+        self, root: str, remote: str, branches: Sequence[str],
+        owned: Sequence[tuple[str, int]],
+    ) -> None:
+        """Fail closed: only recorded open PRs on explicit feature namespaces."""
+        denied = "force push requires a work-order-owned open PR on an unprotected agent/ or feature/ branch"
+        if not owned:
+            raise ValueError(denied)
+        if not branches or any(not name.startswith(("agent/", "feature/")) for name in branches):
+            raise ValueError(denied)
+        # Literal URLs can be redirected by insteadOf/pushInsteadOf after validation.
+        # Require a named remote and let Git expand its effective push URLs.
+        if remote_project(remote) is not None:
+            raise ValueError("force push requires a named remote, not a literal URL")
+        remote = await self._git_checked(root, ("remote", "get-url", "--push", "--all", remote))
+        if len(remote.splitlines()) != 1:
+            raise ValueError(denied)
+        project = remote_project(remote)
+        numbers = [number for owner, number in owned if owner == project]
+        if not numbers:
+            raise ValueError(denied)
+        owner, repo, _ = _pull_request_parts(pull_request_url(project, 1), self._hosts | {self._transport.host})
+        path = f"/repos/{owner}/{repo}"
+        repository = _object(await self._api("GET", path))
+        default = repository.get("default_branch")
+        repository_id = repository.get("id")
+        if not default or repository_id is None:
+            raise ValueError(denied)
+        pulls = [_object(await self._api("GET", f"{path}/pulls/{number}")) for number in numbers]
+        for branch in branches:
+            if branch == default or any(_nested_string(pull, "base", "ref") == branch for pull in pulls):
+                raise ValueError(denied)
+            details = _object(await self._api("GET", f"{path}/branches/{quote(branch, safe='')}"))
+            if details.get("name") != branch or details.get("protected") is not False:
+                raise ValueError(denied)
+            # A branch receiving other PRs is an integration target, even if
+            # its name happens to use the feature namespace.
+            targets = _objects(await self._api(
+                "GET", f"{path}/pulls", params={"state": "open", "base": branch, "per_page": 1}
+            ))
+            if targets:
+                raise ValueError(denied)
+            if not any(
+                pull.get("state") == "open"
+                and _nested_string(pull, "head", "ref") == branch
+                and pull.get("head", {}).get("repo", {}).get("id") == repository_id
+                and pull.get("base", {}).get("repo", {}).get("id") == repository_id
+                for pull in pulls
+            ):
+                raise ValueError(denied)
 
     async def can_write_repository(
         self, pr_url: str, username: str, *, user_id: int | None = None
@@ -291,6 +405,7 @@ class GitHubSourceControl:
         file: str | None = None,
         line: int | None = None,
         in_reply_to_id: int | None = None,
+        *, thread_id: str | None = None, resolve: bool = False, commit_sha: str | None = None,
     ) -> CommentResult:
         """Add a general or inline pull-request comment via the GitHub API."""
 
@@ -314,12 +429,42 @@ class GitHubSourceControl:
 
         owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
 
+        if resolve and (not thread_id or not commit_sha or not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_sha)):
+            raise ValueError("resolving a reply requires thread_id and commit_sha")
+        if thread_id:
+            _positive_number(in_reply_to_id, "in_reply_to_id")
+            thread, replies = await self._review_thread_by_id(pr_url, thread_id, include_replies=resolve)
+            if thread.comment_id != in_reply_to_id:
+                raise ValueError("thread_id does not match the review comment")
+        if resolve:
+            comment = f"Addressed in {commit_sha}: {comment}"
+
         if in_reply_to_id is not None:
-            response = await self._api(
-                "POST",
-                f"/repos/{owner}/{repo}/pulls/{number}/comments/{in_reply_to_id}/replies",
-                json={"body": comment},
-            )
+            response = None
+            if resolve:
+                # A reply may succeed while resolution fails. Reuse our exact
+                # reply on retry, including after a process restart.
+                matching = [entry for entry in replies if entry["body"] == comment]
+                if matching:
+                    login = await self.authenticated_login(pr_url)
+                    match = next((entry for entry in matching
+                                  if (entry.get("author") or {}).get("login", "").lower() == login.lower()), None)
+                    if match:
+                        response = {"id": match["databaseId"], "html_url": match["url"]}
+            if response is None:
+                response = await self._api(
+                    "POST",
+                    f"/repos/{owner}/{repo}/pulls/{number}/comments/{in_reply_to_id}/replies",
+                    json={"body": comment},
+                )
+            if resolve:
+                try:
+                    await self._resolve_validated_thread(thread)
+                except Exception as error:
+                    raise GitHubSourceControlError(
+                        f"Reply posted at {response['html_url']}, but thread resolution failed; "
+                        f"repeat the same add_comment to retry without duplicating it: {error}"
+                    ) from error
             return CommentResult(response["id"], response["html_url"])
 
         if file is None:
@@ -350,6 +495,121 @@ class GitHubSourceControl:
         )
         return CommentResult(response["id"], response["html_url"])
 
+    async def _graphql(self, query: str, **variables: object) -> dict:
+        response = _object(await self._api("POST", "/graphql", json={"query": query, "variables": variables}))
+        if response.get("errors"):
+            raise GitHubSourceControlError(f"GitHub GraphQL failed: {response['errors']}")
+        if not isinstance(response.get("data"), dict):
+            raise GitHubSourceControlError("GitHub GraphQL returned no data")
+        return response["data"]
+
+    async def _review_threads(self, pr_url: str, *, comment_id: int | None = None) -> tuple[Discussion, ...]:
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        query = """query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+          repository(owner: $owner, name: $repo) { pullRequest(number: $number) {
+            reviewThreads(first: 100, after: $cursor) {
+              nodes { id isResolved comments(first: 1) {
+                nodes { databaseId body url author { login } path line }
+              } }
+              pageInfo { hasNextPage endCursor }
+            }
+          } }
+        }"""
+        threads = []
+        cursor = None
+        while True:
+            data = await self._graphql(query, owner=owner, repo=repo, number=int(number), cursor=cursor)
+            connection = data["repository"]["pullRequest"]["reviewThreads"]
+            for thread in connection["nodes"]:
+                root = thread["comments"]["nodes"][0]
+                threads.append(Discussion(
+                    author=(root.get("author") or {}).get("login", ""),
+                    body=root["body"], url=root["url"], path=root.get("path"), line=root.get("line"),
+                    comment_id=root["databaseId"], thread_id=thread["id"], is_resolved=thread["isResolved"],
+                ))
+                if comment_id == root["databaseId"]:
+                    return (threads[-1],)
+            page = connection["pageInfo"]
+            if not page["hasNextPage"]:
+                return tuple(threads)
+            following = page["endCursor"]
+            if not following or following == cursor:
+                raise GitHubSourceControlError("GitHub returned an invalid review thread cursor")
+            cursor = following
+
+    async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
+        _positive_number(comment_id, "comment_id")
+        for thread in await self._review_threads(pr_url, comment_id=comment_id):
+            if thread.comment_id == comment_id:
+                return thread
+        raise ValueError("review comment is not a root thread on this pull request")
+
+    async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
+        thread, _ = await self._review_thread_by_id(pr_url, thread_id)
+        return await self._resolve_validated_thread(thread)
+
+    async def _review_thread_by_id(
+        self, pr_url: str, thread_id: str, *, include_replies: bool = False,
+    ) -> tuple[Discussion, list[dict]]:
+        """Validate one thread and optionally fetch only its replies for retries."""
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        query = """query($thread: ID!, $cursor: String, $count: Int!) {
+          node(id: $thread) { ... on PullRequestReviewThread {
+            id isResolved pullRequest { number repository { nameWithOwner } }
+            comments(first: $count, after: $cursor) {
+              nodes { databaseId body url author { login } path line }
+              pageInfo { hasNextPage endCursor }
+            }
+          } }
+        }"""
+        cursor = None
+        discussion = None
+        replies = []
+        while True:
+            data = await self._graphql(
+                query, thread=thread_id, cursor=cursor, count=100 if include_replies else 1,
+            )
+            node = data.get("node")
+            pull = (node or {}).get("pullRequest", {})
+            if (not node or node.get("id") != thread_id
+                    or pull.get("number") != int(number)
+                    or pull.get("repository", {}).get("nameWithOwner", "").lower() != f"{owner}/{repo}".lower()):
+                raise ValueError("review thread does not belong to this pull request")
+            connection = node["comments"]
+            comments = connection["nodes"]
+            if discussion is None:
+                if not comments:
+                    raise ValueError("review thread has no root comment")
+                root = comments[0]
+                discussion = Discussion(
+                    author=(root.get("author") or {}).get("login", ""),
+                    body=root["body"], url=root["url"], path=root.get("path"), line=root.get("line"),
+                    comment_id=root["databaseId"], thread_id=node["id"], is_resolved=node["isResolved"],
+                )
+                replies.extend(comments[1:])
+            else:
+                replies.extend(comments)
+            page = connection["pageInfo"]
+            if not include_replies or not page["hasNextPage"]:
+                return discussion, replies
+            following = page["endCursor"]
+            if not following or following == cursor:
+                raise GitHubSourceControlError("GitHub returned an invalid review comment cursor")
+            cursor = following
+
+    async def _resolve_validated_thread(self, thread: Discussion) -> bool:
+        """Resolve a thread whose membership the caller has already checked."""
+        if not self._resolve_addressed_threads:
+            return False
+        if thread.is_resolved:
+            return True
+        data = await self._graphql("""mutation($thread: ID!) {
+          resolveReviewThread(input: {threadId: $thread}) { thread { id isResolved } }
+        }""", thread=thread.thread_id)
+        if data["resolveReviewThread"]["thread"]["isResolved"] is not True:
+            raise GitHubSourceControlError("GitHub did not resolve the review thread")
+        return True
+
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int
     ) -> ChangeRequest:
@@ -363,6 +623,14 @@ class GitHubSourceControl:
         inline_comments = await self._paginated_objects(
             f"/repos/{owner}/{repo}/pulls/{number}/comments"
         )
+        threads = {thread.comment_id: thread for thread in await self._review_threads(_string(pull, "html_url"))} if inline_comments else {}
+        discussions = []
+        for comment in inline_comments:
+            discussion = _discussion(comment)
+            thread = threads.get(comment.get("in_reply_to_id") or comment.get("id"))
+            if thread:
+                discussion = replace(discussion, thread_id=thread.thread_id, is_resolved=thread.is_resolved)
+            discussions.append(discussion)
         return ChangeRequest(
             number=number,
             title=_string(pull, "title"),
@@ -382,7 +650,7 @@ class GitHubSourceControl:
             head_sha=_nested_string(pull, "head", "sha"),
             base_ref=_nested_string(pull, "base", "ref"),
             reviews=tuple(_discussion(review) for review in reviews),
-            comments=tuple(_discussion(comment) for comment in (*issue_comments, *inline_comments)),
+            comments=tuple(_discussion(comment) for comment in issue_comments) + tuple(discussions),
         )
 
     async def list_work_items(
@@ -933,6 +1201,7 @@ def _nested_string(value: dict, outer: str, inner: str) -> str:
 def _discussion(value: dict) -> Discussion:
     line = value.get("line")
     return Discussion(
+        comment_id=value.get("id"),
         author=_nested_string(value, "user", "login"),
         body=_string(value, "body"),
         url=_string(value, "html_url"),

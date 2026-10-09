@@ -132,6 +132,7 @@ class GitHubConfig:
     two out of the handler's source.
     """
 
+    resolve_addressed_threads: bool = True
     repository: str = ""
     """`owner/name` of the repository whose webhooks are accepted, or empty.
 
@@ -360,7 +361,10 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "repositories", "host_aliases"}, "github")
+    _reject_unknown(github, {"repository", "repositories", "host_aliases", "resolve_addressed_threads"}, "github")
+    resolve_addressed_threads = github.get("resolve_addressed_threads", True)
+    if not isinstance(resolve_addressed_threads, bool):
+        raise EngineConfigError("github.resolve_addressed_threads must be a boolean")
     github_repository = _repository_slug(
         github.get("repository", ""), "github.repository"
     )
@@ -554,6 +558,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         github=GitHubConfig(
             repository=github_repository,
             repositories=github_repositories,
+            resolve_addressed_threads=resolve_addressed_threads,
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()

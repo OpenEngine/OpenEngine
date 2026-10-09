@@ -13,6 +13,7 @@ changing. `dispose` is the one that ends both.
 """
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
 from engine.domain.ids import WorkspaceId
@@ -54,7 +55,7 @@ class WorkspaceProvider(Protocol):
     """Creates and destroys isolated working environments."""
 
     async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = ""
+        self, repository: str, base_ref: str, *, co_author: str = "", issue: Mapping[str, object] | None = None
     ) -> Workspace:
         """Mint a new workspace, with a checkout ready to work in.
 
@@ -84,6 +85,7 @@ class WorkspaceProvider(Protocol):
         base_ref: str,
         *,
         co_author: str = "",
+        issue: Mapping[str, object] | None = None,
     ) -> Workspace:
         """Give this workspace a checkout again, carrying its work back in.
 

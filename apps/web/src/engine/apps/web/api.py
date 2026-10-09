@@ -1990,6 +1990,8 @@ def create_app(
                     "repository": repository,
                     **({"inputs": inputs} if inputs else {}),
                     **({"coAuthor": co_author} if co_author else {}),
+                    **({"issue": {"repository": origin.issue_repository, "number": origin.issue_number}}
+                       if origin and origin.issue_number else {}),
                 },
                 run_id=scheduled.run_id if scheduled else None,
             )
@@ -3735,6 +3737,13 @@ def create_app(
         """
         repository = origin.channel.removeprefix("github:")
         number = int(origin.thread_id.partition("/review/")[0])
+        if origin.review_comment_id:
+            prompt += (f"\n\nRequested review thread: {origin.review_thread_id or 'lookup unavailable'}; "
+                       f"root comment: {origin.review_comment_id}; PR: {pull_request_url(repository, number)}. "
+                       "Reply using add_comment with in_reply_to_id. If thread_id is unavailable, "
+                       "look it up with view_change_request; a plain reply can omit it. "
+                       "For addressed work supply resolve=true and commit_sha; "
+                       "for disagreement or a needed decision supply resolve=false.")
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not reach a work order: graph runtime unavailable")
@@ -3810,11 +3819,15 @@ def create_app(
             inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
             prompt=(f"Implement issue #{assignment.number}: {assignment.title}\n\n"
                     f"{assignment.body}\n\nIssue: {assignment.url}\n"
-                    f"Include Fixes #{assignment.number} in the pull request body."),
+                    "Issue references are added to commits automatically. When opening "
+                    "the pull request, declare issue_resolution as resolves for complete "
+                    "work or refs for partial work."),
             repository=await github_checkout(repository),
             origin=RunOrigin(
                 channel=f"{GITHUB_CHANNEL_PREFIX}{repository}",
                 thread_id=f"issue/{assignment.number}",
+                issue_repository=assignment.repository,
+                issue_number=assignment.number,
                 author=assignment.sender,
                 requester=github_requester(assignment.sender_id, assignment.sender) or "",
             ),
@@ -3938,16 +3951,51 @@ def create_app(
                 github_activity.ignored("no active work order and Engine was not @mentioned")
                 return
         thread_id = str(comment.number)
+        root_comment = None
+        lookup_unavailable = False
         if comment.event == "pull_request_review_comment":
-            thread_id += f"/review/{comment.in_reply_to_id or comment.comment_id}"
+            root_comment = int(comment.in_reply_to_id or comment.comment_id)
+            if not comment.thread_id:
+                for attempt in range(2):
+                    try:
+                        async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS / 2):
+                            thread = await session.capabilities.source_control.review_thread(pull_request_url(found.project, found.number), root_comment)
+                        comment = replace(comment, thread_id=thread.thread_id or "")
+                        break
+                    except NotImplementedError:
+                        # An unsupported capability will not recover on retry.
+                        break
+                    except Exception:
+                        if attempt == 0:
+                            await asyncio.sleep(0.25)
+                            continue
+                        lookup_unavailable = True
+                        log.warning("Review thread lookup failed twice; forwarding feedback with root comment ID %s", root_comment)
+            thread_id += f"/review/{root_comment}"
         await github_concierge.handle(FeedbackRequest(
             origin=RunOrigin(
                 channel=f"github:{comment.repository}", thread_id=thread_id,
                 author=comment.author,
+                review_thread_id=comment.thread_id,
+                review_comment_id=root_comment,
                 requester=github_requester(comment.author_id, comment.author) or "",
             ),
             text=comment.body, comment_id=comment.comment_id, allow_start=mentioned,
         ))
+        if lookup_unavailable:
+            try:
+                async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
+                    await github_reply(
+                        RunOrigin(channel=f"github:{comment.repository}", thread_id=thread_id),
+                        "Review-thread lookup is temporarily unavailable after two attempts. "
+                        "Your comment was received, but automatic thread resolution may be unavailable. "
+                        "Please retry later.",
+                    )
+            except Exception:
+                # Do not replay already-forwarded work if the reply service is
+                # unavailable too. Keep the retry advice visible in activity.
+                github_activity.ignored("Review-thread service unavailable; please retry later.")
+                log.warning("Could not post review-thread retry advice")
 
     async def github_merge_approves_workorder(merged: GithubMerge) -> None:
         """Merging a pull request is a person accepting its work order.
