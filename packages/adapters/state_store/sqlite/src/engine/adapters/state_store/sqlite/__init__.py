@@ -642,6 +642,11 @@ def _state_to_dict(state: RunState) -> dict[str, object]:
                 "channel": state.origin.channel,
                 "thread_id": state.origin.thread_id,
                 "author": state.origin.author,
+                "requester": state.origin.requester,
+                "issue_repository": state.origin.issue_repository,
+                "issue_number": state.origin.issue_number,
+                "review_thread_id": state.origin.review_thread_id,
+                "review_comment_id": state.origin.review_comment_id,
             }
             if state.origin is not None
             else None
@@ -680,6 +685,11 @@ def _origin_from_dict(value: object) -> RunOrigin | None:
         channel=str(value.get("channel", "")),
         thread_id=str(value.get("thread_id", "")),
         author=str(value.get("author", "")),
+        requester=str(value.get("requester", "")),
+        issue_repository=str(value.get("issue_repository", "")),
+        issue_number=value.get("issue_number"),
+        review_thread_id=str(value.get("review_thread_id", "")),
+        review_comment_id=value.get("review_comment_id"),
     )
 
 

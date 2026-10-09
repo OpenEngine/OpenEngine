@@ -518,3 +518,68 @@ def test_reactions_follow_selected_reply_credentials(tmp_path, provider):
     selected.add_reaction.assert_awaited_once_with(
         "https://github.com/acme/api/pull/7", 42, "+1", review_comment=True)
     other.add_reaction.assert_not_awaited()
+
+
+@pytest.mark.parametrize("api_url,expected", [("https://api.github.com", "https://api.github.com/graphql"), ("https://forge.example/api/v3", "https://forge.example/api/graphql")])
+def test_resolve_review_thread_oauth_graphql(monkeypatch, api_url, expected):
+    import json
+    from engine.adapters.source_control.github import GitHubSourceControl
+    from engine.ports.source_control import Discussion
+    requests = []
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "PRRT_1", "isResolved": True}}}})
+    client = httpx.AsyncClient
+    monkeypatch.setattr("engine.adapters.source_control.github.transports.httpx.AsyncClient", lambda: client(transport=httpx.MockTransport(respond)))
+    source = GitHubSourceControl("test-token", api_url=api_url)
+    source._review_thread_by_id = AsyncMock(return_value=(Discussion("alice", "Fix it", "", comment_id=1, thread_id="PRRT_1", is_resolved=False), []))
+    assert asyncio.run(source.resolve_review_thread("https://github.com/acme/api/pull/7", "PRRT_1"))
+    assert str(requests[0].url) == expected
+    assert requests[0].headers["Authorization"] == "Bearer test-token"
+    payload = json.loads(requests[0].content)
+    assert "resolveReviewThread(input: {threadId: $thread})" in payload["query"]
+    assert payload["variables"] == {"thread": "PRRT_1"}
+
+
+def test_resolve_review_thread_cli_graphql():
+    import json
+    from engine.adapters.source_control.github import GitHubSourceControl
+    from engine.ports.source_control import Discussion
+    transport = GitHubCliTransport()
+    transport._run = AsyncMock(return_value=b'{"data":{"resolveReviewThread":{"thread":{"id":"PRRT_1","isResolved":true}}}}')
+    source = GitHubSourceControl("", transport=transport)
+    source._review_thread_by_id = AsyncMock(return_value=(Discussion("alice", "Fix it", "", comment_id=1, thread_id="PRRT_1", is_resolved=False), []))
+    assert asyncio.run(source.resolve_review_thread("https://github.com/acme/api/pull/7", "PRRT_1"))
+    args = transport._run.await_args
+    assert args.args[:2] == ("api", "graphql")
+    assert args.args[-2:] == ("--input", "-")
+    assert json.loads(args.kwargs["input_bytes"])["variables"] == {"thread": "PRRT_1"}
+
+
+@pytest.mark.parametrize("status", [200, 401, 503])
+def test_download_retries_same_url_with_refreshed_token(monkeypatch, status):
+    requests = []
+    token = {"value": "old"}
+
+    async def refresh(failed_token):
+        assert failed_token == "old"
+        token["value"] = "new"
+        return True
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(401 if len(requests) == 1 else status, content=b"download")
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    transport = GitHubOAuthTransport(lambda: token["value"], on_token_unauthorized=refresh)
+    if status == 200:
+        assert asyncio.run(transport.download("/logs")) == b"download"
+    else:
+        with pytest.raises(GitHubTransportError):
+            asyncio.run(transport.download("/logs"))
+    assert [str(request.url) for request in requests] == ["https://api.github.com/logs"] * 2
+    assert [request.headers["Authorization"] for request in requests] == ["Bearer old", "Bearer new"]

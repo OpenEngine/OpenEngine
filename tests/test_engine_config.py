@@ -909,3 +909,9 @@ def test_local_config_works_without_root_config(tmp_path):
     assert loaded.config.repos == {"owner/repo": "~/code/repo"}
     assert loaded.workflows_directory == (tmp_path / "workflows").resolve()
     assert loaded.config.approvals.bash.allow == ("uv run pytest",)
+
+def test_review_resolution_configuration():
+    assert parse_engine_config({}).github.resolve_addressed_threads is True
+    assert parse_engine_config({"github": {"resolve_addressed_threads": False}}).github.resolve_addressed_threads is False
+    with pytest.raises(EngineConfigError, match="must be a boolean"):
+        parse_engine_config({"github": {"resolve_addressed_threads": "false"}})

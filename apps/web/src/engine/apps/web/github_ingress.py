@@ -83,6 +83,7 @@ class GithubComment:
     in_reply_to_id: str = ""
     #: GitHub's numeric id for ``author``, which outlives a renamed login.
     author_id: int = 0
+    thread_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -319,6 +320,7 @@ def comment_from_payload(
         ),
         in_reply_to_id=str(in_reply_to) if isinstance(in_reply_to, (int, str)) else "",
         author_id=_account_id(user),
+        thread_id=str(comment.get("thread_id") or ""),
     )
 
 

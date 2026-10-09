@@ -266,3 +266,52 @@ deliberate: it is a window on what is happening, and GitHub's delivery log and
 the pull request are the durable record.
 
 It is served from `GET /api/runs/{run_id}/github-comments`.
+
+## Issue references and review replies
+
+An issue assignment carries the issue repository and number as run data. Engine
+adds `Refs #N` to workspace commits and snapshots (or `owner/repo#N` for an issue
+in another repository). `open_pull_request` requires `issue_resolution` for these
+runs: `refs` keeps the issue open; `resolves` also adds `Resolves #N` to the head
+commit. Engine normalizes the PR body's issue line for either choice, including
+an agent-written `Fixes #N`. The closing keyword takes effect when merged to the
+default branch.
+
+Force pushes require an open PR recorded to the current work order, whose head
+is in the same repository and has an `agent/` or `feature/` branch name. GitHub
+must confirm that the branch is unprotected and is neither the repository's
+default branch nor the base of an open PR. Unknown ownership or
+unavailable branch information denies the push. Approval does not override
+these checks. This applies to explicit force flags and `+` refspecs; GitLab
+force pushes are refused until it can verify the same conditions.
+
+Issue publication requires a clean checkout with the current head already
+pushed. When the head's issue trailers need updating, Engine appends an empty
+metadata commit and pushes it normally before creating the PR. This preserves
+published commits and works for the first PR without granting force-push
+permission or recording a PR that does not yet exist. A correctly prepared
+head needs no extra commit. Concurrent remote updates are never overwritten;
+failed pushes reconcile the remote before restoring the local ref, preserving
+concurrent local work and uncertain remote state. The PR is recorded to the
+work order after GitHub successfully creates it.
+
+Review feedback includes the root comment ID and GraphQL thread ID. Both IDs,
+and each thread's resolution state, are also available through
+`view_change_request`. For an ordinary review reply through `add_comment`, supply
+`pr_url`, `comment`, and `in_reply_to_id`. The resolution options are optional:
+`resolve` defaults to `false`, and neither `thread_id` nor `commit_sha` is
+required. Ordinary replies leave the thread open and do not pass through the
+resolution approval gate. Use this form for discussion or disagreement.
+
+For addressed work, supply `in_reply_to_id`, `thread_id`, `resolve=true`, and a
+`commit_sha` of 7–40 hexadecimal characters, along with `pr_url` and `comment`.
+Engine requires approval for this operation, validates that the thread belongs
+to the PR and matches the root comment, formats `Addressed in <sha>: <comment>`,
+posts the reply, then resolves the thread through the configured GitHub
+transport. Missing resolution metadata is rejected for `resolve=true` replies.
+Retrying the same addressed reply after a resolution failure reuses the posted
+reply.
+
+`[github] resolve_addressed_threads = false` leaves addressed threads open for
+reviewers to resolve themselves. The default is `true`. Disconnected runs do
+not expose review replies or resolution.

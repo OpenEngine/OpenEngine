@@ -94,8 +94,12 @@ UPDATE_CHANGE = ByMode(
 #: What to do about review comments a revision addressed.
 ANSWER_REVIEW = ByMode(
     connected=(
-        "Reply to each review comment you addressed, explaining the fix, "
-        "and resolve its review thread where applicable. "
+        "Reply to each requested review thread using add_comment with its "
+        "in_reply_to_id and thread_id from view_change_request. For a fix, "
+        "provide resolve=true, commit_sha, and a one-line explanation; Engine "
+        "posts Addressed in <sha>: <explanation> and resolves the thread when "
+        "enabled by team configuration. For disagreement or a needed decision, "
+        "explain why with resolve=false so the thread stays open. "
     ),
     disconnected="",
 )

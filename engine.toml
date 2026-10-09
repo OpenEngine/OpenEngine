@@ -8,6 +8,8 @@ default_branch = "main"
 # ~/.config/openengine/engine.toml (or $XDG_CONFIG_HOME/openengine/engine.toml).
 # See docs/github-webhooks.md. This checkout does not enable repository hooks.
 [github]
+# Set false when reviewers prefer to resolve addressed review threads themselves.
+resolve_addressed_threads = true
 # Explicit aliases of the SAME forge, mapped to its transport authority (host and optional port).
 # Example: { "github-web.example" = "github-api.example" }
 # Aliases are accepted only by the named transport; this does not add forges.

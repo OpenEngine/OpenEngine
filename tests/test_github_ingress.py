@@ -79,14 +79,14 @@ def test_a_review_thread_reply_keeps_the_comment_it_answers() -> None:
     payload = {
         "action": "created",
         "pull_request": {"number": 12},
-        "comment": {"id": 99, "body": "and this line", "in_reply_to_id": 98,
+        "comment": {"id": 99, "body": "and this line", "in_reply_to_id": 98, "thread_id": "PRRT_1",
                     "user": {"login": "someone", "type": "User"},
                     "author_association": "MEMBER"},
         "repository": {"full_name": "acme/api"},
     }
     comment = comment_from_payload("pull_request_review_comment", payload)
     assert comment is not None
-    assert (comment.number, comment.in_reply_to_id) == (12, "98")
+    assert (comment.number, comment.in_reply_to_id, comment.thread_id) == (12, "98", "PRRT_1")
     assert comment.is_pull_request
 
 

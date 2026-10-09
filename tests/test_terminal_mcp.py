@@ -1,6 +1,7 @@
 """Run-bound MCP terminal tools and their single-result invariants."""
 
 import asyncio
+from unittest.mock import AsyncMock
 import json
 import logging
 from collections.abc import Sequence
@@ -344,7 +345,7 @@ def test_repo_comment_is_forwarded(reply_id: int | None) -> None:
         def __init__(self) -> None:
             self.comments: list[tuple[object, ...]] = []
 
-        async def add_comment(self, *arguments: object) -> CommentResult:
+        async def add_comment(self, *arguments: object, **options: object) -> CommentResult:
             self.comments.append(arguments)
             return CommentResult(123, "https://example.com/comment/123")
 
@@ -356,7 +357,7 @@ def test_repo_comment_is_forwarded(reply_id: int | None) -> None:
             step=STEP,
             registry=TerminalResultRegistry(),
         )
-        broker.enable_repository_tools(source_control, ("add_comment",))  # type: ignore[arg-type]
+        broker.enable_repository_tools(source_control, ("add_comment",), git_approval=AsyncMock(return_value=ApprovalDecision.ACCEPT))  # type: ignore[arg-type]
         broker._result = asyncio.get_running_loop().create_future()
         request = {
             "token": broker._token,
@@ -372,7 +373,7 @@ def test_repo_comment_is_forwarded(reply_id: int | None) -> None:
         if reply_id is not None:
             request["arguments"].pop("file")
             request["arguments"].pop("line")
-            request["arguments"]["in_reply_to_id"] = reply_id
+            request["arguments"].update(in_reply_to_id=reply_id, thread_id="PRRT_1", resolve=False)
         accepted = await broker._submit(request)
 
         assert accepted["ok"] is True
@@ -684,7 +685,7 @@ def test_a_failing_git_command_is_reported_with_what_git_said() -> None:
         )
         async with broker:
             response = await broker._submit(
-                _request(broker, "git-1", "git_subcommand", {"arguments": ["push"]})
+                _request(broker, "git-1", "git_subcommand", {"arguments": ["push", "origin", "agent/topic"]})
             )
 
         assert response["ok"] is False
@@ -875,7 +876,7 @@ def test_comment_provenance_reaches_mcp_client() -> None:
             run_id=RunId("run-1"), agent_run_id=AgentRunId("agent-run-1"),
             step=STEP, registry=TerminalResultRegistry(),
         )
-        broker.enable_repository_tools(source, ("add_comment",))
+        broker.enable_repository_tools(source, ("add_comment",), git_approval=AsyncMock(return_value=ApprovalDecision.ACCEPT))
         async with broker:
             config = broker.config
             response = await _mcp_response(
@@ -885,7 +886,7 @@ def test_comment_provenance_reaches_mcp_client() -> None:
                 {"jsonrpc": "2.0", "id": "reply-1", "method": "tools/call", "params": {
                     "name": "add_comment", "arguments": {
                         "pr_url": "https://github.com/acme/api/pull/42",
-                        "comment": "Fixed", "in_reply_to_id": 123,
+                        "comment": "Fixed", "in_reply_to_id": 123, "thread_id": "PRRT_1", "resolve": False,
                     },
                 }},
                 repository_tools=("add_comment",),
@@ -893,7 +894,7 @@ def test_comment_provenance_reaches_mcp_client() -> None:
         result = response["result"]
         assert json.loads(result["content"][0]["text"]) == {"id": 124, "url": "https://example.com/comment/124"}
         assert result["structuredContent"]["output"] == result["content"][0]["text"]
-        source.add_comment.assert_awaited_once_with("https://github.com/acme/api/pull/42", "Fixed", None, None, 123)
+        source.add_comment.assert_awaited_once_with("https://github.com/acme/api/pull/42", "Fixed", None, None, 123, thread_id="PRRT_1", resolve=False, commit_sha=None)
 
     asyncio.run(scenario())
 
@@ -1737,4 +1738,102 @@ def test_concurrent_update_is_not_credited_to_noop_push():
         assert not broker._pushed
         claim.assert_not_awaited()
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_issue_publication_requires_explicit_resolution_and_approval(accepted):
+    async def scenario():
+        source = AsyncMock()
+        source.request_review.return_value = "https://github.com/acme/api/pull/8"
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT if accepted else ApprovalDecision.CANCEL)
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("open_pull_request",), WorkspaceId("ws"), approval)
+        broker.enable_issue({"repository": "acme/api", "number": 7})
+        lookup = AsyncMock(side_effect=RuntimeError("no existing ownership"))
+        broker.enable_pull_request_ownership(lookup)
+        record = AsyncMock()
+        broker.enable_pull_request_records(record)
+        args = {"branch": "agent/issue", "title": "feat: fix", "body": "Change"}
+        result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
+        assert not result["ok"] and "issue_resolution" in result["error"]
+        source.request_review.assert_not_awaited()
+        args["issue_resolution"] = "resolves"
+        result = await broker._submit(_direct_request(broker, "2", "open_pull_request", args))
+        assert result["ok"] is accepted
+        assert source.request_review.await_count == int(accepted)
+        lookup.assert_not_awaited()
+        assert record.await_count == int(accepted)
+        if accepted:
+            assert source.request_review.await_args.kwargs == {"issue": {"repository": "acme/api", "number": 7}, "issue_resolution": "resolves"}
+        approval.assert_awaited_once()
+        request = approval.await_args.args[0]
+        assert "append an empty metadata commit" in request.reason
+        assert "push it normally" in request.reason
+        assert "repository hooks and signing helpers are disabled" in request.reason
+        assert "helpers still run on the host" in request.reason
+        assert json.loads(request.arguments) == args
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_review_resolution_is_approval_gated(accepted):
+    async def scenario():
+        source = AsyncMock()
+        source.add_comment.return_value = CommentResult(2, "https://github.com/acme/api/pull/7#discussion_r2")
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT if accepted else ApprovalDecision.CANCEL)
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"), approval)
+        args = {"pr_url": "https://github.com/acme/api/pull/7", "comment": "Fixed the race", "in_reply_to_id": 1, "thread_id": "PRRT_1", "resolve": True, "commit_sha": "abcdef0"}
+        result = await broker._submit(_direct_request(broker, "1", "add_comment", args))
+        assert result["ok"] is accepted
+        assert source.add_comment.await_count == int(accepted)
+        assert approval.await_args.args[0].tool_name == "mcp__workflow__add_comment"
+        if accepted:
+            assert source.add_comment.await_args.kwargs == {"thread_id": "PRRT_1", "resolve": True, "commit_sha": "abcdef0"}
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("url", ["https://github.com/acme/api/pull/7", "https://gitlab.com/acme/api/-/merge_requests/7"])
+def test_plain_reply_accepts_omitted_resolution_metadata(url):
+    async def scenario():
+        source = AsyncMock()
+        source.add_comment.return_value = CommentResult(2, url + "#reply")
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("add_comment",), WorkspaceId("ws"))
+        result = await broker._submit(_direct_request(broker, "1", "add_comment", {"pr_url": url, "comment": "Needs a decision", "in_reply_to_id": 1}))
+        assert result["ok"]
+        source.add_comment.assert_awaited_once_with(url, "Needs a decision", None, None, 1)
+        approval.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("recorded", [(), (("acme/api", 7),)])
+def test_force_push_ownership_is_bound_to_work_order(recorded):
+    async def scenario():
+        from engine.ports import GitResult
+        source = AsyncMock()
+        source.run_git.return_value = GitResult(exit_code=0, stdout="", stderr="")
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("git_subcommand",), WorkspaceId("ws"), AsyncMock(return_value=ApprovalDecision.ACCEPT))
+        broker.enable_pull_request_ownership(AsyncMock(return_value=recorded))
+        result = await broker._submit(_direct_request(broker, "1", "git_subcommand", {"arguments": ["push", "--force-with-lease", "origin", "agent/change"]}))
+        assert result["ok"] == bool(recorded)
+        if recorded:
+            assert source.run_git.await_args.kwargs == {"owned_pull_requests": recorded}
+        else:
+            source.run_git.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_force_push_refused_when_ownership_lookup_fails():
+    async def scenario():
+        source = AsyncMock()
+        broker = TerminalMcpBroker(run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP, registry=TerminalResultRegistry())
+        broker.enable_repository_tools(source, ("git_subcommand",), WorkspaceId("ws"), AsyncMock(return_value=ApprovalDecision.ACCEPT))
+        broker.enable_pull_request_ownership(AsyncMock(side_effect=RuntimeError("store offline")))
+        result = await broker._submit(_direct_request(broker, "1", "git_subcommand", {"arguments": ["push", "origin", "+HEAD:agent/change"]}))
+        assert not result["ok"]
+        source.run_git.assert_not_awaited()
     asyncio.run(scenario())

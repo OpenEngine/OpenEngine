@@ -271,6 +271,12 @@ class RecordingSourceControl:
     ) -> None:
         pass
 
+    async def review_thread(self, pr_url, comment_id):
+        raise AssertionError("not called")
+
+    async def resolve_review_thread(self, pr_url, thread_id):
+        raise AssertionError("not called")
+
     async def view_change_request(
         self, _workspace_id: WorkspaceId, _number: int
     ) -> ChangeRequest:
