@@ -33,9 +33,18 @@ from engine.domain.ids import (
     SessionGrantId,
     TaskId,
     WorkflowId,
+    WorkOrderId,
     WorkspaceId,
 )
 from engine.domain.state import RunOrigin, RunPhase, RunState
+from engine.domain.scoping import (
+    LoopQueueItem,
+    PersistedScopingPlan,
+    ScopingPlan,
+    TicketApproval,
+    resolve_scoping_plan,
+)
+from .scoping import encode_plan, decode_plan
 
 
 class SQLiteStateStore:
@@ -53,7 +62,56 @@ class SQLiteStateStore:
             self._connection.execute("PRAGMA foreign_keys = ON")
             upgrade_connection(self._connection)
 
-    # --- workflow runs ----------------------------------------------------
+    # --- scoped tickets ---------------------------------------------------
+
+    async def save_scoping_plan(
+        self, loop_id: str, plan: ScopingPlan
+    ) -> PersistedScopingPlan:
+        """Persist one proposal atomically, resolving all local references."""
+        ids = tuple(WorkOrderId(uuid4().hex) for _ in (
+            *plan.create, *(s for item in plan.supersede for s in item.replacements)
+        ))
+        stored = resolve_scoping_plan(uuid4().hex, loop_id, plan, ids)
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT INTO scoping_plans (plan_id, loop_id, plan_json) VALUES (?, ?, ?)",
+                (stored.plan_id, loop_id, encode_plan(stored)),
+            )
+        return stored
+
+    async def load_scoping_plan(self, plan_id: str) -> PersistedScopingPlan | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT plan_json FROM scoping_plans WHERE plan_id = ?", (plan_id,)
+            ).fetchone()
+            return decode_plan(row[0]) if row else None
+
+    async def set_ticket_approval(
+        self, plan_id: str, ticket_id: WorkOrderId, approval: TicketApproval
+    ) -> PersistedScopingPlan:
+        """Update approval; the queue projection immediately reflects it."""
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT plan_json FROM scoping_plans WHERE plan_id = ?", (plan_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(plan_id)
+            stored = decode_plan(row[0]).with_approval(ticket_id, approval)
+            self._connection.execute(
+                "UPDATE scoping_plans SET plan_json = ? WHERE plan_id = ?",
+                (encode_plan(stored), plan_id),
+            )
+            return stored
+
+    async def list_loop_queue(self, loop_id: str) -> Sequence[LoopQueueItem]:
+        """Approved tickets in proposal order, retaining dependency ids."""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT plan_json FROM scoping_plans WHERE loop_id = ? ORDER BY sequence",
+                (loop_id,),
+            ).fetchall()
+            return tuple(item for row in rows for item in decode_plan(row[0]).queue_items())
 
     async def load(self, run_id: RunId) -> RunState | None:
         with self._lock:
