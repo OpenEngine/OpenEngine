@@ -4457,7 +4457,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
     )
     routes = [
-        *onboarding.routes(github_login.visible_repositories),
+        *onboarding.routes(github_login.visible_repositories, _is_local_request),
         Route("/api/health", health),
         *github_login.routes(),
         Route("/api/config", config),

@@ -876,3 +876,25 @@ def test_repository_onboarding_tools_forward_inputs_and_progress():
     assert json.loads(requests[0].content) == inputs
     assert requests[1].method == "GET"
     assert requests[1].url.path == "/api/repositories/onboard/job1"
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("onboard_repository", {"repository": "owner/repo", "path": "/code/repo"}),
+    ("repository_onboarding_status", {"job_id": "job1"}),
+])
+def test_oidc_callers_cannot_access_onboarding(oidc, name, arguments):
+    settings, transport, token, _, _ = oidc
+
+    def upstream(request):
+        pytest.fail("OIDC onboarding reached the daemon")
+
+    with TestClient(create_app(settings, oidc_transport=transport,
+                               transport=httpx.MockTransport(upstream))) as client:
+        bearer = token()
+        tools = [tool["name"] for tool in oauth_rpc(client, bearer).json()["result"]["tools"]]
+        assert name not in tools
+        response = client.post("/mcp", headers={**HEADERS, "Authorization": f"Bearer {bearer}"}, json={
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        })
+        assert response.json()["result"]["isError"]

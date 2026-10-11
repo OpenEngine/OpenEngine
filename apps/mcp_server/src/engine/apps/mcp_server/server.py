@@ -225,17 +225,21 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             raise RuntimeError("OE returned an invalid result. Check OE before retrying.") from error
         return result
 
-    @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
-    async def onboard_repository(repository: str, path: str | None = None, mode: str = "connected") -> dict[str, object]:
-        """Clone a GitHub repository and configure it on the daemon. Poll repository_onboarding_status with the returned id until complete or failed. Failures include fixes to run as the daemon account."""
-        return await request_engine("POST", "/api/repositories/onboard", {
-            "repository": repository, "path": path, "mode": mode,
-        }, retry_hint="Retry onboard_repository with the same inputs to recover its state.")
+    if not settings.oidc_issuer:
+        # Onboarding uses the gateway service credential to change machine
+        # configuration beyond its pinned repository. Reserve it and its
+        # machine-wide job details for the operator holding the static token.
+        @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
+        async def onboard_repository(repository: str, path: str | None = None, mode: str = "connected") -> dict[str, object]:
+            """Clone a GitHub repository and configure it on the daemon. Poll repository_onboarding_status with the returned id until complete or failed. Failures include fixes to run as the daemon account."""
+            return await request_engine("POST", "/api/repositories/onboard", {
+                "repository": repository, "path": path, "mode": mode,
+            }, retry_hint="Retry onboard_repository with the same inputs to recover its state.")
 
-    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
-    async def repository_onboarding_status(job_id: str) -> dict[str, object]:
-        """Read clone/configuration progress and preflight failures for an onboarding job."""
-        return await request_engine("GET", f"/api/repositories/onboard/{identifier(job_id)}")
+        @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+        async def repository_onboarding_status(job_id: str) -> dict[str, object]:
+            """Read clone/configuration progress and preflight failures for an onboarding job."""
+            return await request_engine("GET", f"/api/repositories/onboard/{identifier(job_id)}")
 
     def identifier(value: str) -> str:
         if not value.strip() or value.strip() in {".", ".."} or "/" in value or "\\" in value:

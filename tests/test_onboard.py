@@ -146,7 +146,8 @@ def test_registers_all_starters_for_the_signed_in_agent():
                 assert spec['default'] == 'opencode'
 
 
-def test_api_job_and_config_share_running_registry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("origin", [None, "http://test", "http://localhost:4364"])
+def test_api_job_and_config_share_running_registry(tmp_path, monkeypatch, origin):
     from test_web_app import ConcurrentRunner, _session
     from engine.apps.web.api import create_app
     from engine.runtime import WorkflowCatalog
@@ -164,7 +165,8 @@ def test_api_job_and_config_share_running_registry(tmp_path, monkeypatch):
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-            response = await client.post('/api/repositories/onboard', json={'repository': 'owner/repo', 'path': str(target)})
+            response = await client.post('/api/repositories/onboard', json={'repository': 'owner/repo', 'path': str(target)},
+                                         headers={'Origin': origin} if origin else {})
             assert response.status_code == 202
             job = response.json()
             for _ in range(100):
@@ -202,7 +204,7 @@ def test_no_credentials_and_ssh_timeout_are_actionable(monkeypatch):
 def test_onboarding_is_operator_only(tmp_path):
     from starlette.applications import Starlette
     service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), tmp_path / 'config.toml', AsyncMock())
-    app = Starlette(routes=service.routes(AsyncMock(return_value={'/visible/repo'})))
+    app = Starlette(routes=service.routes(AsyncMock(return_value={'/visible/repo'}), lambda request: True))
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
@@ -282,3 +284,27 @@ def test_default_checkout_is_under_daemon_home(tmp_path, monkeypatch):
         await service.close()
     asyncio.run(run())
     assert not (tmp_path / 'code').exists()
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "http://localhost.evil.example", "null"])
+def test_cross_origin_onboarding_never_starts(tmp_path, monkeypatch, origin):
+    from test_web_app import ConcurrentRunner, _session
+    from engine.apps.web.api import create_app
+    from engine.runtime import WorkflowCatalog
+
+    start = Mock()
+    monkeypatch.setattr(onboard.RepositoryOnboarding, 'start_request', start)
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
+                     workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'config.toml')
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            response = await client.post('/api/repositories/onboard',
+                                         content='{"repository": "owner/repo"}',
+                                         headers={'Origin': origin, 'Content-Type': 'text/plain'})
+            assert response.status_code == 403
+            assert response.json() == {'error': 'forbidden'}
+    asyncio.run(run())
+    start.assert_not_called()
+    assert not (tmp_path / 'config.toml').exists()

@@ -245,8 +245,11 @@ class RepositoryOnboarding:
             raise OnboardingError("mode", "Invalid mode", "Choose connected or disconnected")
         return self.start(body["repository"], body.get("path"), mode)
 
-    def routes(self, visible_repositories: Callable[[Request], Awaitable[object]]) -> list[Route]:
+    def routes(self, visible_repositories: Callable[[Request], Awaitable[object]],
+               is_local_request: Callable[[Request], bool]) -> list[Route]:
         async def start(request: Request) -> JSONResponse:
+            if not is_local_request(request):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
             if await visible_repositories(request) is not None:
                 return JSONResponse({"error": "repository onboarding is for operators"}, status_code=403)
             try:
