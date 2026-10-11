@@ -1021,16 +1021,10 @@ class _GraphSurface:
         """The agents `engine agent add` offers: workflow runners, not chat runners."""
         return self.service.added_agents() if self.service is not None else ()
 
-    def declared_inputs(
-        self, graph: GraphWorkflow, *, operator: bool
-    ) -> tuple[WorkflowInput, ...]:
-        """A graph's creation fields, an operator's runner dropdowns also offering the added agents.
-
-        Only operators may add an agent, and one can send prompts and repository
-        contents to any model endpoint, so only an operator may pick one.
-        """
+    def declared_inputs(self, graph: GraphWorkflow) -> tuple[WorkflowInput, ...]:
+        """A graph's creation fields, its runner dropdowns also offering the added agents."""
         declarations = getattr(graph, "inputs", ())
-        if not operator or not isinstance(graph, LangGraphWorkflow):
+        if not isinstance(graph, LangGraphWorkflow):
             return declarations
         return offer_runners(declarations, self.added_agents(), added_agent_inputs(graph))
 
@@ -1868,10 +1862,7 @@ def create_app(
                         "id": str(graph.graph_id),
                         "name": graph.name,
                         **(
-                            {"inputs": [
-                                asdict(item)
-                                for item in surface.declared_inputs(graph, operator=visible is None)
-                            ]}
+                            {"inputs": [asdict(item) for item in surface.declared_inputs(graph)]}
                             if getattr(graph, "inputs", ()) else {}
                         ),
                     }
@@ -2123,10 +2114,7 @@ def create_app(
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
-                            # Checked against the requester when this row was recorded.
-                            inputs=resolve_inputs(
-                                surface.declared_inputs(graph, operator=True), state.inputs
-                            ),
+                            inputs=resolve_inputs(surface.declared_inputs(graph), state.inputs),
                             prompt=state.prompt,
                             repository=state.repository or work_orders.repository,
                             origin=state.origin,
@@ -2156,8 +2144,7 @@ def create_app(
                 return _error("configure work_orders.repository before starting this workorder", 400)
             assert surface.runtime is not None
             try:
-                # Checked against the requester when this row was recorded.
-                inputs = resolve_inputs(surface.declared_inputs(graph, operator=True), state.inputs)
+                inputs = resolve_inputs(surface.declared_inputs(graph), state.inputs)
             except ValueError as error:
                 return _error(str(error), 400)
             state = await start_graph_run(
@@ -2182,8 +2169,7 @@ def create_app(
             dependency_value = _optional_string(body, "dependsOnRunId")
         except ValueError as error:
             return _error(str(error), 400)
-        visible = await github_login.visible_repositories(request)
-        if not repository_visible(visible, repository):
+        if not repository_visible(await github_login.visible_repositories(request), repository):
             return _error("you cannot write to this repository", 403)
         # A prerequisite the requester may not see is refused as if it did not
         # exist, so neither its existence nor its state is revealed.
@@ -2197,9 +2183,7 @@ def create_app(
         # running, so this cannot be `None` here.
         assert surface.runtime is not None
         try:
-            inputs = resolve_inputs(
-                surface.declared_inputs(graph, operator=visible is None), body.get("inputs", {})
-            )
+            inputs = resolve_inputs(surface.declared_inputs(graph), body.get("inputs", {}))
         except ValueError as error:
             return _error(str(error), 400)
         try:

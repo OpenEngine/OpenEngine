@@ -37,7 +37,7 @@ from engine.graph_runtime import GraphCompilationError, GraphId
 from engine.graph_runtime.inputs import WorkflowInput
 from engine.ports import SourceControl
 from engine.graph_runtime_langgraph.acp import answer_permission
-from engine.graph_runtime_langgraph.graphs import LangGraphDefinition
+from engine.graph_runtime_langgraph.graphs import LangGraphDefinition, unwrapped
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
 from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore
 from langgraph_acp import ACPAgentProvider, ACPAgentRegistry
@@ -309,8 +309,7 @@ def added_agent_inputs(workflow: GraphWorkflow) -> frozenset[str]:
     """
     readers: dict[str, bool] = {}
     for spec in getattr(workflow.builder, "nodes", {}).values():
-        wrapper = spec.runnable
-        node = getattr(wrapper, "afunc", None) or getattr(wrapper, "func", None) or wrapper
+        node = unwrapped(spec.runnable)
         key = getattr(node, "graph_node_runner_input", "")
         if key:
             offers = isinstance(getattr(node, "registry", None), WithAddedAgents)

@@ -879,11 +879,10 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(tmp_p
 def test_the_daemon_offers_added_agents_as_workflow_runners(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An agent added through the graph service is an operator's runner choice in the web UI too.
+    """An agent added through the graph service is a runner choice in the web UI too.
 
-    Only operators may add one, so a signed-in user who sees only some
-    repositories is neither offered one nor allowed to start a WorkOrder on it.
-    Only a workflow whose nodes resolve added agents offers one, and loops,
+    Whoever may start a workflow may pick one, including a signed-in user who
+    sees only some repositories. Only a workflow whose nodes resolve added agents offers one, and loops,
     which run on the workflow's defaults, offer none.
     """
     from dataclasses import dataclass
@@ -978,13 +977,9 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                     assert choices["runners"] == ["codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN]
                     assert choices["own"] == ["codex", "claude", LEAST_UTILIZED, ROUND_ROBIN]
                     scoped = (await client.get("/api/config", headers=limited)).json()
-                    for graph in scoped["workflows"]:
-                        assert graph["inputs"][0]["choices"] == ["codex", "claude", LEAST_UTILIZED, ROUND_ROBIN]
-                    refused = await client.post("/api/runs", headers=limited, json={
-                        "workflowId": "runners", "repository": "acme/api", "prompt": "Task",
-                        "inputs": {"implementation_runner": "qwen"},
-                    })
-                    assert refused.status_code == 400, refused.text
+                    assert {
+                        graph["id"]: graph["inputs"][0]["choices"] for graph in scoped["workflows"]
+                    } == choices
                     started = await client.post("/api/runs", json={
                         "workflowId": "runners", "repository": ".", "prompt": "Task",
                         "inputs": {"implementation_runner": "qwen"},

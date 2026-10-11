@@ -218,18 +218,20 @@ class LangGraphDefinition:
         return found
 
 
-def _described(node: Any) -> Any:
-    """The callable a drawn node stands for.
+def unwrapped(runnable: Any) -> Any:
+    """The callable a node's runnable stands for.
 
     LangGraph wraps a node in a `RunnableCallable`, which keeps a sync callable
     on `func` and an async one on `afunc`. Unwrapping both is what lets a node
     describe itself; the wrapper cannot, and asking it would describe every node
     in every graph identically.
     """
-    wrapper = getattr(node, "data", None)
-    return (
-        getattr(wrapper, "afunc", None) or getattr(wrapper, "func", None) or wrapper
-    )
+    return getattr(runnable, "afunc", None) or getattr(runnable, "func", None) or runnable
+
+
+def _described(node: Any) -> Any:
+    """The callable a drawn node stands for."""
+    return unwrapped(getattr(node, "data", None))
 
 
 def _name_of(node: Any) -> str:
