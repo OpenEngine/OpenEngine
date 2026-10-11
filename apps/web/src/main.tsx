@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 
 import {
   api,
-  loopRunners,
   newChatAgent,
   setThreadRunner,
   type ApiThread,
@@ -263,7 +262,7 @@ function App() {
     <Sidebar
       runs={runs}
       graphNodes={graphNodes}
-      runners={loopRunners(config)}
+      runners={config.runners.map((option) => option.id)}
       activeRunId={activeRunId}
       activeConversationUrl={conversationUrl}
       activeLoopId={route.kind === "loop" ? route.loopId : undefined}

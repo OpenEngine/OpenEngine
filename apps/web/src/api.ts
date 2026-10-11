@@ -27,8 +27,6 @@ export type RunnerOption = {
 export type EngineConfig = {
   agents: AgentOption[];
   runners: RunnerOption[];
-  /** Agents added with `engine agent add`: workflow runners, not chat runners. */
-  addedAgents?: string[];
   defaultAgent: string;
   /** `mode` is set when `engine init` fixed the mode of the repository's WorkOrders. */
   repositories: { name: string; path: string; mode?: string }[];
@@ -42,11 +40,6 @@ export type EngineConfig = {
 
 export function newChatAgent(config: EngineConfig): string {
   return config.defaultAgent;
-}
-
-/** What a loop's implementer and reviewer groups may run on: every runner, and every added agent. */
-export function loopRunners(config: EngineConfig): string[] {
-  return [...new Set([...config.runners.map((option) => option.id), ...(config.addedAgents ?? [])])];
 }
 
 export type ApiThread = {

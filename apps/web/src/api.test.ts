@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   answerQuestion,
   api,
-  loopRunners,
   messageText,
   newChatAgent,
   type EngineConfig,
@@ -85,28 +84,6 @@ describe("newChatAgent", () => {
   });
 
 
-});
-
-describe("loopRunners", () => {
-  const config = {
-    agents: [],
-    runners: [
-      { id: "codex", implementation: "AcpAgentRunner" },
-      { id: "claude", implementation: "AcpAgentRunner" },
-    ],
-    defaultAgent: "coder",
-    repositories: [],
-    defaultRunner: "codex",
-    workflows: [],
-  } satisfies EngineConfig;
-
-  it("offers the agents added with engine agent add after the runners", () => {
-    expect(loopRunners({ ...config, addedAgents: ["qwen", "codex"] })).toEqual(["codex", "claude", "qwen"]);
-  });
-
-  it("offers the runners alone when nothing was added", () => {
-    expect(loopRunners(config)).toEqual(["codex", "claude"]);
-  });
 });
 
 describe("answerQuestion", () => {

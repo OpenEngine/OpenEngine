@@ -876,32 +876,58 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(tmp_p
     asyncio.run(scenario())
 
 
-def test_the_daemon_offers_added_agents_as_workflow_and_loop_runners(
+def test_the_daemon_offers_added_agents_as_workflow_runners(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An agent added through the graph service is an operator's runner choice in the web UI too.
 
     Only operators may add one, so a signed-in user who sees only some
     repositories is neither offered one nor allowed to start a WorkOrder on it.
+    Only a workflow whose nodes resolve added agents offers one, and loops,
+    which run on the workflow's defaults, offer none.
     """
+    from dataclasses import dataclass
     from engine.apps.web.github_login import GitHubLogin
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
     from langgraph.graph import StateGraph
     from engine.adapters.state_store.memory import InMemoryStateStore
     from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN, WorkflowInput
-    from engine.graph_runtime_langgraph import State, graph_workflow
+    from engine.graph_runtime_langgraph import (
+        AddedAgents, State, graph_workflow, with_added_agents,
+    )
     from engine.runtime.workflows import WorkflowCatalog
     from test_web_app import ConcurrentRunner, _workflow_app
 
-    builder = StateGraph(State)
-    builder.add_node("work", lambda state: {})
-    builder.set_entry_point("work")
-    workflow = graph_workflow(builder, id="runners", name="Runners", inputs=(
-        WorkflowInput(
-            "implementation_runner", "Implementation runner", "codex", True,
-            ("codex", "claude", LEAST_UTILIZED, ROUND_ROBIN),
-        ),
-    ))
+    added_agents = AddedAgents()
+
+    @dataclass
+    class Work:
+        registry: Any
+        graph_node_runner = "codex"
+        graph_node_runner_input = "implementation_runner"
+
+        @property
+        def graph_node_runners(self) -> tuple[str, ...]:
+            return self.registry.names
+
+        async def __call__(self, state: Any) -> dict[str, Any]:
+            return {}
+
+    def runners_workflow(graph_id: str, registry: Any) -> Any:
+        builder = StateGraph(State)
+        builder.add_node("work", Work(registry))
+        builder.set_entry_point("work")
+        return graph_workflow(builder, id=graph_id, name=graph_id.title(), inputs=(
+            WorkflowInput(
+                "implementation_runner", "Implementation runner", "codex", True,
+                ("codex", "claude", LEAST_UTILIZED, ROUND_ROBIN),
+            ),
+        ))
+
+    builtin = agent_registry([CodexACPProvider(), ClaudeACPProvider()])
+    workflow = runners_workflow("runners", with_added_agents(builtin, added_agents))
+    own = runners_workflow("own", builtin)
 
     async def visible_repositories(self: GitHubLogin, request: Any) -> frozenset[str] | None:
         return frozenset({"acme/api"}) if "x-limited" in request.headers else None
@@ -929,31 +955,31 @@ def test_the_daemon_offers_added_agents_as_workflow_and_loop_runners(
                     runtime, tmp_path / DATABASE,
                     workspace_provider=Checkouts(tmp_path / "checkout"),
                     registry=agent_registry([stub("stub")]), start=start,
-                    agent_factory=lambda row: stub(row.name), default_repository="example/repo",
+                    agent_factory=lambda row: stub(row.name), added_agents=added_agents,
+                    default_repository="example/repo",
                 )
 
             app = _workflow_app(
                 InMemoryStateStore(), ConcurrentRunner(), graph_runtime=running(), graph_service=factory,
-                workflow_catalog=WorkflowCatalog.from_graphs((workflow,)),
+                workflow_catalog=WorkflowCatalog.from_graphs((workflow, own)),
                 loop_settings=LoopSettingsStore(tmp_path / "loops.json"),
             )
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 async with app.router.lifespan_context(app):
-                    before = (await client.get("/api/config")).json()
-                    assert before["addedAgents"] == []
                     added = await client.post("/api/v1/agents", json={
                         "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://localhost:11434/v1",
                     })
                     assert added.status_code == 201, added.text
                     config = (await client.get("/api/config")).json()
-                    assert config["addedAgents"] == ["qwen"]
-                    runner, = config["workflows"][0]["inputs"]
-                    assert runner["choices"] == ["codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN]
+                    choices = {
+                        graph["id"]: graph["inputs"][0]["choices"] for graph in config["workflows"]
+                    }
+                    assert choices["runners"] == ["codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN]
+                    assert choices["own"] == ["codex", "claude", LEAST_UTILIZED, ROUND_ROBIN]
                     scoped = (await client.get("/api/config", headers=limited)).json()
-                    assert scoped["addedAgents"] == []
-                    runner, = scoped["workflows"][0]["inputs"]
-                    assert runner["choices"] == ["codex", "claude", LEAST_UTILIZED, ROUND_ROBIN]
+                    for graph in scoped["workflows"]:
+                        assert graph["inputs"][0]["choices"] == ["codex", "claude", LEAST_UTILIZED, ROUND_ROBIN]
                     refused = await client.post("/api/runs", headers=limited, json={
                         "workflowId": "runners", "repository": "acme/api", "prompt": "Task",
                         "inputs": {"implementation_runner": "qwen"},
@@ -970,7 +996,7 @@ def test_the_daemon_offers_added_agents_as_workflow_and_loop_runners(
                         "activeHours": {"start": "00:00", "end": "00:00"}, "maxPrs": 1, "maxDailySpend": 0,
                         "runnerStrategy": "manual", "implementationRunner": "qwen", "reviewRunner": "test",
                     })
-                    assert saved.status_code == 200, saved.text
+                    assert saved.status_code == 400, saved.text
             store.close()
 
     asyncio.run(scenario())

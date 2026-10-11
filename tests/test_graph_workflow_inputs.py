@@ -54,13 +54,15 @@ def test_round_robin_rotates_each_input_through_its_runners():
     assert turns == {"implementation_runner": 3}
 
 
-def test_added_runners_are_offered_before_the_policies_of_runner_inputs_only():
+def test_added_runners_are_offered_before_the_policies_of_accepting_inputs_only():
     mode = mode_input()
-    offered = offer_runners((*DECLARED, mode), ("qwen", "codex"))
+    accepting = ("implementation_runner", "review_runner")
+    offered = offer_runners((*DECLARED, mode), ("qwen", "codex"), accepting)
     assert offered[0].choices == ("codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN)
     assert offered[1].choices == offered[0].choices
     assert offered[2] == mode
-    assert offer_runners(DECLARED, ()) == DECLARED
+    assert offer_runners(DECLARED, (), accepting) == DECLARED
+    assert offer_runners(DECLARED, ("qwen",), ()) == DECLARED
 
 
 def test_added_runners_join_no_policy_pool():

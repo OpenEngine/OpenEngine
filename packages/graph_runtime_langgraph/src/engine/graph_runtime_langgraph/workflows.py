@@ -301,6 +301,23 @@ def with_added_agents(
     return WithAddedAgents((registry.resolve(name) for name in registry.names), added)
 
 
+def added_agent_inputs(workflow: GraphWorkflow) -> frozenset[str]:
+    """The runner inputs whose every node also resolves the added agents.
+
+    Only these may offer an added agent: a node whose registry is its own
+    would refuse one as an unsupported runner when the run starts.
+    """
+    readers: dict[str, bool] = {}
+    for spec in getattr(workflow.builder, "nodes", {}).values():
+        wrapper = spec.runnable
+        node = getattr(wrapper, "afunc", None) or getattr(wrapper, "func", None) or wrapper
+        key = getattr(node, "graph_node_runner_input", "")
+        if key:
+            offers = isinstance(getattr(node, "registry", None), WithAddedAgents)
+            readers[key] = readers.get(key, True) and offers
+    return frozenset(key for key, offers in readers.items() if offers)
+
+
 def _compiled(workflow: GraphWorkflow, checkpointer: Any) -> LangGraphDefinition:
     """Compile one graph, and name it if it will not compile.
 

@@ -153,6 +153,8 @@ from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
 )
 from engine.graph_runtime_langgraph.store import PullRequestRecord
+from engine.graph_runtime_langgraph.workflows import GraphWorkflow as LangGraphWorkflow
+from engine.graph_runtime_langgraph.workflows import added_agent_inputs
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
@@ -1028,7 +1030,9 @@ class _GraphSurface:
         contents to any model endpoint, so only an operator may pick one.
         """
         declarations = getattr(graph, "inputs", ())
-        return offer_runners(declarations, self.added_agents()) if operator else declarations
+        if not operator or not isinstance(graph, LangGraphWorkflow):
+            return declarations
+        return offer_runners(declarations, self.added_agents(), added_agent_inputs(graph))
 
 
 class GithubProvenance(Protocol):
@@ -1849,7 +1853,6 @@ def create_app(
                     {"id": name, "implementation": type(runner).__name__}
                     for name, runner in runners.items()
                 ],
-                "addedAgents": list(surface.added_agents()) if visible is None else [],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
                 "repositories": [
@@ -2801,7 +2804,7 @@ def create_app(
         if not _is_local_request(request):
             return _error("forbidden", 403)
         try:
-            settings = parse_loop_settings(await request.json(), [*runners, *surface.added_agents()])
+            settings = parse_loop_settings(await request.json(), runners)
         except ValueError as error:
             return _error(str(error), 400)
         _loop_settings.set(settings)

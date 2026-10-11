@@ -308,7 +308,7 @@ class GraphService:
 
     def added_agents(self) -> tuple[str, ...]:
         """The runners `engine agent add` offers, beyond the built-in ones."""
-        return tuple(name for name in self._registry.names if name not in self._builtin_agents)
+        return self._added_agents.names
 
     # --- agents -------------------------------------------------------------
 
