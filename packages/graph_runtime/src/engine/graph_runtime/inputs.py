@@ -83,11 +83,13 @@ def offer_runners(
 
     `runners` are listed after an input's own runners and before its policies.
     They join no policy's pool: `choose_runners` is given the declarations as written.
+    An input with no choices is free text, which already accepts any runner, so
+    it is left as declared rather than narrowed to `runners`.
     """
     offered = []
     for item in declarations:
         extra = tuple(runner for runner in runners if runner not in item.choices)
-        if extra and item.name in inputs:
+        if extra and item.choices and item.name in inputs:
             own = tuple(choice for choice in item.choices if choice not in RUNNER_POLICIES)
             policies = tuple(choice for choice in item.choices if choice in RUNNER_POLICIES)
             item = replace(item, choices=(*own, *extra, *policies))

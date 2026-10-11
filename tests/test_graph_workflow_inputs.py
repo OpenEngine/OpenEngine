@@ -1,5 +1,6 @@
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, WorkflowInput, choose_runners, mode_input, offer_runners,
+    resolve_inputs,
 )
 
 RUNNERS = ("codex", "claude", LEAST_UTILIZED, ROUND_ROBIN)
@@ -63,6 +64,16 @@ def test_added_runners_are_offered_before_the_policies_of_accepting_inputs_only(
     assert offered[2] == mode
     assert offer_runners(DECLARED, (), accepting) == DECLARED
     assert offer_runners(DECLARED, ("qwen",), ()) == DECLARED
+
+
+def test_added_runners_leave_a_free_text_runner_input_accepting_any_runner():
+    free = WorkflowInput("implementation_runner", "Implementation runner", "codex")
+    offered = offer_runners((free,), ("qwen",), (free.name,))
+    assert offered == (free,)
+    assert resolve_inputs(offered, {}) == {"implementation_runner": "codex"}
+    assert resolve_inputs(offered, {"implementation_runner": "claude"}) == {
+        "implementation_runner": "claude"
+    }
 
 
 def test_added_runners_join_no_policy_pool():
