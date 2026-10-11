@@ -1,7 +1,7 @@
 """Declared string inputs shared by graph definitions and creation surfaces."""
 
-from collections.abc import Callable, Mapping, MutableMapping
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass, replace
 
 from engine.domain import MODE_INPUT, STATE_INPUT, ForgeMode, WorkState
 
@@ -74,6 +74,27 @@ def resolve_inputs(
             raise ValueError(f"invalid choice for workflow input {item.name!r}")
         resolved[item.name] = value
     return resolved
+
+
+def offer_runners(
+    declarations: tuple[WorkflowInput, ...],
+    names: Collection[str],
+    runners: Sequence[str],
+) -> tuple[WorkflowInput, ...]:
+    """Also offer `runners` from each runner input in `names`, ahead of its policies.
+
+    How an agent added after a workflow was written becomes a choice of it.
+    Policies resolve over the declarations as written, not these.
+    """
+    offered = []
+    for item in declarations:
+        if item.name in names and item.choices:
+            added = tuple(runner for runner in runners if runner not in item.choices)
+            policies = tuple(choice for choice in item.choices if choice in RUNNER_POLICIES)
+            kept = tuple(choice for choice in item.choices if choice not in RUNNER_POLICIES)
+            item = replace(item, choices=(*kept, *added, *policies))
+        offered.append(item)
+    return tuple(offered)
 
 
 def choose_runners(

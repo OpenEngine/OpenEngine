@@ -847,6 +847,45 @@ def test_stage_runners_configure_models_and_mcp_identity(
     assert observed[2].session_config["model"] == module.REVIEW_MODELS[review]["default"]
 
 
+def test_an_added_agent_runs_a_stage_on_its_own_model_and_endpoint() -> None:
+    """An agent from `engine agent add` is a runner of every stage, as the CLI runs it."""
+    from engine.graph_runtime_langgraph import ADDED_AGENTS
+    from langgraph_acp.providers import OpenCodeACPProvider
+
+    module = definition_module()
+    nodes = nodes_of(module.graph_for("codex").builder)
+    ADDED_AGENTS.registry.register(OpenCodeACPProvider(name="qwen"), replace=True)
+    ADDED_AGENTS.models["qwen"] = "engine-url/qwen3-coder"
+    try:
+        assert "qwen" in nodes["implementation"].graph_node_runners
+        for name in ("implementation", "review-security", "impact-analysis"):
+            node = nodes[name]._for_runner("qwen")
+            assert node.agent == "qwen" and node.registry is ADDED_AGENTS.registry
+            assert node.session_config["model"] == "engine-url/qwen3-coder"
+            assert all(binding.agent_id == "qwen" for binding in node.mcp_server_bindings)
+        # Built-in runners keep their own registry and review models.
+        claude = nodes["review-security"]._for_runner("claude")
+        assert claude.registry is module.AGENTS
+        assert claude.session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+
+        del ADDED_AGENTS.models["qwen"]
+        assert "model" not in (nodes["review-bugs"]._for_runner("qwen").session_config or {})
+    finally:
+        ADDED_AGENTS.registry.unregister("qwen")
+        ADDED_AGENTS.models.pop("qwen", None)
+
+
+def test_an_added_implementer_is_cross_reviewed_by_a_built_in_runner() -> None:
+    module = definition_module()
+    assert [module.cross_reviewer(runner) for runner in ("codex", "claude", "qwen")] == [
+        "claude", "codex", "claude",
+    ]
+    nodes = nodes_of(module.pipeline("qwen"))
+    assert nodes["implementation"].agent == "qwen"
+    assert nodes["review-security"].agent == "claude"
+    assert nodes["review-security"].session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+
+
 def test_input_runner_can_be_reset_to_workflow_default_and_retried(tmp_path):
     """Run the real ACP node and persist the selection across a runtime restart."""
     from dataclasses import replace

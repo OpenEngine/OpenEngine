@@ -47,7 +47,7 @@ from engine.graph_runtime.control import CANCELLED
 from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
-from engine.graph_runtime_langgraph import GraphWorkflow, LangGraphRuntime
+from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime
 from engine.ports import WorkspaceProvider
 from langgraph_acp import ACPAgentRegistry
 
@@ -223,6 +223,7 @@ class GraphService:
         model_tiers: Mapping[str, Mapping[str, str]] | None = None,
         allow_python: bool = True,
         agent_factory: AgentFactory | None = None,
+        added_agents: AddedAgents | None = None,
         session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
         approval_policy: ApprovalConfig | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -249,9 +250,11 @@ class GraphService:
         self._agent_factory = agent_factory
         #: What the registry held before any added agent: these cannot be replaced or removed.
         self._builtin_agents = tuple(registry.names)
+        #: The added agents again, for graphs registered elsewhere (a workflow directory).
+        self._added = added_agents or AddedAgents()
         #: Added agents' models, by name. Compiled graphs hold this dict, not a copy,
         #: so a model changed here reaches graphs registered before the change.
-        self._agent_models: dict[str, str] = {}
+        self._agent_models: dict[str, str] = self._added.models
         self._sessions = Sessions()
         self._session_workflow = session_workflow(
             workspace_provider, self._sessions,
@@ -303,6 +306,10 @@ class GraphService:
 
     def runners(self) -> tuple[str, ...]:
         return tuple(self._registry.names)
+
+    def added_runners(self) -> tuple[str, ...]:
+        """The agents added with `engine agent add`, without the built-in ones."""
+        return self._added.registry.names
 
     # --- agents -------------------------------------------------------------
 
@@ -364,12 +371,15 @@ class GraphService:
                 raise NotFound(f"no agent named {name!r}", agent=name)
             self.store.delete_agent(name)
             self._registry.unregister(name)
+            self._added.registry.unregister(name)
             self._agent_models.pop(name, None)
         return {**self.agent_json(name, row), "removed": True}
 
     def _offer_agent(self, row: AgentRow) -> None:
         assert self._agent_factory is not None
-        self._registry.register(self._agent_factory(row), replace=True)
+        provider = self._agent_factory(row)
+        self._registry.register(provider, replace=True)
+        self._added.registry.register(provider, replace=True)
         if row.model:
             self._agent_models[row.name] = session_model(row)
         else:

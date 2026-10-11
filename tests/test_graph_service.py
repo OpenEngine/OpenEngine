@@ -687,6 +687,22 @@ def test_an_added_agent_runs_graphs_and_outlives_the_daemon(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_an_added_agent_is_shared_with_graphs_registered_elsewhere(tmp_path: Path) -> None:
+    from engine.graph_runtime_langgraph import AddedAgents
+
+    shared = AddedAgents()
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, added_agents=shared) as service:
+            await service.add_agent("claude", name="reviewer", model="opus")
+            assert service.added_runners() == shared.registry.names == ("reviewer",)
+            assert shared.models == {"reviewer": "opus"}
+            await service.remove_agent("reviewer")
+            assert service.added_runners() == () and shared.models == {}
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(("arguments", "refusal"), [
     ({"kind": "gemini"}, "kind must be one of"),
     ({"kind": "claude", "name": "Bad Name"}, "lowercase"),

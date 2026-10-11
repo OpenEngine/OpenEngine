@@ -88,7 +88,7 @@ from engine.apps.web.source_control import (
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
 from engine.graph_runtime_langgraph import LangGraphRuntime, answer_permission
-from engine.graph_runtime_langgraph.workflows import RUNS, agent_registry, sqlite_runtime
+from engine.graph_runtime_langgraph.workflows import ADDED_AGENTS, RUNS, agent_registry, sqlite_runtime
 from engine.graph_service import GraphService, StartRun
 from engine.graph_service.service import opencode_config
 from engine.graph_service.store import AgentRow
@@ -417,6 +417,8 @@ def build_graph_service(
             workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
             registry=agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]),
             agent_factory=added_agent,
+            # Shared with the workflow directory's graphs, so they can run on an added agent too.
+            added_agents=ADDED_AGENTS,
             start=start,
             session_config=claude_session_config_for(settings),
             default_repository=default_repository,

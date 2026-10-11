@@ -42,6 +42,7 @@ from engine.adapters.workspace_provider.git_worktree import (
     GitWorktreeWorkspaceProvider,
 )
 from engine.graph_runtime_langgraph import (
+    ADDED_AGENTS,
     GraphWorkflow,
     WorkflowInput,
     State,
@@ -127,6 +128,15 @@ REVIEW_MODELS: dict[str, dict[str, str]] = {
     "claude": {"default": "sonnet", "elevated": "opus"},
     "codex": {"default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
 }
+
+
+def cross_reviewer(runner: str) -> str:
+    """Who reviews `runner`'s work by default: the other provider.
+
+    An agent added with `engine agent add` is reviewed by Claude, the reviewer
+    of the default implementation runner.
+    """
+    return {"codex": "claude", "claude": "codex"}.get(runner, "claude")
 
 
 # ---------------------------------------------------------------------------
@@ -233,15 +243,27 @@ class _RunnerInput:
 
     graph_node_runner_input = "implementation_runner"
 
+    @property
+    def graph_node_runners(self) -> tuple[str, ...]:
+        return (*super().graph_node_runners, *ADDED_AGENTS.registry.names)
+
     def _for_runner(self, runner: str) -> ACPNode:
-        config = self.session_config
-        if isinstance(self, ReviewNode):
+        config, registry = self.session_config, self.registry
+        if runner in ADDED_AGENTS.registry and runner not in REVIEW_MODELS:
+            # An added agent runs on its own model and endpoint, as the CLI runs it.
+            registry = ADDED_AGENTS.registry
+            config = {key: value for key, value in (config or {}).items() if key != "model"}
+            if model := ADDED_AGENTS.models.get(runner):
+                config["model"] = model
+            config = config or None
+        elif isinstance(self, ReviewNode):
             facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
             model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
             config = _with_model(config, model)
         return replace(
             self,
             agent=runner,
+            registry=registry,
             session_config=config,
             mcp_server_bindings=tuple(
                 replace(binding, agent_id=runner)
@@ -487,7 +509,7 @@ def pipeline(
 
     # ---- review fan-out: one node per facet, run in parallel ----------------
 
-    reviewer = {"codex": "claude", "claude": "codex"}[runner]
+    reviewer = cross_reviewer(runner)
     models = REVIEW_MODELS[reviewer]
     for facet in REVIEW_FACETS:
         model = models["elevated"] if facet.elevated else models["default"]
@@ -653,7 +675,9 @@ def pipeline(
     return builder
 
 
-#: Runner choices for the implementation and review stages.
+#: Runner choices for the implementation and review stages. Agents added with
+#: `engine agent add` are offered beside them where WorkOrders are created, but
+#: the policies keep picking from these: an added agent has no utilization.
 RUNNER_CHOICES = ("codex", "claude")
 #: What the runner dropdowns offer: a runner, or a policy that picks one per run.
 RUNNER_INPUT_CHOICES = (*RUNNER_CHOICES, LEAST_UTILIZED, ROUND_ROBIN)
@@ -692,7 +716,7 @@ def graph_for(
             ),
             WorkflowInput(
                 "review_runner", "Review runner",
-                default={"codex": "claude", "claude": "codex"}[runner],
+                default=cross_reviewer(runner),
                 required=True, choices=RUNNER_INPUT_CHOICES,
             ),
             mode_input(),

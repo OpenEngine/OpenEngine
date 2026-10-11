@@ -68,6 +68,8 @@ from engine.graph_runtime_langgraph.store import (
 from engine.graph_runtime_langgraph.terminal_mcp import TerminalMcpServer
 from engine.graph_runtime.inputs import WorkflowInput
 from engine.graph_runtime_langgraph.workflows import (
+    ADDED_AGENTS,
+    AddedAgents,
     GraphWorkflow,
     State,
     agent_registry,
@@ -76,7 +78,9 @@ from engine.graph_runtime_langgraph.workflows import (
 )
 
 __all__ = [
+    "ADDED_AGENTS",
     "APPROVAL_ID",
+    "AddedAgents",
     "EXECUTION_ID",
     "NODE_ID",
     "RUN_ID",

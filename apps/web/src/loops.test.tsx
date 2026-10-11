@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "./api";
-import { LoopPage, NewLoopPage } from "./loops";
+import { LoopPage, NewLoopPage, loopRunners } from "./loops";
 import { Sidebar } from "./sidebar";
 
 vi.mock("./api", async (original) => ({
@@ -89,6 +89,27 @@ describe("Loops section", () => {
       reviewRunner: "claude",
     }));
     expect(await screen.findByText("Saved")).toBeVisible();
+  });
+
+  it("offers an added agent as an implementer and reviewer group", async () => {
+    const user = userEvent.setup();
+    const runners = loopRunners({
+      runners: [{ id: "codex", implementation: "ACP" }, { id: "claude", implementation: "ACP" }],
+      addedRunners: ["qwen"],
+    });
+    expect(runners).toEqual(["codex", "claude", "qwen"]);
+    render(<Sidebar runs={[]} runners={runners} initialSection="loops" />);
+
+    await user.selectOptions(await screen.findByLabelText("Runner strategy"), "manual");
+    await user.selectOptions(screen.getByLabelText("Implementer group"), "qwen");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(api.setLoopSettings).toHaveBeenCalledWith({
+      ...saved,
+      runnerStrategy: "manual",
+      implementationRunner: "qwen",
+      reviewRunner: "codex",
+    }));
   });
 });
 

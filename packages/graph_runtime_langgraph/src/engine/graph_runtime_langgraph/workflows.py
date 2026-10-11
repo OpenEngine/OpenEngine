@@ -242,6 +242,25 @@ def agent_registry(providers: Iterable[Any]) -> ACPAgentRegistry:
     )
 
 
+@dataclass(frozen=True)
+class AddedAgents:
+    """Agents added while a process runs (`engine agent add`), and the model each asks for.
+
+    A workflow file's own registry is fixed when the file is imported, so an
+    agent added later is only reachable through something shared: the graph
+    service keeps this up to date, and a workflow resolves a runner it does
+    not know here.
+    """
+
+    registry: ACPAgentRegistry = field(default_factory=ACPAgentRegistry)
+    models: dict[str, str] = field(default_factory=dict)
+    """An added agent's own model, by name; absent when it names none."""
+
+
+#: The process's added agents, shared by the graph service and workflow files.
+ADDED_AGENTS = AddedAgents()
+
+
 def _compiled(workflow: GraphWorkflow, checkpointer: Any) -> LangGraphDefinition:
     """Compile one graph, and name it if it will not compile.
 
@@ -303,7 +322,9 @@ async def sqlite_runtime(
 
 
 __all__ = [
+    "ADDED_AGENTS",
     "CHECKPOINTS",
+    "AddedAgents",
     "RUNS",
     "GraphWorkflow",
     "State",

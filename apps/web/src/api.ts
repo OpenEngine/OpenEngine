@@ -27,6 +27,8 @@ export type RunnerOption = {
 export type EngineConfig = {
   agents: AgentOption[];
   runners: RunnerOption[];
+  /** Agents added with `engine agent add`, which WorkOrders and loops can also run on. */
+  addedRunners?: string[];
   defaultAgent: string;
   /** `mode` is set when `engine init` fixed the mode of the repository's WorkOrders. */
   repositories: { name: string; path: string; mode?: string }[];

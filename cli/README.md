@@ -113,6 +113,9 @@ A graph node's `agent:` names an agent on the backend. `claude`, `codex` and
 of its own, stored on the backend. `--model` is what it runs when a node names
 no model, or a tier the backend has no entry for. `--url` points an opencode
 agent at an OpenAI-compatible endpoint, which needs `--model` and no sign-in.
+An added agent is also offered as an implementation and review runner in the
+web UI's WorkOrder form and loop settings; `least-utilized` and `round-robin`
+still only pick between the built-in runners.
 `agent signin` signs in the harness an agent runs on; `engine runner signin`
 still works for one release.
 

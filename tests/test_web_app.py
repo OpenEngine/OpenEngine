@@ -3116,6 +3116,83 @@ def test_graph_workorder_round_robin_runner_resolves_at_start():
     asyncio.run(scenario())
 
 
+def test_an_added_agent_is_offered_as_a_runner_but_never_picked_by_a_policy(tmp_path):
+    """`engine agent add` agents join the form's and loops' runners; policies keep to the declared ones."""
+    from engine.apps.web.loops import LoopSettingsStore
+    from engine.graph_runtime.inputs import ROUND_ROBIN
+
+    class AddedAgentGraph(type(_runner_input_graph())):
+        def topology(self):
+            drawn = super().topology()
+            return replace(drawn, nodes=tuple(
+                replace(node, runner_input="implementation_runner") for node in drawn.nodes
+            ))
+
+    class CheckpointedRuntime(ScriptedGraphRuntime):
+        checkpointer = object()
+
+    class AddedAgents:
+        async def open(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+        async def observe(self, _event) -> None:
+            pass
+
+        def added_runners(self) -> tuple[str, ...]:
+            return ("qwen",)
+
+    graph = AddedAgentGraph(
+        GraphId("inputs"), "Inputs", (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+        inputs=(_runner_input_graph("codex", "claude", ROUND_ROBIN).inputs[0],),
+    )
+    runtime = CheckpointedRuntime(graph)
+    app = _graph_app_over(
+        InMemoryStateStore(), runtime, graph,
+        graph_service=lambda _runtime, _start: AddedAgents(),
+        loop_settings=LoopSettingsStore(tmp_path / "loops.json"),
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                config = (await client.get("/api/config")).json()
+                assert config["addedRunners"] == ["qwen"]
+                offered, = config["workflows"][0]["inputs"]
+                assert offered["choices"] == ["codex", "claude", "qwen", ROUND_ROBIN]
+
+                chosen = await client.post("/api/runs", json={
+                    "workflowId": "inputs", "repository": ".", "prompt": "Task",
+                    "inputs": {"implementation_runner": "qwen"},
+                })
+                assert chosen.status_code == 201
+                snapshot = await runtime.snapshot(RunId(chosen.json()["runId"]))
+                assert snapshot.values["inputs"]["implementation_runner"] == "qwen"
+
+                picked = []
+                for _ in range(3):
+                    response = await client.post("/api/runs", json={
+                        "workflowId": "inputs", "repository": ".", "prompt": "Task",
+                        "inputs": {"implementation_runner": ROUND_ROBIN},
+                    })
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    picked.append(snapshot.values["inputs"]["implementation_runner"])
+                assert picked == ["codex", "claude", "codex"]
+
+                saved = await client.put("/api/loops/settings", json={
+                    "activeHours": {"start": "00:00", "end": "00:00"}, "maxPrs": 1,
+                    "maxDailySpend": 0, "runnerStrategy": "manual",
+                    "implementationRunner": "qwen", "reviewRunner": "test",
+                })
+                assert saved.status_code == 200, saved.text
+
+    asyncio.run(scenario())
+
+
 def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path):
     """Nothing else keeps the utilization cache warm, so starting the run reads it."""
     from engine.graph_runtime.inputs import LEAST_UTILIZED

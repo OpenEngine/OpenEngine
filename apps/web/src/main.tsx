@@ -21,7 +21,7 @@ import {
   useGraphNodes,
   useRuns,
 } from "./runs";
-import { LoopPage, NewLoopPage } from "./loops";
+import { LoopPage, NewLoopPage, loopRunners } from "./loops";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar } from "./sidebar";
 import { UtilizationPage } from "./utilization";
@@ -262,7 +262,7 @@ function App() {
     <Sidebar
       runs={runs}
       graphNodes={graphNodes}
-      runners={config.runners.map((option) => option.id)}
+      runners={loopRunners(config)}
       activeRunId={activeRunId}
       activeConversationUrl={conversationUrl}
       activeLoopId={route.kind === "loop" ? route.loopId : undefined}

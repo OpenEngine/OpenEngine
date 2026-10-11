@@ -1,5 +1,5 @@
 from engine.graph_runtime.inputs import (
-    LEAST_UTILIZED, ROUND_ROBIN, WorkflowInput, choose_runners,
+    LEAST_UTILIZED, ROUND_ROBIN, WorkflowInput, choose_runners, offer_runners,
 )
 
 RUNNERS = ("codex", "claude", LEAST_UTILIZED, ROUND_ROBIN)
@@ -52,3 +52,14 @@ def test_round_robin_rotates_each_input_through_its_runners():
     ]
     assert picked == ["codex", "claude", "codex"]
     assert turns == {"implementation_runner": 3}
+
+
+def test_added_runners_are_offered_before_the_policies_of_runner_inputs_only():
+    mode = WorkflowInput("mode", "Mode", "connected", True, ("connected", "disconnected"))
+    offered = offer_runners((*DECLARED, mode), {"implementation_runner", "review_runner"}, ("qwen", "codex"))
+    assert [item.choices for item in offered] == [
+        ("codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN),
+        ("codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN),
+        ("connected", "disconnected"),
+    ]
+    assert offer_runners(DECLARED, set(), ("qwen",)) == DECLARED

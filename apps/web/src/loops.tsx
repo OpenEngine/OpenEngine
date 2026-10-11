@@ -88,6 +88,12 @@ const STRATEGIES: { value: LoopSettings["runnerStrategy"]; label: string }[] = [
   { value: "manual", label: "Manual" },
 ];
 
+/** The runners a loop's manual strategy offers: the configured ones, then any added agent. */
+export function loopRunners(config: Pick<EngineConfig, "runners" | "addedRunners">): string[] {
+  const configured = config.runners.map((option) => option.id);
+  return [...configured, ...(config.addedRunners ?? []).filter((name) => !configured.includes(name))];
+}
+
 export function LoopSettingsForm({ runners }: { runners: string[] }) {
   const [settings, setSettings] = useState<LoopSettings | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");

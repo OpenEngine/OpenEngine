@@ -128,7 +128,7 @@ from engine.domain import (
     WorkspaceId,
     review_inputs,
 )
-from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, resolve_inputs
+from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, offer_runners, resolve_inputs
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -1081,6 +1081,31 @@ def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None
     return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
+def _added_runners(service: GraphService | None) -> tuple[str, ...]:
+    """Agents added with `engine agent add`, offered as runners beside the built-in ones."""
+    return service.added_runners() if service is not None else ()
+
+
+def _offering_added_runners(
+    graphs: Mapping[str, GraphWorkflow], runtime: GraphRuntime, added: Sequence[str],
+) -> Mapping[str, GraphWorkflow]:
+    """`graphs`, each runner input of which also offers the `added` agents.
+
+    A runner input is one a node of the graph's topology picks its runner by.
+    """
+    if not added:
+        return graphs
+    offered: dict[str, GraphWorkflow] = {}
+    for key, graph in graphs.items():
+        declared: Any = graph
+        topology = runtime.topology(GraphId(str(graph.graph_id)))
+        names = {node.runner_input for node in topology.nodes if node.runner_input} if topology else set()
+        offered[key] = replace(declared, inputs=offer_runners(declared.inputs, names, added)) if (
+            getattr(declared, "inputs", ())
+        ) else graph
+    return offered
+
+
 def create_app(
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -1183,7 +1208,10 @@ def create_app(
         a graph that no longer compiles -- there are no graph entries at
         all, rather than entries that fail the moment somebody picks one.
         """
-        return graph_workflows if surface.runtime is not None else {}
+        return (
+            _offering_added_runners(graph_workflows, surface.runtime, _added_runners(surface.service))
+            if surface.runtime is not None else {}
+        )
 
     approval_feed = ApprovalFeed(session.state_store)
     service = ThreadService(
@@ -1832,6 +1860,7 @@ def create_app(
                     {"id": name, "implementation": type(runner).__name__}
                     for name, runner in runners.items()
                 ],
+                "addedRunners": list(_added_runners(surface.service)),
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
                 "repositories": [
@@ -1970,8 +1999,10 @@ def create_app(
                     return state
             # Policies resolve at start, not at scheduling, so a dependent
             # WorkOrder is placed by utilization when it actually runs.
+            # Over the runners the workflow declares, not the added agents
+            # `offered_graphs` adds: those have no utilization to compare.
             inputs = choose_runners(
-                getattr(graph, "inputs", ()), inputs,
+                getattr(graph_workflows.get(str(graph.graph_id), graph), "inputs", ()), inputs,
                 usage=lambda: usage,
                 turns=round_robin_turns,
             )
@@ -2775,7 +2806,7 @@ def create_app(
         if not _is_local_request(request):
             return _error("forbidden", 403)
         try:
-            settings = parse_loop_settings(await request.json(), runners)
+            settings = parse_loop_settings(await request.json(), (*runners, *_added_runners(surface.service)))
         except ValueError as error:
             return _error(str(error), 400)
         _loop_settings.set(settings)
