@@ -405,7 +405,9 @@ def test_review_comments_reach_the_github_api(tmp_path) -> None:
     assert "/repos/acme/api/issues/7/comments" in str(recorded[0].url)
 
 
-def test_web_restores_sqlite_conversations_after_restart(tmp_path, *, web_app) -> None:
+def test_web_restores_sqlite_conversations_after_restart(
+    async_client, tmp_path, *, web_app
+) -> None:
     database = tmp_path / "conversations.sqlite3"
     runner = ConcurrentRunner()
     other_runner = ConcurrentRunner(("persisted answer",))
@@ -418,8 +420,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path, *, web_app) -
     )
 
     async def first_process() -> str:
-        transport = httpx.ASGITransport(app=first_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(first_app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -447,8 +448,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path, *, web_app) -
     )
 
     async def second_process():
-        transport = httpx.ASGITransport(app=second_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(second_app, base_url="http://test") as client:
             threads = await client.get("/api/threads")
             messages = await client.get(f"/api/threads/{thread_id}/messages")
             return threads, messages
@@ -526,7 +526,7 @@ def _work_order(
     )
 
 
-def test_deleting_a_run_forgets_it(workflow_app) -> None:
+def test_deleting_a_run_forgets_it(async_client, workflow_app) -> None:
     """The rail's × on a WorkOrder is not the project row's archive.
 
     Nothing lists or restores what it removes, so the row goes for good.
@@ -537,8 +537,7 @@ def test_deleting_a_run_forgets_it(workflow_app) -> None:
     app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             deleted = await client.delete(f"/api/runs/{state.run_id}")
             listed = await client.get("/api/runs")
             detail = await client.get(f"/api/runs/{state.run_id}")
@@ -557,7 +556,7 @@ def test_deleting_a_run_forgets_it(workflow_app) -> None:
 
 
 def test_utilization_is_served_from_the_cache_and_then_scraped(
-    tmp_path, *, workflow_app
+    async_client, tmp_path, *, workflow_app
 ) -> None:
     """The two calls the page makes, and why there are two of them.
 
@@ -588,8 +587,7 @@ def test_utilization_is_served_from_the_cache_and_then_scraped(
     )
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             empty = await client.get("/api/utilization")
             scraped = await client.post("/api/utilization/refresh")
             cached = await client.get("/api/utilization")
@@ -614,7 +612,7 @@ def test_utilization_is_served_from_the_cache_and_then_scraped(
 
 
 def test_utilization_refresh_refuses_a_cross_origin_page(
-    tmp_path, *, workflow_app
+    async_client, tmp_path, *, workflow_app
 ) -> None:
     """It reads the tokens the runners signed in with, so it is guarded like
     every other endpoint that touches a stored credential."""
@@ -635,8 +633,7 @@ def test_utilization_refresh_refuses_a_cross_origin_page(
     )
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return await client.post(
                 "/api/utilization/refresh", headers={"origin": "https://elsewhere.example"}
             )
@@ -647,7 +644,9 @@ def test_utilization_refresh_refuses_a_cross_origin_page(
     assert not asked
 
 
-def test_run_list_leaves_the_prose_to_the_run_it_names(workflow_app) -> None:
+def test_run_list_leaves_the_prose_to_the_run_it_names(
+    async_client, workflow_app
+) -> None:
     """Every screen polls `/api/runs` once a second to keep its rail current.
 
     What that list carries is what every screen pays for, on a payload that
@@ -661,8 +660,7 @@ def test_run_list_leaves_the_prose_to_the_run_it_names(workflow_app) -> None:
     app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return (
                 await client.get("/api/runs"),
                 await client.get(f"/api/runs/{state.run_id}"),
@@ -750,14 +748,13 @@ def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
     ],
 )
 def test_create_workflow_run_rejects_invalid_requests(
-    body: dict[str, str], *, workflow_app
+    async_client, body: dict[str, str], *, workflow_app
 ) -> None:
     store = InMemoryStateStore()
     app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return await client.post("/api/runs", json=body)
 
     response = asyncio.run(scenario())
@@ -767,7 +764,7 @@ def test_create_workflow_run_rejects_invalid_requests(
 
 
 def test_create_workflow_run_records_the_signed_in_requester(
-    tmp_path, *, sqlite_store, workflow_app
+    async_client, tmp_path, *, sqlite_store, workflow_app
 ) -> None:
     """A WorkOrder started from the web UI names its GitHub account, and still
     does after a restart."""
@@ -782,10 +779,7 @@ def test_create_workflow_run_records_the_signed_in_requester(
      workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="https://engine.test"
-        ) as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             # The login middleware wraps the app whose lifespan starts the engine.
             async with app.app.router.lifespan_context(app.app):
                 return await client.post(
@@ -869,15 +863,16 @@ def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards(
     assert served <= _proxied_prefixes()
 
 
-def test_run_id_frontend_route_serves_the_application(tmp_path, *, web_app) -> None:
+def test_run_id_frontend_route_serves_the_application(
+    async_client, tmp_path, *, web_app
+) -> None:
     static = tmp_path / "dist"
     static.mkdir()
     (static / "index.html").write_text("<main>workflow application</main>")
     app = web_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return await client.get("/runs/run-42")
 
     response = asyncio.run(scenario())
@@ -887,7 +882,7 @@ def test_run_id_frontend_route_serves_the_application(tmp_path, *, web_app) -> N
 
 
 def test_new_workflow_frontend_route_serves_the_application(
-    tmp_path, *, web_app
+    async_client, tmp_path, *, web_app
 ) -> None:
     static = tmp_path / "dist"
     static.mkdir()
@@ -895,8 +890,7 @@ def test_new_workflow_frontend_route_serves_the_application(
     app = web_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return await client.get("/runs/new")
 
     response = asyncio.run(scenario())
@@ -945,15 +939,14 @@ def _workspace_session(
     )
 
 
-def test_each_new_chat_reports_its_own_worktree(web_app) -> None:
+def test_each_new_chat_reports_its_own_worktree(async_client, web_app) -> None:
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
     session = _workspace_session(runner, workspaces)
     app = web_app(session, {"test": runner})
 
     async def scenario() -> tuple[dict[str, object], dict[str, object]]:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             body = {"agentId": "coder", "runner": "test"}
             first = await client.post("/api/threads", json=body)
             second = await client.post("/api/threads", json=body)
@@ -970,7 +963,9 @@ def test_each_new_chat_reports_its_own_worktree(web_app) -> None:
     assert runner.workspace_ids == ["ws-1"]
 
 
-def test_a_removed_worktree_does_not_take_the_other_chats_with_it(web_app) -> None:
+def test_a_removed_worktree_does_not_take_the_other_chats_with_it(
+    async_client, web_app
+) -> None:
     """One vanished checkout used to brick every endpoint, new chats included."""
     runner = ConcurrentRunner()
     workspaces = VanishingWorkspaces()
@@ -980,8 +975,7 @@ def test_a_removed_worktree_does_not_take_the_other_chats_with_it(web_app) -> No
     )
 
     async def scenario():
-        transport = httpx.ASGITransport(app=first_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(first_app, base_url="http://test") as client:
             abandoned = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -992,8 +986,7 @@ def test_a_removed_worktree_does_not_take_the_other_chats_with_it(web_app) -> No
         restarted = web_app(
             _workspace_session(runner, workspaces, store), {"test": runner}
         )
-        transport = httpx.ASGITransport(app=restarted)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(restarted, base_url="http://test") as client:
             listed = await client.get("/api/threads")
             survivor = await client.get(f"/api/threads/{abandoned.json()['id']}")
             created = await client.post(
@@ -1014,15 +1007,14 @@ def test_a_removed_worktree_does_not_take_the_other_chats_with_it(web_app) -> No
 
 
 def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back(
-    web_app,
+    async_client, web_app,
 ) -> None:
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
     app = web_app(_workspace_session(runner, workspaces), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1048,15 +1040,14 @@ def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back(
 
 
 def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path(
-    web_app,
+    async_client, web_app,
 ) -> None:
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
     app = web_app(_workspace_session(runner, workspaces), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1079,7 +1070,9 @@ def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path(
     assert runner.workspace_ids == ["ws-1"]
 
 
-def test_a_chat_that_never_had_a_workspace_can_be_given_one(web_app) -> None:
+def test_a_chat_that_never_had_a_workspace_can_be_given_one(
+    async_client, web_app
+) -> None:
     """Conversations from before worktrees existed, and any other stragglers."""
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
@@ -1089,8 +1082,7 @@ def test_a_chat_that_never_had_a_workspace_can_be_given_one(web_app) -> None:
 
     async def scenario():
         instance = await store.create_instance(CODER)
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             before = await client.get(f"/api/threads/{instance.instance_id}")
             attached = await client.post(f"/api/threads/{instance.instance_id}/workspace")
         # The pairing is durable, not just something the page is holding.
@@ -1106,13 +1098,14 @@ def test_a_chat_that_never_had_a_workspace_can_be_given_one(web_app) -> None:
     assert stored.workspace_id == "ws-1"
 
 
-def test_a_process_without_a_workspace_repository_says_so(web_app) -> None:
+def test_a_process_without_a_workspace_repository_says_so(
+    async_client, web_app
+) -> None:
     runner = ConcurrentRunner()
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1164,13 +1157,12 @@ def test_one_chat_serializes_its_own_turns() -> None:
     ]
 
 
-def test_http_api_creates_lists_and_streams_threads(web_app) -> None:
+def test_http_api_creates_lists_and_streams_threads(async_client, web_app) -> None:
     runner = ConcurrentRunner(("hello",))
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             config = await client.get("/api/config")
             created = await client.post(
                 "/api/threads",
@@ -1200,7 +1192,9 @@ def test_http_api_creates_lists_and_streams_threads(web_app) -> None:
     ]
 
 
-def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none(web_app) -> None:
+def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none(
+    async_client, web_app
+) -> None:
     """The conversation remembers its runner; a turn need not repeat it.
 
     The header sends the choice once, so a turn that carries no runner has to
@@ -1212,8 +1206,7 @@ def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none(web_app) 
     app = web_app(_session_with(runners), runners)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1237,13 +1230,14 @@ def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none(web_app) 
     assert unknown.status_code == 400
 
 
-def test_agent_names_chat_before_answer_without_changing_conversation(web_app) -> None:
+def test_agent_names_chat_before_answer_without_changing_conversation(
+    async_client, web_app
+) -> None:
     runner = ConcurrentRunner(('"SQLite Conversation Persistence"', "The answer."))
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads",
                 json={"agentId": "coder", "runner": "test"},
@@ -1288,7 +1282,9 @@ def test_agent_names_chat_before_answer_without_changing_conversation(web_app) -
     ]
 
 
-def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn(web_app) -> None:
+def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn(
+    async_client, web_app
+) -> None:
     """Naming happens before the message it names is sent, so it cannot fail it.
 
     A CLI that is out of quota, unauthenticated, or simply broken fails the
@@ -1306,8 +1302,7 @@ def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn(web_app) -> N
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1335,13 +1330,12 @@ def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn(web_app) -> N
     assert finished["content"][0]["text"] == "The answer."
 
 
-def test_missing_frontend_has_an_actionable_response(web_app) -> None:
+def test_missing_frontend_has_an_actionable_response(async_client, web_app) -> None:
     runner = ConcurrentRunner()
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return await client.get("/")
 
     response = asyncio.run(scenario())
@@ -1350,7 +1344,7 @@ def test_missing_frontend_has_an_actionable_response(web_app) -> None:
     assert "npm --prefix apps/web run build" in response.text
 
 
-def test_tool_activity_round_trips_as_assistant_ui_parts(web_app) -> None:
+def test_tool_activity_round_trips_as_assistant_ui_parts(async_client, web_app) -> None:
     call = ToolCall(call_id="call-1", name="Read", arguments='{"path":"README.md"}')
 
     class ToolRunner(ConcurrentRunner):
@@ -1367,8 +1361,7 @@ def test_tool_activity_round_trips_as_assistant_ui_parts(web_app) -> None:
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads",
                 json={"agentId": "coder", "runner": "test"},
@@ -1392,7 +1385,7 @@ def test_tool_activity_round_trips_as_assistant_ui_parts(web_app) -> None:
     ]
 
 
-def test_replayed_tool_call_id_is_only_exposed_once(web_app) -> None:
+def test_replayed_tool_call_id_is_only_exposed_once(async_client, web_app) -> None:
     """Provider reconnects may repeat a completed item with its original id.
 
     assistant-ui treats the id as a resource key across the whole thread, so a
@@ -1418,10 +1411,7 @@ def test_replayed_tool_call_id_is_only_exposed_once(web_app) -> None:
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads",
                 json={"agentId": "coder", "runner": "test"},
@@ -1449,7 +1439,9 @@ def test_replayed_tool_call_id_is_only_exposed_once(web_app) -> None:
     assert parts[0]["result"] == "engine"
 
 
-def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript(web_app) -> None:
+def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript(
+    async_client, web_app
+) -> None:
     """Pressing stop ends the turn, not the record of it. What the agent had
     already done is on disk whatever the button does, so a reload that showed
     the question alone would be a transcript the worktree disagrees with."""
@@ -1476,8 +1468,7 @@ def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript(web_app) -> No
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1583,7 +1574,7 @@ def test_active_run_survives_stream_disconnect_and_replays_progress() -> None:
 
 
 def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(
-    tmp_path, *, web_app
+    async_client, tmp_path, *, web_app
 ) -> None:
     """A cached entry point asks for the assets of a build that is gone."""
     runner = ConcurrentRunner()
@@ -1594,8 +1585,7 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(
     app = web_app(_session(runner), {"test": runner}, dist)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return (
                 await client.get("/"),
                 await client.get("/assets/index-abc123.js"),
@@ -1779,7 +1769,7 @@ def _review_graph() -> ScriptedGraph:
     )
 
 
-def test_a_workflow_is_offered_under_its_own_name(workflow_app) -> None:
+def test_a_workflow_is_offered_under_its_own_name(async_client, workflow_app) -> None:
     """The dropdown, which is where a person meets this at all.
 
     Asked of a started server, because that is when a workflow is offerable:
@@ -1788,8 +1778,7 @@ def test_a_workflow_is_offered_under_its_own_name(workflow_app) -> None:
     app, _ = _graph_app(InMemoryStateStore(), _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 return (await client.get("/api/config")).json()["workflows"]
 
@@ -1803,7 +1792,9 @@ def test_a_workflow_is_offered_under_its_own_name(workflow_app) -> None:
     ]
 
 
-def test_a_workflow_is_not_offered_without_an_engine_to_run_it(workflow_app) -> None:
+def test_a_workflow_is_not_offered_without_an_engine_to_run_it(
+    async_client, workflow_app
+) -> None:
     """No graph engine composed, nothing on offer.
 
     The alternative is a choice that fails after somebody made it, which is
@@ -1816,8 +1807,7 @@ def test_a_workflow_is_not_offered_without_an_engine_to_run_it(workflow_app) -> 
     )
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             return (
                 (await client.get("/api/config")).json()["workflows"],
                 await client.post(
@@ -1836,7 +1826,7 @@ def test_a_workflow_is_not_offered_without_an_engine_to_run_it(workflow_app) -> 
     assert refused.status_code == 400
 
 
-def test_creating_a_work_order_starts_the_graph(workflow_app) -> None:
+def test_creating_a_work_order_starts_the_graph(async_client, workflow_app) -> None:
     """The whole point: picking one runs it on the graph engine.
 
     Checked on the engine rather than only on the answer, because a WorkOrder
@@ -1846,8 +1836,7 @@ def test_creating_a_work_order_starts_the_graph(workflow_app) -> None:
     app, runtime = _graph_app(store, _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -1966,7 +1955,7 @@ def test_auto_approve_config_seeds_all_graph_nodes(async_client, workflow_app) -
     }
 
 
-def test_a_graph_naming_node_names_its_work_order(workflow_app) -> None:
+def test_a_graph_naming_node_names_its_work_order(async_client, workflow_app) -> None:
     store = InMemoryStateStore()
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
@@ -1984,10 +1973,7 @@ def test_a_graph_naming_node_names_its_work_order(workflow_app) -> None:
     app, _ = _graph_app(store, graph, workflow_app=workflow_app)
 
     async def scenario() -> dict[str, object]:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2010,7 +1996,9 @@ def test_a_graph_naming_node_names_its_work_order(workflow_app) -> None:
     assert named["name"] == "Cancellation handling"
 
 
-def test_a_finished_graph_run_stops_saying_it_is_working(workflow_app) -> None:
+def test_a_finished_graph_run_stops_saying_it_is_working(
+    async_client, workflow_app
+) -> None:
     """The row follows the graph to its ending.
 
     Nothing else would move it: the step executor is not driving this run, so
@@ -2021,8 +2009,7 @@ def test_a_finished_graph_run_stops_saying_it_is_working(workflow_app) -> None:
     app, _ = _graph_app(store, _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2043,7 +2030,9 @@ def test_a_finished_graph_run_stops_saying_it_is_working(workflow_app) -> None:
     assert ended == "succeeded"
 
 
-def test_deleting_a_graph_work_order_stops_the_engine_driving_it(workflow_app) -> None:
+def test_deleting_a_graph_work_order_stops_the_engine_driving_it(
+    async_client, workflow_app
+) -> None:
     """The rail's x on a graph row has to reach the other engine.
 
     None of what stops a step WorkOrder touches a graph one: its driver is a
@@ -2066,8 +2055,7 @@ def test_deleting_a_graph_work_order_stops_the_engine_driving_it(workflow_app) -
     app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2144,7 +2132,7 @@ def test_deleting_a_prerequisite_with_scheduled_dependents_is_rejected(
 
 
 def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works(
-    workflow_app,
+    async_client, workflow_app,
 ) -> None:
     """A row whose graph state is gone is still the reader's to throw away.
 
@@ -2165,8 +2153,7 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works(
 
     async def scenario():
         await store.save(stranded)
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 deleted = await client.delete(f"/api/runs/{stranded.run_id}")
                 return deleted, [str(one) for one in runtime.running()]
@@ -2178,7 +2165,9 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works(
     assert driving == []
 
 
-def test_graph_events_cursor_replays_only_unseen_events(workflow_app) -> None:
+def test_graph_events_cursor_replays_only_unseen_events(
+    async_client, workflow_app
+) -> None:
     store = InMemoryStateStore()
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
@@ -2188,8 +2177,7 @@ def test_graph_events_cursor_replays_only_unseen_events(workflow_app) -> None:
     app, _ = _graph_app(store, graph, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2240,7 +2228,7 @@ def test_graph_events_cursor_replays_only_unseen_events(workflow_app) -> None:
 
 
 def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads(
-    workflow_app,
+    async_client, workflow_app,
 ) -> None:
     """A WorkOrder outlives the workflow it ran, and the pages have to cope.
 
@@ -2262,8 +2250,7 @@ def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads(
     app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2313,7 +2300,9 @@ def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads(
     assert described.status_code == 404
 
 
-def test_a_restart_fails_a_work_order_whose_workflow_is_gone(workflow_app) -> None:
+def test_a_restart_fails_a_work_order_whose_workflow_is_gone(
+    async_client, workflow_app
+) -> None:
     """The row is told, rather than left claiming an agent is working on it.
 
     Nothing can pick this run back up -- there is no graph to run it -- so the
@@ -2329,8 +2318,7 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone(workflow_app) -> No
     app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2345,8 +2333,7 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone(workflow_app) -> No
                     await asyncio.sleep(0)
         runtime.withdraw(GraphId("implementation-review-codex"))
         restarted = _graph_app_over(store, runtime, workflow_app=workflow_app)
-        transport = httpx.ASGITransport(app=restarted)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(restarted, base_url="http://test") as client:
             async with restarted.router.lifespan_context(restarted):
                 return await client.get(f"/api/runs/{run_id}")
 
@@ -2357,7 +2344,9 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone(workflow_app) -> No
     assert "no longer available" in detail["failureReason"]
 
 
-def test_the_graph_engine_answers_under_its_own_prefix(workflow_app) -> None:
+def test_the_graph_engine_answers_under_its_own_prefix(
+    async_client, workflow_app
+) -> None:
     """Where a graph run is watched and approved today.
 
     This app's pages cannot do either yet, and the graph engine's own API can,
@@ -2367,8 +2356,7 @@ def test_the_graph_engine_answers_under_its_own_prefix(workflow_app) -> None:
     app, _ = _graph_app(InMemoryStateStore(), _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 return await client.get("/graph/api/graphs")
 
@@ -2380,7 +2368,7 @@ def test_the_graph_engine_answers_under_its_own_prefix(workflow_app) -> None:
     ]
 
 
-def test_a_failed_graph_run_says_why_on_its_row(workflow_app) -> None:
+def test_a_failed_graph_run_says_why_on_its_row(async_client, workflow_app) -> None:
     """The other ending, and the reason that comes with it.
 
     The reason is read out of the event the engine publishes, so the row and
@@ -2397,8 +2385,7 @@ def test_a_failed_graph_run_says_why_on_its_row(workflow_app) -> None:
     app, _ = _graph_app(store, broken, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2418,7 +2405,7 @@ def test_a_failed_graph_run_says_why_on_its_row(workflow_app) -> None:
 
 
 def test_messaging_a_failed_graph_implementer_resets_its_workorder(
-    workflow_app,
+    async_client, workflow_app,
 ) -> None:
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
@@ -2432,8 +2419,7 @@ def test_messaging_a_failed_graph_implementer_resets_its_workorder(
     app, runtime = _graph_app(InMemoryStateStore(), graph, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2472,7 +2458,7 @@ def test_messaging_a_failed_graph_implementer_resets_its_workorder(
 
 
 def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded(
-    workflow_app,
+    async_client, workflow_app,
 ) -> None:
     """The narrowest bit of ordering in the whole change.
 
@@ -2490,8 +2476,7 @@ def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded(
     app, _ = _graph_app(store, instant, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 return await client.post(
                     "/api/runs",
@@ -2727,7 +2712,7 @@ def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
 
 
 def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
-    caplog: pytest.LogCaptureFixture, *, workflow_app
+    async_client, caplog: pytest.LogCaptureFixture, *, workflow_app
 ) -> None:
     """Everything else that can go wrong stays inside the graph feature.
 
@@ -2754,8 +2739,7 @@ def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
     )
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app, base_url="http://test") as client:
             async with app.router.lifespan_context(app):
                 return (
                     await client.get("/api/config"),
@@ -3171,7 +3155,7 @@ def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id(
     (None, "github:42:alice"),
 ])
 def test_starting_a_scheduled_workorder_keeps_its_requester(
-    proposer, expected, *, workflow_app
+    async_client, proposer, expected, *, workflow_app
 ) -> None:
     """Whoever clicks Start does not replace the proposer as requester."""
     graph = _review_graph()
@@ -3190,10 +3174,7 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(
             name="Proposed work", prompt="Do the work", repository=".",
             requester=proposer,
         ))
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="https://engine.test"
-        ) as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             async with app.app.router.lifespan_context(app.app):
                 return await client.post("/api/runs/run-proposed/start")
 
@@ -3710,14 +3691,15 @@ def _as_user(writable):
 
 
 @pytest.mark.parametrize("live", [False, True])
-def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path, live, *, workflow_app) -> None:
+def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(
+    async_client, tmp_path, live, *, workflow_app
+) -> None:
     """Someone who can push only to `api` sees `api`'s WorkOrders, and every
     other run answers as if it did not exist."""
     app, store, repos = _scoped_app(tmp_path, live=live, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             async with app.app.router.lifespan_context(app.app):
                 listed = (await client.get("/api/runs")).json()["runs"]
                 assert sorted(run["runId"] for run in listed) == [
@@ -3767,7 +3749,7 @@ def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path, live,
 
 
 def test_a_graph_run_stream_is_rechecked_against_its_own_repository(
-    tmp_path, *, workflow_app
+    async_client, tmp_path, *, workflow_app
 ) -> None:
     """A stream from `/graph` ends when its run's repository is out of reach,
     even for someone who can still write to another repository."""
@@ -3783,8 +3765,7 @@ def test_a_graph_run_stream_is_rechecked_against_its_own_repository(
     writable = {"acme/api"}
 
     async def scenario():
-        transport = httpx.ASGITransport(app=recording)
-        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+        async with async_client(recording, base_url="https://engine.test") as client:
             async with app.app.router.lifespan_context(app.app):
                 await client.get("/graph/api/runs/run-api")
                 still_visible = scopes[-1][STREAM_ACCESS]
@@ -3863,7 +3844,7 @@ def _scoped_chat_app(tmp_path, default="/repository", *, git_repo, web_app):
 
 
 def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(
-    tmp_path, *, git_repo, web_app
+    async_client, tmp_path, *, git_repo, web_app
 ) -> None:
     """A chat whose branch is in a repository its user cannot push to is not
     listed and answers as missing, attached or detached, so its transcript
@@ -3872,8 +3853,7 @@ def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(
     app, store, repos, workspaces = _scoped_chat_app(tmp_path, git_repo=git_repo, web_app=web_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             ids = {}
             for name in ("api", "web", None):
                 instance = await store.create_instance(CODER)
@@ -3886,8 +3866,7 @@ def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(
             return ids
 
     async def as_api_user(ids):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             listed = {t["id"] for t in (await client.get("/api/threads")).json()["threads"]}
             assert ids["api"] in listed and ids["web"] not in listed
             # A chat that never had a checkout is in no repository.
@@ -3920,15 +3899,14 @@ def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(
 
 
 def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(
-    tmp_path, *, git_repo, web_app
+    async_client, tmp_path, *, git_repo, web_app
 ) -> None:
     """A new chat gets the default checkout at once, so it is refused before
     anything is checked out for somebody who cannot write there."""
     app, store, _repos, _workspaces = _scoped_chat_app(tmp_path, default="web", git_repo=git_repo, web_app=web_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             refused = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
             assert refused.status_code == 403, refused.text
             assert await store.list_instances() == ()
@@ -3937,15 +3915,14 @@ def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(
         asyncio.run(scenario())
     with _as_user({"acme/web"}):
         async def allowed():
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            async with async_client(app, base_url="https://engine.test") as client:
                 created = await client.post("/api/threads", json={"agentId": str(CODER), "runner": "test"})
                 assert created.status_code == 201, created.text
         asyncio.run(allowed())
 
 
 def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(
-    tmp_path, *, git_repo, web_app
+    async_client, tmp_path, *, git_repo, web_app
 ) -> None:
     """A chat cannot be given a checkout of a repository its user cannot push
     to, whether named or the server's default, attached for the first time or
@@ -3955,8 +3932,7 @@ def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(
     async def scenario():
         instance = await store.create_instance(CODER)
         path = f"/api/threads/{instance.instance_id}/workspace"
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             for body in ({"repository": str(Path(repos["web"]).resolve())}, {"repository": "web"}, {}):
                 refused = await client.post(path, json=body)
                 assert refused.status_code == 403, (body, refused.text)
@@ -3971,13 +3947,12 @@ def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(
         asyncio.run(scenario())
 
 
-def test_operators_see_every_run(tmp_path, *, workflow_app) -> None:
+def test_operators_see_every_run(async_client, tmp_path, *, workflow_app) -> None:
     """Operators see everything, including runs no GitHub repository maps to."""
     app, _store, _repos = _scoped_app(tmp_path, workflow_app=workflow_app)
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+        async with async_client(app, base_url="https://engine.test") as client:
             async with app.app.router.lifespan_context(app.app):
                 listed = (await client.get("/api/runs")).json()["runs"]
                 assert (await client.get("/api/runs/run-elsewhere")).status_code == 200
@@ -4049,10 +4024,10 @@ def test_onboarded_repository_can_be_selected_for_a_workorder(
     asyncio.run(scenario())
 
 
-def test_added_repository_writers_can_sign_in(monkeypatch, tmp_path):
+def test_added_repository_writers_can_sign_in(monkeypatch, tmp_path, web_app):
     registry = RepositoryRegistry(projects={})
     source_control = MagicMock(can_write_repository=AsyncMock(return_value=True))
-    authorize = _login_gate("", source_control, repos=registry)
+    authorize = _login_gate("", source_control, repos=registry, web_app=web_app)
     assert asyncio.run(authorize(1, "writer")) == {}
     monkeypatch.setattr(RepositoryRegistry, "_project", lambda self, path: "acme/new")
     registry.add("new", str(tmp_path))
