@@ -46,8 +46,10 @@ from engine.graph_runtime_langgraph import (
     WorkflowInput,
     State,
     TerminalMcpServer,
+    WithAddedAgents,
     agent_registry,
     graph_workflow,
+    with_added_agents,
 )
 from engine.graph_runtime_langgraph.components import (
     ACPNode,
@@ -113,9 +115,10 @@ REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BR
 #: Set on a run started in review to post its review rather than triage it.
 PUBLISH_INPUT = REVIEW_PUBLISH_INPUT
 
-#: Codex and Claude, reached through their ACP adapters.  `agent_registry` is
-#: what routes an agent's permission request back to the run that raised it.
-AGENTS = agent_registry([CodexACPProvider(), ClaudeACPProvider()])
+#: Codex and Claude, reached through their ACP adapters, and any agent added
+#: with `engine agent add`.  `agent_registry` is what routes an agent's
+#: permission request back to the run that raised it.
+AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider()]))
 
 #: Model identifiers per runner.  The default tier handles most facets; the
 #: elevated tier handles security, where missing something costs more.
@@ -235,10 +238,14 @@ class _RunnerInput:
 
     def _for_runner(self, runner: str) -> ACPNode:
         config = self.session_config
-        if isinstance(self, ReviewNode):
+        if isinstance(self, ReviewNode) and runner in REVIEW_MODELS:
             facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
             model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
             config = _with_model(config, model)
+        elif runner not in REVIEW_MODELS:
+            # An added agent asks for its own model, as it does from the CLI.
+            added = self.registry.model(runner) if isinstance(self.registry, WithAddedAgents) else ""
+            config = _with_model(config, added)
         return replace(
             self,
             agent=runner,
@@ -310,10 +317,18 @@ class InputRerankerNode(_RunnerInput, RerankerNode):
 def _with_model(
     base: Mapping[str, object] | None, model: str
 ) -> dict[str, object]:
-    """Merge a model override into the caller's session config."""
+    """Merge a model override into the caller's session config; none leaves the agent's own."""
     merged = dict(base or {})
-    merged["model"] = model
+    if model:
+        merged["model"] = model
+    else:
+        merged.pop("model", None)
     return merged
+
+
+def _cross_reviewer(runner: str) -> str:
+    """The other built-in provider; Claude for an added agent, as for Codex."""
+    return "codex" if runner == "claude" else "claude"
 
 
 def _review_node_name(facet_id: str) -> str:
@@ -487,7 +502,7 @@ def pipeline(
 
     # ---- review fan-out: one node per facet, run in parallel ----------------
 
-    reviewer = {"codex": "claude", "claude": "codex"}[runner]
+    reviewer = _cross_reviewer(runner)
     models = REVIEW_MODELS[reviewer]
     for facet in REVIEW_FACETS:
         model = models["elevated"] if facet.elevated else models["default"]
@@ -653,7 +668,9 @@ def pipeline(
     return builder
 
 
-#: Runner choices for the implementation and review stages.
+#: Runner choices for the implementation and review stages.  An agent added
+#: with `engine agent add` is offered beside these by the process serving it,
+#: but is left out of the policies: it reports no utilization to place by.
 RUNNER_CHOICES = ("codex", "claude")
 #: What the runner dropdowns offer: a runner, or a policy that picks one per run.
 RUNNER_INPUT_CHOICES = (*RUNNER_CHOICES, LEAST_UTILIZED, ROUND_ROBIN)
@@ -692,7 +709,7 @@ def graph_for(
             ),
             WorkflowInput(
                 "review_runner", "Review runner",
-                default={"codex": "claude", "claude": "codex"}[runner],
+                default=_cross_reviewer(runner),
                 required=True, choices=RUNNER_INPUT_CHOICES,
             ),
             mode_input(),

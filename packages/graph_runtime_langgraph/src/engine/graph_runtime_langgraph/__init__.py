@@ -68,19 +68,26 @@ from engine.graph_runtime_langgraph.store import (
 from engine.graph_runtime_langgraph.terminal_mcp import TerminalMcpServer
 from engine.graph_runtime.inputs import WorkflowInput
 from engine.graph_runtime_langgraph.workflows import (
+    ADDED_AGENTS,
+    AddedAgents,
     GraphWorkflow,
     State,
+    WithAddedAgents,
+    added_agent_inputs,
     agent_registry,
     graph_workflow,
     sqlite_runtime,
+    with_added_agents,
 )
 
 __all__ = [
+    "ADDED_AGENTS",
     "APPROVAL_ID",
     "EXECUTION_ID",
     "NODE_ID",
     "RUN_ID",
     "ACPNode",
+    "AddedAgents",
     "ApprovalRecord",
     "CommentRecord",
     "DescribesItself",
@@ -100,10 +107,13 @@ __all__ = [
     "SqliteGraphRuntimeStore",
     "State",
     "TerminalMcpServer",
+    "WithAddedAgents",
     "WorkspaceNode",
+    "added_agent_inputs",
     "agent_registry",
     "answer_permission",
     "current_execution",
     "graph_workflow",
     "sqlite_runtime",
+    "with_added_agents",
 ]

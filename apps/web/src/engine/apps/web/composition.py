@@ -87,7 +87,7 @@ from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
-from engine.graph_runtime_langgraph import LangGraphRuntime, answer_permission
+from engine.graph_runtime_langgraph import ADDED_AGENTS, LangGraphRuntime, answer_permission
 from engine.graph_runtime_langgraph.workflows import RUNS, agent_registry, sqlite_runtime
 from engine.graph_service import GraphService, StartRun
 from engine.graph_service.service import opencode_config
@@ -408,6 +408,7 @@ def build_graph_service(
     the runtime and the runtime does not exist until the server starts. Its
     agents are langgraph-acp sessions on the same providers the workflow
     directory's graphs use; its tables live in the graph engine's own file.
+    Agents added through it are offered to those graphs as well.
     """
 
     def build(runtime: LangGraphRuntime, start: StartRun) -> GraphService:
@@ -417,6 +418,7 @@ def build_graph_service(
             workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
             registry=agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]),
             agent_factory=added_agent,
+            added_agents=ADDED_AGENTS,
             start=start,
             session_config=claude_session_config_for(settings),
             default_repository=default_repository,

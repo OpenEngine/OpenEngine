@@ -128,7 +128,9 @@ from engine.domain import (
     WorkspaceId,
     review_inputs,
 )
-from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, resolve_inputs
+from engine.graph_runtime.inputs import (
+    LEAST_UTILIZED, WorkflowInput, choose_runners, offer_runners, resolve_inputs,
+)
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -151,6 +153,8 @@ from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
 )
 from engine.graph_runtime_langgraph.store import PullRequestRecord
+from engine.graph_runtime_langgraph.workflows import GraphWorkflow as LangGraphWorkflow
+from engine.graph_runtime_langgraph.workflows import added_agent_inputs
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
@@ -1013,6 +1017,17 @@ class _GraphSurface:
     """Registered graphs, loops and node steering, when the engine supports them."""
     service_app: Starlette | None = None
 
+    def added_agents(self) -> tuple[str, ...]:
+        """The agents `engine agent add` offers: workflow runners, not chat runners."""
+        return self.service.added_agents() if self.service is not None else ()
+
+    def declared_inputs(self, graph: GraphWorkflow) -> tuple[WorkflowInput, ...]:
+        """A graph's creation fields, its runner dropdowns also offering the added agents."""
+        declarations = getattr(graph, "inputs", ())
+        if not isinstance(graph, LangGraphWorkflow):
+            return declarations
+        return offer_runners(declarations, self.added_agents(), added_agent_inputs(graph))
+
 
 class GithubProvenance(Protocol):
     """The half of the runtime's store that says who owns a pull request.
@@ -1847,7 +1862,7 @@ def create_app(
                         "id": str(graph.graph_id),
                         "name": graph.name,
                         **(
-                            {"inputs": [asdict(item) for item in graph.inputs]}  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                            {"inputs": [asdict(item) for item in surface.declared_inputs(graph)]}
                             if getattr(graph, "inputs", ()) else {}
                         ),
                     }
@@ -2099,7 +2114,7 @@ def create_app(
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
-                            inputs=resolve_inputs(getattr(graph, "inputs", ()), state.inputs),
+                            inputs=resolve_inputs(surface.declared_inputs(graph), state.inputs),
                             prompt=state.prompt,
                             repository=state.repository or work_orders.repository,
                             origin=state.origin,
@@ -2129,7 +2144,7 @@ def create_app(
                 return _error("configure work_orders.repository before starting this workorder", 400)
             assert surface.runtime is not None
             try:
-                inputs = resolve_inputs(getattr(graph, "inputs", ()), state.inputs)
+                inputs = resolve_inputs(surface.declared_inputs(graph), state.inputs)
             except ValueError as error:
                 return _error(str(error), 400)
             state = await start_graph_run(
@@ -2168,9 +2183,7 @@ def create_app(
         # running, so this cannot be `None` here.
         assert surface.runtime is not None
         try:
-            inputs = resolve_inputs(
-                getattr(graph, "inputs", ()), body.get("inputs", {})
-            )
+            inputs = resolve_inputs(surface.declared_inputs(graph), body.get("inputs", {}))
         except ValueError as error:
             return _error(str(error), 400)
         try:

@@ -1,5 +1,6 @@
 from engine.graph_runtime.inputs import (
-    LEAST_UTILIZED, ROUND_ROBIN, WorkflowInput, choose_runners,
+    LEAST_UTILIZED, ROUND_ROBIN, WorkflowInput, choose_runners, mode_input, offer_runners,
+    resolve_inputs,
 )
 
 RUNNERS = ("codex", "claude", LEAST_UTILIZED, ROUND_ROBIN)
@@ -52,3 +53,34 @@ def test_round_robin_rotates_each_input_through_its_runners():
     ]
     assert picked == ["codex", "claude", "codex"]
     assert turns == {"implementation_runner": 3}
+
+
+def test_added_runners_are_offered_before_the_policies_of_accepting_inputs_only():
+    mode = mode_input()
+    accepting = ("implementation_runner", "review_runner")
+    offered = offer_runners((*DECLARED, mode), ("qwen", "codex"), accepting)
+    assert offered[0].choices == ("codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN)
+    assert offered[1].choices == offered[0].choices
+    assert offered[2] == mode
+    assert offer_runners(DECLARED, (), accepting) == DECLARED
+    assert offer_runners(DECLARED, ("qwen",), ()) == DECLARED
+
+
+def test_added_runners_leave_a_free_text_runner_input_accepting_any_runner():
+    free = WorkflowInput("implementation_runner", "Implementation runner", "codex")
+    offered = offer_runners((free,), ("qwen",), (free.name,))
+    assert offered == (free,)
+    assert resolve_inputs(offered, {}) == {"implementation_runner": "codex"}
+    assert resolve_inputs(offered, {"implementation_runner": "claude"}) == {
+        "implementation_runner": "claude"
+    }
+
+
+def test_added_runners_join_no_policy_pool():
+    turns: dict[str, int] = {}
+    inputs = {"implementation_runner": LEAST_UTILIZED, "review_runner": ROUND_ROBIN}
+    picked = [
+        tuple(choose_runners(DECLARED, inputs, usage=dict, turns=turns).values())
+        for _ in range(3)
+    ]
+    assert picked == [("codex", "codex"), ("claude", "claude"), ("codex", "codex")]

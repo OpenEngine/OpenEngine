@@ -47,7 +47,7 @@ from engine.graph_runtime.control import CANCELLED
 from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
-from engine.graph_runtime_langgraph import GraphWorkflow, LangGraphRuntime
+from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime
 from engine.ports import WorkspaceProvider
 from langgraph_acp import ACPAgentRegistry
 
@@ -223,6 +223,7 @@ class GraphService:
         model_tiers: Mapping[str, Mapping[str, str]] | None = None,
         allow_python: bool = True,
         agent_factory: AgentFactory | None = None,
+        added_agents: AddedAgents | None = None,
         session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
         approval_policy: ApprovalConfig | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -247,11 +248,12 @@ class GraphService:
         self._model_tiers = model_tiers
         self._allow_python = allow_python
         self._agent_factory = agent_factory
+        #: Added agents and their models, offered to workflow files too when this
+        #: process runs any. Compiled graphs hold its `models` dict, not a copy,
+        #: so a model changed here reaches graphs registered before the change.
+        self._added_agents = added_agents if added_agents is not None else AddedAgents()
         #: What the registry held before any added agent: these cannot be replaced or removed.
         self._builtin_agents = tuple(registry.names)
-        #: Added agents' models, by name. Compiled graphs hold this dict, not a copy,
-        #: so a model changed here reaches graphs registered before the change.
-        self._agent_models: dict[str, str] = {}
         self._sessions = Sessions()
         self._session_workflow = session_workflow(
             workspace_provider, self._sessions,
@@ -303,6 +305,10 @@ class GraphService:
 
     def runners(self) -> tuple[str, ...]:
         return tuple(self._registry.names)
+
+    def added_agents(self) -> tuple[str, ...]:
+        """The runners `engine agent add` offers, beyond the built-in ones."""
+        return self._added_agents.names
 
     # --- agents -------------------------------------------------------------
 
@@ -364,16 +370,14 @@ class GraphService:
                 raise NotFound(f"no agent named {name!r}", agent=name)
             self.store.delete_agent(name)
             self._registry.unregister(name)
-            self._agent_models.pop(name, None)
+            self._added_agents.withdraw(name)
         return {**self.agent_json(name, row), "removed": True}
 
     def _offer_agent(self, row: AgentRow) -> None:
         assert self._agent_factory is not None
-        self._registry.register(self._agent_factory(row), replace=True)
-        if row.model:
-            self._agent_models[row.name] = session_model(row)
-        else:
-            self._agent_models.pop(row.name, None)
+        provider = self._agent_factory(row)
+        self._registry.register(provider, replace=True)
+        self._added_agents.offer(provider, session_model(row) if row.model else "")
 
     # --- sessions -----------------------------------------------------------
 
@@ -1177,7 +1181,7 @@ class GraphService:
                     registry=self._registry,
                     session_config=self._session_config,
                     model_tiers=self._model_tiers,
-                    agent_models=self._agent_models,
+                    agent_models=self._added_agents.models,
                     default_base_ref=self._default_base_ref,
                 ),
                 spec,

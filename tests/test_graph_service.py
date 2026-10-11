@@ -29,6 +29,7 @@ from engine.graph_runtime_langgraph import (
 from engine.cli import starters
 from engine.graph_service import GraphError, GraphService, create_app, parse_graph
 from engine.graph_service.service import Conflict, NotFound, ServiceError
+from engine.apps.web.loops import LoopSettingsStore
 from engine.ports import Workspace
 from langgraph_acp import StdioACPProvider
 
@@ -687,6 +688,27 @@ def test_an_added_agent_runs_graphs_and_outlives_the_daemon(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_an_added_agent_is_offered_to_workflow_files_with_its_model(tmp_path: Path) -> None:
+    from engine.graph_runtime_langgraph import AddedAgents
+
+    added = AddedAgents()
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, added_agents=added) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3", url="http://localhost:11434/v1")
+            assert service.added_agents() == ("qwen",)
+            assert added.names == ("qwen",) and added.models == {"qwen": "engine/qwen3"}
+            await service.remove_agent("qwen")
+            assert service.added_agents() == () and added.names == () and added.models == {}
+            await service.add_agent("claude", name="reviewer")
+        # A restarted daemon offers what it stored again.
+        restarted = AddedAgents()
+        async with graph_service(tmp_path, added_agents=restarted):
+            assert restarted.names == ("reviewer",) and restarted.models == {}
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(("arguments", "refusal"), [
     ({"kind": "gemini"}, "kind must be one of"),
     ({"kind": "claude", "name": "Bad Name"}, "lowercase"),
@@ -849,6 +871,127 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(tmp_p
                     assert body["results"]["review"] == "echo: review echo: do it (plain)"
                     listed = (await client.get("/api/runs")).json()["runs"]
                     assert [item["runId"] for item in listed] == [run_id]
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_daemon_offers_added_agents_as_workflow_runners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent added through the graph service is a runner choice in the web UI too.
+
+    Whoever may start a workflow may pick one, including a signed-in user who
+    sees only some repositories. Only a workflow whose nodes resolve added agents offers one, and loops,
+    which run on the workflow's defaults, offer none.
+    """
+    from dataclasses import dataclass
+    from engine.apps.web.github_login import GitHubLogin
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
+    from langgraph.graph import StateGraph
+    from engine.adapters.state_store.memory import InMemoryStateStore
+    from engine.graph_runtime.inputs import LEAST_UTILIZED, ROUND_ROBIN, WorkflowInput
+    from engine.graph_runtime_langgraph import (
+        AddedAgents, State, graph_workflow, with_added_agents,
+    )
+    from engine.runtime.workflows import WorkflowCatalog
+    from test_web_app import ConcurrentRunner, _workflow_app
+
+    added_agents = AddedAgents()
+
+    @dataclass
+    class Work:
+        registry: Any
+        graph_node_runner = "codex"
+        graph_node_runner_input = "implementation_runner"
+
+        @property
+        def graph_node_runners(self) -> tuple[str, ...]:
+            return self.registry.names
+
+        async def __call__(self, state: Any) -> dict[str, Any]:
+            return {}
+
+    def runners_workflow(graph_id: str, registry: Any) -> Any:
+        builder = StateGraph(State)
+        builder.add_node("work", Work(registry))
+        builder.set_entry_point("work")
+        return graph_workflow(builder, id=graph_id, name=graph_id.title(), inputs=(
+            WorkflowInput(
+                "implementation_runner", "Implementation runner", "codex", True,
+                ("codex", "claude", LEAST_UTILIZED, ROUND_ROBIN),
+            ),
+        ))
+
+    builtin = agent_registry([CodexACPProvider(), ClaudeACPProvider()])
+    workflow = runners_workflow("runners", with_added_agents(builtin, added_agents))
+    own = runners_workflow("own", builtin)
+
+    async def visible_repositories(self: GitHubLogin, request: Any) -> frozenset[str] | None:
+        return frozenset({"acme/api"}) if "x-limited" in request.headers else None
+
+    monkeypatch.setattr(GitHubLogin, "visible_repositories", visible_repositories)
+    limited = {"x-limited": "1"}
+
+    async def scenario() -> None:
+        def stub(name: str) -> StdioACPProvider:
+            return StdioACPProvider(name=name, command=[sys.executable, str(AGENT)])
+
+        async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "checkpoints.sqlite3")) as saver:
+            store = SqliteGraphRuntimeStore(tmp_path / DATABASE)
+            runtime = LangGraphRuntime(workflow.compiled(saver), store=store, checkpointer=saver)
+
+            @asynccontextmanager
+            async def running() -> AsyncIterator[LangGraphRuntime]:
+                try:
+                    yield runtime
+                finally:
+                    await runtime.aclose()
+
+            def factory(runtime: LangGraphRuntime, start: Any) -> GraphService:
+                return GraphService(
+                    runtime, tmp_path / DATABASE,
+                    workspace_provider=Checkouts(tmp_path / "checkout"),
+                    registry=agent_registry([stub("stub")]), start=start,
+                    agent_factory=lambda row: stub(row.name), added_agents=added_agents,
+                    default_repository="example/repo",
+                )
+
+            app = _workflow_app(
+                InMemoryStateStore(), ConcurrentRunner(), graph_runtime=running(), graph_service=factory,
+                workflow_catalog=WorkflowCatalog.from_graphs((workflow, own)),
+                loop_settings=LoopSettingsStore(tmp_path / "loops.json"),
+            )
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                async with app.router.lifespan_context(app):
+                    added = await client.post("/api/v1/agents", json={
+                        "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://localhost:11434/v1",
+                    })
+                    assert added.status_code == 201, added.text
+                    config = (await client.get("/api/config")).json()
+                    choices = {
+                        graph["id"]: graph["inputs"][0]["choices"] for graph in config["workflows"]
+                    }
+                    assert choices["runners"] == ["codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN]
+                    assert choices["own"] == ["codex", "claude", LEAST_UTILIZED, ROUND_ROBIN]
+                    scoped = (await client.get("/api/config", headers=limited)).json()
+                    assert {
+                        graph["id"]: graph["inputs"][0]["choices"] for graph in scoped["workflows"]
+                    } == choices
+                    started = await client.post("/api/runs", json={
+                        "workflowId": "runners", "repository": ".", "prompt": "Task",
+                        "inputs": {"implementation_runner": "qwen"},
+                    })
+                    assert started.status_code == 201, started.text
+                    snapshot = await runtime.snapshot(RunId(started.json()["runId"]))
+                    assert snapshot.values["inputs"]["implementation_runner"] == "qwen"
+                    saved = await client.put("/api/loops/settings", json={
+                        "activeHours": {"start": "00:00", "end": "00:00"}, "maxPrs": 1, "maxDailySpend": 0,
+                        "runnerStrategy": "manual", "implementationRunner": "qwen", "reviewRunner": "test",
+                    })
+                    assert saved.status_code == 400, saved.text
             store.close()
 
     asyncio.run(scenario())
