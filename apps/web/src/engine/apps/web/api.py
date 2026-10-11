@@ -1015,6 +1015,14 @@ class _GraphSurface:
     """Registered graphs, loops and node steering, when the engine supports them."""
     service_app: Starlette | None = None
 
+    def added_agents(self) -> tuple[str, ...]:
+        """The agents `engine agent add` offers: workflow runners, not chat runners."""
+        return self.service.added_agents() if self.service is not None else ()
+
+    def declared_inputs(self, graph: GraphWorkflow) -> tuple[WorkflowInput, ...]:
+        """A graph's creation fields, its runner dropdowns also offering the added agents."""
+        return offer_runners(getattr(graph, "inputs", ()), self.added_agents())
+
 
 class GithubProvenance(Protocol):
     """The half of the runtime's store that says who owns a pull request.
@@ -1186,14 +1194,6 @@ def create_app(
         all, rather than entries that fail the moment somebody picks one.
         """
         return graph_workflows if surface.runtime is not None else {}
-
-    def added_agents() -> tuple[str, ...]:
-        """The agents `engine agent add` offers: workflow runners, not chat runners."""
-        return surface.service.added_agents() if surface.service is not None else ()
-
-    def declared_inputs(graph: GraphWorkflow) -> tuple[WorkflowInput, ...]:
-        """A graph's creation fields, its runner dropdowns also offering the added agents."""
-        return offer_runners(getattr(graph, "inputs", ()), added_agents())
 
     approval_feed = ApprovalFeed(session.state_store)
     service = ThreadService(
@@ -1842,7 +1842,7 @@ def create_app(
                     {"id": name, "implementation": type(runner).__name__}
                     for name, runner in runners.items()
                 ],
-                "addedAgents": list(added_agents()),
+                "addedAgents": list(surface.added_agents()),
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
                 "repositories": [
@@ -1858,7 +1858,7 @@ def create_app(
                         "id": str(graph.graph_id),
                         "name": graph.name,
                         **(
-                            {"inputs": [asdict(item) for item in declared_inputs(graph)]}
+                            {"inputs": [asdict(item) for item in surface.declared_inputs(graph)]}
                             if getattr(graph, "inputs", ()) else {}
                         ),
                     }
@@ -2110,7 +2110,7 @@ def create_app(
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
-                            inputs=resolve_inputs(declared_inputs(graph), state.inputs),
+                            inputs=resolve_inputs(surface.declared_inputs(graph), state.inputs),
                             prompt=state.prompt,
                             repository=state.repository or work_orders.repository,
                             origin=state.origin,
@@ -2140,7 +2140,7 @@ def create_app(
                 return _error("configure work_orders.repository before starting this workorder", 400)
             assert surface.runtime is not None
             try:
-                inputs = resolve_inputs(declared_inputs(graph), state.inputs)
+                inputs = resolve_inputs(surface.declared_inputs(graph), state.inputs)
             except ValueError as error:
                 return _error(str(error), 400)
             state = await start_graph_run(
@@ -2179,7 +2179,7 @@ def create_app(
         # running, so this cannot be `None` here.
         assert surface.runtime is not None
         try:
-            inputs = resolve_inputs(declared_inputs(graph), body.get("inputs", {}))
+            inputs = resolve_inputs(surface.declared_inputs(graph), body.get("inputs", {}))
         except ValueError as error:
             return _error(str(error), 400)
         try:
@@ -2784,7 +2784,7 @@ def create_app(
         if not _is_local_request(request):
             return _error("forbidden", 403)
         try:
-            settings = parse_loop_settings(await request.json(), [*runners, *added_agents()])
+            settings = parse_loop_settings(await request.json(), [*runners, *surface.added_agents()])
         except ValueError as error:
             return _error(str(error), 400)
         _loop_settings.set(settings)
