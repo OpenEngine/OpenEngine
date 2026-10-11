@@ -182,9 +182,14 @@ class RoutingSourceControl:
             raise RuntimeError(f"{name} provider failed: {error}") from error
 
     async def run_git(
-        self, workspace_id: WorkspaceId, arguments: Sequence[str]
+        self, workspace_id: WorkspaceId, arguments: Sequence[str],
+        *, owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> GitResult:
-        return await self._call(lambda source: source.run_git(workspace_id, arguments))
+        return await self._call(
+            lambda source: source.run_git(
+                workspace_id, arguments, owned_pull_requests=owned_pull_requests,
+            )
+        )
 
     async def create_branch(
         self, workspace_id: WorkspaceId, name: str, base_ref: str
@@ -207,10 +212,12 @@ class RoutingSourceControl:
         title: str,
         body: str,
         *, issue: dict[str, object] | None = None, issue_resolution: str | None = None,
+        owned_pull_requests: Sequence[tuple[str, int]] = (),
     ) -> str:
         return await self._call(
             lambda source: source.request_review(
                 workspace_id, branch, base_ref, title, body,
+                owned_pull_requests=owned_pull_requests,
                 **({"issue": issue, "issue_resolution": issue_resolution} if issue else {}),
             )
         )
