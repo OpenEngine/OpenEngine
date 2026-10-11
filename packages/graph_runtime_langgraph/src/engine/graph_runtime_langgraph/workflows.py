@@ -273,39 +273,32 @@ ADDED_AGENTS = AddedAgents()
 class WithAddedAgents(ACPAgentRegistry):
     """A workflow's own agents, and then whatever `added` offers when a run asks."""
 
-    def __init__(self, own: ACPAgentRegistry, added: AddedAgents) -> None:
-        super().__init__()
-        self.own = own
+    def __init__(self, providers: Iterable[ACPAgentProvider], added: AddedAgents) -> None:
+        super().__init__(providers)
         self.added = added
 
-    def register(self, provider: ACPAgentProvider, *, replace: bool = False) -> None:
-        self.own.register(provider, replace=replace)
-
-    def unregister(self, name: str) -> None:
-        self.own.unregister(name)
-
     def resolve(self, name: str) -> ACPAgentProvider:
-        if name in self.added and name not in self.own:
+        if name in self.added and not super().__contains__(name):
             return self.added.resolve(name)
-        return self.own.resolve(name)
+        return super().resolve(name)
 
     @property
     def names(self) -> tuple[str, ...]:
-        return tuple(sorted({*self.own.names, *self.added.names}))
+        return tuple(sorted({*super().names, *self.added.names}))
 
     def __contains__(self, name: object) -> bool:
-        return name in self.own or name in self.added
+        return super().__contains__(name) or name in self.added
 
     def model(self, name: str) -> str:
         """The model an added agent's sessions ask for; empty for the workflow's own."""
-        return "" if name in self.own else self.added.models.get(name, "")
+        return "" if super().__contains__(name) else self.added.models.get(name, "")
 
 
 def with_added_agents(
     registry: ACPAgentRegistry, added: AddedAgents = ADDED_AGENTS
 ) -> WithAddedAgents:
-    """`registry`, also resolving the agents added with `engine agent add`."""
-    return WithAddedAgents(registry, added)
+    """`registry`'s agents, also resolving the agents added with `engine agent add`."""
+    return WithAddedAgents((registry.resolve(name) for name in registry.names), added)
 
 
 def _compiled(workflow: GraphWorkflow, checkpointer: Any) -> LangGraphDefinition:

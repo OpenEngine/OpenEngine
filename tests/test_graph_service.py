@@ -876,8 +876,15 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(tmp_p
     asyncio.run(scenario())
 
 
-def test_the_daemon_offers_added_agents_as_workflow_and_loop_runners(tmp_path: Path) -> None:
-    """An agent added through the graph service is a runner choice in the web UI too."""
+def test_the_daemon_offers_added_agents_as_workflow_and_loop_runners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent added through the graph service is an operator's runner choice in the web UI too.
+
+    Only operators may add one, so a signed-in user who sees only some
+    repositories is neither offered one nor allowed to start a WorkOrder on it.
+    """
+    from engine.apps.web.github_login import GitHubLogin
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from langgraph.graph import StateGraph
     from engine.adapters.state_store.memory import InMemoryStateStore
@@ -895,6 +902,12 @@ def test_the_daemon_offers_added_agents_as_workflow_and_loop_runners(tmp_path: P
             ("codex", "claude", LEAST_UTILIZED, ROUND_ROBIN),
         ),
     ))
+
+    async def visible_repositories(self: GitHubLogin, request: Any) -> frozenset[str] | None:
+        return frozenset({"acme/api"}) if "x-limited" in request.headers else None
+
+    monkeypatch.setattr(GitHubLogin, "visible_repositories", visible_repositories)
+    limited = {"x-limited": "1"}
 
     async def scenario() -> None:
         def stub(name: str) -> StdioACPProvider:
@@ -937,6 +950,15 @@ def test_the_daemon_offers_added_agents_as_workflow_and_loop_runners(tmp_path: P
                     assert config["addedAgents"] == ["qwen"]
                     runner, = config["workflows"][0]["inputs"]
                     assert runner["choices"] == ["codex", "claude", "qwen", LEAST_UTILIZED, ROUND_ROBIN]
+                    scoped = (await client.get("/api/config", headers=limited)).json()
+                    assert scoped["addedAgents"] == []
+                    runner, = scoped["workflows"][0]["inputs"]
+                    assert runner["choices"] == ["codex", "claude", LEAST_UTILIZED, ROUND_ROBIN]
+                    refused = await client.post("/api/runs", headers=limited, json={
+                        "workflowId": "runners", "repository": "acme/api", "prompt": "Task",
+                        "inputs": {"implementation_runner": "qwen"},
+                    })
+                    assert refused.status_code == 400, refused.text
                     started = await client.post("/api/runs", json={
                         "workflowId": "runners", "repository": ".", "prompt": "Task",
                         "inputs": {"implementation_runner": "qwen"},

@@ -248,13 +248,12 @@ class GraphService:
         self._model_tiers = model_tiers
         self._allow_python = allow_python
         self._agent_factory = agent_factory
-        #: Where added agents are offered to workflow files too, when this process runs any.
-        self._added_agents = added_agents
+        #: Added agents and their models, offered to workflow files too when this
+        #: process runs any. Compiled graphs hold its `models` dict, not a copy,
+        #: so a model changed here reaches graphs registered before the change.
+        self._added_agents = added_agents if added_agents is not None else AddedAgents()
         #: What the registry held before any added agent: these cannot be replaced or removed.
         self._builtin_agents = tuple(registry.names)
-        #: Added agents' models, by name. Compiled graphs hold this dict, not a copy,
-        #: so a model changed here reaches graphs registered before the change.
-        self._agent_models: dict[str, str] = {}
         self._sessions = Sessions()
         self._session_workflow = session_workflow(
             workspace_provider, self._sessions,
@@ -371,21 +370,14 @@ class GraphService:
                 raise NotFound(f"no agent named {name!r}", agent=name)
             self.store.delete_agent(name)
             self._registry.unregister(name)
-            self._agent_models.pop(name, None)
-            if self._added_agents is not None:
-                self._added_agents.withdraw(name)
+            self._added_agents.withdraw(name)
         return {**self.agent_json(name, row), "removed": True}
 
     def _offer_agent(self, row: AgentRow) -> None:
         assert self._agent_factory is not None
         provider = self._agent_factory(row)
         self._registry.register(provider, replace=True)
-        if row.model:
-            self._agent_models[row.name] = session_model(row)
-        else:
-            self._agent_models.pop(row.name, None)
-        if self._added_agents is not None:
-            self._added_agents.offer(provider, self._agent_models.get(row.name, ""))
+        self._added_agents.offer(provider, session_model(row) if row.model else "")
 
     # --- sessions -----------------------------------------------------------
 
@@ -1189,7 +1181,7 @@ class GraphService:
                     registry=self._registry,
                     session_config=self._session_config,
                     model_tiers=self._model_tiers,
-                    agent_models=self._agent_models,
+                    agent_models=self._added_agents.models,
                     default_base_ref=self._default_base_ref,
                 ),
                 spec,
