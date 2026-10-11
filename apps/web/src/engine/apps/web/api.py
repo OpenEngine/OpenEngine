@@ -23,6 +23,7 @@ from langgraph_acp.agent import ACPAgentProvider
 from langgraph_acp.providers import CodexACPProvider
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -2119,7 +2120,7 @@ def create_app(
             dependencies_changed.clear()
             async with scheduled_start_lock:
                 # Built once per pass, and only when some run is ready to start.
-                offered: Mapping[str, GraphWorkflow] | None = None
+                offered = functools.cache(offered_graphs)
                 for state in await session.state_store.list_runs():
                     if (
                         state.phase is not RunPhase.SCHEDULED
@@ -2128,9 +2129,7 @@ def create_app(
                     ):
                         continue
                     try:
-                        if offered is None:
-                            offered = offered_graphs()
-                        graph = offered[str(state.workflow_id)]
+                        graph = offered()[str(state.workflow_id)]
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
