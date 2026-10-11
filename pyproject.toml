@@ -24,12 +24,20 @@ members = ["packages/*", "packages/adapters/*/*", "apps/*", "cli/client", "cli/s
 # them. Open Verify is an independent distribution for later repository extraction.
 exclude = ["packages/adapters", "packages/engine", "apps/open-verify"]
 
+[tool.uv.sources]
+engine-cli = { workspace = true }
+engine-web = { workspace = true }
+
 [dependency-groups]
 # `watchfiles` is what `engine-dev` reloads on: Uvicorn falls back to polling
 # every watched file without it, which is slower and misses nothing only
 # because it looks at everything. A development dependency rather than one of
 # `engine-web`'s, because a served interface never reloads.
 dev = [
+    # `uv run engine` from the repository root, without `--all-packages`;
+    # `engine daemon` starts the `engine-web` installed beside it.
+    "engine-cli",
+    "engine-web",
     "httpx>=0.28",
     # The durable checkpointer the graph-runtime tests use. A test that
     # destroys a runtime and rebuilds it from a file proves something an
