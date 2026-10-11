@@ -911,14 +911,15 @@ def test_an_approval_needs_a_conversation_to_belong_to(store: StateStore) -> Non
 # --- the HTTP surface -------------------------------------------------------
 
 
-def test_approving_resumes_the_paused_turn_and_records_the_decision(web_app) -> None:
+def test_approving_resumes_the_paused_turn_and_records_the_decision(
+    async_client, web_app
+) -> None:
     store = InMemoryStateStore()
     runner = ApprovalRunner()
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             started = asyncio.create_task(
                 client.post(
@@ -973,7 +974,9 @@ def test_approving_resumes_the_paused_turn_and_records_the_decision(web_app) -> 
     ] == [("user", "run the tests"), ("assistant", "All tests passed.")]
 
 
-def test_a_decision_reaches_the_client_even_when_the_turn_asks_again(web_app) -> None:
+def test_a_decision_reaches_the_client_even_when_the_turn_asks_again(
+    async_client, web_app
+) -> None:
     """Otherwise the card you just answered waits on an answer it already got.
 
     A turn let go by a decision usually asks its next question immediately --
@@ -987,8 +990,7 @@ def test_a_decision_reaches_the_client_even_when_the_turn_asks_again(web_app) ->
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             started = asyncio.create_task(
                 client.post(f"/api/threads/{thread_id}/runs", json={"text": "go"})
@@ -1022,14 +1024,15 @@ def test_a_decision_reaches_the_client_even_when_the_turn_asks_again(web_app) ->
     assert runner.executed == ["pytest", "Write"]
 
 
-def test_cancelling_a_request_ends_the_turn_without_running_the_action(web_app) -> None:
+def test_cancelling_a_request_ends_the_turn_without_running_the_action(
+    async_client, web_app
+) -> None:
     store = InMemoryStateStore()
     runner = ApprovalRunner()
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             started = asyncio.create_task(
                 client.post(
@@ -1055,14 +1058,15 @@ def test_cancelling_a_request_ends_the_turn_without_running_the_action(web_app) 
     assert _lines(streamed)[-1]["type"] == "done"
 
 
-def test_a_second_decision_on_the_same_request_is_refused(web_app) -> None:
+def test_a_second_decision_on_the_same_request_is_refused(
+    async_client, web_app
+) -> None:
     store = InMemoryStateStore()
     runner = ApprovalRunner()
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             started = asyncio.create_task(
                 client.post(
@@ -1091,7 +1095,7 @@ def test_a_second_decision_on_the_same_request_is_refused(web_app) -> None:
     [("maybe", "unknown decision"), ("accept_for_session", "not one of the decisions")],
 )
 def test_a_decision_the_request_never_offered_is_refused(
-    decision: str, detail: str, *, web_app
+    async_client, decision: str, detail: str, *, web_app
 ) -> None:
     """Including one that exists: the provider decides what it can honour."""
     store = InMemoryStateStore()
@@ -1099,8 +1103,7 @@ def test_a_decision_the_request_never_offered_is_refused(
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             started = asyncio.create_task(
                 client.post(f"/api/threads/{thread_id}/runs", json={"text": "write it"})
@@ -1125,14 +1128,15 @@ def test_a_decision_the_request_never_offered_is_refused(
     assert runner.executed == []
 
 
-def test_a_request_from_a_finished_run_cannot_be_answered_later(web_app) -> None:
+def test_a_request_from_a_finished_run_cannot_be_answered_later(
+    async_client, web_app
+) -> None:
     store = InMemoryStateStore()
     runner = ApprovalRunner([RUN_TESTS, WRITE_FILE])
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             first_run = asyncio.create_task(
                 client.post(f"/api/threads/{thread_id}/runs", json={"text": "first"})
@@ -1176,14 +1180,13 @@ def test_a_request_from_a_finished_run_cannot_be_answered_later(web_app) -> None
     assert runner.executed == ["pytest", "Write"]
 
 
-def test_another_conversations_request_is_not_found_here(web_app) -> None:
+def test_another_conversations_request_is_not_found_here(async_client, web_app) -> None:
     store = InMemoryStateStore()
     runner = ApprovalRunner()
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             asking = await _thread(client)
             bystander = await _thread(client)
             started = asyncio.create_task(
@@ -1248,15 +1251,16 @@ def test_a_reconnecting_browser_is_told_what_the_run_is_waiting_on(web_app) -> N
     assert runner.executed == ["pytest"]
 
 
-def test_stopping_a_waiting_run_cancels_the_request_and_the_turn(web_app) -> None:
+def test_stopping_a_waiting_run_cancels_the_request_and_the_turn(
+    async_client, web_app
+) -> None:
     store = InMemoryStateStore()
     runner = ApprovalRunner()
     app = web_app(_session(store, runner), {"test": runner})
     service = app.state.thread_service
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = AgentInstanceId(await _thread(client))
             started = asyncio.create_task(
                 client.post(f"/api/threads/{thread_id}/runs", json={"text": "run"})
@@ -1296,15 +1300,14 @@ def test_stopping_a_waiting_run_cancels_the_request_and_the_turn(web_app) -> Non
 
 
 def test_a_provider_that_dies_mid_question_leaves_the_request_interrupted(
-    web_app,
+    async_client, web_app
 ) -> None:
     store = InMemoryStateStore()
     runner = DyingApprovalRunner()
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             started = asyncio.create_task(
                 client.post(f"/api/threads/{thread_id}/runs", json={"text": "run"})
@@ -1333,7 +1336,7 @@ def test_a_provider_that_dies_mid_question_leaves_the_request_interrupted(
 
 
 def test_a_restart_interrupts_the_requests_it_cannot_resume(
-    tmp_path, *, sqlite_store, web_app
+    async_client, tmp_path, *, sqlite_store, web_app
 ) -> None:
     """The CLI died with the server, so its question can no longer be put."""
     database = tmp_path / "conversations.sqlite3"
@@ -1361,8 +1364,7 @@ def test_a_restart_interrupts_the_requests_it_cannot_resume(
     app = web_app(_session(after, runner), {"test": runner}, approval_policy=ApprovalConfig())
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             listed = await client.get("/api/threads")
             refused = await client.post(
                 _approval_url(instance.instance_id, "apv-before-restart"),
@@ -1737,15 +1739,16 @@ def test_a_revoked_grant_stops_answering() -> None:
     assert asyncio.run(scenario())[0].is_pending
 
 
-def test_a_granted_action_does_not_pause_the_next_turn_of_a_chat(web_app) -> None:
+def test_a_granted_action_does_not_pause_the_next_turn_of_a_chat(
+    async_client, web_app
+) -> None:
     """The same thing again, through the whole stack the browser talks to."""
     store = InMemoryStateStore()
     runner = ApprovalRunner()
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             first = asyncio.create_task(
                 client.post(
@@ -1794,14 +1797,15 @@ def test_a_granted_action_does_not_pause_the_next_turn_of_a_chat(web_app) -> Non
     ]
 
 
-def test_a_runner_that_cannot_pause_runs_exactly_as_before(web_app) -> None:
+def test_a_runner_that_cannot_pause_runs_exactly_as_before(
+    async_client, web_app
+) -> None:
     store = InMemoryStateStore()
     runner = PlainRunner()
     app = web_app(_session(store, runner), {"test": runner})
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             streamed = await client.post(
                 f"/api/threads/{thread_id}/runs", json={"text": "no approvals here"}
@@ -1968,7 +1972,7 @@ def test_a_runner_whose_requests_nobody_can_read_is_asked_about_regardless() -> 
 
 
 def test_a_turn_the_policy_covers_runs_start_to_finish_without_a_prompt(
-    web_app,
+    async_client, web_app
 ) -> None:
     """The whole of it, over HTTP: nothing pending, and the action happened."""
     store = InMemoryStateStore()
@@ -1982,8 +1986,7 @@ def test_a_turn_the_policy_covers_runs_start_to_finish_without_a_prompt(
     )
 
     async def scenario():
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with async_client(app) as client:
             thread_id = await _thread(client)
             streamed = await client.post(
                 f"/api/threads/{thread_id}/runs", json={"text": "run the tests"}

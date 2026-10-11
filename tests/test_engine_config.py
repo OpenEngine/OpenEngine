@@ -549,8 +549,6 @@ def test_repository_projects_are_read_from_the_checkouts_remotes(
 ) -> None:
     """`[repos]` names local paths; login asks GitHub about the repository
     each one pushes to, and skips what GitHub cannot answer for."""
-    import subprocess
-
     remotes = {
         "api": "git@github.com:Acme/API.git",
         "web": "https://github.com/acme/web.git",
@@ -560,8 +558,7 @@ def test_repository_projects_are_read_from_the_checkouts_remotes(
     }
     repos = {}
     for name, remote in remotes.items():
-        git_repo(tmp_path / name)
-        subprocess.run(["git", "-C", str(tmp_path / name), "remote", "add", "origin", remote], check=True)
+        git_repo(tmp_path / name, origin=remote)
         repos[name] = str(tmp_path / name)
     repos["missing"] = str(tmp_path / "missing")
     loaded = LoadedEngineConfig(config=parse_engine_config({
@@ -584,11 +581,7 @@ def test_the_servers_own_checkout_is_named_dot(
 ) -> None:
     """A run in `.` is in the server's own checkout, which does not by itself
     let anyone sign in."""
-    import subprocess
-
-    git_repo(tmp_path)
-    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
-                    "https://github.com/acme/server.git"], check=True)
+    git_repo(tmp_path, origin="https://github.com/acme/server.git")
     monkeypatch.chdir(tmp_path)
     loaded = LoadedEngineConfig(config=parse_engine_config({}))
 
