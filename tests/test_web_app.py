@@ -6,11 +6,13 @@ import json
 import logging
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from web_fakes import ConcurrentRunner, ConversationWorkspaces
 
 import httpx
 import pytest
@@ -23,7 +25,7 @@ from engine.adapters.communications.slack import SlackCommunications
 from engine.adapters.state_store.memory import InMemoryStateStore
 from engine.adapters.state_store.sqlite import SQLiteStateStore
 from engine.apps.web.__main__ import build_app
-from engine.apps.web.api import ApprovalFeed, ThreadService, create_app
+from engine.apps.web.api import ApprovalFeed, ThreadService
 from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
 from engine.apps.web.utilization import (
     RunnerUtilization,
@@ -93,7 +95,6 @@ from graph_runtime_fakes import (
     ScriptedGraphRuntime,
     ScriptedNode,
 )
-from permission_fakes import UNCLASSIFIED_PERMISSION_TRANSLATOR
 
 CODER = AgentId("coder")
 PROFILES = {
@@ -130,7 +131,9 @@ def test_web_selects_the_configured_communications_provider() -> None:
         )
 
 
-def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
+def test_repository_choices_reach_the_web_config(
+    tmp_path, monkeypatch, *, async_client
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / "engine.toml"
@@ -139,9 +142,7 @@ def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
     app = build_app(path)
 
     async def ask():
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with async_client(app, base_url="http://test") as client:
             return (await client.get("/api/config")).json()
 
     assert asyncio.run(ask())["repositories"] == [
@@ -151,7 +152,7 @@ def test_repository_choices_reach_the_web_config(tmp_path, monkeypatch) -> None:
 
 
 def test_the_application_can_be_built_from_configuration_alone(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, *, async_client
 ) -> None:
     """The contract the development server's reloader depends on.
 
@@ -164,9 +165,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
     app = build_app()
     async def ask() -> httpx.Response:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with async_client(app, base_url="http://test") as client:
             return await client.get("/api/config")
 
     answered = asyncio.run(ask())
@@ -406,14 +405,14 @@ def test_review_comments_reach_the_github_api(tmp_path) -> None:
     assert "/repos/acme/api/issues/7/comments" in str(recorded[0].url)
 
 
-def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
+def test_web_restores_sqlite_conversations_after_restart(tmp_path, *, web_app) -> None:
     database = tmp_path / "conversations.sqlite3"
     runner = ConcurrentRunner()
     other_runner = ConcurrentRunner(("persisted answer",))
     runners = {"test": runner, "other": other_runner}
 
     first_capabilities = build_capabilities(Settings(sqlite_path=str(database)))
-    first_app = create_app(
+    first_app = web_app(
         AgentSession(first_capabilities, profiles=PROFILES, runners=runners),
         runners,
     )
@@ -442,7 +441,7 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     first_capabilities.state_store.close()
 
     second_capabilities = build_capabilities(Settings(sqlite_path=str(database)))
-    second_app = create_app(
+    second_app = web_app(
         AgentSession(second_capabilities, profiles=PROFILES, runners=runners),
         runners,
     )
@@ -475,39 +474,6 @@ def test_web_restores_sqlite_conversations_after_restart(tmp_path) -> None:
     ] == [("user", "remember this"), ("assistant", "persisted answer")]
 
 
-class ConcurrentRunner:
-    """A controllably slow runner that records how much work overlaps."""
-
-    permission_translator = UNCLASSIFIED_PERMISSION_TRANSLATOR
-
-    def __init__(self, replies: Sequence[str] = ("ok",)) -> None:
-        self.replies = list(replies)
-        self.seen: list[tuple[Message, ...]] = []
-        self.workspace_ids: list[str | None] = []
-        self.active = 0
-        self.most_active = 0
-
-    async def run_turn(
-        self,
-        agent_run_id: AgentRunId,
-        profile: AgentProfile,
-        messages: Sequence[Message],
-        tools=(),
-        workspace_id=None,
-    ) -> AgentTurn:
-        self.seen.append(tuple(messages))
-        self.workspace_ids.append(workspace_id)
-        self.active += 1
-        self.most_active = max(self.most_active, self.active)
-        await asyncio.sleep(0.02)
-        self.active -= 1
-        reply = self.replies.pop(0) if self.replies else "ok"
-        return AgentTurn(Message.assistant(reply))
-
-    async def cancel(self, agent_run_id: AgentRunId) -> None:
-        pass
-
-
 def _session(runner: ConcurrentRunner) -> AgentSession:
     return _session_with({"test": runner})
 
@@ -529,60 +495,6 @@ def _session_with(
         ),
         profiles=profiles,
         runners=dict(runners),
-    )
-
-
-def _workflow_app(
-    store: InMemoryStateStore,
-    runner: ConcurrentRunner,
-    workspaces: object | None = None,
-    communications: object | None = None,
-    runners: dict[str, ConcurrentRunner] | None = None,
-    workflow_catalog: WorkflowCatalog | None = None,
-    workspace_repository: str | None = None,
-    graph_runtime=None,
-    approval_policy: ApprovalConfig = ApprovalConfig(),
-    public_url: str = "",
-    utilization: UtilizationService | None = None,
-    github_login_config: GitHubLoginConfig | None = None,
-    repos: dict[str, str] | None = None,
-    repo_modes: dict[str, str] | None = None,
-    trusted_repos: frozenset[str] = frozenset(),
-    **options,
-):
-    """Wire the app the way the composition root does."""
-    unused = object()
-    chat_runners: dict[str, ConcurrentRunner] = dict(runners or {"test": runner})
-    session = AgentSession(
-        Capabilities(
-            workflow_runtime=unused,
-            source_control=unused,
-            agent_runner=runner,
-            communications=communications if communications is not None else unused,
-            workspace_provider=workspaces or ConversationWorkspaces(),
-            state_store=store,
-        ),
-        profiles=PROFILES,
-        runners=chat_runners,
-        workspace_repository=workspace_repository,
-    )
-    return create_app(
-        session,
-        chat_runners,
-        workflow_catalog=(
-            workflow_catalog
-            if workflow_catalog is not None
-            else WorkflowCatalog.from_graphs(())
-        ),
-        graph_runtime=graph_runtime,
-        approval_policy=approval_policy,
-        public_url=public_url,
-        utilization=utilization,
-        github_login_config=github_login_config,
-        repos=repos,
-        repo_modes=repo_modes,
-        trusted_repos=trusted_repos,
-        **options,
     )
 
 
@@ -614,7 +526,7 @@ def _work_order(
     )
 
 
-def test_deleting_a_run_forgets_it() -> None:
+def test_deleting_a_run_forgets_it(workflow_app) -> None:
     """The rail's × on a WorkOrder is not the project row's archive.
 
     Nothing lists or restores what it removes, so the row goes for good.
@@ -622,7 +534,7 @@ def test_deleting_a_run_forgets_it() -> None:
     store = InMemoryStateStore()
     state = _work_order(RunPhase.SUCCEEDED)
     asyncio.run(store.save(state))
-    app = _workflow_app(store, ConcurrentRunner())
+    app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -644,7 +556,9 @@ def test_deleting_a_run_forgets_it() -> None:
     assert asyncio.run(store.load(state.run_id)) is None
 
 
-def test_utilization_is_served_from_the_cache_and_then_scraped(tmp_path) -> None:
+def test_utilization_is_served_from_the_cache_and_then_scraped(
+    tmp_path, *, workflow_app
+) -> None:
     """The two calls the page makes, and why there are two of them.
 
     Opening it must draw something before either provider answers, so the cache
@@ -666,7 +580,7 @@ def test_utilization_is_served_from_the_cache_and_then_scraped(tmp_path) -> None
     utilization = UtilizationService(
         cache_path=tmp_path / "utilization.json", readers={"claude": read_claude}
     )
-    app = _workflow_app(
+    app = workflow_app(
         InMemoryStateStore(),
         ConcurrentRunner(),
         runners={"claude": ConcurrentRunner(), "codex": ConcurrentRunner()},
@@ -699,7 +613,9 @@ def test_utilization_is_served_from_the_cache_and_then_scraped(tmp_path) -> None
     assert cached.json() == scraped.json()
 
 
-def test_utilization_refresh_refuses_a_cross_origin_page(tmp_path) -> None:
+def test_utilization_refresh_refuses_a_cross_origin_page(
+    tmp_path, *, workflow_app
+) -> None:
     """It reads the tokens the runners signed in with, so it is guarded like
     every other endpoint that touches a stored credential."""
     asked = False
@@ -709,7 +625,7 @@ def test_utilization_refresh_refuses_a_cross_origin_page(tmp_path) -> None:
         asked = True
         return RunnerUtilization(runner="claude")
 
-    app = _workflow_app(
+    app = workflow_app(
         InMemoryStateStore(),
         ConcurrentRunner(),
         runners={"claude": ConcurrentRunner()},
@@ -731,7 +647,7 @@ def test_utilization_refresh_refuses_a_cross_origin_page(tmp_path) -> None:
     assert not asked
 
 
-def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
+def test_run_list_leaves_the_prose_to_the_run_it_names(workflow_app) -> None:
     """Every screen polls `/api/runs` once a second to keep its rail current.
 
     What that list carries is what every screen pays for, on a payload that
@@ -742,7 +658,7 @@ def test_run_list_leaves_the_prose_to_the_run_it_names() -> None:
     store = InMemoryStateStore()
     state = _work_order(RunPhase.FAILED, failure_reason="the reviewer gave up")
     asyncio.run(store.save(state))
-    app = _workflow_app(store, ConcurrentRunner())
+    app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -833,9 +749,11 @@ def test_approval_feed_replays_and_pushes_broker_transitions() -> None:
         },
     ],
 )
-def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> None:
+def test_create_workflow_run_rejects_invalid_requests(
+    body: dict[str, str], *, workflow_app
+) -> None:
     store = InMemoryStateStore()
-    app = _workflow_app(store, ConcurrentRunner())
+    app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -848,18 +766,20 @@ def test_create_workflow_run_rejects_invalid_requests(body: dict[str, str]) -> N
     assert asyncio.run(store.list_runs()) == ()
 
 
-def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
+def test_create_workflow_run_records_the_signed_in_requester(
+    tmp_path, *, sqlite_store, workflow_app
+) -> None:
     """A WorkOrder started from the web UI names its GitHub account, and still
     does after a restart."""
     path = tmp_path / "requester.sqlite3"
-    store = SQLiteStateStore(path)
+    store = sqlite_store(path)
     runtime = ScriptedGraphRuntime(_review_graph())
     app = _graph_app_over(
         store, runtime, _review_graph(),
         github_login_config=GitHubLoginConfig(
             "client", "secret", "https://engine.test/api/auth/github/callback"
         ),
-    )
+     workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -890,7 +810,7 @@ def test_create_workflow_run_records_the_signed_in_requester(tmp_path) -> None:
     started = asyncio.run(runtime.snapshot(RunId(created.json()["runId"])))
     assert started.values["coAuthor"] == "alice <42+alice@users.noreply.github.com>"
     store.close()
-    reopened = SQLiteStateStore(path)
+    reopened = sqlite_store(path)
     try:
         (run,) = asyncio.run(reopened.list_runs())
         assert run.requester == "github:42:alice"
@@ -915,7 +835,9 @@ def _proxied_prefixes() -> set[str]:
     return set(re.findall(r'"([^"]+)"', listing.group(1)))
 
 
-def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards() -> None:
+def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards(
+    web_app,
+) -> None:
     """The failure this is here for is silent, and only in development.
 
     `apps/web/vite.config.ts` forwards the prefixes it was told about and
@@ -930,7 +852,7 @@ def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards() -
     not the client's own: the SPA's pages are Vite's to answer and must not be
     forwarded.
     """
-    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()})
+    app = web_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()})
 
     served = {
         "/" + route.path.lstrip("/").split("/")[0]
@@ -947,11 +869,11 @@ def test_every_prefix_this_application_serves_is_one_the_dev_server_forwards() -
     assert served <= _proxied_prefixes()
 
 
-def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
+def test_run_id_frontend_route_serves_the_application(tmp_path, *, web_app) -> None:
     static = tmp_path / "dist"
     static.mkdir()
     (static / "index.html").write_text("<main>workflow application</main>")
-    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
+    app = web_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -964,11 +886,13 @@ def test_run_id_frontend_route_serves_the_application(tmp_path) -> None:
     assert "workflow application" in response.text
 
 
-def test_new_workflow_frontend_route_serves_the_application(tmp_path) -> None:
+def test_new_workflow_frontend_route_serves_the_application(
+    tmp_path, *, web_app
+) -> None:
     static = tmp_path / "dist"
     static.mkdir()
     (static / "index.html").write_text("<main>workflow application</main>")
-    app = create_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
+    app = web_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -979,57 +903,6 @@ def test_new_workflow_frontend_route_serves_the_application(tmp_path) -> None:
 
     assert response.status_code == 200
     assert "workflow application" in response.text
-
-
-class ConversationWorkspaces:
-    """A provider whose checkouts come and go, as real ones do."""
-
-    def __init__(self) -> None:
-        self.count = 0
-        self.detached: set[str] = set()
-        self.attachments: list[tuple[str, str, str]] = []
-
-    async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = ""
-    ) -> Workspace:
-        self.count += 1
-        return self._workspace(f"ws-{self.count}", repository, base_ref)
-
-    async def root_path(self, workspace_id: str) -> str:
-        if workspace_id in self.detached:
-            raise KeyError(f"no workspace {workspace_id!r}")
-        return f"/worktrees/{workspace_id}"
-
-    async def state(self, workspace_id: str) -> WorkspaceState:
-        return WorkspaceState(
-            workspace_id=workspace_id,
-            ref=f"engine/{workspace_id}",
-            root_path=(
-                None if workspace_id in self.detached else f"/worktrees/{workspace_id}"
-            ),
-        )
-
-    async def attach(
-        self, workspace_id: str, repository: str, base_ref: str, *, co_author: str = ""
-    ) -> Workspace:
-        self.attachments.append((workspace_id, repository, base_ref))
-        self.detached.discard(workspace_id)
-        return self._workspace(workspace_id, repository, base_ref)
-
-    async def detach(self, workspace_id: str) -> None:
-        self.detached.add(workspace_id)
-
-    async def dispose(self, workspace_id: str) -> None:
-        self.detached.add(workspace_id)
-
-    def _workspace(self, workspace_id: str, repository: str, base_ref: str) -> Workspace:
-        return Workspace(
-            workspace_id=workspace_id,
-            root_path=f"/worktrees/{workspace_id}",
-            repository=repository,
-            base_ref=base_ref,
-            ref=f"engine/{workspace_id}",
-        )
 
 
 class VanishingWorkspaces(ConversationWorkspaces):
@@ -1072,11 +945,11 @@ def _workspace_session(
     )
 
 
-def test_each_new_chat_reports_its_own_worktree() -> None:
+def test_each_new_chat_reports_its_own_worktree(web_app) -> None:
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
     session = _workspace_session(runner, workspaces)
-    app = create_app(session, {"test": runner})
+    app = web_app(session, {"test": runner})
 
     async def scenario() -> tuple[dict[str, object], dict[str, object]]:
         transport = httpx.ASGITransport(app=app)
@@ -1097,12 +970,12 @@ def test_each_new_chat_reports_its_own_worktree() -> None:
     assert runner.workspace_ids == ["ws-1"]
 
 
-def test_a_removed_worktree_does_not_take_the_other_chats_with_it() -> None:
+def test_a_removed_worktree_does_not_take_the_other_chats_with_it(web_app) -> None:
     """One vanished checkout used to brick every endpoint, new chats included."""
     runner = ConcurrentRunner()
     workspaces = VanishingWorkspaces()
     store = InMemoryStateStore()
-    first_app = create_app(
+    first_app = web_app(
         _workspace_session(runner, workspaces, store), {"test": runner}
     )
 
@@ -1116,7 +989,7 @@ def test_a_removed_worktree_does_not_take_the_other_chats_with_it() -> None:
 
         # A restart: the registry is rebuilt from the store, whose instances
         # still name a workspace that is no longer on disk.
-        restarted = create_app(
+        restarted = web_app(
             _workspace_session(runner, workspaces, store), {"test": runner}
         )
         transport = httpx.ASGITransport(app=restarted)
@@ -1140,10 +1013,12 @@ def test_a_removed_worktree_does_not_take_the_other_chats_with_it() -> None:
     assert fresh.json()["workspaceRoot"] == "/worktrees/ws-2"
 
 
-def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back() -> None:
+def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back(
+    web_app,
+) -> None:
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
-    app = create_app(_workspace_session(runner, workspaces), {"test": runner})
+    app = web_app(_workspace_session(runner, workspaces), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1172,10 +1047,12 @@ def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back() -> 
     assert workspaces.count == 1
 
 
-def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path() -> None:
+def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path(
+    web_app,
+) -> None:
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
-    app = create_app(_workspace_session(runner, workspaces), {"test": runner})
+    app = web_app(_workspace_session(runner, workspaces), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1202,13 +1079,13 @@ def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path() -> 
     assert runner.workspace_ids == ["ws-1"]
 
 
-def test_a_chat_that_never_had_a_workspace_can_be_given_one() -> None:
+def test_a_chat_that_never_had_a_workspace_can_be_given_one(web_app) -> None:
     """Conversations from before worktrees existed, and any other stragglers."""
     runner = ConcurrentRunner()
     workspaces = ConversationWorkspaces()
     store = InMemoryStateStore()
     session = _workspace_session(runner, workspaces, store)
-    app = create_app(session, {"test": runner})
+    app = web_app(session, {"test": runner})
 
     async def scenario():
         instance = await store.create_instance(CODER)
@@ -1229,9 +1106,9 @@ def test_a_chat_that_never_had_a_workspace_can_be_given_one() -> None:
     assert stored.workspace_id == "ws-1"
 
 
-def test_a_process_without_a_workspace_repository_says_so() -> None:
+def test_a_process_without_a_workspace_repository_says_so(web_app) -> None:
     runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1287,9 +1164,9 @@ def test_one_chat_serializes_its_own_turns() -> None:
     ]
 
 
-def test_http_api_creates_lists_and_streams_threads() -> None:
+def test_http_api_creates_lists_and_streams_threads(web_app) -> None:
     runner = ConcurrentRunner(("hello",))
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1323,7 +1200,7 @@ def test_http_api_creates_lists_and_streams_threads() -> None:
     ]
 
 
-def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None:
+def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none(web_app) -> None:
     """The conversation remembers its runner; a turn need not repeat it.
 
     The header sends the choice once, so a turn that carries no runner has to
@@ -1332,7 +1209,7 @@ def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None
     first = ConcurrentRunner(("from the first",))
     second = ConcurrentRunner(("from the second",))
     runners = {"test": first, "other": second}
-    app = create_app(_session_with(runners), runners)
+    app = web_app(_session_with(runners), runners)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1360,9 +1237,9 @@ def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none() -> None
     assert unknown.status_code == 400
 
 
-def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
+def test_agent_names_chat_before_answer_without_changing_conversation(web_app) -> None:
     runner = ConcurrentRunner(('"SQLite Conversation Persistence"', "The answer."))
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1411,7 +1288,7 @@ def test_agent_names_chat_before_answer_without_changing_conversation() -> None:
     ]
 
 
-def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn() -> None:
+def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn(web_app) -> None:
     """Naming happens before the message it names is sent, so it cannot fail it.
 
     A CLI that is out of quota, unauthenticated, or simply broken fails the
@@ -1426,7 +1303,7 @@ def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn() -> None:
             return await super().run_turn(*args, **kwargs)
 
     runner = FailsToName(("The answer.",))
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1458,9 +1335,9 @@ def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn() -> None:
     assert finished["content"][0]["text"] == "The answer."
 
 
-def test_missing_frontend_has_an_actionable_response() -> None:
+def test_missing_frontend_has_an_actionable_response(web_app) -> None:
     runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1473,7 +1350,7 @@ def test_missing_frontend_has_an_actionable_response() -> None:
     assert "npm --prefix apps/web run build" in response.text
 
 
-def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
+def test_tool_activity_round_trips_as_assistant_ui_parts(web_app) -> None:
     call = ToolCall(call_id="call-1", name="Read", arguments='{"path":"README.md"}')
 
     class ToolRunner(ConcurrentRunner):
@@ -1487,7 +1364,7 @@ def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
             )
 
     runner = ToolRunner()
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1515,7 +1392,7 @@ def test_tool_activity_round_trips_as_assistant_ui_parts() -> None:
     ]
 
 
-def test_replayed_tool_call_id_is_only_exposed_once() -> None:
+def test_replayed_tool_call_id_is_only_exposed_once(web_app) -> None:
     """Provider reconnects may repeat a completed item with its original id.
 
     assistant-ui treats the id as a resource key across the whole thread, so a
@@ -1538,7 +1415,7 @@ def test_replayed_tool_call_id_is_only_exposed_once() -> None:
             )
 
     runner = ReplayRunner()
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1572,7 +1449,7 @@ def test_replayed_tool_call_id_is_only_exposed_once() -> None:
     assert parts[0]["result"] == "engine"
 
 
-def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript() -> None:
+def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript(web_app) -> None:
     """Pressing stop ends the turn, not the record of it. What the agent had
     already done is on disk whatever the button does, so a reload that showed
     the question alone would be a transcript the worktree disagrees with."""
@@ -1596,7 +1473,7 @@ def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript() -> None:
             raise AssertionError("this runner only ever ends by being stopped")
 
     runner = StoppedMidWorkRunner()
-    app = create_app(_session(runner), {"test": runner})
+    app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1705,14 +1582,16 @@ def test_active_run_survives_stream_disconnect_and_replays_progress() -> None:
     ]
 
 
-def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path) -> None:
+def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(
+    tmp_path, *, web_app
+) -> None:
     """A cached entry point asks for the assets of a build that is gone."""
     runner = ConcurrentRunner()
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text('<script src="/assets/index-abc123.js"></script>')
     (dist / "assets" / "index-abc123.js").write_text("console.log('engine')")
-    app = create_app(_session(runner), {"test": runner}, dist)
+    app = web_app(_session(runner), {"test": runner}, dist)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1731,13 +1610,15 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(tmp_path)
 
 
 @pytest.mark.parametrize("encoding", ["gzip", "identity"])
-def test_web_compresses_large_json_and_static_assets(tmp_path, encoding) -> None:
+def test_web_compresses_large_json_and_static_assets(
+    tmp_path, encoding, *, async_client, web_app
+) -> None:
     runner = ConcurrentRunner()
     (tmp_path / "assets").mkdir()
     javascript = b"console.log('engine');\n" * 5000
     (tmp_path / "assets" / "index-abc123.js").write_bytes(javascript)
     (tmp_path / "index.html").write_text("<html>engine</html>")
-    app = create_app(_session(runner), {"test": runner}, tmp_path)
+    app = web_app(_session(runner), {"test": runner}, tmp_path)
     payload = {"messages": ["large response" * 1000]}
 
     async def large_response(request):
@@ -1746,10 +1627,7 @@ def test_web_compresses_large_json_and_static_assets(tmp_path, encoding) -> None
     app.router.routes.insert(0, Route("/api/compression-test", large_response))
 
     async def scenario():
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test",
-            headers={"Accept-Encoding": encoding},
-        ) as client:
+        async with async_client(app, base_url="http://test", headers={"Accept-Encoding": encoding}) as client:
             for path, expected in [
                 ("/api/compression-test", JSONResponse(payload).body),
                 ("/assets/index-abc123.js", javascript),
@@ -1782,10 +1660,12 @@ def test_web_compresses_large_json_and_static_assets(tmp_path, encoding) -> None
     ("/api/threads/test/runs", "application/x-ndjson"),
     ("/api/threads/test/runs/current", "application/x-ndjson"),
 ])
-def test_web_compression_delivers_stream_chunks_immediately(path, media_type) -> None:
+def test_web_compression_delivers_stream_chunks_immediately(
+    path, media_type, *, web_app
+) -> None:
     async def scenario():
         runner = ConcurrentRunner()
-        app = create_app(_session(runner), {"test": runner})
+        app = web_app(_session(runner), {"test": runner})
         delivered = asyncio.Event()
         chunks = [b'data: {"message": "first"}\n\n', b'data: {"message": "second"}\n\n']
         bodies = []
@@ -1839,6 +1719,7 @@ def _graph_app(
     *graphs: ScriptedGraph,
     approval_policy: ApprovalConfig = ApprovalConfig(),
     utilization: UtilizationService | None = None,
+    workflow_app,
     **options,
 ):
     """The web app with a scripted graph engine wired in.
@@ -1852,7 +1733,7 @@ def _graph_app(
         _graph_app_over(
             store, runtime, *graphs, approval_policy=approval_policy,
             utilization=utilization, **options,
-        ),
+         workflow_app=workflow_app),
         runtime,
     )
 
@@ -1864,6 +1745,7 @@ def _graph_app_over(
     approval_policy: ApprovalConfig = ApprovalConfig(),
     github_login_config: GitHubLoginConfig | None = None,
     utilization: UtilizationService | None = None,
+    workflow_app,
     **options,
 ):
     """A web app over an engine that already exists, so a restart can be one.
@@ -1877,7 +1759,7 @@ def _graph_app_over(
     async def running(_app=None):
         yield runtime
 
-    return _workflow_app(
+    return workflow_app(
         store,
         ConcurrentRunner(),
         workflow_catalog=WorkflowCatalog.from_graphs(graphs),
@@ -1897,13 +1779,13 @@ def _review_graph() -> ScriptedGraph:
     )
 
 
-def test_a_workflow_is_offered_under_its_own_name() -> None:
+def test_a_workflow_is_offered_under_its_own_name(workflow_app) -> None:
     """The dropdown, which is where a person meets this at all.
 
     Asked of a started server, because that is when a workflow is offerable:
     the engine that would run one is opened on startup.
     """
-    app, _ = _graph_app(InMemoryStateStore(), _review_graph())
+    app, _ = _graph_app(InMemoryStateStore(), _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1921,13 +1803,13 @@ def test_a_workflow_is_offered_under_its_own_name() -> None:
     ]
 
 
-def test_a_workflow_is_not_offered_without_an_engine_to_run_it() -> None:
+def test_a_workflow_is_not_offered_without_an_engine_to_run_it(workflow_app) -> None:
     """No graph engine composed, nothing on offer.
 
     The alternative is a choice that fails after somebody made it, which is
     worse than a choice that was never there.
     """
-    app = _workflow_app(
+    app = workflow_app(
         InMemoryStateStore(),
         ConcurrentRunner(),
         workflow_catalog=WorkflowCatalog.from_graphs((_review_graph(),)),
@@ -1954,14 +1836,14 @@ def test_a_workflow_is_not_offered_without_an_engine_to_run_it() -> None:
     assert refused.status_code == 400
 
 
-def test_creating_a_work_order_starts_the_graph() -> None:
+def test_creating_a_work_order_starts_the_graph(workflow_app) -> None:
     """The whole point: picking one runs it on the graph engine.
 
     Checked on the engine rather than only on the answer, because a WorkOrder
     that was recorded and never started would look identical from here.
     """
     store = InMemoryStateStore()
-    app, runtime = _graph_app(store, _review_graph())
+    app, runtime = _graph_app(store, _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -1997,19 +1879,19 @@ def test_creating_a_work_order_starts_the_graph() -> None:
     assert [one["runId"] for one in listed.json()["runs"]] == [str(run_id)]
 
 
-def test_graph_run_listing_carries_live_node_and_approval_state(monkeypatch) -> None:
+def test_graph_run_listing_carries_live_node_and_approval_state(
+    monkeypatch, *, async_client, workflow_app
+) -> None:
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
         "Implementation review (codex)",
         (ScriptedNode(NodeId("implementation"), (Ask("Run tests"),)),),
     )
-    app, runtime = _graph_app(InMemoryStateStore(), graph)
+    app, runtime = _graph_app(InMemoryStateStore(), graph, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 created = await client.post(
                     "/api/runs",
                     json={
@@ -2042,7 +1924,7 @@ def test_graph_run_listing_carries_live_node_and_approval_state(monkeypatch) -> 
     }
 
 
-def test_auto_approve_config_seeds_all_graph_nodes() -> None:
+def test_auto_approve_config_seeds_all_graph_nodes(async_client, workflow_app) -> None:
     """When `auto_approve = true`, every node starts auto-approved."""
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
@@ -2060,13 +1942,11 @@ def test_auto_approve_config_seeds_all_graph_nodes() -> None:
         InMemoryStateStore(),
         graph,
         approval_policy=ApprovalConfig(auto_approve=True),
-    )
+     workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 created = await client.post(
                     "/api/runs",
                     json={
@@ -2086,7 +1966,7 @@ def test_auto_approve_config_seeds_all_graph_nodes() -> None:
     }
 
 
-def test_a_graph_naming_node_names_its_work_order() -> None:
+def test_a_graph_naming_node_names_its_work_order(workflow_app) -> None:
     store = InMemoryStateStore()
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
@@ -2101,7 +1981,7 @@ def test_a_graph_naming_node_names_its_work_order() -> None:
             ScriptedNode(NodeId("implementation"), (AwaitSteering(),)),
         ),
     )
-    app, _ = _graph_app(store, graph)
+    app, _ = _graph_app(store, graph, workflow_app=workflow_app)
 
     async def scenario() -> dict[str, object]:
         transport = httpx.ASGITransport(app=app)
@@ -2130,7 +2010,7 @@ def test_a_graph_naming_node_names_its_work_order() -> None:
     assert named["name"] == "Cancellation handling"
 
 
-def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
+def test_a_finished_graph_run_stops_saying_it_is_working(workflow_app) -> None:
     """The row follows the graph to its ending.
 
     Nothing else would move it: the step executor is not driving this run, so
@@ -2138,7 +2018,7 @@ def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
     forever.
     """
     store = InMemoryStateStore()
-    app, _ = _graph_app(store, _review_graph())
+    app, _ = _graph_app(store, _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2163,7 +2043,7 @@ def test_a_finished_graph_run_stops_saying_it_is_working() -> None:
     assert ended == "succeeded"
 
 
-def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
+def test_deleting_a_graph_work_order_stops_the_engine_driving_it(workflow_app) -> None:
     """The rail's x on a graph row has to reach the other engine.
 
     None of what stops a step WorkOrder touches a graph one: its driver is a
@@ -2183,7 +2063,7 @@ def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
         "Implementation review (codex)",
         (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
     )
-    app, runtime = _graph_app(store, waiting)
+    app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2228,13 +2108,13 @@ def test_deleting_a_graph_work_order_stops_the_engine_driving_it() -> None:
     [RunPhase.SCHEDULED, RunPhase.RUNNING_AGENT, RunPhase.SUCCEEDED, RunPhase.FAILED],
 )
 def test_deleting_a_prerequisite_with_scheduled_dependents_is_rejected(
-    phase: RunPhase,
+    phase: RunPhase, *, async_client, workflow_app
 ) -> None:
     from unittest.mock import AsyncMock
 
     async def scenario():
         store = InMemoryStateStore()
-        app, runtime = _graph_app(store, _review_graph())
+        app, runtime = _graph_app(store, _review_graph(), workflow_app=workflow_app)
         runtime.cancel = AsyncMock()
         prerequisite = RunState(
             run_id=RunId("prerequisite"), task_id=TaskId("prerequisite"),
@@ -2249,9 +2129,7 @@ def test_deleting_a_prerequisite_with_scheduled_dependents_is_rejected(
         await store.save(dependent)
         # Keep dispatch stopped to also cover a completed prerequisite whose
         # dependent has not yet been started.
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with async_client(app, base_url="http://test") as client:
             response = await client.delete("/api/runs/prerequisite")
             assert response.status_code == 409
             assert "dependent" in response.json()["error"]
@@ -2265,7 +2143,9 @@ def test_deleting_a_prerequisite_with_scheduled_dependents_is_rejected(
     asyncio.run(scenario())
 
 
-def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> None:
+def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works(
+    workflow_app,
+) -> None:
     """A row whose graph state is gone is still the reader's to throw away.
 
     The case `restore_graph_runs` fails a run for: the engine has no record of
@@ -2273,7 +2153,7 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> 
     WorkOrder that cannot be removed and that nothing is working on.
     """
     store = InMemoryStateStore()
-    app, runtime = _graph_app(store, _review_graph())
+    app, runtime = _graph_app(store, _review_graph(), workflow_app=workflow_app)
     stranded = RunState(
         run_id=RunId("run-stranded"),
         task_id=TaskId("task-stranded"),
@@ -2298,14 +2178,14 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works() -> 
     assert driving == []
 
 
-def test_graph_events_cursor_replays_only_unseen_events() -> None:
+def test_graph_events_cursor_replays_only_unseen_events(workflow_app) -> None:
     store = InMemoryStateStore()
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
         "Implementation review (codex)",
         (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
     )
-    app, _ = _graph_app(store, graph)
+    app, _ = _graph_app(store, graph, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2359,7 +2239,9 @@ def test_graph_events_cursor_replays_only_unseen_events() -> None:
     asyncio.run(scenario())
 
 
-def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads() -> None:
+def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads(
+    workflow_app,
+) -> None:
     """A WorkOrder outlives the workflow it ran, and the pages have to cope.
 
     Renaming a graph -- what #367 did to this one -- or taking it out of the
@@ -2377,7 +2259,7 @@ def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads() -> N
         "Implementation review (codex)",
         (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
     )
-    app, runtime = _graph_app(store, waiting)
+    app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2431,7 +2313,7 @@ def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads() -> N
     assert described.status_code == 404
 
 
-def test_a_restart_fails_a_work_order_whose_workflow_is_gone() -> None:
+def test_a_restart_fails_a_work_order_whose_workflow_is_gone(workflow_app) -> None:
     """The row is told, rather than left claiming an agent is working on it.
 
     Nothing can pick this run back up -- there is no graph to run it -- so the
@@ -2444,7 +2326,7 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone() -> None:
         "Implementation review (codex)",
         (ScriptedNode(NodeId("implementation"), (Say("Reading."), AwaitSteering())),),
     )
-    app, runtime = _graph_app(store, waiting)
+    app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2462,7 +2344,7 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone() -> None:
                 while not runtime.running():
                     await asyncio.sleep(0)
         runtime.withdraw(GraphId("implementation-review-codex"))
-        restarted = _graph_app_over(store, runtime)
+        restarted = _graph_app_over(store, runtime, workflow_app=workflow_app)
         transport = httpx.ASGITransport(app=restarted)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             async with restarted.router.lifespan_context(restarted):
@@ -2475,14 +2357,14 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone() -> None:
     assert "no longer available" in detail["failureReason"]
 
 
-def test_the_graph_engine_answers_under_its_own_prefix() -> None:
+def test_the_graph_engine_answers_under_its_own_prefix(workflow_app) -> None:
     """Where a graph run is watched and approved today.
 
     This app's pages cannot do either yet, and the graph engine's own API can,
     so it is served from here rather than left unreachable. Behind `/graph`
     because both call their runs `/api/runs`.
     """
-    app, _ = _graph_app(InMemoryStateStore(), _review_graph())
+    app, _ = _graph_app(InMemoryStateStore(), _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2498,7 +2380,7 @@ def test_the_graph_engine_answers_under_its_own_prefix() -> None:
     ]
 
 
-def test_a_failed_graph_run_says_why_on_its_row() -> None:
+def test_a_failed_graph_run_says_why_on_its_row(workflow_app) -> None:
     """The other ending, and the reason that comes with it.
 
     The reason is read out of the event the engine publishes, so the row and
@@ -2512,7 +2394,7 @@ def test_a_failed_graph_run_says_why_on_its_row() -> None:
         "Implementation review (codex)",
         (ScriptedNode(NodeId("implementation"), (Fail("codex is out of quota"),)),),
     )
-    app, _ = _graph_app(store, broken)
+    app, _ = _graph_app(store, broken, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2535,7 +2417,9 @@ def test_a_failed_graph_run_says_why_on_its_row() -> None:
     assert ended["failureReason"] == "codex is out of quota"
 
 
-def test_messaging_a_failed_graph_implementer_resets_its_workorder() -> None:
+def test_messaging_a_failed_graph_implementer_resets_its_workorder(
+    workflow_app,
+) -> None:
     graph = ScriptedGraph(
         GraphId("implementation-review-codex"),
         "Implementation review (codex)",
@@ -2545,7 +2429,7 @@ def test_messaging_a_failed_graph_implementer_resets_its_workorder() -> None:
             always_open=True,
         ),),
     )
-    app, runtime = _graph_app(InMemoryStateStore(), graph)
+    app, runtime = _graph_app(InMemoryStateStore(), graph, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2587,7 +2471,9 @@ def test_messaging_a_failed_graph_implementer_resets_its_workorder() -> None:
     assert restarted["terminalOutcome"] is None
 
 
-def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded() -> None:
+def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded(
+    workflow_app,
+) -> None:
     """The narrowest bit of ordering in the whole change.
 
     A graph short enough to be over before `start` answers announces its ending
@@ -2601,7 +2487,7 @@ def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded() -> None
         "Implementation review (codex)",
         (ScriptedNode(NodeId("implementation")),),
     )
-    app, _ = _graph_app(store, instant)
+    app, _ = _graph_app(store, instant, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2667,7 +2553,7 @@ class _EngineAfterARestart:
 
 
 def _restarted(
-    store: InMemoryStateStore, answers: dict[RunId, RunSnapshot | None]
+    store: InMemoryStateStore, answers: dict[RunId, RunSnapshot | None], *, workflow_app
 ) -> tuple[object, _EngineAfterARestart]:
     runtime = _EngineAfterARestart(answers)
 
@@ -2675,7 +2561,7 @@ def _restarted(
     async def running(_app=None):
         yield runtime
 
-    app = _workflow_app(
+    app = workflow_app(
         store,
         ConcurrentRunner(),
         workflow_catalog=WorkflowCatalog.from_graphs((_review_graph(),)),
@@ -2717,7 +2603,7 @@ def _after_a_restart(app, store: InMemoryStateStore, run: RunState) -> RunState:
     return asyncio.run(scenario())
 
 
-def test_a_graph_run_interrupted_mid_execution_is_picked_back_up() -> None:
+def test_a_graph_run_interrupted_mid_execution_is_picked_back_up(workflow_app) -> None:
     """The reason this pass exists at all.
 
     A run that was working when the process died has no driver in the process
@@ -2727,7 +2613,7 @@ def test_a_graph_run_interrupted_mid_execution_is_picked_back_up() -> None:
     position it saved and carried on from there.
     """
     store = InMemoryStateStore()
-    app, runtime = _restarted(store, {RunId("run-graph"): _graph_snapshot(RunStatus.RUNNING)})
+    app, runtime = _restarted(store, {RunId("run-graph"): _graph_snapshot(RunStatus.RUNNING)}, workflow_app=workflow_app)
 
     restored = _after_a_restart(app, store, _interrupted_run())
 
@@ -2738,7 +2624,7 @@ def test_a_graph_run_interrupted_mid_execution_is_picked_back_up() -> None:
     assert restored.failure_reason == ""
 
 
-def test_a_graph_run_waiting_on_a_person_is_left_where_it_is() -> None:
+def test_a_graph_run_waiting_on_a_person_is_left_where_it_is(workflow_app) -> None:
     """The case that already worked, and must not be disturbed.
 
     A run parked on a question is picked back up by the answer, not by the
@@ -2747,7 +2633,8 @@ def test_a_graph_run_waiting_on_a_person_is_left_where_it_is() -> None:
     """
     store = InMemoryStateStore()
     app, runtime = _restarted(
-        store, {RunId("run-graph"): _graph_snapshot(RunStatus.AWAITING_APPROVAL)}
+        store, {RunId("run-graph"): _graph_snapshot(RunStatus.AWAITING_APPROVAL)},
+        workflow_app=workflow_app,
     )
 
     restored = _after_a_restart(app, store, _interrupted_run())
@@ -2756,7 +2643,9 @@ def test_a_graph_run_waiting_on_a_person_is_left_where_it_is() -> None:
     assert restored.phase is RunPhase.RUNNING_AGENT
 
 
-def test_a_graph_run_that_ended_while_the_server_was_down_catches_up() -> None:
+def test_a_graph_run_that_ended_while_the_server_was_down_catches_up(
+    workflow_app,
+) -> None:
     """An ending announced to a process that was not there to hear it.
 
     `graph_event` only moves a row while this process is running. A run that
@@ -2767,7 +2656,7 @@ def test_a_graph_run_that_ended_while_the_server_was_down_catches_up() -> None:
     app, runtime = _restarted(
         store,
         {RunId("run-graph"): _graph_snapshot(RunStatus.FAILED, "the checkout vanished")},
-    )
+     workflow_app=workflow_app)
 
     restored = _after_a_restart(app, store, _interrupted_run())
 
@@ -2776,7 +2665,9 @@ def test_a_graph_run_that_ended_while_the_server_was_down_catches_up() -> None:
     assert restored.failure_reason == "the checkout vanished"
 
 
-def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working() -> None:
+def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working(
+    workflow_app,
+) -> None:
     """State deleted from under a row -- `graph-state/` thrown away, say.
 
     Nothing can recover it and nobody will ever answer it, so it is failed with
@@ -2784,7 +2675,7 @@ def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working
     long as the database survives.
     """
     store = InMemoryStateStore()
-    app, _ = _restarted(store, {})
+    app, _ = _restarted(store, {}, workflow_app=workflow_app)
 
     restored = _after_a_restart(app, store, _interrupted_run())
 
@@ -2792,18 +2683,8 @@ def test_a_graph_run_the_engine_has_forgotten_is_failed_rather_than_left_working
     assert "no record" in restored.failure_reason
 
 
-def _app_over(store: InMemoryStateStore, engine):
-    """The web app with a graph engine that behaves however a test needs."""
-    return _workflow_app(
-        store,
-        ConcurrentRunner(),
-        workflow_catalog=WorkflowCatalog.from_graphs((_review_graph(),)),
-        graph_runtime=engine,
-    )
-
-
 def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, *, workflow_app
 ) -> None:
     """A broken definition is not something to carry on without.
 
@@ -2826,7 +2707,12 @@ def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
         )
         yield  # pragma: no cover -- unreachable, and required to make this a CM
 
-    app = _app_over(store, broken())
+    app = workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_graphs((_review_graph(),)),
+        graph_runtime=broken(),
+    )
 
     async def scenario():
         async with app.router.lifespan_context(app):  # pragma: no cover -- raises
@@ -2841,7 +2727,7 @@ def test_a_graph_that_does_not_compile_stops_the_server_and_names_itself(
 
 
 def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, *, workflow_app
 ) -> None:
     """Everything else that can go wrong stays inside the graph feature.
 
@@ -2860,7 +2746,12 @@ def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
         raise PermissionError("graph-state/: read-only file system")
         yield  # pragma: no cover -- unreachable, and required to make this a CM
 
-    app = _app_over(store, refusing())
+    app = workflow_app(
+        store,
+        ConcurrentRunner(),
+        workflow_catalog=WorkflowCatalog.from_graphs((_review_graph(),)),
+        graph_runtime=refusing(),
+    )
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -2901,28 +2792,26 @@ def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
     ({"undeclared": "value"}, 400),
     ([], 400),
 ])
-def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, status):
-    from dataclasses import dataclass
+def test_graph_workorder_inputs_are_validated_and_passed_to_execution(
+    values, status, *, async_client, workflow_app
+):
     from engine.graph_runtime.inputs import WorkflowInput
 
-    @dataclass(frozen=True)
-    class InputGraph(ScriptedGraph):
-        inputs: tuple[WorkflowInput, ...] = (
-            WorkflowInput("implementation_runner", "Implementation runner", "codex", True, ("codex", "claude")),
-            WorkflowInput("review_runner", "Review runner", "claude", True, ("codex", "claude")),
-        )
+    from graph_runtime_fakes import InputGraph
 
     graph = InputGraph(
         GraphId("inputs"), "Inputs",
         (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+        inputs=(
+            WorkflowInput("implementation_runner", "Implementation runner", "codex", True, ("codex", "claude")),
+            WorkflowInput("review_runner", "Review runner", "claude", True, ("codex", "claude")),
+        ),
     )
-    app, runtime = _graph_app(InMemoryStateStore(), graph)
+    app, runtime = _graph_app(InMemoryStateStore(), graph, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 config = (await client.get("/api/config")).json()
                 offered = next(item for item in config["workflows"] if item["id"] == "inputs")
                 assert offered["inputs"][0]["choices"] == ["codex", "claude"]
@@ -2942,25 +2831,21 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(values, st
     asyncio.run(scenario())
 
 
-def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
-    from engine.graph_runtime.inputs import mode_input
-
-    @dataclass(frozen=True)
-    class ModeGraph(ScriptedGraph):
-        inputs: tuple = (mode_input(),)
+def test_a_disconnected_repository_runs_every_workorder_disconnected(
+    tmp_path, *, async_client, workflow_app
+):
+    from graph_runtime_fakes import ModeGraph
 
     graph = ModeGraph(GraphId("modes"), "Modes", (ScriptedNode(NodeId("work"), (Say("Done"),)),))
     offline, online = tmp_path / "offline", tmp_path / "online"
     registry = RepositoryRegistry(projects={})
-    app, runtime = _graph_app(InMemoryStateStore(), graph, repos=registry)
+    app, runtime = _graph_app(InMemoryStateStore(), graph, repos=registry, workflow_app=workflow_app)
     registry.add("acme/offline", str(offline), mode="disconnected")
     registry.add("acme/online", str(online))
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 config = (await client.get("/api/config")).json()
                 assert config["repositories"] == [
                     {"name": "acme/offline", "path": str(offline), "mode": "disconnected"},
@@ -2980,21 +2865,21 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_trusted_repository_auto_approves_its_workorders_only(tmp_path):
+def test_a_trusted_repository_auto_approves_its_workorders_only(
+    tmp_path, *, async_client, workflow_app
+):
     graph = ScriptedGraph(
         GraphId("trust"), "Trust", (ScriptedNode(NodeId("work"), (Say("Done"),)),),
     )
     trusted, other = tmp_path / "trusted", tmp_path / "other"
     registry = RepositoryRegistry(projects={})
-    app, runtime = _graph_app(InMemoryStateStore(), graph, repos=registry)
+    app, runtime = _graph_app(InMemoryStateStore(), graph, repos=registry, workflow_app=workflow_app)
     registry.add("acme/trusted", str(trusted), trusted=True)
     registry.add("acme/other", str(other))
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 approved = {}
                 for path in (trusted, other):
                     response = await client.post("/api/runs", json={
@@ -3008,21 +2893,19 @@ def test_a_trusted_repository_auto_approves_its_workorders_only(tmp_path):
     asyncio.run(scenario())
 
 
-def test_a_disconnected_repository_is_matched_through_subfolders_and_worktrees(tmp_path):
+def test_a_disconnected_repository_is_matched_through_subfolders_and_worktrees(
+    tmp_path, *, async_client, git_repo, workflow_app
+):
     import subprocess
 
-    from engine.graph_runtime.inputs import mode_input
-
-    @dataclass(frozen=True)
-    class ModeGraph(ScriptedGraph):
-        inputs: tuple = (mode_input(),)
+    from graph_runtime_fakes import ModeGraph
 
     def git(*args: str) -> None:
         subprocess.run(["git", *args], check=True, capture_output=True)
 
     offline = tmp_path / "offline"
     (offline / "src").mkdir(parents=True)
-    git("init", "-q", str(offline))
+    git_repo(offline)
     git("-C", str(offline), "-c", "user.name=t", "-c", "user.email=t@t",
         "commit", "-q", "--allow-empty", "-m", "init")
     other_worktree = tmp_path / "other-worktree"
@@ -3032,13 +2915,11 @@ def test_a_disconnected_repository_is_matched_through_subfolders_and_worktrees(t
         InMemoryStateStore(), graph,
         repos={"acme/offline": str(offline)},
         repo_modes={"acme/offline": "disconnected"},
-    )
+     workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 for path in (offline / "src", other_worktree):
                     response = await client.post("/api/runs", json={
                         "workflowId": "modes", "repository": str(path), "prompt": "Task",
@@ -3055,21 +2936,22 @@ def _runner_input_graph(*choices: str) -> ScriptedGraph:
     """A graph whose one input is an implementation runner offering `choices`."""
     from engine.graph_runtime.inputs import WorkflowInput
 
-    @dataclass(frozen=True)
-    class InputGraph(ScriptedGraph):
-        inputs: tuple[WorkflowInput, ...] = (
-            WorkflowInput(
-                "implementation_runner", "Implementation runner", "codex", True, choices,
-            ),
-        )
+    from graph_runtime_fakes import InputGraph
 
     return InputGraph(
         GraphId("inputs"), "Inputs",
         (ScriptedNode(NodeId("work"), (Say("Done"),)),),
+        inputs=(
+            WorkflowInput(
+                "implementation_runner", "Implementation runner", "codex", True, choices,
+            ),
+        ),
     )
 
 
-def _least_utilized_app(tmp_path, read_test, cached: float | None = None):
+def _least_utilized_app(
+    tmp_path, read_test, cached: float | None = None, *, workflow_app
+):
     """A least-utilized graph app whose "test" runner is read by `read_test`.
 
     `cached` seeds an hour-old "test" reading at that percentage, so the start
@@ -3088,20 +2970,20 @@ def _least_utilized_app(tmp_path, read_test, cached: float | None = None):
     return _graph_app(
         InMemoryStateStore(), _runner_input_graph("codex", "test", LEAST_UTILIZED),
         utilization=service,
-    )
+     workflow_app=workflow_app)
 
 
-def test_graph_workorder_round_robin_runner_resolves_at_start():
+def test_graph_workorder_round_robin_runner_resolves_at_start(
+    async_client, workflow_app
+):
     from engine.graph_runtime.inputs import ROUND_ROBIN
 
     graph = _runner_input_graph("codex", "claude", ROUND_ROBIN)
-    app, runtime = _graph_app(InMemoryStateStore(), graph)
+    app, runtime = _graph_app(InMemoryStateStore(), graph, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 picked = []
                 for _ in range(3):
                     response = await client.post("/api/runs", json={
@@ -3116,7 +2998,9 @@ def test_graph_workorder_round_robin_runner_resolves_at_start():
     asyncio.run(scenario())
 
 
-def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path):
+def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(
+    tmp_path, *, async_client, workflow_app
+):
     """Nothing else keeps the utilization cache warm, so starting the run reads it."""
     from engine.graph_runtime.inputs import LEAST_UTILIZED
 
@@ -3126,13 +3010,11 @@ def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path)
             windows=(UtilizationWindow("five_hour", "5-hour", 5.0, ""),),
         )
 
-    app, runtime = _least_utilized_app(tmp_path, read_test)
+    app, runtime = _least_utilized_app(tmp_path, read_test, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 response = await client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Task",
                     "inputs": {"implementation_runner": LEAST_UTILIZED},
@@ -3146,7 +3028,7 @@ def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(tmp_path)
 
 
 def test_graph_workorder_least_utilized_falls_back_to_the_cache_when_the_scrape_hangs(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, *, async_client, workflow_app
 ):
     from engine.apps.web import api as web_api
     from engine.graph_runtime.inputs import LEAST_UTILIZED
@@ -3155,13 +3037,11 @@ def test_graph_workorder_least_utilized_falls_back_to_the_cache_when_the_scrape_
         await asyncio.Event().wait()
 
     monkeypatch.setattr(web_api, "UTILIZATION_REFRESH_TIMEOUT_SECONDS", 0.05)
-    app, runtime = _least_utilized_app(tmp_path, hang, cached=5.0)
+    app, runtime = _least_utilized_app(tmp_path, hang, cached=5.0, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 response = await client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Task",
                     "inputs": {"implementation_runner": LEAST_UTILIZED},
@@ -3173,7 +3053,9 @@ def test_graph_workorder_least_utilized_falls_back_to_the_cache_when_the_scrape_
     assert asyncio.run(scenario()) == "test"
 
 
-def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(tmp_path):
+def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(
+    tmp_path, *, async_client, workflow_app
+):
     """The scrape runs outside the lock every WorkOrder creation takes."""
     from engine.graph_runtime.inputs import LEAST_UTILIZED
 
@@ -3186,13 +3068,11 @@ def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(tmp
             runner="test", windows=(UtilizationWindow("five_hour", "5-hour", 5.0, ""),),
         )
 
-    app, _runtime = _least_utilized_app(tmp_path, slow)
+    app, _runtime = _least_utilized_app(tmp_path, slow, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 placed = asyncio.create_task(client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Placed",
                     "inputs": {"implementation_runner": LEAST_UTILIZED},
@@ -3213,13 +3093,15 @@ def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(tmp
     asyncio.run(scenario())
 
 
-def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts():
+def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts(
+    async_client, workflow_app
+):
     """A scheduled dependent keeps the policy and is placed once it can run."""
     from engine.graph_runtime.inputs import ROUND_ROBIN
 
     graph = _runner_input_graph("codex", "claude", ROUND_ROBIN)
     store = InMemoryStateStore()
-    app, runtime = _graph_app(store, graph)
+    app, runtime = _graph_app(store, graph, workflow_app=workflow_app)
     prerequisite = RunState(
         run_id=RunId("prerequisite"), task_id=TaskId("task-prerequisite"),
         workflow_id=WorkflowId(str(graph.graph_id)), phase=RunPhase.RUNNING_AGENT,
@@ -3229,9 +3111,7 @@ def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts():
     async def scenario():
         await store.save(prerequisite)
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 response = await client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Follow up",
                     "dependsOnRunId": "prerequisite",
@@ -3252,7 +3132,9 @@ def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts():
     assert asyncio.run(scenario()) == "codex"
 
 
-def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() -> None:
+def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id(
+    async_client, workflow_app
+) -> None:
     async def scenario():
         store = InMemoryStateStore()
         graph = ScriptedGraph(GraphId("scheduled-graph"), "Scheduled graph", (
@@ -3264,11 +3146,11 @@ def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() ->
             name="Scheduled graph work", prompt="Do the work", repository=".",
         )
         await store.save(state)
-        app, runtime = _graph_app(store, graph)
+        app, runtime = _graph_app(store, graph, workflow_app=workflow_app)
         async with app.router.lifespan_context(app):
             assert (await store.load(state.run_id)).phase is RunPhase.SCHEDULED
             assert await runtime.snapshot(state.run_id) is None
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            async with async_client(app, base_url="http://test") as client:
                 first, second = await asyncio.gather(
                     client.post("/api/runs/run-scheduled-graph/start"),
                     client.post("/api/runs/run-scheduled-graph/start"),
@@ -3288,7 +3170,9 @@ def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id() ->
     ("github:7:bob", "github:7:bob"),
     (None, "github:42:alice"),
 ])
-def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) -> None:
+def test_starting_a_scheduled_workorder_keeps_its_requester(
+    proposer, expected, *, workflow_app
+) -> None:
     """Whoever clicks Start does not replace the proposer as requester."""
     graph = _review_graph()
     store = InMemoryStateStore()
@@ -3297,7 +3181,7 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) 
         github_login_config=GitHubLoginConfig(
             "client", "secret", "https://engine.test/api/auth/github/callback"
         ),
-    )
+     workflow_app=workflow_app)
 
     async def scenario():
         await store.save(RunState(
@@ -3325,7 +3209,9 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(proposer, expected) 
     assert asyncio.run(store.load(RunId("run-proposed"))).requester == expected
 
 
-def test_agent_created_workorder_links_to_its_creator() -> None:
+def test_agent_created_workorder_links_to_its_creator(
+    async_client, workflow_app
+) -> None:
     from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
     from engine.domain import AgentRunId
 
@@ -3334,13 +3220,11 @@ def test_agent_created_workorder_links_to_its_creator() -> None:
     callbacks = []
     runtime.bind_workorder_creator = callbacks.append
     store = InMemoryStateStore()
-    app = _graph_app_over(store, runtime, graph)
+    app = _graph_app_over(store, runtime, graph, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 parent = (await client.post("/api/runs", json={
                     "workflowId": str(graph.graph_id), "prompt": "Original task",
                     "repository": "acme/api",
@@ -3365,7 +3249,9 @@ def test_agent_created_workorder_links_to_its_creator() -> None:
     asyncio.run(scenario())
 
 
-def test_workorder_dependencies_wait_and_release_a_chain() -> None:
+def test_workorder_dependencies_wait_and_release_a_chain(
+    async_client, workflow_app
+) -> None:
     async def scenario():
         store = InMemoryStateStore()
         waiting = ScriptedGraph(GraphId("waiting"), "Waiting", (
@@ -3374,9 +3260,9 @@ def test_workorder_dependencies_wait_and_release_a_chain() -> None:
         quick = ScriptedGraph(GraphId("quick"), "Quick", (
             ScriptedNode(NodeId("work"), (Say("Done"),)),
         ))
-        app, runtime = _graph_app(store, waiting, quick)
+        app, runtime = _graph_app(store, waiting, quick, workflow_app=workflow_app)
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            async with async_client(app, base_url="http://test") as client:
                 async def create(graph, dependency=None):
                     body = {"workflowId": graph, "repository": ".", "prompt": "Task"}
                     if dependency:
@@ -3414,7 +3300,9 @@ def test_workorder_dependencies_wait_and_release_a_chain() -> None:
     asyncio.run(scenario())
 
 
-def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisites_blocked() -> None:
+def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisites_blocked(
+    workflow_app,
+) -> None:
     async def scenario():
         store = InMemoryStateStore()
         graph = _review_graph()
@@ -3429,7 +3317,7 @@ def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisit
                 workflow_id=WorkflowId(str(graph.graph_id)), repository=".",
                 phase=phase, depends_on_run_id=RunId(dependency) if dependency else None,
             ))
-        app, runtime = _graph_app(store, graph)
+        app, runtime = _graph_app(store, graph, workflow_app=workflow_app)
         async with app.router.lifespan_context(app):
             for _ in range(1000):
                 if (await store.load(RunId("ready"))).phase is RunPhase.SUCCEEDED:
@@ -3443,7 +3331,9 @@ def test_dependency_dispatch_recovers_after_restart_and_keeps_failed_prerequisit
 
 
 @pytest.mark.parametrize("creation", ["api", "agent"])
-def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creation) -> None:
+def test_dependency_creation_during_prerequisite_cancellation_is_rejected(
+    creation, *, async_client, web_app
+) -> None:
     async def scenario():
         store = InMemoryStateStore()
         graph = _review_graph()
@@ -3463,7 +3353,7 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
         async def running(_app=None):
             yield runtime
 
-        app = create_app(
+        app = web_app(
             _session_with({"test": ConcurrentRunner()}, state_store=store),
             {"test": ConcurrentRunner()},
             workflow_catalog=WorkflowCatalog.from_graphs((graph,)),
@@ -3476,9 +3366,7 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
                 phase=RunPhase.RUNNING_AGENT, repository=".",
             )
             await store.save(prerequisite)
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test",
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 deletion = asyncio.create_task(client.delete("/api/runs/prerequisite"))
                 try:
                     async with asyncio.timeout(5):
@@ -3503,7 +3391,9 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(creati
     asyncio.run(scenario())
 
 
-def test_graph_frontier_is_seeded_once_when_restoring_pending_approvals(monkeypatch):
+def test_graph_frontier_is_seeded_once_when_restoring_pending_approvals(
+    monkeypatch, *, async_client, workflow_app
+):
     from engine.graph_runtime.control import PendingApproval
     from engine.graph_runtime.identity import ExecutionId
 
@@ -3516,7 +3406,7 @@ def test_graph_frontier_is_seeded_once_when_restoring_pending_approvals(monkeypa
             ApprovalKind.COMMAND_EXECUTION,
         ),),
     )
-    app, runtime = _restarted(store, {snapshot.run_id: snapshot})
+    app, runtime = _restarted(store, {snapshot.run_id: snapshot}, workflow_app=workflow_app)
 
     async def scenario():
         await store.save(_interrupted_run())
@@ -3525,9 +3415,7 @@ def test_graph_frontier_is_seeded_once_when_restoring_pending_approvals(monkeypa
                 raise AssertionError("restored frontier must not read checkpoints on polls")
 
             monkeypatch.setattr(runtime, "snapshot", no_snapshot)
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 return (await client.get("/api/runs")).json()["runs"][0]
 
     row = asyncio.run(scenario())
@@ -3538,12 +3426,14 @@ def test_graph_frontier_is_seeded_once_when_restoring_pending_approvals(monkeypa
     }
 
 
-def test_finished_run_resumed_after_restart_gets_live_frontier():
+def test_finished_run_resumed_after_restart_gets_live_frontier(
+    async_client, workflow_app
+):
     from engine.graph_runtime.events import EventKind, RuntimeEvent
 
     store = InMemoryStateStore()
     snapshot = _graph_snapshot(RunStatus.COMPLETED)
-    app, runtime = _restarted(store, {snapshot.run_id: snapshot})
+    app, runtime = _restarted(store, {snapshot.run_id: snapshot}, workflow_app=workflow_app)
 
     async def scenario():
         await store.save(replace(_interrupted_run(), phase=RunPhase.SUCCEEDED))
@@ -3551,9 +3441,7 @@ def test_finished_run_resumed_after_restart_gets_live_frontier():
             await runtime._observer(RuntimeEvent(
                 snapshot.run_id, EventKind.RUN_FORKED, {"nodes": ["implementation"]},
             ))
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 return (await client.get("/api/runs")).json()["runs"][0]
 
     row = asyncio.run(scenario())
@@ -3563,13 +3451,12 @@ def test_finished_run_resumed_after_restart_gets_live_frontier():
 
 
 @pytest.mark.parametrize("login_enabled", [False, True])
-def test_health_identity_and_lifecycle(login_enabled):
+def test_health_identity_and_lifecycle(login_enabled, *, client, web_app):
     from importlib.metadata import version
-    from starlette.testclient import TestClient
     from engine.apps.web.github_login import GitHubLoginConfig
 
     runner = ConcurrentRunner()
-    app = create_app(
+    app = web_app(
         _session(runner), {"test": runner},
         github_login_config=(GitHubLoginConfig(
             "client", "secret", "https://engine.test/api/auth/github/callback"
@@ -3577,31 +3464,29 @@ def test_health_identity_and_lifecycle(login_enabled):
     )
     expected = {"service": "openengine", "version": version("engine-web"),
                 "ready": False, "api_version": 1}
-    with TestClient(app) as client:
-        response = client.get("/api/health")
+    with client(app) as browser:
+        response = browser.get("/api/health")
         assert response.status_code == 200
         assert response.json() == {**expected, "ready": True}
         assert response.headers["cache-control"] == "no-store"
-        assert client.get("/api/health").json() == response.json()
+        assert browser.get("/api/health").json() == response.json()
         if login_enabled:
-            assert client.get("/api/threads").status_code == 401
-    response = client.get("/api/health")
+            assert browser.get("/api/threads").status_code == 401
+    response = browser.get("/api/health")
     assert response.status_code == 503
     assert response.json() == expected
 
 
-def test_health_not_ready_when_configured_graph_runtime_fails():
-    from starlette.testclient import TestClient
-
+def test_health_not_ready_when_configured_graph_runtime_fails(client, web_app):
     @asynccontextmanager
     async def broken_runtime():
         raise OSError("cannot open graph state")
         yield
 
     runner = ConcurrentRunner()
-    app = create_app(_session(runner), {"test": runner}, graph_runtime=broken_runtime())
-    with TestClient(app) as client:
-        response = client.get("/api/health")
+    app = web_app(_session(runner), {"test": runner}, graph_runtime=broken_runtime())
+    with client(app) as browser:
+        response = browser.get("/api/health")
         assert response.status_code == 503
         assert response.json()["ready"] is False
         assert response.json()["service"] == "openengine"
@@ -3612,7 +3497,15 @@ def test_production_port_default_preserves_explicit_settings():
     assert Settings(port=8123).port == 8123
 
 
-def _login_gate(repository: str, source_control: object, login_repositories=(), check="authorize", **options):
+def _login_gate(
+    repository: str,
+    source_control: object,
+    login_repositories=(),
+    check="authorize",
+    *,
+    web_app,
+    **options,
+):
     """The `check` the app hands its GitHub login, over `source_control`."""
     unused = object()
     session = AgentSession(
@@ -3624,7 +3517,7 @@ def _login_gate(repository: str, source_control: object, login_repositories=(), 
         ),
         profiles=PROFILES, runners={"test": ConcurrentRunner()},
     )
-    app = create_app(
+    app = web_app(
         session, {"test": ConcurrentRunner()},
         workflow_catalog=WorkflowCatalog.from_graphs(()),
         github_login_config=GitHubLoginConfig(
@@ -3641,11 +3534,11 @@ def _login_gate(repository: str, source_control: object, login_repositories=(), 
     return getattr(callback.__self__, check)
 
 
-def test_signing_in_requires_write_access_to_the_configured_repository() -> None:
+def test_signing_in_requires_write_access_to_the_configured_repository(web_app) -> None:
     """WorkOrders are visible to the people who can push to the repository they
     work on, and to nobody else with a GitHub account."""
     source_control = MagicMock(can_write_repository=AsyncMock(side_effect=[True, False]))
-    authorize = _login_gate("acme/api", source_control)
+    authorize = _login_gate("acme/api", source_control, web_app=web_app)
 
     assert asyncio.run(authorize(1, "maintainer")) == {"acme/api": True}
     assert asyncio.run(authorize(2, "stranger")) == {"acme/api": False}
@@ -3657,15 +3550,15 @@ def test_signing_in_requires_write_access_to_the_configured_repository() -> None
     ]
 
 
-def test_signing_in_is_refused_without_a_repository_to_check() -> None:
+def test_signing_in_is_refused_without_a_repository_to_check(web_app) -> None:
     source_control = MagicMock(can_write_repository=AsyncMock(return_value=True))
-    authorize = _login_gate("", source_control)
+    authorize = _login_gate("", source_control, web_app=web_app)
 
     assert asyncio.run(authorize(1, "maintainer")) == {}
     source_control.can_write_repository.assert_not_awaited()
 
 
-def test_every_configured_repository_is_asked_and_a_failure_is_unknown() -> None:
+def test_every_configured_repository_is_asked_and_a_failure_is_unknown(web_app) -> None:
     """Each repository gets its own answer, so what a user sees can be scoped to
     the ones they can push to; a lookup that fails is unknown, not a no."""
     async def can_write(pr_url, login, *, user_id):
@@ -3674,7 +3567,7 @@ def test_every_configured_repository_is_asked_and_a_failure_is_unknown() -> None
         return "acme/web" in pr_url
 
     source_control = MagicMock(can_write_repository=AsyncMock(side_effect=can_write))
-    authorize = _login_gate("Acme/API", source_control, ("acme/docs", "acme/web", "acme/api"))
+    authorize = _login_gate("Acme/API", source_control, ("acme/docs", "acme/web", "acme/api"), web_app=web_app)
 
     assert asyncio.run(authorize(1, "maintainer")) == {
         "acme/api": None, "acme/docs": False, "acme/web": True,
@@ -3688,7 +3581,9 @@ def test_every_configured_repository_is_asked_and_a_failure_is_unknown() -> None
     ]
 
 
-def test_the_users_own_token_is_asked_about_public_github_repositories(monkeypatch) -> None:
+def test_the_users_own_token_is_asked_about_public_github_repositories(
+    monkeypatch, *, web_app
+) -> None:
     """The stand-in for a failed server lookup asks GitHub with the signed-in
     user's token, reads only a write role as a yes, and skips other forges."""
     asked = []
@@ -3705,7 +3600,8 @@ def test_the_users_own_token_is_asked_about_public_github_repositories(monkeypat
         lambda **kwargs: real_client(transport=httpx.MockTransport(github), **kwargs),
     )
     authorize_user = _login_gate(
-        "acme/api", MagicMock(), ("acme/web", "gitlab.example/acme/ops"), "authorize_user"
+        "acme/api", MagicMock(), ("acme/web", "gitlab.example/acme/ops"), "authorize_user",
+        web_app=web_app,
     )
 
     assert asyncio.run(authorize_user("user-token")) == {"acme/api": None, "acme/web": True}
@@ -3715,7 +3611,9 @@ def test_the_users_own_token_is_asked_about_public_github_repositories(monkeypat
     ]
 
 
-def test_the_users_own_token_without_a_write_role_is_no_yes(monkeypatch) -> None:
+def test_the_users_own_token_without_a_write_role_is_no_yes(
+    monkeypatch, *, web_app
+) -> None:
     def github(request):
         return httpx.Response(200, json={"permissions": {"pull": True, "push": False}})
 
@@ -3724,20 +3622,20 @@ def test_the_users_own_token_without_a_write_role_is_no_yes(monkeypatch) -> None
         "engine.apps.web.api.httpx.AsyncClient",
         lambda **kwargs: real_client(transport=httpx.MockTransport(github), **kwargs),
     )
-    authorize_user = _login_gate("acme/api", MagicMock(), check="authorize_user")
+    authorize_user = _login_gate("acme/api", MagicMock(), check="authorize_user", web_app=web_app)
 
     assert asyncio.run(authorize_user("user-token")) == {"acme/api": False}
 
 
-def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
+def test_retired_project_routes_and_conversation_ownership_are_absent(
+    async_client, *, web_app
+) -> None:
     runner = ConcurrentRunner()
     store = InMemoryStateStore()
-    app = create_app(_session_with({"test": runner}, state_store=store), {"test": runner})
+    app = web_app(_session_with({"test": runner}, state_store=store), {"test": runner})
 
     async def scenario():
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with async_client(app, base_url="http://test") as client:
             for method, path in (
                 ("GET", "/api/projects"),
                 ("POST", "/api/projects"),
@@ -3759,7 +3657,7 @@ def test_retired_project_routes_and_conversation_ownership_are_absent() -> None:
     asyncio.run(scenario())
 
 
-def _scoped_app(tmp_path, runtime=None, *, live=False):
+def _scoped_app(tmp_path, runtime=None, *, live=False, workflow_app):
     """Two checkouts behind GitHub login, and a run in each place a run can be."""
     graph = _review_graph()
     store = InMemoryStateStore()
@@ -3773,6 +3671,7 @@ def _scoped_app(tmp_path, runtime=None, *, live=False):
         repos=registry if live else repos,
         login_repositories=("acme/api", "acme/web"),
         repository_projects={"api": "acme/api", "web": "acme/web"},
+        workflow_app=workflow_app,
     )
     if live:
         for name, path in repos.items():
@@ -3811,10 +3710,10 @@ def _as_user(writable):
 
 
 @pytest.mark.parametrize("live", [False, True])
-def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path, live) -> None:
+def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path, live, *, workflow_app) -> None:
     """Someone who can push only to `api` sees `api`'s WorkOrders, and every
     other run answers as if it did not exist."""
-    app, store, repos = _scoped_app(tmp_path, live=live)
+    app, store, repos = _scoped_app(tmp_path, live=live, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -3867,12 +3766,14 @@ def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path, live)
     assert asyncio.run(store.load(RunId("run-web-scheduled"))).phase is RunPhase.SCHEDULED
 
 
-def test_a_graph_run_stream_is_rechecked_against_its_own_repository(tmp_path) -> None:
+def test_a_graph_run_stream_is_rechecked_against_its_own_repository(
+    tmp_path, *, workflow_app
+) -> None:
     """A stream from `/graph` ends when its run's repository is out of reach,
     even for someone who can still write to another repository."""
     from engine.apps.web.github_login import STREAM_ACCESS
 
-    app, _store, _repos = _scoped_app(tmp_path)
+    app, _store, _repos = _scoped_app(tmp_path, workflow_app=workflow_app)
     scopes = []
 
     async def recording(scope, receive, send):
@@ -3899,13 +3800,15 @@ def test_a_graph_run_stream_is_rechecked_against_its_own_repository(tmp_path) ->
         asyncio.run(scenario())
 
 
-def test_an_agent_cannot_depend_on_another_repositorys_run(tmp_path) -> None:
+def test_an_agent_cannot_depend_on_another_repositorys_run(
+    tmp_path, *, workflow_app
+) -> None:
     """An agent's WorkOrder may wait on runs in its own repository only; any
     other run is as unknown as a missing one, whatever its state."""
     runtime = ScriptedGraphRuntime(_review_graph())
     creators = []
     runtime.bind_workorder_creator = creators.append
-    app, store, _repos = _scoped_app(tmp_path, runtime)
+    app, store, _repos = _scoped_app(tmp_path, runtime, workflow_app=workflow_app)
 
     async def scenario():
         async with app.app.router.lifespan_context(app.app):
@@ -3934,19 +3837,19 @@ class BranchingWorkspaces(ConversationWorkspaces):
         return super()._workspace(workspace_id, repository, base_ref)
 
 
-def _scoped_chat_app(tmp_path, default="/repository"):
+def _scoped_chat_app(tmp_path, default="/repository", *, git_repo, web_app):
     """Two real checkouts, `api` and `web`, behind GitHub login."""
     import subprocess
 
     repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
     for path in repos.values():
-        subprocess.run(["git", "init", "-q", path], check=True)
+        git_repo(path)
         subprocess.run(["git", "-C", path, "-c", "user.name=t", "-c", "user.email=t@t",
                         "commit", "-q", "--allow-empty", "-m", "init"], check=True)
     runner = ConcurrentRunner()
     store = InMemoryStateStore()
     workspaces = BranchingWorkspaces()
-    app = create_app(
+    app = web_app(
         _workspace_session(runner, workspaces, store, repos.get(default, default)),
         {"test": runner},
         github_login_config=GitHubLoginConfig(
@@ -3959,12 +3862,14 @@ def _scoped_chat_app(tmp_path, default="/repository"):
     return app, store, repos, workspaces
 
 
-def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(
+    tmp_path, *, git_repo, web_app
+) -> None:
     """A chat whose branch is in a repository its user cannot push to is not
     listed and answers as missing, attached or detached, so its transcript
     cannot be read nor its agent prompted, and its checkout cannot be kept by
     naming another repository."""
-    app, store, repos, workspaces = _scoped_chat_app(tmp_path)
+    app, store, repos, workspaces = _scoped_chat_app(tmp_path, git_repo=git_repo, web_app=web_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -4014,10 +3919,12 @@ def test_chats_are_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> N
         asyncio.run(as_api_user(ids))
 
 
-def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(tmp_path) -> None:
+def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(
+    tmp_path, *, git_repo, web_app
+) -> None:
     """A new chat gets the default checkout at once, so it is refused before
     anything is checked out for somebody who cannot write there."""
-    app, store, _repos, _workspaces = _scoped_chat_app(tmp_path, default="web")
+    app, store, _repos, _workspaces = _scoped_chat_app(tmp_path, default="web", git_repo=git_repo, web_app=web_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -4037,11 +3944,13 @@ def test_a_new_chat_is_refused_the_default_checkout_its_user_cannot_write_to(tmp
         asyncio.run(allowed())
 
 
-def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_path) -> None:
+def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(
+    tmp_path, *, git_repo, web_app
+) -> None:
     """A chat cannot be given a checkout of a repository its user cannot push
     to, whether named or the server's default, attached for the first time or
     again after a detach."""
-    app, store, repos, _workspaces = _scoped_chat_app(tmp_path)
+    app, store, repos, _workspaces = _scoped_chat_app(tmp_path, git_repo=git_repo, web_app=web_app)
 
     async def scenario():
         instance = await store.create_instance(CODER)
@@ -4062,9 +3971,9 @@ def test_a_chat_checkout_is_scoped_to_the_repositories_a_user_can_write_to(tmp_p
         asyncio.run(scenario())
 
 
-def test_operators_see_every_run(tmp_path) -> None:
+def test_operators_see_every_run(tmp_path, *, workflow_app) -> None:
     """Operators see everything, including runs no GitHub repository maps to."""
-    app, _store, _repos = _scoped_app(tmp_path)
+    app, _store, _repos = _scoped_app(tmp_path, workflow_app=workflow_app)
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
@@ -4103,7 +4012,9 @@ def test_engines_own_info_lines_reach_the_log():
         engine.setLevel(before)
 
 
-def test_onboarded_repository_can_be_selected_for_a_workorder(tmp_path, monkeypatch):
+def test_onboarded_repository_can_be_selected_for_a_workorder(
+    tmp_path, monkeypatch, *, async_client, workflow_app
+):
     from engine.apps.web.repositories import ensure_repository_checkouts
 
     checkout = tmp_path / "repo"
@@ -4119,13 +4030,11 @@ def test_onboarded_repository_can_be_selected_for_a_workorder(tmp_path, monkeypa
         (ScriptedNode(NodeId("work"), (Say("Done"),)),),
     )
     store = InMemoryStateStore()
-    app, _ = _graph_app(store, graph, repos=repos)
+    app, _ = _graph_app(store, graph, repos=repos, workflow_app=workflow_app)
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://test"
-            ) as client:
+            async with async_client(app, base_url="http://test") as client:
                 config = (await client.get("/api/config")).json()
                 choice = next(r for r in config["repositories"] if r["name"] == "owner/repo")
                 assert Path(choice["path"]).is_dir()
