@@ -40,7 +40,7 @@ from engine.graph_runtime_langgraph.acp import answer_permission
 from engine.graph_runtime_langgraph.graphs import LangGraphDefinition
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
 from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore
-from langgraph_acp import ACPAgentRegistry
+from langgraph_acp import ACPAgentProvider, ACPAgentRegistry
 
 #: LangGraph's checkpoints, and the runtime's own records. Two files because
 #: they answer to two different owners: one is Pregel's idea of where a run
@@ -240,6 +240,72 @@ def agent_registry(providers: Iterable[Any]) -> ACPAgentRegistry:
     return ACPAgentRegistry(
         [replace(provider, permissions=answer_permission) for provider in providers]
     )
+
+
+class AddedAgents(ACPAgentRegistry):
+    """Agents added with `engine agent add`, and the model each one's sessions ask for.
+
+    Filled by the process serving them -- the graph service -- and read by
+    workflow files through `with_added_agents`, so a workflow written for the
+    built-in agents can also run on one added after it was loaded.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.models: dict[str, str] = {}
+
+    def offer(self, provider: ACPAgentProvider, model: str = "") -> None:
+        self.register(provider, replace=True)
+        if model:
+            self.models[provider.name] = model
+        else:
+            self.models.pop(provider.name, None)
+
+    def withdraw(self, name: str) -> None:
+        self.unregister(name)
+        self.models.pop(name, None)
+
+
+#: This process's added agents: what its graph service offers.
+ADDED_AGENTS = AddedAgents()
+
+
+class WithAddedAgents(ACPAgentRegistry):
+    """A workflow's own agents, and then whatever `added` offers when a run asks."""
+
+    def __init__(self, own: ACPAgentRegistry, added: AddedAgents) -> None:
+        super().__init__()
+        self.own = own
+        self.added = added
+
+    def register(self, provider: ACPAgentProvider, *, replace: bool = False) -> None:
+        self.own.register(provider, replace=replace)
+
+    def unregister(self, name: str) -> None:
+        self.own.unregister(name)
+
+    def resolve(self, name: str) -> ACPAgentProvider:
+        if name in self.added and name not in self.own:
+            return self.added.resolve(name)
+        return self.own.resolve(name)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted({*self.own.names, *self.added.names}))
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.own or name in self.added
+
+    def model(self, name: str) -> str:
+        """The model an added agent's sessions ask for; empty for the workflow's own."""
+        return "" if name in self.own else self.added.models.get(name, "")
+
+
+def with_added_agents(
+    registry: ACPAgentRegistry, added: AddedAgents = ADDED_AGENTS
+) -> WithAddedAgents:
+    """`registry`, also resolving the agents added with `engine agent add`."""
+    return WithAddedAgents(registry, added)
 
 
 def _compiled(workflow: GraphWorkflow, checkpointer: Any) -> LangGraphDefinition:

@@ -847,6 +847,38 @@ def test_stage_runners_configure_models_and_mcp_identity(
     assert observed[2].session_config["model"] == module.REVIEW_MODELS[review]["default"]
 
 
+@pytest.mark.parametrize(("model", "expected"), (("engine/qwen3", "engine/qwen3"), ("", None)))
+def test_an_added_agent_runs_any_stage_on_its_own_model(model, expected) -> None:
+    from engine.graph_runtime_langgraph import AddedAgents, agent_registry, with_added_agents
+    from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider, OpenCodeACPProvider
+
+    module = definition_module()
+    added = AddedAgents()
+    added.offer(OpenCodeACPProvider(name="qwen"), model)
+    agents = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider()]), added)
+    nodes = nodes_of(module.pipeline("codex", agents=agents))
+    assert "qwen" in nodes["implementation"].graph_node_runners
+    for name in ("implementation", "review-security", "review-bugs", "impact-analysis"):
+        node = nodes[name]._for_runner("qwen")
+        assert node.agent == "qwen" and agents.resolve("qwen").name == "qwen"
+        assert all(binding.agent_id == "qwen" for binding in node.mcp_server_bindings)
+        assert (node.session_config or {}).get("model") == expected
+    # Codex and Claude keep their own review models beside it.
+    claude = nodes["review-security"]._for_runner("claude")
+    assert claude.session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+
+
+def test_an_added_implementer_is_reviewed_by_claude() -> None:
+    module = definition_module()
+    nodes = nodes_of(module.pipeline("qwen"))
+    assert nodes["implementation"].agent == "qwen"
+    assert nodes["review-security"].agent == "claude"
+    assert nodes["review-security"].session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+    defaults = {item.name: item.default for item in module.graph_for("codex").inputs}
+    assert defaults["implementation_runner"] == "codex" and defaults["review_runner"] == "claude"
+    assert {item.name: item.default for item in module.graph_for("claude").inputs}["review_runner"] == "codex"
+
+
 def test_input_runner_can_be_reset_to_workflow_default_and_retried(tmp_path):
     """Run the real ACP node and persist the selection across a runtime restart."""
     from dataclasses import replace
