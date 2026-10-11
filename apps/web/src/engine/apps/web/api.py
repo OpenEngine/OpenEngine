@@ -2118,6 +2118,8 @@ def create_app(
             await dependencies_changed.wait()
             dependencies_changed.clear()
             async with scheduled_start_lock:
+                # Built once per pass, and only when some run is ready to start.
+                offered: Mapping[str, GraphWorkflow] | None = None
                 for state in await session.state_store.list_runs():
                     if (
                         state.phase is not RunPhase.SCHEDULED
@@ -2126,7 +2128,9 @@ def create_app(
                     ):
                         continue
                     try:
-                        graph = offered_graphs()[str(state.workflow_id)]
+                        if offered is None:
+                            offered = offered_graphs()
+                        graph = offered[str(state.workflow_id)]
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
