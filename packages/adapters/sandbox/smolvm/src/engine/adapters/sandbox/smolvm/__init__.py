@@ -55,7 +55,8 @@ def _kill(process: asyncio.subprocess.Process) -> None:
 def _relative(path: str) -> str:
     relative = PurePosixPath(path)
     if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError("sandbox path must stay within its workspace")
+        message = "sandbox path must stay within its workspace"
+        raise ValueError(message)
     return str(relative)
 
 
@@ -78,13 +79,15 @@ class SmolvmProcess:
                     # Killing just the CLI is insufficient: destroy the VM to
                     # ensure the guest command and its descendants also stop.
                     instance._begin_destroy()
-            self._timer = asyncio.get_running_loop().call_later(instance.spec.timeout, expire)
-            self._waiter.add_done_callback(lambda _: self._timer.cancel())
+            timer = asyncio.get_running_loop().call_later(instance.spec.timeout, expire)
+            self._timer = timer
+            self._waiter.add_done_callback(lambda _: timer.cancel())
 
     async def wait(self) -> int:
         status = await asyncio.shield(self._waiter)
         if self._expired:
-            raise TimeoutError("sandbox command timed out")
+            message = "sandbox command timed out"
+            raise TimeoutError(message)
         return status
 
 
@@ -104,18 +107,21 @@ class SmolvmInstance:
 
     def _alive(self) -> None:
         if self._destroyed:
-            raise RuntimeError("sandbox has been destroyed")
+            message = "sandbox has been destroyed"
+            raise RuntimeError(message)
 
     def _exec_arguments(self, command: Sequence[str], env: Mapping[str, str] | None = None):
         args = ["machine", "exec", "--name", self.name, "--interactive"]
         environment = dict(self._environment)
         for key, value in (env or {}).items():
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or "\0" in value:
-                raise ValueError("invalid sandbox environment variable")
+                message = "invalid sandbox environment variable"
+                raise ValueError(message)
             args.extend(["--env", f"{key}={value}"])
         for index, (key, value) in enumerate(self.spec.secrets.items()):
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or "\0" in value:
-                raise ValueError("invalid sandbox secret variable")
+                message = "invalid sandbox secret variable"
+                raise ValueError(message)
             reference = f"OE_SANDBOX_SECRET_{index}"
             environment[reference] = value
             # The CLI's explicit --env wins over --secret-env. Exclude any
@@ -154,7 +160,8 @@ class SmolvmInstance:
             for secret in self.spec.secrets.values():
                 if secret:
                     detail = detail.replace(secret, "[redacted]")
-            raise SmolvmError(f"smolvm {arguments[1]} failed ({process.returncode}): {detail}")
+            message = f"smolvm {arguments[1]} failed ({process.returncode}): {detail}"
+            raise SmolvmError(message)
         return stdout, stderr, process.returncode
 
     async def _helper(self, operation: str, *arguments: str, env=None):
@@ -168,7 +175,8 @@ class SmolvmInstance:
                 for secret in self.spec.secrets.values():
                     if secret:
                         detail = detail.replace(secret, "[redacted]")
-                raise SmolvmError(f"guest transfer helper failed ({code}): {detail}") from None
+                message = f"guest transfer helper failed ({code}): {detail}"
+                raise SmolvmError(message) from None
             if failure.get("error") == "FileNotFoundError":
                 raise FileNotFoundError(failure["message"])
             if failure.get("error") in {"ValueError", "FilterError", "OutsideDestinationError", "AbsoluteLinkError", "LinkOutsideDestinationError"}:
@@ -181,7 +189,8 @@ class SmolvmInstance:
             self._alive()
             directory = _relative(cwd)
             if not argv:
-                raise ValueError("sandbox command must not be empty")
+                message = "sandbox command must not be empty"
+                raise ValueError(message)
             checked = json.loads(await self._helper("check", directory, argv[0], env=env))
             args, environment = self._exec_arguments([checked["executable"], *argv[1:]], env)
             args[2:2] = ["--workdir", checked["cwd"]]
@@ -242,7 +251,8 @@ class SmolvmInstance:
                 # Confirm absence instead of ignoring arbitrary deletion errors.
                 listing, _, _ = await self._command(["machine", "ls", "--json"])
                 if any(machine["name"] == self.name for machine in json.loads(listing)):
-                    raise SmolvmError(f"SmolVM could not delete sandbox {self.name}")
+                    message = f"SmolVM could not delete sandbox {self.name}"
+                    raise SmolvmError(message)
 
 
 class SmolvmSandbox:
@@ -252,10 +262,12 @@ class SmolvmSandbox:
     @asynccontextmanager
     async def create(self, spec: SandboxSpec) -> AsyncIterator[SmolvmInstance]:
         if spec.egress_allowlist is not None:
-            raise ValueError("SmolVM egress allowlists are not implemented yet (#677)")
+            message = "SmolVM egress allowlists are not implemented yet (#677)"
+            raise ValueError(message)
         image = spec.image or self.image
         if not image:
-            raise ValueError("configure sandbox.image or provide SandboxSpec.image with the built guest image")
+            message = "configure sandbox.image or provide SandboxSpec.image with the built guest image"
+            raise ValueError(message)
         support, cancelled = await _settle(asyncio.create_task(asyncio.to_thread(detect_support, self.executable)))
         if cancelled:
             raise asyncio.CancelledError
@@ -268,7 +280,8 @@ class SmolvmSandbox:
             arguments = ["machine", "create", "--name", name, "--image", image, "--net"]
             for key, value in spec.labels.items():
                 if not key or "=" in key or "\0" in key + value:
-                    raise ValueError("invalid sandbox label")
+                    message = "invalid sandbox label"
+                    raise ValueError(message)
                 arguments.extend(["--label", f"{key}={value}"])
             # Keep one workload container alive: cp and exec must address the
             # same mount namespace, even when an image's default CMD exits.

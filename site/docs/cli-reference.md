@@ -140,6 +140,18 @@ engine daemon doctor [-h] [--json]
 | --- | --- |
 | `--json` |  |
 
+## `engine doctor`
+
+Check local configuration, tools and SmolVM support.
+
+```text
+engine doctor [-h] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` |  |
+
 ## `engine backend`
 
 Choose which engine daemon commands talk to.

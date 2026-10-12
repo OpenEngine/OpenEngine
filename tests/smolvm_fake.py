@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import sys
 
-root = Path(ROOT)
+root = Path(globals()["ROOT"])
 arguments = sys.argv[1:]
 with (root / "commands.jsonl").open("a") as log:
     log.write(json.dumps(arguments) + "\n")

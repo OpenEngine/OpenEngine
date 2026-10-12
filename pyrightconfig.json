@@ -18,6 +18,7 @@
     "packages/adapters/communications/buzz/src",
     "packages/adapters/communications/slack/src",
     "packages/adapters/sandbox/process/src",
+    "packages/adapters/sandbox/smolvm/src",
     "packages/adapters/source_control/github/src",
     "packages/adapters/source_control/gitlab/src",
     "packages/adapters/state_store/memory/src",

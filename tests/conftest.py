@@ -7,10 +7,9 @@ by the test's context manager, including tests that exercise startup failures.
 
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
-from pathlib import Path
-import sys
 
 from engine.runtime.config import CONFIG_ENVIRONMENT_VARIABLE
 
