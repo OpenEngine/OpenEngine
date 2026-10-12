@@ -35,7 +35,7 @@ def test_a_review_is_published_only_when_its_inputs_ask(inputs, publishes):
 
 def test_finding_round_trip_and_comment():
     finding = Finding("Users lose their work", "Saving overwrites an existing file.",
-                      "bugs", "claude", "save.py", 7)
+                      "bugs", "claude", "save.py", 7, model_tier="elevated")
     assert Finding.from_dict(finding.to_dict()) == finding
     assert finding.as_comment() == (
         "**Users lose their work**\n\nSaving overwrites an existing file.\n\n"
@@ -55,6 +55,7 @@ def test_finding_round_trip_and_comment():
     {"tagline": "Bad", "description": "a\nb\nc\nd"},
     {"tagline": "Bad", "description": "Bad", "line": 0},
     {"tagline": "Bad", "description": "Bad", "line": True},
+    {"tagline": "Bad", "description": "Bad", "model_tier": 123},
 ])
 def test_invalid_finding_is_rejected(data):
     with pytest.raises(ValueError):
@@ -80,6 +81,10 @@ def test_cross_provider_and_model_tiers(runner, reviewer, default, security):
     for facet in ("security", "bugs", "performance", "conciseness", "dryness"):
         node = nodes[f"review-{facet}"]
         assert node.agent == reviewer
+        tier = "elevated" if facet == "security" else "default"
+        assert node.model_tier == tier
+        assert node._for_runner(runner).model_tier == tier
+        assert node._for_runner("custom").model_tier is None
         assert node.session_config["model"] == (security if facet == "security" else default)
 
 
@@ -197,7 +202,7 @@ def test_review_tool_rejects_then_accepts_corrected_findings(
             update = node._terminal_update(await broker.result())
             expected = dict(findings[0])
             if node_name != "reranker":
-                expected.update(agent=node.agent, facet=node.facet)
+                expected.update(agent=node.agent, facet=node.facet, model_tier=node.model_tier)
             assert update == {node.output_key: [expected]}
 
     asyncio.run(scenario())

@@ -108,7 +108,7 @@ ANSWER_REVIEW = ByMode(
 PUBLISH_FINDINGS = ByMode(
     connected=(
         "For each surviving finding, post it as a PR comment using add_comment. "
-        "Pass the original structured finding (including agent, facet, file and "
+        "Pass the original structured finding (including agent, facet, model_tier, file and "
         "line) in the finding argument, even when posting a general comment. "
         "Format each comment as:\n\n"
         "**<tagline>**\n\n"
@@ -119,14 +119,14 @@ PUBLISH_FINDINGS = ByMode(
         "leave one general comment saying the change looks clean.\n\n"
         "After posting comments, call complete_step with the filtered findings "
         "as a JSON array (same schema as the inputs). Preserve each finding's "
-        "agent and facet fields unchanged.\n\n"
+        "agent, facet and model_tier fields unchanged.\n\n"
     ),
     disconnected=(
         "This run is disconnected from the forge: do not post comments or contact "
         "any pull request. The surviving findings are shown to a person directly "
         "from your output. Call complete_step with the filtered findings as a "
         "JSON array (same schema as the inputs), or [] when none survive. "
-        "Preserve each finding's agent and facet fields unchanged.\n\n"
+        "Preserve each finding's agent, facet and model_tier fields unchanged.\n\n"
     ),
 )
 

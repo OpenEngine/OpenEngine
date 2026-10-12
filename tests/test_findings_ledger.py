@@ -69,15 +69,18 @@ def test_ledger_identity_lineage_comment_and_idempotent_outcome(store):
         store.findings.record_outcome("unknown", "free_form_signal", source="test")
 
 
-def test_terminal_stages_capture_and_preserve_lineage(store, monkeypatch):
+@pytest.mark.parametrize("tier", ["default", "elevated", None])
+def test_terminal_stages_capture_and_preserve_lineage(store, monkeypatch, tier):
     execution = SimpleNamespace(run_id="run", node_id="review-bugs", runtime=SimpleNamespace(findings_ledger=store.findings))
     monkeypatch.setattr(nodes, "current_execution", lambda: execution)
-    review = nodes.ReviewNode(agent="claude", facet="bugs", cwd="/tmp", output_key="bugs")
-    result = review._terminal_update(completed([{**FINDING, "agent": "spoof", "facet": "spoof"}]))
+    review = nodes.ReviewNode(agent="claude", facet="bugs", model_tier=tier, cwd="/tmp", output_key="bugs")
+    result = review._terminal_update(completed([{**FINDING, "agent": "spoof", "facet": "spoof", "model_tier": "spoof"}]))
     execution.node_id = "reranker"
     reranker = nodes.RerankerNode(agent="codex", cwd="/tmp", output_key="review")
-    assert reranker._terminal_update(completed(result["bugs"])) == {"review": [FINDING]}
+    expected = {**FINDING, **({"model_tier": tier} if tier is not None else {})}
+    assert reranker._terminal_update(completed(result["bugs"])) == {"review": [expected]}
     rows = store.findings.list_findings(run_id="run")
+    assert all(r.model_tier == tier for r in rows)
     assert {(r.stage, r.node_id, r.agent, r.facet) for r in rows} == {
         ("raw", "review-bugs", "claude", "bugs"), ("reranked", "reranker", "claude", "bugs"),
     }
@@ -94,13 +97,15 @@ def test_triage_records_every_reranked_finding(store, monkeypatch, decision, not
     execution = SimpleNamespace(run_id="run", node_id="triage", runtime=SimpleNamespace(findings_ledger=store.findings),
                                 say=say, ask=ask, pending_messages=lambda: [note])
     monkeypatch.setattr(nodes, "current_execution", lambda: execution)
-    findings = [FINDING, {**FINDING, "tagline": "Another bug"}]
+    findings = [{**FINDING, "model_tier": "elevated"}, {**FINDING, "tagline": "Another bug", "model_tier": "default"}]
     result = asyncio.run(nodes.TriageNode(findings_key="review")({"review": findings}))
     assert len(result["fix"]) == selected
     signals = outcomes(store)
     assert sum(row["signal"] == "triage_selected" for row in signals) == selected
     assert sum(row["signal"] == "triage_rejected" for row in signals) == 2 - selected
-    assert len([r for r in store.findings.list_findings() if r.stage == "triaged"]) == selected
+    triaged = [r for r in store.findings.list_findings() if r.stage == "triaged"]
+    assert len(triaged) == selected
+    assert {r.model_tier for r in triaged} == ({"elevated", "default"} if selected == 2 else {"elevated"} if selected == 1 else set())
 
 
 def test_failed_ledger_does_not_break_terminal_or_triage(monkeypatch, caplog):
@@ -167,7 +172,7 @@ def test_reranker_posting_captures_immediately_with_lineage(store, monkeypatch, 
             source_control=source, store=graph_store, findings_ledger=store.findings))
         binding = terminal_mcp.TerminalMcpServer(step_id="reranker", agent_id="codex", repository_tools=("add_comment",))
         async with binding({"workspaceId": "workspace"}, execution, None):
-            args = {"pr_url": PR, "comment": "**Work is lost**\n\nSaving overwrites work.", "finding": FINDING}
+            args = {"pr_url": PR, "comment": "**Work is lost**\n\nSaving overwrites work.", "finding": {**FINDING, "model_tier": "elevated"}}
             if inline:
                 args.update(file="save.py", line=10)
             result = await brokers[0]._submit(_request(brokers[0], "post", "add_comment", args))
@@ -182,6 +187,7 @@ def test_reranker_posting_captures_immediately_with_lineage(store, monkeypatch, 
             row, = rows
             assert (row.stage, row.agent, row.facet, row.node_id, row.head_sha, row.comment_id, row.pr_url, row.file, row.line) == (
                 "posted", "claude", "bugs", "reranker", "head", 123, PR, "save.py", 10)
+            assert row.model_tier == "elevated"
             assert outcomes(store)[0]["signal"] == "comment_posted"
     asyncio.run(scenario())
 
@@ -230,7 +236,7 @@ def test_ingress_reconciles_all_merges_without_approving_bot_work(automated):
     asyncio.run(scenario())
 
 
-def test_post_record_endpoint_uses_durable_lineage_and_checks_pr(store, workflow_app, async_client):
+def test_post_record_endpoint_cannot_forge_posted_findings(store, workflow_app, async_client):
     from engine.domain import RunId, RunState, TaskId, WorkflowId
     from web_fakes import ConcurrentRunner
 
@@ -241,13 +247,13 @@ def test_post_record_endpoint_uses_durable_lineage_and_checks_pr(store, workflow
         async with async_client(app) as client:
             body = {"finding": {**FINDING, "agent": "spoofed"}, "comment_id": 123, "pr_url": PR, "head_sha": "head"}
             response = await client.post("/api/runs/run/findings/posted", json=body)
-            assert response.status_code == 200
-            assert response.json() == {"recorded": True}
+            assert response.status_code in (404, 405)
             response = await client.post("/api/runs/run/findings/posted", json={**body, "pr_url": PR + "9"})
-            assert response.status_code == 400
-            assert (await client.post("/api/runs/unknown/findings/posted", json=body)).status_code == 404
-        row, = store.findings.list_findings(pr_url=PR)
-        assert (row.agent, row.facet, row.comment_id, row.head_sha) == ("claude", "bugs", 123, "head")
+            assert response.status_code in (404, 405)
+        row, = store.findings.list_findings(run_id="run")
+        assert row.stage == "reranked"
+        assert row.comment_id is None and row.head_sha is None
+        assert outcomes(store) == []
     asyncio.run(scenario())
 
 

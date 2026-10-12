@@ -4,7 +4,8 @@ The state-store Alembic history creates `review_findings` and `finding_outcomes`
 Run `engine-migrate sqlite:///path/to/state.sqlite3` when upgrading a deployment.
 The graph/checkpoint databases do not own these tables.
 
-Raw and reranked terminal outputs retain reviewer lineage. Triage records a
+Raw and reranked terminal outputs retain reviewer lineage, including the configured
+reviewer model tier (`default` or `elevated`, and NULL when unknown). Triage records a
 selected/rejected outcome on every reranked finding, and selected findings also
 get a `triaged` row. Identities hash run, stage, file, line, and tagline; retries
 reuse that identity. Outcomes are unique per finding and signal.
@@ -12,8 +13,8 @@ reuse that identity. Outcomes are unique per finding and signal.
 The reranker passes the structured `finding` argument to `add_comment`. Its
 successful comment callback records the posted finding immediately, before
 terminal completion, including the returned GitHub ID. General comments retain
-the finding's original location. The run-scoped ledger endpoint accepts comment
-metadata and uses persisted reranked lineage rather than client copies. The
+the finding's original location and model tier. Posted metadata is recorded only
+through the trusted posting callback; there is no public ledger write endpoint. The
 legacy CLI review/posting flow was removed upstream; current CLI reviews report
 findings without posting comments.
 

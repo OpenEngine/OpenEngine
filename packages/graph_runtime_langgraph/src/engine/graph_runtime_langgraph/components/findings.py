@@ -51,6 +51,9 @@ class Finding:
     severity: str = ""
     """`high`, `medium` or `low`, when the reviewer ranked it."""
 
+    model_tier: str | None = None
+    """Configured tier of the producing reviewer, when known."""
+
     def __post_init__(self) -> None:
         for name, limit in (("tagline", 2), ("description", 3)):
             value = getattr(self, name)
@@ -66,6 +69,8 @@ class Finding:
             raise ValueError("line must be a positive integer")
         if not isinstance(self.agent, str) or not isinstance(self.facet, str):
             raise ValueError("agent and facet must be strings")
+        if self.model_tier is not None and not isinstance(self.model_tier, str):
+            raise ValueError("model_tier must be a string")
         if self.severity not in SEVERITIES:
             raise ValueError("severity must be high, medium or low")
 
@@ -81,6 +86,8 @@ class Finding:
             d["line"] = self.line
         if self.severity:
             d["severity"] = self.severity
+        if self.model_tier is not None:
+            d["model_tier"] = self.model_tier
         return d
 
     @classmethod
@@ -93,6 +100,7 @@ class Finding:
             file=data.get("file"),
             line=data.get("line"),
             severity=data.get("severity") or "",
+            model_tier=data.get("model_tier"),
         )
 
     def as_comment(self) -> str:
@@ -227,6 +235,7 @@ class ReviewNode(ACPNode):
     """Store validated findings under this facet's own key for parallel writes."""
 
     facet: str
+    model_tier: str | None = None
     graph_node_group: str = WorkState.REVIEW
 
     @property
@@ -242,7 +251,7 @@ class ReviewNode(ACPNode):
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)
         findings = parse_findings(update.get("findings"))
-        findings = [replace(finding, agent=self.agent, facet=self.facet) for finding in findings]
+        findings = [replace(finding, agent=self.agent, facet=self.facet, model_tier=self.model_tier) for finding in findings]
         _capture_stage("raw", findings)
         return {self.output_key: [finding.to_dict() for finding in findings]}
 
