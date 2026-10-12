@@ -238,7 +238,7 @@ def test_an_unsigned_delivery_starts_nothing(*, slack_app, client) -> None:
         )
     assert response.status_code == 401
     assert communications.posts == []
-    assert asyncio.run(capabilities.state_store.list_runs()) == ()
+    assert asyncio.run(app.state.run_reader.list_runs()) == ()
 
 
 def test_a_mention_replies_through_the_concierge(*, slack_app, client) -> None:
@@ -372,7 +372,7 @@ def test_a_mention_starts_nothing_while_slack_is_disconnected(
         status = browser.get("/api/slack/status").json()
 
     assert response.status_code == 200
-    assert asyncio.run(capabilities.state_store.list_runs()) == ()
+    assert asyncio.run(app.state.run_reader.list_runs()) == ()
     assert communications.posts == []
     assert status["connected"] is False
     assert status["events"] is False
@@ -948,7 +948,7 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(
         greeting = body("app_mention", "1", "<@BOT>")
         assert browser.post("/api/slack/events", content=greeting, headers=_signed(greeting)).status_code == 200
         browser.portal.call(app.state.slack_ingress.drain)
-        assert not browser.portal.call(capabilities.state_store.list_runs)
+        assert not browser.portal.call(app.state.run_reader.list_runs)
         request = body("message", "2", "new workorder please", thread_ts="1")
         browser.post("/api/slack/events", content=request, headers=_signed(request))
         browser.portal.call(app.state.slack_ingress.drain)
@@ -956,7 +956,7 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(
         duplicate = body("app_mention", "2", "new workorder please", thread_ts="1")
         browser.post("/api/slack/events", content=duplicate, headers=_signed(duplicate))
         browser.portal.call(app.state.slack_ingress.drain)
-        runs = browser.portal.call(capabilities.state_store.list_runs)
+        runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
         assert runs[0].origin.thread_id == "1"
         result = provider.clients[0].result
@@ -1279,7 +1279,7 @@ def test_slack_starts_configured_graph_with_input_defaults(
         browser.portal.call(app.state.slack_ingress.drain)
         result = provider.clients[0].result
         assert not result.get("isError"), result
-        runs = browser.portal.call(capabilities.state_store.list_runs)
+        runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
         assert str(runs[0].workflow_id) == graph.graph_id
         assert runs[0].origin.thread_id == "1"
@@ -1383,7 +1383,7 @@ def test_an_auto_approved_request_is_not_announced(*, slack_app, client) -> None
     with client(app) as browser:
         assert browser.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
         browser.portal.call(app.state.slack_ingress.drain)
-        runs = browser.portal.call(capabilities.state_store.list_runs)
+        runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
         run_id = runs[0].run_id
 

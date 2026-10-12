@@ -39,7 +39,7 @@ from engine.domain.state import RunOrigin, RunPhase, RunState
 
 
 class SQLiteStateStore:
-    """Persist agent instances, runs, and conversations in one SQLite file.
+    """Persist agent instances and conversations in one SQLite file.
 
     A single connection keeps ``:memory:`` useful in tests. SQLite calls are
     guarded because Streamlit may reuse a cached store from another thread.
@@ -53,87 +53,36 @@ class SQLiteStateStore:
             self._connection.execute("PRAGMA foreign_keys = ON")
             upgrade_connection(self._connection)
 
-    # --- workflow runs ----------------------------------------------------
+    # --- legacy metadata handoff -----------------------------------------
 
-    async def load(self, run_id: RunId) -> RunState | None:
+    def legacy_runs(self) -> Sequence[RunState]:
+        """Read the migration handoff; retain incompatible rows for recovery."""
+        states = []
         with self._lock:
-            row = self._connection.execute(
-                "SELECT state_json, requester FROM run_states WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-        return _state_from_row(row) if row else None
+            for row in self._connection.execute(
+                "SELECT * FROM legacy_run_metadata ORDER BY sequence"
+            ):
+                try:
+                    state = _state_from_row(row)
+                    if state.origin is None and row["origin_channel"] is not None:
+                        state = replace(state, origin=RunOrigin(
+                            channel=row["origin_channel"], thread_id=row["origin_thread_id"] or "", author="",
+                        ))
+                    states.append(state)
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                    warnings.warn(
+                        f"skipping incompatible workflow run {row['run_id']}: {error}",
+                        RuntimeWarning, stacklevel=2,
+                    )
+        return tuple(states)
 
-    async def save(self, state: RunState) -> None:
+    def clear_legacy_runs(self, run_ids: Sequence[RunId]) -> None:
+        """Acknowledge only rows durably imported into the graph store."""
         with self._lock, self._connection:
-            self._connection.execute(
-                """
-                INSERT INTO run_states (
-                    run_id, state_json, origin_channel, origin_thread_id,
-                    requester
-                )
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    state_json = excluded.state_json,
-                    origin_channel = excluded.origin_channel,
-                    origin_thread_id = excluded.origin_thread_id,
-                    requester = excluded.requester
-                """,
-                (
-                    state.run_id,
-                    json.dumps(_state_to_dict(state)),
-                    state.origin.channel if state.origin is not None else None,
-                    state.origin.thread_id if state.origin is not None else None,
-                    state.requester,
-                ),
+            self._connection.executemany(
+                "DELETE FROM legacy_run_metadata WHERE run_id = ?",
+                ((str(run_id),) for run_id in run_ids),
             )
-
-    async def list_runs(self) -> Sequence[RunState]:
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT run_id, state_json, requester FROM run_states ORDER BY sequence DESC"
-            ).fetchall()
-        runs: list[RunState] = []
-        for row in rows:
-            try:
-                runs.append(_state_from_row(row))
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-                warnings.warn(
-                    f"skipping incompatible workflow run {row['run_id']}: {error}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-        return tuple(runs)
-
-    async def list_runs_for_origin(
-        self, channel: str, thread_id: str
-    ) -> Sequence[RunState]:
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT run_id, state_json, requester FROM run_states
-                WHERE origin_channel = ? AND origin_thread_id = ?
-                ORDER BY sequence DESC
-                """,
-                (channel, thread_id),
-            ).fetchall()
-        runs: list[RunState] = []
-        for row in rows:
-            try:
-                runs.append(_state_from_row(row))
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-                warnings.warn(
-                    f"skipping incompatible workflow run {row['run_id']}: {error}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-        return tuple(runs)
-
-    async def delete_run(self, run_id: RunId) -> bool:
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
-                "DELETE FROM run_states WHERE run_id = ?", (run_id,)
-            )
-        return cursor.rowcount > 0
 
     async def create_instance(
         self,
@@ -622,39 +571,6 @@ def _message_from_row(row: sqlite3.Row) -> Message:
         tool_call_id=row["tool_call_id"],
         message_id=MessageId(f"msg-{row['sequence']:06d}"),
     )
-
-
-def _state_to_dict(state: RunState) -> dict[str, object]:
-    return {
-        "run_id": state.run_id,
-        "task_id": state.task_id,
-        "workflow_id": state.workflow_id,
-        "phase": state.phase.value,
-        "repository": state.repository,
-        "prompt": state.prompt,
-        "name": state.name,
-        "failure_reason": state.failure_reason,
-        "parent_run_id": state.parent_run_id,
-        "depends_on_run_id": state.depends_on_run_id,
-        "inputs": state.inputs,
-        "started_at": (
-            state.started_at.isoformat() if state.started_at is not None else None
-        ),
-        "origin": (
-            {
-                "channel": state.origin.channel,
-                "thread_id": state.origin.thread_id,
-                "author": state.origin.author,
-                "requester": state.origin.requester,
-                "issue_repository": state.origin.issue_repository,
-                "issue_number": state.origin.issue_number,
-                "review_thread_id": state.origin.review_thread_id,
-                "review_comment_id": state.origin.review_comment_id,
-            }
-            if state.origin is not None
-            else None
-        ),
-    }
 
 
 def _state_from_row(row: sqlite3.Row) -> RunState:

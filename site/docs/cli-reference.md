@@ -392,7 +392,8 @@ List runs, newest first.
 
 ```text
 engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--graph GRAPH]
-            [--loop LOOP] [--status STATUS] [--limit LIMIT]
+            [--loop LOOP] [--requester REQUESTER] [--origin ORIGIN] [--status STATUS]
+            [--limit LIMIT]
             [{list}]
 ```
 
@@ -405,6 +406,8 @@ engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--
 | `--all-projects` |  |
 | `--graph GRAPH` | only runs of this graph |
 | `--loop LOOP` | only runs this loop started |
+| `--requester REQUESTER` | only runs requested by this identity |
+| `--origin ORIGIN` | only runs from this origin channel |
 | `--status STATUS` | only runs in this status, such as running or failed |
 | `--limit LIMIT` | at most this many (default: 20) |
 

@@ -73,6 +73,8 @@ def create_app(service: GraphService) -> Starlette:
             graph=query.get("graph", ""),
             loop=query.get("loop", ""),
             status=query.get("status", ""),
+            requester=query.get("requester", ""),
+            origin=query.get("origin", ""),
             limit=_count(query.get("limit"), "limit", DEFAULT_RUN_LIMIT),
         )})
 

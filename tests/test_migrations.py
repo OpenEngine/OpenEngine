@@ -52,8 +52,8 @@ def test_sqlite_upgrade_creates_and_stamps_the_schema(tmp_path: Path) -> None:
             "SELECT version_num FROM alembic_version"
         ).fetchone()
 
-    assert {"agent_instances", "projects", "session_grants"} <= tables
-    assert revision == ("d487944fbd15",)
+    assert {"agent_instances", "legacy_run_metadata", "session_grants"} <= tables
+    assert revision == ("9668c9dcd56a",)
 
 
 def test_slack_thread_lookup_migration_backfills_and_indexes_runs(tmp_path: Path) -> None:
@@ -73,7 +73,7 @@ def test_slack_thread_lookup_migration_backfills_and_indexes_runs(tmp_path: Path
         )
         connection.commit()
 
-    upgrade(url)
+    upgrade(url, "36ad5285394c")
 
     with sqlite3.connect(database) as connection:
         row = connection.execute(
@@ -117,7 +117,7 @@ def test_sqlite_upgrade_removes_runs_with_retired_human_review_phase(
         )
         connection.commit()
 
-    upgrade(url)
+    upgrade(url, "sqlite_0007")
 
     with sqlite3.connect(database) as connection:
         runs = connection.execute(
@@ -323,7 +323,7 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
         assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "github_pull_requests", "cli_graphs", "cli_graph_versions", "cli_run_submissions", "cli_loops", "cli_loop_runs", "cli_node_executions", "cli_steering", "cli_agents", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("17c1558d2a6b",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("3a749697aced",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -392,7 +392,7 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("17c1558d2a6b",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("3a749697aced",)
 
 
 def test_github_comments_migration_preserves_graph_data_and_downgrades(
@@ -597,7 +597,7 @@ def test_retiring_milestone_projects_preserves_runs_and_conversations(tmp_path: 
             "VALUES ('chat', 'planner', 'conversation', 'Keep this conversation')"
         )
         connection.commit()
-        upgrade_connection(connection)
+        upgrade_connection(connection, "d487944fbd15")
         assert not connection.execute("PRAGMA foreign_key_check").fetchall()
         assert "milestone_id" not in {row[1] for row in connection.execute("PRAGMA table_info(run_states)")}
         assert connection.execute("SELECT COUNT(*) FROM projects").fetchone() == (0,)
@@ -612,9 +612,64 @@ def test_retiring_milestone_projects_preserves_runs_and_conversations(tmp_path: 
         assert {row[1] for row in connection.execute("PRAGMA index_list(run_states)")} >= {"runs_by_origin_thread"}
 
     # Reopening at head is idempotent; downgrade restores schema, not lost plans.
-    upgrade(url)
+    upgrade(url, "d487944fbd15")
     command.downgrade(alembic_config(url), "473bfdc7cd0d")
     with sqlite3.connect(database) as connection:
         assert "milestone_id" in {row[1] for row in connection.execute("PRAGMA table_info(run_states)")}
         assert connection.execute("SELECT COUNT(*) FROM milestones").fetchone() == (0,)
-    upgrade(url)
+    upgrade(url, "d487944fbd15")
+
+
+def test_legacy_metadata_survives_migration_and_idempotent_backfill(tmp_path):
+    import asyncio
+    from engine.adapters.state_store.sqlite import SQLiteStateStore
+    from engine.domain import RunId
+    from engine.graph_runtime import GraphId
+    from engine.graph_runtime.metadata import RunMetadata
+    from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore, RunRecord
+    from engine.runtime.run_read_model import RunReader
+
+    state_path, graph_path = tmp_path / "state.sqlite3", tmp_path / "graph.sqlite3"
+    state_url, graph_url = f"sqlite:///{state_path}", f"sqlite:///{graph_path}"
+    upgrade(state_url, "d487944fbd15")
+    upgrade(graph_url, "17c1558d2a6b", store="graph")
+    with sqlite3.connect(state_path) as db:
+        for run_id, phase in (("existing", "running_agent"), ("scheduled", "scheduled")):
+            db.execute("INSERT INTO run_states (run_id, state_json, requester) VALUES (?, ?, ?)", (
+                run_id, json.dumps({"run_id": run_id, "task_id": "task", "workflow_id": "graph",
+                    "phase": phase, "name": "Legacy", "prompt": "Do it", "repository": "repo",
+                    "inputs": {"runner": "test"}, "parent_run_id": "parent",
+                    "depends_on_run_id": "dependency",
+                    "origin": {"channel": "github", "thread_id": "42", "author": "alice",
+                               "review_thread_id": "review", "review_comment_id": 7},
+                }), "alice"))
+    state, graph = SQLiteStateStore(state_path), SqliteGraphRuntimeStore(graph_path)
+
+    async def scenario():
+        reader = RunReader()
+        reader.store = graph
+        await graph.remember_run(RunRecord(RunId("existing"), GraphId("graph")))
+        await graph.save_metadata(RunId("existing"), GraphId("graph"), RunMetadata(name="Current"))
+        legacy = state.legacy_runs()
+        await reader.backfill(legacy)
+        first = await graph.list_runs()
+        await reader.backfill(legacy)
+        assert await graph.list_runs() == first
+        existing = await graph.run(RunId("existing"))
+        scheduled = await graph.run(RunId("scheduled"))
+        assert existing.metadata.name == "Current"
+        assert existing.metadata.prompt == "Do it"
+        assert existing.metadata.requester == "alice"
+        assert existing.metadata.origin.review_comment_id == 7
+        assert scheduled.metadata.scheduled
+        assert scheduled.graph_id == "graph"
+        assert scheduled.metadata.inputs == {"runner": "test"}
+        assert scheduled.metadata.depends_on_run_id == "dependency"
+        state.clear_legacy_runs([row.run_id for row in legacy])
+        assert not state.legacy_runs()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        graph.close()
+        state.close()

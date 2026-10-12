@@ -96,14 +96,14 @@ def test_agent_transcript_is_mirrored(
                 "workflowId": "mirror-test", "prompt": "Implement it", "repository": "acme/api",
             })
             assert response.status_code < 300, response.text
-        runs = browser.portal.call(capabilities.state_store.list_runs)
+        runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
         run_id = runs[0].run_id
 
         async def finished():
             async with asyncio.timeout(10):
                 while True:
-                    state = await capabilities.state_store.load(run_id)
+                    state = await app.state.run_reader.load(run_id)
                     if state.phase in (RunPhase.SUCCEEDED, RunPhase.FAILED):
                         return state
                     await asyncio.sleep(0.01)
@@ -201,13 +201,13 @@ def test_human_review_slack_sequence(
         }}).encode()
         assert browser.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
         browser.portal.call(app.state.slack_ingress.drain)
-        runs = browser.portal.call(capabilities.state_store.list_runs)
+        runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
         run_id = runs[0].run_id
 
         async def wait_for_phase(phase):
             async with asyncio.timeout(10):
-                while (await capabilities.state_store.load(run_id)).phase is not phase:
+                while (await app.state.run_reader.load(run_id)).phase is not phase:
                     await asyncio.sleep(0.01)
 
         async def wait_for_review():

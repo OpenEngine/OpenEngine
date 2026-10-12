@@ -25,10 +25,6 @@ from provider_fakes import FakeACPProvider
 from web_fakes import RecordingCommunications
 
 
-#: The run id the fake runtime hands back when it is asked to start one.
-STARTED_RUN = "fresh"
-
-
 def _graph_runtime(
     *, run_id="existing", graph_id="implementation-review-v1",
     pr_number=7, repository="acme/api", always_open=("implementation",),
@@ -68,7 +64,7 @@ def _graph_runtime(
         return record.run_id
 
     async def snapshot(asked):
-        if asked == RunId(STARTED_RUN):
+        if asked == RunId(runtime.started_run_id):
             # The run this fake just started, which is running by construction.
             return RunSnapshot(
                 run_id=asked, graph_id=GraphId(graph_id),
@@ -94,15 +90,25 @@ def _graph_runtime(
         pull_request_for_run=AsyncMock(side_effect=pull_request_for_run),
         claim_pull_request=AsyncMock(side_effect=claim_pull_request),
     )
+    from engine.graph_runtime_langgraph.store import InMemoryGraphRuntimeStore
+    metadata_store = InMemoryGraphRuntimeStore()
+    for method in ("run", "save_metadata", "list_runs", "list_runs_for_origin", "delete_run"):
+        setattr(runtime.store, method, getattr(metadata_store, method))
+    runtime.started_run_id = None
     runtime.snapshot = AsyncMock(side_effect=snapshot)
     runtime.topology = MagicMock(return_value=topology)
     runtime.steer = AsyncMock()
     runtime.cancel = AsyncMock()
     runtime.decide = AsyncMock()
-    runtime.start = AsyncMock(return_value=RunSnapshot(
-        run_id=RunId(STARTED_RUN), graph_id=GraphId(graph_id),
-        status=RunStatus.RUNNING, values={},
-    ))
+    async def start(graph_id, values, *, run_id=None):
+        from dataclasses import replace
+        runtime.started_run_id = run_id
+        record = await metadata_store.run(run_id)
+        await metadata_store.save_metadata(run_id, graph_id, replace(record.metadata, scheduled=False))
+        return await snapshot(run_id)
+
+    runtime.start = AsyncMock(side_effect=start)
+
 
     @asynccontextmanager
     async def opened():
@@ -186,7 +192,7 @@ def test_github_comments_continue_existing_workorders(
         browser.portal.call(app.state.github_ingress.drain)
         # No work order was created: the pull request already has one, and the
         # feedback reaches it by name rather than by reading every saved run.
-        assert not browser.portal.call(capabilities.state_store.list_runs)
+        assert not browser.portal.call(app.state.run_reader.list_runs)
         runtime.store.run_for_pull_request.assert_awaited_with("acme/api", 7)
         runtime.steer.assert_awaited_once()
         assert runtime.steer.await_args.args[0] == RunId("existing")
@@ -705,7 +711,7 @@ def test_github_does_not_answer_comments_on_issues(*, github_app, client):
         assert browser.post("/api/github/events", content=body, headers=dict(
             github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
         browser.portal.call(app.state.github_ingress.drain)
-        assert not browser.portal.call(capabilities.state_store.list_runs)
+        assert not browser.portal.call(app.state.run_reader.list_runs)
         assert not provider.clients
         source.add_comment.assert_not_awaited()
         source.add_reaction.assert_awaited_once_with(
@@ -787,7 +793,7 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(
             runtime.store.claim_pull_request.assert_not_awaited()
             assert not provider.clients
             source_control.add_comment.assert_not_awaited()
-            assert not browser.portal.call(capabilities.state_store.list_runs)
+            assert not browser.portal.call(app.state.run_reader.list_runs)
             return
         # Started in the checkout of the repository the comment arrived from,
         # which is where the pull request is, rather than the configured default.
@@ -795,8 +801,8 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(
         assert runtime.start.await_args.args[1]["task"].startswith("Implement it")
         if event == "pull_request_review_comment":
             assert "Requested review thread: PRRT_1; root comment: 1" in runtime.start.await_args.args[1]["task"]
-        runs = browser.portal.call(capabilities.state_store.list_runs)
-        assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
+        runs = browser.portal.call(app.state.run_reader.list_runs)
+        assert [run.run_id for run in runs] == [RunId(runtime.started_run_id)]
         # No chat origin: this conversation is the pull request, which the
         # concierge answers itself, and a `github:` channel is not somewhere
         # the chat provider could post progress to.
@@ -806,15 +812,15 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(
         # to the pull request that already exists.
         claimed = runtime.store.claim_pull_request.await_args.args[0]
         assert (claimed.repository, claimed.number, claimed.run_id) == (
-            repository, 7, RunId(STARTED_RUN))
+            repository, 7, RunId(runtime.started_run_id))
         assert claimed.url == pr_url
         assert provider.clients[0].result["structuredContent"]["started"] is True
     # And the pull request is told a work order was started, not that its
     # comment was forwarded to one that was already at work.
     source_control.add_comment.assert_awaited_once_with(
         pr_url,
-        f"Started work order `{STARTED_RUN}` for this pull request. "
-        f"https://engine.example/runs/{STARTED_RUN}",
+        f"Started work order `{runtime.started_run_id}` for this pull request. "
+        f"https://engine.example/runs/{runtime.started_run_id}",
         in_reply_to_id=1 if event == "pull_request_review_comment" else None,
     )
     source_control.can_write_repository.assert_awaited_once_with(pr_url, payload["comment"]["user"]["login"])
@@ -870,7 +876,7 @@ def test_unmentioned_comment_cannot_start_work_if_run_finishes_during_turn(
         runtime.start.assert_not_awaited()
         runtime.steer.assert_not_awaited()
         runtime.store.claim_pull_request.assert_not_awaited()
-        assert not browser.portal.call(capabilities.state_store.list_runs)
+        assert not browser.portal.call(app.state.run_reader.list_runs)
         source_control.add_comment.assert_awaited_once_with(
             "https://github.com/acme/api/pull/7", UNDELIVERED, in_reply_to_id=None,
         )
@@ -919,9 +925,9 @@ def test_a_second_comment_steers_the_work_order_the_first_one_started(
             browser.portal.call(app.state.github_ingress.drain)
         assert runtime.start.await_count == 1
         runtime.steer.assert_awaited_once_with(
-            RunId(STARTED_RUN), "Implement it", node_id=NodeId("implementation"))
+            RunId(runtime.started_run_id), "Implement it", node_id=NodeId("implementation"))
         assert [run.run_id for run in
-                browser.portal.call(capabilities.state_store.list_runs)] == [RunId(STARTED_RUN)]
+                browser.portal.call(app.state.run_reader.list_runs)] == [RunId(runtime.started_run_id)]
 
 
 @pytest.mark.parametrize("claim", ["lost", "unwritable"])
@@ -971,7 +977,7 @@ def test_a_start_that_does_not_win_the_claim_leaves_no_run_behind(
         assert browser.post("/api/github/events", content=body, headers=dict(
             github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
         browser.portal.call(app.state.github_ingress.drain)
-        runtime.cancel.assert_awaited_once_with(RunId(STARTED_RUN))
+        runtime.cancel.assert_awaited_once_with(RunId(runtime.started_run_id))
         if claim == "lost":
             # The feedback still lands, on the work order that holds the pull
             # request, and the reply says forwarded rather than started.
@@ -1032,7 +1038,7 @@ def test_github_never_answers_its_own_reply(identity, *, github_app, client):
         assert not provider.clients
         source_control.add_comment.assert_not_awaited()
         source_control.add_reaction.assert_not_awaited()
-        assert not browser.portal.call(capabilities.state_store.list_runs)
+        assert not browser.portal.call(app.state.run_reader.list_runs)
         source_control.authenticated_login.assert_awaited_once_with(
             "https://github.com/acme/api")
         if identity == "unavailable":
@@ -1493,8 +1499,8 @@ def test_assigning_issue_to_engine_starts_workorder(
             assert "https://github.com/acme/api/issues/7" in inputs["task"]
             assert "issue_resolution" in inputs["task"]
             assert inputs["issue"] == {"repository": "acme/api", "number": 7}
-            runs = browser.portal.call(capabilities.state_store.list_runs)
-            assert [run.run_id for run in runs] == [RunId(STARTED_RUN)]
+            runs = browser.portal.call(app.state.run_reader.list_runs)
+            assert [run.run_id for run in runs] == [RunId(runtime.started_run_id)]
             # Progress is reported back to the issue, addressed to the assigner.
             assert runs[0].origin == RunOrigin(
                 channel="github:acme/api", thread_id="issue/7",
@@ -1585,7 +1591,7 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(
         # Claimed, so the review may comment on the pull request it was given.
         record = runtime.store.claim_pull_request.await_args.args[0]
         assert (record.repository, record.number, record.run_id) == (
-            "acme/api", 12, RunId(STARTED_RUN))
+            "acme/api", 12, RunId(runtime.started_run_id))
 
 
 def test_a_review_request_leaves_a_pull_request_to_its_running_work_order(
@@ -1664,7 +1670,7 @@ def test_an_assignment_without_a_local_checkout_starts_nothing(
         assert browser.post("/api/github/events", content=body, headers=headers).status_code == 200
         browser.portal.call(app.state.github_ingress.drain)
         runtime.start.assert_not_awaited()
-        assert not browser.portal.call(capabilities.state_store.list_runs)
+        assert not browser.portal.call(app.state.run_reader.list_runs)
     assert "no checkout of acme/api is configured" in caplog.text
 
 
@@ -1807,7 +1813,7 @@ def test_issue_progress_posts_only_milestones(monkeypatch, *, github_app, client
             (EventKind.RUN_FINISHED, None, {}),
         ):
             browser.portal.call(observe, RuntimeEvent(
-                run_id=RunId(STARTED_RUN), kind=kind,
+                run_id=RunId(runtime.started_run_id), kind=kind,
                 node_id=NodeId(node) if node else None, payload=payload,
             ))
 
@@ -1850,7 +1856,7 @@ def test_issue_progress_survives_a_failed_pull_request_lookup(
         browser.portal.call(app.state.github_ingress.drain)
         observe = runtime.observe.call_args.args[0]
         browser.portal.call(observe, RuntimeEvent(
-            run_id=RunId(STARTED_RUN), kind=EventKind.RUN_FINISHED, payload={},
+            run_id=RunId(runtime.started_run_id), kind=EventKind.RUN_FINISHED, payload={},
         ))
 
     runtime.store.pull_request_for_run.assert_awaited()

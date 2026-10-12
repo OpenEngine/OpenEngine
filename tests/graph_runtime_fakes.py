@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import count
 
 from engine.graph_runtime.inputs import WorkflowInput, mode_input
@@ -420,6 +420,9 @@ class ScriptedGraphRuntime:
         self._entries: dict[NodeId, int] = {}
         self._pending_steers: dict[RunId, dict[NodeId, list[str]]] = {}
         self.ids = count(1)
+        from engine.graph_runtime_langgraph.store import InMemoryGraphRuntimeStore
+        self.store = InMemoryGraphRuntimeStore()
+        self.seeded_snapshots = {}
 
     # --- the control surface's contract ------------------------------------
 
@@ -442,6 +445,16 @@ class ScriptedGraphRuntime:
         run_id = run_id or RunId(f"run-{next(self.ids)}")
         if run_id in self._runs:
             raise ValueError(f"run already exists: {run_id}")
+        from engine.graph_runtime_langgraph.store import RunRecord
+        from engine.graph_runtime.metadata import RunMetadata
+        from datetime import UTC, datetime
+        existing = await self.store.run(run_id)
+        if existing and not existing.metadata.scheduled:
+            raise ValueError(f"run already exists: {run_id}")
+        await self.store.remember_run(RunRecord(run_id, graph_id))
+        metadata = existing.metadata if existing else RunMetadata()
+        await self.store.save_metadata(run_id, graph_id, replace(
+            metadata, scheduled=False, started_at=datetime.now(UTC).isoformat()))
         run = _Run(run_id, graph)
         run.values.update(values)
         self._runs[run.run_id] = run
@@ -454,9 +467,14 @@ class ScriptedGraphRuntime:
         return self._snapshot(run)
 
     async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
+        record = await self.store.run(run_id)
+        if record is None:
+            return None
+        if record.metadata.scheduled:
+            return RunSnapshot(run_id=run_id, graph_id=record.graph_id, status=RunStatus.SCHEDULED)
         run = self._runs.get(run_id)
         if run is None:
-            return None
+            return self.seeded_snapshots.get(run_id)
         if run.graph.graph_id not in self._graphs:
             raise UnknownGraphError(
                 f"run {run_id} is of graph {run.graph.graph_id}, which this "
