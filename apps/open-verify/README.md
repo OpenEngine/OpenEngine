@@ -66,9 +66,12 @@ failed attempts remain available for diagnosis.
 
 Plan complete user journeys: entry, action, successful result, and any requested
 exit or reversal belong to one case. Pages and individual assertions are not
-separate use cases. Publication selects the final attempt's Playwright test and
-one GIF for each case. The PR comment contains a short result, a test link, and
-that GIF; individual PNGs and earlier attempts stay in the local run directory.
+separate use cases. Publication selects one GIF from the final attempt for each browser case.
+The PR comment contains a short result and that GIF; generated Python scripts,
+individual PNGs and earlier attempts stay in the local run directory.
+Browser smoke tests capture visual evidence even when the PR only changes backend code.
+For web applications, planning includes one standard UI smoke journey unless the
+request explicitly limits verification to backend checks.
 If the final GIF is unavailable, at most one screenshot is attached with an
 explicit omission. An older attempt's GIF is never substituted for the final one.
 
@@ -389,13 +392,15 @@ After the CLI exits, read `<run>/manifest.json` (`schema_version: 1`):
   inspected diff text; it is not a full working-tree content hash.
 - `tests`: case ID, runner, actual execution status, test path, and `rerun` argv
   with `cwd: "."` relative to the bundle. Every attempt is retained.
-- `artifacts`: only publishable `test`, `screenshot`, and `video` entries, each with
+- `artifacts`: validated `test`, `screenshot`, and `video` entries, each with
   a bundle-relative path, MIME type, byte size, and associated case ID.
 - `findings`, `support_files`, `omissions`: assessments, rerun prerequisites, and
   explanations for unavailable artifacts. Skipped/planned runs have no attachments.
 
 OE owns MR publication; this CLI has no GitHub/Engine dependency. Consumers should
-attach only the manifest's `artifacts`, not scan the run folder for media. A partial
+publish only visual entries from the manifest's `artifacts`, not scan the run folder
+for media. Generated `test` entries support local inspection and replay; the GitHub
+publisher does not upload or link those scripts. A partial
 or failed run still saves its report/manifest; cleanup errors prevent a success status.
 
 ## Execution options

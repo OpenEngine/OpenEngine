@@ -119,11 +119,12 @@ def test_plan_only_requires_impact_and_does_not_run_browser(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["passed", "failed", "blocked"])
-def test_host_test_result_controls_findings_and_manifest(tmp_path, status):
+@pytest.mark.parametrize("ui", [True, False])
+def test_host_test_result_controls_findings_and_manifest(tmp_path, status, ui):
     report, runner, manifest, agent = execute(
         tmp_path,
         [
-            impact(),
+            impact(ui=ui),
             browser_plan(),
             action(
                 "run_browser_test",

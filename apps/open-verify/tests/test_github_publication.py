@@ -91,11 +91,12 @@ def test_uploads_only_evidence_and_deduplicates_repeat_publication(tmp_path):
         assert first == await github.publish(path, TARGET)
 
     asyncio.run(run())
-    assert len(github.assets) == 2 and len(github.comments) == 1
+    assert len(github.assets) == 1 and len(github.comments) == 1
     assert len(github.releases) == 1
     assert github.releases[0]["prerelease"] is True
     body = github.comments[0]["body"]
-    assert "![Screenshot" in body and "[Playwright test" in body and "[video" not in body
+    assert "![Screenshot" in body and "Playwright test" not in body and "[video" not in body
+    assert all(not item["name"].endswith(".py") for item in github.assets)
     assert "secret" not in body
 
 
@@ -178,16 +179,16 @@ def test_retry_saved_bundle_reuses_uploaded_assets_and_checks_revision(tmp_path)
 
     async def flaky(path, **kwargs):
         nonlocal fail_once
-        if path.startswith('https://uploads.github.com') and len(github.assets) == 1 and fail_once:
+        if path.endswith('/comments') and fail_once:
             fail_once = False
-            raise RuntimeError('Upload interrupted')
+            raise RuntimeError('Comment interrupted')
         return await api(path, **kwargs)
 
     github.api = flaky
     assert asyncio.run(publish_saved(tmp_path, github=github)) == 2
     assert len(github.assets) == 1 and not github.comments
     assert asyncio.run(publish_saved(tmp_path, github=github)) == 0
-    assert len(github.assets) == 2 and len(github.comments) == 1
+    assert len(github.assets) == 1 and len(github.comments) == 1
     github.current = PullRequest('owner/repo', 1, 'c' * 40, BASE, BASE)
     assert asyncio.run(publish_saved(tmp_path, github=github)) == 2
     assert len(github.comments) == 1
@@ -211,7 +212,7 @@ def test_starter_asset_from_failed_upload_is_replaced(tmp_path):
 
     github.api = deleting
     asyncio.run(github.publish(path, TARGET))
-    assert len(removed) == 1 and len(github.assets) == 2
+    assert len(removed) == 1 and len(github.assets) == 1
     assert len(github.comments) == 1
 
 
@@ -253,3 +254,18 @@ def test_real_gh_upload_uses_content_length(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_backend_result_publishes_summary_without_uploading_scripts(tmp_path):
+    path = bundle(tmp_path)
+    data = json.loads(path.read_text())
+    data['artifacts'] = [item for item in data['artifacts'] if item['type'] == 'test']
+    data['tests'][0]['runner'] = 'terminal'
+    path.write_text(json.dumps(data))
+    github = FakeGitHub()
+    asyncio.run(github.publish(path, TARGET))
+    assert not github.assets and not github.releases
+    assert len(github.comments) == 1
+    assert 'C1: passed' in github.comments[0]['body']
+    assert 'Playwright test' not in github.comments[0]['body']
+    assert 'test.py' not in github.comments[0]['body']

@@ -232,7 +232,7 @@ class VerificationRunner:
                     request = LoginRequest.model_validate(action.arguments)
                     self.engine.check_url(request.url)
                     result = await self.authentication.run(
-                        request, capture_media=bool((state.get('impact') or {}).get('material_ui_change')),
+                        request, capture_media=True,
                     )
                     observation = self.artifacts.record(action.tool, action.arguments, result, True)
                 except Exception as exc:
@@ -467,7 +467,7 @@ class VerificationRunner:
                     self.test_results[slot] = result
 
             result = await self.journeys.run(Case.model_validate(current),
-                capture_media=bool((state.get("impact") or {}).get("material_ui_change")),
+                capture_media=True,
                 on_result=checkpoint)
             checkpoint(result)
             summaries = [p for p in result.screenshots if p.endswith(".gif")]

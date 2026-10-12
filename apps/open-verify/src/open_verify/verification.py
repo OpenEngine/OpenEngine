@@ -90,7 +90,7 @@ class CaseVerifier:
                     self.test_results[result_index] = result
 
             result = await self.test_runner.run(
-                test, capture_media=state["impact"]["material_ui_change"],
+                test, capture_media=True,
                 on_result=checkpoint,
             )
             checkpoint(result)
