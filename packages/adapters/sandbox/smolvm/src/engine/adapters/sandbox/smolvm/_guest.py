@@ -24,8 +24,13 @@ def workspace_path(relative: str, *, destination: bool = False) -> Path:
 
 def pack(source: Path, archive: Path) -> None:
     # One known root lets the receiver copy either a file or a whole directory.
+    def metadata(member: tarfile.TarInfo) -> tarfile.TarInfo:
+        if member.name == "payload":
+            member.pax_headers["openengine.basename"] = source.name
+        return member
+
     with tarfile.open(archive, "w") as output:
-        output.add(source, arcname="payload", recursive=True)
+        output.add(source, arcname="payload", recursive=True, filter=metadata)
 
 
 def _check_destination(destination: Path) -> None:
@@ -51,14 +56,38 @@ def _copy(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def _check_links(source: Path, destination: Path, source_root: Path, destination_root: Path) -> None:
+    if source.is_symlink():
+        target = source.readlink()
+        # Extraction validates against its temporary root, one level above
+        # payload. Check both the copied tree and its final host location.
+        if (target.is_absolute()
+                or not source.resolve().is_relative_to(source_root)
+                or not (destination.parent / target).resolve().is_relative_to(destination_root)):
+            raise ValueError("copied symlink must stay within its copied tree")
+    elif source.is_dir():
+        for child in source.iterdir():
+            _check_links(child, destination / child.name, source_root, destination_root)
+
+
 def unpack(archive: Path, destination: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="oe-transfer-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         try:
             with tarfile.open(archive) as incoming:
                 # data filtering refuses escaping links, devices and traversal.
                 incoming.extractall(root, filter="data")
-            _copy(root / "payload", destination)
+                basename = incoming.getmember("payload").pax_headers.get("openengine.basename", "payload")
+            if not basename or basename in {".", ".."} or any(char in basename for char in "/\\\0"):
+                raise ValueError("invalid transfer basename")
+            source = root / "payload"
+            _check_destination(destination)
+            if source.is_symlink():
+                raise ValueError("copied symlink must stay within its copied tree")
+            if not source.is_dir() and destination.is_dir():
+                destination = destination / basename
+            _check_links(source, destination, source, destination.resolve())
+            _copy(source, destination)
         finally:
             # Read-only directory modes must not prevent temporary-file cleanup,
             # including after extraction or destination validation fails.

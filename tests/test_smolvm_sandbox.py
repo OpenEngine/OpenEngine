@@ -231,3 +231,76 @@ def test_copy_out_rejects_traversal_archive(tmp_path):
     with pytest.raises(tarfile.FilterError):
         _guest.unpack(archive, tmp_path / "destination")
     assert not (tmp_path / "escaped").exists()
+
+
+@pytest.mark.parametrize("target", ["..", "../outside"])
+def test_transfer_rejects_links_outside_payload(tmp_path, target):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "up").symlink_to(target)
+    archive = tmp_path / "transfer.tar"
+    _guest.pack(source, archive)
+    destination = tmp_path / "destination"
+    with pytest.raises(ValueError, match="copied tree"):
+        _guest.unpack(archive, destination)
+    assert not destination.exists()
+
+
+def test_transfer_rejects_links_through_existing_host_symlink(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "link").symlink_to("existing")
+    archive = tmp_path / "transfer.tar"
+    _guest.pack(source, archive)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (destination / "existing").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="copied tree"):
+        _guest.unpack(archive, destination)
+    assert not (destination / "link").exists()
+
+
+def test_copy_out_rejects_guest_link_to_host_parent(smolvm_cli, tmp_path):
+    launcher, root = smolvm_cli
+    destination = tmp_path / "output"
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            workspace = root / sandbox.name / "workspace"
+            (workspace / "up").symlink_to("..", target_is_directory=True)
+            with pytest.raises(ValueError, match="copied tree"):
+                await sandbox.copy_out(".", destination)
+    asyncio.run(run())
+    assert not destination.exists()
+
+
+def test_transfer_preserves_internal_symlinks(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "data").write_text("safe")
+    (source / "nested").mkdir()
+    (source / "nested/link").symlink_to("../data")
+    (source / "alias").symlink_to("nested/link")
+    archive = tmp_path / "transfer.tar"
+    _guest.pack(source, archive)
+    destination = tmp_path / "destination"
+    _guest.unpack(archive, destination)
+    assert (destination / "nested/link").readlink() == Path("../data")
+    assert (destination / "alias").readlink() == Path("nested/link")
+    assert (destination / "alias").read_text() == "safe"
+
+
+@pytest.mark.parametrize("basename", ["../outside", "/outside", "..", "nested\\outside"])
+def test_transfer_rejects_untrusted_basename(tmp_path, basename):
+    archive = tmp_path / "transfer.tar"
+    with tarfile.open(archive, "w") as output:
+        member = tarfile.TarInfo("payload")
+        member.pax_headers["openengine.basename"] = basename
+        output.addfile(member)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    with pytest.raises(ValueError, match="basename"):
+        _guest.unpack(archive, destination)
+    assert not list(destination.iterdir())

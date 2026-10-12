@@ -996,8 +996,12 @@ def diagnose() -> list[Finding]:
     # Optional with the process backend; actionable failure when selected.
     backend, image = "process", ""
     if port is not None:
-        sandbox = load_engine_config(config).config.sandbox
-        backend, image = sandbox.backend, sandbox.image
+        try:
+            sandbox = load_engine_config(config).config.sandbox
+        except (OSError, ValueError) as error:
+            findings[0] = Finding("config", "error", f"{config}: {error}")
+        else:
+            backend, image = sandbox.backend, sandbox.image
     support = detect_support(path=record.spec.environment()["PATH"] if record else None)
     level = "ok" if support.available else ("error" if backend == "smolvm" else "warn")
     findings.append(Finding("smolvm", level, support.reason))

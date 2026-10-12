@@ -251,6 +251,26 @@ def test_doctor_reports_missing_guest_image(home, monkeypatch, capsys):
     assert checks["smolvm"]["level"] == "ok"
     assert checks["sandbox image"]["level"] == "error"
 
+@pytest.mark.parametrize("command", [["doctor"], ["daemon", "doctor"]])
+@pytest.mark.parametrize("invalid", ['[sandbox]\nbackend = "unsupported"\n', '[sandbox]\nimage = 42\n'])
+def test_doctor_reports_invalid_full_configuration(home, monkeypatch, capsys, command, invalid):
+    from engine.adapters.sandbox.smolvm import SmolvmSupport
+
+    config = home / "config/openengine/engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[server]\nport = 4411\n' + invalid)
+    monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path("/venv/bin/engine-web"))
+    monkeypatch.setattr(daemon, "_port_finding", lambda _: daemon.Finding("port", "ok", "free"))
+    monkeypatch.setattr(daemon, "_path_tools", lambda: {"node": "/tools/node"})
+    monkeypatch.setattr(daemon, "detect_support", lambda **kwargs: SmolvmSupport(True, "available", "/tools/smolvm"))
+    assert cli.main([*command, "--json"]) == 1
+    checks = {entry["name"]: entry for entry in json.loads(capsys.readouterr().out)["checks"]}
+    assert checks["config"]["level"] == "error"
+    assert "sandbox." in checks["config"]["detail"]
+    assert checks["port"]["level"] == "ok"
+    assert checks["smolvm"]["level"] == "ok"
+
+
 FAKE_SERVICE = """\
 import json, os, signal, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
