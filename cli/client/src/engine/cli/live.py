@@ -105,6 +105,16 @@ def frame(run: dict[str, Any], *, tick: int = 0, width: int = 80, elapsed: float
     elif not run.get("terminal"):
         lines.append([("  Now    ", _DIM), ("between steps", _DIM)])
 
+    completed = [node for node in nodes.values() if node["status"] == "completed"]
+    if completed:
+        finished = {row["executionId"]: row.get("finishedAt") or "" for row in run.get("nodes") or []}
+        last = max(enumerate(completed), key=lambda pair: (finished.get(pair[1].get("executionId"), ""), pair[0]))[1]
+        result = (run.get("results") or {}).get(last["id"]) or last.get("latestMessage") or ""
+        prefix = f"  ✓ {last['id']} · "
+        for index, text in enumerate(str(result).strip().splitlines()[:2] or [""]):
+            line = (prefix if index == 0 else " " * len(prefix)) + text
+            lines.append([(line[:max(width - 1, 0)], _DIM)])
+
     speaking = current or [_last_heard(run)]
     for node in (node for node in speaking if node):
         message = node.get("latestMessage") or ""
@@ -148,9 +158,9 @@ def _last_heard(run: dict[str, Any]) -> dict[str, Any] | None:
 class Terminal:
     """Draws frames in place, in colour when the terminal wants it."""
 
-    def __init__(self, out: TextIO = sys.stdout) -> None:
-        self.out = out
-        self.color = out.isatty() and not os.environ.get("NO_COLOR")
+    def __init__(self, out: TextIO | None = None) -> None:
+        self.out = out if out is not None else sys.stdout
+        self.color = self.out.isatty() and not os.environ.get("NO_COLOR")
         self.drawn = 0
 
     @property
@@ -194,12 +204,12 @@ class Watch:
         run_id: str,
         *,
         terminal: Terminal | None = None,
-        ask: Callable[[str], str] = input,
+        ask: Callable[[str], str] | None = None,
     ) -> None:
         self.client = client
         self.run_id = run_id
         self.terminal = terminal or Terminal()
-        self.ask = ask
+        self.ask = ask or input
         self.answered: set[str] = set()
 
     def follow(self) -> tuple[dict[str, Any], str]:
@@ -287,7 +297,9 @@ class Watch:
 
 def summary(run: dict[str, Any]) -> list[str]:
     """What is worth reading once a run has ended: its final output and where the work is."""
-    lines: list[str] = []
+    lines: list[str] = [f"{run['runId']} · {run['status'].replace('_', ' ')}"]
+    if run.get("failure"):
+        lines.append(f"Failure: {run['failure']['error']}")
     nodes = run.get("graphNodes") or []
     sources = {source for source, _ in run.get("edges") or []}
     final = [node["id"] for node in nodes if node["id"] not in sources]
