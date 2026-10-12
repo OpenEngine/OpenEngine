@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from engine.domain import WorkState
+from engine.domain import ForgeMode, WorkState, forge_mode
 from engine.graph_runtime_langgraph.acp import NoWorkingDirectoryError
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import WorkspaceProvider
@@ -78,7 +78,14 @@ class WorkspaceNode:
         repository = self.repository or str(state.get(REPOSITORY) or ".")
         inputs = state.get("inputs")
         requested = inputs.get(self.ref_input) if self.ref_input and isinstance(inputs, Mapping) else ""
-        base_ref = requested if isinstance(requested, str) and requested.strip() else self.base_ref
+        requested = requested if isinstance(requested, str) and requested.strip() else ""
+        base_ref = requested or self.base_ref
+        if forge_mode(inputs) is ForgeMode.DISCONNECTED:
+            # Use the current checkout by default, and cached remote refs when
+            # explicitly requested. Neither asks the provider to fetch.
+            base_ref = requested or "HEAD"
+            if base_ref.startswith("origin/"):
+                base_ref = "refs/remotes/" + base_ref
         await execution.say(f"Checking {repository} out at {base_ref}.")
         workspace = await self.provider.provision(
             repository, base_ref, co_author=str(state.get(CO_AUTHOR) or ""),

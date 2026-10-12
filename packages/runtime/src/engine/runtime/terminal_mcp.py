@@ -131,8 +131,8 @@ READ_ONLY_REPOSITORY_TOOLS: frozenset[str] = frozenset(
 
 #: The repository tools that work in the step's own checkout and nothing else,
 #: which is all a disconnected run is served. `git_subcommand` is here though a
-#: subcommand could push: without a pull request or a forge credential in play
-#: a push has nowhere it is expected to go, and a local commit needs it.
+#: local commits need it. The broker rejects network subcommands in a
+#: disconnected run before requesting approval.
 LOCAL_REPOSITORY_TOOLS: frozenset[str] = frozenset({"git_subcommand"})
 
 #: What `open_pull_request` proposes against when the agent names no base.
@@ -242,6 +242,7 @@ class TerminalMcpBroker:
         self._connections: set[asyncio.Task[None]] = set()
         self._result: asyncio.Future[TerminalEvent] | None = None
         self._clarifications: asyncio.Queue[None] | None = None
+        self.disconnected = False
         self._source_control: SourceControl | None = None
         self._repository_tools: tuple[str, ...] = ()
         self._workspace_id: WorkspaceId | None = None
@@ -996,6 +997,8 @@ class TerminalMcpBroker:
         that the profile holds `git_subcommand`.
         """
 
+        if self.disconnected and _git_subcommand(arguments) in {"push", "fetch", "pull", "clone", "ls-remote"}:
+            return {"ok": False, "error": "this run is disconnected; network git operations are disabled"}
         if self._git_approval is None:
             return {
                 "ok": False,

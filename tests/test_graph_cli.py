@@ -488,3 +488,12 @@ def test_pretty_approval_escapes_terminal_controls(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert r"approval a\x1b[2K at work\r: danger\nbenign\x9b2K" in out
     assert "\x1b" not in out and "\r" not in out and "\x9b" not in out
+
+
+def test_local_run_sends_override_and_pretty_output_starts_with_mode(monkeypatch, capsys):
+    context = {"mode": "disconnected", "reason": "explicitly requested local execution",
+               "summary": "disconnected · local branch only (run engine connect github to publish)"}
+    recorded = serve(monkeypatch, {**RUN, "forgeContext": context})
+    assert main(["graph", "run", "pair", "do it", "--repo", "o/r", "--local", "--pretty"]) == 0
+    assert recorded.requests[0]["body"]["inputs"] == {"mode": "disconnected"}
+    assert capsys.readouterr().out.splitlines()[0] == context["summary"]

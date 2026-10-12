@@ -1839,3 +1839,14 @@ def test_force_push_refused_when_ownership_lookup_fails():
         assert not result["ok"]
         source.run_git.assert_not_awaited()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("command", ["push", "fetch", "pull", "clone", "ls-remote"])
+def test_disconnected_git_cannot_contact_a_remote(command):
+    source = RecordingRepository()
+    broker = _repository_broker(source, "git_subcommand")
+    broker.disconnected = True
+    result = asyncio.run(broker._repository_call("git_subcommand", {"arguments": [command, "origin"]}, "local"))
+    assert result["ok"] is False
+    assert "disconnected" in result["error"]
+    assert source.git_calls == []

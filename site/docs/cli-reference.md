@@ -296,7 +296,7 @@ Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch
 
 ```text
 engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME=VALUE]
-                 [--branch BRANCH] [--agent AGENT] [--repo REPO] [--no-watch] [--json]
+                 [--branch BRANCH] [--agent AGENT] [--local] [--repo REPO] [--no-watch] [--json]
                  [--wait] [--timeout SECONDS] [--idempotency-key IDEMPOTENCY_KEY]
                  graph [instruction]
 ```
@@ -311,6 +311,7 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--input, -i NAME=VALUE` |  |
 | `--branch BRANCH` | the branch to check out (sets the branch input) |
 | `--agent AGENT` | the agent to run (sets the agent input) |
+| `--local` | keep commits and findings local; do not publish |
 | `--repo REPO` | repository to check out |
 | `--no-watch` | return immediately without the live view |
 | `--json` | print JSON without the live view |

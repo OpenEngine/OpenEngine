@@ -625,6 +625,7 @@ class GraphService:
             return _runner_of(node_id, values, overrides, topology, selected)
 
         return {
+            "forgeContext": dict(snapshot.forge_context),
             "runId": run_id,
             "graphId": graph.graph_id if graph else None,
             "versionId": str(snapshot.graph_id),

@@ -29,7 +29,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from engine.domain import StepCompleted
+from engine.domain import ForgeMode, StepCompleted, forge_mode
 from engine.graph_runtime.inputs import RUNNER_POLICIES, WorkflowInput
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
@@ -220,14 +220,16 @@ def _node(
     assert node.runner is not None
     default = _default_runner(node.runner, runners)
     prompt_template = template(node.prompt)
-    instructions = _completion_instructions(node.outputs) if node.structured else ""
 
     def prompt(state: Mapping[str, object]) -> str:
+        outputs = _mode_outputs(node.outputs, forge_mode(state.get("inputs")))
+        instructions = _completion_instructions(outputs) if node.structured else ""
         return prompt_template.render(environment(state, groups, item)) + instructions
 
     bindings: tuple[Any, ...] = ()
     if node.structured:
-        bindings = (TerminalMcpServer(
+        bindings = (GraphTerminalMcpServer(
+            outputs=node.outputs,
             step_id=key,
             agent_id=default,
             required_outputs=tuple(output.name for output in node.outputs if output.required),
@@ -429,6 +431,21 @@ def _completion_instructions(outputs: Sequence[OutputSpec]) -> str:
         description = f" -- {output.description}" if output.description else ""
         lines.append(f"- {output.name}{required}: {detail}{description}")
     return "\n".join(lines)
+
+
+def _mode_outputs(outputs: Sequence[OutputSpec], mode: ForgeMode) -> tuple[OutputSpec, ...]:
+    return tuple(output for output in outputs if mode is ForgeMode.CONNECTED or output.name != "pr_url")
+
+
+@dataclass(frozen=True, slots=True)
+class GraphTerminalMcpServer(TerminalMcpServer):
+    outputs: tuple[OutputSpec, ...] = ()
+
+    def for_mode(self, mode: ForgeMode) -> TerminalMcpServer:
+        return replace(
+            TerminalMcpServer.for_mode(self, mode),
+            validate_completion=_validator(_mode_outputs(self.outputs, mode)),
+        )
 
 
 def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]:

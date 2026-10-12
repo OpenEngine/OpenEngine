@@ -249,7 +249,7 @@ class RecordingSourceControl:
         pass
 
     async def can_write_repository(self, pr_url: str, username: str, *, user_id: int | None = None) -> bool:
-        return False
+        return True
 
     async def authenticated_login(self, repository_url: str) -> str:
         return "OpenEngineBot"
@@ -521,7 +521,7 @@ def test_an_acp_node_runs_a_turn_and_publishes_what_happened(tmp_path: Path) -> 
     # about doing it. A transcript holding only the second is not a
     # conversation, and a reader opening one has to guess what was asked.
     assert transcript(events) == [("user", PROMPT), ("assistant", DONE)]
-    assert values == {str(IMPLEMENTATION): DONE, str(REVIEW): "Looks right."}
+    assert values == {str(IMPLEMENTATION): DONE, str(REVIEW): "Looks right.", "inputs": {"mode": "disconnected"}}
     started = [event for event in events if event.kind.value == "conversation.started"]
     assert len(started) == 1
     assert started[0].node_id == IMPLEMENTATION
@@ -572,7 +572,7 @@ def test_run_bound_tools_cross_acp_and_mcp_processes_and_rebind_on_resume(
             pipeline_with_run_bound_mcp,
             source_control,
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             asked = await until(log, run.run_id, "approval.requested")
             return run.run_id, str(asked[-1].payload["approvalId"])
 
@@ -658,7 +658,7 @@ def test_run_bound_git_keeps_the_broker_approval_boundary(tmp_path: Path) -> Non
             pipeline_with_run_bound_mcp,
             source_control,
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             events = await until(log, run.run_id, "approval.requested")
             approval_id = events[-1].payload["approvalId"]
             assert source_control.git_calls == []
@@ -698,7 +698,7 @@ def test_cancelling_run_bound_git_never_calls_source_control(tmp_path: Path) -> 
             pipeline_with_run_bound_mcp,
             source_control,
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             events = await until(log, run.run_id, "approval.requested")
             await runtime.decide(
                 run.run_id,
@@ -729,7 +729,7 @@ def test_an_acp_answer_cannot_approve_an_unrelated_mcp_request_after_resume(
             pipeline_with_run_bound_mcp,
             source_control,
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             asked = await until(log, run.run_id, "approval.requested")
             return run.run_id, str(asked[-1].payload["approvalId"])
 
@@ -778,7 +778,7 @@ def test_complete_step_carries_declared_outputs_into_graph_state(
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "run.finished")
             return (
                 dict((await runtime.snapshot(run.run_id)).values),
@@ -803,7 +803,7 @@ def test_ordinary_turn_is_reprompted_before_the_graph_can_advance(
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             events = await until(log, run.run_id, "run.failed")
             return await runtime.snapshot(run.run_id), events
 
@@ -842,7 +842,7 @@ def test_an_ordinary_turn_can_complete_after_the_correction(tmp_path: Path) -> N
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "run.finished")
             return dict((await runtime.snapshot(run.run_id)).values)
 
@@ -868,7 +868,7 @@ def test_clarify_preserves_the_graph_position_until_continuation(
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "transcript", count=2)
             paused = await runtime.snapshot(run.run_id)
             await runtime.steer(run.run_id, "Continue with the implementation.")
@@ -910,7 +910,7 @@ def test_reopening_a_clarified_step_answers_the_message_it_was_sent(
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "transcript", count=2)
             # Settles the node onto the wait the reopening message arrives at,
             # which is the only place the dropped flag could be read.
@@ -939,7 +939,7 @@ def test_clarify_resets_the_invalid_completion_budget(tmp_path: Path) -> None:
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "transcript", count=4)
             paused = await runtime.snapshot(run.run_id)
             await runtime.steer(run.run_id, "Continue with the implementation.")
@@ -978,7 +978,7 @@ def test_complete_step_rejects_a_missing_declared_output(tmp_path: Path) -> None
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "run.failed")
             return (
                 await runtime.snapshot(run.run_id),
@@ -1009,7 +1009,7 @@ def test_fail_step_fails_the_graph_run(tmp_path: Path) -> None:
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "run.failed")
             return (
                 await runtime.snapshot(run.run_id),
@@ -1082,7 +1082,7 @@ def test_run_bound_tools_intersect_with_source_control_capabilities(
             pipeline_with_run_bound_mcp,
             GitOnlySourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "run.failed")
 
     asyncio.run(scenario())
@@ -1192,7 +1192,7 @@ def test_terminal_result_waits_for_queued_steering(
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(
                 log, run.run_id,
                 "run.finished" if terminal == "complete_step" else "run.failed",
@@ -1249,7 +1249,7 @@ def test_steering_does_not_send_a_terminal_correction(tmp_path: Path) -> None:
             pipeline_with_run_bound_mcp,
             RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             agent_log = tmp_path / "agent.log"
             async with asyncio.timeout(PATIENCE):
                 while not agent_log.exists() or not prompts(tmp_path):
@@ -2570,7 +2570,7 @@ def test_cancelled_reopening_waits_for_input_without_harness_correction(
                      mcp_terminal=terminal, cancel_prompt=REOPEN, cancel_text=partial),
             pipeline_with_run_bound_mcp, RecordingSourceControl(),
         ) as (runtime, log):
-            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run"})
+            run = await runtime.start(GRAPH, {"workspaceId": "ws-graph-run", "repository": "acme/repository"})
             await until(log, run.run_id, "transcript", count=2)
             await runtime.snapshot(run.run_id)
             await runtime.steer(run.run_id, REOPEN)

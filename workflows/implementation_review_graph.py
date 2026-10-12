@@ -485,6 +485,7 @@ def pipeline(
                     required_outputs=("pr_url",),
                     repository_tools=(
                         "git_subcommand", "open_pull_request",
+                        "view_change_request", "add_comment",
                         "list_pipeline_status", "get_job_logs",
                     ),
                 ),

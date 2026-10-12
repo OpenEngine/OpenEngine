@@ -411,6 +411,7 @@ def _snapshot_json(
     run: RunSnapshot, *, topology: GraphTopology | None = None, full_values: bool = True,
 ) -> dict[str, object]:
     return {
+        "forgeContext": dict(run.forge_context),
         "runId": str(run.run_id),
         "graphId": str(run.graph_id),
         "status": run.status.value,

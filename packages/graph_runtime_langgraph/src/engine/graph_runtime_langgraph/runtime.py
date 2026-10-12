@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -177,6 +177,7 @@ class LangGraphRuntime:
         self._entries: dict[NodeId, int] = {}
         self._source_control = source_control
         self.workorder_creator: WorkorderCreator | None = None
+        self.repository_mode: Callable[[str], Awaitable[str | None]] | None = None
 
     def bind_workorder_creator(self, create: WorkorderCreator) -> None:
         """Bind the host that starts workorders and records their provenance."""
@@ -221,8 +222,22 @@ class LangGraphRuntime:
         run_id = run_id or RunId(f"run-{uuid4().hex[:12]}")
         if await self._store.run(run_id) is not None:
             raise ValueError(f"run already exists: {run_id}")
+        from engine.graph_runtime_langgraph.forge import resolve_forge_context
+
+        supplied = values.get("inputs")
+        inputs = dict(supplied) if isinstance(supplied, Mapping) else {}
+        configured = None
+        if self.repository_mode is not None:
+            configured = await self.repository_mode(str(values.get("repository") or ""))
+            if configured == "disconnected":
+                inputs["mode"] = configured
+        context = await resolve_forge_context(self.source_control, {**values, "inputs": inputs})
+        if configured == "disconnected":
+            context["reason"] = "repository configured for local execution"
+        values = {**values, "inputs": {**inputs, "mode": context["mode"]}}
         await self._store.remember_run(RunRecord(
             run_id, graph_id,
+            forge_context=context,
             runner_overrides=definition.initial_runner_overrides(values),
         ))
         live = _Live(run_id, graph_id)
@@ -1151,6 +1166,7 @@ class LangGraphRuntime:
             error=record.error,
             auto_approve_nodes=record.auto_approve_nodes,
             runner_overrides=record.runner_overrides,
+            forge_context=record.forge_context,
         )
 
 

@@ -114,6 +114,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
     running.add_argument("--branch", default="", help="the branch to check out (sets the branch input)")
     running.add_argument("--agent", default="", help="the agent to run (sets the agent input)")
+    running.add_argument("--local", action="store_true", help="keep commits and findings local; do not publish")
     running.add_argument("--repo", default="", help="repository to check out")
     running.add_argument("--no-watch", action="store_true", help="return immediately without the live view")
     running.add_argument("--json", action="store_true", help="print JSON without the live view")
@@ -364,6 +365,8 @@ def graph_run(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     key = arguments.idempotency_key or f"cli-{uuid.uuid4()}"
     inputs = _inputs(arguments.input)
+    if getattr(arguments, "local", False):
+        inputs["mode"] = "disconnected"
     for name in ("branch", "agent"):
         if getattr(arguments, name):
             inputs[name] = getattr(arguments, name)
@@ -719,6 +722,8 @@ def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
     if auth and backend.name != backends.LOCAL:
         auth["command"] = f"{auth['command']} --backend {backend.name}"
     if pretty:
+        if context := run.get("forgeContext"):
+            print(context["summary"])
         print(f"{run['runId']}  {run['graph']} v{run['version']}  {run['status']}")
         if run.get("nodes"):
             _table(run["nodes"], _NODE_COLUMNS)
