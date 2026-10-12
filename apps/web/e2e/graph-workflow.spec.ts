@@ -99,7 +99,7 @@ const ASKING_SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "Added the requested files.",
-            outputs: { pr_url: PULL_REQUEST },
+            outputs: { pr_url: PULL_REQUEST, branch: "agent/greeting" },
           },
         },
       ],
@@ -167,7 +167,7 @@ const SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: IMPLEMENTED,
-            outputs: { pr_url: PULL_REQUEST },
+            outputs: { pr_url: PULL_REQUEST, branch: "agent/greeting" },
           },
         },
       ],
@@ -194,7 +194,7 @@ const STEERING_SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "Applied the human guidance.",
-            outputs: { pr_url: PULL_REQUEST },
+            outputs: { pr_url: PULL_REQUEST, branch: "agent/greeting" },
           },
         },
       ],
@@ -301,6 +301,9 @@ test("a graph workflow accepts independent stage runners", async ({
     mode: "connected",
     implementation_runner: "claude",
     review_runner: "codex",
+    spec: "false",
+    review_only: "false",
+    adversarial: "false",
     state: "Planning",
     ref: "",
     pr_url: "",
@@ -396,18 +399,20 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
 
   // The nodes a person can read, from the moment the run exists: the
   // checkout and the human verdict are stages rather than conversations.
-  // The lone implementation conversation stands on its own; the review
+  // Specification and implementation stand on their own; the review
   // conversations start in a collapsed group.
   const conversations = page.getByLabel(/^Conversations for /);
-  await expect(conversations.getByRole("link")).toHaveText(["Implementation"]);
+  await expect(conversations.getByRole("link")).toHaveText(["Specification", "Implementation"]);
   await conversations.getByText("Review", { exact: true }).click();
   await expect(conversations.getByRole("link")).toHaveText([
+    "Specification",
     "Implementation",
     "Review (Security)",
     "Review (Bugs & task adherence)",
     "Review (Performance)",
     "Review (Conciseness)",
     "Review (DRYness & code duplication)",
+    "Refute findings",
     "Reranker",
     "Impact analysis",
   ]);

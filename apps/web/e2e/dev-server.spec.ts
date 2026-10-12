@@ -78,7 +78,7 @@ const SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "Added the greeting.",
-            outputs: { pr_url: PULL_REQUEST },
+            outputs: { pr_url: PULL_REQUEST, branch: "agent/greeting" },
           },
         },
       ],
