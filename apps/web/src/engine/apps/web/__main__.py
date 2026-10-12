@@ -366,7 +366,7 @@ def compose_app(
         public_url=loaded.config.public_url,
         work_orders=loaded.config.work_orders,
         repos=registry,
-        config_path=loaded.path,
+        config_path=loaded.path if loaded.explicit else None,
         login_operators=loaded.config.access.operators,
         graph_service=build_graph_service(
             settings,

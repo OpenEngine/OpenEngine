@@ -16,10 +16,11 @@ Preflight failures leave the checkout and configuration untouched. Onboarding
 never changes credentials. Existing checkouts of the same remote are reused.
 Repeating successful onboarding reports that the repository is already onboarded.
 
-Onboarding preserves existing settings and comments in the configuration the
-daemon loaded (`--config` / `ENGINE_CONFIG` when selected). Without a loaded file,
-it creates `$XDG_CONFIG_HOME/openengine/engine.toml`, defaulting to
-`~/.config/openengine/engine.toml`. It updates the running daemon immediately and
+Onboarding writes to `$XDG_CONFIG_HOME/openengine/engine.toml`, defaulting to
+`~/.config/openengine/engine.toml`, unless the daemon selected an explicit
+`--config` / `ENGINE_CONFIG` file. It preserves existing settings and comments
+in that destination and leaves automatically discovered project-local files
+untouched. It updates the running daemon immediately and
 registers the four starter graphs for the `owner/repo` project. No restart is needed.
 The repository is ready to select in the WorkOrder form; the CLI prints a
 `engine graph run review --project owner/repo --repo /checkout/path --input ref=HEAD` command.

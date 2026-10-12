@@ -152,3 +152,38 @@ def test_example_requires_approval_for_shell_commands(command):
     assert config.approvals.auto_approve is False
     policy = config.approvals
     assert policy_decision_for(policy, PermissionScope(ApprovalCapability.BASH, command)) is PolicyDecision.ASK
+
+
+@pytest.mark.parametrize('source', ['engine.toml', '.engine/config.toml', 'machine', 'explicit', 'environment'])
+def test_onboarding_persists_to_machine_config_unless_explicit(tmp_path, monkeypatch, source):
+    from unittest.mock import Mock
+    from engine.apps.web.onboarding import RepositoryOnboarding
+    from engine.runtime.repositories import RepositoryRegistry
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('ENGINE_CONFIG', raising=False)
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config-home'))
+    machine = tmp_path / 'config-home/openengine/engine.toml'
+    selected = machine if source == 'machine' else tmp_path / (source if source.endswith('.toml') else 'custom.toml')
+    selected.parent.mkdir(parents=True, exist_ok=True)
+    original = '# Keep the source configuration intact\n'
+    selected.write_text(original)
+    if source == 'environment':
+        monkeypatch.setenv('ENGINE_CONFIG', str(selected))
+    loaded, catalog = web_main.read_configuration(selected if source == 'explicit' else None)
+    assert loaded.path == selected
+    for name in ('build_capabilities', 'build_runners', 'build_read_only_runners',
+                 'build_session', 'build_graph_runtime', 'build_graph_service'):
+        monkeypatch.setattr(web_main, name, Mock())
+    create_app = Mock()
+    monkeypatch.setattr(web_main, 'create_app', create_app)
+    web_main.compose_app(loaded, catalog)
+    service = RepositoryOnboarding(RepositoryRegistry(projects={}),
+                                  create_app.call_args.kwargs['config_path'], Mock())
+    expected = selected if source in {'explicit', 'environment'} else machine
+    assert service.config_path == expected
+    from engine.apps.web.onboarding import persist_repository
+    persist_repository(service.config_path, 'owner/repo', str(tmp_path / 'repo'), 'connected')
+    assert 'owner/repo' in expected.read_text()
+    if selected != expected:
+        assert selected.read_text() == original

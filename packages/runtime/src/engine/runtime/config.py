@@ -255,6 +255,8 @@ class LoadedEngineConfig:
 
     config: EngineConfig = EngineConfig()
     path: Path | None = None
+    # Distinguish operator overrides from automatically discovered project files.
+    explicit: bool = False
 
     @property
     def claude_config_dir(self) -> Path | None:
@@ -331,7 +333,10 @@ def load_engine_config(
     except tomllib.TOMLDecodeError as error:
         raise EngineConfigError(f"invalid TOML in {path}: {error}") from error
 
-    loaded = LoadedEngineConfig(config=parse_engine_config(document), path=path)
+    loaded = LoadedEngineConfig(
+        config=parse_engine_config(document), path=path,
+        explicit=explicit_path is not None or bool(environment.get(CONFIG_ENVIRONMENT_VARIABLE)),
+    )
     if (directory := loaded.claude_config_dir) is not None and not directory.is_dir():
         raise EngineConfigError(f"claude.config_dir is not an existing directory: {directory}")
     return loaded
