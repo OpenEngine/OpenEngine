@@ -242,6 +242,7 @@ class SmolvmInstance:
     async def copy_out(self, source: str, destination: Path) -> None:
         async with self._lock:
             self._alive()
+            _guest._check_export_destination(Path(destination))
             relative = _relative(source)
             guest_archive = f"/oe-transfer-{uuid.uuid4().hex}.tar"
             with tempfile.TemporaryDirectory(prefix="oe-transfer-") as temporary:
@@ -249,7 +250,7 @@ class SmolvmInstance:
                 async with self._transfer_archive(guest_archive):
                     await self._helper("pack", relative, guest_archive)
                     await self._receive_archive(guest_archive, archive)
-                    await _filesystem(_guest.unpack, archive, Path(destination))
+                    await _filesystem(_guest.unpack, archive, Path(destination), True)
 
     @asynccontextmanager
     async def _transfer_archive(self, archive: str):

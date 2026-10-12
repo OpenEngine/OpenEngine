@@ -53,7 +53,7 @@ def _check_destination(destination: Path) -> None:
             raise ValueError(message)
 
 
-def _copy(source: Path, destination: Path) -> None:
+def _copy(source: Path, destination: Path, *, export: bool = False) -> None:
     _check_destination(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_symlink():
@@ -61,10 +61,15 @@ def _copy(source: Path, destination: Path) -> None:
     elif source.is_dir():
         destination.mkdir(exist_ok=True)
         for child in source.iterdir():
-            _copy(child, destination / child.name)
+            _copy(child, destination / child.name, export=export)
         shutil.copystat(source, destination)
     elif destination.is_dir():
-        _copy(source, destination / source.name)
+        _copy(source, destination / source.name, export=export)
+    elif export:
+        # Do not overwrite a file even if it appeared after preflight.
+        with source.open("rb") as incoming, destination.open("xb") as output:
+            shutil.copyfileobj(incoming, output)
+        shutil.copystat(source, destination)
     else:
         shutil.copy2(source, destination)
 
@@ -84,8 +89,20 @@ def _check_links(source: Path, destination: Path, source_root: Path, destination
             _check_links(child, destination / child.name, source_root, destination_root)
 
 
-def unpack(archive: Path, destination: Path) -> None:
+def _check_export_destination(destination: Path) -> None:
+    _check_destination(destination)
+    if any(part.casefold() == ".git" for part in destination.absolute().parts):
+        message = "copy-out must not target Git metadata"
+        raise ValueError(message)
+    if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
+        message = "copy-out requires a fresh path or an empty staging directory"
+        raise ValueError(message)
+
+
+def unpack(archive: Path, destination: Path, export: bool = False) -> None:
     require_patched_python()
+    if export:
+        _check_export_destination(destination)
     if archive.stat().st_size > MAX_ARCHIVE_BYTES:
         message = "transfer archive exceeds byte budget"
         raise ValueError(message)
@@ -93,6 +110,9 @@ def unpack(archive: Path, destination: Path) -> None:
 
     def bounded_data(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
         nonlocal count, total
+        if export and any(part.casefold() == ".git" for part in Path(member.name).parts):
+            message = "copy-out must not contain Git metadata"
+            raise ValueError(message)
         if member.size < 0:
             message = "invalid transfer member size"
             raise ValueError(message)
@@ -117,6 +137,9 @@ def unpack(archive: Path, destination: Path) -> None:
             if not basename or basename in {".", ".."} or any(char in basename for char in "/\\\0"):
                 message = "invalid transfer basename"
                 raise ValueError(message)
+            if export and basename.casefold() == ".git":
+                message = "copy-out must not contain Git metadata"
+                raise ValueError(message)
             source = root / "payload"
             _check_destination(destination)
             if source.is_symlink():
@@ -125,7 +148,7 @@ def unpack(archive: Path, destination: Path) -> None:
             if not source.is_dir() and destination.is_dir():
                 destination = destination / basename
             _check_links(source, destination, source, destination.resolve())
-            _copy(source, destination)
+            _copy(source, destination, export=export)
         finally:
             # Read-only directory modes must not prevent temporary-file cleanup,
             # including after extraction or destination validation fails.

@@ -447,3 +447,80 @@ def test_replaced_guest_helper_cannot_flood_host(smolvm_cli, monkeypatch):
             assert not sandbox._processes
         assert not (root / sandbox.name).exists()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_copy_out_leaves_existing_host_destination_untouched(smolvm_cli, tmp_path, kind):
+    launcher, root = smolvm_cli
+    destination = tmp_path / "output"
+    if kind == "directory":
+        destination.mkdir()
+        original = destination / "keep.txt"
+    else:
+        original = destination
+    original.write_text("host data")
+    original.chmod(0o600)
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            (root / sandbox.name / "workspace/keep.txt").write_text("guest replacement")
+            with pytest.raises(ValueError, match="fresh path or an empty staging directory"):
+                await sandbox.copy_out("." if kind == "directory" else "keep.txt", destination)
+            assert not list((root / sandbox.name).glob("oe-transfer-*"))
+    asyncio.run(run())
+    assert original.read_text() == "host data"
+    assert original.stat().st_mode & 0o777 == 0o600
+    if kind == "directory":
+        assert list(destination.iterdir()) == [original]
+
+
+@pytest.mark.parametrize("git_name,source", [(".git", "."), (".GiT", "."), (".git", ".git")])
+def test_copy_out_rejects_git_content_before_host_copy(smolvm_cli, tmp_path, git_name, source):
+    launcher, root = smolvm_cli
+    destination = tmp_path / "staging"
+    destination.mkdir()
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            workspace = root / sandbox.name / "workspace"
+            metadata = workspace / git_name
+            (metadata / "hooks").mkdir(parents=True)
+            hook = metadata / "hooks/post-checkout"
+            hook.write_text("#!/bin/sh\necho unsafe\n")
+            hook.chmod(0o755)
+            (metadata / "config").write_text("[core]\nfsmonitor = echo unsafe\n")
+            (workspace / "result.txt").write_text("ordinary output")
+            with pytest.raises(ValueError, match="Git metadata"):
+                await sandbox.copy_out(source, destination)
+            assert not list((root / sandbox.name).glob("oe-transfer-*"))
+    asyncio.run(run())
+    assert list(destination.iterdir()) == []
+
+
+@pytest.mark.parametrize("git_name", [".git", ".GIT"])
+def test_copy_out_rejects_host_git_destination(smolvm_cli, tmp_path, git_name):
+    launcher, root = smolvm_cli
+    destination = tmp_path / "checkout" / git_name / "hooks/post-checkout"
+    destination.parent.mkdir(parents=True)
+    destination.write_text("host hook")
+    destination.chmod(0o755)
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            (root / sandbox.name / "workspace/result").write_text("guest hook")
+            with pytest.raises(ValueError, match="Git metadata"):
+                await sandbox.copy_out("result", destination)
+    asyncio.run(run())
+    assert destination.read_text() == "host hook"
+    assert destination.stat().st_mode & 0o777 == 0o755
+
+
+def test_copy_out_rejects_git_file_basename(tmp_path):
+    source = tmp_path / ".git"
+    source.write_text("gitdir: /outside")
+    archive = tmp_path / "transfer.tar"
+    _guest.pack(source, archive)
+    destination = tmp_path / "staging"
+    with pytest.raises(ValueError, match="Git metadata"):
+        _guest.unpack(archive, destination, True)
+    assert not destination.exists()

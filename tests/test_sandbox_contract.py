@@ -179,3 +179,39 @@ def test_failed_exec_does_not_break_context(sandbox_backend, command):
             process = await sandbox.exec(command("pass"))
             assert await process.wait() == 0
     asyncio.run(run())
+
+
+def test_smolvm_copy_out_requires_safe_staging(sandbox_backend, tmp_path, command):
+    if not isinstance(sandbox_backend, SmolvmSandbox):
+        pytest.skip("fresh staging is the SmolVM export policy")
+    checkout = tmp_path / "checkout"
+    hook = checkout / ".git/hooks/post-checkout"
+    hook.parent.mkdir(parents=True)
+    hook.write_text("host hook")
+    hook.chmod(0o755)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    async def run():
+        async with sandbox_backend.create(SandboxSpec()) as sandbox:
+            process = await sandbox.exec(command(
+                "from pathlib import Path; "
+                "Path('.git/hooks').mkdir(parents=True); "
+                "Path('.git/hooks/post-checkout').write_text('guest hook'); "
+                "Path('.git/config').write_text('[core]\\nfsmonitor = unsafe\\n'); "
+                "Path('result.txt').write_text('safe output')"
+            ))
+            assert await process.wait() == 0
+            with pytest.raises(ValueError, match="Git metadata"):
+                await sandbox.copy_out(".", staging)
+            assert not list(staging.iterdir())
+            with pytest.raises(ValueError, match="fresh path"):
+                await sandbox.copy_out("result.txt", checkout)
+            with pytest.raises(ValueError, match="Git metadata"):
+                await sandbox.copy_out("result.txt", hook)
+            await sandbox.copy_out("result.txt", staging)
+        assert hook.read_text() == "host hook"
+        assert hook.stat().st_mode & 0o777 == 0o755
+        assert not (checkout / ".git/config").exists()
+        assert (staging / "result.txt").read_text() == "safe output"
+    asyncio.run(asyncio.wait_for(run(), 120))
