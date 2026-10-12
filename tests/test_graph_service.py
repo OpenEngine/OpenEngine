@@ -855,7 +855,7 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
                 InMemoryStateStore(), ConcurrentRunner(), graph_runtime=running(), graph_service=factory,
             )
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
                 async with app.router.lifespan_context(app):
                     added = await client.post("/api/v1/graphs", json={"source": PAIR})
                     assert added.status_code == 201, added.text
@@ -966,7 +966,7 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                 loop_settings=LoopSettingsStore(tmp_path / "loops.json"),
             )
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
                 async with app.router.lifespan_context(app):
                     added = await client.post("/api/v1/agents", json={
                         "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://localhost:11434/v1",
