@@ -238,4 +238,9 @@ export const test = terminalTest.extend<{ engine: Engine }>({
   terminalEnv: async ({ engine }, use) => {
     await use(engine.env)
   },
+  // The CLI sends a run "the repository you are in": start sessions in the
+  // fixture repository, as a reader of a guide would be in their own project.
+  terminalCwd: async ({ engine }, use) => {
+    await use(engine.repository)
+  },
 })
