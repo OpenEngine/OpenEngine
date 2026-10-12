@@ -209,6 +209,8 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     ]
     # Only the last step publishes; nothing before it can open a pull request.
     assert [node.id for node in spec.nodes if "open_pull_request" in node.tools] == ["publish"]
+    # The CI step finds the change through the pull request URL publish reports.
+    assert [output.name for output in spec.node("publish").outputs] == ["pr_url"]
 
     # complete_step accepts only the required outputs, and only as text, so
     # every output a step can finish with must be one (see the runtime's

@@ -169,6 +169,11 @@ review:
       guide review left unresolved, and `issue_resolution: resolves`.
       If one is already open, pushing is enough.
 
+      Report the pull request's URL as pr_url, whether you opened it or it was
+      already open: the CI step after this one finds the change by it.
+    outputs:
+      pr_url: {type: string, required: true, description: the pull request's URL}
+
   ci:
     name: CI
     ci: true
