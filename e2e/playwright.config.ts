@@ -1,4 +1,10 @@
 import { defineConfig, devices } from "@playwright/test"
+import { freePort } from "./support/freePort.ts"
+
+// Chosen once in the runner and inherited by its workers, which load this
+// config again and must agree on where the terminal server is.
+process.env.E2E_TERMINAL_PORT ??= String(freePort())
+const terminalUrl = `http://127.0.0.1:${process.env.E2E_TERMINAL_PORT}`
 
 /**
  * Settings the test run and playwright-test2doc.config.ts must share, exported
@@ -17,8 +23,16 @@ export const expectConfig = {
 }
 
 export const sharedUse = {
+  baseURL: terminalUrl,
   trace: "on-first-retry",
 } as const
+
+/** The terminal bridge (terminal/server.ts) the specs drive the CLI through. */
+export const webServerConfig = {
+  command: `node terminal/server.ts --port ${process.env.E2E_TERMINAL_PORT} --static terminal/dist`,
+  url: `${terminalUrl}/healthz`,
+  reuseExistingServer: false,
+}
 
 export default defineConfig({
   testDir: "./tests",
@@ -30,4 +44,5 @@ export default defineConfig({
   expect: expectConfig,
   use: sharedUse,
   projects,
+  webServer: webServerConfig,
 })

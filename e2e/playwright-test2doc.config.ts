@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs"
 import { defineConfig } from "@playwright/test"
-import { projects, expectConfig, sharedUse } from "./playwright.config"
+import { projects, expectConfig, sharedUse, webServerConfig } from "./playwright.config.ts"
 import "@test2doc/playwright/types"
 
 // The site's guides directory; generated, so it is gitignored there. test2doc
@@ -30,4 +30,5 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   projects,
+  webServer: webServerConfig,
 })
