@@ -292,6 +292,33 @@ def test_default_checkout_is_under_daemon_home(tmp_path, monkeypatch):
     assert not (tmp_path / 'code').exists()
 
 
+def test_configured_onboarding_directory_is_used(tmp_path, monkeypatch):
+    monkeypatch.setattr(onboard.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(onboard, 'preflight', lambda: ([{'code': 'agent', 'message': 'sign in', 'fix': 'x'}], None))
+    directory = tmp_path / 'code' / 'work'
+    service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), None, AsyncMock(), onboarding_directory=directory)
+
+    async def run():
+        job = service.start('https://github.com/owner/repo.git', None, 'connected')
+        assert job['path'] == str(directory / 'repo')
+        await service.close()
+    asyncio.run(run())
+    assert not (directory / 'repo').exists()
+
+
+def test_explicit_path_overrides_onboarding_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(onboard.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(onboard, 'preflight', lambda: ([{'code': 'agent', 'message': 'sign in', 'fix': 'x'}], None))
+    service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), None, AsyncMock(), onboarding_directory=tmp_path / 'code' / 'work')
+
+    async def run():
+        job = service.start('https://github.com/owner/repo.git', str(tmp_path / 'elsewhere'), 'connected')
+        assert job['path'] == str(tmp_path / 'elsewhere')
+        await service.close()
+    asyncio.run(run())
+
+
+
 @pytest.mark.parametrize("origin", ["https://evil.example", "http://localhost.evil.example", "null"])
 def test_cross_origin_onboarding_never_starts(tmp_path, monkeypatch, origin):
     from test_web_app import ConcurrentRunner, _session

@@ -237,7 +237,7 @@ engine onboard [-h] [--backend NAME] [--pretty] [--path PATH]
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `url` |  |
-| `--path PATH` | checkout path on the daemon machine |
+| `--path PATH` | checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo) |
 | `--mode MODE` |  |
 
 ## `engine graph`
