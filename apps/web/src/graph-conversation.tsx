@@ -601,15 +601,7 @@ export function GraphConversationPage({
   const node = topology && topology.graphId === graphId
     ? topology.nodes.find((node) => node.nodeId === nodeId)
     : undefined;
-  // The runner this node's latest execution announced, which the topology's
-  // default does not know when an input or a `not`/`same` rule chose it.
-  const announced = useMemo(() => {
-    const selected = events.findLast(
-      (event) => event.nodeId === nodeId && event.type === "runner.selected",
-    );
-    return typeof selected?.payload.runner === "string" ? selected.payload.runner : undefined;
-  }, [events, nodeId]);
-  const runner = run?.runnerOverrides?.[nodeId] ?? announced ?? node?.runner ?? "";
+  const runner = run?.runnerOverrides?.[nodeId] ?? node?.runner ?? "";
   const runners = [...new Set([node?.runner, ...(node?.runners ?? []), runner])]
     .filter((value): value is string => Boolean(value));
   const [runnerBusy, setRunnerBusy] = useState(false);
