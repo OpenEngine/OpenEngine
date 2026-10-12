@@ -185,6 +185,40 @@ def test_the_sketch_compiles_to_langgraph(tmp_path) -> None:
             ("reranker", "implementer"), ("reranker", "__end__")} <= edges
 
 
+def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
+    from pathlib import Path
+
+    from engine.graph_service.expressions import parse
+
+    source = Path(__file__).parents[1] / "docs/examples/graphs/tdd-guide.yaml"
+    spec = graph(source.read_text())
+    assert [node.id for node in spec.nodes] == ["pick", "tdd", "implement", "guide_review", "publish", "ci"]
+    assert {("tdd", "implement", False), ("implement", "guide_review", False), ("publish", "ci", False)} <= set(
+        spec.edges(),
+    )
+    # The tests and the code that passes them come from different runners, and
+    # so does the review of the guide.
+    assert (spec.node("implement").runner.kind, spec.node("implement").runner.value) == ("not", "tdd")
+    assert (spec.node("guide_review").runner.kind, spec.node("guide_review").runner.value) == ("not", "implement")
+    # Only the last step publishes; nothing before it can open a pull request.
+    assert [node.id for node in spec.nodes if "open_pull_request" in node.tools] == ["publish"]
+
+    routes = {rule.sources[0]: rule.routes for rule in spec.flow if rule.routes}
+
+    def after(step: str, outputs: dict, visits: dict | None = None) -> str:
+        names = {"outputs": outputs, "visits": visits or {}, "inputs": {}, "instruction": "", "item": None}
+        return next(route.targets[0] for route in routes[step] if not route.when or parse(route.when).evaluate(names))
+
+    assert after("pick", {"pick": {"found": False}}) == "end"
+    assert after("pick", {"pick": {"found": True}}) == "tdd"
+    assert after("guide_review", {"guide_review": {"verdict": "revise"}}, {"implement": 1}) == "implement"
+    assert after("guide_review", {"guide_review": {"verdict": "revise"}}, {"implement": 3}) == "publish"
+    assert after("guide_review", {"guide_review": {"verdict": "pass"}}, {"implement": 1}) == "publish"
+    assert after("ci", {"ci": {"passed": False}}, {"implement": 1}) == "implement"
+    assert after("ci", {"ci": {"passed": False}}, {"implement": 4}) == "end"
+    assert after("ci", {"ci": {"passed": True}}, {"implement": 1}) == "end"
+
+
 @pytest.mark.parametrize(("field", "value", "path"), [
     ("inputs", [], "inputs"),
     ("inputs", {"tone": "bad"}, "inputs.tone"),

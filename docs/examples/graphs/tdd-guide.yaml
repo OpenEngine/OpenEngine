@@ -1,0 +1,167 @@
+apiVersion: openengine.cc/v1
+kind: Graph
+name: tdd-guide
+description: Work one issue test-first. One agent writes the failing tests, a different one makes them pass, and a runner other than the implementer checks that any generated guide reads like documentation rather than a test before the pull request opens.
+
+inputs:
+  instruction:
+    description: Anything to add to the issue, such as what to leave alone
+  issue:
+    description: The issue number to work; leave empty to pick the next unblocked issue in the milestone
+    default: ""
+  milestone:
+    description: The milestone to pick from when no issue is given
+    default: CLI e2e tests & generated guides
+  runner:
+    description: The runner that writes the tests (the implementer uses a different one)
+    default: claude
+    choices: [claude, codex, round-robin]
+
+plan:
+  workspace:
+    base_ref: origin/main
+
+  pick:
+    name: Pick
+    agent: ${inputs.runner}
+    prompt: |
+      Choose the issue this run works on. Do not edit anything.
+
+      Issue given: "${inputs.issue}".
+
+      If an issue number is given, use it. Otherwise list the open issues in
+      the milestone "${inputs.milestone}" with
+      `gh issue list --milestone "${inputs.milestone}" --state open --json number,title,body`
+      and pick the lowest-numbered one that:
+      - has every issue it "Depends on" closed (check with `gh issue view N --json state`), and
+      - has no open pull request (`gh pr list --state open --search "N in:body" --json number,headRefName`)
+        and no pushed `agent/issue-N-*` branch (`git ls-remote --heads origin "agent/issue-N-*"`).
+
+      Read the chosen issue in full with `gh issue view N --comments`.
+      If nothing qualifies, set found to false and stop.
+
+      ${instruction}
+    outputs:
+      found: {type: boolean, required: true, description: whether there is an issue to work}
+      issue: {type: integer, description: the issue number}
+      title: {type: string, description: the issue title}
+      brief: {type: string, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
+      branch: {type: string, description: "agent/issue-N-short-slug, the branch the pull request will use"}
+      guide: {type: boolean, description: whether the issue adds or changes a guide spec under e2e/tests}
+
+implementation:
+  tdd:
+    name: Write failing tests
+    agent: {same: pick}
+    tools: [git_subcommand]
+    prompt: |
+      Write the tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, before any
+      implementation exists. Change only test files and test fixtures.
+
+      ${outputs.pick.brief}
+
+      ${instruction}
+
+      Cover every acceptance criterion in the issue. For a guide spec under
+      `e2e/tests`, the test is the guide: give each `test.step` a title that
+      tells a reader what to do ("Run `engine graphs list`."), keep setup and
+      cleanup in `[nodoc]` steps, and use `screenshot(testInfo, locator, {annotation})`
+      where a reader needs to see the screen.
+
+      Run the new tests and confirm they fail because the behaviour is missing,
+      not because of a typo or a broken import. Commit them with git_subcommand
+      as a Conventional Commit (`test(...): ...`).
+    outputs:
+      tests: {type: list, required: true, description: the test files and test names written}
+      failure: {type: string, required: true, description: "why the tests fail now, from their output"}
+
+  implement:
+    name: Implement
+    agent: {not: tdd}
+    tools: [git_subcommand]
+    prompt: |
+      Make the failing tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, pass.
+
+      ${outputs.pick.brief}
+
+      Tests written first: ${json(outputs.tdd.tests)}
+      Why they fail: ${outputs.tdd.failure}
+
+      Do not delete, skip or weaken those tests. If one is wrong, fix it
+      as narrowly as you can and say why in the summary.
+
+      Review findings to address, if any: ${json(outputs.guide_review.findings)}
+      CI result, if any: ${json(outputs.ci)}
+
+      Run the tests touched by this change, and the e2e suite (`npm test` in `e2e/`)
+      when it exists. Commit with git_subcommand as Conventional Commits.
+
+      ${instruction}
+
+review:
+  guide_review:
+    name: Guide review
+    agent: {not: implement}
+    prompt: |
+      Check whether issue #${outputs.pick.issue} changed any user-facing guide. Do not change or commit any tracked file.
+
+      Changes a guide spec: ${outputs.pick.guide}.
+
+      If `e2e/` exists and this change touches `e2e/tests`, run `npm run doc`
+      in `e2e/` and read every generated page under `site/docs/guides/`
+      that the change affects, including its screenshots. Otherwise return no
+      findings and pass.
+
+      Read each page as someone new to the `engine` CLI and flag anything that:
+      - sounds like a test rather than instructions ("verify", "assert",
+        "expect", "should be visible", fixture or helper names)
+      - leaks setup that should be a `[nodoc]` step
+      - skips a step a reader needs, or explains something they don't
+      - has a screenshot annotation that points at the wrong row, or a
+        screenshot that is unreadable, cropped or shows a spinner mid-frame
+      - shows machine-specific paths, user names, tokens or ports
+      - has a title or description that doesn't say what the reader will do
+
+      Each finding names the spec file and line to change.
+    outputs:
+      verdict: {type: string, enum: [pass, revise], required: true}
+      findings: {type: findings, required: true}
+
+  publish:
+    name: Open pull request
+    agent: {same: implement}
+    tools: [git_subcommand, open_pull_request]
+    prompt: |
+      Publish the work on issue #${outputs.pick.issue}.
+
+      Push this checkout's commits with git_subcommand to `${outputs.pick.branch}`
+      (`["push", "origin", "HEAD:refs/heads/${outputs.pick.branch}"]`).
+      Never push an engine/ws-* branch.
+
+      If no pull request is open for that branch yet, open one with
+      open_pull_request against main: a Conventional Commit title, a body
+      that summarises the change, the tests written first, and anything the
+      guide review left unresolved, and `issue_resolution: resolves`.
+      If one is already open, pushing is enough.
+
+  ci:
+    name: CI
+    ci: true
+
+flow:
+  - from: pick
+    route:
+      - {when: "outputs.pick.found", to: tdd}
+      - {to: end}
+  - from: guide_review
+    route:
+      - {when: "outputs.guide_review.verdict == 'revise' && visits.implement < 3", to: implement}
+      - {to: publish}
+  - from: ci
+    route:
+      - {when: "outputs.ci.passed == false && visits.implement < 4", to: implement}
+      - {to: end}
+
+loop:
+  every: 1h
+  instruction: Work the next unblocked issue in the milestone.
