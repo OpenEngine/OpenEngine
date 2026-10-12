@@ -84,6 +84,32 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(first.equals(second)).toBe(true)
   })
 
+  test("shows IDs and timestamps as stand-ins that are the same on every run", async ({ browser }) => {
+    const shown = async (ids: string[], time: string) => {
+      const page = await browser.newPage()
+      await openTerminal(page)
+      await page.locator("#terminal").click()
+      await page.keyboard.type(`echo "${ids[0]} ${ids[1]} ${ids[0]} | ${time}"`)
+      await page.keyboard.press("Enter")
+      await expect.poll(() => bufferText(page)).toContain(`${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
+      const row = page.locator(".xterm-rows > div").filter({ hasText: "|" }).last()
+      const text = (await row.textContent())!.trim()
+      await page.close()
+      return text
+    }
+    const first = await shown(["g-0123456789ab", "run-aaaaaaaaaaaa"], "2026-10-12T23:04:01+00:00")
+    const second = await shown(["g-ffffffffffff", "run-bbbbbbbbbbbb"], "2027-03-01T08:15:59+00:00")
+    // The same stand-ins whatever the real values were, the same length so
+    // nothing moves, and the same one wherever an ID repeats.
+    expect(first).toBe(second)
+    const [id, run, again, , time] = first.split(" ")
+    expect(id).toMatch(/^g-[0-9a-f]{12}$/)
+    expect(run).toMatch(/^run-[0-9a-f]{12}$/)
+    expect(again).toBe(id)
+    expect(time).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$/)
+    expect(id).not.toBe("g-0123456789ab")
+  })
+
   test("says so when the server refuses the session", async ({ page }) => {
     await page.goto("/?token=wrong")
     await page.waitForFunction(() => window.__term?.error !== undefined)
