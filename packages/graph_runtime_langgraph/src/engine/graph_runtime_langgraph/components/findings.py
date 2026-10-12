@@ -13,6 +13,7 @@ where something needs to read one.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -22,7 +23,9 @@ from engine.domain import (
     TRIAGE_TOOL, ApprovalDecision, ApprovalKind, StepCompleted, WorkState, finding_comment,
 )
 from engine.graph_runtime_langgraph.acp import ACPNode, TerminalEvent
-from engine.graph_runtime_langgraph.executions import current_execution
+from engine.graph_runtime_langgraph.executions import current_execution, NoExecutionError
+from engine.domain.findings_ledger import FindingStage, ReviewFinding, finding_id
+from engine.runtime.findings import capture, triage
 
 
 #: How bad a finding is, when a reviewer says; empty when it does not.
@@ -48,6 +51,9 @@ class Finding:
     severity: str = ""
     """`high`, `medium` or `low`, when the reviewer ranked it."""
 
+    model_tier: str | None = None
+    """Configured tier of the producing reviewer, when known."""
+
     def __post_init__(self) -> None:
         for name, limit in (("tagline", 2), ("description", 3)):
             value = getattr(self, name)
@@ -63,6 +69,8 @@ class Finding:
             raise ValueError("line must be a positive integer")
         if not isinstance(self.agent, str) or not isinstance(self.facet, str):
             raise ValueError("agent and facet must be strings")
+        if self.model_tier is not None and not isinstance(self.model_tier, str):
+            raise ValueError("model_tier must be a string")
         if self.severity not in SEVERITIES:
             raise ValueError("severity must be high, medium or low")
 
@@ -78,6 +86,8 @@ class Finding:
             d["line"] = self.line
         if self.severity:
             d["severity"] = self.severity
+        if self.model_tier is not None:
+            d["model_tier"] = self.model_tier
         return d
 
     @classmethod
@@ -90,6 +100,7 @@ class Finding:
             file=data.get("file"),
             line=data.get("line"),
             severity=data.get("severity") or "",
+            model_tier=data.get("model_tier"),
         )
 
     def as_comment(self) -> str:
@@ -201,11 +212,30 @@ def parse_findings(value: object, *, require_lineage: bool = False) -> list[Find
     return findings
 
 
+def _capture_stage(stage: FindingStage, findings: list[Finding]) -> None:
+    try:
+        execution = current_execution()
+        ledger = getattr(execution.runtime, "findings_ledger", None)
+        if ledger is None:
+            return
+        rows = [
+            ReviewFinding(run_id=str(execution.run_id), node_id=str(execution.node_id),
+                          stage=stage, **finding.to_dict())
+            for finding in findings
+        ]
+        capture(ledger, rows)
+    except NoExecutionError:
+        pass  # Nodes may also be invoked without a runtime.
+    except Exception:
+        logging.getLogger(__name__).exception("Could not capture %s findings", stage)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReviewNode(ACPNode):
     """Store validated findings under this facet's own key for parallel writes."""
 
     facet: str
+    model_tier: str | None = None
     graph_node_group: str = WorkState.REVIEW
 
     @property
@@ -221,12 +251,9 @@ class ReviewNode(ACPNode):
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)
         findings = parse_findings(update.get("findings"))
-        return {
-            self.output_key: [
-                replace(finding, agent=self.agent, facet=self.facet).to_dict()
-                for finding in findings
-            ]
-        }
+        findings = [replace(finding, agent=self.agent, facet=self.facet, model_tier=self.model_tier) for finding in findings]
+        _capture_stage("raw", findings)
+        return {self.output_key: [finding.to_dict() for finding in findings]}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -248,6 +275,7 @@ class RerankerNode(ACPNode):
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         update = ACPNode._terminal_update(self, event)
         findings = parse_findings(update.get("findings"), require_lineage=True)
+        _capture_stage("reranked", findings)
         return {self.output_key: [finding.to_dict() for finding in findings]}
 
 
@@ -296,6 +324,17 @@ class TriageNode:
             chosen = parse_findings(note)
         else:
             chosen = parse_findings(state.get(self.findings_key) or [])
+        try:
+            ledger = getattr(execution.runtime, "findings_ledger", None)
+            rows = [
+                ReviewFinding(run_id=str(execution.run_id), node_id=str(execution.node_id),
+                              stage="reranked", **finding.to_dict())
+                for finding in parse_findings(state.get(self.findings_key) or [])
+            ]
+            selected = {finding_id(str(execution.run_id), "reranked", f.file, f.line, f.tagline) for f in chosen}
+            triage(ledger, rows, selected)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not capture triage outcomes")
         await execution.say(
             f"Fixing {len(chosen)} finding{'s' if len(chosen) != 1 else ''}."
             if chosen else "Finished without fixing anything."

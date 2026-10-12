@@ -1103,6 +1103,19 @@ def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None
     return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
+async def _reconcile_merged_findings(merged: GithubMerge, state_store, source_control) -> None:
+    from engine.runtime.findings import reconcile
+
+    ledger = getattr(state_store, "findings", None)
+    if ledger is None or not merged.merge_sha:
+        return
+    try:
+        await reconcile(ledger, merged.url, merged.merge_sha,
+                        lambda sha, path: getattr(source_control, "finding_file")(merged.url, sha, path))
+    except Exception:
+        log.exception("Could not reconcile merged findings on %s", merged.url)
+
+
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -1598,6 +1611,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 # therefore no graph entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
+                    if hasattr(surface.runtime, "findings_ledger"):
+                        setattr(surface.runtime, "findings_ledger", getattr(session.state_store, "findings", None))
                     bind_creator = getattr(surface.runtime, "bind_workorder_creator", None)
                     if bind_creator is not None:
                         bind_creator(agent_create_workorder)
@@ -2273,6 +2288,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             async with dependency_lock:
                 deleting_runs.discard(run_id)
         return Response(status_code=204)
+
+    async def reconcile_merged_findings(merged: GithubMerge) -> None:
+        await _reconcile_merged_findings(merged, session.state_store, session.capabilities.source_control)
 
     async def cancel_graph_run(run_id: RunId) -> None:
         """Stop a graph WorkOrder in the engine, if there is one to stop.
@@ -4169,6 +4187,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         may_act=github_sender_may_act,
         handle=github_comment_handler or github_concierge_turn,
         handle_merge=github_merge_approves_workorder,
+        reconcile_merge=reconcile_merged_findings,
         handle_assignment=github_create_workorder,
         handle_review_request=github_review_pull_request,
         activity=github_activity,
@@ -4426,6 +4445,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     )
     routes = [
         *onboarding.routes(github_login.visible_repositories, _is_local_request),
+
         Route("/api/health", health),
         *github_login.routes(),
         Route("/api/config", config),

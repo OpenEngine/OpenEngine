@@ -223,8 +223,8 @@ KEEP_FINDINGS = (
     "Do not post comments or contact any pull request: the surviving findings "
     "are shown to a person, who chooses which to fix or post. Call "
     "complete_step with the filtered findings as a JSON array (same schema as "
-    "the inputs), or [] when none survive. Preserve each finding's agent and "
-    "facet fields unchanged.\n\n"
+    "the inputs), or [] when none survive. Preserve each finding's agent, "
+    "facet and model_tier fields unchanged.\n\n"
 )
 
 # ---------------------------------------------------------------------------
@@ -238,9 +238,12 @@ class _RunnerInput:
 
     def _for_runner(self, runner: str) -> ACPNode:
         config = self.session_config
+        lineage = {"model_tier": None} if isinstance(self, ReviewNode) else {}
         if isinstance(self, ReviewNode) and runner in REVIEW_MODELS:
             facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
-            model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
+            tier = "elevated" if facet.elevated else "default"
+            lineage["model_tier"] = tier
+            model = REVIEW_MODELS[runner][tier]
             config = _with_model(config, model)
         elif runner not in REVIEW_MODELS:
             # An added agent asks for its own model, as it does from the CLI.
@@ -248,6 +251,7 @@ class _RunnerInput:
             config = _with_model(config, added)
         return replace(
             self,
+            **lineage,
             agent=runner,
             session_config=config,
             mcp_server_bindings=tuple(
@@ -511,6 +515,7 @@ def pipeline(
             node_name,
             InputReviewNode(
                 facet=facet.id,
+                model_tier="elevated" if facet.elevated else "default",
                 agent=reviewer,
                 registry=agents,
                 prompt=lambda state, f=facet: FACET_REVIEW_PROMPT.format(
