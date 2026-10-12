@@ -55,6 +55,14 @@ from engine.domain.ids import (
 from engine.domain.state import RunOrigin, RunPhase, RunState
 from engine.domain.states import STATE_INPUT, WorkState, start_state
 from engine.domain.scoping import (
+    TicketLayer,
+    TicketApproval,
+    TicketSourceKind,
+    TicketSourceRef,
+    PersistedScopingPlan,
+    LoopQueueItem,
+    resolve_scoping_plan,
+
     MilestoneScope,
     ScopingPlan,
     ScopingPolicy,
@@ -67,6 +75,14 @@ from engine.domain.tools import ToolParameter, ToolParameterType, ToolSpec
 from engine.domain.workflow import StepOutput, StepSpec
 
 __all__ = [
+    "TicketLayer",
+    "TicketApproval",
+    "TicketSourceKind",
+    "TicketSourceRef",
+    "PersistedScopingPlan",
+    "LoopQueueItem",
+    "resolve_scoping_plan",
+
     "AgentId",
     "AgentInstance",
     "AgentInstanceId",

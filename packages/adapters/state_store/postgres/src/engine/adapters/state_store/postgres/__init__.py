@@ -17,9 +17,16 @@ from engine.domain.ids import (
     ConversationId,
     RunId,
     TaskId,
+    WorkOrderId,
     WorkspaceId,
 )
 from engine.domain.state import RunState
+from engine.domain.scoping import (
+    LoopQueueItem,
+    PersistedScopingPlan,
+    ScopingPlan,
+    TicketApproval,
+)
 
 
 class PostgresStateStore:
@@ -32,6 +39,25 @@ class PostgresStateStore:
         # TODO: Implement PostgreSQL storage when OpenEngine has a need for it.
         self._dsn = dsn
         self._schema = schema
+
+    async def save_scoping_plan(
+        self, loop_id: str, plan: ScopingPlan
+    ) -> PersistedScopingPlan:
+        """Persist one proposal atomically, resolving all local references."""
+        raise NotImplementedError("Scoped tickets require SQLite or memory")
+
+    async def load_scoping_plan(self, plan_id: str) -> PersistedScopingPlan | None:
+        raise NotImplementedError("Scoped tickets require SQLite or memory")
+
+    async def set_ticket_approval(
+        self, plan_id: str, ticket_id: WorkOrderId, approval: TicketApproval
+    ) -> PersistedScopingPlan:
+        """Update approval; the queue projection immediately reflects it."""
+        raise NotImplementedError("Scoped tickets require SQLite or memory")
+
+    async def list_loop_queue(self, loop_id: str) -> Sequence[LoopQueueItem]:
+        """Approved tickets in proposal order, retaining dependency ids."""
+        raise NotImplementedError("Scoped tickets require SQLite or memory")
 
     async def load(self, run_id: RunId) -> RunState | None:
         raise NotImplementedError("Postgres reads land with the state-store ticket")
