@@ -1599,8 +1599,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 # therefore no graph entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
-                    if hasattr(surface.runtime, "repository_mode"):
-                        surface.runtime.repository_mode = repository_mode
+                    bind_mode = getattr(surface.runtime, "bind_repository_mode", None)
+                    if bind_mode is not None:
+                        bind_mode(repository_mode)
                     bind_creator = getattr(surface.runtime, "bind_workorder_creator", None)
                     if bind_creator is not None:
                         bind_creator(agent_create_workorder)

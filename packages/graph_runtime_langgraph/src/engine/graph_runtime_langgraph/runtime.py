@@ -179,6 +179,9 @@ class LangGraphRuntime:
         self.workorder_creator: WorkorderCreator | None = None
         self.repository_mode: Callable[[str], Awaitable[str | None]] | None = None
 
+    def bind_repository_mode(self, resolve: Callable[[str], Awaitable[str | None]]) -> None:
+        self.repository_mode = resolve
+
     def bind_workorder_creator(self, create: WorkorderCreator) -> None:
         """Bind the host that starts workorders and records their provenance."""
         self.workorder_creator = create

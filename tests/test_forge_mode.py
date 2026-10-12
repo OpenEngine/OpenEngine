@@ -212,7 +212,9 @@ def test_disconnected_run_keeps_commits_on_a_descriptive_local_branch(tmp_path, 
     class LocalGit:
         async def run_git(self, workspace_id, arguments):
             root = await provider.root_path(workspace_id)
-            process = await asyncio.create_subprocess_exec("git", "-C", root, *arguments,
+            process = await asyncio.create_subprocess_exec(
+                "git", "-C", root, "-c", "user.name=Engine Tests",
+                "-c", "user.email=engine@example.test", *arguments,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             out, err = await process.communicate()
             return GitResult(process.returncode, out.decode(), err.decode())
