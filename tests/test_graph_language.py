@@ -200,6 +200,8 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     source = Path(__file__).parents[1] / "docs/examples/graphs/tdd-guide.yaml"
     spec = graph(source.read_text())
     assert [node.id for node in spec.nodes] == ["pick", "tdd", "implement", "guide_review", "publish", "ci"]
+    # A run can build on an unmerged branch instead of main, and publishes against it.
+    assert (spec.base_ref, spec.ref_input) == ("origin/main", "base")
     assert {("tdd", "implement", False), ("implement", "guide_review", False), ("publish", "ci", False)} <= set(
         spec.edges(),
     )

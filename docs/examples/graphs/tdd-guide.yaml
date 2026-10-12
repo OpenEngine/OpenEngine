@@ -12,6 +12,9 @@ inputs:
   milestone:
     description: The milestone to pick from when no issue is given
     default: CLI e2e tests & generated guides
+  base:
+    description: "The branch to build on and open the pull request against, such as origin/agent/e2e-agent-mode; empty means main"
+    default: ""
   runner:
     description: The runner that writes the tests (the implementer uses a different one)
     default: claude
@@ -20,6 +23,7 @@ inputs:
 plan:
   workspace:
     base_ref: origin/main
+    ref: ${inputs.base}
 
   pick:
     name: Pick
@@ -57,6 +61,12 @@ implementation:
     prompt: |
       Write the tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, before any
       implementation exists. Change only test files and test fixtures.
+
+      This checkout is fresh. Prepare it first, for every step after this one too:
+      `uv sync --all-packages` and `npm ci --prefix e2e`. Read `e2e/README.md`
+      before writing a spec under `e2e/`: specs check what happened, not what an
+      agent said; example graphs stay tiny; and anything that needs precise
+      timing is scripted with `engine.script(...)`.
 
       ${outputs.pick.brief}
 
@@ -138,8 +148,11 @@ review:
       (`["push", "origin", "HEAD:refs/heads/${outputs.pick.branch}"]`).
       Never push an engine/ws-* branch.
 
+      The pull request's base is the branch this run was built on: "${inputs.base}"
+      without its `origin/` prefix, or `main` if that is empty.
+
       If no pull request is open for that branch yet, open one with
-      open_pull_request against main: a Conventional Commit title, a body
+      open_pull_request against that base: a Conventional Commit title, a body
       that summarises the change, the tests written first, and anything the
       guide review left unresolved, and `issue_resolution: resolves`.
       If one is already open, pushing is enough.
