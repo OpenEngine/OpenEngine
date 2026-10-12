@@ -75,14 +75,25 @@ class RunReader:
         record = await self.store.run(run_id) if self.store else None
         return await self._state(record) if record else None
 
-    async def list_runs(self, *, scheduled_only: bool = False) -> tuple[RunState, ...]:
+    async def list_runs(self) -> tuple[RunState, ...]:
         if self.store is None:
             return ()
-        # Dependency dispatch only needs waiting work. Avoid loading checkpoints
-        # for every completed run each time another prerequisite finishes.
+        return tuple([await self._state(row) for row in await self.store.list_runs()])
+
+    async def dependency_candidates(self) -> tuple[RunState, ...]:
+        if self.store is None:
+            return ()
+        rows = await self.store.list_runs()
+        scheduled = {row.run_id for row in rows if row.metadata.scheduled}
+        # A scheduled prerequisite cannot have succeeded. Filter on metadata
+        # before building views, so a long chain does not rebuild every waiting
+        # run and its prerequisite each time one run completes. The dispatcher
+        # still checks the remaining prerequisites' runtime phases.
         return tuple([
-            await self._state(row) for row in await self.store.list_runs()
-            if not scheduled_only or row.metadata.scheduled
+            await self._state(row) for row in rows
+            if row.metadata.scheduled
+            and row.metadata.depends_on_run_id is not None
+            and row.metadata.depends_on_run_id not in scheduled
         ])
 
     async def list_runs_for_origin(self, channel: str, thread_id: str) -> tuple[RunState, ...]:
