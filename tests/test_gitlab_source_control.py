@@ -263,3 +263,42 @@ def test_gitlab_issue_publication_fails_explicitly():
     with pytest.raises(NotImplementedError, match="issue-linked"):
         asyncio.run(source.request_review("ws", "feature", "main", "Fix", "Body", issue={"repository": "group/project", "number": 7}, issue_resolution="resolves"))
     transport.request.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("level", "expected"), [
+    (10, False), (20, False), (25, False), (30, True), (40, True),
+    (50, True), (60, False), ("30", False), (None, False),
+])
+@pytest.mark.parametrize("suffix", ["", "/-/merge_requests/7"])
+def test_gitlab_repository_write_access_includes_inherited_members(level, expected, suffix):
+    transport = AsyncMock()
+    transport.request.return_value = [{"username": "bot", "id": 4, "access_level": level}]
+    source = GitLabSourceControl("token", transport=transport)
+    assert asyncio.run(source.can_write_repository(
+        "https://gitlab.com/group/subgroup/project" + suffix, "bot", user_id=4,
+    )) is expected
+    transport.request.assert_awaited_once_with(
+        "GET", "/projects/group%2Fsubgroup%2Fproject/members/all",
+        params={"query": "bot", "per_page": 100, "page": 1},
+    )
+
+
+@pytest.mark.parametrize("members", [
+    [], [{"username": "someone-else", "id": 4, "access_level": 40}],
+    [{"username": "bot", "id": 5, "access_level": 40}],
+])
+def test_gitlab_write_access_requires_matching_identity(members):
+    transport = AsyncMock()
+    transport.request.return_value = members
+    source = GitLabSourceControl("token", transport=transport)
+    assert not asyncio.run(source.can_write_repository(
+        "https://gitlab.com/group/project", "bot", user_id=4,
+    ))
+
+
+def test_gitlab_write_probe_rejects_another_origin():
+    transport = AsyncMock()
+    source = GitLabSourceControl("token", transport=transport)
+    with pytest.raises(ValueError, match="configured GitLab origin"):
+        asyncio.run(source.can_write_repository("https://other.example/group/project", "bot"))
+    transport.request.assert_not_awaited()

@@ -453,14 +453,15 @@ def test_invalid_reply_is_rejected_before_api_call(monkeypatch: pytest.MonkeyPat
     ("write", True), ("admin", True), ("read", False), ("none", False),
     (None, False), ("unexpected", False),
 ])
-def test_effective_repository_write_permission(monkeypatch, permission, allowed):
+@pytest.mark.parametrize("suffix", ["", "/pull/42"])
+def test_effective_repository_write_permission(monkeypatch, permission, allowed, suffix):
     from unittest.mock import AsyncMock
 
     source = GitHubSourceControl("")
     api = AsyncMock(return_value={"permission": permission, "role_name": "custom-role"})
     monkeypatch.setattr(source, "_api", api)
     assert asyncio.run(source.can_write_repository(
-        "https://github.com/acme/api/pull/42", "someone")) is allowed
+        "https://github.com/acme/api" + suffix, "someone")) is allowed
     api.assert_awaited_once_with("GET", "/repos/acme/api/collaborators/someone/permission")
 
 

@@ -66,7 +66,7 @@ def test_mode_is_inferred_from_the_backend_repository_access(login, writable, in
     if inputs.get("mode") == "disconnected":
         source.authenticated_login.assert_not_called()
     elif login:
-        source.can_write_repository.assert_awaited_once_with("https://github.com/acme/api/pull/1", "bot")
+        source.can_write_repository.assert_awaited_once_with("https://github.com/acme/api", "bot")
 
 
 def test_every_graph_accepts_the_local_override_without_declaring_it():
@@ -283,3 +283,45 @@ def test_yaml_completion_requires_a_pr_only_when_connected():
     local.validate_completion(completed)
     with pytest.raises(ValueError, match="pr_url is required"):
         server.for_mode(ForgeMode.CONNECTED).validate_completion(completed)
+
+
+@pytest.mark.parametrize(("level", "mode"), [(30, "connected"), (20, "disconnected")])
+@pytest.mark.parametrize("host", ["gitlab.com", "gitlab.example.com"])
+def test_gitlab_mode_inference_uses_real_adapter(level, mode, host):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from engine.adapters.source_control.gitlab import GitLabSourceControl
+    from engine.graph_runtime_langgraph.forge import resolve_forge_context
+
+    transport = AsyncMock()
+    transport.request.side_effect = [
+        {"username": "bot"},
+        [{"username": "bot", "id": 4, "access_level": level}],
+    ]
+    source = GitLabSourceControl("token", origin=f"https://{host}", transport=transport)
+    context = asyncio.run(resolve_forge_context(
+        source, {"repository": f"https://{host}/group/subgroup/project.git"},
+    ))
+    assert context["mode"] == mode
+    assert transport.request.await_args_list[1].args == (
+        "GET", "/projects/group%2Fsubgroup%2Fproject/members/all",
+    )
+
+
+def test_gitlab_mode_inference_fails_closed_when_access_probe_fails():
+    import asyncio
+    from unittest.mock import AsyncMock
+    from engine.adapters.source_control.gitlab import GitLabSourceControl
+    from engine.adapters.source_control.gitlab.transports import GitLabTransportError
+    from engine.graph_runtime_langgraph.forge import resolve_forge_context
+
+    transport = AsyncMock()
+    transport.request.side_effect = [
+        {"username": "bot"}, GitLabTransportError("permission denied"),
+    ]
+    source = GitLabSourceControl("token", transport=transport)
+    context = asyncio.run(resolve_forge_context(
+        source, {"repository": "https://gitlab.com/group/project"},
+    ))
+    assert context["mode"] == "disconnected"
+    assert context["reason"] == "forge access could not be verified"

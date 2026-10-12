@@ -204,7 +204,7 @@ class SourceControl(Protocol):
     async def can_write_repository(
         self, pr_url: str, username: str, *, user_id: int | None = None
     ) -> bool:
-        """Whether the user has effective write access to this request's repository.
+        """Whether the user can write to a repository or change-request URL.
 
         With `user_id`, the answer is also no unless `username` still names
         that account: a login can be renamed and then claimed by someone else.

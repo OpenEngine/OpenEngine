@@ -44,7 +44,7 @@ async def resolve_forge_context(
                     login = await source.authenticated_login(url)
                     if login:
                         reason = "forge connection cannot write to repository"
-                        if await source.can_write_repository(f"{url}/pull/1", login):
+                        if await source.can_write_repository(url, login):
                             mode = "connected"
                             reason = "forge connection has repository write access"
             except Exception:  # noqa: BLE001 -- failed access probes select local execution

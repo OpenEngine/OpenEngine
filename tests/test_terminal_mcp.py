@@ -1841,12 +1841,43 @@ def test_force_push_refused_when_ownership_lookup_fails():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("command", ["push", "fetch", "pull", "clone", "ls-remote"])
-def test_disconnected_git_cannot_contact_a_remote(command):
+@pytest.mark.parametrize("arguments", [
+    ["push", "origin", "agent/change"], ["fetch", "origin"], ["pull"],
+    ["clone", "https://example.com/repo"], ["ls-remote", "origin"],
+    ["remote", "update"], ["remote", "show", "origin"],
+    ["remote", "add", "-f", "upstream", "https://example.com/repo"],
+    ["submodule", "update", "--remote"], ["fetch-pack", "origin"],
+    ["send-pack", "origin"], ["archive", "--remote=origin", "HEAD"],
+    ["archive", "--rem", "origin", "HEAD"], ["lfs", "push", "origin"],
+    ["lfs", "fetch"], ["custom-alias"], ["--no-pager", "remote", "update"],
+    ["checkout", "--recurse-submodules", "HEAD"],
+    ["-c", "alias.custom=!git fetch", "custom"],
+])
+def test_disconnected_git_cannot_contact_a_remote(arguments):
     source = RecordingRepository()
-    broker = _repository_broker(source, "git_subcommand")
+    approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+    broker = _repository_broker(source, "git_subcommand", git_approval=approval)
     broker.disconnected = True
-    result = asyncio.run(broker._repository_call("git_subcommand", {"arguments": [command, "origin"]}, "local"))
+    result = asyncio.run(broker._repository_call("git_subcommand", {"arguments": arguments}, "local"))
     assert result["ok"] is False
     assert "disconnected" in result["error"]
+    assert source.git_calls == []
+    approval.assert_not_awaited()
+
+
+@pytest.mark.parametrize("arguments", [
+    ["status", "--short"], ["--no-pager", "diff"], ["log", "-1"],
+    ["switch", "-c", "agent/local"], ["add", "."],
+    ["commit", "-m", "feat: local change"], ["remote", "get-url", "origin"],
+    ["remote", "-v"], ["archive", "HEAD"],
+])
+def test_disconnected_local_git_still_requires_approval(arguments):
+    source = RecordingRepository()
+    approval = AsyncMock(return_value=ApprovalDecision.CANCEL)
+    broker = _repository_broker(source, "git_subcommand", git_approval=approval)
+    broker.disconnected = True
+    result = asyncio.run(broker._repository_call("git_subcommand", {"arguments": arguments}, "local"))
+    assert result["ok"] is False
+    assert "not approved" in result["error"]
+    approval.assert_awaited_once()
     assert source.git_calls == []
