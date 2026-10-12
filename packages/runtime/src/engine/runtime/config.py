@@ -272,26 +272,29 @@ class LoadedEngineConfig:
     explicit: bool = False
 
     @property
+    def _base_directory(self) -> Path:
+        return self.path.parent if self.path is not None else Path.cwd()
+
+    @property
     def claude_config_dir(self) -> Path | None:
         configured = self.config.claude.config_dir
         if not configured:
             return None
-        base = self.path.parent if self.path is not None else Path.cwd()
-        return _relative_to(Path(configured).expanduser(), base).resolve()
+        return _relative_to(Path(configured).expanduser(), self._base_directory).resolve()
 
     @property
     def workflows_directory(self) -> Path | None:
         configured = self.config.workflows.directory
         if not configured:
             return None
-        base = self.path.parent if self.path is not None else Path.cwd()
-        return _relative_to(Path(configured), base).resolve()
+        return _relative_to(Path(configured), self._base_directory).resolve()
 
     @property
     def orchestrator_database(self) -> Path:
         """Resolve the Temporal database beside the selected configuration."""
-        base = self.path.parent if self.path is not None else Path.cwd()
-        return _relative_to(Path(self.config.orchestrator.database), base).resolve()
+        return _relative_to(
+            Path(self.config.orchestrator.database), self._base_directory
+        ).resolve()
 
     @property
     def onboarding_directory(self) -> Path:
@@ -302,10 +305,11 @@ class LoadedEngineConfig:
         empty falls back to `~/code`, the historical default.
         """
         configured = self.config.onboarding.directory
-        base = self.path.parent if self.path is not None else Path.cwd()
         if not configured:
             return (Path.home() / "code").resolve()
-        return _relative_to(Path(configured).expanduser(), base).resolve()
+        return _relative_to(
+            Path(configured).expanduser(), self._base_directory
+        ).resolve()
 
 
 def load_engine_config(
@@ -556,19 +560,15 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     workflows = _table(document.get("workflows", {}), "workflows")
     _reject_unknown(workflows, {"directory"}, "workflows")
-    workflow_directory = workflows.get("directory", "")
-    if not isinstance(workflow_directory, str):
-        raise EngineConfigError("workflows.directory must be a string")
-    if workflow_directory and not workflow_directory.strip():
-        raise EngineConfigError("workflows.directory must not be blank")
+    workflow_directory = _optional_nonblank_string(
+        workflows.get("directory", ""), "workflows.directory"
+    )
 
     onboarding = _table(document.get("onboarding", {}), "onboarding")
     _reject_unknown(onboarding, {"directory"}, "onboarding")
-    onboarding_directory = onboarding.get("directory", "")
-    if not isinstance(onboarding_directory, str):
-        raise EngineConfigError("onboarding.directory must be a string")
-    if onboarding_directory and not onboarding_directory.strip():
-        raise EngineConfigError("onboarding.directory must not be blank")
+    onboarding_directory = _optional_nonblank_string(
+        onboarding.get("directory", ""), "onboarding.directory"
+    )
 
     orchestrator = _table(document.get("orchestrator", {}), "orchestrator")
     _reject_unknown(
