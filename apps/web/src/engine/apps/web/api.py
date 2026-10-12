@@ -1027,6 +1027,12 @@ class _GraphSurface:
         if not isinstance(graph, LangGraphWorkflow):
             return declarations
         return offer_runners(declarations, self.added_agents(), added_agent_inputs(graph))
+    def workflows(self, configured: Mapping[str, GraphWorkflow]) -> Mapping[str, GraphWorkflow]:
+        if self.runtime is None:
+            return {}
+        registered = self.service.workflows() if self.service is not None else ()
+        return {**configured, **{str(graph.graph_id): graph for graph in registered}}
+
 
 
 class GithubProvenance(Protocol):
@@ -1096,7 +1102,7 @@ def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None
     return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
-def create_app(
+def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
     static_directory: Path | None = None,
@@ -1124,6 +1130,7 @@ def create_app(
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
     repos: Mapping[str, str] | RepositoryRegistry | None = None,
     repo_modes: Mapping[str, str] | None = None,
+    config_path: Path | None = None,
     trusted_repos: Collection[str] = (),
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
@@ -1156,6 +1163,13 @@ def create_app(
     repository_registry = repos if isinstance(repos, RepositoryRegistry) else RepositoryRegistry(
         repos, repo_modes, trusted_repos,
         projects=repository_projects or {}, login_repositories=login_repositories,
+    )
+
+    from engine.apps.web.onboarding import RepositoryOnboarding, register_starters
+
+    onboarding = RepositoryOnboarding(
+        repository_registry, config_path,
+        lambda project, runner: register_starters(surface.service, project, runner),
     )
 
     async def in_repositories(repository: str, checkouts: frozenset[Path]) -> bool:
@@ -1198,7 +1212,7 @@ def create_app(
         a graph that no longer compiles -- there are no graph entries at
         all, rather than entries that fail the moment somebody picks one.
         """
-        return graph_workflows if surface.runtime is not None else {}
+        return surface.workflows(graph_workflows)
 
     approval_feed = ApprovalFeed(session.state_store)
     service = ThreadService(
@@ -1632,6 +1646,7 @@ def create_app(
                 yield
             finally:
                 ready = False
+                await onboarding.close()
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
@@ -1849,6 +1864,7 @@ def create_app(
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
+                "hasRepositories": bool(configured.repos),
                 "repositories": [
                     choice for choice in repository_choices
                     if repository_visible(visible, choice["path"])
@@ -4441,6 +4457,7 @@ def create_app(
         access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
     )
     routes = [
+        *onboarding.routes(github_login.visible_repositories),
         Route("/api/health", health),
         *github_login.routes(),
         Route("/api/config", config),

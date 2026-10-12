@@ -238,13 +238,13 @@ class EngineConfig:
     repo_modes: Mapping[str, str] = field(default_factory=dict)
     """`[repos]` names mapped to the mode their WorkOrders run in.
 
-    Written by `engine init`. A repository named `disconnected` here has every
+    Written by `engine onboard`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
     trusted_repos: frozenset[str] = frozenset()
     """`[repos]` names whose WorkOrders are auto-approved.
 
-    Written by `engine init` when approvals are left to trusted repositories:
+    Configured explicitly when approvals are left to trusted repositories:
     `approvals.auto_approve` covers every repository, this only the ones named.
     """
 

@@ -337,6 +337,7 @@ async def sqlite_runtime(
     directory: str | Path,
     *,
     source_control: SourceControl | None = None,
+    allow_empty: bool = False,
 ) -> AsyncIterator[LangGraphRuntime]:
     """Every workflow, compiled against durable files, closed on the way out.
 
@@ -352,7 +353,8 @@ async def sqlite_runtime(
     means a failure here leaves nothing behind but the checkpoint file the
     `async with` is already closing.
     """
-    if not workflows:
+    # Daemons register graphs after startup; other callers still require a workflow.
+    if not workflows and not allow_empty:
         raise ValueError("a graph runtime needs at least one workflow")
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)

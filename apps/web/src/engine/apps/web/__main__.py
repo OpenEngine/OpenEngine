@@ -338,9 +338,8 @@ def compose_app(
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
     session = build_session(capabilities, runners, read_only_runners=read_only_runners)
-    # The runtime for the workflows in the configured directory. It
-    # is `None` when that directory holds no graphs, and then the interface
-    # offers none of them.
+    # Keep the runtime ready for graphs registered by repository onboarding,
+    # including installations with no configured workflow directory.
     graph_runtime = build_graph_runtime(
         settings,
         workflow_catalog.graphs if workflow_catalog is not None else (),
@@ -367,6 +366,7 @@ def compose_app(
         public_url=loaded.config.public_url,
         work_orders=loaded.config.work_orders,
         repos=registry,
+        config_path=loaded.path,
         login_operators=loaded.config.access.operators,
         graph_service=build_graph_service(
             settings,

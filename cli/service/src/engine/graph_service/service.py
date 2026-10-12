@@ -494,6 +494,13 @@ class GraphService:
                 self.store.insert_version(version)
             return self._graph_json(graph, version, definition=True), True
 
+    def workflows(self) -> tuple[GraphWorkflow, ...]:
+        """The latest usable graph definitions, for the WorkOrder form."""
+        return tuple(
+            loaded.workflow for graph in self.store.graphs(None)
+            if (loaded := self._loaded.get(graph.latest_version_id)) is not None
+        )
+
     def list_graphs(self, project: str | None) -> list[dict[str, Any]]:
         return [
             self._graph_json(graph, self.store.version(graph.latest_version_id))

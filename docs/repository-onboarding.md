@@ -1,5 +1,31 @@
 # Onboarding a repository
 
+Run `engine onboard https://github.com/owner/repo` and choose connected or
+disconnected mode. Use `--mode connected` (or `disconnected`) to skip the prompt,
+and `--path /absolute/checkout` to choose a destination instead of `~/code/repo`.
+With no URL, `engine onboard` registers the current GitHub checkout with a local daemon.
+
+The web UI offers **Add repository** on the WorkOrder form and on first run.
+MCP clients can call `onboard_repository(repository, path?, mode?)`, then poll
+`repository_onboarding_status(job_id)` using the returned `id`. All three surfaces
+use the same daemon job and display its progress and actionable failures.
+
+The daemon account needs git, working GitHub SSH access (`ssh -T git@github.com`),
+and a signed-in agent (`engine agent signin claude`, `codex`, or `opencode`).
+Preflight failures leave the checkout and configuration untouched. Onboarding
+never changes credentials. Existing checkouts of the same remote are reused.
+Repeating successful onboarding reports that the repository is already onboarded.
+
+Onboarding preserves existing settings and comments in the configuration the
+daemon loaded (`--config` / `ENGINE_CONFIG` when selected). Without a loaded file,
+it creates `$XDG_CONFIG_HOME/openengine/engine.toml`, defaulting to
+`~/.config/openengine/engine.toml`. It updates the running daemon immediately and
+registers the four starter graphs for the `owner/repo` project. No restart is needed.
+The repository is ready to select in the WorkOrder form; the CLI prints a
+`engine graph run review --project owner/repo --repo /checkout/path --input ref=HEAD` command.
+
+## Manual configuration reference
+
 Use the untracked `.engine/config.toml` in the server's working directory to
 configure repositories and approvals without editing the committed `engine.toml`.
 Configuration selection is: explicit `--config`, then `ENGINE_CONFIG`, then the machine config

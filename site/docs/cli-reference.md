@@ -222,6 +222,24 @@ engine backends [-h] [--json] [--check] [{list}]
 | `action` | one of `list` |
 | `--check` | also ask each backend whether it is up |
 
+## `engine onboard`
+
+Onboard a GitHub repository.
+
+```text
+engine onboard [-h] [--backend NAME] [--pretty] [--path PATH]
+               [--mode {connected,disconnected}]
+               [url]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `url` |  |
+| `--path PATH` | checkout path on the daemon machine |
+| `--mode MODE` |  |
+
 ## `engine graph`
 
 Register, inspect and run graphs.
