@@ -141,9 +141,15 @@ def test_registers_all_starters_for_the_signed_in_agent():
     for call in service.add_graph.call_args_list:
         assert call.args == ('owner/repo',)
         definition = yaml.safe_load(call.kwargs['source'])
-        for spec in definition['inputs'].values():
-            if 'opencode' in spec.get('choices', []):
+        original = yaml.safe_load(onboard.starters.source(definition['name']))
+        for name, spec in definition['inputs'].items():
+            before = original['inputs'][name]
+            if before.get('default') in {'claude', 'codex', 'least-utilized'}:
                 assert spec['default'] == 'opencode'
+                if 'choices' in before:
+                    assert spec['choices'] == [*before['choices'], 'opencode']
+                else:
+                    assert 'choices' not in spec
 
 
 @pytest.mark.parametrize("origin", [None, "http://localhost", "http://127.0.0.1"])

@@ -165,8 +165,8 @@ async def register_starters(service: GraphService | None, project: str, runner: 
                 spec["default"] = "HEAD"
             if spec.get("default") in {"claude", "codex", "least-utilized"}:
                 spec["default"] = runner
-                if runner not in spec.get("choices", []):
-                    spec.setdefault("choices", []).append(runner)
+                if "choices" in spec and runner not in spec["choices"]:
+                    spec["choices"].append(runner)
         await service.add_graph(project, source=yaml.safe_dump(definition, sort_keys=False))
 
 
