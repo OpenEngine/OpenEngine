@@ -15,10 +15,23 @@ export type TerminalTestApi = {
   outputCount: number
   /** `performance.now()` when the last output chunk was drawn, or 0. */
   lastOutputAt: number
-  /** The whole buffer, scrollback included, as plain text without trailing spaces. */
+  /** How many prompts the shell has drawn: one when it is ready, one more after each command. */
+  promptCount: number
+  /** The exit code of the command before the latest prompt. */
+  lastExitCode?: number
+  /**
+   * The whole buffer, scrollback included, as plain text: lines the terminal
+   * wrapped are joined back together and trailing spaces are dropped.
+   */
   text(): string
   /** The index of the last visible row matching `pattern` (the nth `.xterm-rows > div`), or -1. */
   rowIndexOf(pattern: Pattern): number
+  /**
+   * Cover visible rows `from` to `to` with one transparent element hugging
+   * their text, for a screenshot to highlight. Returns its `data-mark`; the
+   * element's `data-text` holds the text it covers.
+   */
+  markRows(from: number, to: number): string
 }
 
 declare global {

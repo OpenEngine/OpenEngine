@@ -65,6 +65,10 @@ function baseEnvironment(): Record<string, string> {
     COLORTERM: "truecolor",
     LANG: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
     PS1: "$ ",
+    // Shell integration (OSC 133, as VS Code's terminal uses it): before each
+    // prompt bash reports the last command's exit code in an escape sequence
+    // the page counts and nothing draws, so a test knows when a command is done.
+    PROMPT_COMMAND: 'printf "\\033]133;D;%s\\007" "$?"',
     HISTFILE: "/dev/null",
     BASH_SILENCE_DEPRECATION_WARNING: "1",
   }
