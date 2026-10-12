@@ -1,8 +1,11 @@
 // The bridge between a browser terminal and a real one: each WebSocket on
 // /pty is one PTY, started by the client's `start` message and killed when the
 // socket closes. Test infrastructure only: it runs whatever a client asks for,
-// so it listens on loopback and nowhere else.
+// so it listens on loopback, answers only requests addressed to loopback (no
+// DNS rebinding), and opens a session only for a client holding this run's
+// token whose page, if it has one, is this server's own.
 
+import { randomBytes, timingSafeEqual } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -27,13 +30,21 @@ const CONTENT_TYPES: Record<string, string> = {
   ".map": "application/json",
 }
 
-export type TerminalServer = { url: string; port: number; close(): Promise<void> }
+export type TerminalServer = {
+  url: string
+  port: number
+  /** What a client passes as `/pty?token=` to open a session. */
+  token: string
+  close(): Promise<void>
+}
 
 export type TerminalServerOptions = {
   /** 0 picks a free port. */
   port?: number
   /** Where the terminal page is served from; without it only /healthz answers. */
   staticDir?: string
+  /** Defaults to a fresh random token. */
+  token?: string
 }
 
 /**
@@ -140,16 +151,50 @@ async function serveStatic(root: string | undefined, request: IncomingMessage, r
   }
 }
 
+function sameSecret(given: string | null, expected: string) {
+  const a = Buffer.from(given ?? "")
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
 export async function startTerminalServer(options: TerminalServerOptions = {}): Promise<TerminalServer> {
+  const token = options.token ?? randomBytes(24).toString("base64url")
   const sessions = new Set<Session>()
+  let port = 0
+  const addressedToUs = (request: IncomingMessage) =>
+    request.headers.host === `${HOST}:${port}` || request.headers.host === `localhost:${port}`
+  // Browsers always send Origin on a WebSocket upgrade; only a non-browser
+  // client (which no web page can drive) leaves it out.
+  const fromOurPage = (request: IncomingMessage) =>
+    request.headers.origin === undefined ||
+    request.headers.origin === `http://${HOST}:${port}` ||
+    request.headers.origin === `http://localhost:${port}`
+
   const http = createServer((request, response) => {
+    if (!addressedToUs(request)) {
+      response.writeHead(403).end()
+      return
+    }
     if (request.url === "/healthz") {
       response.writeHead(200, { "content-type": "text/plain" }).end("ok")
       return
     }
     void serveStatic(options.staticDir, request, response)
   })
-  const sockets = new WebSocketServer({ server: http, path: "/pty" })
+  const sockets = new WebSocketServer({ noServer: true })
+  http.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url ?? "/", "http://localhost")
+    const allowed =
+      url.pathname === "/pty" &&
+      addressedToUs(request) &&
+      fromOurPage(request) &&
+      sameSecret(url.searchParams.get("token"), token)
+    if (!allowed) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+      return
+    }
+    sockets.handleUpgrade(request, socket, head, (client) => sockets.emit("connection", client, request))
+  })
 
   sockets.on("connection", (socket) => {
     let session: Session | undefined
@@ -185,10 +230,11 @@ export async function startTerminalServer(options: TerminalServerOptions = {}): 
   })
 
   await new Promise<void>((resolve) => http.listen(options.port ?? 0, HOST, resolve))
-  const { port } = http.address() as AddressInfo
+  port = (http.address() as AddressInfo).port
   return {
     url: `http://${HOST}:${port}`,
     port,
+    token,
     async close() {
       await Promise.all([...sessions].map((session) => session.terminate()))
       sessions.clear()
@@ -201,7 +247,12 @@ export async function startTerminalServer(options: TerminalServerOptions = {}): 
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { values } = parseArgs({ options: { port: { type: "string" }, static: { type: "string" } } })
-  const server = await startTerminalServer({ port: Number(values.port ?? 0), staticDir: values.static })
+  const server = await startTerminalServer({
+    port: Number(values.port ?? 0),
+    staticDir: values.static,
+    // From the environment rather than argv, so it doesn't show up in `ps`.
+    token: process.env.E2E_TERMINAL_TOKEN,
+  })
   console.log(`terminal server listening on ${server.url}`)
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => void server.close().then(() => process.exit(0)))
