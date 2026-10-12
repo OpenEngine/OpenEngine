@@ -579,7 +579,7 @@ engine node steer [-h] [--backend NAME] [--pretty] [--idempotency-key IDEMPOTENC
 Add, inspect, remove and sign in the agents graphs name.
 
 ```text
-engine agent [-h] {add,get,remove,signin,claude} ...
+engine agent [-h] {add,get,remove,signin,claude,codex,opencode} ...
 ```
 
 ### `engine agent add`
@@ -658,7 +658,41 @@ engine agent claude [-h] [--repo REPO] [--base REF] [--backend NAME] ...
 | `--repo REPO` | a path inside the repository (default: the current directory) |
 | `--base REF` | what the workspace starts from (default: the backend's) |
 | `--backend NAME` | the backend to use; it must run on this machine |
-| `claude_args` | passed to claude after -- |
+| `agent_args` | passed to claude after -- |
+
+### `engine agent codex`
+
+Drive an implementation node with Codex in this terminal.
+
+Start a run whose implementation node is Codex in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to codex.
+
+```text
+engine agent codex [-h] [--repo REPO] [--base REF] [--backend NAME] ...
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--repo REPO` | a path inside the repository (default: the current directory) |
+| `--base REF` | what the workspace starts from (default: the backend's) |
+| `--backend NAME` | the backend to use; it must run on this machine |
+| `agent_args` | passed to codex after -- |
+
+### `engine agent opencode`
+
+Drive an implementation node with OpenCode in this terminal.
+
+Start a run whose implementation node is OpenCode in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to opencode.
+
+```text
+engine agent opencode [-h] [--repo REPO] [--base REF] [--backend NAME] ...
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--repo REPO` | a path inside the repository (default: the current directory) |
+| `--base REF` | what the workspace starts from (default: the backend's) |
+| `--backend NAME` | the backend to use; it must run on this machine |
+| `agent_args` | passed to opencode after -- |
 
 ## `engine agents`
 
