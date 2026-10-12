@@ -49,7 +49,6 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 

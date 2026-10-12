@@ -78,7 +78,6 @@ from engine.runtime import (
     WorkflowCatalog,
 )
 from engine.graph_runtime import (
-    CANCELLED,
     CheckpointId,
     GraphCompilationError,
     GraphId,

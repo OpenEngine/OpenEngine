@@ -2058,7 +2058,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             async with scheduled_start_lock:
                 # One dispatch pass offers the same graphs to every run it starts.
                 offered = functools.cache(offered_graphs)
-                for state in await run_reader.list_runs():
+                for state in await run_reader.list_runs(scheduled_only=True):
                     if (
                         state.phase is not RunPhase.SCHEDULED
                         or state.depends_on_run_id is None

@@ -75,8 +75,15 @@ class RunReader:
         record = await self.store.run(run_id) if self.store else None
         return await self._state(record) if record else None
 
-    async def list_runs(self) -> tuple[RunState, ...]:
-        return tuple([await self._state(row) for row in await self.store.list_runs()]) if self.store else ()
+    async def list_runs(self, *, scheduled_only: bool = False) -> tuple[RunState, ...]:
+        if self.store is None:
+            return ()
+        # Dependency dispatch only needs waiting work. Avoid loading checkpoints
+        # for every completed run each time another prerequisite finishes.
+        return tuple([
+            await self._state(row) for row in await self.store.list_runs()
+            if not scheduled_only or row.metadata.scheduled
+        ])
 
     async def list_runs_for_origin(self, channel: str, thread_id: str) -> tuple[RunState, ...]:
         return tuple([await self._state(row) for row in await self.store.list_runs_for_origin(channel, thread_id)]) if self.store else ()
@@ -86,7 +93,8 @@ class RunReader:
 
     async def save(self, state: RunState, *, only_missing: bool = False) -> None:
         if self.store is None:
-            raise RuntimeError("graph run store is unavailable")
+            message = "graph run store is unavailable"
+            raise RuntimeError(message)
         old = await self.store.run(state.run_id)
         metadata = RunMetadata(
             name=state.name, prompt=state.prompt, repository=state.repository,

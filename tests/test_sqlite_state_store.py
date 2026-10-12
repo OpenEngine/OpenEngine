@@ -1,8 +1,6 @@
 """SQLite conversation persistence."""
 
 import asyncio
-from datetime import UTC, datetime
-import json
 import sqlite3
 
 import pytest
@@ -14,16 +12,9 @@ from engine.domain import (
     AgentRunId,
     AgentRunStatus,
     ApprovalId,
-    ConversationId,
     Message,
     Role,
-    RunId,
-    RunOrigin,
-    RunPhase,
-    RunState,
-    TaskId,
     ToolCall,
-    WorkflowId,
 )
 from engine.ports import StateStore
 
