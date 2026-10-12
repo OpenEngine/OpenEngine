@@ -24,7 +24,7 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
-from engine.cli import backends, repository, starters
+from engine.cli import backends, live, repository, starters
 from engine.cli.backends import Backend, BackendError
 from engine.cli.http import Client, RequestFailed
 from engine.cli.specs import graph_spec, loop_spec
@@ -105,13 +105,18 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("file", help="the graph file, or - for YAML on stdin")
     getting = actions.add_parser("get", parents=[scoped], help="a graph and its exact definition")
     getting.add_argument("graph", help="a name, name@VERSION, graph id or version id")
-    running = actions.add_parser("run", parents=[scoped], help="run a graph with an instruction")
+    running = actions.add_parser(
+        "run", parents=[scoped], help="run a graph with an instruction",
+        description="Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch is given.",
+    )
     running.add_argument("graph", help=f"a graph, or a built-in one: {', '.join(starters.NAMES)}")
     running.add_argument("instruction", nargs="?", default="", help="what to do (default: run the graph)")
     running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
     running.add_argument("--branch", default="", help="the branch to check out (sets the branch input)")
     running.add_argument("--agent", default="", help="the agent to run (sets the agent input)")
     running.add_argument("--repo", default="", help="repository to check out")
+    running.add_argument("--no-watch", action="store_true", help="return immediately without the live view")
+    running.add_argument("--json", action="store_true", help="print JSON without the live view")
     running.add_argument("--wait", action="store_true", help="wait for the run to finish")
     running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
     running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
@@ -125,6 +130,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     actions = run.add_subparsers(dest="action", required=True)
     getting = actions.add_parser("get", parents=[common], help="status, nodes, results and failure")
     getting.add_argument("run_id")
+    watching = actions.add_parser("watch", parents=[common], help="follow a run live and answer approvals inline")
+    watching.add_argument("run_id")
     waiting = actions.add_parser("wait", parents=[common], help="wait for a run to finish")
     waiting.add_argument("run_id")
     waiting.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
@@ -377,6 +384,10 @@ def graph_run(arguments: argparse.Namespace) -> int:
         client.post("/graphs", {"project": request["project"], "format": "yaml",
                                 "source": starters.source(arguments.graph)})
         run = client.post("/runs", request, idempotent=True)
+    if not (arguments.wait or arguments.json or arguments.no_watch) and sys.stdout.isatty() and sys.stdin.isatty():
+        return _watch_run(client, run["runId"], backend)
+    if arguments.json:
+        arguments.pretty = False
     if arguments.wait:
         if not arguments.pretty:
             print(json.dumps({"runId": run["runId"], "status": run["status"]}), file=sys.stderr)
@@ -405,7 +416,29 @@ def runs_list(arguments: argparse.Namespace) -> int:
 
 def run_get(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
-    return _show_run(client.get(f"/runs/{quote(arguments.run_id)}"), backend, arguments.pretty)
+    run = client.get(f"/runs/{quote(arguments.run_id)}")
+    if arguments.pretty:
+        print(live.safe_text(f"UI: {backend.url.rstrip('/')}/runs/{run['runId']}"))
+        for approval in run.get("pendingApprovals") or []:
+            command = approval.get("command") or approval.get("reason") or ""
+            print(live.safe_text(f"approval {approval['approvalId']} at {approval['node']}: {command}"))
+    return _show_run(run, backend, arguments.pretty)
+
+
+def run_watch(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    return _watch_run(client, arguments.run_id, backend)
+
+
+def _watch_run(client: Client, run_id: str, backend: Backend) -> int:
+    run, outcome = live.Watch(client, run_id).follow()
+    if outcome == "detached":
+        command = shlex.join(["engine", "run", "watch", run_id, "--backend", backend.name])
+        print(live.safe_text(f"Detached. Reattach with: {command}"))
+        return EXIT_OK
+    for line in live.summary(run):
+        print(line)
+    return EXIT_FAILED if outcome == "cancelled" or _run_failed(run) else EXIT_OK
 
 
 def run_wait(arguments: argparse.Namespace) -> int:
@@ -677,6 +710,10 @@ def _wait_for_steering(client: Client, execution_id: str, steering_id: str, time
         time.sleep(WAIT_INTERVAL_SECONDS)
 
 
+def _run_failed(run: dict[str, Any]) -> bool:
+    return run["status"] == "failed"
+
+
 def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
     auth = (run.get("failure") or {}).get("authRequired")
     if auth and backend.name != backends.LOCAL:
@@ -701,7 +738,7 @@ def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
         if auth:
             print(f"engine: {auth['runner'] or 'a runner'} is not signed in; run `{auth['command']}`",
                   file=sys.stderr)
-    return EXIT_FAILED if run["status"] == "failed" else EXIT_OK
+    return EXIT_FAILED if _run_failed(run) else EXIT_OK
 
 
 def _health(backend: Backend) -> str:
@@ -829,6 +866,7 @@ _HANDLERS = {
     ("graphs", "list"): graphs_list,
     ("run", "get"): run_get,
     ("run", "wait"): run_wait,
+    ("run", "watch"): run_watch,
     ("runs", "list"): runs_list,
     ("loop", "spec"): loop_spec,
     ("loop", "add"): loop_add,

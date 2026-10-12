@@ -27,7 +27,7 @@ started — a daemon that is up already serves it.
 
 Backend commands use the selected backend. List commands (`engine graphs`,
 `runs`, `loops`, `nodes`, `agents`, `backends`, `connections`) print a table;
-add `--json` for JSON. Other commands print JSON unless `--pretty` is given. `engine graph spec` and
+add `--json` for JSON. Other commands print JSON unless `--pretty` is given, except the live run view on a TTY. `engine graph spec` and
 `engine loop spec` print the current specifications as Markdown locally, without
 a running daemon. Their specifications and the site reference are generated from
 the parser’s field definitions, expression rules, and accompanying prose; the
@@ -126,8 +126,16 @@ engine runs
 engine runs --graph fix-flaky-test --status failed
 ```
 
-`graph run` returns the run ID immediately; `--wait` polls to completion and
-exits non-zero if the run failed. Each submission carries an idempotency key
+`graph run` follows the run live when stdin and stdout are both TTYs. The view
+shows stages, nodes, recent results and agent messages, and asks approvals inline
+with y/n. Ctrl-C offers to detach or cancel; reattach to any run with
+`engine run watch RUN_ID`. Finished runs print a summary; failure or cancellation
+exits non-zero, while detaching exits 0.
+
+Use `--no-watch` to return immediately on a TTY, or `--json` for JSON output.
+Non-TTY invocations return immediately as before. `--wait` always polls without
+interaction and exits non-zero if the run failed. `engine run get RUN_ID --pretty`
+lists pending approval IDs, nodes and commands, plus the run's UI URL. Each submission carries an idempotency key
 (`--idempotency-key` to choose it), and the client retries a dropped
 connection with the same key, so a retry never starts a second run. A run
 records status, node executions, each node's result, usage, pull requests

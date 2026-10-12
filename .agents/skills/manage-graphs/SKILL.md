@@ -71,8 +71,9 @@ uv run engine run get RUN_ID --pretty
 uv run engine runs --graph NAME --status failed --pretty
 ```
 
-`graph run` prints the run id straight away; `--wait` polls and exits 1 if the
-run fails. A run pins the version that was latest when it started. Resubmit
+Always use `--wait` for agent invocations: it polls non-interactively and exits
+1 if the run fails. Without it, `graph run` opens an interactive live view when
+stdin and stdout are TTYs. `--no-watch` returns immediately instead. A run pins the version that was latest when it started. Resubmit
 with the same `--idempotency-key` to avoid starting a second run.
 
 `run get` shows status, each node's result, usage, pull requests and the
@@ -86,7 +87,9 @@ uv run engine node steer EXECUTION_ID "use the existing retry helper" --wait
 
 Steering is a message into the turn the agent is in, not a retry or an
 approval. A run stopped on an approval or a human step is answered in the web
-UI; `run get` lists what it is waiting for.
+UI; `run get --pretty` lists approval IDs, nodes, commands and the UI URL.
+People can also use `engine run watch RUN_ID` to answer approvals inline;
+agents should keep using non-interactive `--wait`.
 
 ## Run on a schedule
 

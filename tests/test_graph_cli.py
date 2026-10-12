@@ -413,3 +413,78 @@ def test_onboard_reports_fix(monkeypatch, capsys):
     serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "engine agent signin codex"}]})
     assert main(["onboard", "owner/repo", "--mode", "connected"]) == 1
     assert "engine agent signin codex" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("stdin_tty,stdout_tty,flags,watched", [
+    (True, True, [], True), (False, True, [], False), (True, False, [], False),
+    (True, True, ["--wait"], False), (True, True, ["--json"], False),
+    (True, True, ["--no-watch"], False),
+])
+def test_graph_run_live_selection(monkeypatch, capsys, stdin_tty, stdout_tty, flags, watched):
+    import sys
+    from engine.cli import live
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: stdin_tty)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: stdout_tty)
+    done = {**RUN, "status": "completed", "terminal": True}
+    serve(monkeypatch, RUN, done)
+    calls = []
+    monkeypatch.setattr(live.Watch, "follow", lambda self: calls.append(self.run_id) or (done, "finished"))
+    assert main(["graph", "run", "pair", "go", "--repo", "o/r", *flags]) == 0
+    assert calls == (["run-1"] if watched else [])
+    output = capsys.readouterr().out
+    if watched:
+        assert "run-1 · completed" in output
+    else:
+        assert json.loads(output)["runId"] == "run-1"
+
+
+@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0)])
+def test_watch_finished_run(monkeypatch, capsys, status, code):
+    serve(monkeypatch, {**RUN, "status": status, "terminal": True})
+    assert main(["run", "watch", "run-1"]) == code
+    assert f"run-1 · {status}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("outcome,code", [("detached", 0), ("cancelled", 1)])
+def test_watch_outcome(monkeypatch, capsys, outcome, code):
+    from engine.cli import live
+
+    backends.add("mini", "http://mini:4364", use=True)
+    monkeypatch.setattr(live.Watch, "follow", lambda self: (RUN, outcome))
+    assert main(["run", "watch", "run-1"]) == code
+    if outcome == "detached":
+        assert "engine run watch run-1 --backend mini" in capsys.readouterr().out
+
+
+def test_pretty_run_lists_approvals_and_ui(monkeypatch, capsys):
+    serve(monkeypatch, {**RUN, "pendingApprovals": [
+        {"approvalId": "a1", "node": "work", "command": "pytest"},
+        {"approvalId": "a2", "node": "review", "command": "ruff check"},
+    ]})
+    assert main(["run", "get", "run-1", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert "UI: http://127.0.0.1:4364/runs/run-1" in out
+    assert "approval a1 at work: pytest" in out
+    assert "approval a2 at review: ruff check" in out
+
+
+@pytest.mark.parametrize("status,code", [
+    ("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0),
+])
+@pytest.mark.parametrize("args", [["run", "get", "run-1"], ["run", "wait", "run-1"],
+                                  ["graph", "run", "pair", "--wait"]])
+def test_run_result_codes_match_watch(monkeypatch, status, code, args):
+    run = {**RUN, "status": status, "terminal": True}
+    serve(monkeypatch, run, run)
+    assert main(args) == code
+
+
+def test_pretty_approval_escapes_terminal_controls(monkeypatch, capsys):
+    serve(monkeypatch, {**RUN, "pendingApprovals": [
+        {"approvalId": "a\x1b[2K", "node": "work\r", "command": "danger\nbenign\x9b2K"},
+    ]})
+    assert main(["run", "get", "run-1", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert r"approval a\x1b[2K at work\r: danger\nbenign\x9b2K" in out
+    assert "\x1b" not in out and "\r" not in out and "\x9b" not in out

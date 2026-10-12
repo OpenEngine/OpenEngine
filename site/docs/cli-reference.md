@@ -292,10 +292,12 @@ engine graph get [-h] [--backend NAME] [--pretty] [--project NAME] graph
 
 Run a graph with an instruction.
 
+Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch is given.
+
 ```text
 engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME=VALUE]
-                 [--branch BRANCH] [--agent AGENT] [--repo REPO] [--wait] [--timeout SECONDS]
-                 [--idempotency-key IDEMPOTENCY_KEY]
+                 [--branch BRANCH] [--agent AGENT] [--repo REPO] [--no-watch] [--json]
+                 [--wait] [--timeout SECONDS] [--idempotency-key IDEMPOTENCY_KEY]
                  graph [instruction]
 ```
 
@@ -310,6 +312,8 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--branch BRANCH` | the branch to check out (sets the branch input) |
 | `--agent AGENT` | the agent to run (sets the agent input) |
 | `--repo REPO` | repository to check out |
+| `--no-watch` | return immediately without the live view |
+| `--json` | print JSON without the live view |
 | `--wait` | wait for the run to finish |
 | `--timeout SECONDS` | give up waiting after this long |
 | `--idempotency-key IDEMPOTENCY_KEY` | reuse to make a resubmission safe |
@@ -335,7 +339,7 @@ engine graphs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [
 Inspect a run.
 
 ```text
-engine run [-h] {get,wait} ...
+engine run [-h] {get,watch,wait} ...
 ```
 
 ### `engine run get`
@@ -344,6 +348,20 @@ Status, nodes, results and failure.
 
 ```text
 engine run get [-h] [--backend NAME] [--pretty] run_id
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `run_id` |  |
+
+### `engine run watch`
+
+Follow a run live and answer approvals inline.
+
+```text
+engine run watch [-h] [--backend NAME] [--pretty] run_id
 ```
 
 | Argument | Meaning |
