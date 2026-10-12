@@ -6,12 +6,17 @@
 // Per test rather than per worker: graphs, runs and loops are all things one
 // test leaves behind, and the doc pass runs every spec in one worker, so a
 // shared daemon would make each guide's screenshots depend on what ran first.
+//
+// Its agents are real or scripted (E2E_AGENT, see resolveAgentMode). Specs
+// assert on state -- statuses, what was registered, what exists -- and never
+// on what an agent said, so one spec passes either way.
 
-import { spawn, type ChildProcess } from "node:child_process"
+import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { engineBin } from "../support/engine.ts"
 import { test as terminalTest } from "./terminal.ts"
 
@@ -23,11 +28,67 @@ const STARTUP_TIMEOUT_MS = 60_000
 /** What the daemon is allowed of the host's environment; nothing else, credentials included, reaches it. */
 const INHERITED = ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG"]
 
+/** What a real agent additionally needs to find its login: never a GitHub credential. */
+const AGENT_LOGINS = ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CODEX_HOME", "OPENAI_API_KEY"]
+
+const STUB_DAEMON = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../harness/daemon.py")
+
+export type AgentMode = "real" | "stub"
+
+/** What the scripted agent says and does; see tests/provider_fakes.py. */
+export type AgentScript = {
+  title?: string
+  scenarios: {
+    /** Matched as a substring of the prompt; absent, it matches any turn. */
+    when?: string
+    steps: (
+      | { type: "say"; text: string }
+      | { type: "run"; command: string }
+      | { type: "tool"; name: string; arguments: Record<string, unknown> }
+    )[]
+  }[]
+}
+
+type AgentDetection = { claudeLogin: boolean; npx: boolean }
+
+function detectAgent(): AgentDetection {
+  const claudeConfig = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")
+  let npx = true
+  try {
+    execFileSync("npx", ["--version"], { stdio: "ignore" })
+  } catch {
+    npx = false
+  }
+  return { claudeLogin: existsSync(claudeConfig), npx }
+}
+
+/**
+ * `E2E_AGENT`: `stub` always scripts the agents, `real` always runs them, and
+ * `auto` (the default) runs them only outside CI on a machine where Claude
+ * Code has a login and its ACP adapter can be fetched with npx.
+ */
+export function resolveAgentMode(
+  env: Record<string, string | undefined> = process.env,
+  detect: AgentDetection | (() => AgentDetection) = detectAgent,
+): AgentMode {
+  const requested = env.E2E_AGENT ?? "auto"
+  if (requested === "stub" || requested === "real") return requested
+  if (requested !== "auto") throw new Error(`E2E_AGENT must be auto, real or stub, not ${JSON.stringify(requested)}`)
+  if (env.CI) return "stub"
+  const found = typeof detect === "function" ? detect() : detect
+  return found.claudeLogin && found.npx ? "real" : "stub"
+}
+
 export type Engine = {
   /** Where the daemon answers, http://127.0.0.1:PORT. */
   url: string
   /** The throwaway directory holding its state, configuration and backends file. */
   root: string
+  /** The git repository runs check out by default; its `origin` is a bare repository beside it. */
+  repository: string
+  agentMode: AgentMode
+  /** Set what the stub agent will do next; read on every turn. Does nothing for real agents. */
+  script(script: AgentScript): void
   /** What a terminal session needs to reach it as `local`. */
   env: Record<string, string>
   /** The whole environment the daemon runs with. */
@@ -42,8 +103,31 @@ function engineWebBin() {
   return process.env.ENGINE_WEB_BIN ?? path.join(path.dirname(engineBin), "engine-web")
 }
 
-export async function startEngine({ keepRoot = () => false }: { keepRoot?: () => boolean } = {}): Promise<Engine> {
+/** A repository with one commit and a bare origin, so a run can base its worktree on origin/main. */
+function fixtureRepository(root: string) {
+  const repository = path.join(root, "repository")
+  const origin = path.join(root, "origin.git")
+  const git = (...args: string[]) => execFileSync("git", args, { stdio: "pipe" })
+  git("init", "--initial-branch=main", repository)
+  writeFileSync(path.join(repository, "README.md"), "# Example project\n")
+  git("-C", repository, "add", "--all")
+  git("-C", repository, "-c", "user.email=engine@localhost", "-c", "user.name=engine", "commit", "--no-verify", "-m", "Initial commit")
+  git("init", "--bare", "--initial-branch=main", origin)
+  git("-C", repository, "remote", "add", "origin", origin)
+  git("-C", repository, "push", "--quiet", "origin", "main")
+  git("-C", repository, "remote", "set-head", "origin", "main")
+  return repository
+}
+
+export async function startEngine({
+  keepRoot = () => false,
+  agentMode = resolveAgentMode(),
+}: { keepRoot?: () => boolean; agentMode?: AgentMode } = {}): Promise<Engine> {
   const root = mkdtempSync(path.join(os.tmpdir(), "openengine-e2e-"))
+  const repository = fixtureRepository(root)
+  const scriptPath = path.join(root, "agent-script.json")
+  const script = (value: AgentScript) => writeFileSync(scriptPath, JSON.stringify(value, null, 2))
+  script({ scenarios: [{ steps: [{ type: "say", text: "Done." }] }] })
   const config = path.join(root, "engine.toml")
   const backendsFile = path.join(root, "backends.json")
   const githubConfig = path.join(root, "gh")
@@ -51,7 +135,8 @@ export async function startEngine({ keepRoot = () => false }: { keepRoot?: () =>
   writeFileSync(config, "# The e2e daemon's configuration: built-in defaults unless a spec says otherwise.\n")
   const token = randomBytes(24).toString("hex")
 
-  const inherited = Object.fromEntries(INHERITED.flatMap((name) => (process.env[name] ? [[name, process.env[name]!]] : [])))
+  const passed = agentMode === "real" ? [...INHERITED, ...AGENT_LOGINS] : INHERITED
+  const inherited = Object.fromEntries(passed.flatMap((name) => (process.env[name] ? [[name, process.env[name]!]] : [])))
   const daemonEnv: Record<string, string> = {
     ...inherited,
     ENGINE_CONFIG: config,
@@ -62,13 +147,19 @@ export async function startEngine({ keepRoot = () => false }: { keepRoot?: () =>
     ENGINE_SERVICE_TOKEN: token,
     // An empty gh configuration and no token: the daemon must never act on GitHub as whoever runs the tests.
     GH_CONFIG_DIR: githubConfig,
+    ...(agentMode === "stub" ? { ENGINE_FAKE_SCRIPT: scriptPath } : {}),
   }
-  const daemon = spawn(engineWebBin(), [], { cwd: root, env: daemonEnv, stdio: ["ignore", "pipe", "pipe"] })
+  // Started in the repository: with no [repos] configured, that is what a run checks out.
+  const [command, ...args] =
+    agentMode === "stub"
+      ? [path.join(path.dirname(engineBin), "python"), STUB_DAEMON, path.join(root, "bin")]
+      : [engineWebBin()]
+  const daemon = spawn(command!, args, { cwd: repository, env: daemonEnv, stdio: ["ignore", "pipe", "pipe"] })
   const output: string[] = []
   daemon.stdout!.on("data", (chunk: Buffer) => output.push(chunk.toString()))
   daemon.stderr!.on("data", (chunk: Buffer) => output.push(chunk.toString()))
   let failure: string | undefined
-  daemon.on("error", (error) => (failure = `${engineWebBin()} could not be started: ${error.message}`))
+  daemon.on("error", (error) => (failure = `${command} could not be started: ${error.message}`))
 
   const stop = async () => {
     await terminate(daemon)
@@ -81,6 +172,9 @@ export async function startEngine({ keepRoot = () => false }: { keepRoot?: () =>
     return {
       url,
       root,
+      repository,
+      agentMode,
+      script,
       env: { ENGINE_BACKENDS_FILE: backendsFile, ENGINE_SERVICE_TOKEN: token },
       daemonEnv,
       log: () => output.join(""),
@@ -123,6 +217,8 @@ export const test = terminalTest.extend<{ engine: Engine }>({
   engine: async ({}, use, testInfo) => {
     const failed = () => testInfo.status !== testInfo.expectedStatus
     const engine = await startEngine({ keepRoot: failed })
+    testInfo.annotations.push({ type: "agents", description: engine.agentMode })
+    if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
     try {
       await use(engine)
     } finally {
