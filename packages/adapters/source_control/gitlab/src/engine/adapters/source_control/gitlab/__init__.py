@@ -68,7 +68,29 @@ class GitLabSourceControl:
         return url
 
     async def can_write_repository(self, pr_url: str, username: str, *, user_id: int | None = None) -> bool:
-        raise NotImplementedError("GitLab repository permission checks are not supported")
+        """Check direct and inherited membership on the configured GitLab."""
+        origin = self._origin_source() if callable(self._origin_source) else self._origin_source
+        target, configured = urlparse(pr_url), urlparse(origin)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        configured_port = configured.port or (443 if configured.scheme == "https" else 80)
+        if (target.scheme, target.hostname, target_port) != (
+            configured.scheme, configured.hostname, configured_port
+        ):
+            raise ValueError("repository URL must be on the configured GitLab origin")
+        found = change_request(pr_url)
+        path = found.path if found is not None else target.path.strip("/").removesuffix(".git")
+        if not path or not all(names_a_project_step(step) for step in path.split("/")):
+            raise ValueError("invalid GitLab repository path")
+        members = await self._list(
+            f"/projects/{quote(path, safe='')}/members/all", {"query": username},
+        )
+        return any(
+            member.get("username") == username
+            and type(member.get("access_level")) is int
+            and member["access_level"] in (30, 40, 50)
+            and (user_id is None or type(member.get("id")) is int and member["id"] == user_id)
+            for member in members
+        )
 
     async def authenticated_login(self, repository_url: str) -> str:
         username = self._str(await self._api("GET", "/user"), "username")

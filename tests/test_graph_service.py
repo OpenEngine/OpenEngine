@@ -1083,3 +1083,34 @@ def test_running_graph_service_resolves_added_repository(tmp_path: Path, monkeyp
             assert (await settled(service, run["runId"]))["status"] == "completed"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_v1_runs_infer_forge_mode_and_accept_local_without_a_graph_input(tmp_path, monkeypatch, local):
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            source = service.runtime.source_control
+            login = AsyncMock(return_value="bot")
+            monkeypatch.setattr(source, "authenticated_login", login, raising=False)
+            monkeypatch.setattr(source, "can_write_repository", AsyncMock(return_value=True), raising=False)
+            app = Starlette(routes=[Mount("/api/v1", app=create_app(service))])
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                added = await client.post("/api/v1/graphs", json={"source": PAIR, "format": "yaml"})
+                assert added.status_code in {200, 201}, added.text
+                started = await client.post("/api/v1/runs", json={
+                    "graph": "pair", "instruction": "do it", "repository": "acme/api",
+                    "inputs": {"mode": "disconnected"} if local else {},
+                })
+                assert started.status_code == 201, started.text
+                context = started.json()["forgeContext"]
+                assert context["mode"] == ("disconnected" if local else "connected")
+                assert context["reason"]
+                completed = await settled(service, started.json()["runId"])
+                assert completed["forgeContext"] == context
+                if local:
+                    login.assert_not_called()
+    asyncio.run(scenario())

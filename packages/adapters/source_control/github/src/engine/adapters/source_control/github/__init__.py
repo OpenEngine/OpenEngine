@@ -267,6 +267,8 @@ class GitHubSourceControl:
         self, pr_url: str, username: str, *, user_id: int | None = None
     ) -> bool:
         """Check effective access, including team and organization grants."""
+        if change_request(pr_url) is None:
+            pr_url = pr_url.rstrip("/") + "/pull/1"
         owner, repo, _ = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
         response = await self._api(
             "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"

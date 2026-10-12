@@ -425,7 +425,9 @@ def test_starting_a_run_reports_the_frontier_it_begins_at(
     assert run["activeExecutions"] == []
     assert run["nextNodes"] == [str(IMPLEMENTATION)]
     assert run["checkpointId"] is not None
-    assert run["values"] == {"repository": "acme/api"}
+    assert run["values"] == {"repository": "acme/api", **({"inputs": {"mode": "disconnected"}} if build.name == "langgraph" else {})}
+    if build.name == "langgraph":
+        assert run["forgeContext"]["mode"] == "disconnected"
     assert run["pendingApprovals"] == []
 
 
@@ -1430,8 +1432,8 @@ def test_a_run_saves_a_checkpoint_at_every_superstep_boundary(
     assert history[1]["parentId"] == history[0]["checkpointId"]
     assert history[2]["parentId"] == history[1]["checkpointId"]
     # The state each position starts from, not the state it produced.
-    assert history[0]["values"] == {}
-    assert history[1]["values"] == {str(IMPLEMENTATION): "Wrote it."}
+    assert history[0]["values"] == ({"inputs": {"mode": "disconnected"}} if build.name == "langgraph" else {})
+    assert history[1]["values"] == {str(IMPLEMENTATION): "Wrote it.", **history[0]["values"]}
 
 
 def test_sending_a_run_back_forks_and_keeps_the_attempt_it_replaces(
@@ -1479,7 +1481,7 @@ def test_sending_a_run_back_forks_and_keeps_the_attempt_it_replaces(
     assert reverted["status"] == "running"
     assert reverted["activeExecutions"] == []
     assert reverted["nextNodes"] == [str(IMPLEMENTATION)]
-    assert reverted["values"] == {}
+    assert reverted["values"] == ({"inputs": {"mode": "disconnected"}} if build.name == "langgraph" else {})
     assert reverted["checkpointId"] not in {point["checkpointId"] for point in before}
     # Nothing was removed. The fork hangs off the position it re-attempts, so
     # the first attempt keeps its own children.
@@ -1621,7 +1623,7 @@ def test_a_resume_can_interrupt_a_superstep_that_is_still_running(
 
     reverted, restarted = asyncio.run(scenario())
 
-    assert reverted["values"] == {}
+    assert reverted["values"] == ({"inputs": {"mode": "disconnected"}} if build.name == "langgraph" else {})
     assert reverted["nextNodes"] == [str(IMPLEMENTATION)]
     assert _kinds(restarted) == ["run.forked", "node.started"]
     assert restarted[-1]["nodeId"] == str(IMPLEMENTATION)
@@ -2018,7 +2020,7 @@ def test_polling_projects_display_values_and_full_state_is_explicit(
         "result": {"pr_url": "https://example.test/pull/1"},
         "implementation": values["implementation"],
     }
-    assert full["values"] == values
+    assert full["values"] == {**values, **({"inputs": {"mode": "disconnected"}} if build.name == "langgraph" else {})}
     assert poll["pendingApprovals"] == full["pendingApprovals"]
     assert len(poll["pendingApprovals"]) == 1
     assert poll["activeExecutions"] == full["activeExecutions"]

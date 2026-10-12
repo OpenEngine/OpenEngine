@@ -1286,6 +1286,7 @@ def test_slack_starts_configured_graph_with_input_defaults(
         snapshot = browser.get(f"/graph/api/runs/{runs[0].run_id}?includeValues=true").json()
         assert snapshot["values"]["inputs"] == {
             "implementation_runner": "codex", "review_runner": "claude",
+            "mode": "disconnected",
         }
         expected = {
             "finished": "Work order finished.",

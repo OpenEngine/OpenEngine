@@ -337,7 +337,8 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     assert len(implementation.mcp_server_bindings) == 1
     impl_binding = implementation.mcp_server_bindings[0]
     assert impl_binding.repository_tools == (
-        "git_subcommand", "open_pull_request", "list_pipeline_status", "get_job_logs",
+        "git_subcommand", "open_pull_request", "view_change_request", "add_comment",
+        "list_pipeline_status", "get_job_logs",
     )
     assert impl_binding.required_outputs == ("pr_url",)
 

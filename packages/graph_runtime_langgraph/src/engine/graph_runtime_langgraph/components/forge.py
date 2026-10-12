@@ -67,7 +67,8 @@ PUBLISH_CHANGE = ByMode(
         + "Every git operation goes through the git_subcommand tool. When the "
         "change is ready, create a descriptive agent/<description> branch and "
         "commit only this change to it in this checkout. Finish by calling "
-        "complete_step with a summary of the change and the branch it is on. "
+        "complete_step with a summary of the change, the branch it is on, and "
+        "the git push command a person can run later to publish it. "
     ),
 )
 

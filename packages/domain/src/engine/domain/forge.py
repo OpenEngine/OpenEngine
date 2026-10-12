@@ -1,4 +1,4 @@
-"""Whether a WorkOrder may reach the forge it came from.
+"""Whether a graph run may reach its forge.
 
 A *connected* run does its work in the open: it pushes a branch, opens a pull
 request, waits on CI and posts its review as comments. A *disconnected* run
@@ -6,8 +6,8 @@ does the same work in its own checkout and reaches nothing outside it -- no
 push, no pull request, no comment -- and what it would have posted is kept in
 the run for a person to read where they are watching it.
 
-Chosen per run, at creation, through the workflow input named `MODE_INPUT`, so
-one workflow serves both. Everything that behaves differently asks
+Resolved at run creation from backend repository write access; the input
+`MODE_INPUT` can force disconnected execution, so one workflow serves both. Everything that behaves differently asks
 `forge_mode` rather than reading the input itself.
 """
 

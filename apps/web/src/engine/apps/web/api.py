@@ -1599,6 +1599,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 # therefore no graph entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
+                    bind_mode = getattr(surface.runtime, "bind_repository_mode", None)
+                    if bind_mode is not None:
+                        bind_mode(repository_mode)
                     bind_creator = getattr(surface.runtime, "bind_workorder_creator", None)
                     if bind_creator is not None:
                         bind_creator(agent_create_workorder)
@@ -1955,9 +1958,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         """
         if requester is None and scheduled is not None:
             requester = scheduled.requester
-        # A repository onboarded as disconnected is never reached from, however
-        # the WorkOrder was asked for.
-        if MODE_INPUT in inputs and (mode := await repository_mode(repository)) is not None:
+        # Preserve the configured input for scheduled WorkOrder views as well.
+        if (mode := await repository_mode(repository)) is not None:
             inputs = {**inputs, MODE_INPUT: str(mode)}
         async def runner_usage() -> dict[str, float]:
             # Scraped here rather than trusting the cache, which otherwise only
@@ -2045,7 +2047,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 origin=origin,
                 parent_run_id=scheduled.parent_run_id if scheduled else parent_run_id,
                 depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
-                inputs=inputs,
+                inputs={**inputs, MODE_INPUT: snapshot.forge_context.get("mode", inputs.get(MODE_INPUT, "connected"))},
                 requester=requester,
                 started_at=started_at,
             )
