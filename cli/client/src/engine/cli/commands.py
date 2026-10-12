@@ -74,6 +74,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     go.add_argument("words", nargs="*", metavar="VERB/TARGET/INSTRUCTION", help="instruction, or a verb and change target")
     go.add_argument("--repo", default="", help="repository (default: the current checkout)")
     go.add_argument("--local", action="store_true", help="force disconnected mode; keep work local")
+    go.add_argument("--review", metavar="PR_OR_BRANCH", help="review an existing change with the default graph")
     go.add_argument("--spec", action="store_true", help="write a specification before implementing")
     go.add_argument("--input", "-i", action="append", default=[], metavar="KEY=VALUE")
     go.add_argument("--wait", action="store_true", help="wait non-interactively for completion")
@@ -419,6 +420,8 @@ def go(arguments: argparse.Namespace) -> int:
     project = _project(arguments, backend)
     verbs = client.get("/verbs", project=project)["verbs"]
     words, verb, target = arguments.words, "go", {}
+    if arguments.review:
+        words = ["review", arguments.review, *words]
     repo = _repository(arguments, backend)
     if words and words[0] in verbs and words[0] != "go":
         candidate = words[1] if len(words) > 1 else ""
@@ -446,6 +449,13 @@ def go(arguments: argparse.Namespace) -> int:
     declared = set(graph.get("inputs", []))
     if arguments.spec:
         arguments.input.append("spec=true")
+    if arguments.graph == starters.DEFAULT:
+        if verb == "review":
+            arguments.input.append("review_only=true")
+            if target.get("pr_url"):
+                arguments.input.append("publish_review=true")
+        elif verb == "fix":
+            arguments.input.append("fix_only=true")
     supplied = _inputs(arguments.input)
     for name in ("pr_url", "ref", "review_threads"):
         if name in target and name in declared and name not in supplied:

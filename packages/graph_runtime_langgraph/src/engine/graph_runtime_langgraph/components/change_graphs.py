@@ -54,6 +54,14 @@ class TargetWorkspace(WorkspaceNode):
 
 class FixWorkspace(TargetWorkspace):
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
+        target = change_request(pr_url(state))
+        if target:
+            source = current_execution().runtime.source_control
+            inspector = getattr(source, "inspect_target", None)
+            details = await inspector(target.project, number=target.number) if inspector else {}
+            if str(details.get("head_repository", "")).casefold() != target.project.casefold():
+                message = "cannot fix a fork PR or a PR with an unavailable head repository"
+                raise ValueError(message)
         branch = str(state.get('inputs', {}).get('ref', '')).removeprefix('refs/remotes/origin/').removeprefix('origin/')
         provision = getattr(self.provider, 'provision_branch', None)
         if branch and provision:

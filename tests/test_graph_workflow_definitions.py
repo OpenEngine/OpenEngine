@@ -170,7 +170,10 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     topologies = asyncio.run(scenario())
     codex = next(one for one in topologies if str(one.graph_id) == GRAPHS[0])
 
-    assert [str(node.node_id) for node in codex.nodes] == [
+    fix_nodes = {"threads", "fix-implementation", "fix-ci", "reply"}
+    assert fix_nodes <= {str(node.node_id) for node in codex.nodes}
+    nodes = [node for node in codex.nodes if str(node.node_id) not in fix_nodes]
+    assert [str(node.node_id) for node in nodes] == [
         "workspace",
         "spec",
         "naming",
@@ -187,7 +190,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "human-review",
         "triage",
     ]
-    assert [node.name for node in codex.nodes] == [
+    assert [node.name for node in nodes] == [
         "Workspace",
         "Specification",
         "Naming",
@@ -205,7 +208,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Triage",
     ]
     # Every node belongs to one of the shared WorkOrder states.
-    assert [node.group for node in codex.nodes] == [
+    assert [node.group for node in nodes] == [
         "Planning",
         "Planning",
         "Planning",
@@ -224,7 +227,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     ]
     # Reviewers, the reranker and triage say where their findings are kept.
     assert {
-        str(node.node_id): node.findings_key for node in codex.nodes if node.findings_key
+        str(node.node_id): node.findings_key for node in nodes if node.findings_key
     } == {
         **{f"review-{facet}": f"review-{facet}" for facet in (
             "security", "bugs", "performance", "conciseness", "dryness",
@@ -235,7 +238,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     }
     # The kinds: a checkout, eleven agents (implementation + 5 reviewers +
     # reranker + naming + impact analysis), and the one stage that is a person.
-    assert [node.kind for node in codex.nodes] == [
+    assert [node.kind for node in nodes] == [
         "workspace",
         "agent",
         "agent",
@@ -255,7 +258,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     # The implementation, review facets, and reranker are conversations a
     # person reads and can talk to. The checkout, naming turn, and verdict
     # are stages of the run rather than conversations in it.
-    assert [node.show_in_sidebar for node in codex.nodes] == [
+    assert [node.show_in_sidebar for node in nodes] == [
         False,
         True,
         False,
@@ -334,7 +337,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 11
+    assert len(agents) == 13
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
@@ -801,6 +804,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     assert [
         [item["name"] for item in one["inputs"]] for one in offered
     ] == [[
+        "instruction", "fix_only", "review_threads",
         "implementation_runner", "review_runner", "spec", "review_only", "adversarial",
         "mode", "state", "ref", "pr_url", "branch",
         "publish_review",
@@ -843,6 +847,7 @@ def test_stage_runners_configure_models_and_mcp_identity(
     module = definition_module()
     graph = module.graph_for("codex")
     assert [item.name for item in graph.inputs] == [
+        "instruction", "fix_only", "review_threads",
         "implementation_runner", "review_runner", "spec", "review_only", "adversarial",
         "mode", "state", "ref", "pr_url", "branch",
         "publish_review",

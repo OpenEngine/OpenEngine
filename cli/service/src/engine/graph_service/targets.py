@@ -13,6 +13,7 @@ from engine.graph_service.service import NotFound, ServiceError
 NO_TARGET = 'no such branch or PR; to give an instruction, quote it'
 NO_REPOSITORY = 'no repository: run in a checkout or pass --repo or a full PR URL'
 CONNECT = 'cannot read this repository while disconnected; run engine connect github'
+FORK_FIX = 'cannot fix a fork PR or a PR with an unavailable head repository; check out the fork and fix it there'
 PRIVATE = 'private repository requires a forge connection; run engine connect github'
 
 if TYPE_CHECKING:
@@ -67,6 +68,8 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
             raise NotFound(NO_TARGET) from error
         if disconnected and details.get('private'):
             raise ServiceError(PRIVATE)
+    if verb == 'fix' and details.get('pr_url') and str(details.get('head_repository', '')).casefold() != project.casefold():
+        raise ServiceError(FORK_FIX)
     exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
     if target and not exists and not details.get('exists'):
         raise NotFound(NO_TARGET)

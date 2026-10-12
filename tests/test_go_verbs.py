@@ -67,34 +67,36 @@ def test_project_bindings_are_validated_persisted_and_exposed(tmp_path):
             with pytest.raises(ServiceError, match='must declare pr_url or ref'):
                 service.bind_verb('one', 'review', 'pair')
             await service.add_graph('one', source=starters.source('review'), format='python')
-            assert service.bind_verb('one', 'audit', 'review')['audit'] == 'review'
+            assert service.bind_verb('one', 'audit', starters.DEFAULT)['audit'] == starters.DEFAULT
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service)), base_url='http://test') as client:
                 assert (await client.get('/verbs', params={'project': 'one'})).json()['verbs']['go'] == 'pair'
                 refused = await client.post('/verbs/review', json={'project': 'one', 'graph': 'pair'})
                 assert refused.status_code == 400
-                assert (await client.get('/graphs/review', params={'project': 'one'})).json()['inputs'] == [
-                    'instruction', 'mode', 'implementation_runner', 'review_runner', 'ref', 'pr_url', 'adversarial']
+                registered = (await client.get(f'/graphs/{starters.DEFAULT}', params={'project': 'one'})).json()
+                assert {'spec', 'review_only', 'adversarial', 'fix_only'} <= set(registered['inputs'])
+
         async with graph_service(tmp_path) as service:
             assert service.verbs('one')['go'] == 'pair'
             assert service.verbs('two') == starters.VERBS
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('name', starters.NAMES)
+@pytest.mark.parametrize('entry', ['implement', 'review', 'fix'])
 @pytest.mark.parametrize('mode', ['connected', 'disconnected'])
-def test_builtin_compositions_have_independent_paths(tmp_path, name, mode):
+def test_builtin_default_routes_inputs(tmp_path, entry, mode):
+    name = starters.DEFAULT
     path = tmp_path / f'{name}.py'
     path.write_text(starters.source(name))
     workflow = load_workflow_file(path)[0]
     assert str(workflow.graph_id) == name
     inputs = {item.name for item in workflow.inputs}
-    assert not inputs.intersection({'state', 'review_only', 'fix'})
+    assert {'spec', 'review_only', 'adversarial', 'fix_only'} <= inputs
     visited = []
 
     def stub(key):
         def invoke(state):
             visited.append(key)
-            if key == 'ci-check':
+            if key in ('ci-check', 'fix-ci'):
                 return {'ci_check': {'passed': True}}
             if key == 'reranker':
                 return {'review_rounds': state.get('review_rounds', 0) + 1, 'review': [{'tagline': 'Bug', 'description': 'Fix it'}]}
@@ -104,16 +106,17 @@ def test_builtin_compositions_have_independent_paths(tmp_path, name, mode):
         return RunnableLambda(invoke)
     for key, node in workflow.builder.nodes.items():
         node.runnable = stub(key)
-    asyncio.run(workflow.builder.compile().ainvoke({'task': 'docs', 'inputs': {'mode': mode, 'spec': 'true', 'adversarial': 'true'}}))
-    if name == 'implement':
+    asyncio.run(workflow.builder.compile().ainvoke({'task': 'docs', 'inputs': {'mode': mode, 'spec': 'true', 'adversarial': 'true', 'review_only': str(entry == 'review').lower(), 'publish_review': 'true', 'fix_only': str(entry == 'fix').lower()}}))
+    if entry == 'implement':
         assert visited.count('implementation') == 2 and visited.count('reranker') == 2
         assert visited.index('spec') < visited.index('implementation')
-        assert 'threads' not in visited and 'refute' not in visited
-    elif name == 'review':
+        assert 'threads' not in visited and visited.count('refute') == 2
+        assert visited[-1] == 'human-review'
+    elif entry == 'review':
         assert 'implementation' not in visited and 'ci-check' not in visited
-        assert visited.index('refute') < visited.index('reranker') < visited.index('impact')
+        assert visited.index('refute') < visited.index('reranker') < visited.index('impact-analysis')
     else:
-        assert visited == ['workspace', 'threads', 'implementation', 'ci-check', 'reply']
+        assert visited == ['workspace', 'threads', 'fix-implementation', 'fix-ci', 'reply']
 
 
 @pytest.mark.parametrize('mode', ['connected', 'disconnected'])
@@ -156,7 +159,7 @@ def test_go_review_uses_callers_branch_on_remote_backend(monkeypatch, tmp_path):
     monkeypatch.delenv('ENGINE_SERVICE_TOKEN', raising=False)
     backends.add('mini', 'http://mini:4364')
     monkeypatch.setattr(repository, 'current', lambda: repository.Repository(tmp_path, 'o/r', 'caller-topic', False))
-    recorded = serve_go(monkeypatch, RUN, graph='review', target={'ref': 'origin/caller-topic'})
+    recorded = serve_go(monkeypatch, RUN, graph=starters.DEFAULT, target={'ref': 'origin/caller-topic'})
     assert main(['go', 'review', '--backend', 'mini']) == 0
     assert recorded.requests[1]['body']['target'] == 'caller-topic'
 
@@ -193,3 +196,27 @@ def test_builtin_disconnected_bindings_expose_no_forge_tools(tmp_path, monkeypat
     asyncio.run(scenario())
     assert served
     assert all(set(names) <= {'git_subcommand'} and 'pr_url' not in outputs for names, outputs in served)
+
+
+@pytest.mark.parametrize('head_repository', ['fork/r', '', 'o/r'])
+@pytest.mark.parametrize('mode', ['connected', 'disconnected'])
+def test_fix_pr_rejects_fork_or_missing_head(monkeypatch, head_repository, mode):
+    details = {'exists': True, 'branch': 'main', 'pr_url': 'https://github.com/o/r/pull/9',
+               'head_repository': head_repository}
+    service = SimpleNamespace(resolve_repository=lambda value: value,
+        runtime=SimpleNamespace(source_control=SimpleNamespace(inspect_target=AsyncMock(return_value=details))))
+    monkeypatch.setattr(targets, 'resolve_forge_context', AsyncMock(return_value={'mode': mode}))
+    if head_repository == 'o/r':
+        assert asyncio.run(targets.resolve_target(service, 'o/r', '#9', verb='fix'))['ref'].endswith('origin/main')
+    else:
+        with pytest.raises(ServiceError, match='cannot fix a fork PR'):
+            asyncio.run(targets.resolve_target(service, 'o/r', '#9', verb='fix'))
+
+
+def test_direct_fix_rejects_fork_before_provisioning(monkeypatch):
+    provider = SimpleNamespace(provision_branch=AsyncMock())
+    source = SimpleNamespace(inspect_target=AsyncMock(return_value={'head_repository': 'fork/r'}))
+    monkeypatch.setattr(graphs, 'current_execution', lambda: SimpleNamespace(runtime=SimpleNamespace(source_control=source)))
+    with pytest.raises(ValueError, match='cannot fix a fork PR'):
+        asyncio.run(graphs.FixWorkspace(provider=provider)({'inputs': {'pr_url': 'https://github.com/o/r/pull/9', 'ref': 'origin/main'}}))
+    provider.provision_branch.assert_not_called()

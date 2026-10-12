@@ -542,3 +542,33 @@ def test_fix_refuses_dirty_borrowed_checkout(tmp_path, git_repo):
     provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
     with pytest.raises(GitWorktreeError, match='commit or stash'):
         asyncio.run(provider.provision_branch(str(repository), 'topic'))
+
+
+@pytest.mark.parametrize('lifecycle', ['detach', 'dispose'])
+def test_repository_marker_cannot_redirect_workspace(tmp_path, git_repo, lifecycle):
+    repository = git_repo(commit=True)
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    async def scenario():
+        workspace = await provider.provision(str(repository), 'HEAD')
+        path = Path(workspace.root_path)
+        (path / '.engine-existing-checkout').write_text(str(repository))
+        assert await provider.root_path(workspace.workspace_id) == str(path)
+        assert (await provider.state(workspace.workspace_id)).root_path == str(path)
+        assert (await provider.attach(workspace.workspace_id, str(repository), 'HEAD')).root_path == str(path)
+        await getattr(provider, lifecycle)(workspace.workspace_id)
+        assert not path.exists()
+        assert (repository / '.git').exists()
+        if lifecycle == 'detach':
+            assert _git(repository, 'show', f'{workspace.ref}:.engine-existing-checkout') == str(repository)
+    asyncio.run(scenario())
+
+
+def test_borrowed_metadata_validates_checkout_branch(tmp_path, git_repo):
+    repository = git_repo(commit=True, branch='topic')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    async def scenario():
+        workspace = await provider.provision_branch(str(repository), 'topic')
+        _git(repository, 'checkout', '-b', 'other')
+        with pytest.raises(GitWorktreeError, match='invalid borrowed checkout metadata'):
+            await provider.root_path(workspace.workspace_id)
+    asyncio.run(scenario())

@@ -12,8 +12,9 @@ Backend commands talk to the selected backend (`--backend`, else `ENGINE_BACKEND
 Make a change with the default graph and follow it live.
 
 ```text
-engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--local] [--spec]
-          [--input KEY=VALUE] [--wait] [--json] [--timeout SECONDS]
+engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--local]
+          [--review PR_OR_BRANCH] [--spec] [--input KEY=VALUE] [--wait] [--json]
+          [--timeout SECONDS]
           [VERB/TARGET/INSTRUCTION ...]
 ```
 
@@ -25,6 +26,7 @@ engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--loc
 | `VERB/TARGET/INSTRUCTION` | instruction, or a verb and change target |
 | `--repo REPO` | repository (default: the current checkout) |
 | `--local` | force disconnected mode; keep work local |
+| `--review PR_OR_BRANCH` | review an existing change with the default graph |
 | `--spec` | write a specification before implementing |
 | `--input, -i KEY=VALUE` |  |
 | `--wait` | wait non-interactively for completion |
@@ -235,7 +237,7 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
-| `graph` | a graph, or a built-in one: implement, review, fix |
+| `graph` | a graph, or a built-in one: implementation-review-rerank |
 | `instruction` | what to do (default: run the graph) |
 | `--input, -i NAME=VALUE` |  |
 | `--branch BRANCH` | the branch to check out (sets the branch input) |

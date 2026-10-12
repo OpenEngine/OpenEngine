@@ -9,6 +9,7 @@ human, whether or not a worktree is currently sitting on it.
 """
 
 import asyncio
+import json
 import shlex
 import re
 import shutil
@@ -86,8 +87,9 @@ class GitWorktreeWorkspaceProvider:
         if holder is not None:
             if await _git(str(holder), "status", "--porcelain"):
                 raise GitWorktreeError("commit or stash local changes before fixing this branch")
-            path.mkdir(parents=True)
-            (path / ".engine-existing-checkout").write_text(str(holder), encoding="utf-8")
+            marker = self._borrowed_marker(workspace_id)
+            marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            marker.write_text(json.dumps({"path": holder, "repository": root, "branch": branch}), encoding="utf-8")
             path = Path(holder)
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,18 +98,18 @@ class GitWorktreeWorkspaceProvider:
 
     async def root_path(self, workspace_id: WorkspaceId) -> str:
         root_path = self._path_for(workspace_id)
-        borrowed = root_path / ".engine-existing-checkout"
-        if borrowed.is_file():
-            root_path = Path(borrowed.read_text(encoding="utf-8"))
+        borrowed = await self._borrowed_checkout(workspace_id)
+        if borrowed is not None:
+            root_path = borrowed
         if not root_path.is_dir():
             raise KeyError(f"no workspace {workspace_id!r}")
         return str(root_path)
 
     async def state(self, workspace_id: WorkspaceId) -> WorkspaceState:
         root_path = self._path_for(workspace_id)
-        borrowed = root_path / ".engine-existing-checkout"
-        if borrowed.is_file():
-            root_path = Path(borrowed.read_text(encoding="utf-8"))
+        borrowed = await self._borrowed_checkout(workspace_id)
+        if borrowed is not None:
+            root_path = borrowed
             return WorkspaceState(workspace_id=workspace_id,
                 ref=await _git(str(root_path), "symbolic-ref", "--quiet", "--short", "HEAD"),
                 root_path=str(root_path))
@@ -128,9 +130,11 @@ class GitWorktreeWorkspaceProvider:
     ) -> Workspace:
         repository_root = await _repository_root(repository)
         root_path = self._path_for(workspace_id)
-        borrowed = root_path / ".engine-existing-checkout"
-        if borrowed.is_file():
-            root_path = Path(borrowed.read_text(encoding="utf-8"))
+        borrowed = await self._borrowed_checkout(workspace_id)
+        if borrowed is not None:
+            root_path = borrowed
+            if await _main_worktree(root_path) != await _main_worktree(Path(repository_root)):
+                raise GitWorktreeError("borrowed checkout belongs to another repository")
             return Workspace(workspace_id=workspace_id, root_path=str(root_path),
                 repository=repository_root, base_ref=base_ref,
                 ref=await _git(str(root_path), "symbolic-ref", "--quiet", "--short", "HEAD"))
@@ -148,7 +152,7 @@ class GitWorktreeWorkspaceProvider:
 
     async def detach(self, workspace_id: WorkspaceId) -> None:
         root_path = self._path_for(workspace_id)
-        if (root_path / ".engine-existing-checkout").is_file():
+        if await self._borrowed_checkout(workspace_id) is not None:
             return
         if not root_path.is_dir():
             return
@@ -169,10 +173,8 @@ class GitWorktreeWorkspaceProvider:
         branch from is worse than leaving one behind.
         """
         root_path = self._path_for(workspace_id)
-        borrowed = root_path / ".engine-existing-checkout"
-        if borrowed.is_file():
-            borrowed.unlink()
-            root_path.rmdir()
+        if await self._borrowed_checkout(workspace_id) is not None:
+            self._borrowed_marker(workspace_id).unlink()
             return
         branch = _branch_for(workspace_id)
         repository_root = (
@@ -233,9 +235,32 @@ class GitWorktreeWorkspaceProvider:
             ref=branch,
         )
 
+    def _borrowed_marker(self, workspace_id: WorkspaceId) -> Path:
+        return self._root_directory / ".metadata" / f"{self._path_for(workspace_id).name}.json"
+
+    async def _borrowed_checkout(self, workspace_id: WorkspaceId) -> Path | None:
+        marker = self._borrowed_marker(workspace_id)
+        if not marker.exists() and not marker.is_symlink():
+            return None
+        if marker.is_symlink() or marker.parent.is_symlink():
+            raise GitWorktreeError("invalid borrowed checkout metadata")
+        try:
+            record = json.loads(marker.read_text(encoding="utf-8"))
+            path, repository, branch = (record[key] for key in ("path", "repository", "branch"))
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            raise GitWorktreeError("invalid borrowed checkout metadata") from error
+        if not all(isinstance(value, str) and value for value in (path, repository, branch)):
+            raise GitWorktreeError("invalid borrowed checkout metadata")
+        checkout = Path(path)
+        if (not checkout.is_absolute() or checkout.resolve() != checkout or not checkout.is_dir()
+                or await _checkout_holding(repository, branch) != path
+                or await _repository_root(path) != path):
+            raise GitWorktreeError("invalid borrowed checkout metadata")
+        return checkout
+
     def _path_for(self, workspace_id: WorkspaceId) -> Path:
         name = str(workspace_id)
-        if not name or Path(name).name != name:
+        if not re.fullmatch(r"ws-[a-zA-Z0-9_-]+", name):
             raise ValueError(f"invalid workspace id {workspace_id!r}")
         return self._root_directory / name
 

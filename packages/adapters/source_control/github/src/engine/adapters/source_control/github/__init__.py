@@ -590,6 +590,8 @@ class GitHubSourceControl:
             return {**result, 'exists': False}
         if pull:
             url = _string(pull, "html_url")
+            head_repo = _object(_object(pull.get("head") or {}).get("repo") or {}).get("full_name", "")
+            result["head_repository"] = head_repo
             result.update(pr_url=url, branch=_nested_string(pull, "head", "ref"), exists=True,
                           checkout_ref=f"origin/refs/pull/{pull['number']}/head")
             if include_threads:

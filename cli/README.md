@@ -4,7 +4,7 @@
 engine go "add a new doc for the out-of-the-box experience"
 ```
 
-`go` registers the selected built-in graph on first use, runs it against the
+`go` registers the built-in default graph on first use, runs it against the
 checkout you are in, and follows it live on a TTY with inline approvals. Its
 first line reports the daemon's inferred connected or disconnected mode.
 Connected runs finish with a PR URL; disconnected runs report the local branch
@@ -169,16 +169,19 @@ opened, and failure details. An agent without credentials fails with
 `engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
 
-Three built-in graphs serve separate verbs:
+One built-in graph, `implementation-review-rerank`, serves every default verb.
+It is based on `workflows/implementation_review_graph.py` and runs implementation,
+CI, parallel review facets, reranking, one fix-and-review pass, and human review.
 
-| Command | Graph | Behavior |
+| Command | Inputs | Behavior |
 | --- | --- | --- |
-| `engine go "add a feature" --spec` | `implement` | Optional specification, implementation, CI, parallel reviews, reranking, and one fix-and-review pass. |
-| `engine go review '#839'` | `review` | Review facets, optional `-i adversarial=true` refutation, reranking, and impact rating. |
-| `engine go fix '#839'` | `fix` | Address unresolved review threads, check CI, and reply to addressed threads. |
+| `engine go "add a feature" --spec` | `spec=true` | Write a specification before implementation. |
+| `engine go review '#839'` | `review_only=true`, `publish_review=true` | Review an existing change; `-i adversarial=true` adds refutation. |
+| `engine go fix '#839'` | `fix_only=true` | Address unresolved review threads, check CI, and reply to addressed threads. |
 
 Connected runs publish to the forge; disconnected runs keep findings in run
-results and commits locally. Fixes remain on the target branch. Disconnected
+results and commits locally. Fixes remain on the target branch. Fixing fork PRs is rejected before checkout
+to prevent pushing a same-named upstream branch. Disconnected
 fixes can use cached threads via `-i review_threads=JSON`. Private repositories
 require `engine connect github` before running disconnected.
 
@@ -195,15 +198,15 @@ when `the` is not a branch. A sole invalid target reports
 `no such branch or PR; to give an instruction, quote it`.
 
 Use `engine verbs` to inspect project bindings and
-`engine verb set review my-review` to replace one. Defaults are `go: implement`,
-`review: review`, and `fix: fix`. A replacement must declare `instruction` for
+`engine verb set review my-review` to replace one. All three default bindings point to
+`implementation-review-rerank`. A replacement must declare `instruction` for
 `go`, or `pr_url` or `ref` for target verbs; the API and CLI reject incompatible
 bindings. These contracts describe inputs, never internal graph stages.
 
-For one release, `engine graph run` accepts deprecated aliases: `review` maps
-to `review`, `adversarial-review` to `review` with `adversarial=true`,
-`implement-review` to `implement`, and `spec-implement-review` to `implement`
-with `spec=true`. The old `--branch` and `--agent` flags remain supported there.
+For one release, `engine graph run` accepts deprecated aliases for the default
+graph: `review` sets `review_only=true`, `adversarial-review` also sets
+`adversarial=true`, `implement-review` uses the defaults, and
+`spec-implement-review` sets `spec=true`. The old `--branch` and `--agent` flags remain supported there.
 
 
 `engine runs` lists runs newest first, whether submitted or started by a loop,

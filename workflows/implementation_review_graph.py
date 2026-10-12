@@ -39,6 +39,7 @@ from engine.graph_runtime_langgraph.components.change_prompts import (
 )
 
 
+from engine.graph_runtime_langgraph.components.change_graphs import Components, FixWorkspace, review_threads
 from engine.runtime.change_requests import change_request
 from collections.abc import Mapping
 from dataclasses import replace
@@ -268,6 +269,8 @@ def _enabled(state: Mapping[str, Any], name: str) -> bool:
 
 class ReviewWorkspaceNode(WorkspaceNode):
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
+        if _enabled(state, "fix_only"):
+            return await FixWorkspace(provider=self.provider, ref_input=REF_INPUT)(state)
         inputs = dict(state.get("inputs") or {})
         if _reviewing(state) and not inputs.get(REF_INPUT):
             if inputs.get(PR_INPUT):
@@ -351,6 +354,8 @@ def _implementation_prompt(state: Mapping[str, Any]) -> str:
 
 
 def _after_workspace(state: dict[str, Any]) -> str | list[Send]:
+    if _enabled(state, "fix_only"):
+        return "threads"
     if _reviewing(state):
         return _fan_out_reviews(state)
     return SPEC if _enabled(state, "spec") else NAMING
@@ -412,6 +417,20 @@ def pipeline(
             ref_input=REF_INPUT,
         ),
     )
+    fix_components = Components(runner, agents, workspace_provider or GitWorktreeWorkspaceProvider(DEFAULT_ROOT_DIRECTORY), session_config)
+    builder.add_node("threads", review_threads)
+    builder.add_node("fix-implementation", fix_components.implementation(fixing=True))
+    builder.add_node("fix-ci", CICheck())
+    builder.add_node("reply", fix_components.agent("reply", lambda state: ANSWER_REVIEW(state)
+        + "Report the completed fixes and remaining unresolved requests. Do not modify code.\n"
+        + str(state.get("threads", "")) + "\n" + str(state.get("implementation", "")),
+        tools=("view_change_request", "add_comment")))
+    builder.add_conditional_edges("threads", lambda state: "fix-implementation" if state.get("threads") else END,
+                                  ["fix-implementation", END])
+    builder.add_edge("fix-implementation", "fix-ci")
+    builder.add_conditional_edges("fix-ci", lambda state: "reply" if state["ci_check"]["passed"] else "fix-implementation",
+                                  ["reply", "fix-implementation"])
+    builder.add_edge("reply", END)
     builder.add_node(SPEC, InputImplementationNode(
         agent=runner, registry=agents, cwd=checkout,
         prompt=lambda state: (
@@ -616,7 +635,7 @@ def pipeline(
     builder.add_edge(START, WORKSPACE)
     builder.add_conditional_edges(
         WORKSPACE, _after_workspace,
-        [SPEC, NAMING, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
+        ["threads", SPEC, NAMING, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
     )
     builder.add_edge(SPEC, NAMING)
     builder.add_edge(NAMING, IMPLEMENTATION)
@@ -693,6 +712,9 @@ def graph_for(
         description="Implement, check CI, review parallel facets, rerank, fix once, and ask for human review.",
         previous_ids=PREVIOUS_IDS,
         inputs=(
+            WorkflowInput("instruction", "Instruction"),
+            WorkflowInput("fix_only", "Fix unresolved review threads", default="false", choices=("false", "true")),
+            WorkflowInput("review_threads", "Cached unresolved review threads"),
             WorkflowInput(
                 "implementation_runner", "Implementation runner",
                 default=runner, required=True, choices=RUNNER_INPUT_CHOICES,

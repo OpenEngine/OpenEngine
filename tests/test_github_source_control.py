@@ -1253,7 +1253,7 @@ def test_inspect_target_returns_unresolved_threads_and_branch(monkeypatch):
     from unittest.mock import AsyncMock
     source = GitHubSourceControl('')
     monkeypatch.setattr(source, '_api', AsyncMock(side_effect=[{'private': False}, {
-        'number': 9, 'html_url': 'https://github.com/o/r/pull/9', 'head': {'ref': 'topic'},
+        'number': 9, 'html_url': 'https://github.com/o/r/pull/9', 'head': {'ref': 'topic', 'repo': {'full_name': 'fork/r'}},
     }]))
     monkeypatch.setattr(source, '_review_threads', AsyncMock(return_value=[
         SimpleNamespace(comment_id=1, thread_id='T', is_resolved=False),
@@ -1264,4 +1264,5 @@ def test_inspect_target_returns_unresolved_threads_and_branch(monkeypatch):
     ]))
     result = asyncio.run(source.inspect_target('o/r', number=9, include_threads=True))
     assert result['branch'] == 'topic'
+    assert result['head_repository'] == 'fork/r'
     assert json.loads(result['review_threads']) == [{'id': 1, 'body': 'fix this', 'thread_id': 'T'}]
