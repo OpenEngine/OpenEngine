@@ -391,3 +391,59 @@ def test_transfer_preserves_primary_error_when_cleanup_fails(smolvm_cli, tmp_pat
             else:
                 assert "cleanup unavailable" in str(caught.value)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("version,allowed", [
+    ((3, 11, 8), False), ((3, 11, 12), False), ((3, 11, 13), True),
+    ((3, 12, 0), False), ((3, 12, 10), False), ((3, 12, 11), True),
+    ((3, 13, 0), False), ((3, 13, 3), False), ((3, 13, 4), True),
+    ((3, 14, 0), True),
+])
+def test_transfer_python_floor_and_package_metadata(monkeypatch, version, allowed):
+    import tomllib
+    from packaging.specifiers import SpecifierSet
+
+    metadata = Path(__file__).parents[1] / "packages/adapters/sandbox/smolvm/pyproject.toml"
+    requirement = SpecifierSet(tomllib.loads(metadata.read_text())["project"]["requires-python"])
+    assert requirement.contains(".".join(map(str, version))) == allowed
+    monkeypatch.setattr(_guest.sys, "version_info", version)
+    if allowed:
+        _guest.require_patched_python()
+    else:
+        with pytest.raises(RuntimeError, match="patched Python"):
+            # Version validation precedes opening any guest-controlled archive.
+            _guest.unpack(Path("nonexistent.tar"), Path("destination"))
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr", "both"])
+def test_command_output_flood_is_bounded_and_process_reaped(monkeypatch, stream):
+    import engine.adapters.sandbox.smolvm as adapter
+
+    monkeypatch.setattr(adapter, "MAX_COMMAND_OUTPUT_BYTES", 1024)
+    writes = "os.write(1, b'x' * 700); os.write(2, b'y' * 700)" if stream == "both" else (
+        f"os.write({1 if stream == 'stdout' else 2}, b'x' * 2048)"
+    )
+
+    async def run():
+        instance = adapter.SmolvmInstance(sys.executable, "fixture", SandboxSpec())
+        with pytest.raises(SmolvmError, match="output exceeds byte budget"):
+            await asyncio.wait_for(instance._command(["-c", f"import os, time; {writes}; time.sleep(60)"]), 5)
+        assert not instance._processes
+    asyncio.run(run())
+
+
+def test_replaced_guest_helper_cannot_flood_host(smolvm_cli, monkeypatch):
+    import engine.adapters.sandbox.smolvm as adapter
+
+    launcher, root = smolvm_cli
+    monkeypatch.setattr(adapter, "MAX_COMMAND_OUTPUT_BYTES", 1024)
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            helper = root / sandbox.name / "oe-sandbox-transfer.py"
+            helper.write_text("import os, time\nos.write(1, b'x' * 65536)\ntime.sleep(60)\n")
+            with pytest.raises(SmolvmError, match="output exceeds byte budget"):
+                await asyncio.wait_for(sandbox._helper("init"), 5)
+            assert not sandbox._processes
+        assert not (root / sandbox.name).exists()
+    asyncio.run(run())

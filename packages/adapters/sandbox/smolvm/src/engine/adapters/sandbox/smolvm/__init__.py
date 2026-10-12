@@ -26,6 +26,7 @@ HELPER = "/oe-sandbox-transfer.py"
 # The guest image supplies Python here; command PATH overrides must not affect
 # the helper that validates that command's working directory and executable.
 GUEST_PYTHON = "/usr/local/bin/python3"
+MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024
 
 
 async def _settle(task: asyncio.Task):
@@ -50,6 +51,15 @@ def _kill(process: asyncio.subprocess.Process) -> None:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+
+
+async def _discard_process_output(process: asyncio.subprocess.Process) -> None:
+    async def drain(stream):
+        if stream is not None:
+            while await stream.read(65536):
+                pass
+    await asyncio.gather(drain(process.stdout), drain(process.stderr))
+    await process.wait()
 
 
 def _relative(path: str) -> str:
@@ -148,13 +158,34 @@ class SmolvmInstance:
 
     async def _command(self, arguments, environment=None, *, check=True):
         process = await self._spawn(arguments, environment)
-        communicating = asyncio.create_task(process.communicate())
+        assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+        process.stdin.close()
+        total = 0
+
+        async def collect(stream):
+            nonlocal total
+            output = bytearray()
+            while chunk := await stream.read(65536):
+                total += len(chunk)
+                if total > MAX_COMMAND_OUTPUT_BYTES:
+                    message = "SmolVM command output exceeds byte budget"
+                    raise SmolvmError(message)
+                output.extend(chunk)
+            return bytes(output)
+
+        readers = [asyncio.create_task(collect(process.stdout)), asyncio.create_task(collect(process.stderr))]
         try:
-            stdout, stderr = await asyncio.wait_for(asyncio.shield(communicating), 300)
-        except (asyncio.CancelledError, TimeoutError):
-            _kill(process)
-            await _settle(communicating)
-            raise
+            async with asyncio.timeout(300):
+                stdout, stderr = await asyncio.gather(*readers)
+                await process.wait()
+        finally:
+            if process.returncode is None:
+                _kill(process)
+
+            async def finish():
+                await asyncio.gather(*readers, return_exceptions=True)
+                await _discard_process_output(process)
+            await _settle(asyncio.create_task(finish()))
         if check and process.returncode:
             detail = stderr.decode(errors="replace").strip()
             for secret in self.spec.secrets.values():
@@ -298,7 +329,7 @@ class SmolvmInstance:
             processes = tuple(self._processes)
             for process in processes:
                 _kill(process)
-            await asyncio.gather(*(process.communicate() for process in processes), return_exceptions=True)
+            await asyncio.gather(*(_discard_process_output(process) for process in processes), return_exceptions=True)
             # -f stops a running machine and removes its persistent storage.
             # Do not suppress a deletion failure: it may mean a leaked VM.
             stdout, stderr, code = await self._command(
@@ -319,6 +350,7 @@ class SmolvmSandbox:
 
     @asynccontextmanager
     async def create(self, spec: SandboxSpec) -> AsyncIterator[SmolvmInstance]:
+        _guest.require_patched_python()
         if spec.egress_allowlist is not None:
             message = "SmolVM egress allowlists are not implemented yet (#677)"
             raise ValueError(message)

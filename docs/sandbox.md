@@ -67,7 +67,11 @@ recipe includes Python 3.12 (for transfers), Node 22, Git, and the exact ACP
 adapter versions used by `langgraph-acp`. The npm lock pins transitive packages
 and platform binaries too; `npm ci` runs only while building the image. No npm
 command or package installation happens during sandbox creation or execution.
-Host Python must be 3.11.8+ for safe archive extraction. The base image tags
+Archive extraction requires Python 3.11.13+, 3.12.11+, 3.13.4+, or 3.14+
+on both host and guest, which include the
+[June 2025 tarfile filter fixes](https://www.python.org/downloads/release/python-31113/).
+Older patch releases are excluded by package metadata and rejected before
+VM creation or archive extraction. The base image tags
 track patch updates; export the built archive or pin the resulting OCI digest
 for deployments that must use an identical image.
 
@@ -112,6 +116,10 @@ rejected to prevent amplification when files are copied. Rejected transfers
 clean up host temporary files and attempt guest archive removal. If removal
 also fails, the original transfer error is preserved with a cleanup failure note;
 a cleanup failure after an otherwise successful transfer is raised normally.
+Host SmolVM control/helper commands have a combined stdout/stderr limit of
+1 MiB. Exceeding it terminates the CLI and raises an error without buffering
+the remaining output. This also applies when guest code replaces the helper.
+Agent command streams remain caller-consumed streams.
 Workspaces are copied, never host-mounted. `exec --interactive` provides binary
 streams without a TTY; secrets use temporary host environment references rather
 than plaintext CLI arguments or persistent VM configuration. Commands do not

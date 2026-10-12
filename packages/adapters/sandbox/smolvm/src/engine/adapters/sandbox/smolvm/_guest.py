@@ -14,6 +14,14 @@ MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 10_000
 
 
+def require_patched_python() -> None:
+    version = sys.version_info[:3]
+    floors = {(3, 11): (3, 11, 13), (3, 12): (3, 12, 11), (3, 13): (3, 13, 4)}
+    if version < floors.get(version[:2], (3, 14, 0)):
+        message = "sandbox transfers require patched Python: 3.11.13+, 3.12.11+, 3.13.4+ or 3.14+"
+        raise RuntimeError(message)
+
+
 def workspace_path(relative: str, *, destination: bool = False) -> Path:
     path = Path(relative)
     original = WORKSPACE / path
@@ -77,6 +85,7 @@ def _check_links(source: Path, destination: Path, source_root: Path, destination
 
 
 def unpack(archive: Path, destination: Path) -> None:
+    require_patched_python()
     if archive.stat().st_size > MAX_ARCHIVE_BYTES:
         message = "transfer archive exceeds byte budget"
         raise ValueError(message)
@@ -159,7 +168,7 @@ def main() -> None:
     operation, *arguments = sys.argv[1:]
     try:
         _dispatch(operation, arguments)
-    except (OSError, ValueError, tarfile.TarError) as error:
+    except (OSError, ValueError, RuntimeError, tarfile.TarError) as error:
         print(json.dumps({"error": type(error).__name__, "message": str(error)}))
         sys.exit(2)
 
