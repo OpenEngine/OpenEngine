@@ -205,10 +205,15 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     assert {("tdd", "implement", False), ("implement", "guide_review", False), ("publish", "ci", False)} <= set(
         spec.edges(),
     )
-    # The tests and the code that passes them come from different runners, and
-    # so does the review of the guide.
-    assert (spec.node("implement").runner.kind, spec.node("implement").runner.value) == ("not", "tdd")
-    assert (spec.node("guide_review").runner.kind, spec.node("guide_review").runner.value) == ("not", "implement")
+    # Who writes the tests, who implements and who reviews are each the run's
+    # choice, so a run can use one runner throughout or a different one for each.
+    assert [(node.id, node.runner.kind, node.runner.value) for node in spec.nodes if node.kind == "agent"] == [
+        ("pick", "input", "runner"),
+        ("tdd", "same", "pick"),
+        ("implement", "input", "implementer"),
+        ("guide_review", "input", "reviewer"),
+        ("publish", "same", "implement"),
+    ]
     # Only the last step publishes; nothing before it can open a pull request.
     assert [node.id for node in spec.nodes if "open_pull_request" in node.tools] == ["publish"]
 
