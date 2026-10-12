@@ -45,21 +45,24 @@ plan:
       the milestone "${inputs.milestone}" with
       `gh issue list --milestone "${inputs.milestone}" --state open --json number,title,body`
       and pick the lowest-numbered one that:
-      - has every issue it "Depends on" closed (check with `gh issue view N --json state`), and
+      - has every issue it "Depends on" closed (check with `gh issue view N --json state`),
+        or already done in this checkout: on a branch that hasn't landed yet, a
+        dependency's work can be here while its issue is still open, and
       - has no open pull request (`gh pr list --state open --search "N in:body" --json number,headRefName`)
         and no pushed `agent/issue-N-*` branch (`git ls-remote --heads origin "agent/issue-N-*"`).
 
       Read the chosen issue in full with `gh issue view N --comments`.
-      If nothing qualifies, set found to false and stop.
+      If nothing qualifies, set found to no and every other output to "none".
 
       ${instruction}
+    # Every output is required text: complete_step accepts nothing else yet.
     outputs:
-      found: {type: boolean, required: true, description: whether there is an issue to work}
-      issue: {type: integer, description: the issue number}
-      title: {type: string, description: the issue title}
-      brief: {type: string, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
-      branch: {type: string, description: "agent/issue-N-short-slug, the branch the pull request will use"}
-      guide: {type: boolean, description: whether the issue adds or changes a guide spec under e2e/tests}
+      found: {type: string, enum: ["yes", "no"], required: true, description: whether there is an issue to work}
+      issue: {type: string, required: true, description: the issue number}
+      title: {type: string, required: true, description: the issue title}
+      brief: {type: string, required: true, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
+      branch: {type: string, required: true, description: "agent/issue-N-short-slug, the branch the pull request will use"}
+      guide: {type: string, enum: ["yes", "no"], required: true, description: whether the issue adds or changes a guide spec under e2e/tests}
 
 implementation:
   tdd:
@@ -90,7 +93,7 @@ implementation:
       not because of a typo or a broken import. Commit them with git_subcommand
       as a Conventional Commit (`test(...): ...`).
     outputs:
-      tests: {type: list, required: true, description: the test files and test names written}
+      tests: {type: string, required: true, description: "the test files and test names written, one per line"}
       failure: {type: string, required: true, description: "why the tests fail now, from their output"}
 
   implement:
@@ -102,7 +105,8 @@ implementation:
 
       ${outputs.pick.brief}
 
-      Tests written first: ${json(outputs.tdd.tests)}
+      Tests written first:
+      ${outputs.tdd.tests}
       Why they fail: ${outputs.tdd.failure}
 
       Do not delete, skip or weaken those tests. If one is wrong, fix it
@@ -172,7 +176,7 @@ review:
 flow:
   - from: pick
     route:
-      - {when: "outputs.pick.found", to: tdd}
+      - {when: "outputs.pick.found == 'yes'", to: tdd}
       - {to: end}
   - from: guide_review
     route:
