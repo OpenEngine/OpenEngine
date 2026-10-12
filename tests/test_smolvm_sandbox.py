@@ -524,3 +524,42 @@ def test_copy_out_rejects_git_file_basename(tmp_path):
     with pytest.raises(ValueError, match="Git metadata"):
         _guest.unpack(archive, destination, True)
     assert not destination.exists()
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("FileNotFoundError", FileNotFoundError), ("ValueError", ValueError),
+    ("FilterError", ValueError), ("OutsideDestinationError", ValueError),
+    ("AbsoluteLinkError", ValueError), ("LinkOutsideDestinationError", ValueError),
+    ("RuntimeError", SmolvmError),
+])
+def test_guest_error_json_redacts_secrets_before_host_exception(smolvm_cli, kind, expected):
+    launcher, root = smolvm_cli
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(
+            SandboxSpec(secrets={"SHORT": "token", "LONG": "token-sensitive", "OTHER": "private-value", "EMPTY": ""})
+        ) as sandbox:
+            helper = root / sandbox.name / "oe-sandbox-transfer.py"
+            report = json.dumps({"error": kind, "message": "failed: token-sensitive; private-value; token"})
+            helper.write_text(f"import sys\nprint({report!r})\nsys.exit(2)\n")
+            with pytest.raises(expected) as caught:
+                await sandbox._helper("check", ".", "python")
+            assert str(caught.value) == "failed: [redacted]; [redacted]; [redacted]"
+            assert "sensitive" not in repr(caught.value)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("report", [[], "private-value", {"error": [], "message": ["private-value"]}])
+def test_malformed_guest_error_json_does_not_leak_secrets(smolvm_cli, report):
+    launcher, root = smolvm_cli
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(
+            SandboxSpec(secrets={"KEY": "private-value"})
+        ) as sandbox:
+            helper = root / sandbox.name / "oe-sandbox-transfer.py"
+            helper.write_text(f"import sys\nprint({json.dumps(report)!r})\nsys.exit(2)\n")
+            with pytest.raises(SmolvmError, match="guest transfer failed") as caught:
+                await sandbox._helper("init")
+            assert "private-value" not in repr(caught.value)
+    asyncio.run(run())

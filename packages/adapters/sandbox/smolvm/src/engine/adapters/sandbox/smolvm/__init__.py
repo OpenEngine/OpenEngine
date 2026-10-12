@@ -120,6 +120,13 @@ class SmolvmInstance:
             message = "sandbox has been destroyed"
             raise RuntimeError(message)
 
+    def _redact(self, message: str) -> str:
+        # Replace longer values first so overlapping secrets stay fully hidden.
+        for secret in sorted(self.spec.secrets.values(), key=len, reverse=True):
+            if secret:
+                message = message.replace(secret, "[redacted]")
+        return message
+
     def _exec_arguments(self, command: Sequence[str], env: Mapping[str, str] | None = None):
         args = ["machine", "exec", "--name", self.name, "--interactive"]
         environment = dict(self._environment)
@@ -187,10 +194,7 @@ class SmolvmInstance:
                 await _discard_process_output(process)
             await _settle(asyncio.create_task(finish()))
         if check and process.returncode:
-            detail = stderr.decode(errors="replace").strip()
-            for secret in self.spec.secrets.values():
-                if secret:
-                    detail = detail.replace(secret, "[redacted]")
+            detail = self._redact(stderr.decode(errors="replace").strip())
             message = f"smolvm {arguments[1]} failed ({process.returncode}): {detail}"
             raise SmolvmError(message)
         return stdout, stderr, process.returncode
@@ -202,17 +206,18 @@ class SmolvmInstance:
             try:
                 failure = json.loads(stdout)
             except (ValueError, UnicodeError):
-                detail = stderr.decode(errors="replace").strip()
-                for secret in self.spec.secrets.values():
-                    if secret:
-                        detail = detail.replace(secret, "[redacted]")
+                detail = self._redact(stderr.decode(errors="replace").strip())
                 message = f"guest transfer helper failed ({code}): {detail}"
                 raise SmolvmError(message) from None
-            if failure.get("error") == "FileNotFoundError":
-                raise FileNotFoundError(failure["message"])
-            if failure.get("error") in {"ValueError", "FilterError", "OutsideDestinationError", "AbsoluteLinkError", "LinkOutsideDestinationError"}:
-                raise ValueError(failure["message"])
-            raise SmolvmError(failure.get("message", "guest transfer failed"))
+            # A guest may replace the helper and choose every JSON field.
+            message = failure.get("message") if isinstance(failure, dict) else None
+            message = self._redact(message) if isinstance(message, str) else "guest transfer failed"
+            kind = failure.get("error") if isinstance(failure, dict) else None
+            if kind == "FileNotFoundError":
+                raise FileNotFoundError(message)
+            if isinstance(kind, str) and kind in {"ValueError", "FilterError", "OutsideDestinationError", "AbsoluteLinkError", "LinkOutsideDestinationError"}:
+                raise ValueError(message)
+            raise SmolvmError(message)
         return stdout
 
     async def exec(self, argv: Sequence[str], *, cwd: str = ".", env: Mapping[str, str] | None = None) -> SmolvmProcess:
@@ -299,9 +304,7 @@ class SmolvmInstance:
                 code = await process.wait()
                 detail = (await asyncio.shield(errors)).decode(errors="replace")
                 if code:
-                    for secret in self.spec.secrets.values():
-                        if secret:
-                            detail = detail.replace(secret, "[redacted]")
+                    detail = self._redact(detail)
                     message = f"guest archive stream failed ({code}): {detail}"
                     raise SmolvmError(message)
         finally:
