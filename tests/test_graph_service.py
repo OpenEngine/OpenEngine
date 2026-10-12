@@ -879,7 +879,7 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
 
 
 def test_the_daemon_offers_added_agents_as_workflow_runners(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, workflow_app,
 ) -> None:
     """An agent added through the graph service is a runner choice in the web UI too.
 
@@ -898,7 +898,7 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
         AddedAgents, State, graph_workflow, with_added_agents,
     )
     from engine.runtime.workflows import WorkflowCatalog
-    from test_web_app import ConcurrentRunner, _workflow_app
+    from web_fakes import ConcurrentRunner
 
     added_agents = AddedAgents()
 
@@ -960,7 +960,7 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                     default_repository="example/repo",
                 )
 
-            app = _workflow_app(
+            app = workflow_app(
                 InMemoryStateStore(), ConcurrentRunner(), graph_runtime=running(), graph_service=factory,
                 workflow_catalog=WorkflowCatalog.from_graphs((workflow, own)),
                 loop_settings=LoopSettingsStore(tmp_path / "loops.json"),
