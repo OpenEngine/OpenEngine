@@ -133,6 +133,11 @@ function TextParts() {
       {({ part }) =>
         part.type === "text" ? (
           <MessagePartPrimitive.Text component="p" />
+        ) : part.type === "reasoning" ? (
+          <details className="message-reasoning">
+            <summary>Thinking</summary>
+            <p>{part.text}</p>
+          </details>
         ) : part.type === "tool-call" ? (
           <>
             <ToolCall

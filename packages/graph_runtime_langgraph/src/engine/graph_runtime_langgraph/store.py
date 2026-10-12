@@ -322,8 +322,8 @@ class InMemoryGraphRuntimeStore:
         events.append(numbered)
         return numbered
 
-    def events_since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]:
-        return tuple(self._events.get(run_id, ())[cursor:])
+    def events_since(self, run_id: RunId, cursor: int = 0, *, kind: EventKind | None = None) -> tuple[RuntimeEvent, ...]:
+        return tuple(event for event in self._events.get(run_id, ())[cursor:] if kind is None or event.kind is kind)
 
     async def remember_run(self, record: RunRecord) -> None:
         self._runs[record.run_id] = record
@@ -442,11 +442,13 @@ class SqliteGraphRuntimeStore:
         assert cursor.lastrowid is not None
         return replace(event, sequence=cursor.lastrowid)
 
-    def events_since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]:
+    def events_since(self, run_id: RunId, cursor: int = 0, *, kind: EventKind | None = None) -> tuple[RuntimeEvent, ...]:
         rows = self._connection.execute(
             "SELECT run_id, kind, payload, sequence, node_id, execution_id "
-            "FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence",
-            (str(run_id), cursor),
+            "FROM events WHERE run_id = ? AND sequence > ?"
+            + (" AND kind = ?" if kind is not None else "")
+            + " ORDER BY sequence",
+            (str(run_id), cursor, kind.value) if kind is not None else (str(run_id), cursor),
         ).fetchall()
         return tuple(RuntimeEvent(
             run_id=RunId(row["run_id"]), kind=EventKind(row["kind"]),
