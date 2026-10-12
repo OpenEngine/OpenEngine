@@ -20,6 +20,7 @@ import {
   type ApiUsage,
   type RunView,
 } from "./api";
+import { AddRepository } from "./onboarding";
 import { Stat, StatStrip } from "./brand";
 import {
   GITHUB_COMMENTS_ANCHOR,
@@ -376,10 +377,13 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
 }
 
 export function NewWorkflowPage({
-  config,
+  config: initialConfig, onConfig,
 }: {
   config: EngineConfig;
+  onConfig?: (config: EngineConfig) => void;
 }) {
+  const [config, setConfig] = useState(initialConfig);
+  const [addingRepository, setAddingRepository] = useState(initialConfig.hasRepositories === false || !initialConfig.repositories.length);
   const [prompt, setPrompt] = useState(
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
   );
@@ -444,6 +448,16 @@ export function NewWorkflowPage({
     }
   }
 
+  if (addingRepository) return <main className="panel-scroll">
+    <AddRepository onComplete={(updated, path) => {
+      setConfig(updated);
+      onConfig?.(updated);
+      setRepository(path);
+      if (!workflowId) setWorkflowId(updated.workflows[0]?.id ?? "");
+      setAddingRepository(false);
+    }} />
+  </main>;
+
   return (
     <main className="panel-scroll">
       <header className="hero hero-narrow">
@@ -473,6 +487,7 @@ export function NewWorkflowPage({
             ))}
           </select>
         </label>
+        <button type="button" onClick={() => setAddingRepository(true)}>Add repository</button>
         <label>
           <span>Repository</span>
           <select

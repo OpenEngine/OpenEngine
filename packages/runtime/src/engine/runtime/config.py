@@ -238,13 +238,13 @@ class EngineConfig:
     repo_modes: Mapping[str, str] = field(default_factory=dict)
     """`[repos]` names mapped to the mode their WorkOrders run in.
 
-    Written by `engine init`. A repository named `disconnected` here has every
+    Written by `engine onboard`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
     trusted_repos: frozenset[str] = frozenset()
     """`[repos]` names whose WorkOrders are auto-approved.
 
-    Written by `engine init` when approvals are left to trusted repositories:
+    Configured explicitly when approvals are left to trusted repositories:
     `approvals.auto_approve` covers every repository, this only the ones named.
     """
 
@@ -255,6 +255,8 @@ class LoadedEngineConfig:
 
     config: EngineConfig = EngineConfig()
     path: Path | None = None
+    # Distinguish operator overrides from automatically discovered project files.
+    explicit: bool = False
 
     @property
     def claude_config_dir(self) -> Path | None:
@@ -331,7 +333,10 @@ def load_engine_config(
     except tomllib.TOMLDecodeError as error:
         raise EngineConfigError(f"invalid TOML in {path}: {error}") from error
 
-    loaded = LoadedEngineConfig(config=parse_engine_config(document), path=path)
+    loaded = LoadedEngineConfig(
+        config=parse_engine_config(document), path=path,
+        explicit=explicit_path is not None or bool(environment.get(CONFIG_ENVIRONMENT_VARIABLE)),
+    )
     if (directory := loaded.claude_config_dir) is not None and not directory.is_dir():
         raise EngineConfigError(f"claude.config_dir is not an existing directory: {directory}")
     return loaded

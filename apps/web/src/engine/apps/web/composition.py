@@ -373,25 +373,17 @@ def build_graph_runtime(
     settings: Settings,
     graphs: Sequence[GraphWorkflow],
     source_control: SourceControl | None = None,
-) -> AbstractAsyncContextManager[GraphRuntime] | None:
-    """The engine that runs graph workflows, or nothing when there are none.
+) -> AbstractAsyncContextManager[GraphRuntime]:
+    """Open the graph engine even before a project has registered its first graph.
 
-    It hands back an *unopened* context manager rather than a running engine,
-    because starting one opens database files that somebody then has to close.
-    The web application opens it when the server starts and closes it when the
-    server stops, which is the only lifetime that gets that right.
-
-    `None` when this deployment's workflow directory holds no graphs: there is
-    nothing to run, so there is no reason to open the files. The interface then
-    offers no graph entries, which is what keeps a person from picking one
-    that nothing here could start.
+    Onboarding registers starter graphs in the running daemon, so an empty
+    workflow directory must still have a runtime ready to accept them.
     """
-    if not graphs:
-        return None
     return sqlite_runtime(
         tuple(graphs),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         settings.graph_state_directory,
         source_control=source_control,
+        allow_empty=True,
     )
 
 

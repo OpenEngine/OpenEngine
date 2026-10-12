@@ -25,10 +25,11 @@ export type RunnerOption = {
 };
 
 export type EngineConfig = {
+  hasRepositories?: boolean;
   agents: AgentOption[];
   runners: RunnerOption[];
   defaultAgent: string;
-  /** `mode` is set when `engine init` fixed the mode of the repository's WorkOrders. */
+  /** `mode` is set when `engine onboard` fixed the mode of the repository's WorkOrders. */
   repositories: { name: string; path: string; mode?: string }[];
   defaultRunner: string;
   /** Each workflow declares the inputs its creation form asks for. */

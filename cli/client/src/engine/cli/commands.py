@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,7 +31,7 @@ from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
-    "runner",
+    "runner", "onboard",
 })
 #: Commands that still parse but are not advertised in `engine --help`.
 HIDDEN = frozenset({"runner"})
@@ -88,6 +89,11 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     listing = commands.add_parser("backends", parents=[listed], help="list backends")
     listing.add_argument("action", nargs="?", choices=("list",), default="list")
     listing.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
+
+    onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
+    onboard.add_argument("url", nargs="?")
+    onboard.add_argument("--path", help="checkout path on the daemon machine")
+    onboard.add_argument("--mode", choices=("connected", "disconnected"))
 
     graph = commands.add_parser("graph", help="register, inspect and run graphs")
     actions = graph.add_subparsers(dest="action", required=True)
@@ -207,7 +213,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
 def main(arguments: argparse.Namespace) -> int:
     try:
-        handler = _HANDLERS[(arguments.command, getattr(arguments, "action", None))]  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
+        handler = _HANDLERS[(arguments.command, getattr(arguments, "action", None))]
         return handler(arguments)
     except (BackendError, RequestFailed, _UsageError, OSError) as error:
         if isinstance(error, _UsageError):
@@ -215,6 +221,44 @@ def main(arguments: argparse.Namespace) -> int:
             return EXIT_USAGE
         _report(error)
         return EXIT_FAILED
+
+
+def onboard_repository(arguments: argparse.Namespace) -> int:
+    backend, _ = _connect(arguments)
+    client = Client(backend, api_prefix="/api")
+    reference, path = arguments.url, arguments.path
+    if not reference:
+        if not backend.is_local:
+            raise _UsageError("Pass a GitHub URL when onboarding through a remote backend")
+        root = repository._git(str(Path.cwd()), "rev-parse", "--show-toplevel")
+        reference = repository._git(root, "remote", "get-url", "origin") if root else ""
+        if not reference:
+            raise _UsageError("Run inside a GitHub checkout with an origin, or pass a GitHub URL")
+        path = path or root
+    mode = arguments.mode
+    if not mode:
+        if not sys.stdin.isatty():
+            raise _UsageError("Pass --mode connected or --mode disconnected when not using a terminal")
+        mode = input("Mode [connected/disconnected] (connected): ").strip() or "connected"
+        if mode not in {"connected", "disconnected"}:
+            raise _UsageError("Mode must be connected or disconnected")
+    state = client.post("/repositories/onboard", {"repository": reference, "path": path, "mode": mode})
+    previous = None
+    while True:
+        if state["message"] != previous:
+            print(state["message"])
+            previous = state["message"]
+        if state["status"] == "failed":
+            for problem in state["problems"]:
+                print(f"{problem['message']}. Fix: {problem['fix']}", file=sys.stderr)
+            return EXIT_FAILED
+        if state["status"] == "complete":
+            command = ["engine", "graph", "run", "review", "--project", state["repository"],
+                       "--repo", state["path"], "--backend", backend.name, "--input", "ref=HEAD"]
+            print(f"Next: {shlex.join(command)}")
+            return EXIT_OK
+        time.sleep(WAIT_INTERVAL_SECONDS)
+        state = client.get(f"/repositories/onboard/{state['id']}")
 
 
 # --- backends ---------------------------------------------------------------
@@ -772,6 +816,7 @@ _STEERING_COLUMNS: list[tuple[str, Any]] = [
 ]
 
 _HANDLERS = {
+    ("onboard", None): onboard_repository,
     ("backend", "add"): backend_add,
     ("backend", "list"): backend_list,
     ("backend", "use"): backend_use,

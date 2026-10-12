@@ -386,3 +386,30 @@ def test_field_constraints_drive_parser_and_reference(monkeypatch) -> None:
     text = generator["specifications"]()["graph"]
     assert "pattern: `^changed$`" in text
     assert "| output | required | Whether the value is required. | default: `True`; type: bool |" in text
+
+
+def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
+    backend = serve(monkeypatch,
+        {"id": "job1", "status": "cloning", "message": "Cloning"},
+        {"id": "job1", "status": "complete", "message": "Repository onboarded", "repository": "owner/repo", "path": "/code/repo"},
+    )
+    assert main(["onboard", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
+    assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
+    assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo"}
+    assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
+    assert "Next: engine graph run review --project owner/repo --repo /code/repo" in capsys.readouterr().out
+
+
+def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
+    from engine.cli import repository
+    monkeypatch.setattr(repository, "_git", lambda root, *args: "/checkout" if args[0] == "rev-parse" else "git@github.com:owner/repo.git")
+    backend = serve(monkeypatch, {"status": "complete", "message": "Already onboarded", "repository": "owner/repo", "path": "/checkout"})
+    assert main(["onboard", "--mode", "connected"]) == 0
+    assert backend.requests[0]["body"]["path"] == "/checkout"
+    assert backend.requests[0]["body"]["repository"] == "git@github.com:owner/repo.git"
+
+
+def test_onboard_reports_fix(monkeypatch, capsys):
+    serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "engine agent signin codex"}]})
+    assert main(["onboard", "owner/repo", "--mode", "connected"]) == 1
+    assert "engine agent signin codex" in capsys.readouterr().err

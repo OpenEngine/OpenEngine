@@ -40,6 +40,8 @@ dependencies = [
     "uvicorn>=0.35",
     "keyring>=25",
     "filelock>=3.18",
+    "tomlkit>=0.13",
+    "engine-graph-cli",
     "platformdirs>=4",
     "python-dotenv>=1.0",
 ]
@@ -62,6 +64,7 @@ packages = ["src/engine"]
 path = "hatch_build.py"
 
 [tool.uv.sources]
+engine-graph-cli = { workspace = true }
 engine-adapter-sandbox-process = { workspace = true }
 engine-runtime = { workspace = true }
 engine-github-concierge = { workspace = true }

@@ -34,6 +34,7 @@ class RequestFailed(RuntimeError):
 class Client:
     backend: Backend
     timeout: float = 30.0
+    api_prefix: str = API_PREFIX
 
     def get(self, path: str, **query: str | None) -> dict[str, Any]:
         return self.request("GET", path, query=query, retry=True)
@@ -54,7 +55,7 @@ class Client:
         retry: bool = False,
     ) -> dict[str, Any]:
         parameters = {key: value for key, value in (query or {}).items() if value}
-        url = f"{self.backend.url}{API_PREFIX}{path}" + (f"?{urlencode(parameters)}" if parameters else "")
+        url = f"{self.backend.url}{self.api_prefix}{path}" + (f"?{urlencode(parameters)}" if parameters else "")
         headers = {"Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"

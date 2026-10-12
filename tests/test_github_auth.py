@@ -584,7 +584,7 @@ class TestCsrfGuard:
 
     def _post(self, app, path: str, origin: str | None = None, *, client):
         headers = {"origin": origin} if origin else {}
-        with client(app, raise_server_exceptions=True) as browser:
+        with client(app, base_url=origin if origin in {"http://localhost:4364", "https://localhost:8443"} else "http://localhost", raise_server_exceptions=True) as browser:
             return browser.post(path, headers=headers)
 
     def test_connect_from_localhost_origin_is_allowed(self, *, github_auth_app, client):
