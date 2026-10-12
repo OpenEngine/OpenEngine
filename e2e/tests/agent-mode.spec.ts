@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs"
+import { realpathSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { test, expect, resolveAgentMode } from "../fixtures/engine.ts"
 
@@ -45,6 +45,18 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     await terminal.run(`engine graph add ${graph}`)
     const { output } = await terminal.run('engine graph run hello "Say hello" --wait --pretty')
     expect(output).toContain("Scripted greeting 4c1e.")
+  })
+
+  test("runs check out the fixture repository, never the one the tests live in", async ({ engine, terminal }) => {
+    const repository = realpathSync(engine.repository)
+    expect((await terminal.run("pwd -P")).output).toBe(repository)
+    const graph = path.join(engine.root, "hello.yaml")
+    writeFileSync(graph, HELLO)
+    await terminal.run(`engine graph add ${graph}`)
+    await terminal.run('engine graph run hello "Say hello" --wait', { timeout: 280_000 })
+    const run = JSON.parse((await terminal.run("engine runs list --json")).output).runs[0]
+    const { output } = await terminal.run(`engine run get ${run.runId}`)
+    expect(output).toContain(`Checking ${repository} out`)
   })
 
   test("checks out a repository with an origin, so runs need no --repo", async ({ engine }) => {

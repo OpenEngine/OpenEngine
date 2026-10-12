@@ -187,6 +187,7 @@ export class Terminal {
 export const test = base.extend<{
   terminalSession: TerminalSession
   terminalEnv: Record<string, string>
+  terminalCwd: string | undefined
   terminal: Terminal
 }>({
   /** How the `terminal` fixture's session starts; override with `test.use({ terminalSession: ... })`. */
@@ -195,7 +196,17 @@ export const test = base.extend<{
   terminalEnv: async ({}, use) => {
     await use({})
   },
-  terminal: async ({ page, terminalSession, terminalEnv }, use) => {
-    await use(await Terminal.open(page, { ...terminalSession, env: { ...terminalEnv, ...terminalSession.env } }))
+  /** Where sessions start unless the spec says: another fixture's directory (the engine daemon's repository, for one). */
+  terminalCwd: async ({}, use) => {
+    await use(undefined)
+  },
+  terminal: async ({ page, terminalSession, terminalEnv, terminalCwd }, use) => {
+    await use(
+      await Terminal.open(page, {
+        cwd: terminalCwd,
+        ...terminalSession,
+        env: { ...terminalEnv, ...terminalSession.env },
+      }),
+    )
   },
 })
