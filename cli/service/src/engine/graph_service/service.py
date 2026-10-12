@@ -611,17 +611,18 @@ class GraphService:
         events = self.runtime.store.events_since(RunId(run_id))
         usage = usage_rollup(events)
         activity = _latest_activity(events)
+        selected = _selected_runners(events)
         failure: dict[str, Any] | None = None
         if snapshot.status is RunStatus.FAILED:
             failed = next((row for row in reversed(executions) if row.status == "failed"), None)
             node_id = failed.node_id if failed else ""
             failure = {"error": snapshot.error, "node": node_id or None}
-            runner = _runner_of(node_id, values, overrides, topology)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
+            runner = _runner_of(node_id, values, overrides, topology, selected)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
             if auth := auth_required(snapshot.error, runner):  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 failure["authRequired"] = auth
 
         def runner(node_id: str) -> str:
-            return _runner_of(node_id, values, overrides, topology)
+            return _runner_of(node_id, values, overrides, topology, selected)
 
         return {
             "runId": run_id,
@@ -738,9 +739,9 @@ class GraphService:
 
     async def get_node(self, execution_id: str) -> dict[str, Any]:
         row = self._execution(execution_id)
-        topology, values, overrides = await self._run_context(row.run_id)
+        topology, values, overrides, selected = await self._run_context(row.run_id)
         return {
-            **_execution_json(row, topology, lambda node: _runner_of(node, values, overrides, topology)),
+            **_execution_json(row, topology, lambda node: _runner_of(node, values, overrides, topology, selected)),
             "steering": [_steering_json(item) for item in self.store.steering(execution_id)],
         }
 
@@ -772,7 +773,7 @@ class GraphService:
                     f"{row.status}; only a running attempt can be steered",
                     status=row.status,
                 )
-            topology, _, _ = await self._run_context(row.run_id)
+            topology, _, _, _ = await self._run_context(row.run_id, include_selected=False)
             node = topology.node(row.node_id) if topology else None  # type: ignore[arg-type]
             if node is None or node.kind != "agent":
                 raise Conflict(f"node {row.node_id!r} is not an agent session, so it cannot be steered")
@@ -1136,8 +1137,8 @@ class GraphService:
         if row is None:
             return
         if error and error != CANCELLED:
-            topology, values, overrides = await self._run_context(run_id)
-            if auth := auth_required(error, _runner_of(node_id, values, overrides, topology)):
+            topology, values, overrides, selected = await self._run_context(run_id)
+            if auth := auth_required(error, _runner_of(node_id, values, overrides, topology, selected)):
                 await self._pause(loop_id, _auth_reason(auth))
                 return
         if row.state == "active" and (reached := self._limit_reached(row, await self.accounting(row))):
@@ -1313,8 +1314,8 @@ class GraphService:
         return repository
 
     async def _run_context(
-        self, run_id: str,
-    ) -> tuple[GraphTopology | None, Mapping[str, Any], Mapping[Any, str]]:
+        self, run_id: str, *, include_selected: bool = True,
+    ) -> tuple[GraphTopology | None, Mapping[str, Any], Mapping[Any, str], Mapping[str, str]]:
         snapshot = await self.runtime.snapshot(RunId(run_id))
         if snapshot is None:
             raise NotFound(f"no run {run_id}")
@@ -1323,6 +1324,8 @@ class GraphService:
             self.runtime.topology(snapshot.graph_id),
             snapshot.values or {},
             record.runner_overrides if record else {},
+            _selected_runners(self.runtime.store.events_since(RunId(run_id), kind=EventKind.RUNNER_SELECTED))
+            if include_selected else {},
         )
 
     def _execution(self, execution_id: str) -> ExecutionRow:
@@ -1407,6 +1410,8 @@ def _latest_activity(events: Sequence[RuntimeEvent]) -> dict[str, dict[str, str]
             entry["activity"] = ""
         elif event.kind is EventKind.TOOL_CALL:
             entry["activity"] = str(event.payload.get("name", ""))
+        elif event.kind is EventKind.THOUGHT:
+            entry["activity"] = "thinking"
         elif event.kind is EventKind.APPROVAL_REQUESTED and not event.payload.get("autoApproved"):
             entry["activity"] = f"waiting for approval: {event.payload.get('reason', '')}".strip()
     return latest
@@ -1414,10 +1419,16 @@ def _latest_activity(events: Sequence[RuntimeEvent]) -> dict[str, dict[str, str]
 
 def _runner_of(
     node_id: str, values: Mapping[str, Any], overrides: Mapping[Any, str], topology: GraphTopology | None,
+    selected: Mapping[str, str] | None = None,
 ) -> str:
     """The runner a node's latest execution used, else the one it would use."""
     if not node_id:
         return ""
+    # Announced as each execution starts, so it is right while the node runs
+    # and when it fails before finishing -- the state below is written only
+    # once a node completes.
+    if announced := (selected or {}).get(node_id):
+        return announced
     used = values.get(f"_runner.{node_id}")
     if isinstance(used, str) and used:
         return used
@@ -1425,6 +1436,15 @@ def _runner_of(
         return overrides[node_id]
     node = topology.node(node_id) if topology else None  # type: ignore[arg-type]
     return node.runner if node else ""
+
+
+def _selected_runners(events: Sequence[RuntimeEvent]) -> dict[str, str]:
+    """Each node's runner, as its latest execution announced it."""
+    return {
+        str(event.node_id): str(event.payload.get("runner"))
+        for event in events
+        if event.kind is EventKind.RUNNER_SELECTED and event.node_id and event.payload.get("runner")
+    }
 
 
 def _execution_json(

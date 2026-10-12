@@ -603,6 +603,7 @@ class ACPNode:
         # overrides apply only to fresh executions, after this recovery finishes.
         if stored is not None and resuming is not None:
             runner = stored.agent
+        await execution.emit(EventKind.RUNNER_SELECTED, {"runner": runner})
         node = self._for_runner(runner)
         return await node._run(state, cwd, stored, resuming)
 
@@ -1006,12 +1007,29 @@ class ACPNode:
         said: list[str] = []
         cancelled = False
         pending: list[str] = []
+        thinking: list[str] = []
+
+        async def flush_thinking(*, whole_lines: bool = False) -> None:
+            # Thinking is gathered like speech, but published a line at a time
+            # as well as whenever the agent does anything else: a slow model
+            # can think for minutes, and its thinking is the only sign of life
+            # until it acts. Emptied before anything is awaited, like speech.
+            text = "".join(thinking)
+            thinking.clear()
+            if whole_lines:
+                text, newline, rest = text.rpartition("\n")
+                text += newline
+                if rest:
+                    thinking.append(rest)
+            if text.strip():
+                await execution.emit(EventKind.THOUGHT, {"text": text})
 
         async def flush() -> None:
             # Emptied before anything is awaited, so the two tasks that can
             # call this cannot publish the same words twice.
             text = "".join(pending)
             pending.clear()
+            await flush_thinking()
             if text:
                 said.append(text)
                 await execution.say(text)
@@ -1026,6 +1044,19 @@ class ACPNode:
                     cancelled = event.data.get("stopReason") == "cancelled"
                 if event.type in _INTERRUPTS_THE_NARRATION:
                     await flush()
+                if event.type == ACPEventType.THOUGHT_DELTA:
+                    if pending:
+                        # Words said before this thought are published before it.
+                        await flush()
+                    block = event.data.get("content")
+                    if isinstance(block, Mapping) and block.get("type") == "text":
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            thinking.append(text)
+                            if "\n" in text:
+                                await flush_thinking(whole_lines=True)
+                    continue
+                await flush_thinking()
                 await self._republish(execution, event)
                 if event.type == ACPEventType.MESSAGE_DELTA:
                     block = event.data.get("content")
