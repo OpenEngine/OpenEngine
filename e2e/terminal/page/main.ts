@@ -10,6 +10,7 @@ import "./page.css"
 import { Terminal } from "@xterm/xterm"
 import type { ClientMessage, ServerMessage } from "../protocol.ts"
 import type { Pattern, TerminalTestApi } from "./api.ts"
+import { StandIns } from "./stand-ins.ts"
 
 const FONT = '"JetBrains Mono"'
 const params = new URLSearchParams(location.search)
@@ -53,6 +54,21 @@ const terminal = new Terminal({
   },
 })
 terminal.open(document.getElementById("terminal")!)
+
+// Draw IDs and timestamps as stand-ins (see stand-ins.ts) by rewriting the
+// rows xterm renders; the buffer underneath keeps the real values.
+const standIns = new StandIns()
+const rowsElement = document.querySelector("#terminal .xterm-rows")!
+const drawStandIns = new MutationObserver(() => {
+  drawStandIns.disconnect()
+  const walker = document.createTreeWalker(rowsElement, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const shown = standIns.apply(node.nodeValue ?? "")
+    if (shown !== node.nodeValue) node.nodeValue = shown
+  }
+  drawStandIns.observe(rowsElement, { childList: true, subtree: true, characterData: true })
+})
+drawStandIns.observe(rowsElement, { childList: true, subtree: true, characterData: true })
 
 // The prompt marker PROMPT_COMMAND prints (see the server): "D;<exit code>".
 terminal.parser.registerOscHandler(133, (data) => {
