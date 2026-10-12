@@ -1,0 +1,21 @@
+{
+  "name": "openengine-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "doc": "TEST2DOC=true playwright test --config=playwright-test2doc.config.ts --grep-invert @skip-docs",
+    "types": "tsc"
+  },
+  "engines": {
+    "node": ">=20.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@test2doc/playwright": "^1.10.0",
+    "@test2doc/playwright-utils": "^0.1.1",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
