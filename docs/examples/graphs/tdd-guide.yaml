@@ -1,7 +1,7 @@
 apiVersion: openengine.cc/v1
 kind: Graph
 name: tdd-guide
-description: Work one issue test-first. One agent writes the failing tests, a different one makes them pass, and a runner other than the implementer checks that any generated guide reads like documentation rather than a test before the pull request opens.
+description: Work one issue test-first. One agent writes the failing tests, a fresh session makes them pass without weakening them, and a third checks that any generated guide reads like documentation rather than a test before the pull request opens.
 
 inputs:
   instruction:
@@ -16,9 +16,17 @@ inputs:
     description: "The branch to build on and open the pull request against, such as origin/agent/e2e-agent-mode; empty means main"
     default: ""
   runner:
-    description: The runner that writes the tests (the implementer uses a different one)
+    description: The runner that picks the issue and writes the tests
     default: claude
-    choices: [claude, codex, round-robin]
+    choices: [claude, codex, opencode]
+  implementer:
+    description: The runner that makes the tests pass; a different one from the test writer gives the change a second model's eyes
+    default: claude
+    choices: [claude, codex, opencode]
+  reviewer:
+    description: The runner that reviews the generated guide
+    default: claude
+    choices: [claude, codex, opencode]
 
 plan:
   workspace:
@@ -87,7 +95,7 @@ implementation:
 
   implement:
     name: Implement
-    agent: {not: tdd}
+    agent: ${inputs.implementer}
     tools: [git_subcommand]
     prompt: |
       Make the failing tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, pass.
@@ -111,7 +119,7 @@ implementation:
 review:
   guide_review:
     name: Guide review
-    agent: {not: implement}
+    agent: ${inputs.reviewer}
     prompt: |
       Check whether issue #${outputs.pick.issue} changed any user-facing guide. Do not change or commit any tracked file.
 
