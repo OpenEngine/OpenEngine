@@ -98,6 +98,20 @@ const api: TerminalTestApi = {
     }
     return -1
   },
+  usedArea() {
+    let last = terminal.buffer.active.cursorY
+    for (let row = terminal.rows - 1; row > last; row--) {
+      if (visibleRow(row).trim()) {
+        last = row
+        break
+      }
+    }
+    const frame = document.getElementById("terminal")!
+    const box = frame.getBoundingClientRect()
+    const bottom = frame.querySelectorAll(".xterm-rows > div")[last]!.getBoundingClientRect().bottom
+    const padding = parseFloat(getComputedStyle(frame).paddingBottom)
+    return { x: box.left, y: box.top, width: box.width, height: Math.ceil(bottom - box.top + padding) }
+  },
   markRows(from, to) {
     const lines = Array.from({ length: to - from + 1 }, (_, i) => visibleRow(from + i))
     const start = Math.min(...lines.map((line) => line.search(/\S|$/)))

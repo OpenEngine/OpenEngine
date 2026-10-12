@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process"
 import { screenshot } from "@test2doc/playwright/screenshots"
 import { test, expect } from "../fixtures/terminal.ts"
+import { engineBin } from "../support/engine"
 
 test.describe("terminal fixture", { tag: ["@skip-docs"] }, () => {
   test("runs a command and returns its output and exit code", async ({ terminal }) => {
@@ -10,6 +12,11 @@ test.describe("terminal fixture", { tag: ["@skip-docs"] }, () => {
   test("fails a command that exits differently than expected, unless told to expect it", async ({ terminal }) => {
     await expect(terminal.run("false")).rejects.toThrow(/exited with 1/)
     expect((await terminal.run("sh -c 'exit 3'", { exitCode: 3 })).exitCode).toBe(3)
+  })
+
+  test("runs this checkout's engine, whatever else is installed", async ({ terminal }) => {
+    const version = execFileSync(engineBin, ["--version"], { encoding: "utf8" }).trim()
+    expect((await terminal.run("engine --version")).output).toBe(version)
   })
 
   test("keeps long output lines whole even when the terminal wraps them", async ({ terminal }) => {
@@ -45,6 +52,17 @@ test.describe("terminal fixture", { tag: ["@skip-docs"] }, () => {
   test("sizes the page to the terminal so screenshots are the terminal and nothing else", async ({ page, terminal }) => {
     const box = await terminal.screen().boundingBox()
     expect(page.viewportSize()).toEqual({ width: Math.ceil(box!.width), height: Math.ceil(box!.height) })
+  })
+
+  test("crops a screenshot to the rows in use", async ({ terminal }) => {
+    await terminal.run("echo one; echo two")
+    const area = await terminal.usedArea()
+    const screen = (await terminal.screen().boundingBox())!
+    const row = (await (await terminal.row(/^two$/)).boundingBox())!
+    expect(area.width).toBe(screen.width)
+    // The command, its two lines and the new prompt, plus the frame's padding.
+    expect(area.height).toBeGreaterThan(row.y + row.height * 2)
+    expect(area.height).toBeLessThan(row.y + row.height * 2 + 30)
   })
 
   test("locates the text on one row, hugging it rather than the whole line", async ({ terminal }) => {

@@ -7,6 +7,7 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test"
 import type { StartMessage } from "../terminal/protocol.ts"
 import type { Pattern } from "../terminal/page/api.ts"
+import { engineBinDir } from "../support/engine.ts"
 import "../terminal/page/api.ts"
 
 export { expect }
@@ -30,8 +31,15 @@ export class Terminal {
     this.page = page
   }
 
-  /** Open the terminal page on a new session, and size the page to the terminal. */
+  /**
+   * Open the terminal page on a new session, and size the page to the terminal.
+   * `engine` on the session's PATH is always this checkout's.
+   */
   static async open(page: Page, session: TerminalSession = {}): Promise<Terminal> {
+    session = {
+      ...session,
+      env: { ...session.env, PATH: `${engineBinDir()}:${session.env?.PATH ?? process.env.PATH}` },
+    }
     const params = new URLSearchParams({ token: process.env.E2E_TERMINAL_TOKEN ?? "" })
     if (session.command) params.set("cmd", session.command)
     for (const arg of session.args ?? []) params.append("arg", arg)
@@ -57,6 +65,15 @@ export class Terminal {
   /** The terminal, for a screenshot of the whole screen. */
   screen(): Locator {
     return this.page.locator("#terminal")
+  }
+
+  /**
+   * The terminal down to the last row in use, as a screenshot `clip`, so a
+   * short output isn't followed by a screen of empty rows:
+   * `screenshot(testInfo, locator, { clip: await terminal.usedArea() })`.
+   */
+  usedArea(): Promise<{ x: number; y: number; width: number; height: number }> {
+    return this.page.evaluate(() => window.__term!.usedArea())
   }
 
   /** The whole buffer as text, wrapped lines joined. */
