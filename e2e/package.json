@@ -6,16 +6,25 @@
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "doc": "TEST2DOC=true playwright test --config=playwright-test2doc.config.ts --grep-invert @skip-docs",
-    "types": "tsc"
+    "types": "tsc",
+    "postinstall": "node scripts/fix-node-pty.mjs"
   },
   "engines": {
-    "node": ">=20.0"
+    "node": ">=22.18"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
     "@test2doc/playwright": "^1.10.0",
     "@test2doc/playwright-utils": "^0.1.1",
     "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "ws": "^8.22.0"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }
