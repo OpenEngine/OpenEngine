@@ -789,6 +789,67 @@ def test_web_preserves_claude_environment_without_configuration(tmp_path, monkey
     assert os.environ.get("CLAUDE_CONFIG_DIR") == inherited
 
 
+@pytest.mark.parametrize("value", ["gh-account", "~/gh-account"])
+def test_gh_config_directory_resolves_at_load(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    directory = tmp_path / "gh-account"
+    directory.mkdir()
+    config = tmp_path / "engine.toml"
+    config.write_text(f'[github]\ngh_config_dir = "{value}"\n')
+    monkeypatch.chdir(tmp_path.parent)
+
+    loaded = load_engine_config(config)
+
+    assert loaded.config.github.gh_config_dir == value
+    assert loaded.gh_config_dir == directory
+    assert f"github.gh_config_dir={directory}" in describe_loaded_config(loaded)
+
+
+@pytest.mark.parametrize("value", ["missing", "file"])
+def test_gh_config_directory_must_exist(tmp_path, value):
+    (tmp_path / "file").write_text("")
+    config = tmp_path / "engine.toml"
+    config.write_text(f'[github]\ngh_config_dir = "{value}"\n')
+    with pytest.raises(EngineConfigError, match="github.gh_config_dir"):
+        load_engine_config(config)
+
+
+@pytest.mark.parametrize("value", [1, "", " "])
+def test_gh_config_directory_setting_is_strict(value):
+    with pytest.raises(EngineConfigError):
+        parse_engine_config({"github": {"gh_config_dir": value}})
+
+
+@pytest.mark.parametrize("inherited", [None, "/existing/gh"])
+def test_web_preserves_gh_environment_without_configuration(tmp_path, monkeypatch, inherited):
+    import os
+
+    monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
+    if inherited is not None:
+        monkeypatch.setenv("GH_CONFIG_DIR", inherited)
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    loaded, _ = web_main.read_configuration(config)
+    assert loaded.gh_config_dir is None
+    assert os.environ.get("GH_CONFIG_DIR") == inherited
+
+
+def test_web_gh_cli_uses_configured_login(tmp_path, monkeypatch):
+    import os
+
+    from engine.adapters.source_control.github.transports import gh_cli_environment
+
+    directory = tmp_path / "gh-account"
+    directory.mkdir()
+    config = tmp_path / "engine.toml"
+    config.write_text('[github]\ngh_config_dir = "gh-account"\n')
+    monkeypatch.setenv("GH_CONFIG_DIR", "/other/gh")
+    web_main.read_configuration(config)
+    # monkeypatch restores the variable after the test; read_configuration set it.
+    assert os.environ["GH_CONFIG_DIR"] == str(directory)
+    assert gh_cli_environment()["GH_CONFIG_DIR"] == str(directory)
+
+
 def test_web_claude_provider_inherits_configured_login(tmp_path, monkeypatch):
     import asyncio
     import sys

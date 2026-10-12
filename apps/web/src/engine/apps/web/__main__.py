@@ -348,6 +348,9 @@ def read_configuration(
     # Workflow providers may omit env entirely; all Claude children inherit this.
     if (directory := loaded.claude_config_dir) is not None:
         os.environ["CLAUDE_CONFIG_DIR"] = str(directory)
+    # Likewise for `gh`: the source-control provider and agents' `gh` share this login.
+    if (directory := loaded.gh_config_dir) is not None:
+        os.environ["GH_CONFIG_DIR"] = str(directory)
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(

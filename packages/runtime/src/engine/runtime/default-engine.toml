@@ -45,9 +45,11 @@ backend = "process"
 # [onboarding]
 # directory = "~/code/work"
 
-# Review-request webhooks start this graph (also used by `engine go review`).
 [github]
+# Review-request webhooks start this graph (also used by `engine go review`).
 review_request_workflow = "review"
+# The gh login source control and agents use (GH_CONFIG_DIR). Defaults to ~/.config/gh.
+# gh_config_dir = "~/.config/gh-work"
 
 # Defaults resolved when a review run starts; explicit run inputs win.
 [pull_requests]
