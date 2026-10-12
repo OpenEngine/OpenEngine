@@ -1,13 +1,58 @@
 import { readFileSync, writeFileSync } from "node:fs"
+import { createServer, request as httpRequest } from "node:http"
+import type { AddressInfo } from "node:net"
 import path from "node:path"
 import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { screenshot } from "@test2doc/playwright/screenshots"
 import { test as engineTest, expect, startEngine, type Engine } from "../fixtures/engine.ts"
 import { backendsCategory } from "./docCategories"
 
+// What the reader's daemons answer at: their own on the default port, and one
+// on a Mac mini on the network.
+const LOCAL_URL = "http://127.0.0.1:4364"
+const MAC_MINI_URL = "http://mac-mini.local:4364"
+
+type BackendsFile = { current: string; backends: Record<string, { url: string; token_env?: string }> }
+
+function backendsFile(engine: Engine): BackendsFile {
+  return JSON.parse(readFileSync(engine.env.ENGINE_BACKENDS_FILE!, "utf8"))
+}
+
+/**
+ * An HTTP proxy sending each of `routes`' URLs to the daemon that stands in
+ * for it, so the CLI, pointed at it with `http_proxy`, can use the URLs a
+ * reader would rather than the test daemons' own ports.
+ */
+async function startProxy(routes: Record<string, string>) {
+  const server = createServer((request, response) => {
+    const asked = URL.canParse(request.url!) ? new URL(request.url!) : undefined
+    const target = asked && routes[asked.origin]
+    if (!target) {
+      response.writeHead(502).end()
+      return
+    }
+    const upstream = httpRequest(
+      new URL(asked.pathname + asked.search, target),
+      { method: request.method, headers: { ...request.headers, host: new URL(target).host } },
+      (answer) => {
+        response.writeHead(answer.statusCode!, answer.headers)
+        answer.pipe(response)
+      },
+    )
+    upstream.on("error", () => response.writeHead(502).end())
+    request.pipe(upstream)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const { port } = server.address() as AddressInfo
+  return {
+    url: `http://127.0.0.1:${port}`,
+    stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  }
+}
+
 // A second daemon for the guide to connect to, standing in for one on another
 // machine. The guide exports its token in the terminal, as a reader would.
-const test = engineTest.extend<{ macMini: Engine }>({
+const test = engineTest.extend<{ macMini: Engine; daemonProxy: { url: string } }>({
   macMini: async ({}, use) => {
     const macMini = await startEngine()
     try {
@@ -16,15 +61,23 @@ const test = engineTest.extend<{ macMini: Engine }>({
       await macMini.stop()
     }
   },
+  daemonProxy: async ({ engine, macMini }, use) => {
+    const proxy = await startProxy({ [LOCAL_URL]: engine.url, [MAC_MINI_URL]: macMini.url })
+    const file = backendsFile(engine)
+    file.backends.local!.url = LOCAL_URL
+    writeFileSync(engine.env.ENGINE_BACKENDS_FILE!, JSON.stringify(file, null, 2))
+    try {
+      await use(proxy)
+    } finally {
+      await proxy.stop()
+    }
+  },
+  terminalEnv: async ({ engine, daemonProxy: proxy }, use) => {
+    await use({ ...engine.env, http_proxy: proxy.url, HTTP_PROXY: proxy.url, no_proxy: "", NO_PROXY: "" })
+  },
 })
 
 test.use({ terminalSession: { cols: 100, rows: 10 } })
-
-type BackendsFile = { current: string; backends: Record<string, { url: string; token_env?: string }> }
-
-function backendsFile(engine: Engine): BackendsFile {
-  return JSON.parse(readFileSync(engine.env.ENGINE_BACKENDS_FILE!, "utf8"))
-}
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
@@ -62,10 +115,10 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Name the other daemon with `engine backend add`: give it a name, its URL, and the environment variable that holds its token.",
+          "Name the other daemon with `engine backend add`, giving it a name, its URL, and with `--token-env` the environment variable that holds its token: `engine backend add mac-mini http://mac-mini.local:4364 --token-env MAC_MINI_TOKEN`.",
           async () => {
-            await terminal.run(`engine backend add mac-mini ${macMini.url} --token-env MAC_MINI_TOKEN`)
-            expect(backendsFile(engine).backends["mac-mini"]).toMatchObject({ url: macMini.url, token_env: "MAC_MINI_TOKEN" })
+            await terminal.run(`engine backend add mac-mini ${MAC_MINI_URL} --token-env MAC_MINI_TOKEN`)
+            expect(backendsFile(engine).backends["mac-mini"]).toMatchObject({ url: MAC_MINI_URL, token_env: "MAC_MINI_TOKEN" })
             expect(backendsFile(engine).current).toBe("local")
           },
         )
@@ -75,11 +128,11 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each is up. The URLs are wherever each daemon listens; here both run on this machine, on ports of their own.",
+          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each is up.",
           async () => {
             const { output } = await terminal.run("engine backends list --check")
-            expect(output).toMatch(new RegExp(`^\\*\\s+local\\s+${escape(engine.url)}\\s.*\\bup\\b`, "m"))
-            expect(output).toMatch(new RegExp(`^\\s+mac-mini\\s+${escape(macMini.url)}\\s.*\\bup\\b`, "m"))
+            expect(output).toMatch(new RegExp(`^\\*\\s+local\\s+${escape(LOCAL_URL)}\\s.*\\bup\\b`, "m"))
+            expect(output).toMatch(new RegExp(`^\\s+mac-mini\\s+${escape(MAC_MINI_URL)}\\s.*\\bup\\b`, "m"))
             await screenshot(testInfo, await terminal.row(/^\s+mac-mini\s.*\bup\b/), {
               annotation: { text: "The new backend answered: it is up" },
             })
@@ -108,9 +161,13 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Commands now go to `mac-mini`. Register any graph file you have there with `engine graph add`; this guide uses one called `hello.yaml`.",
+          "Commands now go to `mac-mini`. Register a graph file from your project with `engine graph add`; the CLI reads it here and sends it to `mac-mini`. This guide uses one called `hello.yaml`, and adds `--pretty` for a one-line answer instead of JSON: `engine graph add hello.yaml --pretty`.",
           async () => {
-            await terminal.run("engine graph add hello.yaml")
+            const { output } = await terminal.run("engine graph add hello.yaml --pretty")
+            expect(output).toMatch(/^registered hello v/m)
+            await screenshot(testInfo, await terminal.row(/^registered hello v/), {
+              annotation: { text: "Registered on mac-mini" },
+            })
             expect((await terminal.run("engine graphs list --json --backend mac-mini")).output).toContain('"hello"')
             expect((await terminal.run("engine graphs list --json --backend local")).output).not.toContain('"hello"')
           },
