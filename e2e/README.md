@@ -6,7 +6,7 @@ browser. The same specs become the site's Guides.
 ```sh
 npm ci                    # once
 npm test                  # the suite, with scripted agents
-npm run doc               # the guides, written to site/docs/guides/
+npm run doc               # regenerate the guides in site/docs/guides/
 E2E_AGENT=real npm test   # the suite again, with real Claude Code
 ```
 
@@ -27,8 +27,8 @@ E2E_AGENT=real npm test   # the suite again, with real Claude Code
 Graph runs use a **scripted agent** unless `E2E_AGENT=real` is set. The stub
 is the production daemon with only the agent swapped for
 `tests/provider_fakes.py`, scripted per test with `engine.script(...)`. It is
-fast, it does exactly what a spec needs on cue, and CI uses it. The published
-guides are generated with it too.
+fast, it does exactly what a spec needs on cue, and CI uses it. Always
+generate the guides with it too, so they come out the same every time.
 
 `E2E_AGENT=real` runs Claude Code through its ACP adapter instead, to show
 the whole chain works. It needs a Claude Code login and `npx`, and refuses to
@@ -53,3 +53,10 @@ A spec under `tests/` whose describe blocks use `withDocCategory` and
 follows ("Run `engine graphs list`."). Setup and cleanup go in `[nodoc]`
 steps. Put each category in `tests/docCategories.ts`. Specs that test the
 harness itself are tagged `@skip-docs`.
+
+**The generated guides are committed.** After changing a guide spec, run
+`npm run doc` and commit what changed under `site/docs/guides/` along with the
+spec, so a reviewer reads the page itself in the pull request. The output is
+byte-for-byte the same on every run, so only real changes show up in a diff.
+Keep it that way: no timestamps, run IDs, random ports or paths from your
+machine on screen. Show fixed values, or leave them out of the screenshot.
