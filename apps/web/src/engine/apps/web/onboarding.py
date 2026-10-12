@@ -184,7 +184,7 @@ class RepositoryOnboarding:
 
     def _default_checkout(self, name: str) -> Path:
         directory = self.onboarding_directory if self.onboarding_directory is not None else Path.home() / "code"
-        return Path(directory / name.split("/")[1]).expanduser().resolve()
+        return (directory / name.split("/")[1]).expanduser().resolve()
 
     def start(self, reference: str, path: str | None, mode: str) -> dict:
         name = repository_name(reference)
