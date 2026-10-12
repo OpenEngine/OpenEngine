@@ -6,8 +6,7 @@ import { test as engineTest, expect, startEngine, type Engine } from "../fixture
 import { backendsCategory } from "./docCategories"
 
 // A second daemon for the guide to connect to, standing in for one on another
-// machine. Its token reaches the terminal as MAC_MINI_TOKEN, as a reader would
-// keep it in their shell's environment.
+// machine. The guide exports its token in the terminal, as a reader would.
 const test = engineTest.extend<{ macMini: Engine }>({
   macMini: async ({}, use) => {
     const macMini = await startEngine()
@@ -16,9 +15,6 @@ const test = engineTest.extend<{ macMini: Engine }>({
     } finally {
       await macMini.stop()
     }
-  },
-  terminalEnv: async ({ engine, macMini }, use) => {
-    await use({ ...engine.env, MAC_MINI_TOKEN: macMini.env.ENGINE_SERVICE_TOKEN! })
   },
 })
 
@@ -55,6 +51,17 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
+          "A backend is a named engine daemon the CLI sends its commands to. `local`, the daemon on your own machine, is there from the start and selected by default. To add another, you need two things from it: its URL, `http://<its host>:4364` unless it was started on another port, and the `ENGINE_SERVICE_TOKEN` it was started with. Keep the token in an environment variable rather than typing it into commands: `export MAC_MINI_TOKEN=<the token>`.",
+          async () => {
+            await terminal.run(`export MAC_MINI_TOKEN=${macMini.env.ENGINE_SERVICE_TOKEN}`)
+          },
+        )
+
+        await test.step("[nodoc] Clear the screen", async () => {
+          await terminal.run("clear")
+        })
+
+        await test.step(
           "Name the other daemon with `engine backend add`: give it a name, its URL, and the environment variable that holds its token.",
           async () => {
             await terminal.run(`engine backend add mac-mini ${macMini.url} --token-env MAC_MINI_TOKEN`)
@@ -68,7 +75,7 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each is up.",
+          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each is up. The URLs are wherever each daemon listens; here both run on this machine, on ports of their own.",
           async () => {
             const { output } = await terminal.run("engine backends list --check")
             expect(output).toMatch(new RegExp(`^\\*\\s+local\\s+${escape(engine.url)}\\s.*\\bup\\b`, "m"))
@@ -83,29 +90,46 @@ test.describe(backendsCategory, () => {
           await terminal.run("clear")
         })
 
-        await test.step("Run `engine backend use mac-mini` to send every command after it to that daemon.", async () => {
-          await terminal.run("engine backend use mac-mini")
-          expect(backendsFile(engine).current).toBe("mac-mini")
-          expect((await terminal.run("engine backends list")).output).toMatch(/^\*\s+mac-mini\s/m)
-        })
-
-        await test.step("Commands now go to `mac-mini`. Register a graph there with `engine graph add hello.yaml`.", async () => {
-          await terminal.run("engine graph add hello.yaml")
-          expect((await terminal.run("engine graphs list --json --backend mac-mini")).output).toContain('"hello"')
-          expect((await terminal.run("engine graphs list --json --backend local")).output).not.toContain('"hello"')
-        })
+        await test.step(
+          "Run `engine backend use mac-mini` to send every command after it to that daemon. `engine backends list` now marks `mac-mini` with `*`.",
+          async () => {
+            await terminal.run("engine backend use mac-mini")
+            expect(backendsFile(engine).current).toBe("mac-mini")
+            await terminal.run("clear")
+            expect((await terminal.run("engine backends list")).output).toMatch(/^\*\s+mac-mini\s/m)
+            await screenshot(testInfo, await terminal.row(/^\*\s+mac-mini\s/), {
+              annotation: { text: "Selected: commands go here" },
+            })
+          },
+        )
 
         await test.step("[nodoc] Clear the screen", async () => {
           await terminal.run("clear")
         })
 
         await test.step(
-          "To reach a different backend for one command only, add `--backend`. `engine graphs list --backend local` lists the graphs on `local`, and leaves `mac-mini` selected.",
+          "Commands now go to `mac-mini`. Register any graph file you have there with `engine graph add`; this guide uses one called `hello.yaml`.",
+          async () => {
+            await terminal.run("engine graph add hello.yaml")
+            expect((await terminal.run("engine graphs list --json --backend mac-mini")).output).toContain('"hello"')
+            expect((await terminal.run("engine graphs list --json --backend local")).output).not.toContain('"hello"')
+          },
+        )
+
+        await test.step("[nodoc] Clear the screen", async () => {
+          await terminal.run("clear")
+        })
+
+        await test.step(
+          "To reach a different backend for one command only, add `--backend`. `engine graphs list --backend local` lists the graphs on `local`, which hasn't got `hello`, and leaves `mac-mini` selected: a plain `engine graphs list` after it still lists `mac-mini`'s graphs.",
           async () => {
             const { output } = await terminal.run("engine graphs list --backend local")
             expect(output).not.toMatch(/^hello\s/m)
             expect(backendsFile(engine).current).toBe("mac-mini")
             expect((await terminal.run("engine graphs list")).output).toMatch(/^hello\s/m)
+            await screenshot(testInfo, await terminal.row(/^hello\s/), {
+              annotation: { text: "Back on mac-mini without switching" },
+            })
           },
         )
       })
