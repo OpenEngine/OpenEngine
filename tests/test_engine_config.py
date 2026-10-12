@@ -18,7 +18,6 @@ from engine.runtime import (
 )
 
 
-
 @pytest.fixture(autouse=True)
 def isolated_config_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
@@ -545,11 +544,11 @@ def test_access_operators_reject_logins_and_bad_ids(operators) -> None:
         parse_engine_config({"access": {"operators": operators}})
 
 
-def test_repository_projects_are_read_from_the_checkouts_remotes(tmp_path) -> None:
+def test_repository_projects_are_read_from_the_checkouts_remotes(
+    tmp_path, *, git_repo
+) -> None:
     """`[repos]` names local paths; login asks GitHub about the repository
     each one pushes to, and skips what GitHub cannot answer for."""
-    import subprocess
-
     remotes = {
         "api": "git@github.com:Acme/API.git",
         "web": "https://github.com/acme/web.git",
@@ -559,8 +558,7 @@ def test_repository_projects_are_read_from_the_checkouts_remotes(tmp_path) -> No
     }
     repos = {}
     for name, remote in remotes.items():
-        subprocess.run(["git", "init", "-q", str(tmp_path / name)], check=True)
-        subprocess.run(["git", "-C", str(tmp_path / name), "remote", "add", "origin", remote], check=True)
+        git_repo(tmp_path / name, origin=remote)
         repos[name] = str(tmp_path / name)
     repos["missing"] = str(tmp_path / "missing")
     loaded = LoadedEngineConfig(config=parse_engine_config({
@@ -578,14 +576,12 @@ def test_repository_projects_are_read_from_the_checkouts_remotes(tmp_path) -> No
     )
 
 
-def test_the_servers_own_checkout_is_named_dot(tmp_path, monkeypatch) -> None:
+def test_the_servers_own_checkout_is_named_dot(
+    tmp_path, monkeypatch, *, git_repo
+) -> None:
     """A run in `.` is in the server's own checkout, which does not by itself
     let anyone sign in."""
-    import subprocess
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
-                    "https://github.com/acme/server.git"], check=True)
+    git_repo(tmp_path, origin="https://github.com/acme/server.git")
     monkeypatch.chdir(tmp_path)
     loaded = LoadedEngineConfig(config=parse_engine_config({}))
 
@@ -602,7 +598,6 @@ def test_web_starts_login_with_only_operators(tmp_path, monkeypatch):
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "https://engine.test/api/auth/github/callback")
 
     assert web_main._github_login_config(load_engine_config(path)) is not None
-
 
 
 def test_web_bind_address_and_state_paths_default_to_the_source_checkout_flow(

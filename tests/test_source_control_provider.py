@@ -638,3 +638,40 @@ def test_download_retries_same_url_with_refreshed_token(monkeypatch, status):
             asyncio.run(transport.download("/logs"))
     assert [str(request.url) for request in requests] == ["https://api.github.com/logs"] * 2
     assert [request.headers["Authorization"] for request in requests] == ["Bearer old", "Bearer new"]
+
+
+
+@pytest.mark.parametrize("selected", ["gh-cli", "github-oauth", "gitlab-oauth"])
+@pytest.mark.parametrize("owned", [(), (("acme/api", 7),)])
+def test_router_forwards_owned_pull_requests(tmp_path, selected, owned):
+    from engine.domain.ids import WorkspaceId
+
+    providers = {name: AsyncMock() for name in ("gh-cli", "github-oauth", "gitlab-oauth")}
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set(selected)
+    router = RoutingSourceControl(preferences, *providers.values())
+    source = providers[selected]
+    workspace = WorkspaceId("ws")
+    arguments = ["push", "--force-with-lease", "origin", "agent/change"]
+    options = {"owned_pull_requests": owned} if owned else {}
+
+    result = asyncio.run(router.run_git(workspace, arguments, **options))
+    assert result is source.run_git.return_value
+    source.run_git.assert_awaited_once_with(
+        workspace, arguments, owned_pull_requests=owned,
+    )
+
+    issue = {"number": 7}
+    result = asyncio.run(router.request_review(
+        workspace, "agent/change", "main", "Title", "Body",
+        issue=issue, issue_resolution="resolves", **options,
+    ))
+    assert result is source.request_review.return_value
+    source.request_review.assert_awaited_once_with(
+        workspace, "agent/change", "main", "Title", "Body",
+        issue=issue, issue_resolution="resolves", owned_pull_requests=owned,
+    )
+    for name, unused in providers.items():
+        if name != selected:
+            unused.run_git.assert_not_awaited()
+            unused.request_review.assert_not_awaited()
