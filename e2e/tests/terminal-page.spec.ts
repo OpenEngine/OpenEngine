@@ -92,7 +92,10 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
       await page.keyboard.type(`echo "${ids[0]} ${ids[1]} ${ids[0]} | ${time}"`)
       await page.keyboard.press("Enter")
       await expect.poll(() => bufferText(page)).toContain(`${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
-      const row = page.locator(".xterm-rows > div").filter({ hasText: "|" }).last()
+      // The echoed line, not the command that typed it: the buffer can be
+      // ahead of the rows drawn on screen, so wait for the row itself.
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^\s*[a-z]+-[0-9a-f]{12} .*\|/ })
+      await expect(row).toHaveCount(1)
       const text = (await row.textContent())!.trim()
       await page.close()
       return text

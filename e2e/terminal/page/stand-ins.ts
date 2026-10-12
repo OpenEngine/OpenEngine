@@ -1,6 +1,7 @@
-// What the page draws in place of IDs and timestamps, so a guide's screenshots
-// are the same on every run: the daemon makes new IDs and the clock moves on,
-// but a reader needs neither to be real. Each stand-in is as long as what it
+// What the page draws in place of IDs, timestamps and the ports of daemons on
+// this machine, so a guide's screenshots are the same on every run: the daemon
+// makes new IDs, the clock moves on and the OS picks a new port, but a reader
+// needs none of them to be real. Each stand-in is as long as what it
 // replaces, so nothing on screen moves, and an ID gets the same stand-in
 // wherever it appears -- in output, or in a command a test typed. The buffer,
 // and so every assertion, keeps the real values.
@@ -16,20 +17,46 @@ const TIMESTAMP = /\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[
 /** Every timestamp shows this moment, cut or padded to the original's shape. */
 const MOMENT = "2026-01-15T09:30:00.000000"
 
+/**
+ * A loopback host and a port. Only one the OS picked is replaced: one in the
+ * ephemeral ranges, which start at 32768 on Linux and 49152 on macOS. A port
+ * someone chose, like the daemon's own 4364, is shown as it is.
+ */
+const LOOPBACK_PORT = /(?<![\w.-])(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0):(\d{5})(?!\d)/g
+
+/** Where the ephemeral ranges start. */
+const EPHEMERAL = 32768
+
+/** The nth port on a page is drawn as 10001 + n: five digits, below every ephemeral range. */
+const FIRST_PORT = 10001
+
 export class StandIns {
   private readonly standIns = new Map<string, string>()
   private readonly used = new Set<string>()
+  private readonly ports = new Map<string, string>()
   private seed = 0x2f6e2b1
 
-  /** `text` with every ID and timestamp replaced, or `text` itself if it has none. */
+  /** `text` with every ID, timestamp and loopback port replaced, or `text` itself if it has none. */
   apply(text: string): string {
     return text
+      .replace(LOOPBACK_PORT, (address, host: string, port: string) =>
+        Number(port) < EPHEMERAL ? address : `${host}:${this.portFor(port)}`,
+      )
       .replace(IDENTIFIER, (id) => this.standInFor(id))
       .replace(
         TIMESTAMP,
         (_time, moment: string, offset?: string) =>
           moment.replace(/\d/g, (_digit, index: number) => MOMENT[index] ?? "0") + (offset ?? ""),
       )
+  }
+
+  private portFor(port: string): string {
+    let standIn = this.ports.get(port)
+    if (!standIn) {
+      standIn = String(FIRST_PORT + this.ports.size)
+      this.ports.set(port, standIn)
+    }
+    return standIn
   }
 
   private standInFor(id: string): string {
