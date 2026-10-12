@@ -773,7 +773,7 @@ class GraphService:
                     f"{row.status}; only a running attempt can be steered",
                     status=row.status,
                 )
-            topology, _, _, _ = await self._run_context(row.run_id)
+            topology, _, _, _ = await self._run_context(row.run_id, include_selected=False)
             node = topology.node(row.node_id) if topology else None  # type: ignore[arg-type]
             if node is None or node.kind != "agent":
                 raise Conflict(f"node {row.node_id!r} is not an agent session, so it cannot be steered")
@@ -1314,7 +1314,7 @@ class GraphService:
         return repository
 
     async def _run_context(
-        self, run_id: str,
+        self, run_id: str, *, include_selected: bool = True,
     ) -> tuple[GraphTopology | None, Mapping[str, Any], Mapping[Any, str], Mapping[str, str]]:
         snapshot = await self.runtime.snapshot(RunId(run_id))
         if snapshot is None:
@@ -1324,7 +1324,8 @@ class GraphService:
             self.runtime.topology(snapshot.graph_id),
             snapshot.values or {},
             record.runner_overrides if record else {},
-            _selected_runners(self.runtime.store.events_since(RunId(run_id))),
+            _selected_runners(self.runtime.store.events_since(RunId(run_id), kind=EventKind.RUNNER_SELECTED))
+            if include_selected else {},
         )
 
     def _execution(self, execution_id: str) -> ExecutionRow:
