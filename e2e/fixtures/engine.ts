@@ -7,9 +7,11 @@
 // test leaves behind, and the doc pass runs every spec in one worker, so a
 // shared daemon would make each guide's screenshots depend on what ran first.
 //
-// Its agents are real or scripted (E2E_AGENT, see resolveAgentMode). Specs
-// assert on state -- statuses, what was registered, what exists -- and never
-// on what an agent said, so one spec passes either way.
+// Its agents are scripted unless E2E_AGENT=real asks for real ones (see
+// resolveAgentMode): the stub is fast and does exactly what a spec needs on
+// cue, and real agents are there to show the whole thing works. Specs assert
+// on state -- statuses, what was registered, what exists -- and never on what
+// an agent said, so one spec passes either way.
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -63,20 +65,23 @@ function detectAgent(): AgentDetection {
 }
 
 /**
- * `E2E_AGENT`: `stub` always scripts the agents, `real` always runs them, and
- * `auto` (the default) runs them only outside CI on a machine where Claude
- * Code has a login and its ACP adapter can be fetched with npx.
+ * `E2E_AGENT`: `stub` (the default) scripts the agents; `real` runs Claude
+ * Code through its ACP adapter, and refuses to start where it can't rather
+ * than quietly scripting them instead.
  */
 export function resolveAgentMode(
   env: Record<string, string | undefined> = process.env,
   detect: AgentDetection | (() => AgentDetection) = detectAgent,
 ): AgentMode {
-  const requested = env.E2E_AGENT ?? "auto"
-  if (requested === "stub" || requested === "real") return requested
-  if (requested !== "auto") throw new Error(`E2E_AGENT must be auto, real or stub, not ${JSON.stringify(requested)}`)
-  if (env.CI) return "stub"
+  const requested = env.E2E_AGENT ?? "stub"
+  if (requested === "stub") return "stub"
+  if (requested !== "real") throw new Error(`E2E_AGENT must be real or stub, not ${JSON.stringify(requested)}`)
   const found = typeof detect === "function" ? detect() : detect
-  return found.claudeLogin && found.npx ? "real" : "stub"
+  if (!found.claudeLogin) {
+    throw new Error("E2E_AGENT=real needs a Claude Code login: none at $CLAUDE_CONFIG_DIR or ~/.claude")
+  }
+  if (!found.npx) throw new Error("E2E_AGENT=real needs npx, to fetch Claude Code's ACP adapter")
+  return "real"
 }
 
 export type Engine = {
