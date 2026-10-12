@@ -287,7 +287,7 @@ class GraphService:
         self.runtime.register(self._session_workflow.compiled(self.runtime.checkpointer))
         for version in self.store.versions():
             try:
-                self._register(version)
+                await self._register(version)
             except Exception:
                 log.exception("registered graph version %s could not be loaded", version.version_id)
         at = self._now_iso()
@@ -451,20 +451,24 @@ class GraphService:
         async with self._lock:
             at = self._now_iso()
             version_id = f"gv-{uuid.uuid4().hex[:12]}"
+            workflow = None
             if format == "python":
                 # Loaded once to learn its name and to refuse it early if it is broken.
-                workflow = self._python_workflow(version_id, source, graph_name)
+                workflow = await asyncio.to_thread(self._python_workflow, version_id, source, graph_name)
                 graph_name = graph_name or str(workflow.graph_id)
                 if not _NAME.match(graph_name):
                     raise ServiceError(f"{graph_name!r} is not a usable graph name; pass --name")
                 definition["workflowId"] = str(workflow.graph_id)
                 definition["title"] = workflow.name
+                definition["description"] = workflow.description
                 digest = hashlib.sha256(f"{graph_name}\n{source}".encode()).hexdigest()
             existing = self.store.graphs_named(graph_name, project)
             if existing:
                 graph = existing[0]
                 latest = self.store.version(graph.latest_version_id)
                 if latest is not None and latest.digest == digest:
+                    if latest.version_id not in self._loaded:
+                        await self._register(latest, name=graph_name, workflow=workflow)
                     self._forget_source(version_id)
                     return self._graph_json(graph, latest, definition=True), False
                 number = max(version.number for version in self.store.versions(graph.graph_id)) + 1
@@ -477,7 +481,7 @@ class GraphService:
             # Compiled before anything is written: a graph LangGraph refuses is
             # a validation error, and leaves no version behind.
             try:
-                self._register(version, name=graph_name)
+                await self._register(version, name=graph_name, workflow=workflow)
             except GraphError:
                 self._forget_source(version_id)
                 raise
@@ -608,6 +612,8 @@ class GraphService:
         overrides = record.runner_overrides if record else {}
         values = snapshot.values or {}
         results = _results(topology, values)
+        run_inputs = values.get("inputs")
+        run_inputs = run_inputs if isinstance(run_inputs, Mapping) else {}
         events = self.runtime.store.events_since(RunId(run_id))
         usage = usage_rollup(events)
         activity = _latest_activity(events)
@@ -654,6 +660,8 @@ class GraphService:
                 for item in snapshot.pending_approvals
             ],
             "results": results,
+            "prUrl": values.get("pr_url") or run_inputs.get("pr_url"),
+            "branch": values.get("branch"),
             "output": _output(executions, results) if snapshot.status is RunStatus.COMPLETED else None,
             "failure": failure,
             "usage": usage.total.json(),
@@ -1166,42 +1174,40 @@ class GraphService:
 
     # --- helpers ------------------------------------------------------------
 
-    def _register(self, version: VersionRow, *, name: str = "") -> GraphWorkflow:
-        """Load a stored version and offer it on the runtime under its version id."""
-        if version.format == "python":
-            graph = self.store.graph(version.graph_id)
-            loaded = Loaded(
-                self._python_workflow(
-                    version.version_id, version.source,
-                    name or (graph.name if graph else ""),
+    async def _register(
+        self, version: VersionRow, *, name: str = "", workflow: GraphWorkflow | None = None,
+    ) -> GraphWorkflow:
+        """Import and compile off-thread; publish runtime state on the event loop."""
+        graph = self.store.graph(version.graph_id)
+        name = name or (graph.name if graph else "")
+
+        def load():
+            if version.format == "python":
+                original = workflow or self._python_workflow(
+                    version.version_id, version.source, name,
                     version.manifest.get("workflowId", ""),
-                    number=version.number,
-                ),
-                None,
-            )
-        else:
-            spec = _parse_yaml(version.source, runners=None)
-            loaded = Loaded(
-                compile_graph(
-                    spec,
-                    version_id=version.version_id,
-                    number=version.number,
-                    workspace_provider=self._workspace_provider,
-                    registry=self._registry,
-                    session_config=self._session_config,
-                    model_tiers=self._model_tiers,
-                    agent_models=self._added_agents.models,
-                    default_base_ref=self._default_base_ref,
-                ),
-                spec,
-            )
-        definition = loaded.workflow.compiled(self.runtime.checkpointer)
+                )
+                loaded = Loaded(replace(
+                    original, graph_id=GraphId(version.version_id),
+                    name=f"{name or original.graph_id} v{version.number}", previous_ids=(),
+                ), None)
+            else:
+                spec = _parse_yaml(version.source, runners=None)
+                loaded = Loaded(compile_graph(
+                    spec, version_id=version.version_id, number=version.number,
+                    workspace_provider=self._workspace_provider, registry=self._registry,
+                    session_config=self._session_config, model_tiers=self._model_tiers,
+                    agent_models=self._added_agents.models, default_base_ref=self._default_base_ref,
+                ), spec)
+            return loaded, loaded.workflow.compiled(self.runtime.checkpointer)
+
+        loaded, definition = await asyncio.to_thread(load)
         self.runtime.register(definition)
         self._loaded[version.version_id] = loaded
         return loaded.workflow
 
     def _python_workflow(
-        self, version_id: str, source: str, name: str, workflow_id: str = "", *, number: int = 0,
+        self, version_id: str, source: str, name: str, workflow_id: str = "",
     ) -> GraphWorkflow:
         """Import an uploaded Python graph, as a workflow directory's file would be."""
         self._sources.mkdir(parents=True, exist_ok=True)
@@ -1221,13 +1227,7 @@ class GraphService:
                 ids = ", ".join(str(item.graph_id) for item in candidates)
                 raise GraphError([Problem("workflow", f"exports several graphs ({ids}); pass --name to choose one")])
             chosen = candidates
-        workflow = chosen[0]
-        return replace(
-            workflow,
-            graph_id=GraphId(version_id),
-            name=f"{name or workflow.graph_id} v{number}" if number else workflow.name,
-            previous_ids=(),
-        )
+        return chosen[0]
 
     def _forget_source(self, version_id: str) -> None:
         (self._sources / f"{version_id.replace('-', '_')}.py").unlink(missing_ok=True)
@@ -1262,7 +1262,8 @@ class GraphService:
         instruction = (instruction or "").strip()
         if not instruction:
             raise ServiceError("an instruction is required")
-        given = {key: "" if value is None else str(value) for key, value in (inputs or {}).items()}
+        given = {key: ("" if value is None else str(value).lower() if isinstance(value, bool) else str(value))
+                 for key, value in (inputs or {}).items()}
         try:
             resolved = resolve_inputs(tuple(loaded.workflow.inputs), given)
         except ValueError as error:

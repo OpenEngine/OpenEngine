@@ -1,5 +1,31 @@
 # cli
 
+```bash
+engine go "add a new doc for the out-of-the-box experience"
+```
+
+`go` registers the built-in default graph on first use, runs it against the
+checkout you are in, and follows it live on a TTY with inline approvals. Its
+first line reports the daemon's inferred connected or disconnected mode.
+Connected runs finish with a PR URL; disconnected runs report the local branch
+and a command to push it later. The selected backend must be running.
+
+```bash
+engine go "implement the feature" --spec
+engine go --review feature/my-change
+engine go --review https://github.com/owner/repo/pull/42
+engine go "update docs" --repo owner/repo --backend mini
+engine go "update docs" --local --wait --json
+```
+
+`--local` forces disconnected mode on the selected backend. `-i KEY=VALUE`
+sets graph inputs, including `adversarial=true`, `implementation_runner`, and
+`review_runner`. `--wait` polls without interaction; `--json` emits JSON and
+sends the mode banner to stderr. Without `--wait`, non-TTY calls return the run
+immediately. Repository selection uses `--repo`, otherwise the current checkout
+(path for a local backend, origin's owner/repo for a remote backend), otherwise
+the backend's configured repository.
+
 `engine graph`, `engine loop`, `engine node` and `engine backend`: register
 graphs, run them once or on a cadence within limits, and steer their
 nodes — on this machine's daemon or on another one, such as a Mac mini.
@@ -120,7 +146,7 @@ still works for one release.
 
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
-engine graph run adversarial-review --branch feat/my_feat --agent codex
+engine go --review feat/my_feat -i adversarial=true
 engine run get run-0123abcd --pretty
 engine runs
 engine runs --graph fix-flaky-test --status failed
@@ -143,13 +169,16 @@ opened, and failure details. An agent without credentials fails with
 `engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
 
-The instruction is optional. `--branch` and `--agent` set the `branch` and
-`agent` inputs, as `-i branch=...` would. The built-in graphs (`review`,
-`adversarial-review`, `implement-review`, `spec-implement-review`) need no
-`graph add`: the first `graph run` of one in a project registers it.
-`adversarial-review` checks out a new workspace on `--branch`, has `--agent`
-attack the change from three angles, then has it try to refute every finding,
-and reports what survives. It changes nothing.
+The single built-in graph, `implementation-review-rerank`, implements, checks CI,
+reviews five facets in parallel, reranks findings, makes one fix-and-review pass,
+and asks for human review. `--spec` adds a specification first. `--review` (or
+`review_only=true` with `ref`/`pr_url`) starts at review; triage lets a person
+choose fixes. `adversarial=true` adds a refutation step before reranking.
+
+For one release, `graph run review`, `adversarial-review`, `implement-review`,
+and `spec-implement-review` remain aliases for the default graph, print a
+deprecation note, and set the matching inputs. `--branch` selects the review
+ref and `--agent` sets both runner inputs for these aliases.
 
 `engine runs` lists runs newest first, whether submitted or started by a loop,
 filtered by `--graph`, `--loop` and `--status`, at most `--limit` (default 20),

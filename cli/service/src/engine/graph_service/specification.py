@@ -84,7 +84,8 @@ def graph_spec(_arguments: object = None) -> int:
 
     A Python file exports `workflow`, a `GraphWorkflow` or a tuple of them built
     with `graph_workflow` and the engine's LangGraph components. Its id supplies
-    the default graph name. The backend loads and compiles it with its runtime;
+    the default graph name; its `description` supplies the registry description.
+    The backend imports and compiles it off the server event loop;
     Python runs with daemon privileges and can be disabled by
     `[graphs] allow_python = false`. YAML and Python share the same registry,
     version history, checkpoints, approvals, steering and run feed.

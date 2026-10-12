@@ -7,138 +7,30 @@ description: Every engine command, its arguments and options.
 
 Backend commands talk to the selected backend (`--backend`, else `ENGINE_BACKEND`, else the one `engine backend use` chose). List commands print a table unless `--json` is given; other backend commands print JSON unless `--pretty` is given. Exit status is 0 on success, 1 on a refusal or failed run, and 2 on a usage mistake. See [Graphs](graphs.md), [Loops](loops.md) and the [graph and loop specifications](cli-specs.md).
 
-## `engine connect`
+## `engine go`
 
-Connect shared source control or Slack.
+Make a change with the default graph and follow it live.
 
 ```text
-engine connect [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--open]
-               {gh,github,gitlab,slack}
+engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--local] [--spec]
+          [--review PR_OR_BRANCH] [--input KEY=VALUE] [--wait] [--json] [--timeout SECONDS]
+          [instruction]
 ```
 
 | Argument | Meaning |
 | --- | --- |
-| `provider` | one of `gh`, `github`, `gitlab`, `slack` |
-| `--server URL` | override the selected backend's URL |
-| `--backend NAME` | the backend to connect (default: the selected one) |
-| `--origin ORIGIN` | the GitLab instance to connect |
-| `--open` | open the authorization page in a browser |
-
-## `engine connections`
-
-Show source control and Slack connections.
-
-```text
-engine connections [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--json]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--server URL` | override the selected backend's URL |
-| `--backend NAME` | the backend to ask (default: the selected one) |
-| `--origin ORIGIN` | the GitLab instance to report |
-| `--json` | JSON instead of a table |
-
-## `engine disconnect`
-
-Disconnect shared source control or Slack.
-
-```text
-engine disconnect [-h] [--server URL] [--backend NAME] [--origin ORIGIN]
-                  {github,gitlab,slack}
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `provider` | one of `github`, `gitlab`, `slack` |
-| `--server URL` | override the selected backend's URL |
-| `--backend NAME` | the backend to disconnect (default: the selected one) |
-| `--origin ORIGIN` | the GitLab instance to disconnect |
-
-## `engine daemon`
-
-Run the local OpenEngine service in the background.
-
-```text
-engine daemon [-h] [--no-browser] {open,setup,start,stop,status,logs,doctor} ...
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--no-browser` | start without opening a browser |
-
-### `engine daemon open`
-
-Start the service if needed and open it in a browser.
-
-```text
-engine daemon open [-h] [--no-browser]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--no-browser` | do not open a browser |
-
-### `engine daemon setup`
-
-Register the service to run at login, then start it.
-
-```text
-engine daemon setup [-h]
-```
-
-### `engine daemon start`
-
-Start the service if it is not running.
-
-```text
-engine daemon start [-h]
-```
-
-### `engine daemon stop`
-
-Stop the service gracefully.
-
-```text
-engine daemon stop [-h]
-```
-
-### `engine daemon status`
-
-Show version, health and URL.
-
-```text
-engine daemon status [-h] [--json]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--json` |  |
-
-### `engine daemon logs`
-
-Print the service log.
-
-```text
-engine daemon logs [-h] [-n LINES] [-f]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `-n, --lines LINES` | lines to print (default: 100) |
-| `-f, --follow` | keep printing new lines |
-
-### `engine daemon doctor`
-
-Check config, port and tools.
-
-```text
-engine daemon doctor [-h] [--json]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--json` |  |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+| `instruction` | the change to make |
+| `--repo REPO` | repository (default: the current checkout) |
+| `--local` | force disconnected mode; keep work local |
+| `--spec` | write a specification before implementing |
+| `--review PR_OR_BRANCH` | review an existing change |
+| `--input, -i KEY=VALUE` |  |
+| `--wait` | wait non-interactively for completion |
+| `--json` | JSON output; mode banner goes to stderr |
+| `--timeout SECONDS` |  |
 
 ## `engine backend`
 
@@ -306,7 +198,7 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
-| `graph` | a graph, or a built-in one: review, adversarial-review, implement-review, spec-implement-review |
+| `graph` | a graph, or a built-in one: implementation-review-rerank |
 | `instruction` | what to do (default: run the graph) |
 | `--input, -i NAME=VALUE` |  |
 | `--branch BRANCH` | the branch to check out (sets the branch input) |
@@ -708,3 +600,136 @@ engine agents [-h] [--json] [--backend NAME] [{list}]
 | `--json` | JSON instead of a table |
 | `action` | one of `list` |
 | `--backend NAME` |  |
+
+## `engine connect`
+
+Connect shared source control or Slack.
+
+```text
+engine connect [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--open]
+               {gh,github,gitlab,slack}
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `provider` | one of `gh`, `github`, `gitlab`, `slack` |
+| `--server URL` | override the selected backend's URL |
+| `--backend NAME` | the backend to connect (default: the selected one) |
+| `--origin ORIGIN` | the GitLab instance to connect |
+| `--open` | open the authorization page in a browser |
+
+## `engine connections`
+
+Show source control and Slack connections.
+
+```text
+engine connections [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--server URL` | override the selected backend's URL |
+| `--backend NAME` | the backend to ask (default: the selected one) |
+| `--origin ORIGIN` | the GitLab instance to report |
+| `--json` | JSON instead of a table |
+
+## `engine disconnect`
+
+Disconnect shared source control or Slack.
+
+```text
+engine disconnect [-h] [--server URL] [--backend NAME] [--origin ORIGIN]
+                  {github,gitlab,slack}
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `provider` | one of `github`, `gitlab`, `slack` |
+| `--server URL` | override the selected backend's URL |
+| `--backend NAME` | the backend to disconnect (default: the selected one) |
+| `--origin ORIGIN` | the GitLab instance to disconnect |
+
+## `engine daemon`
+
+Run the local OpenEngine service in the background.
+
+```text
+engine daemon [-h] [--no-browser] {open,setup,start,stop,status,logs,doctor} ...
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--no-browser` | start without opening a browser |
+
+### `engine daemon open`
+
+Start the service if needed and open it in a browser.
+
+```text
+engine daemon open [-h] [--no-browser]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--no-browser` | do not open a browser |
+
+### `engine daemon setup`
+
+Register the service to run at login, then start it.
+
+```text
+engine daemon setup [-h]
+```
+
+### `engine daemon start`
+
+Start the service if it is not running.
+
+```text
+engine daemon start [-h]
+```
+
+### `engine daemon stop`
+
+Stop the service gracefully.
+
+```text
+engine daemon stop [-h]
+```
+
+### `engine daemon status`
+
+Show version, health and URL.
+
+```text
+engine daemon status [-h] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` |  |
+
+### `engine daemon logs`
+
+Print the service log.
+
+```text
+engine daemon logs [-h] [-n LINES] [-f]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `-n, --lines LINES` | lines to print (default: 100) |
+| `-f, --follow` | keep printing new lines |
+
+### `engine daemon doctor`
+
+Check config, port and tools.
+
+```text
+engine daemon doctor [-h] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` |  |

@@ -248,7 +248,7 @@ async def _resolve_base(repository_root: str, base_ref: str) -> str:
         )
     elif base_ref.startswith("origin/"):
         branch = base_ref.removeprefix("origin/")
-        source, missing = f"refs/heads/{branch}", (
+        source, missing = (branch if branch.startswith("refs/") else f"refs/heads/{branch}"), (
             f"Configured default branch {branch!r} does not exist on remote "
             f"'origin'. Create that branch, or set default_branch in engine.toml "
             "to a branch that exists."

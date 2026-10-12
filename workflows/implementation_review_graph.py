@@ -32,9 +32,11 @@ tools and skip CI themselves, and the prompts are filled from the shared
 """
 
 import json
+
+from engine.runtime.change_requests import change_request
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 from engine.adapters.workspace_provider.git_worktree import (
     DEFAULT_BRANCH_REF,
@@ -106,6 +108,11 @@ IMPACT_ANALYSIS = "impact-analysis"
 HUMAN_REVIEW = "human-review"
 VERIFICATION = "verification"
 TRIAGE = "triage"
+SPEC = "spec"
+REFUTE = "refute"
+INVALID_IMPACT_LEVEL = "impact_level must be Green, Orange, or Red"
+INVALID_IMPACT_RATIONALE = "impact_rationale must be non-empty"
+INVALID_PR_URL = "pr_url must be a pull request or merge request URL"
 
 #: Where the findings a person chose at triage are kept for implementation.
 FIX = "fix"
@@ -141,7 +148,7 @@ IMPLEMENTATION_PROMPT = (
     "before editing. The workspace is already based on the current commit of the "
     "remote default branch; do not fetch, pull, or merge it before editing. Make the "
     "smallest complete change and report the result.\n\n"
-    "{publish}"
+    "{publish}Return the final branch name as the branch output. "
     "Use fail_step "
     "if the work cannot be completed, or clarify only when answering a question "
     "without changing the implementation.\n\n"
@@ -237,23 +244,24 @@ class _RunnerInput:
     graph_node_runner_input = "implementation_runner"
 
     def _for_runner(self, runner: str) -> ACPNode:
-        config = self.session_config
+        node = cast(ACPNode, self)
+        config = node.session_config
         if isinstance(self, ReviewNode) and runner in REVIEW_MODELS:
             facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
             model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
             config = _with_model(config, model)
         elif runner not in REVIEW_MODELS:
             # An added agent asks for its own model, as it does from the CLI.
-            added = self.registry.model(runner) if isinstance(self.registry, WithAddedAgents) else ""
+            added = node.registry.model(runner) if isinstance(node.registry, WithAddedAgents) else ""
             config = _with_model(config, added)
         return replace(
-            self,
+            node,
             agent=runner,
             session_config=config,
             mcp_server_bindings=tuple(
                 replace(binding, agent_id=runner)
                 if isinstance(binding, TerminalMcpServer) else binding
-                for binding in self.mcp_server_bindings
+                for binding in node.mcp_server_bindings
             ),
         )
 
@@ -275,10 +283,10 @@ class InputImpactAnalysisNode(_RunnerInput, ACPNode):
 def _validate_impact_analysis(event: StepCompleted) -> None:
     outputs = {output.name: output.value for output in event.outputs}
     if outputs.get("impact_level") not in ("Green", "Orange", "Red"):
-        raise ValueError("impact_level must be Green, Orange, or Red")
+        raise ValueError(INVALID_IMPACT_LEVEL)
     rationale = outputs.get("impact_rationale")
     if not isinstance(rationale, str) or not rationale.strip():
-        raise ValueError("impact_rationale must be non-empty")
+        raise ValueError(INVALID_IMPACT_RATIONALE)
 
 
 class InputReviewNode(_RunnerInput, ReviewNode):
@@ -294,13 +302,13 @@ class _RerankerTools(TerminalMcpServer):
 
     def __call__(
         self,
-        state: Mapping[str, object],
+        state: Mapping[str, Any],
         execution: NodeExecution,
         approve: ApprovalHandler,
     ) -> Any:
         return TerminalMcpServer.__call__(self.for_state(state), state, execution, approve)
 
-    def for_state(self, state: Mapping[str, object]) -> TerminalMcpServer:
+    def for_state(self, state: Mapping[str, Any]) -> TerminalMcpServer:
         if not _keeping_findings(state):
             return self
         return replace(self, repository_tools=tuple(
@@ -308,14 +316,18 @@ class _RerankerTools(TerminalMcpServer):
         ))
 
 
+class InputRefuteNode(_RunnerInput, RerankerNode):
+    pass
+
+
 class InputRerankerNode(_RunnerInput, RerankerNode):
-    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+    async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
         update = await super().__call__(state)
         return {**update, "review_rounds": state.get("review_rounds", 0) + 1}
 
 
 def _with_model(
-    base: Mapping[str, object] | None, model: str
+    base: Mapping[str, Any] | None, model: str
 ) -> dict[str, object]:
     """Merge a model override into the caller's session config; none leaves the agent's own."""
     merged = dict(base or {})
@@ -335,29 +347,51 @@ def _review_node_name(facet_id: str) -> str:
     return f"review-{facet_id}"
 
 
-def _reviewing(state: Mapping[str, object]) -> bool:
+def _enabled(state: Mapping[str, Any], name: str) -> bool:
+    return str(state.get("inputs", {}).get(name, "false")).lower() == "true"
+
+
+class ReviewWorkspaceNode(WorkspaceNode):
+    async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
+        inputs = dict(state.get("inputs") or {})
+        if _reviewing(state) and not inputs.get(REF_INPUT):
+            if inputs.get(PR_INPUT):
+                target = change_request(str(inputs[PR_INPUT]))
+                if target is None:
+                    raise ValueError(INVALID_PR_URL)
+                path = f"pull/{target.number}/head" if target.kind == "pull" else f"merge-requests/{target.number}/head"
+                inputs[REF_INPUT] = f"origin/refs/{path}"
+            else:
+                inputs[REF_INPUT] = inputs.get(BRANCH_INPUT) or "HEAD"
+        updated = {**state, "inputs": inputs}
+        return {**await super().__call__(updated), "inputs": inputs}
+
+
+def _reviewing(state: Mapping[str, Any]) -> bool:
     """Whether this run started in review, at a change it did not make."""
-    return start_state(state.get("inputs")) is WorkState.REVIEW
+    inputs = state.get("inputs") or {}
+    return (start_state(inputs) is WorkState.REVIEW or _enabled(state, "review_only")
+            or bool(inputs.get(REF_INPUT) or inputs.get(PR_INPUT)))
 
 
-def _publishing(state: Mapping[str, object]) -> bool:
+def _publishing(state: Mapping[str, Any]) -> bool:
     """Whether a run started in review posts its review instead of triaging it."""
     return _reviewing(state) and publishes_review(state.get("inputs"))
 
 
-def _keeping_findings(state: Mapping[str, object]) -> bool:
+def _keeping_findings(state: Mapping[str, Any]) -> bool:
     """Whether the surviving findings are left for a person at triage."""
     return _reviewing(state) and not _publishing(state)
 
 
-def _pr_url(state: Mapping[str, object]) -> str:
+def _pr_url(state: Mapping[str, Any]) -> str:
     """The run's pull request: the one it opened, or the one it was given."""
     inputs = state.get("inputs")
     given = inputs.get(PR_INPUT, "") if isinstance(inputs, Mapping) else ""
     return str(state.get("pr_url") or given or "")
 
 
-def _push_to(state: Mapping[str, object]) -> str:
+def _push_to(state: Mapping[str, Any]) -> str:
     """Where a fix to a change this run was given goes: that change's branch.
 
     The workspace is checked out on a branch of its own, so a plain push would
@@ -370,7 +404,7 @@ def _push_to(state: Mapping[str, object]) -> str:
     return f"The pull request's branch is {branch}: push to it with `git push origin HEAD:{branch}`. "
 
 
-def _implementation_prompt(state: Mapping[str, object]) -> str:
+def _implementation_prompt(state: Mapping[str, Any]) -> str:
     ci = state.get("ci_check")
     if isinstance(ci, dict) and ci.get("passed") is False:
         return (
@@ -388,7 +422,7 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
             "Address the review findings on "
             f"{THE_CHANGE(state, pr_url=_pr_url(state))}. "
             "Read the relevant code, make the smallest complete fix, test it, "
-            f"{UPDATE_CHANGE(state)}{_push_to(state)}"
+            f"{UPDATE_CHANGE(state)}{_push_to(state)}Return the branch output too. "
             # Findings a person chose were never posted, so there is nothing to answer.
             f"{'' if _reviewing(state) else ANSWER_REVIEW(state)}"
             "Use fail_step if the findings cannot be addressed.\n\n"
@@ -396,14 +430,15 @@ def _implementation_prompt(state: Mapping[str, object]) -> str:
             f"Original task:\n{state.get('task', '')}"
         )
     return IMPLEMENTATION_PROMPT.format(
-        publish=PUBLISH_CHANGE(state), task=state.get("task", ""),
+        publish=PUBLISH_CHANGE(state),
+        task=str(state.get("task", "")) + (f"\n\nAgreed specification:\n{state[SPEC]}" if state.get(SPEC) else ""),
     )
 
 
 def _after_workspace(state: dict[str, Any]) -> str | list[Send]:
     if _reviewing(state):
         return _fan_out_reviews(state)
-    return NAMING
+    return SPEC if _enabled(state, "spec") else NAMING
 
 
 def _after_reranker(state: dict[str, Any]) -> str:
@@ -443,7 +478,7 @@ def pipeline(
     *,
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
-    session_config: Mapping[str, object] | None = None,
+    session_config: Mapping[str, Any] | None = None,
     verification: OpenVerify | None = None,
 ) -> StateGraph:
     """Use declared stage inputs, defaulting to `runner` and the other provider.
@@ -451,16 +486,29 @@ def pipeline(
     Deployments can replace checkout provisioning, agents and session settings,
     and opt into Open Verify by supplying its installed CLI and evidence uploader.
     """
-    builder: StateGraph = StateGraph(State)
+    # LangGraph accepts an Annotated root channel; its constructor typing expects a class.
+    builder: Any = StateGraph(cast(Any, State))
     builder.add_node(
         WORKSPACE,
-        WorkspaceNode(
+        ReviewWorkspaceNode(
             provider=workspace_provider
             or GitWorktreeWorkspaceProvider(DEFAULT_ROOT_DIRECTORY),
             base_ref=BASE_REF,
             ref_input=REF_INPUT,
         ),
     )
+    builder.add_node(SPEC, InputImplementationNode(
+        agent=runner, registry=agents, cwd=checkout,
+        prompt=lambda state: (
+            "Read the repository and write a concise specification with scope, acceptance "
+            "criteria and a test plan. Do not edit files or publish anything. "
+            "Call complete_step with the specification in your summary.\n\n"
+            + str(state.get("task", ""))
+        ),
+        mcp_server_bindings=(TerminalMcpServer(step_id=SPEC, agent_id=runner),),
+        output_key=SPEC, graph_node_name="Specification", graph_node_group=WorkState.PLANNING,
+        session_config=session_config,
+    ))
     builder.add_node(
         NAMING,
         InputNameNode(
@@ -482,7 +530,7 @@ def pipeline(
                     step_id=IMPLEMENTATION,
                     create_workorder=True,
                     agent_id=runner,
-                    required_outputs=("pr_url",),
+                    required_outputs=("pr_url", "branch"),
                     repository_tools=(
                         "git_subcommand", "open_pull_request",
                         "view_change_request", "add_comment",
@@ -518,7 +566,7 @@ def pipeline(
                     facet_name=f.name,
                     facet_focus=f.focus,
                     change=CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state)),
-                    task=state.get("task", ""),
+                    task=str(state.get("task", "")) + (f"\n\nSpecification:\n{state[SPEC]}" if state.get(SPEC) else ""),
                     implementation=state.get(IMPLEMENTATION, ""),
                 ),
                 cwd=checkout,
@@ -544,9 +592,25 @@ def pipeline(
             ),
         )
 
+    builder.add_node(REFUTE, InputRefuteNode(
+        agent=runner, registry=agents, cwd=checkout,
+        prompt=lambda state: (
+            "Try to refute every finding below by reading the code and checking the claimed "
+            "failure. Drop disproven, duplicate or non-actionable claims; explain why each "
+            "survivor stands. Inspect only: do not edit, commit, push or post comments. "
+            "Call complete_step with a findings JSON array, preserving agent and facet.\n\n"
+            + json.dumps([finding for facet in REVIEW_FACETS
+                          for finding in cast(list[dict[str, Any]], state.get(_review_node_name(facet.id), []))])
+        ),
+        mcp_server_bindings=(TerminalMcpServer(
+            step_id=REFUTE, agent_id=runner, required_outputs=("findings",),
+            validate_completion=RerankerNode.validate_completion,
+        ),),
+        output_key=REFUTE, graph_node_name="Refute findings", session_config=session_config,
+    ))
     # ---- reranker: squash noise and post comments ---------------------------
 
-    def _reranker_prompt(state: Mapping[str, object]) -> str:
+    def _reranker_prompt(state: Mapping[str, Any]) -> str:
         sections: list[str] = []
         for facet in REVIEW_FACETS:
             key = _review_node_name(facet.id)
@@ -559,7 +623,8 @@ def pipeline(
             publishing=KEEP_FINDINGS if _keeping_findings(state) else PUBLISH_FINDINGS(
                 state, runner=state.get("inputs", {}).get("review_runner", reviewer),
             ),
-            findings_sections="".join(sections),
+            findings_sections=(f"Refuted findings:\n{json.dumps(state.get(REFUTE, []))}\n\n"
+                               if _enabled(state, "adversarial") else "".join(sections)),
             change=f"The change is {CHANGE_UNDER_REVIEW(state, pr_url=_pr_url(state))}.\n\n",
             task=state.get("task", ""),
         )
@@ -636,8 +701,9 @@ def pipeline(
     builder.add_edge(START, WORKSPACE)
     builder.add_conditional_edges(
         WORKSPACE, _after_workspace,
-        [NAMING, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
+        [SPEC, NAMING, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
     )
+    builder.add_edge(SPEC, NAMING)
     builder.add_edge(NAMING, IMPLEMENTATION)
 
     builder.add_edge(IMPLEMENTATION, CI_CHECK)
@@ -648,7 +714,12 @@ def pipeline(
 
     # Fan-in: every facet converges on the reranker.
     for facet in REVIEW_FACETS:
-        builder.add_edge(_review_node_name(facet.id), RERANKER)
+        builder.add_conditional_edges(
+            _review_node_name(facet.id),
+            lambda state: REFUTE if _enabled(state, "adversarial") else RERANKER,
+            [REFUTE, RERANKER],
+        )
+    builder.add_edge(REFUTE, RERANKER)
 
     builder.add_conditional_edges(
         RERANKER, _after_reranker, [IMPLEMENTATION, IMPACT_ANALYSIS, TRIAGE],
@@ -672,7 +743,9 @@ def pipeline(
 #: Runner choices for the implementation and review stages.  An agent added
 #: with `engine agent add` is offered beside these by the process serving it,
 #: but is left out of the policies: it reports no utilization to place by.
-RUNNER_CHOICES = ("codex", "claude")
+DEFAULT_RUNNER = "codex"
+DEFAULT_REVIEW_RUNNER = ""
+RUNNER_CHOICES = tuple(dict.fromkeys(("codex", "claude", DEFAULT_RUNNER)))
 #: What the runner dropdowns offer: a runner, or a policy that picks one per run.
 RUNNER_INPUT_CHOICES = (*RUNNER_CHOICES, LEAST_UTILIZED, ROUND_ROBIN)
 #: What this workflow was called when the runner was part of its id, before the
@@ -680,7 +753,7 @@ RUNNER_INPUT_CHOICES = (*RUNNER_CHOICES, LEAST_UTILIZED, ROUND_ROBIN)
 #: so they are retired rather than dropped and go on opening as this workflow.
 PREVIOUS_IDS = ("implementation-review-codex", "implementation-review-claude")
 # The loader rebuilds one default graph with deployment session configuration.
-RUNNERS = ("codex",)
+RUNNERS = (DEFAULT_RUNNER,)
 
 
 def graph_for(
@@ -688,7 +761,7 @@ def graph_for(
     *,
     workspace_provider: WorkspaceProvider | None = None,
     agents: ACPAgentRegistry = AGENTS,
-    session_config: Mapping[str, object] | None = None,
+    session_config: Mapping[str, Any] | None = None,
     verification: OpenVerify | None = None,
 ) -> GraphWorkflow:
     """Build the workflow with the requested initial implementation runner."""
@@ -702,6 +775,7 @@ def graph_for(
         ),
         id="implementation-review-rerank",
         name="Implementation review rerank",
+        description="Implement, check CI, review parallel facets, rerank, fix once, and ask for human review.",
         previous_ids=PREVIOUS_IDS,
         inputs=(
             WorkflowInput(
@@ -710,9 +784,13 @@ def graph_for(
             ),
             WorkflowInput(
                 "review_runner", "Review runner",
-                default=_cross_reviewer(runner),
+                default=DEFAULT_REVIEW_RUNNER or _cross_reviewer(runner),
                 required=True, choices=RUNNER_INPUT_CHOICES,
             ),
+            *(WorkflowInput(name, label, default="false", choices=("false", "true"))
+              for name, label in (("spec", "Write a specification first"),
+                                  ("review_only", "Review an existing change"),
+                                  ("adversarial", "Refute review findings"))),
             mode_input(),
             state_input(WorkState.PLANNING, WorkState.REVIEW),
             WorkflowInput(REF_INPUT, "Ref to review"),
@@ -723,4 +801,4 @@ def graph_for(
     )
 
 
-workflow = graph_for("codex")
+workflow = graph_for(DEFAULT_RUNNER)

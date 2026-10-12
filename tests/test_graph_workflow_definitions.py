@@ -172,6 +172,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
 
     assert [str(node.node_id) for node in codex.nodes] == [
         "workspace",
+        "spec",
         "naming",
         "implementation",
         "ci-check",
@@ -180,6 +181,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "review-performance",
         "review-conciseness",
         "review-dryness",
+        "refute",
         "reranker",
         "impact-analysis",
         "human-review",
@@ -187,6 +189,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     ]
     assert [node.name for node in codex.nodes] == [
         "Workspace",
+        "Specification",
         "Naming",
         "Implementation",
         "CI check",
@@ -195,6 +198,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review (Performance)",
         "Review (Conciseness)",
         "Review (DRYness & code duplication)",
+        "Refute findings",
         "Reranker",
         "Impact analysis",
         "Human review",
@@ -204,8 +208,10 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     assert [node.group for node in codex.nodes] == [
         "Planning",
         "Planning",
+        "Planning",
         "Implementation",
         "Implementation",
+        "Review",
         "Review",
         "Review",
         "Review",
@@ -223,16 +229,19 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         **{f"review-{facet}": f"review-{facet}" for facet in (
             "security", "bugs", "performance", "conciseness", "dryness",
         )},
+        "refute": "refute",
         "reranker": "review",
         "triage": "review",
     }
-    # The kinds: a checkout, nine agents (implementation + 5 reviewers +
+    # The kinds: a checkout, eleven agents (implementation + 5 reviewers +
     # reranker + naming + impact analysis), and the one stage that is a person.
     assert [node.kind for node in codex.nodes] == [
         "workspace",
         "agent",
         "agent",
+        "agent",
         "tool",
+        "agent",
         "agent",
         "agent",
         "agent",
@@ -248,9 +257,11 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     # are stages of the run rather than conversations in it.
     assert [node.show_in_sidebar for node in codex.nodes] == [
         False,
+        True,
         False,
         True,
         False,
+        True,
         True,
         True,
         True,
@@ -323,7 +334,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 9
+    assert len(agents) == 11
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
@@ -340,7 +351,7 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
         "git_subcommand", "open_pull_request", "view_change_request", "add_comment",
         "list_pipeline_status", "get_job_logs",
     )
-    assert impl_binding.required_outputs == ("pr_url",)
+    assert impl_binding.required_outputs == ("pr_url", "branch")
 
     # Each review facet gets read-only repository tools (no add_comment).
     for facet in module.REVIEW_FACETS:
@@ -721,7 +732,7 @@ def test_a_disconnected_run_is_served_no_forge_tools(monkeypatch) -> None:
     asyncio.run(scenario())
 
     assert served == {
-        module.IMPLEMENTATION: (("git_subcommand",), ()),
+        module.IMPLEMENTATION: (("git_subcommand",), ("branch",)),
         "review-security": ((), ("findings",)),
         module.RERANKER: ((), ("findings",)),
         module.IMPACT_ANALYSIS: ((), ("impact_level", "impact_rationale")),
@@ -790,7 +801,8 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     assert [
         [item["name"] for item in one["inputs"]] for one in offered
     ] == [[
-        "implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch",
+        "implementation_runner", "review_runner", "spec", "review_only", "adversarial",
+        "mode", "state", "ref", "pr_url", "branch",
         "publish_review",
     ]]
 
@@ -831,7 +843,8 @@ def test_stage_runners_configure_models_and_mcp_identity(
     module = definition_module()
     graph = module.graph_for("codex")
     assert [item.name for item in graph.inputs] == [
-        "implementation_runner", "review_runner", "mode", "state", "ref", "pr_url", "branch",
+        "implementation_runner", "review_runner", "spec", "review_only", "adversarial",
+        "mode", "state", "ref", "pr_url", "branch",
         "publish_review",
     ]
     nodes = nodes_of(graph.builder)
@@ -1041,3 +1054,80 @@ def test_impact_analysis_receives_final_evidence_and_selected_review_runner():
                      "use add_comment to post one general comment",
                      "must not be merged without a human"):
         assert evidence in prompt
+
+
+@pytest.mark.parametrize("spec,adversarial,review_only", [
+    (False, False, False), (True, False, False), (False, True, True), (True, True, False),
+])
+def test_default_graph_optional_steps_and_bounded_fix(spec, adversarial, review_only):
+    from langchain_core.runnables import RunnableLambda
+    module = definition_module()
+    builder = module.pipeline("codex")
+    visited = []
+
+    def stub(name):
+        def run(state):
+            visited.append(name)
+            if name == module.CI_CHECK:
+                return {"ci_check": {"passed": True}}
+            if name == module.RERANKER:
+                return {"review_rounds": state.get("review_rounds", 0) + 1,
+                        module.REVIEW: [{"tagline": "Bug", "description": "Fix it"}]}
+            if name == module.TRIAGE:
+                return {module.FIX: []}
+            if name == module.SPEC:
+                return {module.SPEC: "Acceptance criteria"}
+            return {}
+        return RunnableLambda(run)
+
+    for name, node in builder.nodes.items():
+        node.runnable = stub(name)
+    asyncio.run(builder.compile().ainvoke({"task": "docs", "inputs": {
+        "spec": str(spec).lower(), "adversarial": str(adversarial).lower(),
+        "review_only": str(review_only).lower(),
+    }}))
+    assert (module.SPEC in visited) == (spec and not review_only)
+    assert (module.REFUTE in visited) == adversarial
+    assert visited.count(module.IMPLEMENTATION) == (0 if review_only else 2)
+    assert visited.count(module.RERANKER) == (1 if review_only else 2)
+    if adversarial:
+        assert visited.index(module.REFUTE) < visited.index(module.RERANKER)
+    if spec and not review_only:
+        assert visited.index(module.SPEC) < visited.index(module.IMPLEMENTATION)
+
+
+@pytest.mark.parametrize("inputs", [{"review_only": "true"}, {"ref": "feature"}, {"pr_url": "https://github.com/o/r/pull/1"}])
+def test_review_inputs_skip_implementation(inputs):
+    module = definition_module()
+    assert isinstance(module._after_workspace({"inputs": inputs}), list)
+
+
+def test_spec_is_given_to_implementation_and_review():
+    module = definition_module()
+    nodes = nodes_of(module.pipeline("codex"))
+    state = {"task": "docs", "spec": "Require a runnable example"}
+    assert "Require a runnable example" in nodes["implementation"].prompt(state)
+    assert "Require a runnable example" in nodes["review-bugs"].prompt(state)
+
+
+@pytest.mark.parametrize("inputs,expected", [
+    ({"review_only": "true"}, "HEAD"),
+    ({"review_only": "true", "branch": "topic"}, "topic"),
+    ({"pr_url": "https://github.com/owner/repo/pull/9"}, "origin/refs/pull/9/head"),
+    ({"pr_url": "https://gitlab.com/group/repo/-/merge_requests/7"}, "origin/refs/merge-requests/7/head"),
+    ({"pr_url": "https://github.com/owner/repo/pull/9", "ref": "cached-sha"}, "cached-sha"),
+])
+def test_default_review_resolves_the_checkout_ref(monkeypatch, inputs, expected):
+    from engine.graph_runtime_langgraph.components import WorkspaceNode
+    module = definition_module()
+    seen = []
+
+    async def checkout(self, state):
+        seen.append(state["inputs"]["ref"])
+        return {"workspace": "/checkout"}
+
+    monkeypatch.setattr(WorkspaceNode, "__call__", checkout)
+    node = nodes_of(module.pipeline("codex"))[module.WORKSPACE]
+    result = asyncio.run(node({"inputs": inputs}))
+    assert seen == [expected]
+    assert result["inputs"]["ref"] == expected

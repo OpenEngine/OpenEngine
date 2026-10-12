@@ -484,3 +484,19 @@ def test_issue_references_survive_commit_amend_snapshot_and_reattach(
     assert f"Refs {reference}" in _git(root, "log", "-1", "--format=%B")
     _git(root, *_IDENTITY, "commit", "--allow-empty", "-m", "feat: follow up")
     assert _git(root, "log", "-1", "--format=%B").count(f"Refs {reference}") == 1
+
+
+@pytest.mark.parametrize("ref", ["refs/pull/9/head", "refs/merge-requests/7/head"])
+def test_review_ref_fetches_forge_ref_without_treating_it_as_a_branch(monkeypatch, ref):
+    from engine.adapters.workspace_provider import git_worktree
+    commands = []
+
+    async def git(repository, *args):
+        commands.append(args)
+        return "review-sha" if args[0] == "rev-parse" else ""
+
+    monkeypatch.setattr(git_worktree, "_git", git)
+    assert asyncio.run(git_worktree._resolve_base("/repo", f"origin/{ref}")) == "review-sha"
+    fetch = next(args for args in commands if args[0] == "fetch")
+    assert fetch[-1].startswith(f"+{ref}:refs/engine/provisioning/")
+    assert commands[-1][:2] == ("update-ref", "-d")

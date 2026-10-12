@@ -229,7 +229,13 @@ def test_the_instruction_is_builtin_and_runners_must_exist() -> None:
 
 
 def test_a_runner_input_is_not_checked_at_registration() -> None:
-    parse_graph(yaml.safe_load(starters.source("adversarial-review")), runners=["codex"])
+    parse_graph(yaml.safe_load("""apiVersion: openengine.cc/v1
+name: runner-input
+inputs:
+  agent: {default: claude}
+implementation:
+  work: {agent: '${inputs.agent}', prompt: hi}
+"""), runners=["codex"])
 
 
 # --- graphs and runs ----------------------------------------------------------
@@ -273,21 +279,19 @@ def test_registering_discovering_and_running_a_graph(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_a_built_in_graph_registers_without_its_default_agent(tmp_path: Path) -> None:
+def test_default_python_graph_uses_module_metadata(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            _, created = await service.add_graph("default", source=starters.source("adversarial-review"))
-            assert created
-            with pytest.raises(ServiceError, match=r"agent 'claude' is not available .*available: stub.*--agent"):
-                await service.submit_run(
-                    project="default", graph="adversarial-review", instruction="x",
-                    inputs={"branch": "feat/x"},
-                )
-            run, created = await service.submit_run(
-                project="default", graph="adversarial-review", instruction="x",
-                inputs={"branch": "feat/x", "agent": "stub"},
-            )
-            assert created and run["runId"]
+            graph, created = await service.add_graph("default", source=starters.source(), format="python")
+            assert created and graph["name"] == starters.DEFAULT
+            assert graph["description"].startswith("Implement, check CI")
+            assert graph["definition"]["workflowId"] == starters.DEFAULT
+            assert str(service.workflows()[0].graph_id) == graph["versionId"]
+            again, created = await service.add_graph("default", source=starters.source(), format="python")
+            assert not created and again["versionId"] == graph["versionId"]
+        async with graph_service(tmp_path) as service:
+            assert service.get_graph("default", starters.DEFAULT)["name"] == starters.DEFAULT
+            assert service.workflows()[0].graph_id == graph["versionId"]
 
     asyncio.run(scenario())
 
@@ -1113,4 +1117,114 @@ def test_v1_runs_infer_forge_mode_and_accept_local_without_a_graph_input(tmp_pat
                 assert completed["forgeContext"] == context
                 if local:
                     login.assert_not_called()
+    asyncio.run(scenario())
+
+
+PYTHON_GRAPH = '''
+from engine.graph_runtime_langgraph import graph_workflow, State
+from langgraph.graph import StateGraph, START, END
+builder = StateGraph(State)
+builder.add_node("work", lambda state: {"answer": "done"})
+builder.add_edge(START, "work")
+builder.add_edge("work", END)
+workflow = graph_workflow(builder, id="python-example", name="Python example", description="A module description.")
+'''
+
+
+def test_python_registration_and_reload_do_not_block_health(tmp_path):
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            app = Starlette(routes=[
+                Route("/api/health", lambda request: JSONResponse({"ok": True})),
+                Mount("/api/v1", create_app(service)),
+            ])
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                # Sleep represents a slow import; health must answer while it is still importing.
+                task = asyncio.create_task(client.post("/api/v1/graphs", json={
+                    "project": "default", "format": "python",
+                    "source": "import time\ntime.sleep(0.3)\n" + PYTHON_GRAPH,
+                }))
+                await asyncio.sleep(0.05)
+                assert (await client.get("/api/health")).status_code == 200
+                assert not task.done(), "Python registration blocked health until the import finished"
+                response = await task
+                assert response.status_code == 201, response.text
+                graph = response.json()
+                assert graph["name"] == "python-example"
+                assert graph["description"] == "A module description."
+        # Startup uses the same off-thread loading path, and also yields to health.
+        context = graph_service(tmp_path)
+        reloading = asyncio.create_task(context.__aenter__())
+        try:
+            await asyncio.sleep(0.05)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                assert (await client.get("/api/health")).status_code == 200
+            assert not reloading.done(), "Python reload blocked health until the import finished"
+            service = await reloading
+            assert service.get_graph("default", "python-example")["versionId"] == graph["versionId"]
+            run, _ = await service.submit_run(project="default", graph="python-example", instruction="go")
+            assert (await settled(service, run["runId"]))["status"] == "completed"
+        finally:
+            await reloading
+            await context.__aexit__(None, None, None)
+
+    asyncio.run(scenario())
+
+
+def test_registration_loads_an_identical_but_unloaded_version(tmp_path):
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            graph, _ = await service.add_graph("default", source=PAIR)
+            version_id = graph["versionId"]
+            service._loaded.pop(version_id)
+            # Simulate a version whose original startup load failed before runtime registration.
+            from unittest.mock import patch
+            with patch.object(service.runtime, "register") as register:
+                again, created = await service.add_graph("default", source=PAIR)
+                register.assert_called_once()
+            assert not created and again["versionId"] == version_id
+            assert version_id in service._loaded
+
+    asyncio.run(scenario())
+
+
+def test_corrected_api_version_does_not_dedupe_to_stale_source(tmp_path):
+    import hashlib
+    from engine.graph_service.store import GraphRow, VersionRow, now_iso
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            spec = parse_graph(yaml.safe_load(PAIR))
+            at = now_iso()
+            old_manifest = spec.json()
+            old_manifest.pop("apiVersion")
+            old_digest = hashlib.sha256(json.dumps(old_manifest, sort_keys=True, default=str).encode()).hexdigest()
+            stale = VersionRow("gv-stale", "g-stale", 1, {}, old_digest,
+                               at, source=PAIR.replace("openengine.cc/v1", "openengine.dev/v1"))
+            with service.store.transaction():
+                service.store.insert_graph(GraphRow("g-stale", "default", "pair", "gv-stale", at, at))
+                service.store.insert_version(stale)
+            corrected, created = await service.add_graph("default", source=PAIR)
+            assert created and corrected["version"] == 2
+            assert corrected["versionId"] != "gv-stale"
+            run, _ = await service.submit_run(project="default", graph="pair", instruction="hi")
+            assert (await settled(service, run["runId"]))["status"] == "completed"
+
+    asyncio.run(scenario())
+
+
+def test_onboarded_runner_survives_python_rebuild_with_session_config(tmp_path):
+    async def scenario():
+        async with graph_service(tmp_path, session_config={"model": "test-model"}) as service:
+            graph, _ = await service.add_graph("default", source=starters.source(runner="opencode"), format="python")
+            inputs = {item.name: item for item in service.workflows()[0].inputs}
+            for name in ("implementation_runner", "review_runner"):
+                assert inputs[name].default == "opencode"
+                assert "opencode" in inputs[name].choices
+            assert graph["name"] == starters.DEFAULT
+
     asyncio.run(scenario())

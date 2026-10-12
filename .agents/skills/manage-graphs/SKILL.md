@@ -5,6 +5,24 @@ description: Write, register, run, schedule and debug OpenEngine graphs with the
 
 # Managing OpenEngine graphs
 
+Start with the project's default graph:
+
+```bash
+uv run engine go "add a new doc for the out-of-the-box experience" --wait
+uv run engine go "implement the feature" --spec --wait
+uv run engine go --review feature/my-change -i adversarial=true --wait
+uv run engine go "update docs" --local --repo OWNER/REPO --backend mini --wait --json
+```
+
+`go` registers the one built-in graph on first use, chooses the current checkout
+unless `--repo` is supplied, and uses the selected backend. It prints the forge
+mode first (to stderr with `--json`); `--local` forces disconnected mode.
+On a TTY it follows live with inline approvals; agents use `--wait` instead.
+The result includes the PR URL or local branch and how to push it later.
+Use `--review PR_OR_BRANCH` to start at review, `--spec` to plan first, and
+`-i KEY=VALUE` for runner inputs and `adversarial=true`. The old four starter
+names are deprecated aliases for one release.
+
 Graphs, runs and loops live on a daemon (a *backend*). The `engine` CLI talks
 to it over HTTP; it never runs a graph itself. Inside this repository, run the
 CLI as `uv run engine ...`.

@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from engine.cli import starters
 from engine.graph_service.language import GraphError, parse_graph
 
 SKETCH = """
@@ -115,17 +114,11 @@ def test_a_step_given_a_way_out_in_flow_leaves_the_written_order() -> None:
     assert ("tdd", "ci_check", False) in edges and ("tdd", "implementer", False) not in edges
 
 
-def test_every_starter_parses() -> None:
-    for name in starters.NAMES:
-        spec = parse_graph(yaml.safe_load(starters.source(name)))
-        assert spec.node("reviewers") is not None and spec.node("reranker") is not None
-
-
-def test_adversarial_review_checks_out_the_branch_and_runs_the_agent_input() -> None:
-    spec = parse_graph(yaml.safe_load(starters.source("adversarial-review")))
-    assert spec.ref_input == "branch"
-    assert {item.name for item in spec.inputs} == {"branch", "agent"}
-    assert spec.node("reviewers").runner.kind == spec.node("reranker").runner.kind == "input"
+def test_graph_digest_includes_api_version() -> None:
+    from dataclasses import replace
+    spec = parse_graph(yaml.safe_load(SKETCH))
+    assert spec.json()["apiVersion"] == "openengine.cc/v1"
+    assert replace(spec, api_version="openengine.dev/v1").digest != spec.digest
 
 
 def test_mistakes_are_reported_with_their_section() -> None:

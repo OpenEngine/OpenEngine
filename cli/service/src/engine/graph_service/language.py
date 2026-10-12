@@ -180,6 +180,7 @@ class GraphSpec:
     flow: tuple[FlowRule, ...]
     loop: LoopDefaults = field(default_factory=LoopDefaults)
     repository: str = ""
+    api_version: str = API_VERSION
     checkout: str = WORKSPACE_NODE
     """The checkout's node id: the step that has neither agent, human nor ci."""
 
@@ -209,7 +210,9 @@ class GraphSpec:
         return found
 
     def json(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        value["apiVersion"] = value.pop("api_version")
+        return value
 
     @property
     def digest(self) -> str:
