@@ -24,6 +24,11 @@ registers the four starter graphs for the `owner/repo` project. No restart is ne
 The repository is ready to select in the WorkOrder form; the CLI prints a
 `engine graph run review --project owner/repo --repo /checkout/path --input ref=HEAD` command.
 
+The web daemon accepts loopback hostnames (`localhost`, `127.0.0.1`, and `::1`).
+For access through another hostname or a reverse proxy, set `public_url` in the
+loaded configuration to the external URL, including its port when nonstandard.
+Requests to other hostnames are rejected, including read-only requests.
+
 ## Manual configuration reference
 
 Use the untracked `.engine/config.toml` in the server's working directory to

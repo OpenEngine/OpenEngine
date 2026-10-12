@@ -247,7 +247,7 @@ async def open_chat(
     # No timeout: a live turn takes as long as the model takes, and the
     # scenario's own deadline is the one that should end it.
     client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=None
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost", timeout=None
     )
     created = await client.post(
         "/api/threads", json={"agentId": "coder", "runner": runner_name}

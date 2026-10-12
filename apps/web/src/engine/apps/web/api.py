@@ -49,6 +49,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
+from engine.apps.web.request_security import RequestSecurity, TrustedDaemonHostMiddleware
 from engine.apps.web.loop_runs import (
     Loop,
     LoopHost,
@@ -2688,41 +2689,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         name, email = (re.sub(r"[<>\s]+", " ", part).strip() for part in identity)
         return f"{name} <{email}>" if name and email and " " not in email else ""
 
-    def _is_local_request(request: Request) -> bool:
-        """True when the request originates from the UI served by this process.
-
-        The GitHub auth endpoints are mutating and must not be triggerable by
-        arbitrary pages. Checking the Origin header against localhost is a
-        lightweight CSRF guard appropriate for a local tool; it stops a
-        cross-origin page from silently disconnecting the user's token or
-        initiating a new device flow. GET /api/github/status is read-only and
-        exempt.
-        """
-        origin = request.headers.get("origin", "")
-        if not origin:
-            # No Origin means a same-origin request (form submit, etc.) or a
-            # curl call from localhost. Both are fine for a local tool.
-            return True
-        parsed = urlsplit(origin)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path
-            or parsed.query
-            or parsed.fragment
-        ):
-            return False
-        # Browser Origin values have no path and lowercase hostnames.  Compare
-        # parsed hosts rather than prefixes: localhost.evil.example is not
-        # localhost.
-        return parsed.hostname.lower() in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-            (request.url.hostname or "").lower(),
-        }
+    request_security = RequestSecurity(public_url)
+    _is_local_request = request_security.is_local_request
 
     def _hint(value: str) -> str:
         """Return first 4 chars + bullets so the UI can confirm which ID is set."""
@@ -4578,7 +4546,10 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     app = Starlette(
         routes=routes,
         lifespan=lifespan,
-        middleware=[Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5)],
+        middleware=[
+            Middleware(TrustedDaemonHostMiddleware, security=request_security),
+            Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5),
+        ],
     )
     app.state.thread_service = service
     app.state.slack_ingress = slack_ingress

@@ -146,7 +146,7 @@ def test_registers_all_starters_for_the_signed_in_agent():
                 assert spec['default'] == 'opencode'
 
 
-@pytest.mark.parametrize("origin", [None, "http://test", "http://localhost:4364"])
+@pytest.mark.parametrize("origin", [None, "http://localhost", "http://127.0.0.1"])
 def test_api_job_and_config_share_running_registry(tmp_path, monkeypatch, origin):
     from test_web_app import ConcurrentRunner, _session
     from engine.apps.web.api import create_app
@@ -164,7 +164,7 @@ def test_api_job_and_config_share_running_registry(tmp_path, monkeypatch, origin
                      workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'custom.toml')
 
     async def run():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
             response = await client.post('/api/repositories/onboard', json={'repository': 'owner/repo', 'path': str(target)},
                                          headers={'Origin': origin} if origin else {})
             assert response.status_code == 202
@@ -207,7 +207,7 @@ def test_onboarding_is_operator_only(tmp_path):
     app = Starlette(routes=service.routes(AsyncMock(return_value={'/visible/repo'}), lambda request: True))
 
     async def run():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
             assert (await client.post('/api/repositories/onboard', json={'repository': 'owner/repo'})).status_code == 403
             assert (await client.get('/api/repositories/onboard/unknown')).status_code == 403
     asyncio.run(run())
@@ -256,7 +256,7 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
 
     async def run():
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
                 assert (await client.get('/api/config')).json()['workflows'] == []
                 job = (await client.post('/api/repositories/onboard', json={'repository': 'owner/repo', 'path': str(target)})).json()
                 for _ in range(200):
@@ -299,7 +299,7 @@ def test_cross_origin_onboarding_never_starts(tmp_path, monkeypatch, origin):
                      workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'config.toml')
 
     async def run():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
             response = await client.post('/api/repositories/onboard',
                                          content='{"repository": "owner/repo"}',
                                          headers={'Origin': origin, 'Content-Type': 'text/plain'})
@@ -308,3 +308,60 @@ def test_cross_origin_onboarding_never_starts(tmp_path, monkeypatch, origin):
     asyncio.run(run())
     start.assert_not_called()
     assert not (tmp_path / 'config.toml').exists()
+
+
+@pytest.mark.parametrize('origin', [None, 'http://evil.example', 'http://localhost'])
+@pytest.mark.parametrize('method,path', [
+    ('POST', '/api/repositories/onboard'),
+    ('GET', '/api/repositories/onboard/job1'),
+    ('GET', '/api/config'),
+    ('POST', '/api/github/connect'),
+])
+def test_rebound_host_cannot_reach_daemon(tmp_path, monkeypatch, origin, method, path):
+    from test_web_app import ConcurrentRunner, _session
+    from engine.apps.web.api import create_app
+    from engine.runtime import WorkflowCatalog
+
+    start = Mock()
+    monkeypatch.setattr(onboard.RepositoryOnboarding, 'start_request', start)
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
+                     workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'config.toml')
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://evil.example') as client:
+            headers = {'Origin': origin} if origin else {}
+            headers['Content-Type'] = 'text/plain'
+            response = await client.request(method, path, headers=headers, content='{"repository":"owner/repo"}')
+            assert response.status_code == 403
+    asyncio.run(run())
+    start.assert_not_called()
+    assert not (tmp_path / 'config.toml').exists()
+
+
+@pytest.mark.parametrize('base_url,public_url', [
+    ('http://localhost:4364', ''),
+    ('http://127.0.0.1:4364', ''),
+    ('http://[::1]:4364', ''),
+    ('https://engine.example:8443', 'https://engine.example:8443'),
+])
+def test_trusted_hosts_can_onboard(tmp_path, monkeypatch, base_url, public_url):
+    from test_web_app import ConcurrentRunner, _session
+    from engine.apps.web.api import create_app
+    from engine.runtime import WorkflowCatalog
+
+    start = Mock(return_value={'id': 'job1', 'status': 'queued'})
+    monkeypatch.setattr(onboard.RepositoryOnboarding, 'start_request', start)
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
+                     workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'config.toml',
+                     public_url=public_url)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base_url) as client:
+            assert (await client.get('/api/config')).status_code == 200
+            response = await client.post('/api/repositories/onboard', headers={'Origin': base_url},
+                                         json={'repository': 'owner/repo'})
+            assert response.status_code == 202
+    asyncio.run(run())
+    start.assert_called_once()
