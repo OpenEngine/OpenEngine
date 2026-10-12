@@ -51,11 +51,11 @@ const DefaultsContext = createContext<NewChatDefaults | null>(null);
 const ACTIVE_THREAD_KEY = "engine.activeThreadId";
 
 function useInitialThreadId(forcedThreadId?: string, restore = true) {
-  const storedThreadId = useRef(
+  const [storedThreadId] = useState(() =>
     forcedThreadId ?? (!restore || typeof window === "undefined"
       ? undefined
       : window.localStorage.getItem(ACTIVE_THREAD_KEY) ?? undefined),
-  ).current;
+  );
   const [result, setResult] = useState<{ loading: boolean; threadId?: string }>(() => ({
     loading: storedThreadId !== undefined,
   }));
@@ -92,8 +92,11 @@ function ThreadInitializationBridge({
   updateActiveTitle: ActiveThreadTitleUpdater;
 }) {
   const aui = useAui();
+  // oxlint-disable-next-line react/immutability -- Publish the imperative assistant-ui initializer through the shared bridge ref.
   initializer.current = () => aui.threadListItem.initialize();
+  // oxlint-disable-next-line react/immutability -- Publish the imperative thread reload callback through the shared bridge ref.
   reloadThreads.current = () => aui.threads.reload();
+  // oxlint-disable-next-line react/immutability -- Publish the active thread title callback through the shared bridge ref.
   updateActiveTitle.current = async (remoteId, title) => {
     if (aui.threadListItem.getState().remoteId === remoteId)
       await aui.threadListItem.rename(title);
@@ -172,6 +175,7 @@ export function ApprovalEventSubscription({
   open?: (url: string) => ApprovalEventConnection;
 }) {
   const messageCountRef = useRef(messageCount);
+  // oxlint-disable-next-line react/refs -- The long-lived approval subscription needs the latest count without reconnecting.
   messageCountRef.current = messageCount;
   useEffect(() => {
     // History publishes durable approvals before assistant-ui imports its
@@ -355,6 +359,7 @@ function EngineRuntime({
   const threadInitializerRef = useRef<ThreadInitializer["current"]>(null);
   const reloadThreadsRef = useRef<(() => Promise<void>) | null>(null);
   const updateActiveTitleRef = useRef<ActiveThreadTitleUpdater["current"]>(null);
+  // oxlint-disable-next-line react/refs -- Stable runtime adapters read the latest defaults when creating a thread.
   defaultsRef.current = defaults;
 
   const modelAdapter = useMemo<ChatModelAdapter>(
@@ -467,12 +472,13 @@ function EngineRuntime({
   );
 
   const runtime = useRemoteThreadListRuntime({
-    runtimeHook: () =>
-      useLocalRuntime(modelAdapter, {
+    runtimeHook: function useThreadRuntime() {
+      return useLocalRuntime(modelAdapter, {
         unstable_enableMessageQueue: true,
         // Preserve queued follow-ups while Stop transitions to the next run.
         unstable_queueClearOnCancel: false,
-      }),
+      });
+    },
     adapter: threadAdapter,
     initialThreadId,
     onThreadIdChange(threadId) {

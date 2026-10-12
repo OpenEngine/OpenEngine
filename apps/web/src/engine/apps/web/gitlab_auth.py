@@ -112,7 +112,7 @@ class GitLabCredentialStore(OAuthCredentialStore):
     def get_client_id(self) -> str | None:
         try:
             return keyring.get_password(_KEYRING_SERVICE, f"{_CLIENT_ID_PREFIX}{self.origin}")
-        except keyring.errors.NoKeyringError:
+        except keyring.errors.NoKeyringError:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             return None
 
     def set_client_id(self, client_id: str) -> None:
@@ -122,7 +122,7 @@ class GitLabCredentialStore(OAuthCredentialStore):
     def delete_client_id(self) -> None:
         try:
             keyring.delete_password(_KEYRING_SERVICE, f"{_CLIENT_ID_PREFIX}{self.origin}")
-        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
+        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             pass
 
 

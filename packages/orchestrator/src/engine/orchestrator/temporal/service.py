@@ -104,7 +104,7 @@ class TemporalService:
             return await self.client.service_client.check_health(
                 timeout=timedelta(seconds=2)
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 -- #779: health boundary reports false; monitor logs failure and restarts
             return False
 
     async def _boot(self) -> None:

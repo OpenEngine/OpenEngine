@@ -37,10 +37,10 @@ from engine.graph_runtime import GraphCompilationError, GraphId
 from engine.graph_runtime.inputs import WorkflowInput
 from engine.ports import SourceControl
 from engine.graph_runtime_langgraph.acp import answer_permission
-from engine.graph_runtime_langgraph.graphs import LangGraphDefinition
+from engine.graph_runtime_langgraph.graphs import LangGraphDefinition, unwrapped
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
 from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore
-from langgraph_acp import ACPAgentRegistry
+from langgraph_acp import ACPAgentProvider, ACPAgentRegistry
 
 #: LangGraph's checkpoints, and the runtime's own records. Two files because
 #: they answer to two different owners: one is Pregel's idea of where a run
@@ -242,6 +242,81 @@ def agent_registry(providers: Iterable[Any]) -> ACPAgentRegistry:
     )
 
 
+class AddedAgents(ACPAgentRegistry):
+    """Agents added with `engine agent add`, and the model each one's sessions ask for.
+
+    Filled by the process serving them -- the graph service -- and read by
+    workflow files through `with_added_agents`, so a workflow written for the
+    built-in agents can also run on one added after it was loaded.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.models: dict[str, str] = {}
+
+    def offer(self, provider: ACPAgentProvider, model: str = "") -> None:
+        self.register(provider, replace=True)
+        if model:
+            self.models[provider.name] = model
+        else:
+            self.models.pop(provider.name, None)
+
+    def withdraw(self, name: str) -> None:
+        self.unregister(name)
+        self.models.pop(name, None)
+
+
+#: This process's added agents: what its graph service offers.
+ADDED_AGENTS = AddedAgents()
+
+
+class WithAddedAgents(ACPAgentRegistry):
+    """A workflow's own agents, and then whatever `added` offers when a run asks."""
+
+    def __init__(self, providers: Iterable[ACPAgentProvider], added: AddedAgents) -> None:
+        super().__init__(providers)
+        self.added = added
+
+    def resolve(self, name: str) -> ACPAgentProvider:
+        if name in self.added and not super().__contains__(name):
+            return self.added.resolve(name)
+        return super().resolve(name)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted({*super().names, *self.added.names}))
+
+    def __contains__(self, name: object) -> bool:
+        return super().__contains__(name) or name in self.added
+
+    def model(self, name: str) -> str:
+        """The model an added agent's sessions ask for; empty for the workflow's own."""
+        return "" if super().__contains__(name) else self.added.models.get(name, "")
+
+
+def with_added_agents(
+    registry: ACPAgentRegistry, added: AddedAgents = ADDED_AGENTS
+) -> WithAddedAgents:
+    """`registry`'s agents, also resolving the agents added with `engine agent add`."""
+    return WithAddedAgents((registry.resolve(name) for name in registry.names), added)
+
+
+def added_agent_inputs(workflow: GraphWorkflow) -> frozenset[str]:
+    """The runner inputs whose every node also resolves the added agents.
+
+    Only these may offer an added agent: a node whose registry is its own
+    would refuse one as an unsupported runner when the run starts.
+    """
+    readers: dict[str, bool] = {}
+    for spec in getattr(workflow.builder, "nodes", {}).values():
+        node = unwrapped(spec.runnable)
+        key = getattr(node, "graph_node_runner_input", "")
+        if key:
+            offers = isinstance(getattr(node, "registry", None), WithAddedAgents)
+            readers[key] = readers.get(key, True) and offers
+    return frozenset(key for key, offers in readers.items() if offers)
+
+
 def _compiled(workflow: GraphWorkflow, checkpointer: Any) -> LangGraphDefinition:
     """Compile one graph, and name it if it will not compile.
 
@@ -262,6 +337,7 @@ async def sqlite_runtime(
     directory: str | Path,
     *,
     source_control: SourceControl | None = None,
+    allow_empty: bool = False,
 ) -> AsyncIterator[LangGraphRuntime]:
     """Every workflow, compiled against durable files, closed on the way out.
 
@@ -277,7 +353,8 @@ async def sqlite_runtime(
     means a failure here leaves nothing behind but the checkpoint file the
     `async with` is already closing.
     """
-    if not workflows:
+    # Daemons register graphs after startup; other callers still require a workflow.
+    if not workflows and not allow_empty:
         raise ValueError("a graph runtime needs at least one workflow")
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)

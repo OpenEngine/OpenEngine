@@ -645,7 +645,7 @@ class StdioACPSession:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- #779: prompt task delivers the error to its stream consumer
             stream.put_nowait(_Completion(error=exc))
         else:
             stream.put_nowait(

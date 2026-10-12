@@ -68,8 +68,8 @@ const LOGOS = [
 ];
 
 const PILLARS = [
-  ['workflows', 'Workflows', 'Your lifecycle as a graph. Add a reviewer once and it checks every change.'],
-  ['workorders', 'WorkOrders', 'One task, run through the graph. One model family builds, another reviews.'],
+  ['graphs', 'Graphs', 'Your lifecycle as a graph. Add a reviewer once and it checks every change.'],
+  ['loops', 'Loops', 'Run a graph on a cadence, within limits on pull requests and spend.'],
   ['integrations', 'Integrations', 'Start, steer and approve work from Slack threads and pull request comments.'],
 ];
 

@@ -20,6 +20,7 @@ import {
   type ApiUsage,
   type RunView,
 } from "./api";
+import { AddRepository } from "./onboarding";
 import { Stat, StatStrip } from "./brand";
 import {
   GITHUB_COMMENTS_ANCHOR,
@@ -102,6 +103,14 @@ export function usageLabel(usage: ApiUsage) {
     ? "< $0.01"
     : `$${usage.costUsd.toFixed(2)}`;
   return `${usage.estimated ? "≈ " : ""}${dollars}${usage.complete ? "" : " (partial)"}`;
+}
+
+/** An ISO-8601 instant as a date and time in the reader's own zone. */
+export function startedLabel(iso: string) {
+  const when = new Date(iso);
+  return Number.isNaN(when.getTime()) ? iso : when.toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  });
 }
 
 export function requesterLabel(requester: string) {
@@ -368,10 +377,13 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
 }
 
 export function NewWorkflowPage({
-  config,
+  config: initialConfig, onConfig,
 }: {
   config: EngineConfig;
+  onConfig?: (config: EngineConfig) => void;
 }) {
+  const [config, setConfig] = useState(initialConfig);
+  const [addingRepository, setAddingRepository] = useState(initialConfig.hasRepositories === false || !initialConfig.repositories.length);
   const [prompt, setPrompt] = useState(
     () => window.localStorage.getItem(WORKFLOW_DRAFT_KEY) ?? "",
   );
@@ -436,6 +448,16 @@ export function NewWorkflowPage({
     }
   }
 
+  if (addingRepository) return <main className="panel-scroll">
+    <AddRepository onComplete={(updated, path) => {
+      setConfig(updated);
+      onConfig?.(updated);
+      setRepository(path);
+      if (!workflowId) setWorkflowId(updated.workflows[0]?.id ?? "");
+      setAddingRepository(false);
+    }} />
+  </main>;
+
   return (
     <main className="panel-scroll">
       <header className="hero hero-narrow">
@@ -465,6 +487,7 @@ export function NewWorkflowPage({
             ))}
           </select>
         </label>
+        <button type="button" onClick={() => setAddingRepository(true)}>Add repository</button>
         <label>
           <span>Repository</span>
           <select
@@ -667,6 +690,11 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             {phaseLabel(step.status)}
           </span>
         </header>
+        {step.startedAt && (
+          <p className="step-outcome">
+            Started: <time dateTime={step.startedAt}>{startedLabel(step.startedAt)}</time>
+          </p>
+        )}
         {step.outcome && (
           <p className="step-outcome">
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
@@ -874,6 +902,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const workflowId = baseRun?.workflowId;
   useEffect(() => {
     let cancelled = false;
+    // oxlint-disable-next-line react/set-state-in-effect -- Clear stale topology when fetching a different workflow or retrying a failed request.
     setTopology(undefined);
     setWorkflowGone(false);
     setTopologyError("");
@@ -892,6 +921,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   useEffect(() => {
     let cancelled = false;
     let cursor = 0;
+    // oxlint-disable-next-line react/set-state-in-effect -- Reset the event stream when subscribing to a different run.
     setGraphEvents([]);
     let timer: number | undefined;
     // Kept up even once the run has finished, the way the rail's list is: an
@@ -939,6 +969,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
     const completed = new Set(
       graphEvents.filter((event) => event.type === "node.finished").map((event) => event.nodeId),
     );
+    // The latest start wins, so a retried node reads as when it began again.
+    const started = new Map<string, string>();
+    for (const event of graphEvents) {
+      if (event.type === "node.started" && event.nodeId && typeof event.payload.startedAt === "string")
+        started.set(event.nodeId, event.payload.startedAt);
+    }
     const active = new Set(graph.activeExecutions.map((execution) => execution.nodeId));
     const waiting = new Set(graph.pendingApprovals.map((approval) => approval.nodeId));
     return {
@@ -964,6 +1000,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           ))
             ? graphConversationUrl(runId, node.nodeId) : null,
           waiting: waiting.has(node.nodeId),
+          startedAt: started.get(node.nodeId),
           group: node.group || undefined,
           summary: typeof value === "string" ? value
             : typeof fields?.summary === "string" ? fields.summary : "",
@@ -1013,6 +1050,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <Stat label="Repository" value={run.repository} />
             {run.requester && (
               <Stat label="Requested by" value={requesterLabel(run.requester)} />
+            )}
+            {run.startedAt && (
+              <Stat label="Started" value={
+                <time dateTime={run.startedAt}>{startedLabel(run.startedAt)}</time>
+              } />
             )}
             {run.parentRunId && (
               <Stat label="Created by" value={

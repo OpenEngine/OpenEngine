@@ -64,15 +64,15 @@ class SingleToolBroker(ABC):
         self._credential: TextIO | None = None
 
     async def __aenter__(self) -> SingleToolBroker:
-        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-")
-        self._credential.write(self._token)
-        self._credential.flush()
+        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        self._credential.write(self._token)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
+        self._credential.flush()  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         try:
             self._server = await asyncio.start_server(
                 self._handle_connection, "127.0.0.1", 0
             )
         except BaseException:
-            self._credential.close()
+            self._credential.close()  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             raise
         return self
 
@@ -104,7 +104,7 @@ class SingleToolBroker(ABC):
         try:
             request = json.loads(await reader.readline())
             response = await self._submit(request)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: connection boundary returns invalid-request error
             response = {"ok": False, "error": f"invalid concierge request: {error}"}
         writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
         with suppress(ConnectionError):
@@ -257,7 +257,7 @@ async def serve_stdio(
             )
             if response is None:
                 continue
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: stdio boundary reports JSON-RPC error
             response = rpc_error(None, -32700, f"Parse error: {error}")
         sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
         sys.stdout.flush()

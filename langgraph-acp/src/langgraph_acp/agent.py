@@ -146,6 +146,10 @@ class ACPAgentRegistry:
             )
         self._providers[provider.name] = provider
 
+    def unregister(self, name: str) -> None:
+        """Stop offering `name`; a graph that still names it fails when it resolves."""
+        self._providers.pop(name, None)
+
     def resolve(self, name: str) -> ACPAgentProvider:
         """The provider registered as `name`."""
         provider = self._providers.get(name)

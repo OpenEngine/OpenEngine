@@ -31,29 +31,41 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
-from engine.domain import ApprovalDecision, ApprovalId, RunId
+from engine.runtime.repositories import RepositoryRegistry
+from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
 from engine.graph_runtime import (
     AmbiguousExecutionError,
     RunNotSteerableError,
     RunStatus,
+    UnknownGraphError,
     UnknownRunError,
 )
 from engine.graph_runtime.control import CANCELLED
 from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
-from engine.graph_runtime_langgraph import GraphWorkflow, LangGraphRuntime
+from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime
 from engine.ports import WorkspaceProvider
 from langgraph_acp import ACPAgentRegistry
 
 from engine.graph_runtime import GraphId
-from engine.graph_runtime.inputs import resolve_inputs
+from engine.graph_runtime.inputs import RUNNER_POLICIES, resolve_inputs
 from engine.graph_runtime.topology import GraphTopology
+from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig
 from engine.runtime.workflows import WorkflowLoadError, load_workflow_file
 
 from engine.graph_service.compile import compile_graph
+from engine.graph_service.session import (
+    BASE_INPUT,
+    SESSION_AGENTS,
+    SESSION_INPUT,
+    Session,
+    Sessions,
+    session_workflow,
+)
 from engine.graph_service.language import (
     STAGE_GROUPS,
     STAGES,
@@ -65,6 +77,7 @@ from engine.graph_service.language import (
 )
 from engine.graph_service.store import (
     OPEN_EXECUTION_STATUSES,
+    AgentRow,
     ExecutionRow,
     GraphRow,
     GraphServiceStore,
@@ -77,6 +90,18 @@ from engine.graph_service.store import (
 )
 
 log = logging.getLogger(__name__)
+
+#: The harnesses an added agent can run on.
+AGENT_KINDS = ("claude", "codex", "opencode")
+_AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: Query parameter names that carry a credential: an agent's url is stored and listed back, so none may ride in it.
+_CREDENTIAL_PARAMETER = re.compile(r"(key|token|secret|password|signature|sig|auth|credential)s?$")
+
+#: The provider an opencode agent with a url reaches its endpoint through.
+OPENCODE_URL_PROVIDER = "engine"
+
+AgentFactory = Callable[[AgentRow], Any]
+"""Builds the ACP provider an added agent runs as: one registered under `row.name`."""
 
 DEFAULT_PROJECT = "default"
 TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED})
@@ -193,10 +218,14 @@ class GraphService:
         start: StartRun | None = None,
         session_config: Mapping[str, object] | None = None,
         default_repository: str = "",
-        repositories: Mapping[str, str] | None = None,
+        repositories: Mapping[str, str] | RepositoryRegistry | None = None,
         default_base_ref: str = "origin/HEAD",
         model_tiers: Mapping[str, Mapping[str, str]] | None = None,
         allow_python: bool = True,
+        agent_factory: AgentFactory | None = None,
+        added_agents: AddedAgents | None = None,
+        session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
+        approval_policy: ApprovalConfig | None = None,
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
     ) -> None:
@@ -209,12 +238,28 @@ class GraphService:
         self._start = start or self._start_directly
         self._session_config = session_config
         self._default_repository = default_repository
-        self._repositories = dict(repositories or {})
+        self._repositories = (
+            repositories if isinstance(repositories, RepositoryRegistry)
+            else RepositoryRegistry(repositories, projects={})
+        )
         self._default_base_ref = default_base_ref
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._tick_seconds = tick_seconds
         self._model_tiers = model_tiers
         self._allow_python = allow_python
+        self._agent_factory = agent_factory
+        #: Added agents and their models, offered to workflow files too when this
+        #: process runs any. Compiled graphs hold its `models` dict, not a copy,
+        #: so a model changed here reaches graphs registered before the change.
+        self._added_agents = added_agents if added_agents is not None else AddedAgents()
+        #: What the registry held before any added agent: these cannot be replaced or removed.
+        self._builtin_agents = tuple(registry.names)
+        self._sessions = Sessions()
+        self._session_workflow = session_workflow(
+            workspace_provider, self._sessions,
+            tools=session_tools, policy=approval_policy or ApprovalConfig(),
+            default_base_ref=default_base_ref,
+        )
         self._sources = Path(database).parent / "registered-graphs"
         self._loaded: dict[str, Loaded] = {}
         self._lock = asyncio.Lock()
@@ -234,6 +279,12 @@ class GraphService:
         ids -- and steering still queued in memory is reported undelivered
         rather than left looking like it might still arrive.
         """
+        for agent in self.store.agents():
+            try:
+                self._offer_agent(agent)
+            except Exception:
+                log.exception("added agent %s could not be offered", agent.name)
+        self.runtime.register(self._session_workflow.compiled(self.runtime.checkpointer))
         for version in self.store.versions():
             try:
                 self._register(version)
@@ -254,6 +305,122 @@ class GraphService:
 
     def runners(self) -> tuple[str, ...]:
         return tuple(self._registry.names)
+
+    def added_agents(self) -> tuple[str, ...]:
+        """The runners `engine agent add` offers, beyond the built-in ones."""
+        return self._added_agents.names
+
+    # --- agents -------------------------------------------------------------
+
+    def agents_json(self) -> list[dict[str, Any]]:
+        added = {row.name: row for row in self.store.agents()}
+        return [self.agent_json(name, added.get(name)) for name in self._registry.names]
+
+    def agent_json(self, name: str, row: AgentRow | None = None) -> dict[str, Any]:
+        row = row or self.store.agent(name)
+        if row is not None:
+            return {
+                "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
+                "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
+            }
+        if name in self._builtin_agents:
+            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+        raise NotFound(f"no agent named {name!r}", agent=name)
+
+    async def add_agent(
+        self, kind: str, *, name: str = "", model: str = "", url: str = "", overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """Offer a harness under a name graphs can use, with its own model or endpoint."""
+        if self._agent_factory is None:
+            raise Unavailable("this backend does not support adding agents")
+        name = name or kind
+        if kind not in AGENT_KINDS:
+            raise ServiceError(f"kind must be one of {', '.join(AGENT_KINDS)}", kind=kind)
+        if not _AGENT_NAME.match(name) or name in RUNNER_POLICIES:
+            raise ServiceError(
+                "an agent name is lowercase letters, digits, - and _, and is not a runner policy", name=name,
+            )
+        if url and kind != "opencode":
+            raise ServiceError("only an opencode agent takes a url", kind=kind)
+        if url and not model:
+            raise ServiceError("an agent with a url needs a model to ask it for")
+        if url and not re.match(r"^https?://", url):
+            raise ServiceError("url must be http(s)", url=url)
+        if url and _carries_credential(url):
+            # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
+            raise ServiceError("url must not carry an api key in its query string")
+        if name in self._builtin_agents:
+            raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
+        async with self._lock:
+            existing = self.store.agent(name)
+            if existing is not None and not overwrite:
+                raise Conflict(f"an agent named {name} already exists; pass replace to change it", agent=name)
+            at = self._now_iso()
+            row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at)
+            self._offer_agent(row)
+            self.store.upsert_agent(row)
+        return self.agent_json(name, row)
+
+    async def remove_agent(self, name: str) -> dict[str, Any]:
+        if name in self._builtin_agents:
+            raise Conflict(f"{name} is built in and cannot be removed", agent=name)
+        async with self._lock:
+            row = self.store.agent(name)
+            if row is None:
+                raise NotFound(f"no agent named {name!r}", agent=name)
+            self.store.delete_agent(name)
+            self._registry.unregister(name)
+            self._added_agents.withdraw(name)
+        return {**self.agent_json(name, row), "removed": True}
+
+    def _offer_agent(self, row: AgentRow) -> None:
+        assert self._agent_factory is not None
+        provider = self._agent_factory(row)
+        self._registry.register(provider, replace=True)
+        self._added_agents.offer(provider, session_model(row) if row.model else "")
+
+    # --- sessions -----------------------------------------------------------
+
+    async def start_session(self, *, agent: str, repository: str, base_ref: str = "") -> dict[str, Any]:
+        """Start a run whose implementation node is a CLI the caller drives itself."""
+        if agent not in SESSION_AGENTS:
+            raise ServiceError(f"agent must be one of {', '.join(SESSION_AGENTS)}", agent=agent)
+        repository = self.resolve_repository((repository or self._default_repository).strip())
+        if not repository:
+            raise ServiceError("no repository: run from inside one, pass --repo, or configure a default on the backend")
+        session = self._sessions.create(agent)
+        inputs = {
+            SESSION_INPUT: session.session_id, MODE_INPUT: str(ForgeMode.CONNECTED),
+            **({BASE_INPUT: base_ref} if base_ref else {}),
+        }
+        session.run_id = str(await self._start(
+            self._session_workflow, StartRequest(f"Interactive {agent} session", repository, inputs),
+        ))
+        return self.session_json(session.session_id)
+
+    def session_json(self, session_id: str) -> dict[str, Any]:
+        session = self._session(session_id)
+        body: dict[str, Any] = {
+            "sessionId": session.session_id, "agent": session.agent,
+            "runId": session.run_id, "status": session.status,
+        }
+        if session.status == "failed":
+            body["error"] = str(session.ready.exception())
+        elif session.ready.done():
+            body.update(session.ready.result())
+        return body
+
+    async def end_session(self, session_id: str, summary: str = "") -> dict[str, Any]:
+        session = self._session(session_id)
+        if not session.ended.done():
+            session.ended.set_result(summary.strip())
+        return self.session_json(session_id)
+
+    def _session(self, session_id: str) -> Session:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise NotFound(f"no session {session_id}")
+        return session
 
     # --- graphs -------------------------------------------------------------
 
@@ -327,6 +494,13 @@ class GraphService:
                 self.store.insert_version(version)
             return self._graph_json(graph, version, definition=True), True
 
+    def workflows(self) -> tuple[GraphWorkflow, ...]:
+        """The latest usable graph definitions, for the WorkOrder form."""
+        return tuple(
+            loaded.workflow for graph in self.store.graphs(None)
+            if (loaded := self._loaded.get(graph.latest_version_id)) is not None
+        )
+
     def list_graphs(self, project: str | None) -> list[dict[str, Any]]:
         return [
             self._graph_json(graph, self.store.version(graph.latest_version_id))
@@ -367,7 +541,7 @@ class GraphService:
                 f"graph name {name!r} is ambiguous; name a project or use a graph id",
                 candidates=[{"graphId": graph.graph_id, "project": graph.project} for graph in matches],
             )
-        graph = matches[0]
+        graph = matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
         if not number:
             return graph, self._version(graph.latest_version_id)
         if not number.isdigit():
@@ -419,6 +593,8 @@ class GraphService:
     async def run_json(self, run_id: str) -> dict[str, Any]:
         try:
             snapshot = await self.runtime.snapshot(RunId(run_id))
+        except UnknownGraphError as unloadable:
+            raise NotFound(str(unloadable)) from unloadable
         except UnknownRunError:
             snapshot = None
         if snapshot is None:
@@ -431,11 +607,7 @@ class GraphService:
         record = await self.runtime.store.run(RunId(run_id))
         overrides = record.runner_overrides if record else {}
         values = snapshot.values or {}
-        results = {
-            str(node.node_id): values[node.node_id]
-            for node in (topology.nodes if topology else ())
-            if node.kind not in ("workspace", "join") and node.node_id in values
-        }
+        results = _results(topology, values)
         events = self.runtime.store.events_since(RunId(run_id))
         usage = usage_rollup(events)
         activity = _latest_activity(events)
@@ -444,8 +616,8 @@ class GraphService:
             failed = next((row for row in reversed(executions) if row.status == "failed"), None)
             node_id = failed.node_id if failed else ""
             failure = {"error": snapshot.error, "node": node_id or None}
-            runner = _runner_of(node_id, values, overrides, topology)
-            if auth := auth_required(snapshot.error, runner):
+            runner = _runner_of(node_id, values, overrides, topology)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
+            if auth := auth_required(snapshot.error, runner):  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 failure["authRequired"] = auth
 
         def runner(node_id: str) -> str:
@@ -480,6 +652,7 @@ class GraphService:
                 for item in snapshot.pending_approvals
             ],
             "results": results,
+            "output": _output(executions, results) if snapshot.status is RunStatus.COMPLETED else None,
             "failure": failure,
             "usage": usage.total.json(),
             "pullRequests": [
@@ -515,7 +688,7 @@ class GraphService:
                 break
             try:
                 snapshot = await self.runtime.snapshot(RunId(row.run_id))
-            except UnknownRunError:
+            except (UnknownRunError, UnknownGraphError):
                 snapshot = None
             if snapshot is None or (status and snapshot.status.value != status):
                 continue
@@ -709,7 +882,7 @@ class GraphService:
                 f"loop name {reference!r} is ambiguous; name a project or use a loop id",
                 candidates=[{"loopId": row.loop_id, "project": row.project} for row in matches],
             )
-        return matches[0]
+        return matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
 
     async def loop_json(self, loop_id: str) -> dict[str, Any]:
         row = self.store.loop(loop_id)
@@ -722,6 +895,10 @@ class GraphService:
             max(row.max_spend_usd - accounting.spend_usd, 0.0)
             if row.max_spend_usd is not None else None
         )
+        latest: dict[str, Any] | None = None
+        for _tick, run_id in reversed(self.store.loop_runs(row.loop_id)):
+            if latest := await self._completed_output(run_id):
+                break
         return {
             "loopId": row.loop_id,
             "name": row.name,
@@ -753,9 +930,22 @@ class GraphService:
                 ),
                 "spendScope": SPEND_SCOPE,
             },
+            "latestOutput": latest,
             "createdAt": row.created_at,
             "updatedAt": row.updated_at,
         }
+
+    async def _completed_output(self, run_id: str) -> dict[str, Any] | None:
+        """What a run produced, with its id, once it has completed; otherwise nothing."""
+        try:
+            snapshot = await self.runtime.snapshot(RunId(run_id))
+        except (UnknownRunError, UnknownGraphError):
+            return None
+        if snapshot is None or snapshot.status is not RunStatus.COMPLETED:
+            return None
+        results = _results(self.runtime.topology(snapshot.graph_id), snapshot.values or {})
+        output = _output(self.store.executions(run_id), results)
+        return {"runId": run_id, **output} if output else None
 
     async def pause_loop(self, project: str | None, reference: str, reason: str = "") -> dict[str, Any]:
         row = self.resolve_loop(project, reference)
@@ -828,7 +1018,7 @@ class GraphService:
         if row.active_run_id:
             try:
                 snapshot = await self.runtime.snapshot(RunId(row.active_run_id))
-            except UnknownRunError:
+            except (UnknownRunError, UnknownGraphError):
                 snapshot = None
             if snapshot is not None and snapshot.status not in TERMINAL_RUN_STATUSES:
                 return
@@ -998,6 +1188,7 @@ class GraphService:
                     registry=self._registry,
                     session_config=self._session_config,
                     model_tiers=self._model_tiers,
+                    agent_models=self._added_agents.models,
                     default_base_ref=self._default_base_ref,
                 ),
                 spec,
@@ -1074,6 +1265,8 @@ class GraphService:
             resolved = resolve_inputs(tuple(loaded.workflow.inputs), given)
         except ValueError as error:
             raise ServiceError(str(error)) from None
+        if loaded.spec is not None:
+            self._check_runner_inputs(loaded.spec, resolved)
         repository = self.resolve_repository(
             (repository or (loaded.spec.repository if loaded.spec else "") or self._default_repository).strip()
         )
@@ -1084,6 +1277,24 @@ class GraphService:
             )
         return StartRequest(instruction, repository, resolved)
 
+    def _check_runner_inputs(self, spec: GraphSpec, inputs: Mapping[str, str]) -> None:
+        """Refuse a run whose input names an agent this backend does not offer.
+
+        Registration leaves these unchecked, so a graph whose default is an
+        agent this backend lacks still registers and runs with another one.
+        """
+        available = self.runners()
+        names = {node.runner.value for node in spec.nodes if node.runner is not None and node.runner.kind == "input"}
+        for name in sorted(names):
+            chosen = inputs.get(name, "")
+            if chosen and chosen not in RUNNER_POLICIES and chosen not in available:
+                how = "--agent NAME" if name == "agent" else f"--input {name}=NAME"
+                raise ServiceError(
+                    f"agent {chosen!r} is not available on this backend "
+                    f"(available: {', '.join(available) or 'none'}); choose one with {how}",
+                    available=list(available),
+                )
+
     def resolve_repository(self, repository: str) -> str:
         """A `[repos]` name or `owner/repo` as the checkout it names; a path as itself.
 
@@ -1092,10 +1303,11 @@ class GraphService:
         """
         if not repository or repository == ".":
             return repository
-        if repository in self._repositories:
-            return str(Path(self._repositories[repository]).expanduser())
+        repos = self._repositories.snapshot.repos
+        if repository in repos:
+            return str(Path(repos[repository]).expanduser())
         folded = repository.lower().removesuffix(".git")
-        for name, path in self._repositories.items():
+        for name, path in repos.items():
             if name.lower() == folded:
                 return str(Path(path).expanduser())
         return repository
@@ -1161,6 +1373,28 @@ class GraphService:
         return now_iso(self._clock())
 
 
+def _results(topology: Any, values: Mapping[str, Any]) -> dict[str, Any]:
+    """Each node's result in a run's state, leaving out checkouts and joins."""
+    return {
+        str(node.node_id): values[node.node_id]
+        for node in (topology.nodes if topology else ())
+        if node.kind not in ("workspace", "join") and node.node_id in values
+    }
+
+
+def _output(executions: Sequence[ExecutionRow], results: Mapping[str, Any]) -> dict[str, Any] | None:
+    """A run's output: the result of the node that completed last.
+
+    That is the node the run ended on, so a graph that ends in a report has the
+    report as its output, whichever route it took to get there.
+    """
+    finished = [row for row in executions if row.status == "completed" and row.node_id in results]
+    if not finished:
+        return None
+    last = max(reversed(finished), key=lambda row: row.finished_at or "")
+    return {"node": last.node_id, "finishedAt": last.finished_at, "value": results[last.node_id]}
+
+
 def _latest_activity(events: Sequence[RuntimeEvent]) -> dict[str, dict[str, str]]:
     """Per execution: the agent's last message, and the last thing it did."""
     latest: dict[str, dict[str, str]] = {}
@@ -1188,7 +1422,7 @@ def _runner_of(
     if isinstance(used, str) and used:
         return used
     if node_id in overrides:
-        return overrides[node_id]  # type: ignore[index]
+        return overrides[node_id]
     node = topology.node(node_id) if topology else None  # type: ignore[arg-type]
     return node.runner if node else ""
 
@@ -1284,6 +1518,34 @@ def _progress(
     return {"graphNodes": nodes, "edges": edges, "stages": stages, "current": current}
 
 
+def _carries_credential(url: str) -> bool:
+    """Whether `url`'s query string names a key, token or other secret, e.g. `?api_key=...`."""
+    return any(
+        _CREDENTIAL_PARAMETER.search(re.sub(r"[^a-z]", "", name.lower()))
+        for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+    )
+
+
+def session_model(row: AgentRow) -> str:
+    """The model an added agent's sessions ask for: on its own endpoint, OpenCode's `provider/model`."""
+    return f"{OPENCODE_URL_PROVIDER}/{row.model}" if row.url else row.model
+
+
+def opencode_config(row: AgentRow) -> dict[str, Any]:
+    """The `OPENCODE_CONFIG_CONTENT` an opencode agent runs with: its model, and its endpoint if any."""
+    config: dict[str, Any] = {"model": session_model(row)} if row.model else {}
+    if row.url:
+        config["provider"] = {
+            OPENCODE_URL_PROVIDER: {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": row.name,
+                "options": {"baseURL": row.url},
+                "models": {row.model: {"name": row.model}},
+            },
+        }
+    return config
+
+
 def _parse_yaml(source: str, *, runners: Sequence[str] | None) -> GraphSpec:
     try:
         raw = yaml.safe_load(source)
@@ -1299,10 +1561,10 @@ def auth_required(error: str, runner: str) -> dict[str, str] | None:
     target = runner or "<runner>"
     return {
         "runner": runner or "",
-        "command": f"engine runner signin {target}",
+        "command": f"engine agent signin {target}",
         "message": (
-            f"runner {target} is not signed in on this backend; run "
-            f"`engine runner signin {target}` and retry"
+            f"agent {target} is not signed in on this backend; run "
+            f"`engine agent signin {target}` and retry"
         ),
     }
 
@@ -1363,7 +1625,9 @@ def _digest(value: object) -> str:
 
 
 __all__ = [
+    "AGENT_KINDS",
     "Accounting",
+    "AgentFactory",
     "Conflict",
     "DEFAULT_PROJECT",
     "GraphService",
@@ -1374,4 +1638,6 @@ __all__ = [
     "StartRun",
     "Unavailable",
     "auth_required",
+    "opencode_config",
+    "session_model",
 ]

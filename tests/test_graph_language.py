@@ -9,7 +9,7 @@ from engine.cli import starters
 from engine.graph_service.language import GraphError, parse_graph
 
 SKETCH = """
-apiVersion: openengine.dev/v1
+apiVersion: openengine.cc/v1
 kind: Graph
 name: sketch
 
@@ -121,6 +121,13 @@ def test_every_starter_parses() -> None:
         assert spec.node("reviewers") is not None and spec.node("reranker") is not None
 
 
+def test_adversarial_review_checks_out_the_branch_and_runs_the_agent_input() -> None:
+    spec = parse_graph(yaml.safe_load(starters.source("adversarial-review")))
+    assert spec.ref_input == "branch"
+    assert {item.name for item in spec.inputs} == {"branch", "agent"}
+    assert spec.node("reviewers").runner.kind == spec.node("reranker").runner.kind == "input"
+
+
 def test_mistakes_are_reported_with_their_section() -> None:
     raw = yaml.safe_load(SKETCH)
     raw["implementation"]["setup"] = {"base_ref": "origin/main"}
@@ -209,7 +216,7 @@ def test_the_sketch_compiles_to_langgraph(tmp_path) -> None:
 ])
 def test_invalid_graph_fields_report_their_location(field, value, path):
     raw = {
-        "apiVersion": "openengine.dev/v1", "name": "validation",
+        "apiVersion": "openengine.cc/v1", "name": "validation",
         "implementation": {"work": {"agent": "claude", "prompt": "go"}},
         field: value,
     }
@@ -246,7 +253,7 @@ def test_invalid_graph_fields_report_their_location(field, value, path):
 ])
 def test_invalid_agent_settings_report_their_location(fields, path):
     raw = {
-        "apiVersion": "openengine.dev/v1", "name": "validation",
+        "apiVersion": "openengine.cc/v1", "name": "validation",
         "implementation": {"work": {"agent": "claude", "prompt": "go", **fields}},
     }
     with pytest.raises(GraphError) as raised:

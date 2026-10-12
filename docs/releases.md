@@ -40,7 +40,7 @@ python scripts/build_release.py --commit <source-commit-sha>
 On macOS or Linux (x86_64 or arm64), with only `curl` and `tar`:
 
 ```sh
-curl -LsSf https://openengine.sh/install.sh | sh
+curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
 `scripts/install.sh` is published on the site and attached to each release. It

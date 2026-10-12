@@ -21,10 +21,11 @@ restart without requiring an external database service.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from langgraph_acp.providers import (
@@ -33,8 +34,10 @@ from langgraph_acp.providers import (
     OPENCODE_ACP_COMMAND,
     ClaudeACPProvider,
     CodexACPProvider,
+    OpenCodeACPProvider,
 )
 
+from engine.runtime.repositories import RepositoryRegistry
 from engine.adapters.agent_runner.acp import (
     READ_ONLY_TOOLS,
     allowed_tools_for,
@@ -85,9 +88,11 @@ from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
 from engine.graph_runtime import GraphRuntime, GraphWorkflow
-from engine.graph_runtime_langgraph import LangGraphRuntime
+from engine.graph_runtime_langgraph import ADDED_AGENTS, LangGraphRuntime, answer_permission
 from engine.graph_runtime_langgraph.workflows import RUNS, agent_registry, sqlite_runtime
 from engine.graph_service import GraphService, StartRun
+from engine.graph_service.service import opencode_config
+from engine.graph_service.store import AgentRow
 from engine.ports import AgentRunner, Communications, SourceControl
 from engine.runtime import (
     AgentSession,
@@ -235,7 +240,7 @@ def build_capabilities(
     )
 
     def _gitlab_origin() -> str:
-        return (
+        return (  # pyright: ignore[reportReturnType]  # Baseline: see docs/pyright.md
             settings.source_control_preferences.gitlab_origin()
             if settings.source_control_preferences is not None
             and settings.source_control_preferences.gitlab_origin()
@@ -298,7 +303,7 @@ def build_capabilities(
     return Capabilities(
         sandbox=sandbox,
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host),
-        source_control=source_control,
+        source_control=source_control,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         agent_runner=codex_acp_runner(
             command=settings.codex_acp_command,
             timeout_seconds=settings.codex_timeout_seconds,
@@ -371,25 +376,17 @@ def build_graph_runtime(
     settings: Settings,
     graphs: Sequence[GraphWorkflow],
     source_control: SourceControl | None = None,
-) -> AbstractAsyncContextManager[GraphRuntime] | None:
-    """The engine that runs graph workflows, or nothing when there are none.
+) -> AbstractAsyncContextManager[GraphRuntime]:
+    """Open the graph engine even before a project has registered its first graph.
 
-    It hands back an *unopened* context manager rather than a running engine,
-    because starting one opens database files that somebody then has to close.
-    The web application opens it when the server starts and closes it when the
-    server stops, which is the only lifetime that gets that right.
-
-    `None` when this deployment's workflow directory holds no graphs: there is
-    nothing to run, so there is no reason to open the files. The interface then
-    offers no graph entries, which is what keeps a person from picking one
-    that nothing here could start.
+    Onboarding registers starter graphs in the running daemon, so an empty
+    workflow directory must still have a runtime ready to accept them.
     """
-    if not graphs:
-        return None
     return sqlite_runtime(
-        tuple(graphs),
+        tuple(graphs),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         settings.graph_state_directory,
         source_control=source_control,
+        allow_empty=True,
     )
 
 
@@ -397,7 +394,7 @@ def build_graph_service(
     settings: Settings,
     *,
     default_repository: str = "",
-    repositories: Mapping[str, str] | None = None,
+    repositories: Mapping[str, str] | RepositoryRegistry | None = None,
 ) -> Callable[[LangGraphRuntime, StartRun], GraphService]:
     config = settings.engine_config
     """How the daemon offers registered graphs, once its graph engine is open.
@@ -406,6 +403,7 @@ def build_graph_service(
     the runtime and the runtime does not exist until the server starts. Its
     agents are langgraph-acp sessions on the same providers the workflow
     directory's graphs use; its tables live in the graph engine's own file.
+    Agents added through it are offered to those graphs as well.
     """
 
     def build(runtime: LangGraphRuntime, start: StartRun) -> GraphService:
@@ -413,16 +411,33 @@ def build_graph_service(
             runtime,
             Path(settings.graph_state_directory) / RUNS,
             workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
-            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider()]),
+            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]),
+            agent_factory=added_agent,
+            added_agents=ADDED_AGENTS,
             start=start,
             session_config=claude_session_config_for(settings),
             default_repository=default_repository,
             repositories=repositories,
             model_tiers=config.model_tiers,
             allow_python=config.graphs.allow_python,
+            session_tools=config.sessions.tools,
+            approval_policy=config.approvals,
         )
 
     return build
+
+
+def added_agent(row: AgentRow) -> object:
+    """The provider an agent added with `engine agent add` runs as, answering permissions like the built-ins."""
+    if row.kind == "claude":
+        provider: object = ClaudeACPProvider(name=row.name)
+    elif row.kind == "codex":
+        provider = CodexACPProvider(name=row.name)
+    else:
+        config = opencode_config(row)
+        env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)} if config else None
+        provider = OpenCodeACPProvider(name=row.name, env=env)
+    return replace(provider, permissions=answer_permission)
 
 
 def claude_session_config_for(settings: Settings) -> dict[str, object] | None:

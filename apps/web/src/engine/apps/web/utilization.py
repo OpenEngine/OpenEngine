@@ -479,7 +479,7 @@ class UtilizationService:
             reading = await self._readers[runner](client)
         except UtilizationError as error:
             return RunnerUtilization(runner=runner, error=str(error), remedy=error.remedy)
-        except Exception as error:  # noqa: BLE001 -- one runner must not fail the page
+        except Exception as error:  # noqa: BLE001 -- #779: scrape boundary reports runner error to the page
             return RunnerUtilization(runner=runner, error=str(error) or type(error).__name__)
         return replace(reading, runner=runner, read_at=time.time())
 

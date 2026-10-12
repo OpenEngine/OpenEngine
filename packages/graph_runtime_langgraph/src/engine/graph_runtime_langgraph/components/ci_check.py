@@ -75,10 +75,10 @@ class CICheck:
                 )
                 # GitHub supplies a conclusion; GitLab uses terminal statuses.
                 if (known_requirements or jobs) and all(
-                    job.status.lower() in _TERMINAL for job in jobs
+                    job.status.lower() in _TERMINAL for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
                 ):
                     failed = [
-                        job for job in jobs
+                        job for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
                         if (job.conclusion or job.status).lower()
                         not in _PASSING
                     ]

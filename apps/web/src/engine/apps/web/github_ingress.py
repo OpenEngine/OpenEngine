@@ -145,15 +145,15 @@ def review_request_from_payload(
     reviewer, sender = payload.get("requested_reviewer"), payload.get("sender")
     if not all(isinstance(item, dict) for item in (pull_request, repository, reviewer, sender)):
         return None
-    login = reviewer.get("login")
+    login = reviewer.get("login")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
     if not isinstance(login, str) or login.lower() != self_login.lower():
         return None
-    if pull_request.get("state") != "open" or sender.get("type") == "Bot":
+    if pull_request.get("state") != "open" or sender.get("type") == "Bot":  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         return None
-    head = pull_request.get("head")
+    head = pull_request.get("head")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
     head_repository = head.get("repo") if isinstance(head, dict) else None
-    full_name, actor = repository.get("full_name"), sender.get("login")
-    number = pull_request.get("number")
+    full_name, actor = repository.get("full_name"), sender.get("login")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
+    number = pull_request.get("number")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         return None
     if not isinstance(full_name, str) or not full_name or not isinstance(actor, str) or not actor:
@@ -168,9 +168,9 @@ def review_request_from_payload(
         return None
     return GithubReviewRequest(
         repository=full_name, number=number, sender=actor,
-        title=str(pull_request.get("title") or ""),
-        url=str(pull_request.get("html_url") or ""),
-        branch=branch, head_sha=sha, sender_id=_account_id(sender),
+        title=str(pull_request.get("title") or ""),  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
+        url=str(pull_request.get("html_url") or ""),  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
+        branch=branch, head_sha=sha, sender_id=_account_id(sender),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     )
 
 
@@ -195,21 +195,21 @@ def assignment_from_payload(
     assignee, sender = payload.get("assignee"), payload.get("sender")
     if not all(isinstance(item, dict) for item in (issue, repository, assignee, sender)):
         return None
-    login = assignee.get("login")
+    login = assignee.get("login")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
     if not isinstance(login, str) or login.lower() != self_login.lower():
         return None
-    if "pull_request" in issue or issue.get("state") != "open":
+    if "pull_request" in issue or issue.get("state") != "open":  # pyright: ignore[reportAttributeAccessIssue, reportOperatorIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         return None
-    number, full_name, actor = issue.get("number"), repository.get("full_name"), sender.get("login")
+    number, full_name, actor = issue.get("number"), repository.get("full_name"), sender.get("login")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         return None
     if not isinstance(full_name, str) or not full_name or not isinstance(actor, str) or not actor:
         return None
     return GithubAssignment(
         repository=full_name, number=number, assignee=login, sender=actor,
-        title=str(issue.get("title") or ""), body=str(issue.get("body") or ""),
-        url=str(issue.get("html_url") or ""),
-        sender_id=_account_id(sender),
+        title=str(issue.get("title") or ""), body=str(issue.get("body") or ""),  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
+        url=str(issue.get("html_url") or ""),  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
+        sender_id=_account_id(sender),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     )
 
 

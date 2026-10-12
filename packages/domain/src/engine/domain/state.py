@@ -7,6 +7,7 @@ projection the runtime repairs from that truth.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 from engine.domain.ids import (
@@ -73,6 +74,8 @@ class RunState:
     inputs: dict[str, str] = field(default_factory=dict)
     requester: str | None = None
     """Who started this work, as ``github:<id>:<login>`` or ``slack:<team>:<user>``."""
+    started_at: datetime | None = None
+    """When the graph engine was handed this work; ``None`` while scheduled."""
 
     @property
     def is_terminal(self) -> bool:

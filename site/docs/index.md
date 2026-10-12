@@ -12,7 +12,7 @@ On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
 logged in on this machine, run:
 
 ```sh
-curl -LsSf https://openengine.sh/install.sh | sh
+curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
 This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
@@ -25,7 +25,8 @@ and rerun the installer to upgrade.
 ## Concepts
 
 <div className="cards">
-  <a href="/docs/workflows/"><strong>Workflows</strong><span>Your SDLC as a LangGraph graph.</span></a>
-  <a href="/docs/workorders/"><strong>WorkOrders</strong><span>One task, run through a workflow.</span></a>
+  <a href="/docs/graphs/"><strong>Graphs</strong><span>How a change gets made, as a versioned graph.</span></a>
+  <a href="/docs/loops/"><strong>Loops</strong><span>Run a graph on a cadence, within limits.</span></a>
+  <a href="/docs/cli-reference/"><strong>CLI reference</strong><span>Every engine command and option.</span></a>
   <a href="/docs/integrations/"><strong>Integrations</strong><span>Slack, GitHub and MCP clients.</span></a>
 </div>

@@ -53,6 +53,11 @@
         },
         {
           "type": "toml",
+          "path": "packages/adapters/sandbox/process/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
+          "type": "toml",
           "path": "packages/adapters/source_control/github/pyproject.toml",
           "jsonpath": "$.project.version"
         },

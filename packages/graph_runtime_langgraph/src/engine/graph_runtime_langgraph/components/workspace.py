@@ -82,7 +82,7 @@ class WorkspaceNode:
         await execution.say(f"Checking {repository} out at {base_ref}.")
         workspace = await self.provider.provision(
             repository, base_ref, co_author=str(state.get(CO_AUTHOR) or ""),
-            **({"issue": state["issue"]} if state.get("issue") else {}),
+            **({"issue": state["issue"]} if state.get("issue") else {}),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         )
         # Checked here rather than left for whoever reads the state, so the
         # complaint names the provider that answered rather than the node three

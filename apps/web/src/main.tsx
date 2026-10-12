@@ -228,8 +228,9 @@ function currentRoute(): Route {
  *  The chat runtime is mounted around every page so conversation routes can
  *  render their thread while workflow pages keep their own run UI. */
 function App() {
-  const route = useMemo(currentRoute, []);
+  const route = useMemo(() => currentRoute(), []);
   const [config, setConfig] = useState<EngineConfig | null>(null);
+  const [firstRun, setFirstRun] = useState(false);
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
@@ -241,6 +242,7 @@ function App() {
     api<EngineConfig>("/api/config")
       .then((value) => {
         setConfig(value);
+        setFirstRun(value.hasRepositories === false);
         setAgentId(newChatAgent(value));
         setRunner(value.defaultRunner);
       })
@@ -297,9 +299,11 @@ function App() {
       <div className="app-shell">
         {sidebar()}
         {route.kind === "runs" ? (
-          <RunsPage runs={runs.filter((run) => run.phase !== "scheduled")} error={runsError} />
+          firstRun
+            ? <NewWorkflowPage config={config} onConfig={setConfig} />
+            : <RunsPage runs={runs.filter((run) => run.phase !== "scheduled")} error={runsError} />
         ) : route.kind === "new-run" ? (
-          <NewWorkflowPage config={config} />
+          <NewWorkflowPage config={config} onConfig={setConfig} />
         ) : route.kind === "run" ? (
           <RunDetailPage runId={route.runId} />
         ) : route.kind === "graph-conversation" ? (

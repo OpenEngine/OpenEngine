@@ -13,6 +13,11 @@
     POST /nodes/{execution_id}/steering
     POST /loops   GET /loops   GET /loops/{ref}
     POST /loops/{ref}/pause   POST /loops/{ref}/resume
+    GET  /agents   POST /agents       agents graphs can name; add {kind, name?, model?, url?, replace?}
+    GET  /agents/{name}   DELETE /agents/{name}
+    POST /sessions                    start {agent, repository, baseRef?}: a run whose implementation node is your CLI
+    GET  /sessions/{id}               starting | ready (workspace, mcp, instructions, settings) | ended | failed
+    POST /sessions/{id}/end           {summary?}: the CLI exited; finish the run
     GET  /backend                     what this backend runs graphs with
 
 `project` is a query parameter on reads and a body field on writes. JSON in
@@ -148,9 +153,52 @@ def create_app(service: GraphService) -> Starlette:
             max_spend_usd=body.get("maxSpendUsd"),
         ))
 
+    async def list_agents(_request: Request) -> JSONResponse:
+        return JSONResponse({"agents": service.agents_json()})
+
+    async def add_agent(request: Request) -> JSONResponse:
+        body = await _body(request)
+        overwrite = body.get("replace", False)
+        if not isinstance(overwrite, bool):
+            raise _BadRequest("replace must be a boolean")
+        return JSONResponse(await service.add_agent(
+            _text(body, "kind"),
+            name=_text(body, "name"),
+            model=_text(body, "model"),
+            url=_text(body, "url"),
+            overwrite=overwrite,
+        ), status_code=201)
+
+    async def get_agent(request: Request) -> JSONResponse:
+        return JSONResponse(service.agent_json(request.path_params["name"]))
+
+    async def remove_agent(request: Request) -> JSONResponse:
+        return JSONResponse(await service.remove_agent(request.path_params["name"]))
+    async def start_session(request: Request) -> JSONResponse:
+        body = await _body(request)
+        return JSONResponse(await service.start_session(
+            agent=_text(body, "agent") or "claude",
+            repository=_text(body, "repository"),
+            base_ref=_text(body, "baseRef"),
+        ), status_code=201)
+
+    async def get_session(request: Request) -> JSONResponse:
+        return JSONResponse(service.session_json(request.path_params["session_id"]))
+
+    async def end_session(request: Request) -> JSONResponse:
+        body = await _body(request)
+        return JSONResponse(await service.end_session(request.path_params["session_id"], _text(body, "summary")))
+
     app = Starlette(
         routes=[
             Route("/backend", _guard(backend)),
+            Route("/agents", _guard(list_agents)),
+            Route("/agents", _guard(add_agent), methods=["POST"]),
+            Route("/agents/{name}", _guard(get_agent)),
+            Route("/agents/{name}", _guard(remove_agent), methods=["DELETE"]),
+            Route("/sessions", _guard(start_session), methods=["POST"]),
+            Route("/sessions/{session_id}", _guard(get_session)),
+            Route("/sessions/{session_id}/end", _guard(end_session), methods=["POST"]),
             Route("/graphs", _guard(list_graphs)),
             Route("/graphs", _guard(add_graph), methods=["POST"]),
             Route("/graphs/{ref:path}", _guard(get_graph)),

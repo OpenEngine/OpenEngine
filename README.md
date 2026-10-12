@@ -2,7 +2,7 @@
 
 [![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
 [![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
-[![Docs](https://img.shields.io/badge/docs-openengine.sh-blue)](https://openengine.sh/docs/)
+[![Docs](https://img.shields.io/badge/docs-openengine.cc-blue)](https://openengine.cc/docs/)
 
 OpenEngine is a graph execution engine that meets you where you work.
 
@@ -18,7 +18,7 @@ On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
 logged in on this machine, run:
 
 ```bash
-curl -LsSf https://openengine.sh/install.sh | sh
+curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
 On Windows, use Windows Subsystem for Linux (WSL). If needed, run
@@ -27,7 +27,7 @@ complete the Linux distribution's first-run setup. Install Git and Node.js
 20.19+ and log in to Codex or Claude inside WSL, then run from PowerShell:
 
 ```powershell
-wsl sh -c "curl -LsSf https://openengine.sh/install.sh | sh"
+wsl sh -c "curl -LsSf https://openengine.cc/install.sh | sh"
 ```
 
 Run subsequent `engine` commands inside WSL.
@@ -83,11 +83,21 @@ The binary is `engine`. Run it with no arguments to list its commands:
 - `engine daemon` runs the local service in the background; see
   [Background service](docs/releases.md#background-service).
 - `engine connect gh|github|gitlab|slack` connects the selected backend's shared
-  source control or Slack.
+  source control or Slack; `engine connections` shows them and
+  `engine disconnect` undoes one.
+- `engine agent add|get|remove|signin` and `engine agents` manage the agents
+  graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
+  such as `engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
+- `engine agent claude` starts a run whose implementation node is Claude Code
+  in this terminal: the daemon checks the repository out into a fresh
+  workspace and gives claude the same `git_subcommand` and `open_pull_request`
+  tools an implementation node gets (`[sessions] tools` in `engine.toml`
+  changes which). The run ends when claude exits. Arguments after `--` go to
+  `claude`.
 - `engine graph`, `engine run`, `engine loop`, `engine node` and their list
   forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
-  graphs; `engine backend` chooses which daemon they talk to, and
-  `engine runner signin` signs a runner in. See [cli/README.md](cli/README.md).
+  graphs; `engine backend` chooses which daemon they talk to. See
+  [cli/README.md](cli/README.md).
 
 While working on OpenEngine itself, run the development server instead:
 ```bash
@@ -213,8 +223,12 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
 To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
-To add a repository and command approvals locally in `.engine/config.toml`, see
-[repository onboarding](docs/repository-onboarding.md).
+Onboard a GitHub project with `engine onboard https://github.com/owner/repo`.
+It checks prerequisites, clones the repository, saves configuration, and makes
+it available immediately without restarting. The web UI's **Add repository**
+action and MCP's `onboard_repository` tool provide the same onboarding.
+See [repository onboarding](docs/repository-onboarding.md) for options and the
+manual configuration reference.
 
 ## What is it.
 

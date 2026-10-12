@@ -1,8 +1,8 @@
-"""`engine backend|graph|graphs|run|runs|loop|loops|node|nodes|runner`.
+"""`engine backend|graph|graphs|run|runs|loop|loops|node|nodes|agent|agents|runner`.
 
 Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
 the one `engine backend use` chose -- and print JSON unless `--pretty` asks
-for something to read. Errors go to stderr; the exit status is 0 on success,
+for something to read. List commands print a table unless `--json` asks for JSON. Errors go to stderr; the exit status is 0 on success,
 1 on a refusal or a failed run, and 2 on a usage mistake.
 `graph spec` and `loop spec` print local Markdown specifications offline.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -23,21 +24,27 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
-from engine.cli import backends, repository
+from engine.cli import backends, repository, starters
 from engine.cli.backends import Backend, BackendError
 from engine.cli.http import Client, RequestFailed
 from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
-    "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "runner",
+    "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
+    "runner", "onboard",
 })
+#: Commands that still parse but are not advertised in `engine --help`.
+HIDDEN = frozenset({"runner"})
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 WAIT_INTERVAL_SECONDS = 2.0
 TERMINAL_STEERING = frozenset({"applied", "rejected", "undelivered"})
 
-#: How each runner signs in on the machine its daemon runs on.
+#: The harnesses an agent runs on.
+AGENT_KINDS = ("claude", "codex", "opencode")
+
+#: How each kind of agent signs in on the machine its daemon runs on.
 SIGNIN = {
     "codex": (["codex", "login"], ""),
     "claude": (["claude"], "type /login, finish signing in, then /exit"),
@@ -45,12 +52,20 @@ SIGNIN = {
 }
 
 
-def add_parsers(commands: argparse._SubParsersAction) -> None:
-    """Add these commands to the `engine` parser."""
+def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAction:
+    """Add these commands to the `engine` parser.
+
+    Answers `engine agent`'s actions, so the terminal app can add the ones that
+    run here rather than on a backend, such as `engine agent claude`.
+    """
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--backend", metavar="NAME", help="the backend to use (default: the selected one)")
     common.add_argument("--pretty", action="store_true", help="human-readable output instead of JSON")
     scoped = argparse.ArgumentParser(add_help=False, parents=[common])
+    # List commands print a table by default; `--pretty` is still accepted so older scripts keep working.
+    listed = argparse.ArgumentParser(add_help=False)
+    listed.add_argument("--json", action="store_true", help="JSON instead of a table")
+    listed.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
     scoped.add_argument("--project", metavar="NAME", help="the project names resolve in (default: the backend's)")
 
     backend = commands.add_parser("backend", help="choose which engine daemon commands talk to")
@@ -65,16 +80,20 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     adding.add_argument("--replace", action="store_true", help="overwrite a backend with this name")
     adding.add_argument("--pretty", action="store_true")
     for name, help_text in (("list", "list backends"), ("use", "select a backend"), ("remove", "forget a backend")):
-        action = actions.add_parser(name, help=help_text)
+        action = actions.add_parser(name, parents=[listed] if name == "list" else [], help=help_text)
         if name != "list":
             action.add_argument("name")
+            action.add_argument("--pretty", action="store_true")
         else:
             action.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
-        action.add_argument("--pretty", action="store_true")
-    listing = commands.add_parser("backends", help="list backends")
+    listing = commands.add_parser("backends", parents=[listed], help="list backends")
     listing.add_argument("action", nargs="?", choices=("list",), default="list")
     listing.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
-    listing.add_argument("--pretty", action="store_true")
+
+    onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
+    onboard.add_argument("url", nargs="?")
+    onboard.add_argument("--path", help="checkout path on the daemon machine")
+    onboard.add_argument("--mode", choices=("connected", "disconnected"))
 
     graph = commands.add_parser("graph", help="register, inspect and run graphs")
     actions = graph.add_subparsers(dest="action", required=True)
@@ -87,17 +106,18 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     getting = actions.add_parser("get", parents=[scoped], help="a graph and its exact definition")
     getting.add_argument("graph", help="a name, name@VERSION, graph id or version id")
     running = actions.add_parser("run", parents=[scoped], help="run a graph with an instruction")
-    running.add_argument("graph")
-    running.add_argument("instruction")
+    running.add_argument("graph", help=f"a graph, or a built-in one: {', '.join(starters.NAMES)}")
+    running.add_argument("instruction", nargs="?", default="", help="what to do (default: run the graph)")
     running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
+    running.add_argument("--branch", default="", help="the branch to check out (sets the branch input)")
+    running.add_argument("--agent", default="", help="the agent to run (sets the agent input)")
     running.add_argument("--repo", default="", help="repository to check out")
     running.add_argument("--wait", action="store_true", help="wait for the run to finish")
     running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
     running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
-    graphs = commands.add_parser("graphs", help="list graphs")
+    graphs = commands.add_parser("graphs", parents=[listed], help="list graphs")
     graphs.add_argument("action", nargs="?", choices=("list",), default="list")
     graphs.add_argument("--backend", metavar="NAME")
-    graphs.add_argument("--pretty", action="store_true")
     graphs.add_argument("--project", metavar="NAME")
     graphs.add_argument("--all-projects", action="store_true")
 
@@ -108,10 +128,9 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     waiting = actions.add_parser("wait", parents=[common], help="wait for a run to finish")
     waiting.add_argument("run_id")
     waiting.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
-    runs = commands.add_parser("runs", help="list runs, newest first")
+    runs = commands.add_parser("runs", parents=[listed], help="list runs, newest first")
     runs.add_argument("action", nargs="?", choices=("list",), default="list")
     runs.add_argument("--backend", metavar="NAME")
-    runs.add_argument("--pretty", action="store_true")
     runs.add_argument("--project", metavar="NAME")
     runs.add_argument("--all-projects", action="store_true")
     runs.add_argument("--graph", default="", help="only runs of this graph")
@@ -143,18 +162,16 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
         if name == "resume":
             action.add_argument("--max-prs", type=int, default=None)
             action.add_argument("--max-spend", type=float, default=None, metavar="USD")
-    loops = commands.add_parser("loops", help="list loops")
+    loops = commands.add_parser("loops", parents=[listed], help="list loops")
     loops.add_argument("action", nargs="?", choices=("list",), default="list")
     loops.add_argument("--backend", metavar="NAME")
-    loops.add_argument("--pretty", action="store_true")
     loops.add_argument("--project", metavar="NAME")
     loops.add_argument("--all-projects", action="store_true")
 
-    nodes = commands.add_parser("nodes", help="list a run's node executions")
+    nodes = commands.add_parser("nodes", parents=[listed], help="list a run's node executions")
     nodes.add_argument("action", nargs="?", choices=("list",), default="list")
     nodes.add_argument("--run", required=True, metavar="RUN_ID")
     nodes.add_argument("--backend", metavar="NAME")
-    nodes.add_argument("--pretty", action="store_true")
     node = commands.add_parser("node", help="inspect or steer one node execution")
     actions = node.add_subparsers(dest="action", required=True)
     getting = actions.add_parser("get", parents=[common], help="one node execution and its steering")
@@ -166,11 +183,32 @@ def add_parsers(commands: argparse._SubParsersAction) -> None:
     steering.add_argument("--wait", action="store_true", help="wait until it is applied or cannot be")
     steering.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
 
-    runner = commands.add_parser("runner", help="runner credentials on a backend")
-    actions = runner.add_subparsers(dest="action", required=True)
-    signin = actions.add_parser("signin", help="sign a runner in where the backend runs")
-    signin.add_argument("runner", choices=sorted(SIGNIN))
+    agent = commands.add_parser("agent", help="add, inspect, remove and sign in the agents graphs name")
+    actions = agent_actions = agent.add_subparsers(dest="action", required=True)
+    adding = actions.add_parser("add", parents=[common], help="offer claude, codex or opencode under a name")
+    adding.add_argument("kind", choices=AGENT_KINDS)
+    adding.add_argument("--name", default="", help="what graphs call it (default: the kind)")
+    adding.add_argument("--model", default="", help="the model it runs when a node names none")
+    adding.add_argument("--url", default="", help="an OpenAI-compatible endpoint (opencode only; needs --model)")
+    adding.add_argument("--replace", action="store_true", help="overwrite an agent with this name")
+    for name, help_text in (("get", "one agent"), ("remove", "stop offering an added agent")):
+        action = actions.add_parser(name, parents=[common], help=help_text)
+        action.add_argument("name")
+    signin = actions.add_parser("signin", help="sign an agent in where the backend runs")
+    signin.add_argument("name", help="an agent name, such as claude")
     signin.add_argument("--backend", metavar="NAME")
+    agents = commands.add_parser("agents", parents=[listed], help="list agents")
+    agents.add_argument("action", nargs="?", choices=("list",), default="list")
+    agents.add_argument("--backend", metavar="NAME")
+
+    # `engine runner signin` before agents had their own command; kept for one release.
+    # Without `help`, it is left out of the command list; HIDDEN keeps it out of the usage line.
+    runner = commands.add_parser("runner")
+    actions = runner.add_subparsers(dest="action", required=True)
+    signin = actions.add_parser("signin")
+    signin.add_argument("name", choices=sorted(SIGNIN))
+    signin.add_argument("--backend", metavar="NAME")
+    return agent_actions
 
 
 def main(arguments: argparse.Namespace) -> int:
@@ -183,6 +221,44 @@ def main(arguments: argparse.Namespace) -> int:
             return EXIT_USAGE
         _report(error)
         return EXIT_FAILED
+
+
+def onboard_repository(arguments: argparse.Namespace) -> int:
+    backend, _ = _connect(arguments)
+    client = Client(backend, api_prefix="/api")
+    reference, path = arguments.url, arguments.path
+    if not reference:
+        if not backend.is_local:
+            raise _UsageError("Pass a GitHub URL when onboarding through a remote backend")
+        root = repository._git(str(Path.cwd()), "rev-parse", "--show-toplevel")
+        reference = repository._git(root, "remote", "get-url", "origin") if root else ""
+        if not reference:
+            raise _UsageError("Run inside a GitHub checkout with an origin, or pass a GitHub URL")
+        path = path or root
+    mode = arguments.mode
+    if not mode:
+        if not sys.stdin.isatty():
+            raise _UsageError("Pass --mode connected or --mode disconnected when not using a terminal")
+        mode = input("Mode [connected/disconnected] (connected): ").strip() or "connected"
+        if mode not in {"connected", "disconnected"}:
+            raise _UsageError("Mode must be connected or disconnected")
+    state = client.post("/repositories/onboard", {"repository": reference, "path": path, "mode": mode})
+    previous = None
+    while True:
+        if state["message"] != previous:
+            print(state["message"])
+            previous = state["message"]
+        if state["status"] == "failed":
+            for problem in state["problems"]:
+                print(f"{problem['message']}. Fix: {problem['fix']}", file=sys.stderr)
+            return EXIT_FAILED
+        if state["status"] == "complete":
+            command = ["engine", "graph", "run", "review", "--project", state["repository"],
+                       "--repo", state["path"], "--backend", backend.name, "--input", "ref=HEAD"]
+            print(f"Next: {shlex.join(command)}")
+            return EXIT_OK
+        time.sleep(WAIT_INTERVAL_SECONDS)
+        state = client.get(f"/repositories/onboard/{state['id']}")
 
 
 # --- backends ---------------------------------------------------------------
@@ -206,7 +282,7 @@ def backend_list(arguments: argparse.Namespace) -> int:
         if getattr(arguments, "check", False):
             row["health"] = _health(backend)
         rows.append(row)
-    if arguments.pretty:
+    if not arguments.json:
         _table(rows, [("", lambda r: "*" if r["current"] else " "), ("NAME", "name"), ("URL", "url"),
                       ("PROJECT", "project"), ("TOKEN", lambda r: r["token_env"] or "-"),
                       *([("HEALTH", "health")] if getattr(arguments, "check", False) else [])])
@@ -252,7 +328,7 @@ def graphs_list(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     project = None if arguments.all_projects else _project(arguments, backend)
     graphs = client.get("/graphs", project=project)["graphs"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(graphs, [("NAME", "name"), ("VERSION", "version"), ("PROJECT", "project"),
                         ("GRAPH ID", "graphId"), ("UPDATED", "updatedAt"), ("DESCRIPTION", "description")])
     else:
@@ -280,14 +356,27 @@ def graph_get(arguments: argparse.Namespace) -> int:
 def graph_run(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     key = arguments.idempotency_key or f"cli-{uuid.uuid4()}"
-    run = client.post("/runs", {
+    inputs = _inputs(arguments.input)
+    for name in ("branch", "agent"):
+        if getattr(arguments, name):
+            inputs[name] = getattr(arguments, name)
+    request = {
         "project": _project(arguments, backend),
         "graph": arguments.graph,
-        "instruction": arguments.instruction,
-        "inputs": _inputs(arguments.input),
+        "instruction": arguments.instruction or _default_instruction(arguments),
+        "inputs": inputs,
         "repository": _repository(arguments, backend),
         "idempotencyKey": key,
-    }, idempotent=True)
+    }
+    try:
+        run = client.post("/runs", request, idempotent=True)
+    except RequestFailed as refused:
+        if refused.status != 404 or arguments.graph not in starters.NAMES:
+            raise
+        # A built-in graph this project has not run yet: register it, then run it.
+        client.post("/graphs", {"project": request["project"], "format": "yaml",
+                                "source": starters.source(arguments.graph)})
+        run = client.post("/runs", request, idempotent=True)
     if arguments.wait:
         if not arguments.pretty:
             print(json.dumps({"runId": run["runId"], "status": run["status"]}), file=sys.stderr)
@@ -304,7 +393,7 @@ def runs_list(arguments: argparse.Namespace) -> int:
         "/runs", project=project, graph=arguments.graph or None, loop=arguments.loop or None,
         status=arguments.status or None, limit=str(arguments.limit),
     )["runs"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(runs, [
             ("RUN ID", "runId"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}"), ("STATUS", "status"),
             ("LOOP", "loop"), ("STARTED", "startedAt"), ("SPEND", _run_spend),
@@ -352,7 +441,7 @@ def loops_list(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     project = None if arguments.all_projects else _project(arguments, backend)
     loops = client.get("/loops", project=project)["loops"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(loops, [
             ("NAME", "name"), ("GRAPH", lambda l: f"{l['graph']} v{l['version']}"), ("STATE", "state"),
             ("EVERY", lambda l: _duration(l["everySeconds"])),
@@ -397,7 +486,7 @@ def loop_resume(arguments: argparse.Namespace) -> int:
 def nodes_list(arguments: argparse.Namespace) -> int:
     _backend, client = _connect(arguments)
     nodes = client.get(f"/runs/{quote(arguments.run)}/nodes")["nodes"]
-    if arguments.pretty:
+    if not arguments.json:
         _table(nodes, _NODE_COLUMNS)
     else:
         _print({"nodes": nodes})
@@ -430,17 +519,59 @@ def node_steer(arguments: argparse.Namespace) -> int:
     return EXIT_OK if steering["status"] not in ("rejected", "undelivered") else EXIT_FAILED
 
 
-# --- runners ----------------------------------------------------------------
+# --- agents -----------------------------------------------------------------
 
 
-def runner_signin(arguments: argparse.Namespace) -> int:
-    backend = backends.load().selected(arguments.backend)
-    command, follow_up = SIGNIN[arguments.runner]
+def agent_add(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    agent = client.post("/agents", {
+        "kind": arguments.kind, "name": arguments.name, "model": arguments.model,
+        "url": arguments.url, "replace": arguments.replace,
+    })
+    _emit(agent, arguments.pretty, _agent_line)
+    return EXIT_OK
+
+
+def agents_list(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    agents = client.get("/agents")["agents"]
+    if not arguments.json:
+        _table(agents, _AGENT_COLUMNS)
+    else:
+        _print({"agents": agents})
+    return EXIT_OK
+
+
+def agent_get(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    _emit(client.get(f"/agents/{quote(arguments.name)}"), arguments.pretty, _agent_line)
+    return EXIT_OK
+
+
+def agent_remove(arguments: argparse.Namespace) -> int:
+    _backend, client = _connect(arguments)
+    removed = client.delete(f"/agents/{quote(arguments.name)}")
+    _emit(removed, arguments.pretty, lambda body: f"removed {body['name']}")
+    return EXIT_OK
+
+
+def agent_signin(arguments: argparse.Namespace) -> int:
+    """Sign in the harness an agent runs on, on the machine its backend runs on."""
+    backend, client = _connect(arguments)
+    if arguments.name in SIGNIN:
+        kind, url = arguments.name, ""
+    else:
+        agent = client.get(f"/agents/{quote(arguments.name)}")
+        kind, url = agent["kind"], agent["url"]
+    if url:
+        print(f"{arguments.name} reaches its model at {url}; it has nothing to sign in to.")
+        return EXIT_OK
+    command, follow_up = SIGNIN[kind]
     shown = " ".join(command)
     if not backend.is_local:
         host = urlsplit(backend.url).hostname
         print(
-            f"{arguments.runner} signs in on the machine backend {backend.name} runs on. There, as the "
+            f"{arguments.name} signs in on the machine backend {backend.name} runs on. There, as the "
             f"user its daemon runs as, run:\n\n    {shown}\n"
             + (f"\nthen {follow_up}.\n" if follow_up else "")
             + f"\nFor example: ssh -t {host} {shown}"
@@ -453,6 +584,11 @@ def runner_signin(arguments: argparse.Namespace) -> int:
     if follow_up:
         print(f"Starting {shown}: {follow_up}.", file=sys.stderr)
     return subprocess.call(command)
+
+
+def runner_signin(arguments: argparse.Namespace) -> int:
+    print(f"engine: `engine runner signin` is now `engine agent signin {arguments.name}`", file=sys.stderr)
+    return agent_signin(arguments)
 
 
 # --- helpers ----------------------------------------------------------------
@@ -496,6 +632,11 @@ def _read_graph(file: str) -> tuple[str, str]:
     if not isinstance(manifest, dict):
         raise _UsageError(f"{file} must hold a mapping")
     return "yaml", text
+
+
+def _default_instruction(arguments: argparse.Namespace) -> str:
+    """What a run is asked when no instruction is given: just to run the graph."""
+    return f"Run {arguments.graph}" + (f" on {arguments.branch}" if arguments.branch else "") + "."
 
 
 def _inputs(pairs: list[str]) -> dict[str, str]:
@@ -602,6 +743,11 @@ def _backend_line(body: dict[str, Any]) -> str:
     return f"{'* ' if body['current'] else ''}{body['name']}  {body['url']}  project {body['project']}"
 
 
+def _agent_line(body: dict[str, Any]) -> str:
+    detail = " ".join(part for part in (body.get("model") or "", body.get("url") or "") if part)
+    return f"{body['name']}  {body['kind']}{'  ' + detail if detail else ''}{'  (built in)' if body.get('builtin') else ''}"
+
+
 def _loop_summary(loop: dict[str, Any]) -> str:
     lines = [
         f"{loop['name']} ({loop['loopId']})  {loop['state']}"
@@ -611,7 +757,28 @@ def _loop_summary(loop: dict[str, Any]) -> str:
     ]
     if loop.get("activeRunId"):
         lines.append(f"active run {loop['activeRunId']}")
+    latest = loop.get("latestOutput")
+    if latest:
+        lines.append(f"\nlatest output: {latest['node']} of {latest['runId']}, finished {latest['finishedAt']}")
+        lines.append(_output_text(latest["value"]))
+    elif "latestOutput" in loop:
+        lines.append("latest output: none yet")
     return "\n".join(lines)
+
+
+def _output_text(value: object) -> str:
+    """A node's result for reading: text as written, anything else as indented JSON."""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return json.dumps(value, indent=2)
+    blocks = []
+    for key, item in value.items():
+        if key == "runner":
+            continue
+        text = item if isinstance(item, str) else json.dumps(item, indent=2)
+        blocks.append(f"{key}:\n{text}" if "\n" in text else f"{key}: {text}")
+    return "\n\n".join(blocks)
 
 
 def _spend(loop: dict[str, Any]) -> str:
@@ -635,6 +802,10 @@ def _duration(seconds: int) -> str:
     return f"{seconds}s"
 
 
+_AGENT_COLUMNS: list[tuple[str, Any]] = [
+    ("NAME", "name"), ("KIND", "kind"), ("MODEL", "model"), ("URL", "url"),
+    ("", lambda row: "built in" if row.get("builtin") else ""),
+]
 _NODE_COLUMNS: list[tuple[str, Any]] = [
     ("NODE", "node"), ("EXECUTION", "executionId"), ("ATTEMPT", "attempt"), ("STATUS", "status"),
     ("RUNNER", "runner"), ("STARTED", "startedAt"), ("FINISHED", "finishedAt"),
@@ -645,6 +816,7 @@ _STEERING_COLUMNS: list[tuple[str, Any]] = [
 ]
 
 _HANDLERS = {
+    ("onboard", None): onboard_repository,
     ("backend", "add"): backend_add,
     ("backend", "list"): backend_list,
     ("backend", "use"): backend_use,
@@ -667,6 +839,11 @@ _HANDLERS = {
     ("nodes", "list"): nodes_list,
     ("node", "get"): node_get,
     ("node", "steer"): node_steer,
+    ("agent", "add"): agent_add,
+    ("agent", "get"): agent_get,
+    ("agent", "remove"): agent_remove,
+    ("agent", "signin"): agent_signin,
+    ("agents", "list"): agents_list,
     ("runner", "signin"): runner_signin,
 }
 

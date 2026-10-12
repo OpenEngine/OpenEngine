@@ -175,7 +175,7 @@ def _exported_with_config(
         and _accepts_session_config(graph_for)
     ):
         _exported(module, path)
-        return tuple(
+        return tuple(  # pyright: ignore[reportReturnType]  # Baseline: see docs/pyright.md
             graph_for(runner, session_config=session_config) for runner in runners
         )
     return _exported(module, path)

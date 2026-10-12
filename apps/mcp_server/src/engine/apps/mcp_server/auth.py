@@ -42,7 +42,7 @@ class OIDCTokenVerifier:
             response.raise_for_status()
             metadata = response.json()
             if (not isinstance(metadata, dict) or metadata.get("issuer") != self.issuer
-                    or not https_url(metadata.get("jwks_uri"))):
+                    or not https_url(metadata.get("jwks_uri"))):  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 raise ValueError("Invalid OIDC discovery metadata")
             response = await client.get(metadata["jwks_uri"])
             response.raise_for_status()

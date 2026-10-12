@@ -1,0 +1,72 @@
+apiVersion: openengine.cc/v1
+kind: Graph
+name: adversarial-review
+description: Attack a branch from three angles, then try to refute every finding; report only what survives. Changes nothing.
+
+inputs:
+  instruction:
+    description: Anything to focus the review on
+  branch:
+    description: The branch to review; the run checks out a new workspace on it
+    required: true
+  agent:
+    description: The agent that attacks the change and then defends it
+    default: claude
+
+plan:
+  workspace:
+    ref: ${inputs.branch}
+
+review:
+  reviewers:
+    name: Attack
+    agent: ${inputs.agent}
+    facets:
+      - {facet: security, model: elevated}
+      - {facet: bugs, model: elevated}
+      - facet:
+          id: failure-modes
+          name: Failure modes
+          focus: |
+            Inputs, states and orderings the author did not plan for: empty and
+            huge values, concurrency and retries, partial failure, restarts,
+            upgrades over existing data, and callers the change did not update.
+        model: default
+    prompt: |
+      You are an adversarial reviewer. Assume the changes on this branch
+      (${inputs.branch}) are wrong and set out to prove it, focusing only on
+      **${item.facet.name}**.
+
+      ${item.facet.focus}
+
+      Find the merge base first (for example `git merge-base HEAD origin/HEAD`,
+      falling back to origin/main), then read the diff and the code around it.
+      For every finding, name the concrete input or sequence of events that
+      breaks the code and what goes wrong. Where you can, prove it by running
+      the tests or a short script, but do not edit, commit or push anything.
+      Report nothing you cannot tie to a concrete failure.
+
+      The requester asked you to keep this in mind: ${instruction}
+    outputs:
+      findings: {type: findings, required: true}
+
+  reranker:
+    name: Refute
+    agent: ${inputs.agent}
+    prompt: |
+      ${size(outputs.reviewers)} adversarial reviewers attacked the changes on this
+      branch (${inputs.branch}). Now argue the other side: try to refute every
+      finding.
+
+      For each one, read the code it points at and check the failure it claims.
+      Drop a finding when the code already handles the case, the input cannot
+      occur, the claim misreads the code, it duplicates another finding, or it
+      is a matter of taste. Keep it only if you cannot refute it, and say in its
+      description why it stands. Order what survives by severity, and keep each
+      finding's agent and facet unchanged. Inspect only: do not edit, commit or
+      push anything.
+
+      The findings:
+      ${json(outputs.reviewers)}
+    outputs:
+      findings: {type: findings, required: true, lineage: required}

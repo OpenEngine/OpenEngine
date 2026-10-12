@@ -24,7 +24,6 @@ import {
   getSlackStatus,
   setSlackCredentials,
   setSlackSigningSecret,
-  type GitHubClientIdInfo,
   type GitHubConnectResponse,
   type GitLabDeviceFlow,
   type SlackStatus,
@@ -268,7 +267,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   // Schedule one poll tick, using the server-supplied next interval.
   const schedulePoll = useCallback(
-    (intervalSeconds: number, flow: GitHubConnectResponse) => {
+    function schedulePoll(intervalSeconds: number, flow: GitHubConnectResponse) {
       pollTimeoutRef.current = setTimeout(async () => {
         pollTimeoutRef.current = null;
         try {
@@ -364,7 +363,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, [gitLab.clientId, gitLab.origin]);
 
   const scheduleGitLabPoll = useCallback(
-    (origin: string, intervalSeconds: number) => {
+    function scheduleGitLabPoll(origin: string, intervalSeconds: number) {
       gitLabPollTimeoutRef.current = setTimeout(async () => {
         gitLabPollTimeoutRef.current = null;
         try {

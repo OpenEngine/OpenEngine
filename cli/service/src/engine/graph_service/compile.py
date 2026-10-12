@@ -102,12 +102,13 @@ def compile_graph(
     registry: ACPAgentRegistry,
     session_config: Mapping[str, object] | None = None,
     model_tiers: Mapping[str, Mapping[str, str]] | None = None,
+    agent_models: Mapping[str, str] | None = None,
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
     tiers = {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}
     runners = tuple(registry.names)
-    builder: Any = StateGraph(State)
+    builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(
         spec.checkout,
         WorkspaceNode(
@@ -122,6 +123,7 @@ def compile_graph(
             builder.add_node(key, _node(
                 node, key, branch.item if branch else None, groups,
                 registry=registry, runners=runners, tiers=tiers, session_config=session_config,
+                agent_models={} if agent_models is None else agent_models,
             ))
 
     def keys_of(name: str) -> list[str]:
@@ -194,6 +196,7 @@ def _node(
     registry: ACPAgentRegistry,
     runners: tuple[str, ...],
     tiers: Mapping[str, Mapping[str, str]],
+    agent_models: Mapping[str, str],
     session_config: Mapping[str, object] | None,
 ) -> Any:
     label = node.name or node.id
@@ -206,14 +209,14 @@ def _node(
         "graph_node_group": STAGE_GROUPS[node.stage],
     }
     if node.kind == "human":
-        return GraphHumanNode(state_key=key, **({"prompt": node.prompt} if node.prompt else {}), **common)
+        return GraphHumanNode(state_key=key, **({"prompt": node.prompt} if node.prompt else {}), **common)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     if node.kind == "triage":
         return GraphTriageNode(
             findings_key=f"_choose.{key}", output_key=key, state_key=key, choose=node.choose,
-            groups=groups, **common,
+            groups=groups, **common,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         )
     if node.kind == "ci":
-        return GraphCINode(output_key=key, state_key=key, **common)
+        return GraphCINode(output_key=key, state_key=key, **common)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     assert node.runner is not None
     default = _default_runner(node.runner, runners)
     prompt_template = template(node.prompt)
@@ -249,8 +252,9 @@ def _node(
         facet_id=facet["id"] if isinstance(facet, Mapping) else node.id,
         groups=groups,
         tiers=tiers,
+        agent_models=agent_models,
         runners=runners,
-        **common,
+        **common,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     )
 
 
@@ -274,6 +278,8 @@ class GraphAgentNode(ACPNode):
     facet_id: str = ""
     groups: Groups = field(default_factory=dict)
     tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    agent_models: Mapping[str, str] = field(default_factory=dict)
+    """An added agent's own model, for a node that names none or a tier it has no entry for."""
     runners: tuple[str, ...] = ()
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
@@ -296,7 +302,7 @@ class GraphAgentNode(ACPNode):
         update = await ACPNode.__call__(node, state)
         return {
             **update,
-            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,
+            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             runner_key(self.state_key): runner,
         }
 
@@ -320,11 +326,12 @@ class GraphAgentNode(ACPNode):
         return next((runner for runner in pool if runner != other), self.agent)
 
     def model_for(self, state: Mapping[str, object], runner: str) -> str:
+        fallback = self.agent_models.get(runner, "")
         if not self.model_template:
-            return ""
+            return fallback
         chosen = template(self.model_template).render(environment(state, self.groups, self.item)).strip()
         named = {tier for tiers in self.tiers.values() for tier in tiers}
-        return self.tiers.get(runner, {}).get(chosen, "" if chosen in named else chosen)
+        return self.tiers.get(runner, {}).get(chosen, fallback if chosen in named else chosen)
 
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         base = ACPNode._terminal_update(self, event)
@@ -357,7 +364,7 @@ class GraphHumanNode(HumanReviewNode):
         return {
             **update,
             self.state_key: {"decision": update.get("decision"), "note": update.get("decisionNote", "")},
-            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,
+            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         }
 
 
@@ -374,7 +381,7 @@ class GraphTriageNode(TriageNode):
         return {
             **update,
             self.findings_key: offered,
-            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,
+            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         }
 
 
@@ -384,7 +391,7 @@ class GraphCINode(CICheck):
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         update = await CICheck.__call__(self, state)
-        return {**update, visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1}
+        return {**update, visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1}  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
 
 @dataclass(frozen=True, slots=True)

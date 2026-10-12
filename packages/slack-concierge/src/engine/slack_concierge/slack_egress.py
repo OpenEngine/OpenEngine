@@ -158,16 +158,16 @@ class ConciergeBroker(SingleToolBroker):
         self._credential: TextIO | None = None
 
     async def __aenter__(self) -> ConciergeBroker:
-        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-", delete=False)
-        self._credential.write(self._token)
+        self._credential = tempfile.NamedTemporaryFile(mode="w", prefix="concierge-", delete=False)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        self._credential.write(self._token)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         # Close before the MCP subprocess reopens it (required on Windows).
-        self._credential.close()
+        self._credential.close()  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         try:
             self._server = await asyncio.start_server(
                 self._handle_connection, "127.0.0.1", 0
             )
         except BaseException:
-            Path(self._credential.name).unlink(missing_ok=True)
+            Path(self._credential.name).unlink(missing_ok=True)  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             raise
         return self
 
@@ -203,7 +203,7 @@ class ConciergeBroker(SingleToolBroker):
         try:
             request = json.loads(await reader.readline())
             response = await self._submit(request)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
             response = {"ok": False, "error": f"invalid concierge request: {error}"}
         writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
         with suppress(ConnectionError):
@@ -220,7 +220,7 @@ class ConciergeBroker(SingleToolBroker):
         if isinstance(name, str) and name in REPOSITORY_TOOL_NAMES:
             try:
                 text = await asyncio.to_thread(self._repository.call, name, arguments)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not read repository: {error}"}
             return {"ok": True, "text": text}
         if name == "decide_workorder_review":
@@ -236,7 +236,7 @@ class ConciergeBroker(SingleToolBroker):
                 return {"ok": False, "error": "a request for changes needs feedback"}
             try:
                 url, run_id = await self._decide_review(approved, summary.strip())
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not submit the review decision: {error}"}
             outcome = "approved" if approved else "changes requested and implementation resumed"
             return {"ok": True, "text": f"Review {outcome} for work order `{run_id}`.",
@@ -258,7 +258,7 @@ class ConciergeBroker(SingleToolBroker):
                 return {"ok": False, "error": "answers must map question IDs to non-empty arrays of strings"}
             try:
                 url, run_id = await self._answer_question(approval_id, answers)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not answer the question: {error}"}
             return {"ok": True, "text": f"Answer recorded for work order `{run_id}` and delivered to the waiting agent.",
                     "data": {"run_id": run_id, "url": url}}
@@ -278,7 +278,7 @@ class ConciergeBroker(SingleToolBroker):
                 return {"ok": False, "error": f"{action} is not enabled"}
             try:
                 url, run_id = await callback(prompt.strip())
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
                 return {"ok": False, "error": f"could not {action} the work order: {error}"}
             return {
                 "ok": True,
@@ -289,7 +289,7 @@ class ConciergeBroker(SingleToolBroker):
         repository = self._default_repository or "."
         try:
             url, run_id = await self._create_workorder(repository, prompt.strip())
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: tool boundary returns operation failure to the agent
             return {"ok": False, "error": f"could not start the work order: {error}"}
         return {
             "ok": True,
@@ -406,7 +406,7 @@ async def _serve_stdio(host: str, port: int, token: str, *, steer_enabled: bool 
             response = await _mcp_response(host, port, token, json.loads(line), steer_enabled=steer_enabled, resume_enabled=resume_enabled, answers_enabled=answers_enabled, review_decisions_enabled=review_decisions_enabled)
             if response is None:
                 continue
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: stdio boundary reports JSON-RPC error
             response = _rpc_error(None, -32700, f"Parse error: {error}")
         sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
         sys.stdout.flush()

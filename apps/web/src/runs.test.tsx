@@ -913,6 +913,48 @@ describe("RunDetailPage", () => {
     }
   });
 
+  it("shows when the WorkOrder and each node started", async () => {
+    const graphRun = run({
+      workflowId: "implementation-review-codex",
+      startedAt: "2026-10-09T14:30:00+00:00",
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/runs/run-1") return json(graphRun);
+      if (path === "/graph/api/runs/run-1") return json({
+        runId: "run-1",
+        graphId: graphRun.workflowId,
+        status: "running",
+        activeExecutions: [{ executionId: "x", nodeId: "planning" }],
+        nextNodes: [],
+        values: {},
+        pendingApprovals: [],
+        error: "",
+      });
+      if (path === `/graph/api/graphs/${graphRun.workflowId}`) return json({
+        graphId: graphRun.workflowId,
+        nodes: ["planning", "implementation"].map((nodeId) => ({ nodeId, name: nodeId, kind: "agent" })),
+      });
+      if (path === "/api/runs/run-1/graph-events") return json({
+        events: [{
+          sequence: 1, type: "node.started", nodeId: "planning",
+          payload: { startedAt: "2026-10-09T14:31:00+00:00" },
+        }],
+      });
+      return json({ error: "not found" }, { status: 404 });
+    }));
+
+    render(<RunDetailPage runId="run-1" />);
+
+    const planning = (await screen.findByRole("heading", { name: "planning" })).closest("article")!;
+    expect(within(planning).getByText("Started:").querySelector("time"))
+      .toHaveAttribute("dateTime", "2026-10-09T14:31:00+00:00");
+    const implementation = screen.getByRole("heading", { name: "implementation" }).closest("article")!;
+    expect(within(implementation).queryByText("Started:")).not.toBeInTheDocument();
+    const stat = screen.getByText("Started").closest(".stat")!;
+    expect(stat.querySelector("time")).toHaveAttribute("dateTime", "2026-10-09T14:30:00+00:00");
+  });
+
   it("says where to look for a WorkOrder that has no stages here", async () => {
     // A graph WorkOrder has no steps to draw, because a graph is not made of
     // them. Without a word of explanation the page reads as one that never

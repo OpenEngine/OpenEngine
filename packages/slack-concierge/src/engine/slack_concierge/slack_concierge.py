@@ -88,8 +88,8 @@ def build_graph(
 ):
     """START -> ACP conversation turn -> Slack reply -> END."""
     graph = StateGraph(ConversationState)
-    graph.add_node("concierge", turn)
-    graph.add_node("reply", reply)
+    graph.add_node("concierge", turn)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
+    graph.add_node("reply", reply)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     graph.add_edge(START, "concierge")
     graph.add_edge("concierge", "reply")
     graph.add_edge("reply", END)
@@ -163,7 +163,7 @@ class SlackConcierge:
             key = (message.origin.channel, message.origin.thread_id)
             try:
                 async with asyncio.timeout(self.timeout_seconds):
-                    await self.graph.ainvoke({"message": message})
+                    await self.graph.ainvoke({"message": message})  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             except BaseException:
                 await self._forget(key)
                 raise
@@ -226,7 +226,7 @@ class SlackConcierge:
                     decide_review=decide_review if self.decide_review else None))
                 client = await self.provider.connect()
                 opened.push_async_callback(client.close)
-                session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])
+                session = await client.new_session(cwd=cwd, mcp_servers=[broker.config])  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 self._threads[key] = (opened, session)
             except BaseException:
                 await opened.aclose()

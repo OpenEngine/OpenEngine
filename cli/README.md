@@ -25,18 +25,23 @@ started — a daemon that is up already serves it.
 - A **loop** creates recurring runs of one pinned version.
 - A **node execution ID** identifies one attempt at one node within a run.
 
-Backend commands use the selected backend. `engine graph spec` and
+Backend commands use the selected backend. List commands (`engine graphs`,
+`runs`, `loops`, `nodes`, `agents`, `backends`, `connections`) print a table;
+add `--json` for JSON. Other commands print JSON unless `--pretty` is given. `engine graph spec` and
 `engine loop spec` print the current specifications as Markdown locally, without
 a running daemon. Their specifications and the site reference are generated from
-the parser’s field definitions, expression rules, and accompanying prose. Run
-`python3 scripts/generate_cli_docs.py` from the repository root to regenerate
-both; the site build also runs it automatically. Tests reject stale output.
+the parser’s field definitions, expression rules, and accompanying prose; the
+site's CLI reference is generated from the `engine` argument parser. Run
+`uv run python scripts/generate_cli_docs.py` from the repository root to
+regenerate them; the site build also runs it, keeping the committed CLI
+reference when the parser's dependencies are not installed. Tests reject stale
+output.
 
 ## Backends
 
 ```bash
 engine backend add mini http://mac-mini.local:4364 --token-env MINI_ENGINE_TOKEN --use
-engine backends list --check --pretty
+engine backends list --check
 engine backend use local
 engine graphs list --backend mini      # one-off override; ENGINE_BACKEND also works
 ```
@@ -93,12 +98,31 @@ fields, unknown or reserved node ids, dangling or duplicate edges, cycles,
 placeholders naming undeclared inputs or nodes that do not run first, and
 runners the backend does not have — all problems at once, each with its path.
 
+## Agents
+
+```bash
+engine agents
+engine agent add claude --name reviewer --model opus
+engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1
+engine agent signin reviewer
+engine agent remove qwen
+```
+
+A graph node's `agent:` names an agent on the backend. `claude`, `codex` and
+`opencode` are built in; `agent add` offers one of those harnesses under a name
+of its own, stored on the backend. `--model` is what it runs when a node names
+no model, or a tier the backend has no entry for. `--url` points an opencode
+agent at an OpenAI-compatible endpoint, which needs `--model` and no sign-in.
+`agent signin` signs in the harness an agent runs on; `engine runner signin`
+still works for one release.
+
 ## Runs
 
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
+engine graph run adversarial-review --branch feat/my_feat --agent codex
 engine run get run-0123abcd --pretty
-engine runs --pretty
+engine runs
 engine runs --graph fix-flaky-test --status failed
 ```
 
@@ -107,9 +131,17 @@ exits non-zero if the run failed. Each submission carries an idempotency key
 (`--idempotency-key` to choose it), and the client retries a dropped
 connection with the same key, so a retry never starts a second run. A run
 records status, node executions, each node's result, usage, pull requests
-opened, and failure details. A runner without credentials fails with
-`engine runner signin <runner>`; on a remote backend that command says what
+opened, and failure details. An agent without credentials fails with
+`engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
+
+The instruction is optional. `--branch` and `--agent` set the `branch` and
+`agent` inputs, as `-i branch=...` would. The built-in graphs (`review`,
+`adversarial-review`, `implement-review`, `spec-implement-review`) need no
+`graph add`: the first `graph run` of one in a project registers it.
+`adversarial-review` checks out a new workspace on `--branch`, has `--agent`
+attack the change from three angles, then has it try to refute every finding,
+and reports what survives. It changes nothing.
 
 `engine runs` lists runs newest first, whether submitted or started by a loop,
 filtered by `--graph`, `--loop` and `--status`, at most `--limit` (default 20),
@@ -122,7 +154,7 @@ are approved under its `[approvals]` policy.
 
 ```bash
 engine loop add fix-flaky-test --max-prs 5 --max-spend 20 --every 6h
-engine loops list --pretty
+engine loops list
 engine loop pause fix-flaky-test --reason "release freeze"
 engine loop resume fix-flaky-test --max-spend 40
 ```
@@ -151,7 +183,7 @@ engine loop resume fix-flaky-test --max-spend 40
 ## Nodes and steering
 
 ```bash
-engine nodes list --run run-0123abcd --pretty
+engine nodes list --run run-0123abcd
 engine node steer 1a0055fa-... "Use the existing retry helper instead" --wait
 engine node get 1a0055fa-... --pretty
 ```
@@ -176,6 +208,8 @@ Mounted at `/api/v1` on the daemon:
 | `GET /runs`, `POST /runs`, `GET /runs/{id}` | list, start and inspect |
 | `GET /runs/{id}/nodes`, `GET /nodes/{id}`, `POST /nodes/{id}/steering` | node executions and steering |
 | `GET /loops`, `POST /loops`, `GET /loops/{ref}`, `POST /loops/{ref}/pause`, `POST /loops/{ref}/resume` | loops |
+| `GET /agents`, `POST /agents`, `GET /agents/{name}`, `DELETE /agents/{name}` | agents graphs can name |
+| `POST /sessions`, `GET /sessions/{id}`, `POST /sessions/{id}/end` | `engine agent claude`: a run whose implementation node is a terminal's CLI |
 | `GET /backend` | runners available, and the execution engine |
 
 The service's tables live in the graph database and are created by the

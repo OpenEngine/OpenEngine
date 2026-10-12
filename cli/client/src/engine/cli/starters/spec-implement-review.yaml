@@ -1,4 +1,4 @@
-apiVersion: openengine.dev/v1
+apiVersion: openengine.cc/v1
 kind: Graph
 name: spec-implement-review
 description: Write a short spec, implement it, review the result against the spec with a different agent, and fix what survives once.

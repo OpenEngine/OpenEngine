@@ -65,9 +65,9 @@ class GitHubVerificationUploader:
                     release = await self.transport.request(
                         "GET", f"{prefix}/tags/{quote(tag, safe='')}"
                     )
-            if type(release.get("id")) is not int or release.get("draft"):
+            if type(release.get("id")) is not int or release.get("draft"):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 raise ValueError("GitHub returned an invalid evidence release")
-            self._releases[key] = release["id"]
+            self._releases[key] = release["id"]  # pyright: ignore[reportIndexIssue]  # Baseline: see docs/pyright.md
         release_id = self._releases[key]
         # Paginate rather than missing existing assets and creating duplicates.
         page = 1
@@ -77,10 +77,10 @@ class GitHubVerificationUploader:
                 f"{prefix}/{release_id}/assets",
                 params={"per_page": 100, "page": page},
             )
-            for asset in assets:
+            for asset in assets:  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
                 if asset.get("name") == artifact.name:
                     return self._url(asset, artifact)
-            if len(assets) < 100:
+            if len(assets) < 100:  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 break
             page += 1
         asset = await self.transport.upload_release_asset(
@@ -138,7 +138,7 @@ def main(argv=None) -> int:
     source = GitHubSourceControl(
         token="",
         transport=transport,
-        workspace_provider=_LocalWorkspace(project),
+        workspace_provider=_LocalWorkspace(project),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     )
     try:
         result = asyncio.run(

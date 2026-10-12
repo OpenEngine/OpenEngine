@@ -78,7 +78,7 @@ def frame(run: dict[str, Any], *, tick: int = 0, width: int = 80, elapsed: float
             stages.append((" ─── ", _DIM))
         mark, style = status_mark(stage["status"], tick)
         label_style = {"active": _BOLD + _CYAN, "done": _GREEN, "failed": _RED}.get(stage["status"], _DIM)
-        stages += [(mark, style), (" " + STAGE_LABELS.get(stage["stage"], stage["stage"]), label_style)]
+        stages += [(mark, style), (" " + STAGE_LABELS.get(stage["stage"], stage["stage"]), label_style)]  # pyright: ignore[reportOperatorIssue]  # Baseline: see docs/pyright.md
     lines.append(stages)
     lines.append([])
 

@@ -322,8 +322,8 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
-        assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "github_pull_requests", "cli_graphs", "cli_graph_versions", "cli_run_submissions", "cli_loops", "cli_loop_runs", "cli_node_executions", "cli_steering", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("1395ea8ffaf6",)
+        assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "github_pull_requests", "cli_graphs", "cli_graph_versions", "cli_run_submissions", "cli_loops", "cli_loop_runs", "cli_node_executions", "cli_steering", "cli_agents", "sqlite_sequence", "alembic_version"}
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0492989edd70",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -392,7 +392,7 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("1395ea8ffaf6",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0492989edd70",)
 
 
 def test_github_comments_migration_preserves_graph_data_and_downgrades(

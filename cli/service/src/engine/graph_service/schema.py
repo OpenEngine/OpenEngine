@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable, Mapping
 
 
-API_VERSION = "openengine.dev/v1"
+API_VERSION = "openengine.cc/v1"
 KIND = "Graph"
 SECTIONS = {"plan": "plan", "implementation": "implement", "review": "review"}
 OUTPUT_TYPES = ("string", "number", "integer", "boolean", "list", "object", "findings")

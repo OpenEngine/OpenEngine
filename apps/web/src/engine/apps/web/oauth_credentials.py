@@ -59,7 +59,7 @@ class OAuthCredentialStore:
     def _check_backend(self) -> None:
         try:
             priority = keyring.get_keyring().priority
-        except (keyring.errors.NoKeyringError, NotImplementedError) as error:
+        except (keyring.errors.NoKeyringError, NotImplementedError) as error:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             raise OAuthCredentialError("no secure keyring backend available on this system; the value cannot be stored safely") from error
         if priority < 1:
             raise OAuthCredentialError("no secure keyring backend available on this system; the value cannot be stored safely")
@@ -75,7 +75,7 @@ class OAuthCredentialStore:
     def _read_credentials(self) -> StoredCredentials | None:
         try:
             value = keyring.get_password(self._service, self._username)
-        except keyring.errors.KeyringError:
+        except keyring.errors.KeyringError:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             return None
         if not value:
             return None
@@ -120,7 +120,7 @@ class OAuthCredentialStore:
     def delete(self) -> None:
         try:
             keyring.delete_password(self._service, self._username)
-        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
+        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             pass
         if self._cached:
             self._cache, self._loaded = None, True

@@ -25,10 +25,11 @@ export type RunnerOption = {
 };
 
 export type EngineConfig = {
+  hasRepositories?: boolean;
   agents: AgentOption[];
   runners: RunnerOption[];
   defaultAgent: string;
-  /** `mode` is set when `engine init` fixed the mode of the repository's WorkOrders. */
+  /** `mode` is set when `engine onboard` fixed the mode of the repository's WorkOrders. */
   repositories: { name: string; path: string; mode?: string }[];
   defaultRunner: string;
   /** Each workflow declares the inputs its creation form asks for. */
@@ -72,6 +73,8 @@ export type ApiRunStep = {
   group?: string;
   summary: string;
   outputs: { name: string; value: string }[];
+  /** When the node last started, as ISO-8601; absent until it has. */
+  startedAt?: string;
 };
 
 /** One WorkOrder as `GET /api/runs` lists it.
@@ -98,6 +101,8 @@ export type ApiWorkflowRunListing = {
     nextNodeIds: string[];
   };
   terminalOutcome: string | null;
+  /** When the graph engine was handed it, as ISO-8601; null while scheduled. */
+  startedAt?: string | null;
 };
 
 /** One whole WorkOrder, as `GET /api/runs/{runId}` answers for the page about

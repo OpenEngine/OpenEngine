@@ -76,7 +76,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
     # Installed here rather than by the caller: the feed only replays what it
     # was told about, and a runtime whose observer was never wired would answer
     # every subscription with silence and no error to explain it.
-    runtime.observe(log.append)
+    runtime.observe(log.append)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     async def list_graphs(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -98,7 +98,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _error(str(error), 400)
         try:
             run = await runtime.start(graph_id, values)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run), status_code=201)
 
@@ -113,7 +113,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         """
         try:
             run = await runtime.snapshot(_run_id(request))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         if run is None:
             return _error("run not found", 404)
@@ -132,7 +132,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         """
         try:
             history = await runtime.history(_run_id(request))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(
             {"checkpoints": [_checkpoint_json(point) for point in history]}
@@ -142,7 +142,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         run_id = _run_id(request)
         try:
             snapshot = await runtime.snapshot(run_id)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         if snapshot is None:
             return _error("run not found", 404)
@@ -176,7 +176,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
                 ExecutionId(execution) if execution else None,
                 NodeId(node) if node else None,
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
@@ -206,7 +206,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
                 run = await runtime.resume_from(
                     run_id, checkpoint, node_id=NodeId(node), message=message,
                 )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
@@ -218,7 +218,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             run = await runtime.set_runner(_run_id(request), node, runner)
         except ValueError as error:
             return _error(str(error), 400)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
@@ -232,9 +232,9 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _error(str(error), 400)
         try:
             run = await runtime.set_auto_approve(
-                _run_id(request), node, body["autoApprove"]
+                _run_id(request), node, body["autoApprove"]  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
@@ -251,7 +251,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
                 ApprovalId(request.path_params["approval_id"]),
                 decision,
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 
@@ -264,7 +264,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
                     _run_id(request), request.method == "POST"
                 )
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse({
             "workspaceRef": state.ref,
@@ -275,7 +275,7 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
     async def cancel_run(request: Request) -> JSONResponse:
         try:
             run = await runtime.cancel(_run_id(request))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run))
 

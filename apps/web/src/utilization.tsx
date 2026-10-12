@@ -130,6 +130,7 @@ export function UtilizationPage() {
   useEffect(() => {
     let current = true;
     let scraped = false;
+    // oxlint-disable-next-line react/set-state-in-effect -- Reset request status when the effect starts a new utilization scrape.
     setRefreshing(true);
     setError("");
     // Only the first open has a cache worth waiting on: a refresh already has

@@ -49,6 +49,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
+from engine.apps.web.request_security import RequestSecurity, TrustedDaemonHostMiddleware
 from engine.apps.web.loop_runs import (
     Loop,
     LoopHost,
@@ -128,7 +129,9 @@ from engine.domain import (
     WorkspaceId,
     review_inputs,
 )
-from engine.graph_runtime.inputs import LEAST_UTILIZED, choose_runners, resolve_inputs
+from engine.graph_runtime.inputs import (
+    LEAST_UTILIZED, WorkflowInput, choose_runners, offer_runners, resolve_inputs,
+)
 from engine.graph_runtime import (
     EventKind,
     EventLog,
@@ -151,6 +154,8 @@ from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
 )
 from engine.graph_runtime_langgraph.store import PullRequestRecord
+from engine.graph_runtime_langgraph.workflows import GraphWorkflow as LangGraphWorkflow
+from engine.graph_runtime_langgraph.workflows import added_agent_inputs
 from engine.ports import (
     AgentRunner,
     ApprovalHandler,
@@ -161,6 +166,7 @@ from engine.ports import (
     UserInputAnswer,
     WorkspaceState,
 )
+from engine.runtime.repositories import RepositoryRegistry
 from engine.runtime.change_requests import change_request, pull_request_url, remote_project
 from engine.runtime import (
     AgentSession,
@@ -309,7 +315,7 @@ class ActiveRun:
             ):
                 self.content.append({"type": "text", "text": answer})
             await self._finish()
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- #779: agent task publishes error in the completed run
             self.error = f"{type(error).__name__}: {error}"
             await self._finish()
         except asyncio.CancelledError:
@@ -423,7 +429,7 @@ class BuiltClient(StaticFiles):
 
     def file_response(
         self,
-        full_path: os.PathLike[str],
+        full_path: str | os.PathLike[str],
         stat_result: os.stat_result,
         scope: Scope,
         status_code: int = 200,
@@ -757,7 +763,7 @@ class ThreadService:
         withdrew this turn.
         """
         store = self.session.state_store
-        agent_run = await store.agent_run(agent_run_id)
+        agent_run = await store.agent_run(agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if agent_run is None or agent_run.status is AgentRunStatus.CANCELLED:
             return
         await store.record_agent_run(
@@ -1012,6 +1018,23 @@ class _GraphSurface:
     """Registered graphs, loops and node steering, when the engine supports them."""
     service_app: Starlette | None = None
 
+    def added_agents(self) -> tuple[str, ...]:
+        """The agents `engine agent add` offers: workflow runners, not chat runners."""
+        return self.service.added_agents() if self.service is not None else ()
+
+    def declared_inputs(self, graph: GraphWorkflow) -> tuple[WorkflowInput, ...]:
+        """A graph's creation fields, its runner dropdowns also offering the added agents."""
+        declarations = getattr(graph, "inputs", ())
+        if not isinstance(graph, LangGraphWorkflow):
+            return declarations
+        return offer_runners(declarations, self.added_agents(), added_agent_inputs(graph))
+    def workflows(self, configured: Mapping[str, GraphWorkflow]) -> Mapping[str, GraphWorkflow]:
+        if self.runtime is None:
+            return {}
+        registered = self.service.workflows() if self.service is not None else ()
+        return {**configured, **{str(graph.graph_id): graph for graph in registered}}
+
+
 
 class GithubProvenance(Protocol):
     """The half of the runtime's store that says who owns a pull request.
@@ -1080,7 +1103,7 @@ def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None
     return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
-def create_app(
+def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
     static_directory: Path | None = None,
@@ -1106,8 +1129,9 @@ def create_app(
     communications_channel: str = "",
     public_url: str = "",
     work_orders: WorkOrdersConfig = WorkOrdersConfig(),
-    repos: Mapping[str, str] | None = None,
+    repos: Mapping[str, str] | RepositoryRegistry | None = None,
     repo_modes: Mapping[str, str] | None = None,
+    config_path: Path | None = None,
     trusted_repos: Collection[str] = (),
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
@@ -1137,19 +1161,16 @@ def create_app(
         else {}
     )
     surface = _GraphSurface()
-    # The checkouts `engine init` onboarded as disconnected, as the dropdown
-    # sends them back: every WorkOrder on one runs disconnected.
-    disconnected_repositories = frozenset(
-        Path(path).expanduser().resolve()
-        for name, path in (repos or {}).items()
-        if (repo_modes or {}).get(name) == ForgeMode.DISCONNECTED
+    repository_registry = repos if isinstance(repos, RepositoryRegistry) else RepositoryRegistry(
+        repos, repo_modes, trusted_repos,
+        projects=repository_projects or {}, login_repositories=login_repositories,
     )
 
-    # And those `[trusted_repos]` names, whose WorkOrders are auto-approved.
-    trusted_repositories = frozenset(
-        Path(path).expanduser().resolve()
-        for name, path in (repos or {}).items()
-        if name in (trusted_repos or ())
+    from engine.apps.web.onboarding import RepositoryOnboarding, register_starters
+
+    onboarding = RepositoryOnboarding(
+        repository_registry, config_path,
+        lambda project, runner: register_starters(surface.service, project, runner),
     )
 
     async def in_repositories(repository: str, checkouts: frozenset[Path]) -> bool:
@@ -1168,7 +1189,7 @@ def create_app(
 
     async def repository_mode(repository: str) -> ForgeMode | None:
         """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any."""
-        if await in_repositories(repository, disconnected_repositories):
+        if await in_repositories(repository, repository_registry.snapshot.disconnected):
             return ForgeMode.DISCONNECTED
         return None
 
@@ -1192,7 +1213,7 @@ def create_app(
         a graph that no longer compiles -- there are no graph entries at
         all, rather than entries that fail the moment somebody picks one.
         """
-        return graph_workflows if surface.runtime is not None else {}
+        return surface.workflows(graph_workflows)
 
     approval_feed = ApprovalFeed(session.state_store)
     service = ThreadService(
@@ -1308,7 +1329,7 @@ def create_app(
                         EventKind.NODE_STARTED, EventKind.NODE_FINISHED, EventKind.RUN_FINISHED,
                     ),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 -- #779: notification boundary reports NOTIFICATION_FAILED
                 # Exceptions may contain credentials or request bodies. Record
                 # only a fixed diagnostic in OE's replayable event feed.
                 await graph_events.append(RuntimeEvent(
@@ -1626,72 +1647,73 @@ def create_app(
                 yield
             finally:
                 ready = False
+                await onboarding.close()
 
     def workflow_is_active(thread: ChatThread) -> bool:
         return (
-            thread.workflow_run_id is not None
-            and thread.workflow_run_id in workflow_tasks
+            thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            and thread.workflow_run_id in workflow_tasks  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         )
 
     async def interrupt_workflow(thread: ChatThread) -> None:
         """Stop the active process for an editable step without failing its run."""
 
-        if not thread.editable or thread.workflow_run_id is None:
+        if not thread.editable or thread.workflow_run_id is None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             raise RuntimeError("this workflow conversation is read-only")
-        state = await session.state_store.load(thread.workflow_run_id)
+        state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if (
             state is None
             or state.phase is not RunPhase.RUNNING_AGENT
-            or state.current_step_id != thread.workflow_step_id
+            or state.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         ):
             raise RuntimeError("this workflow step is no longer active")
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task = workflow_tasks.get(thread.workflow_run_id)
+        if state.current_agent_run_id is not None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            await service.approvals.cancel_run(state.current_agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        task = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        assert thread.workflow_step_id is not None
-        await workflow_executor.pause_agent_step(
-            thread.workflow_run_id, thread.workflow_step_id
+        assert thread.workflow_step_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        await workflow_executor.pause_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+            thread.workflow_run_id, thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         )
 
     async def switch_workflow_runner(thread: ChatThread) -> None:
         """Restart an active workflow turn on its conversation's new runner."""
 
-        assert thread.workflow_run_id is not None
-        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
+        assert thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         async with lock:
-            task = workflow_tasks.get(thread.workflow_run_id)
+            task = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
             if task is None or task.done():
                 return
-            state = await session.state_store.load(thread.workflow_run_id)
+            state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             if (
                 state is None
                 or state.phase is not RunPhase.RUNNING_AGENT
-                or state.current_step_id != thread.workflow_step_id
+                or state.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 return
-            if state.current_agent_run_id is not None:
-                await service.approvals.cancel_run(state.current_agent_run_id)
+            if state.current_agent_run_id is not None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                await service.approvals.cancel_run(state.current_agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
             # The completed turn may have advanced to another agent between the
             # first state read and cancellation. Resume whichever conversation is
             # now current, without applying this conversation's choice to another.
-            state = await session.state_store.load(thread.workflow_run_id)
+            state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             if (
                 state is None
                 or state.phase is not RunPhase.RUNNING_AGENT
-                or state.agent_paused
+                or state.agent_paused  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 return
-            runner_name = await workflow_runner_for(state)
-            track_workflow(
+            runner_name = await workflow_runner_for(state)  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+            track_workflow(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                 state.run_id,
                 asyncio.create_task(
-                    workflow_executor.resume_agent_step(
+                    workflow_executor.resume_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                         state.run_id, runner_name=runner_name
                     )
                 ),
@@ -1701,8 +1723,8 @@ def create_app(
         thread: ChatThread, text: str, *, active_only: bool = False, resume_only: bool = False,
     ) -> None:
         """Serialize web and Slack continuations for the same WorkOrder."""
-        assert thread.workflow_run_id is not None
-        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())
+        assert thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        lock = workflow_restart_locks.setdefault(thread.workflow_run_id, asyncio.Lock())  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         async with lock:
             await continue_workflow_locked(thread, text, active_only=active_only, resume_only=resume_only)
 
@@ -1711,19 +1733,19 @@ def create_app(
     ) -> None:
         """Interrupt, append a human message, and resume the same workflow step."""
 
-        assert thread.workflow_run_id is not None
-        if not thread.editable:
+        assert thread.workflow_run_id is not None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        if not thread.editable:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             raise RuntimeError("this workflow conversation is read-only")
         await service.require_somewhere_to_run(thread.instance_id)
         before = len(await service.history(thread.instance_id))
-        state = await session.state_store.load(thread.workflow_run_id)
+        state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if state is None:
             raise RuntimeError("this workflow step is no longer active")
         if resume_only:
-            executing = workflow_tasks.get(thread.workflow_run_id)
+            executing = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
             if executing is not None and not executing.done():
                 raise RuntimeError("this work order already has an execution in progress; use steering")
-            if state.phase not in (RunPhase.SUCCEEDED, RunPhase.FAILED, RunPhase.AWAITING_HUMAN_REVIEW):
+            if state.phase not in (RunPhase.SUCCEEDED, RunPhase.FAILED, RunPhase.AWAITING_HUMAN_REVIEW):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 raise RuntimeError("this work order has not finished; use steering for running work or the WorkOrder page for paused work")
             pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
             if any(record.status.value == "pending" for record in pending):
@@ -1731,47 +1753,47 @@ def create_app(
         if active_only:
             if (
                 state.phase is not RunPhase.RUNNING_AGENT
-                or state.current_step_id != thread.workflow_step_id
-                or state.agent_paused
+                or state.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                or state.agent_paused  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 raise RuntimeError("this work order is not running an agent; continue it on the WorkOrder page")
             pending = await session.state_store.list_approvals(instance_id=thread.instance_id)
             if any(record.status.value == "pending" for record in pending):
                 raise RuntimeError("this agent needs a decision on the WorkOrder page before Slack steering")
-        if state.current_agent_run_id is not None:
-            await service.approvals.cancel_run(state.current_agent_run_id)
-        task = workflow_tasks.get(thread.workflow_run_id)
+        if state.current_agent_run_id is not None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            await service.approvals.cancel_run(state.current_agent_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        task = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        latest = await session.state_store.load(thread.workflow_run_id)
+        latest = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if active_only and (
             latest is None or latest.phase is not RunPhase.RUNNING_AGENT
-            or latest.current_step_id != thread.workflow_step_id
+            or latest.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         ):
             # The run may advance while cancellation is in progress. Do not
             # reopen the old step, or strand a newer one we interrupted.
-            if latest is not None and latest.phase is RunPhase.RUNNING_AGENT and not latest.agent_paused:
-                track_workflow(latest.run_id, asyncio.create_task(
-                    workflow_executor.resume_agent_step(latest.run_id)
+            if latest is not None and latest.phase is RunPhase.RUNNING_AGENT and not latest.agent_paused:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                track_workflow(latest.run_id, asyncio.create_task(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                    workflow_executor.resume_agent_step(latest.run_id)  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                 ))
             raise RuntimeError("the workflow moved to another step before the instruction could be delivered; try again")
         if (
             state.phase is RunPhase.RUNNING_AGENT
-            and state.current_step_id == thread.workflow_step_id
+            and state.current_step_id == thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         ):
-            await workflow_executor.pause_agent_step(
-                thread.workflow_run_id, thread.workflow_step_id
+            await workflow_executor.pause_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                thread.workflow_run_id, thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             )
         task = asyncio.create_task(
-            workflow_executor.resume_agent_step(
-                thread.workflow_run_id,
+            workflow_executor.resume_agent_step(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                thread.workflow_run_id,  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                 text,
                 thread.runner,
-                step_id=thread.workflow_step_id,
+                step_id=thread.workflow_step_id,  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             )
         )
-        track_workflow(thread.workflow_run_id, task)
+        track_workflow(thread.workflow_run_id, task)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
         if active_only or resume_only:
             while True:
                 history = await service.history(thread.instance_id)
@@ -1797,11 +1819,11 @@ def create_app(
         previous_approvals: dict[str, dict[str, object]] = {}
         while True:
             history = await service.history(instance_id)
-            content = _latest_assistant_content(history)
+            content = _latest_assistant_content(history)  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
             approvals = await session.state_store.list_approvals(
                 instance_id=instance_id
             )
-            active = run_id in workflow_tasks
+            active = run_id in workflow_tasks  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
             for record in approvals:
                 approval = _approval_json(record)
                 approval_id = str(record.approval_id)
@@ -1818,13 +1840,14 @@ def create_app(
 
     async def config(request: Request) -> JSONResponse:
         visible = await github_login.visible_repositories(request)
+        configured = repository_registry.snapshot
         repository_choices = [
             {
                 "name": name,
                 "path": str(Path(path).expanduser().resolve()),
-                **({"mode": mode} if (mode := (repo_modes or {}).get(name)) else {}),
+                **({"mode": mode} if (mode := configured.repo_modes.get(name)) else {}),
             }
-            for name, path in (repos or {}).items()
+            for name, path in configured.repos.items()
         ] or [{"name": f". ({Path.cwd()})", "path": "."}]
         return JSONResponse(
             {
@@ -1842,6 +1865,7 @@ def create_app(
                 ],
                 "defaultAgent": str(next(iter(sorted(session.profiles)))),
                 "defaultRunner": session.default_runner,
+                "hasRepositories": bool(configured.repos),
                 "repositories": [
                     choice for choice in repository_choices
                     if repository_visible(visible, choice["path"])
@@ -1855,7 +1879,7 @@ def create_app(
                         "id": str(graph.graph_id),
                         "name": graph.name,
                         **(
-                            {"inputs": [asdict(item) for item in graph.inputs]}
+                            {"inputs": [asdict(item) for item in surface.declared_inputs(graph)]}
                             if getattr(graph, "inputs", ()) else {}
                         ),
                     }
@@ -1944,7 +1968,7 @@ def create_app(
                     readings = await _utilization.recent(
                         tuple(runners), UTILIZATION_MAX_AGE_SECONDS
                     )
-            except Exception:  # noqa: BLE001 -- placement must not fail the run
+            except Exception:  # Placement must not fail the run; log before falling back.
                 log.warning("utilization refresh failed; using cached readings", exc_info=True)
                 readings = _utilization.cached()
             return {
@@ -1983,6 +2007,8 @@ def create_app(
                 usage=lambda: usage,
                 turns=round_robin_turns,
             )
+            # Taken before start(), which may already run nodes.
+            started_at = datetime.now(UTC)
             snapshot = await runtime.start(
                 GraphId(str(graph.graph_id)),
                 {
@@ -2000,7 +2026,7 @@ def create_app(
             if defer_notifications and origin is not None:
                 deferred_graph_notifications[snapshot.run_id] = origin
             seed_graph_progress(runtime, snapshot)
-            if approval_policy.auto_approve or await in_repositories(repository, trusted_repositories):
+            if approval_policy.auto_approve or await in_repositories(repository, repository_registry.snapshot.trusted):
                 topology = runtime.topology(GraphId(str(graph.graph_id)))
                 if topology is not None:
                     for node in topology.nodes:
@@ -2020,6 +2046,7 @@ def create_app(
                 depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
                 inputs=inputs,
                 requester=requester,
+                started_at=started_at,
             )
             await session.state_store.save(state)
         # Nodes may publish before start() returns and before the origin exists.
@@ -2104,7 +2131,7 @@ def create_app(
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
-                            inputs=resolve_inputs(getattr(graph, "inputs", ()), state.inputs),
+                            inputs=resolve_inputs(surface.declared_inputs(graph), state.inputs),
                             prompt=state.prompt,
                             repository=state.repository or work_orders.repository,
                             origin=state.origin,
@@ -2134,7 +2161,7 @@ def create_app(
                 return _error("configure work_orders.repository before starting this workorder", 400)
             assert surface.runtime is not None
             try:
-                inputs = resolve_inputs(getattr(graph, "inputs", ()), state.inputs)
+                inputs = resolve_inputs(surface.declared_inputs(graph), state.inputs)
             except ValueError as error:
                 return _error(str(error), 400)
             state = await start_graph_run(
@@ -2173,9 +2200,7 @@ def create_app(
         # running, so this cannot be `None` here.
         assert surface.runtime is not None
         try:
-            inputs = resolve_inputs(
-                getattr(graph, "inputs", ()), body.get("inputs", {})
-            )
+            inputs = resolve_inputs(surface.declared_inputs(graph), body.get("inputs", {}))
         except ValueError as error:
             return _error(str(error), 400)
         try:
@@ -2326,31 +2351,31 @@ def create_app(
         if not isinstance(approved, bool):
             return _error("approved must be a boolean", 400)
         summary = str(body.get("summary", "")).strip()
-        lock = workflow_restart_locks.setdefault(run_id, asyncio.Lock())
+        lock = workflow_restart_locks.setdefault(run_id, asyncio.Lock())  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
         async with lock:
             state = await session.state_store.load(run_id)
             if state is None:
                 return _error("run not found", 404)
             if (
-                state.phase is not RunPhase.AWAITING_HUMAN_REVIEW
-                or state.current_step_id is None
+                state.phase is not RunPhase.AWAITING_HUMAN_REVIEW  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+                or state.current_step_id is None  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             ):
                 return _error("run is not awaiting human review", 409)
             try:
-                next_state = await workflow_executor.complete_human_review(
-                    HumanReviewCompleted(
+                next_state = await workflow_executor.complete_human_review(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
+                    HumanReviewCompleted(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                         run_id=run_id,
-                        step_id=state.current_step_id,
+                        step_id=state.current_step_id,  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
                         approved=approved,
                         summary=summary,
                     )
                 )
                 if next_state.phase is RunPhase.RUNNING_AGENT:
-                    track_workflow(
+                    track_workflow(  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                         run_id,
-                        asyncio.create_task(workflow_executor.resume_agent_step(run_id)),
+                        asyncio.create_task(workflow_executor.resume_agent_step(run_id)),  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                     )
-            except WorkflowExecutionError as error:
+            except WorkflowExecutionError as error:  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
                 return _error(str(error), 409)
         run = await run_reader.get(run_id)
         assert run is not None
@@ -2493,7 +2518,7 @@ def create_app(
             title = await service.generate_title(instance_id, opening_text, runner)
         except ValueError as error:
             return _error(str(error), 400)
-        except Exception as failure:
+        except Exception as failure:  # noqa: BLE001 -- #779: title endpoint returns the provider error to the client
             # A provider that cannot name the chat has not cost anybody
             # anything yet, and must not be allowed to. The client asks for a
             # name *before* sending the message being named, so a failure
@@ -2642,12 +2667,12 @@ def create_app(
         if user is None:
             # Session middleware normally rejects this before routing.
             raise RuntimeError("GitHub connection requires a browser session")
-        return GitHubCredentialStore(user_id=int(user["id"]))
+        return GitHubCredentialStore(user_id=int(user["id"]))  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     def _web_requester(request: Request) -> str | None:
         """The signed-in GitHub account, or ``None`` without one to name."""
         user = github_login._read_session(request) if github_login.configured else None
-        return github_requester(int(user["id"]), str(user["login"])) if user else None
+        return github_requester(int(user["id"]), str(user["login"])) if user else None  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     async def _co_author(requester: str | None) -> str:
         """Who the WorkOrder's commits credit as co-author, or empty for nobody.
@@ -2664,41 +2689,8 @@ def create_app(
         name, email = (re.sub(r"[<>\s]+", " ", part).strip() for part in identity)
         return f"{name} <{email}>" if name and email and " " not in email else ""
 
-    def _is_local_request(request: Request) -> bool:
-        """True when the request originates from the UI served by this process.
-
-        The GitHub auth endpoints are mutating and must not be triggerable by
-        arbitrary pages. Checking the Origin header against localhost is a
-        lightweight CSRF guard appropriate for a local tool; it stops a
-        cross-origin page from silently disconnecting the user's token or
-        initiating a new device flow. GET /api/github/status is read-only and
-        exempt.
-        """
-        origin = request.headers.get("origin", "")
-        if not origin:
-            # No Origin means a same-origin request (form submit, etc.) or a
-            # curl call from localhost. Both are fine for a local tool.
-            return True
-        parsed = urlsplit(origin)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path
-            or parsed.query
-            or parsed.fragment
-        ):
-            return False
-        # Browser Origin values have no path and lowercase hostnames.  Compare
-        # parsed hosts rather than prefixes: localhost.evil.example is not
-        # localhost.
-        return parsed.hostname.lower() in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-            (request.url.hostname or "").lower(),
-        }
+    request_security = RequestSecurity(public_url)
+    _is_local_request = request_security.is_local_request
 
     def _hint(value: str) -> str:
         """Return first 4 chars + bullets so the UI can confirm which ID is set."""
@@ -2832,7 +2824,7 @@ def create_app(
         return await session.state_store.load(RunId(run_id))
 
     def loop_spend(run_id: str) -> float:
-        return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0
+        return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
 
     async def loop_may_act(loop: Loop) -> bool:
         """Whether the loop's creator can still write to its repository, asked
@@ -2895,7 +2887,7 @@ def create_app(
         if not _is_local_request(request):
             return _error("forbidden", 403)
         repositories = [
-            str(Path(path).expanduser().resolve()) for path in (repos or {}).values()
+            str(Path(path).expanduser().resolve()) for path in repository_registry.snapshot.repos.values()
         ] or ["."]
         try:
             loop = parse_loop(
@@ -3081,7 +3073,7 @@ def create_app(
             active = (flow, flow.interval)
             _gitlab_flows[origin] = active
         flow, interval = active
-        return JSONResponse({"origin": origin, "userCode": flow.user_code, "verificationUri": flow.verification_uri, "expiresIn": flow.expires_in, "interval": interval})
+        return JSONResponse({"origin": origin, "userCode": flow.user_code, "verificationUri": flow.verification_uri, "expiresIn": flow.expires_in, "interval": interval})  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
 
     async def gitlab_connect_poll(request: Request) -> JSONResponse:
         if not _is_local_request(request):
@@ -3100,7 +3092,7 @@ def create_app(
             _gitlab_flows.pop(origin, None)
             return _error("GitLab client ID is not configured for this instance.", 503)
         try:
-            result = await poll_gitlab_device_flow(origin, client_id, flow.device_code, interval)
+            result = await poll_gitlab_device_flow(origin, client_id, flow.device_code, interval)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         except GitLabAuthError as error:
             _gitlab_flows.pop(origin, None)
             return _error(str(error), 502)
@@ -3526,7 +3518,7 @@ def create_app(
         except UnknownGraphError:
             # A saved work order can outlive the graph it was started from.
             return run_id, False
-        return run_id, snapshot.status in STEERABLE_RUN_STATUSES
+        return run_id, snapshot.status in STEERABLE_RUN_STATUSES  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
 
     async def github_checkout(project: str) -> str:
         """The local checkout a forge `project` key is worked on in.
@@ -3537,7 +3529,7 @@ def create_app(
         projects by that port, which a remote does not carry, so the comparison
         ignores it.
         """
-        for name, path in (repos or {}).items():
+        for name, path in repository_registry.snapshot.repos.items():
             if name.lower() == project.lower():
                 return str(Path(path).expanduser())
         authority, _, rest = project.partition("/")
@@ -3563,7 +3555,7 @@ def create_app(
         # to `git -C` by the worktree provider, which does not expand `~`.
         paths = dict.fromkeys(
             str(Path(path).expanduser())
-            for path in (*(repos or {}).values(), work_orders.repository) if path
+            for path in (*repository_registry.snapshot.repos.values(), work_orders.repository) if path
         )
         lookups = {path: asyncio.create_task(origin(path)) for path in paths}
         # The checkouts are asked at once and share one deadline, so stalled
@@ -3758,12 +3750,12 @@ def create_app(
                 requester=origin.requester or None,
             )
         else:
-            reached = await github_steer_workorder(run_id, prompt)
+            reached = await github_steer_workorder(run_id, prompt)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         return reached
 
     async def github_react(request: FeedbackRequest, content: str) -> None:
         repository = request.origin.channel.removeprefix("github:")
-        if disconnected_repositories:
+        if repository_registry.snapshot.disconnected:
             checkout = await github_checkout(repository)
             if await repository_mode(checkout) == ForgeMode.DISCONNECTED:
                 return
@@ -3965,7 +3957,7 @@ def create_app(
                     except NotImplementedError:
                         # An unsupported capability will not recover on retry.
                         break
-                    except Exception:
+                    except Exception:  # noqa: BLE001 -- #779: webhook boundary retries then logs and reports unavailable lookup
                         if attempt == 0:
                             await asyncio.sleep(0.25)
                             continue
@@ -3991,7 +3983,7 @@ def create_app(
                         "Your comment was received, but automatic thread resolution may be unavailable. "
                         "Please retry later.",
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001 -- #779: webhook boundary logs and records failed retry advice
                 # Do not replay already-forwarded work if the reply service is
                 # unavailable too. Keep the retry advice visible in activity.
                 github_activity.ignored("Review-thread service unavailable; please retry later.")
@@ -4040,7 +4032,7 @@ def create_app(
                 merged.repository, merged.number, run_id,
             )
             return
-        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             log.info(
                 "%s#%s was merged, but work order %s has already stopped",
                 merged.repository, merged.number, run_id,
@@ -4079,13 +4071,13 @@ def create_app(
         except UnknownGraphError:
             merges_awaiting_review.pop(run_id, None)
             return
-        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):
+        if snapshot.status in (RunStatus.COMPLETED, RunStatus.FAILED):  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
             merges_awaiting_review.pop(run_id, None)
             return
         pending = next(
             (
                 approval
-                for approval in snapshot.pending_approvals
+                for approval in snapshot.pending_approvals  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
                 if approval.tool_name == HUMAN_REVIEW_TOOL
             ),
             None,
@@ -4141,7 +4133,7 @@ def create_app(
         ).geturl())
         repository = found.project if found is not None else delivery.repository
         may_write: bool | None = None
-        if sender_id and repository.lower() in access_repositories:
+        if sender_id and repository.lower() in access_repositories():
             # The same per-user answer, and cache, that scopes the web app:
             # a sender who was just checked there, or here, is not asked again.
             async with asyncio.timeout(GITHUB_AUTHORIZATION_TIMEOUT_SECONDS):
@@ -4262,9 +4254,12 @@ def create_app(
     # Anyone who can push to one of the repositories this deployment works on
     # may sign in: the webhook repository and the configured checkouts. What
     # they see is the WorkOrders of the repositories they can push to.
-    access_repositories = tuple(dict.fromkeys(
-        project.lower() for project in (github_repository, *github_repositories, *login_repositories) if project
-    ))
+    def access_repositories() -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            project.lower() for project in (
+                github_repository, *github_repositories, *repository_registry.snapshot.login_repositories
+            ) if project
+        ))
 
     async def github_repository_access(user_id: int, login: str) -> dict[str, bool | None]:
         """Whether the user can push to each of this deployment's repositories.
@@ -4284,19 +4279,15 @@ def create_app(
                 log.exception("could not check whether %s can write to %s", login, project)
                 return None
 
-        answers = await asyncio.gather(*(check(project) for project in access_repositories))
-        return dict(zip(access_repositories, answers, strict=True))
+        projects = access_repositories()
+        answers = await asyncio.gather(*(check(project) for project in projects))
+        return dict(zip(projects, answers, strict=True))
 
     # The GitHub repository behind each value a run's `repository` takes: a
     # `[repos]` name, the checkout path the web form sends, or `.`. A run
     # started from GitHub already names its `owner/repo`.
-    run_projects: dict[str, str] = {}
-    for name, project in (repository_projects or {}).items():
-        path = str(Path((repos or {}).get(name, name)).expanduser().resolve())
-        run_projects[name] = run_projects[path] = project.lower()
-
     def run_project(repository: str) -> str | None:
-        project = run_projects.get(repository)
+        project = repository_registry.snapshot.run_projects.get(repository)
         if project is None and "/" in repository and not repository.startswith(("/", ".", "~")):
             project = repository.lower()
         return project
@@ -4341,7 +4332,7 @@ def create_app(
         if ref is None:
             return None
         if ref not in branch_projects:
-            for name, path in {".": ".", **(repos or {})}.items():
+            for name, path in {".": ".", **repository_registry.snapshot.repos}.items():
                 project = run_project(name)
                 if project is None:
                     continue
@@ -4399,7 +4390,7 @@ def create_app(
         answers for public github.com repositories; the rest read as unknown
         (None), as does any lookup that fails.
         """
-        projects = [project for project in access_repositories if project.count("/") == 1]
+        projects = [project for project in access_repositories() if project.count("/") == 1]
         if not projects:
             return {}
 
@@ -4434,6 +4425,7 @@ def create_app(
         access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
     )
     routes = [
+        *onboarding.routes(github_login.visible_repositories, _is_local_request),
         Route("/api/health", health),
         *github_login.routes(),
         Route("/api/config", config),
@@ -4554,14 +4546,17 @@ def create_app(
     app = Starlette(
         routes=routes,
         lifespan=lifespan,
-        middleware=[Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5)],
+        middleware=[
+            Middleware(TrustedDaemonHostMiddleware, security=request_security),
+            Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5),
+        ],
     )
     app.state.thread_service = service
     app.state.slack_ingress = slack_ingress
     app.state.github_ingress = github_ingress
     # Enforce session auth on API routes when GitHub login is configured.
     app = github_login.middleware(app)
-    return app
+    return app  # pyright: ignore[reportReturnType]  # Baseline: see docs/pyright.md
 
 
 def _with_workspace(thread: ChatThread, state: WorkspaceState | None) -> ChatThread:
@@ -4611,6 +4606,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
         "dependsOnRunId": str(run.depends_on_run_id) if run.depends_on_run_id else None,
         "phase": run.phase,
         "terminalOutcome": run.terminal_outcome,
+        "startedAt": run.started_at.isoformat() if run.started_at else None,
     }
     if listing:
         return result
@@ -4751,7 +4747,7 @@ def _merge_message(
                 content.append({"type": "text", "text": clarification})
             changed = True
     elif message.role is Role.TOOL and message.tool_call_id:
-        part = tool_calls.get(message.tool_call_id)
+        part = tool_calls.get(message.tool_call_id)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
         if part is not None:
             part["result"] = message.content
             changed = any(candidate is part for candidate in content)

@@ -44,7 +44,7 @@ def test_discovery_and_creation(dependency):
         assert initialized.json()["result"]["serverInfo"]["name"] == "OpenEngine"
         tools = rpc(client, "tools/list").json()["result"]["tools"]
         assert [tool["name"] for tool in tools] == [
-            "create_workorder", "workorder_status", "node_status", "steer_workorder", "node_steer",
+            "create_workorder", "onboard_repository", "repository_onboarding_status", "workorder_status", "node_status", "steer_workorder", "node_steer",
             "create_loop", "loop_status",
         ]
         assert set(tools[0]["inputSchema"]["properties"]) == {"prompt", "depends_on_run_id"}
@@ -852,3 +852,49 @@ def test_oidc_callers_cannot_create_loops(oidc):
     with TestClient(create_app(settings, oidc_transport=transport)) as client:
         tools = [tool["name"] for tool in oauth_rpc(client, token()).json()["result"]["tools"]]
     assert "create_loop" not in tools and "loop_status" in tools
+
+
+def test_repository_onboarding_tools_forward_inputs_and_progress():
+    requests = []
+    state = {"id": "job1", "status": "failed", "message": "Preflight failed", "problems": [{"code": "agent", "fix": "engine agent signin codex"}]}
+
+    def upstream(request):
+        requests.append(request)
+        return httpx.Response(200, json=state)
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        tools = {tool["name"]: tool for tool in rpc(client, "tools/list").json()["result"]["tools"]}
+        assert tools["onboard_repository"]["annotations"]["readOnlyHint"] is False
+        assert tools["onboard_repository"]["annotations"]["openWorldHint"] is True
+        assert tools["repository_onboarding_status"]["annotations"]["readOnlyHint"] is True
+        inputs = {"repository": "owner/repo", "path": "/code/repo", "mode": "disconnected"}
+        created = rpc(client, "tools/call", {"name": "onboard_repository", "arguments": inputs}).json()["result"]
+        assert created.get("structuredContent") == state, created
+        read = rpc(client, "tools/call", {"name": "repository_onboarding_status", "arguments": {"job_id": "job1"}}).json()["result"]
+        assert read["structuredContent"] == state
+    assert requests[0].url.path == "/api/repositories/onboard"
+    assert json.loads(requests[0].content) == inputs
+    assert requests[1].method == "GET"
+    assert requests[1].url.path == "/api/repositories/onboard/job1"
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("onboard_repository", {"repository": "owner/repo", "path": "/code/repo"}),
+    ("repository_onboarding_status", {"job_id": "job1"}),
+])
+def test_oidc_callers_cannot_access_onboarding(oidc, name, arguments):
+    settings, transport, token, _, _ = oidc
+
+    def upstream(request):
+        pytest.fail("OIDC onboarding reached the daemon")
+
+    with TestClient(create_app(settings, oidc_transport=transport,
+                               transport=httpx.MockTransport(upstream))) as client:
+        bearer = token()
+        tools = [tool["name"] for tool in oauth_rpc(client, bearer).json()["result"]["tools"]]
+        assert name not in tools
+        response = client.post("/mcp", headers={**HEADERS, "Authorization": f"Bearer {bearer}"}, json={
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        })
+        assert response.json()["result"]["isError"]

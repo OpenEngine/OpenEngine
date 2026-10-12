@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 from engine.apps.cli.__main__ import main
-from engine.cli import backends, http
+from engine.cli import backends, http, starters
 
 
 class Backend:
@@ -70,7 +70,7 @@ RUN = {
 def test_backends_are_added_selected_and_listed(capsys) -> None:
     assert main(["backend", "add", "mini", "mac-mini.local:4364", "--token-env", "MINI_TOKEN", "--use"]) == 0
     capsys.readouterr()
-    assert main(["backends", "list"]) == 0
+    assert main(["backends", "list", "--json"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["current"] == "mini"
     assert {b["name"]: b["url"] for b in listed["backends"]} == {
@@ -111,13 +111,39 @@ def test_graph_run_retries_a_dropped_connection_under_the_same_key(monkeypatch, 
     assert json.loads(capsys.readouterr().out)["runId"] == "run-1"
 
 
+def test_a_built_in_graph_is_registered_the_first_time_it_is_run(monkeypatch, capsys) -> None:
+    missing = HTTPError("http://x", 404, "Not Found", {}, io.BytesIO(json.dumps({
+        "error": "no graph named 'adversarial-review' in project 'default'",
+    }).encode()))
+    registered = {"name": "adversarial-review", "version": 1, "created": True}
+    recorded = serve(monkeypatch, missing, registered, {**RUN, "created": True})
+    assert main([
+        "graph", "run", "adversarial-review", "--branch", "feat/my_feat", "--agent", "codex", "--repo", "o/r",
+    ]) == 0
+    first, adding, retry = recorded.requests
+    assert first["body"] == retry["body"]
+    assert first["body"]["inputs"] == {"branch": "feat/my_feat", "agent": "codex"}
+    assert first["body"]["instruction"] == "Run adversarial-review on feat/my_feat."
+    assert adding["url"].endswith("/api/v1/graphs")
+    assert adding["body"]["source"] == starters.source("adversarial-review")
+
+
+def test_an_unknown_graph_is_not_registered(monkeypatch, capsys) -> None:
+    missing = HTTPError("http://x", 404, "Not Found", {}, io.BytesIO(json.dumps({
+        "error": "no graph named 'mine'",
+    }).encode()))
+    recorded = serve(monkeypatch, missing)
+    assert main(["graph", "run", "mine", "go", "--repo", "o/r"]) == 1
+    assert len(recorded.requests) == 1
+
+
 def test_runs_sends_its_filters_and_prints_a_table(monkeypatch, capsys) -> None:
     listed = {**RUN, "loop": None, "startedAt": "2026-10-05T12:00:00+00:00",
               "usage": {"costUsd": 1.25, "complete": True}}
     recorded = serve(monkeypatch, {"runs": [listed]}, {"runs": [listed]})
-    assert main(["runs", "--graph", "pair", "--status", "running", "--limit", "5"]) == 0
+    assert main(["runs", "--graph", "pair", "--status", "running", "--limit", "5", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["runs"][0]["runId"] == "run-1"
-    assert main(["runs", "--all-projects", "--pretty"]) == 0
+    assert main(["runs", "--all-projects"]) == 0
     filtered, everywhere = recorded.requests
     assert filtered["url"].endswith("/api/v1/runs?project=default&graph=pair&status=running&limit=5")
     assert everywhere["url"].endswith("/api/v1/runs?limit=20")
@@ -130,12 +156,12 @@ def test_a_failed_run_names_the_signin_command_for_its_backend(monkeypatch, caps
     failed = {
         **RUN, "status": "failed", "terminal": True,
         "failure": {"error": "Authentication required", "node": "work", "authRequired": {
-            "runner": "claude", "command": "engine runner signin claude", "message": "",
+            "runner": "claude", "command": "engine agent signin claude", "message": "",
         }},
     }
     serve(monkeypatch, failed)
     assert main(["run", "get", "run-1"]) == 1
-    assert "engine runner signin claude --backend mini" in capsys.readouterr().err
+    assert "engine agent signin claude --backend mini" in capsys.readouterr().err
 
 
 def test_an_invalid_manifest_lists_each_problem(tmp_path, monkeypatch, capsys) -> None:
@@ -177,17 +203,80 @@ def test_loop_add_sends_limits_and_explains_what_spend_counts(monkeypatch, capsy
     assert "max-spend counts agent usage" in capsys.readouterr().err
 
 
+def test_loop_get_prints_the_latest_output(monkeypatch, capsys) -> None:
+    loop = {
+        "loopId": "loop-1", "name": "dead-code", "state": "active", "pauseReason": None,
+        "graph": "dead-code", "version": 5, "everySeconds": 86400, "nextRunAt": "2026-10-10T18:00:00+00:00",
+        "activeRunId": None, "prCount": 0, "spend": {"usd": 0.0, "complete": True},
+        "limits": {"maxPrs": None, "maxSpendUsd": None},
+        "latestOutput": {
+            "runId": "run-1", "node": "challenge", "finishedAt": "2026-10-09T18:26:25+00:00",
+            "value": {"summary": "One candidate survived.", "runner": "codex",
+                      "report": "# Dead code\n\n- packages/x.py:3 unused helper"},
+        },
+    }
+    serve(monkeypatch, loop)
+    assert main(["loop", "get", "dead-code", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert "latest output: challenge of run-1, finished 2026-10-09T18:26:25+00:00" in out
+    assert "summary: One candidate survived." in out
+    assert "report:\n# Dead code\n\n- packages/x.py:3 unused helper" in out
+    assert "codex" not in out
+
+
 def test_signing_in_on_a_remote_backend_says_where(monkeypatch, capsys) -> None:
     backends.add("mini", "http://mac-mini.local:4364", use=True)
-    assert main(["runner", "signin", "codex"]) == 0
+    assert main(["agent", "signin", "codex"]) == 0
     out = capsys.readouterr().out
     assert "codex login" in out and "ssh -t mac-mini.local codex login" in out
 
 
-def test_graph_run_sends_the_repository_it_is_run_from(tmp_path, monkeypatch) -> None:
-    import subprocess
+def test_runner_signin_still_works_and_names_its_replacement(monkeypatch, capsys) -> None:
+    backends.add("mini", "http://mac-mini.local:4364", use=True)
+    assert main(["runner", "signin", "codex"]) == 0
+    captured = capsys.readouterr()
+    assert "ssh -t mac-mini.local codex login" in captured.out
+    assert "engine agent signin codex" in captured.err
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+
+def test_an_added_agent_signs_in_as_its_kind(monkeypatch, capsys) -> None:
+    backends.add("mini", "http://mac-mini.local:4364", use=True)
+    backend = serve(monkeypatch, {"name": "reviewer", "kind": "claude", "model": "opus", "url": "", "builtin": False})
+    assert main(["agent", "signin", "reviewer"]) == 0
+    assert backend.requests[0]["url"] == "http://mac-mini.local:4364/api/v1/agents/reviewer"
+    assert "ssh -t mac-mini.local claude" in capsys.readouterr().out
+
+
+def test_an_agent_on_a_model_server_has_nothing_to_sign_in_to(monkeypatch, capsys) -> None:
+    serve(monkeypatch, {"name": "qwen", "kind": "opencode", "model": "q", "url": "http://gpu:8000/v1", "builtin": False})
+    assert main(["agent", "signin", "qwen"]) == 0
+    assert "nothing to sign in to" in capsys.readouterr().out
+
+
+def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys) -> None:
+    qwen = {"name": "qwen", "kind": "opencode", "model": "qwen3", "url": "http://gpu:8000/v1", "builtin": False}
+    backend = serve(
+        monkeypatch, qwen,
+        {"agents": [{"name": "claude", "kind": "claude", "model": "", "url": "", "builtin": True}, qwen]},
+        {**qwen, "removed": True},
+    )
+    assert main(["agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1"]) == 0
+    assert main(["agents"]) == 0
+    assert main(["agent", "remove", "qwen", "--pretty"]) == 0
+    assert [(r["method"], r["url"].removeprefix("http://127.0.0.1:4364/api/v1")) for r in backend.requests] == [
+        ("POST", "/agents"), ("GET", "/agents"), ("DELETE", "/agents/qwen"),
+    ]
+    assert backend.requests[0]["body"] == {
+        "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://gpu:8000/v1", "replace": False,
+    }
+    out = capsys.readouterr().out
+    assert "built in" in out and "http://gpu:8000/v1" in out and "removed qwen" in out
+
+
+def test_graph_run_sends_the_repository_it_is_run_from(
+    tmp_path, monkeypatch, *, git_repo
+) -> None:
+    git_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
     recorded = serve(monkeypatch, RUN)
     assert main(["graph", "run", "pair", "say hello"]) == 0
@@ -221,6 +310,7 @@ def test_generated_spec_documentation_matches_command_documentation() -> None:
     generator = run_path(str(root / "scripts/generate_cli_docs.py"))
     assert (root / "site/docs/cli-specs.md").read_text() == generator["render"]()
     assert (root / "cli/client/src/engine/cli/specs.py").read_text() == generator["render_cli"]()
+    assert (root / "site/docs/cli-reference.md").read_text() == generator["render_reference"]()
 
 
 def test_documented_graph_and_loop_examples_match_current_language() -> None:
@@ -296,3 +386,30 @@ def test_field_constraints_drive_parser_and_reference(monkeypatch) -> None:
     text = generator["specifications"]()["graph"]
     assert "pattern: `^changed$`" in text
     assert "| output | required | Whether the value is required. | default: `True`; type: bool |" in text
+
+
+def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
+    backend = serve(monkeypatch,
+        {"id": "job1", "status": "cloning", "message": "Cloning"},
+        {"id": "job1", "status": "complete", "message": "Repository onboarded", "repository": "owner/repo", "path": "/code/repo"},
+    )
+    assert main(["onboard", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
+    assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
+    assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo"}
+    assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
+    assert "Next: engine graph run review --project owner/repo --repo /code/repo" in capsys.readouterr().out
+
+
+def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
+    from engine.cli import repository
+    monkeypatch.setattr(repository, "_git", lambda root, *args: "/checkout" if args[0] == "rev-parse" else "git@github.com:owner/repo.git")
+    backend = serve(monkeypatch, {"status": "complete", "message": "Already onboarded", "repository": "owner/repo", "path": "/checkout"})
+    assert main(["onboard", "--mode", "connected"]) == 0
+    assert backend.requests[0]["body"]["path"] == "/checkout"
+    assert backend.requests[0]["body"]["repository"] == "git@github.com:owner/repo.git"
+
+
+def test_onboard_reports_fix(monkeypatch, capsys):
+    serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "engine agent signin codex"}]})
+    assert main(["onboard", "owner/repo", "--mode", "connected"]) == 1
+    assert "engine agent signin codex" in capsys.readouterr().err

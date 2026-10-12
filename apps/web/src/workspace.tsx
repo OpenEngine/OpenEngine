@@ -24,6 +24,7 @@ export function WorkspaceControl({
   const endpoint = runId ? resource : `${resource}/workspace`;
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- Clear the previous resource while loading the newly selected workspace.
     setFetched(undefined);
     setError(undefined);
     let current = true;

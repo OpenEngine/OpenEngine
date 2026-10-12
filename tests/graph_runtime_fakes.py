@@ -39,6 +39,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import count
 
+from engine.graph_runtime.inputs import WorkflowInput, mode_input
+
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId
 from engine.graph_runtime import (
     CANCELLED,
@@ -699,7 +701,7 @@ class ScriptedGraphRuntime:
             await self._walk(run, checkpoint)
         except asyncio.CancelledError:
             raise
-        except Exception as failure:  # pragma: no cover - a bug in the fake
+        except Exception as failure:  # noqa: BLE001 -- #779: fake executor reports a failed run; pragma: no cover - a bug in the fake
             await self._fail(run, str(failure), None)
 
     async def _walk(self, run: _Run, checkpoint: Checkpoint) -> None:
@@ -800,7 +802,7 @@ class ScriptedGraphRuntime:
                         return _Outcome(node_id, refused=True)
             except asyncio.CancelledError:
                 raise
-            except Exception as failure:
+            except Exception as failure:  # noqa: BLE001 -- #779: fake node reports error in its outcome
                 return _Outcome(node_id, error=str(failure))
             await self.emit(
                 run,
@@ -953,6 +955,22 @@ __all__ = [
     "Say",
     "ScriptedFailure",
     "ScriptedGraph",
+    "InputGraph",
+    "ModeGraph",
     "ScriptedGraphRuntime",
     "ScriptedNode",
 ]
+
+
+@dataclass(frozen=True)
+class ModeGraph(ScriptedGraph):
+    """A scripted workflow exposing the standard connected/disconnected input."""
+
+    inputs: tuple[WorkflowInput, ...] = (mode_input(),)
+
+
+@dataclass(frozen=True)
+class InputGraph(ScriptedGraph):
+    """A scripted workflow with test-selected input declarations."""
+
+    inputs: tuple[WorkflowInput, ...] = ()

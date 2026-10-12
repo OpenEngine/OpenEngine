@@ -78,7 +78,7 @@ def content_from_answers(
             # let the agent say what it makes of it.
             picks, typed = values, []
         if typed:
-            content[other] = ", ".join(typed)
+            content[other] = ", ".join(typed)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         if not picks:
             continue
         if prop.get("type") == "array":

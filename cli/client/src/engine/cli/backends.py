@@ -110,7 +110,7 @@ def load() -> Backends:
             known = {key: value[key] for key in ("url", "project", "token_env", "repository") if key in value}
             backends[name] = Backend(name=name, **known)
     current = raw.get("current") if isinstance(raw.get("current"), str) else LOCAL
-    return Backends(current=current, backends=backends)
+    return Backends(current=current, backends=backends)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
 
 def save(config: Backends) -> None:

@@ -131,7 +131,7 @@ class GitHubCredentialStore(OAuthCredentialStore):
             return self._client_id
         try:
             client_id = keyring.get_password(_KEYRING_SERVICE, self._client_id_username)
-        except keyring.errors.NoKeyringError:
+        except keyring.errors.NoKeyringError:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             client_id = None
         if self._cached:
             self._client_id, self._client_id_loaded = client_id, True
@@ -146,7 +146,7 @@ class GitHubCredentialStore(OAuthCredentialStore):
     def delete_client_id(self) -> None:
         try:
             keyring.delete_password(_KEYRING_SERVICE, self._client_id_username)
-        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):
+        except (keyring.errors.PasswordDeleteError, keyring.errors.NoKeyringError):  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             pass
         if self._cached:
             self._client_id, self._client_id_loaded = None, True
