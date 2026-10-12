@@ -296,8 +296,8 @@ Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch
 
 ```text
 engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME=VALUE]
-                 [--branch BRANCH] [--agent AGENT] [--local] [--repo REPO] [--no-watch] [--json]
-                 [--wait] [--timeout SECONDS] [--idempotency-key IDEMPOTENCY_KEY]
+                 [--branch BRANCH] [--agent AGENT] [--local] [--repo REPO] [--no-watch]
+                 [--json] [--wait] [--timeout SECONDS] [--idempotency-key IDEMPOTENCY_KEY]
                  graph [instruction]
 ```
 
