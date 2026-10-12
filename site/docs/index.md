@@ -8,6 +8,9 @@ OpenEngine runs every change through a graph you define, on the coding CLIs you 
 
 ## Quickstart
 
+Follow the [getting-started guide](https://github.com/OpenEngine/OpenEngine/blob/main/docs/getting-started.md)
+for installation, a first remote work order or local graph run, and approvals.
+
 On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
 logged in on this machine, run:
 
