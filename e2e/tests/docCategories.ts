@@ -13,3 +13,13 @@ export const gettingStartedCategory = withDocCategory("Getting Started", {
     description: "What these guides cover and how to follow along.",
   },
 })
+
+export const backendsCategory = withDocCategory("Backends", {
+  label: "Backends",
+  position: 2,
+  link: {
+    type: "generated-index",
+    slug: "/guides/backends",
+    description: "Which engine daemon the CLI talks to, and how to choose another.",
+  },
+})
