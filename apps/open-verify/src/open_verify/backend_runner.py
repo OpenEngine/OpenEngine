@@ -53,7 +53,10 @@ def check_text(actual, expected):
     """Apply a literal exact or substring check without evaluating expressions."""
     matches = actual == expected.value if expected.mode == 'equals' else expected.value in actual
     if not matches:
-        raise AssertionError(f'Text {expected.mode} assertion failed')
+        raise AssertionError(
+            f'Text {expected.mode} assertion failed: expected {expected.value[:200]!r}; '
+            f'observed {actual[:200]!r}'
+        )
 
 
 def check_result(step, result, artifacts):

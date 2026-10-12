@@ -59,6 +59,10 @@ class EmptyArgs(Contract):
     pass
 
 
+class SnapshotArgs(Contract):
+    name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$", max_length=80)
+
+
 class WaitArgs(Contract):
     seconds: float = Field(default=60, gt=0, le=60)
 
@@ -115,8 +119,8 @@ TOOLS = {
     "browser_open": (OpenArgs, "Open a URL in an isolated Chromium context."),
     "browser_reload": (EmptyArgs, "Reload the current app page and observe its state."),
     "browser_snapshot": (
-        EmptyArgs,
-        "Observe current page accessibility tree and capture screenshot.",
+        SnapshotArgs,
+        "Observe current page accessibility tree and capture screenshot; optional name labels the artifact.",
     ),
     "browser_click": (
         LocatorArgs,
@@ -573,10 +577,12 @@ class LocalEngine:
             result = {"status": "blocked", "detail": f"{type(exc).__name__}: {exc}"}
         return self.artifacts.record("assert_check", check.model_dump(), result, result['status'] == 'passed')
 
-    async def browser_snapshot(self, args: EmptyArgs):
+    async def browser_snapshot(self, args: SnapshotArgs | EmptyArgs):
         if self.page is None:
             raise ValueError("Open a browser page first")
-        name = f"browser-{len(self.artifacts.observations) + 1:04d}.png"
+        label = getattr(args, 'name', None)
+        suffix = f'-{label}' if label else ''
+        name = f"browser-{len(self.artifacts.observations) + 1:04d}{suffix}.png"
         await self.page.screenshot(path=str(self.artifacts.path / name), full_page=True)
         snapshot = await self.page.locator("body").aria_snapshot()
         events = self.browser_events[-30:]

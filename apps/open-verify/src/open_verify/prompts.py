@@ -15,6 +15,9 @@ that define completion; once those checks pass, finish. Use questions only for m
 that actually blocks testing.
 Organize each requested use case as a lifecycle: entry state, user action, observable success,
 and the requested exit or reversal. Keep these phases in the same case and generated test.
+Capture requested journey screenshots with browser_snapshot and its optional name label.
+The host owns artifact filenames and adds a unique prefix; accept the returned path rather
+than requiring an exact filename or planning a separate rename action.
 Pages, API assertions, reloads, and screenshots are checkpoints within a journey, not separate
 use cases. If the request includes a closing action, verify both the successful active state
 and the state after closing before declaring the case complete. Do not invent extra destructive
@@ -177,6 +180,16 @@ check verbatim to zero-based step indexes. Each http step declares request argum
 and expect.status plus optional exact headers, text or json_check(field, value).
 Each command step declares argv/cwd/stdin/timeout and expect.exit_code plus optional
 output text. Text checks use equals or contains. Tests contain data, never raw Python.
+When reusing existing test suites, inspect the runner configuration before choosing flags
+or output expectations. Pytest quiet flags accumulate: configured addopts=-q plus CLI -q
+can hide the summary even when all tests pass. If asserting a pytest summary such as
+'2 passed', explicitly control its output with python -m pytest -o addopts= -q and
+preserve any required selection/marker flags from the project configuration. Otherwise
+assert the runner's documented exit code rather than an assumed human-readable summary;
+pytest exit 0 means tests passed and exit 5 means no tests were collected. Never treat
+an absent summary alone as a product defect. Use run_command to inspect the exact command's
+exit status and output before submitting summary assertions to run_backend_test, which
+finalizes the case and cannot retry. Do not change product assertions to match a failure.
 Use the current interface consistently; do not replace browser/mixed coverage with
 backend tests. Generated backend suites execute once, stop on the first failed or
 blocked operation, and the host finalizes their verdict. No automatic retry is allowed.

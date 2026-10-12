@@ -127,6 +127,39 @@ def test_terminal_expected_nonzero_exit_and_combined_output_replay(tmp_path):
     assert not (tmp_path / '.git').exists()
 
 
+@pytest.mark.parametrize('fails', [False, True])
+def test_pytest_summary_with_project_quiet_defaults_live_and_replay(tmp_path, fails):
+    (tmp_path / 'pytest.ini').write_text('[pytest]\naddopts = -q\n')
+    (tmp_path / 'test_sample.py').write_text(
+        f'def test_first():\n    assert {not fails!r}\n\n'
+        'def test_second():\n    assert True\n'
+    )
+    test = suite('terminal', [{
+        'kind': 'command',
+        'argv': [sys.executable, '-m', 'pytest', '-o', 'addopts=', '-q', 'test_sample.py'],
+        'expect': {'exit_code': 0, 'output': {'mode': 'contains', 'value': '2 passed'}},
+    }])
+    result, artifacts = execute(tmp_path, test)
+    assert result.status == ('failed' if fails else 'passed')
+    assert replay(result, artifacts).returncode == (1 if fails else 0)
+
+
+def test_missing_pytest_summary_reports_observed_output(tmp_path):
+    (tmp_path / 'pytest.ini').write_text('[pytest]\naddopts = -q\n')
+    (tmp_path / 'test_sample.py').write_text('def test_first():\n    assert True\n')
+    test = suite('terminal', [{
+        'kind': 'command',
+        'argv': [sys.executable, '-m', 'pytest', '-q', 'test_sample.py'],
+        'expect': {'exit_code': 0, 'output': {'mode': 'contains', 'value': '1 passed'}},
+    }])
+    result, artifacts = execute(tmp_path, test)
+    assert result.status == 'failed'
+    assert "expected '1 passed'" in result.detail
+    assert 'observed' in result.detail and '[100%]' in result.detail
+    commands = [item for item in artifacts.observations if item['tool'] == 'run_command']
+    assert commands[0]['result']['exit_code'] == 0
+
+
 @pytest.mark.parametrize('expect', [{'status': 404}, {'headers': {'X-Test': 'no'}},
     {'json_check': {'field': ['missing'], 'value': None}},
     {'json_check': {'field': ['items', 0, 'ok'], 'value': 1}},

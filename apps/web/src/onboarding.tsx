@@ -56,21 +56,27 @@ export function AddRepository({ onComplete }: {
   }
 
   return <section aria-label="Add repository">
-    <h2>Add repository</h2>
-    <form className="workflow-form" onSubmit={submit}>
-      <label>GitHub URL<input required value={url} disabled={active}
+    <header className="hero hero-narrow">
+      <p className="eyebrow">OpenEngine / Repository</p>
+      <h1>Add repository</h1>
+      <p className="lede">Connect a repository to start creating WorkOrders.</p>
+    </header>
+    <form className="form" onSubmit={submit}>
+      <label><span>GitHub URL</span><input required value={url} disabled={active}
         placeholder="https://github.com/owner/repo" onChange={(event) => setUrl(event.target.value)} /></label>
-      <label>Mode<select value={mode} disabled={active} onChange={(event) => setMode(event.target.value)}>
+      <label><span>Mode</span><select value={mode} disabled={active} onChange={(event) => setMode(event.target.value)}>
         <option value="connected">Connected</option>
         <option value="disconnected">Disconnected</option>
       </select></label>
-      <p>Connected work can push branches and open pull requests. Disconnected work stays local.</p>
-      <button type="submit" disabled={active}>{active ? "Adding repository…" : "Add repository"}</button>
-    </form>
-    {job && <p role="status">{job.message}</p>}
-    {job?.problems.map((problem) => <p role="alert" key={problem.code}>
+      <p className="form-note">Connected work can push branches and open pull requests. Disconnected work stays local.</p>
+      {job && <p className="notice" role="status">{job.message}</p>}
+      {job?.problems.map((problem) => <p className="notice" role="alert" key={problem.code}>
       {problem.message}. Fix: {problem.fix}
-    </p>)}
-    {error && <p role="alert">{error}</p>}
+      </p>)}
+      {error && <p className="notice" role="alert">{error}</p>}
+      <div className="form-actions">
+        <button className="btn btn-primary" type="submit" disabled={active}>{active ? "Adding repository…" : "Add repository"}</button>
+      </div>
+    </form>
   </section>;
 }
