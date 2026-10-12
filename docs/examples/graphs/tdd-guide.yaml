@@ -118,6 +118,11 @@ implementation:
       Run the tests touched by this change, and the e2e suite (`npm test` in `e2e/`)
       when it exists. Commit with git_subcommand as Conventional Commits.
 
+      The site's guides are generated from the e2e specs and committed. If this
+      change touches `e2e/tests`, run `npm run doc` in `e2e/` (scripted agents,
+      the default) and commit everything it changed under `site/docs/guides/`
+      with the spec, as `docs(site): ...`. A reviewer reads those pages next.
+
       ${instruction}
 
 review:
@@ -125,14 +130,17 @@ review:
     name: Guide review
     agent: ${inputs.reviewer}
     prompt: |
-      Check whether issue #${outputs.pick.issue} changed any user-facing guide. Do not change or commit any tracked file.
+      Review the guides issue #${outputs.pick.issue} changes, as a reader will
+      get them. Do not change or commit any tracked file.
 
       Changes a guide spec: ${outputs.pick.guide}.
 
-      If `e2e/` exists and this change touches `e2e/tests`, run `npm run doc`
-      in `e2e/` and read every generated page under `site/docs/guides/`
-      that the change affects, including its screenshots. Otherwise return no
-      findings and pass.
+      If this change touches `e2e/tests`, read every page it adds or changes
+      under `site/docs/guides/` (`git diff --stat ${inputs.base}...HEAD` lists
+      them; empty base means origin/main), including each screenshot. Then
+      run `npm run doc` in `e2e/` and check `git status --porcelain site/docs/guides`
+      is empty: if it isn't, the committed guides are stale, and that is a
+      finding. If the change touches no guide, return no findings and pass.
 
       Read each page as someone new to the `engine` CLI and flag anything that:
       - sounds like a test rather than instructions ("verify", "assert",
