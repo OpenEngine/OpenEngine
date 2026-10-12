@@ -1,6 +1,12 @@
 pipeline:
   id: pipeline_OpenEngine_build_f408
   name: pipeline_OpenEngine_build_f408
+  description: Builds and tests OpenEngine, with an AI agent step that implements a given task.
+  inputs:
+    task:
+      type: string
+      description: Task for the agent to implement, with its specifications
+      default: ""
   stages:
     - id: build_and_test
       name: Build and Test
@@ -26,6 +32,12 @@ pipeline:
 
               # Verify installation
               uv run python --version
+        - id: implement_task
+          name: Implement Task
+          template:
+            uses: ca_task_implementer@1.0.0
+            with:
+              task: ${{ inputs.task }}
         - id: run_tests
           name: Run Tests
           run:
@@ -56,3 +68,4 @@ pipeline:
               hcli cov upload --file=".harness/coverage/coverage.xml"
   tags:
     onboarding: "true"
+    ai_generated: ""
