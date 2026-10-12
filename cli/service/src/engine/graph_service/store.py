@@ -153,6 +153,19 @@ class GraphServiceStore:
         else:
             self._connection.execute("COMMIT")
 
+    def verbs(self, project: str) -> dict[str, str]:
+        row = self._connection.execute("SELECT verbs FROM cli_projects WHERE name = ?", (project,)).fetchone()
+        return {"go": "implement", "review": "review", "fix": "fix", **(json.loads(row[0]) if row else {})}
+
+    def bind_verb(self, project: str, verb: str, graph: str) -> dict[str, str]:
+        with self.transaction():
+            verbs = {**self.verbs(project), verb: graph}
+            self._connection.execute(
+                "INSERT INTO cli_projects(name, verbs) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET verbs=excluded.verbs",
+                (project, json.dumps(verbs)),
+            )
+        return verbs
+
     # --- agents -------------------------------------------------------------
 
     def agents(self) -> tuple[AgentRow, ...]:

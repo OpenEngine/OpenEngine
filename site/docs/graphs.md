@@ -16,8 +16,8 @@ the local branch and a push command you can run later.
 
 ```bash
 engine go "add a feature" --spec
-engine go --review feature/my-change
-engine go --review https://github.com/owner/repo/pull/42 -i adversarial=true
+engine go review feature/my-change
+engine go review https://github.com/owner/repo/pull/42 -i adversarial=true
 engine go "update docs" --repo owner/repo --backend mini
 engine go "update docs" --local --wait --json
 ```
@@ -28,25 +28,41 @@ mode on either backend. `--wait` polls without interaction; `--json` emits JSON
 with the mode banner on stderr. Non-TTY calls return immediately unless `--wait`
 is given. Reattach with `engine run watch RUN_ID`.
 
-## The default graph
+Three built-in graphs serve separate verbs:
 
-`implementation-review-rerank` implements → checks CI → reviews five parallel
-facets → reranks → fixes and reviews once → assesses impact → asks for human
-review. `--spec` adds a specification before implementation. `--review` starts at
-review and offers findings for human triage; implementation only follows when a
-person selects fixes. `-i adversarial=true` refutes findings before reranking.
-Use `-i implementation_runner=NAME` and `-i review_runner=NAME` to choose agents.
+| Command | Graph | Behavior |
+| --- | --- | --- |
+| `engine go "add a feature" --spec` | `implement` | Optional specification, implementation, CI, parallel reviews, reranking, and one fix-and-review pass. |
+| `engine go review '#839'` | `review` | Review facets, optional `-i adversarial=true` refutation, reranking, and impact rating. |
+| `engine go fix '#839'` | `fix` | Address unresolved review threads, check CI, and reply to addressed threads. |
 
-The four former starters remain deprecated aliases for one release:
+Connected runs publish to the forge; disconnected runs keep findings in run
+results and commits locally. Fixes remain on the target branch. Disconnected
+fixes can use cached threads via `-i review_threads=JSON`. Private repositories
+require `engine connect github` before running disconnected.
 
-| Alias | Default graph inputs |
-| --- | --- |
-| `review` | `review_only=true` |
-| `adversarial-review` | `review_only=true`, `adversarial=true` |
-| `implement-review` | Standard implementation flow |
-| `spec-implement-review` | `spec=true` |
+`engine go [VERB] [TARGET] [INSTRUCTION...]` recognizes a project verb only in
+first position with a resolvable or inferred target. Targets accept a full
+GitHub PR URL, `'#839'`, `'OWNER/REPO#839'`, or a branch. A full URL supplies the
+repository even outside a checkout. Quote `#` targets so the shell does not
+treat them as comments. `engine go review` uses the current branch and its open
+PR when available. Remaining words supply focus, for example
+`engine go review '#839' focus on the migration`.
 
-Aliases accept the old `--branch` and `--agent` flags and print a deprecation note.
+`engine go review the auth module for races` is an implementation instruction
+when `the` is not a branch. A sole invalid target reports
+`no such branch or PR; to give an instruction, quote it`.
+
+Use `engine verbs` to inspect project bindings and
+`engine verb set review my-review` to replace one. Defaults are `go: implement`,
+`review: review`, and `fix: fix`. A replacement must declare `instruction` for
+`go`, or `pr_url` or `ref` for target verbs; the API and CLI reject incompatible
+bindings. These contracts describe inputs, never internal graph stages.
+
+For one release, `engine graph run` accepts deprecated aliases: `review` maps
+to `review`, `adversarial-review` to `review` with `adversarial=true`,
+`implement-review` to `implement`, and `spec-implement-review` to `implement`
+with `spec=true`. The old `--branch` and `--agent` flags remain supported there.
 
 ## Register your own graph
 

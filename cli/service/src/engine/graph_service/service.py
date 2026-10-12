@@ -438,6 +438,7 @@ class GraphService:
             raise ServiceError(f"format must be one of {', '.join(FORMATS)}")
         if not source.strip():
             raise ServiceError("the graph source is empty")
+        definition: dict[str, Any]
         if format == "yaml":
             spec = _parse_yaml(source, runners=self.runners())
             graph_name, definition, digest = spec.name, {"format": "yaml", **spec.json()}, spec.digest
@@ -461,6 +462,7 @@ class GraphService:
                 definition["workflowId"] = str(workflow.graph_id)
                 definition["title"] = workflow.name
                 definition["description"] = workflow.description
+                definition["inputs"] = [item.name for item in workflow.inputs]
                 digest = hashlib.sha256(f"{graph_name}\n{source}".encode()).hexdigest()
             existing = self.store.graphs_named(graph_name, project)
             if existing:
@@ -1264,6 +1266,8 @@ class GraphService:
             raise ServiceError("an instruction is required")
         given = {key: ("" if value is None else str(value).lower() if isinstance(value, bool) else str(value))
                  for key, value in (inputs or {}).items()}
+        if any(item.name == "instruction" for item in loaded.workflow.inputs):
+            given.setdefault("instruction", instruction)
         try:
             resolved = resolve_inputs(tuple(loaded.workflow.inputs), given)
         except ValueError as error:
@@ -1336,6 +1340,29 @@ class GraphService:
             raise NotFound(f"no node execution {execution_id}")
         return row
 
+    def _contract_inputs(self, version: VersionRow | None) -> list[str]:
+        if version is None:
+            return []
+        if version.format == "python":
+            loaded = self._loaded.get(version.version_id)
+            return [item.name for item in loaded.workflow.inputs] if loaded else version.manifest.get("inputs", [])
+        raw = yaml.safe_load(version.source)
+        return list(raw.get("inputs", {})) if isinstance(raw, dict) else []
+
+    def verbs(self, project: str | None) -> dict[str, str]:
+        return self.store.verbs(_project(project))
+
+    def bind_verb(self, project: str | None, verb: str, graph: str) -> dict[str, str]:
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", verb):
+            raise ServiceError("a verb must be lowercase letters, digits and hyphens")
+        _, version = self.resolve(project, graph)
+        declared = self._contract_inputs(version)
+        valid = "instruction" in declared if verb == "go" else bool({"pr_url", "ref"}.intersection(declared))
+        if not valid:
+            required = "instruction" if verb == "go" else "pr_url or ref"
+            raise ServiceError(f"graph {graph!r} cannot bind {verb!r}: it must declare {required}")
+        return self.store.bind_verb(_project(project), verb, graph)
+
     def _graph_json(
         self,
         graph: GraphRow,
@@ -1351,6 +1378,7 @@ class GraphService:
             "name": graph.name,
             "format": version.format if version else None,
             "description": manifest.get("description", ""),
+            "inputs": self._contract_inputs(version),
             "versionId": version.version_id if version else None,
             "version": version.number if version else None,
             "latestVersionId": graph.latest_version_id,

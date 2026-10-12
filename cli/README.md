@@ -4,7 +4,7 @@
 engine go "add a new doc for the out-of-the-box experience"
 ```
 
-`go` registers the built-in default graph on first use, runs it against the
+`go` registers the selected built-in graph on first use, runs it against the
 checkout you are in, and follows it live on a TTY with inline approvals. Its
 first line reports the daemon's inferred connected or disconnected mode.
 Connected runs finish with a PR URL; disconnected runs report the local branch
@@ -12,8 +12,8 @@ and a command to push it later. The selected backend must be running.
 
 ```bash
 engine go "implement the feature" --spec
-engine go --review feature/my-change
-engine go --review https://github.com/owner/repo/pull/42
+engine go review feature/my-change
+engine go review https://github.com/owner/repo/pull/42
 engine go "update docs" --repo owner/repo --backend mini
 engine go "update docs" --local --wait --json
 ```
@@ -146,7 +146,7 @@ still works for one release.
 
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
-engine go --review feat/my_feat -i adversarial=true
+engine go review feat/my_feat -i adversarial=true
 engine run get run-0123abcd --pretty
 engine runs
 engine runs --graph fix-flaky-test --status failed
@@ -169,16 +169,42 @@ opened, and failure details. An agent without credentials fails with
 `engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
 
-The single built-in graph, `implementation-review-rerank`, implements, checks CI,
-reviews five facets in parallel, reranks findings, makes one fix-and-review pass,
-and asks for human review. `--spec` adds a specification first. `--review` (or
-`review_only=true` with `ref`/`pr_url`) starts at review; triage lets a person
-choose fixes. `adversarial=true` adds a refutation step before reranking.
+Three built-in graphs serve separate verbs:
 
-For one release, `graph run review`, `adversarial-review`, `implement-review`,
-and `spec-implement-review` remain aliases for the default graph, print a
-deprecation note, and set the matching inputs. `--branch` selects the review
-ref and `--agent` sets both runner inputs for these aliases.
+| Command | Graph | Behavior |
+| --- | --- | --- |
+| `engine go "add a feature" --spec` | `implement` | Optional specification, implementation, CI, parallel reviews, reranking, and one fix-and-review pass. |
+| `engine go review '#839'` | `review` | Review facets, optional `-i adversarial=true` refutation, reranking, and impact rating. |
+| `engine go fix '#839'` | `fix` | Address unresolved review threads, check CI, and reply to addressed threads. |
+
+Connected runs publish to the forge; disconnected runs keep findings in run
+results and commits locally. Fixes remain on the target branch. Disconnected
+fixes can use cached threads via `-i review_threads=JSON`. Private repositories
+require `engine connect github` before running disconnected.
+
+`engine go [VERB] [TARGET] [INSTRUCTION...]` recognizes a project verb only in
+first position with a resolvable or inferred target. Targets accept a full
+GitHub PR URL, `'#839'`, `'OWNER/REPO#839'`, or a branch. A full URL supplies the
+repository even outside a checkout. Quote `#` targets so the shell does not
+treat them as comments. `engine go review` uses the current branch and its open
+PR when available. Remaining words supply focus, for example
+`engine go review '#839' focus on the migration`.
+
+`engine go review the auth module for races` is an implementation instruction
+when `the` is not a branch. A sole invalid target reports
+`no such branch or PR; to give an instruction, quote it`.
+
+Use `engine verbs` to inspect project bindings and
+`engine verb set review my-review` to replace one. Defaults are `go: implement`,
+`review: review`, and `fix: fix`. A replacement must declare `instruction` for
+`go`, or `pr_url` or `ref` for target verbs; the API and CLI reject incompatible
+bindings. These contracts describe inputs, never internal graph stages.
+
+For one release, `engine graph run` accepts deprecated aliases: `review` maps
+to `review`, `adversarial-review` to `review` with `adversarial=true`,
+`implement-review` to `implement`, and `spec-implement-review` to `implement`
+with `spec=true`. The old `--branch` and `--agent` flags remain supported there.
+
 
 `engine runs` lists runs newest first, whether submitted or started by a loop,
 filtered by `--graph`, `--loop` and `--status`, at most `--limit` (default 20),

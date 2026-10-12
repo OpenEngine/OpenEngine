@@ -135,9 +135,11 @@ def test_registers_the_default_graph_for_the_signed_in_agent():
     service = Mock()
     service.add_graph = AsyncMock()
     asyncio.run(onboard.register_starters(service, 'owner/repo', 'opencode'))
-    service.add_graph.assert_awaited_once_with(
-        'owner/repo', source=onboard.starters.source(runner='opencode'), format='python',
-    )
+    assert service.add_graph.await_count == 3
+    for name in onboard.starters.NAMES:
+        service.add_graph.assert_any_await(
+            'owner/repo', source=onboard.starters.source(name, runner='opencode'), format='python',
+        )
 
 
 @pytest.mark.parametrize("origin", [None, "http://localhost", "http://127.0.0.1"])
@@ -260,7 +262,7 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
                     await asyncio.sleep(.01)
                 assert state['status'] == 'complete', state
                 config = (await client.get('/api/config')).json()
-                assert len(config['workflows']) == 1
+                assert len(config['workflows']) == 3
                 graphs = (await client.get('/api/v1/graphs', params={'project': 'owner/repo'})).json()['graphs']
                 assert {graph['name'] for graph in graphs} == set(onboard.starters.NAMES)
                 assert config['repositories'] == [{'name': 'owner/repo', 'path': str(target)}]

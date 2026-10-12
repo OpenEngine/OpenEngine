@@ -12,11 +12,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/engine"]
-
-# Editable installs read the repository workflow through the resource symlink.
-# An sdist must carry its contents, since the repository is not shipped with it.
-[tool.hatch.build.targets.sdist]
-exclude = ["src/engine/cli/starters/default_graph.py.txt"]
-
-[tool.hatch.build.targets.sdist.force-include]
-"../../workflows/implementation_review_graph.py" = "src/engine/cli/starters/default_graph.py.txt"

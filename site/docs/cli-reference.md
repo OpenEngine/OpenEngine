@@ -13,8 +13,8 @@ Make a change with the default graph and follow it live.
 
 ```text
 engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--local] [--spec]
-          [--review PR_OR_BRANCH] [--input KEY=VALUE] [--wait] [--json] [--timeout SECONDS]
-          [instruction]
+          [--input KEY=VALUE] [--wait] [--json] [--timeout SECONDS]
+          [VERB/TARGET/INSTRUCTION ...]
 ```
 
 | Argument | Meaning |
@@ -22,15 +22,52 @@ engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--loc
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
-| `instruction` | the change to make |
+| `VERB/TARGET/INSTRUCTION` | instruction, or a verb and change target |
 | `--repo REPO` | repository (default: the current checkout) |
 | `--local` | force disconnected mode; keep work local |
 | `--spec` | write a specification before implementing |
-| `--review PR_OR_BRANCH` | review an existing change |
 | `--input, -i KEY=VALUE` |  |
 | `--wait` | wait non-interactively for completion |
 | `--json` | JSON output; mode banner goes to stderr |
 | `--timeout SECONDS` |  |
+
+## `engine verbs`
+
+Show the project's verb bindings.
+
+```text
+engine verbs [-h] [--backend NAME] [--pretty] [--project NAME]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+
+## `engine verb`
+
+Bind a project verb to a graph.
+
+```text
+engine verb [-h] {set} ...
+```
+
+### `engine verb set`
+
+Bind a verb after checking the graph's inputs.
+
+```text
+engine verb set [-h] [--backend NAME] [--pretty] [--project NAME] verb graph
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+| `verb` |  |
+| `graph` |  |
 
 ## `engine backend`
 
@@ -198,7 +235,7 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
-| `graph` | a graph, or a built-in one: implementation-review-rerank |
+| `graph` | a graph, or a built-in one: implement, review, fix |
 | `instruction` | what to do (default: run the graph) |
 | `--input, -i NAME=VALUE` |  |
 | `--branch BRANCH` | the branch to check out (sets the branch input) |

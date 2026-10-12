@@ -154,7 +154,8 @@ def persist_repository(path: Path, name: str, checkout: str, mode: str) -> None:
 async def register_starters(service: GraphService | None, project: str, runner: str) -> None:
     if service is None:
         raise OnboardingError("graphs", "The graph service is unavailable", "Check daemon health and graph configuration, then retry")
-    await service.add_graph(project, source=starters.source(runner=runner), format="python")
+    for name in starters.NAMES:
+        await service.add_graph(project, source=starters.source(name, runner=runner), format="python")
 
 
 class RepositoryOnboarding:

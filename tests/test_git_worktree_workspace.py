@@ -500,3 +500,45 @@ def test_review_ref_fetches_forge_ref_without_treating_it_as_a_branch(monkeypatc
     fetch = next(args for args in commands if args[0] == "fetch")
     assert fetch[-1].startswith(f"+{ref}:refs/engine/provisioning/")
     assert commands[-1][:2] == ("update-ref", "-d")
+
+
+def test_fix_borrows_clean_branch_without_deleting_checkout(tmp_path, git_repo):
+    repository = git_repo(commit=True, branch='topic')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+
+    async def scenario():
+        workspace = await provider.provision_branch(str(repository), 'topic')
+        assert Path(workspace.root_path) == repository
+        assert await provider.root_path(workspace.workspace_id) == str(repository)
+        assert (await provider.state(workspace.workspace_id)).ref == 'topic'
+        attached = await provider.attach(workspace.workspace_id, str(repository), 'topic')
+        assert attached.root_path == str(repository)
+        await provider.detach(workspace.workspace_id)
+        assert (repository / '.git').exists()
+        await provider.dispose(workspace.workspace_id)
+        assert _git(repository, 'branch', '--show-current') == 'topic'
+    asyncio.run(scenario())
+
+
+def test_fix_unoccupied_branch_keeps_its_commits_after_cleanup(tmp_path, git_repo):
+    repository = git_repo(commit=True)
+    _git(repository, 'branch', 'topic')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+
+    async def scenario():
+        workspace = await provider.provision_branch(str(repository), 'topic')
+        path = Path(workspace.root_path)
+        assert _git(path, 'branch', '--show-current') == 'topic'
+        _git(path, *_IDENTITY, 'commit', '--allow-empty', '-m', 'fix: address review')
+        sha = _git(path, 'rev-parse', 'HEAD')
+        await provider.dispose(workspace.workspace_id)
+        assert _git(repository, 'rev-parse', 'topic') == sha
+    asyncio.run(scenario())
+
+
+def test_fix_refuses_dirty_borrowed_checkout(tmp_path, git_repo):
+    repository = git_repo(commit=True, branch='topic')
+    (repository / 'README.md').write_text('uncommitted\n')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    with pytest.raises(GitWorktreeError, match='commit or stash'):
+        asyncio.run(provider.provision_branch(str(repository), 'topic'))

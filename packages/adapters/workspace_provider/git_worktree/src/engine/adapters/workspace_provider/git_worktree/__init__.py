@@ -10,6 +10,9 @@ human, whether or not a worktree is currently sitting on it.
 
 import asyncio
 import shlex
+import re
+import shutil
+from tempfile import mkdtemp
 from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
@@ -67,14 +70,47 @@ class GitWorktreeWorkspaceProvider:
             co_author=co_author, issue=issue,
         )
 
+    async def provision_branch(self, repository: str, branch: str) -> Workspace:
+        """Fix an existing local branch, retaining a clean checkout already holding it.
+
+        A borrowed checkout is recorded separately so lifecycle cleanup never
+        removes the developer's worktree. Unoccupied branches get a new worktree.
+        """
+        root = await _repository_root(repository)
+        await _git(root, "check-ref-format", "--branch", branch)
+        if not await _branch_exists(root, branch):
+            await _git(root, "branch", branch, f"refs/remotes/origin/{branch}")
+        holder = await _checkout_holding(root, branch)
+        workspace_id = WorkspaceId(f"ws-{uuid4().hex[:12]}")
+        path = self._path_for(workspace_id)
+        if holder is not None:
+            if await _git(str(holder), "status", "--porcelain"):
+                raise GitWorktreeError("commit or stash local changes before fixing this branch")
+            path.mkdir(parents=True)
+            (path / ".engine-existing-checkout").write_text(str(holder), encoding="utf-8")
+            path = Path(holder)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            await _git(root, "worktree", "add", str(path), branch)
+        return Workspace(workspace_id=workspace_id, root_path=str(path), repository=root, base_ref=branch, ref=branch)
+
     async def root_path(self, workspace_id: WorkspaceId) -> str:
         root_path = self._path_for(workspace_id)
+        borrowed = root_path / ".engine-existing-checkout"
+        if borrowed.is_file():
+            root_path = Path(borrowed.read_text(encoding="utf-8"))
         if not root_path.is_dir():
             raise KeyError(f"no workspace {workspace_id!r}")
         return str(root_path)
 
     async def state(self, workspace_id: WorkspaceId) -> WorkspaceState:
         root_path = self._path_for(workspace_id)
+        borrowed = root_path / ".engine-existing-checkout"
+        if borrowed.is_file():
+            root_path = Path(borrowed.read_text(encoding="utf-8"))
+            return WorkspaceState(workspace_id=workspace_id,
+                ref=await _git(str(root_path), "symbolic-ref", "--quiet", "--short", "HEAD"),
+                root_path=str(root_path))
         return WorkspaceState(
             workspace_id=workspace_id,
             ref=_branch_for(workspace_id),
@@ -92,6 +128,12 @@ class GitWorktreeWorkspaceProvider:
     ) -> Workspace:
         repository_root = await _repository_root(repository)
         root_path = self._path_for(workspace_id)
+        borrowed = root_path / ".engine-existing-checkout"
+        if borrowed.is_file():
+            root_path = Path(borrowed.read_text(encoding="utf-8"))
+            return Workspace(workspace_id=workspace_id, root_path=str(root_path),
+                repository=repository_root, base_ref=base_ref,
+                ref=await _git(str(root_path), "symbolic-ref", "--quiet", "--short", "HEAD"))
         if root_path.is_dir():
             return Workspace(
                 workspace_id=workspace_id,
@@ -106,6 +148,8 @@ class GitWorktreeWorkspaceProvider:
 
     async def detach(self, workspace_id: WorkspaceId) -> None:
         root_path = self._path_for(workspace_id)
+        if (root_path / ".engine-existing-checkout").is_file():
+            return
         if not root_path.is_dir():
             return
         await _snapshot(root_path)
@@ -125,6 +169,11 @@ class GitWorktreeWorkspaceProvider:
         branch from is worse than leaving one behind.
         """
         root_path = self._path_for(workspace_id)
+        borrowed = root_path / ".engine-existing-checkout"
+        if borrowed.is_file():
+            borrowed.unlink()
+            root_path.rmdir()
+            return
         branch = _branch_for(workspace_id)
         repository_root = (
             await _main_worktree(root_path) if root_path.is_dir() else None
@@ -231,6 +280,21 @@ async def _checkout_holding(repository_root: str, branch: str) -> str | None:
 
 
 async def _repository_root(repository: str) -> str:
+    if not Path(repository).exists() and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", repository):
+        destination = Path(DEFAULT_ROOT_DIRECTORY) / "repositories" / repository
+        if not destination.is_dir():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(mkdtemp(prefix=".clone-", dir=destination.parent))
+            try:
+                await _git(str(staging), "clone", "--", f"https://github.com/{repository}.git", "checkout")
+                try:
+                    (staging / "checkout").rename(destination)
+                except OSError:
+                    if not destination.is_dir():
+                        raise
+            finally:
+                await asyncio.to_thread(shutil.rmtree, staging)
+        repository = str(destination)
     return await _git(repository, "rev-parse", "--show-toplevel")
 
 
