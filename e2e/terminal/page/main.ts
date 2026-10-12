@@ -54,30 +54,73 @@ const terminal = new Terminal({
 })
 terminal.open(document.getElementById("terminal")!)
 
+// The prompt marker PROMPT_COMMAND prints (see the server): "D;<exit code>".
+terminal.parser.registerOscHandler(133, (data) => {
+  const [kind, code] = data.split(";")
+  if (kind === "D") {
+    api.lastExitCode = Number(code)
+    api.promptCount++
+  }
+  return true
+})
+
 function matcher(pattern: Pattern): (line: string) => boolean {
   if (typeof pattern === "string") return (line) => line.includes(pattern)
   const regexp = new RegExp(pattern.source, pattern.flags)
   return (line) => regexp.test(line)
 }
 
+const visibleRow = (row: number) =>
+  terminal.buffer.active.getLine(terminal.buffer.active.viewportY + row)?.translateToString(true) ?? ""
+let marks = 0
+
 const api: TerminalTestApi = {
   ready: false,
   exited: false,
   outputCount: 0,
   lastOutputAt: 0,
+  promptCount: 0,
   text() {
     const buffer = terminal.buffer.active
     const lines: string[] = []
-    for (let i = 0; i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) ?? "")
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i)
+      const text = line?.translateToString(true) ?? ""
+      if (line?.isWrapped && lines.length) lines[lines.length - 1] += text
+      else lines.push(text)
+    }
     return lines.join("\n").trimEnd()
   },
   rowIndexOf(pattern) {
     const matches = matcher(pattern)
-    const buffer = terminal.buffer.active
     for (let row = terminal.rows - 1; row >= 0; row--) {
-      if (matches(buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "")) return row
+      if (matches(visibleRow(row))) return row
     }
     return -1
+  },
+  markRows(from, to) {
+    const lines = Array.from({ length: to - from + 1 }, (_, i) => visibleRow(from + i))
+    const start = Math.min(...lines.map((line) => line.search(/\S|$/)))
+    const end = Math.max(start + 1, ...lines.map((line) => line.length))
+    const frame = document.getElementById("terminal")!
+    const screen = frame.querySelector(".xterm-screen")!.getBoundingClientRect()
+    const rowElements = frame.querySelectorAll(".xterm-rows > div")
+    const top = rowElements[from]!.getBoundingClientRect()
+    const bottom = rowElements[to]!.getBoundingClientRect()
+    const cell = screen.width / terminal.cols
+    const origin = frame.getBoundingClientRect()
+    const mark = document.createElement("div")
+    mark.className = "row-mark"
+    mark.dataset.mark = String(++marks)
+    mark.dataset.text = lines.map((line) => line.slice(start).trimEnd()).join("\n")
+    Object.assign(mark.style, {
+      left: `${screen.left - origin.left + start * cell}px`,
+      top: `${top.top - origin.top}px`,
+      width: `${(end - start) * cell}px`,
+      height: `${bottom.bottom - top.top}px`,
+    })
+    frame.append(mark)
+    return mark.dataset.mark
   },
 }
 window.__term = api
