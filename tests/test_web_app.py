@@ -142,7 +142,7 @@ def test_repository_choices_reach_the_web_config(
     app = build_app(path)
 
     async def ask():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return (await client.get("/api/config")).json()
 
     assert asyncio.run(ask())["repositories"] == [
@@ -165,7 +165,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
     app = build_app()
     async def ask() -> httpx.Response:
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return await client.get("/api/config")
 
     answered = asyncio.run(ask())
@@ -420,7 +420,7 @@ def test_web_restores_sqlite_conversations_after_restart(
     )
 
     async def first_process() -> str:
-        async with async_client(first_app, base_url="http://test") as client:
+        async with async_client(first_app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -448,7 +448,7 @@ def test_web_restores_sqlite_conversations_after_restart(
     )
 
     async def second_process():
-        async with async_client(second_app, base_url="http://test") as client:
+        async with async_client(second_app, base_url="http://localhost") as client:
             threads = await client.get("/api/threads")
             messages = await client.get(f"/api/threads/{thread_id}/messages")
             return threads, messages
@@ -537,7 +537,7 @@ def test_deleting_a_run_forgets_it(async_client, workflow_app) -> None:
     app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             deleted = await client.delete(f"/api/runs/{state.run_id}")
             listed = await client.get("/api/runs")
             detail = await client.get(f"/api/runs/{state.run_id}")
@@ -587,7 +587,7 @@ def test_utilization_is_served_from_the_cache_and_then_scraped(
     )
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             empty = await client.get("/api/utilization")
             scraped = await client.post("/api/utilization/refresh")
             cached = await client.get("/api/utilization")
@@ -633,7 +633,7 @@ def test_utilization_refresh_refuses_a_cross_origin_page(
     )
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return await client.post(
                 "/api/utilization/refresh", headers={"origin": "https://elsewhere.example"}
             )
@@ -660,7 +660,7 @@ def test_run_list_leaves_the_prose_to_the_run_it_names(
     app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return (
                 await client.get("/api/runs"),
                 await client.get(f"/api/runs/{state.run_id}"),
@@ -754,7 +754,7 @@ def test_create_workflow_run_rejects_invalid_requests(
     app = workflow_app(store, ConcurrentRunner())
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return await client.post("/api/runs", json=body)
 
     response = asyncio.run(scenario())
@@ -872,7 +872,7 @@ def test_run_id_frontend_route_serves_the_application(
     app = web_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return await client.get("/runs/run-42")
 
     response = asyncio.run(scenario())
@@ -890,7 +890,7 @@ def test_new_workflow_frontend_route_serves_the_application(
     app = web_app(_session(ConcurrentRunner()), {"test": ConcurrentRunner()}, static)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return await client.get("/runs/new")
 
     response = asyncio.run(scenario())
@@ -946,7 +946,7 @@ def test_each_new_chat_reports_its_own_worktree(async_client, web_app) -> None:
     app = web_app(session, {"test": runner})
 
     async def scenario() -> tuple[dict[str, object], dict[str, object]]:
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             body = {"agentId": "coder", "runner": "test"}
             first = await client.post("/api/threads", json=body)
             second = await client.post("/api/threads", json=body)
@@ -975,7 +975,7 @@ def test_a_removed_worktree_does_not_take_the_other_chats_with_it(
     )
 
     async def scenario():
-        async with async_client(first_app, base_url="http://test") as client:
+        async with async_client(first_app, base_url="http://localhost") as client:
             abandoned = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -986,7 +986,7 @@ def test_a_removed_worktree_does_not_take_the_other_chats_with_it(
         restarted = web_app(
             _workspace_session(runner, workspaces, store), {"test": runner}
         )
-        async with async_client(restarted, base_url="http://test") as client:
+        async with async_client(restarted, base_url="http://localhost") as client:
             listed = await client.get("/api/threads")
             survivor = await client.get(f"/api/threads/{abandoned.json()['id']}")
             created = await client.post(
@@ -1014,7 +1014,7 @@ def test_detaching_keeps_the_work_reachable_and_reattaching_brings_it_back(
     app = web_app(_workspace_session(runner, workspaces), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1047,7 +1047,7 @@ def test_a_detached_chat_is_told_to_reattach_rather_than_failing_on_a_path(
     app = web_app(_workspace_session(runner, workspaces), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1082,7 +1082,7 @@ def test_a_chat_that_never_had_a_workspace_can_be_given_one(
 
     async def scenario():
         instance = await store.create_instance(CODER)
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             before = await client.get(f"/api/threads/{instance.instance_id}")
             attached = await client.post(f"/api/threads/{instance.instance_id}/workspace")
         # The pairing is durable, not just something the page is holding.
@@ -1105,7 +1105,7 @@ def test_a_process_without_a_workspace_repository_says_so(
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1162,7 +1162,7 @@ def test_http_api_creates_lists_and_streams_threads(async_client, web_app) -> No
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             config = await client.get("/api/config")
             created = await client.post(
                 "/api/threads",
@@ -1206,7 +1206,7 @@ def test_a_chat_keeps_the_runner_it_was_given_for_turns_that_name_none(
     app = web_app(_session_with(runners), runners)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1237,7 +1237,7 @@ def test_agent_names_chat_before_answer_without_changing_conversation(
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads",
                 json={"agentId": "coder", "runner": "test"},
@@ -1302,7 +1302,7 @@ def test_a_provider_that_cannot_name_a_chat_does_not_cost_the_turn(
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1335,7 +1335,7 @@ def test_missing_frontend_has_an_actionable_response(async_client, web_app) -> N
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return await client.get("/")
 
     response = asyncio.run(scenario())
@@ -1361,7 +1361,7 @@ def test_tool_activity_round_trips_as_assistant_ui_parts(async_client, web_app) 
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads",
                 json={"agentId": "coder", "runner": "test"},
@@ -1411,7 +1411,7 @@ def test_replayed_tool_call_id_is_only_exposed_once(async_client, web_app) -> No
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads",
                 json={"agentId": "coder", "runner": "test"},
@@ -1468,7 +1468,7 @@ def test_a_stopped_run_leaves_its_work_in_the_reloaded_transcript(
     app = web_app(_session(runner), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             created = await client.post(
                 "/api/threads", json={"agentId": "coder", "runner": "test"}
             )
@@ -1585,7 +1585,7 @@ def test_the_built_client_is_revalidated_but_its_hashed_assets_are_not(
     app = web_app(_session(runner), {"test": runner}, dist)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return (
                 await client.get("/"),
                 await client.get("/assets/index-abc123.js"),
@@ -1617,7 +1617,7 @@ def test_web_compresses_large_json_and_static_assets(
     app.router.routes.insert(0, Route("/api/compression-test", large_response))
 
     async def scenario():
-        async with async_client(app, base_url="http://test", headers={"Accept-Encoding": encoding}) as client:
+        async with async_client(app, base_url="http://localhost", headers={"Accept-Encoding": encoding}) as client:
             for path, expected in [
                 ("/api/compression-test", JSONResponse(payload).body),
                 ("/assets/index-abc123.js", javascript),
@@ -1689,7 +1689,7 @@ def test_web_compression_delivers_stream_chunks_immediately(
             "type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
             "http_version": "1.1", "method": "GET", "scheme": "http",
             "path": path, "query_string": b"",
-            "headers": [(b"accept-encoding", b"gzip")],
+            "headers": [(b"host", b"localhost"), (b"accept-encoding", b"gzip")],
         }, receive, send), timeout=2)
         assert bodies == chunks
 
@@ -1749,6 +1749,7 @@ def _graph_app_over(
     async def running(_app=None):
         yield runtime
 
+    options.setdefault("public_url", "https://engine.test")
     return workflow_app(
         store,
         ConcurrentRunner(),
@@ -1778,7 +1779,7 @@ def test_a_workflow_is_offered_under_its_own_name(async_client, workflow_app) ->
     app, _ = _graph_app(InMemoryStateStore(), _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 return (await client.get("/api/config")).json()["workflows"]
 
@@ -1807,7 +1808,7 @@ def test_a_workflow_is_not_offered_without_an_engine_to_run_it(
     )
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             return (
                 (await client.get("/api/config")).json()["workflows"],
                 await client.post(
@@ -1836,7 +1837,7 @@ def test_creating_a_work_order_starts_the_graph(async_client, workflow_app) -> N
     app, runtime = _graph_app(store, _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -1880,7 +1881,7 @@ def test_graph_run_listing_carries_live_node_and_approval_state(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 created = await client.post(
                     "/api/runs",
                     json={
@@ -1935,7 +1936,7 @@ def test_auto_approve_config_seeds_all_graph_nodes(async_client, workflow_app) -
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 created = await client.post(
                     "/api/runs",
                     json={
@@ -1973,7 +1974,7 @@ def test_a_graph_naming_node_names_its_work_order(async_client, workflow_app) ->
     app, _ = _graph_app(store, graph, workflow_app=workflow_app)
 
     async def scenario() -> dict[str, object]:
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2009,7 +2010,7 @@ def test_a_finished_graph_run_stops_saying_it_is_working(
     app, _ = _graph_app(store, _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2055,7 +2056,7 @@ def test_deleting_a_graph_work_order_stops_the_engine_driving_it(
     app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2117,7 +2118,7 @@ def test_deleting_a_prerequisite_with_scheduled_dependents_is_rejected(
         await store.save(dependent)
         # Keep dispatch stopped to also cover a completed prerequisite whose
         # dependent has not yet been started.
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             response = await client.delete("/api/runs/prerequisite")
             assert response.status_code == 409
             assert "dependent" in response.json()["error"]
@@ -2153,7 +2154,7 @@ def test_deleting_a_graph_work_order_the_engine_never_heard_of_still_works(
 
     async def scenario():
         await store.save(stranded)
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 deleted = await client.delete(f"/api/runs/{stranded.run_id}")
                 return deleted, [str(one) for one in runtime.running()]
@@ -2177,7 +2178,7 @@ def test_graph_events_cursor_replays_only_unseen_events(
     app, _ = _graph_app(store, graph, workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2250,7 +2251,7 @@ def test_a_work_order_of_a_withdrawn_workflow_still_lists_and_still_reads(
     app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2318,7 +2319,7 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone(
     app, runtime = _graph_app(store, waiting, workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2333,7 +2334,7 @@ def test_a_restart_fails_a_work_order_whose_workflow_is_gone(
                     await asyncio.sleep(0)
         runtime.withdraw(GraphId("implementation-review-codex"))
         restarted = _graph_app_over(store, runtime, workflow_app=workflow_app)
-        async with async_client(restarted, base_url="http://test") as client:
+        async with async_client(restarted, base_url="http://localhost") as client:
             async with restarted.router.lifespan_context(restarted):
                 return await client.get(f"/api/runs/{run_id}")
 
@@ -2356,7 +2357,7 @@ def test_the_graph_engine_answers_under_its_own_prefix(
     app, _ = _graph_app(InMemoryStateStore(), _review_graph(), workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 return await client.get("/graph/api/graphs")
 
@@ -2385,7 +2386,7 @@ def test_a_failed_graph_run_says_why_on_its_row(async_client, workflow_app) -> N
     app, _ = _graph_app(store, broken, workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2419,7 +2420,7 @@ def test_messaging_a_failed_graph_implementer_resets_its_workorder(
     app, runtime = _graph_app(InMemoryStateStore(), graph, workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 created = await client.post(
                     "/api/runs",
@@ -2476,7 +2477,7 @@ def test_a_graph_run_that_ends_before_its_row_exists_is_still_recorded(
     app, _ = _graph_app(store, instant, workflow_app=workflow_app)
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 return await client.post(
                     "/api/runs",
@@ -2739,7 +2740,7 @@ def test_a_graph_engine_that_will_not_open_does_not_take_the_app_with_it(
     )
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 return (
                     await client.get("/api/config"),
@@ -2795,7 +2796,7 @@ def test_graph_workorder_inputs_are_validated_and_passed_to_execution(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 config = (await client.get("/api/config")).json()
                 offered = next(item for item in config["workflows"] if item["id"] == "inputs")
                 assert offered["inputs"][0]["choices"] == ["codex", "claude"]
@@ -2829,7 +2830,7 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 config = (await client.get("/api/config")).json()
                 assert config["repositories"] == [
                     {"name": "acme/offline", "path": str(offline), "mode": "disconnected"},
@@ -2863,7 +2864,7 @@ def test_a_trusted_repository_auto_approves_its_workorders_only(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 approved = {}
                 for path in (trusted, other):
                     response = await client.post("/api/runs", json={
@@ -2903,7 +2904,7 @@ def test_a_disconnected_repository_is_matched_through_subfolders_and_worktrees(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 for path in (offline / "src", other_worktree):
                     response = await client.post("/api/runs", json={
                         "workflowId": "modes", "repository": str(path), "prompt": "Task",
@@ -2967,7 +2968,7 @@ def test_graph_workorder_round_robin_runner_resolves_at_start(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 picked = []
                 for _ in range(3):
                     response = await client.post("/api/runs", json={
@@ -2998,7 +2999,7 @@ def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 response = await client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Task",
                     "inputs": {"implementation_runner": LEAST_UTILIZED},
@@ -3025,7 +3026,7 @@ def test_graph_workorder_least_utilized_falls_back_to_the_cache_when_the_scrape_
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 response = await client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Task",
                     "inputs": {"implementation_runner": LEAST_UTILIZED},
@@ -3056,7 +3057,7 @@ def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 placed = asyncio.create_task(client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Placed",
                     "inputs": {"implementation_runner": LEAST_UTILIZED},
@@ -3095,7 +3096,7 @@ def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts(
     async def scenario():
         await store.save(prerequisite)
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 response = await client.post("/api/runs", json={
                     "workflowId": "inputs", "repository": ".", "prompt": "Follow up",
                     "dependsOnRunId": "prerequisite",
@@ -3134,7 +3135,7 @@ def test_scheduled_graph_workorder_survives_restart_and_starts_with_same_id(
         async with app.router.lifespan_context(app):
             assert (await store.load(state.run_id)).phase is RunPhase.SCHEDULED
             assert await runtime.snapshot(state.run_id) is None
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 first, second = await asyncio.gather(
                     client.post("/api/runs/run-scheduled-graph/start"),
                     client.post("/api/runs/run-scheduled-graph/start"),
@@ -3205,7 +3206,7 @@ def test_agent_created_workorder_links_to_its_creator(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 parent = (await client.post("/api/runs", json={
                     "workflowId": str(graph.graph_id), "prompt": "Original task",
                     "repository": "acme/api",
@@ -3243,7 +3244,7 @@ def test_workorder_dependencies_wait_and_release_a_chain(
         ))
         app, runtime = _graph_app(store, waiting, quick, workflow_app=workflow_app)
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 async def create(graph, dependency=None):
                     body = {"workflowId": graph, "repository": ".", "prompt": "Task"}
                     if dependency:
@@ -3347,7 +3348,7 @@ def test_dependency_creation_during_prerequisite_cancellation_is_rejected(
                 phase=RunPhase.RUNNING_AGENT, repository=".",
             )
             await store.save(prerequisite)
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 deletion = asyncio.create_task(client.delete("/api/runs/prerequisite"))
                 try:
                     async with asyncio.timeout(5):
@@ -3396,7 +3397,7 @@ def test_graph_frontier_is_seeded_once_when_restoring_pending_approvals(
                 raise AssertionError("restored frontier must not read checkpoints on polls")
 
             monkeypatch.setattr(runtime, "snapshot", no_snapshot)
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 return (await client.get("/api/runs")).json()["runs"][0]
 
     row = asyncio.run(scenario())
@@ -3422,7 +3423,7 @@ def test_finished_run_resumed_after_restart_gets_live_frontier(
             await runtime._observer(RuntimeEvent(
                 snapshot.run_id, EventKind.RUN_FORKED, {"nodes": ["implementation"]},
             ))
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 return (await client.get("/api/runs")).json()["runs"][0]
 
     row = asyncio.run(scenario())
@@ -3616,7 +3617,7 @@ def test_retired_project_routes_and_conversation_ownership_are_absent(
     app = web_app(_session_with({"test": runner}, state_store=store), {"test": runner})
 
     async def scenario():
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             for method, path in (
                 ("GET", "/api/projects"),
                 ("POST", "/api/projects"),
@@ -3833,6 +3834,7 @@ def _scoped_chat_app(tmp_path, default="/repository", *, git_repo, web_app):
     app = web_app(
         _workspace_session(runner, workspaces, store, repos.get(default, default)),
         {"test": runner},
+        public_url="https://engine.test",
         github_login_config=GitHubLoginConfig(
             "client", "secret", "https://engine.test/api/auth/github/callback"
         ),
@@ -4009,7 +4011,7 @@ def test_onboarded_repository_can_be_selected_for_a_workorder(
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            async with async_client(app, base_url="http://test") as client:
+            async with async_client(app, base_url="http://localhost") as client:
                 config = (await client.get("/api/config")).json()
                 choice = next(r for r in config["repositories"] if r["name"] == "owner/repo")
                 assert Path(choice["path"]).is_dir()

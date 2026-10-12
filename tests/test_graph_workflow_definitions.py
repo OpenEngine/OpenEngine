@@ -775,7 +775,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     app = build_app()
 
     async def ask() -> dict:
-        async with async_client(app, base_url="http://test") as client:
+        async with async_client(app, base_url="http://localhost") as client:
             async with app.router.lifespan_context(app):
                 answered = await client.get("/api/config")
             assert answered.status_code == 200

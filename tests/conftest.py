@@ -141,6 +141,7 @@ def client(web_app):
     from starlette.testclient import TestClient
 
     def build(app=None, **options):
+        options.setdefault("base_url", "http://localhost")
         return TestClient(app if app is not None else web_app(), **options)
 
     return build
@@ -151,7 +152,7 @@ def async_client():
     """Async ASGI clients; the caller controls lifespan and async cleanup."""
     import httpx
 
-    def build(app, *, base_url="http://test", **options):
+    def build(app, *, base_url="http://localhost", **options):
         return httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url=base_url, **options
         )
@@ -313,6 +314,7 @@ def github_auth_app(web_app, sqlite_store, tmp_path):
             credential_store=credential_store or GitHubCredentialStore(),
             github_client_id=client_id,
             github_login_config=login_config,
+            public_url="https://engine.test",
             source_control_preferences=SourceControlPreferences(
                 tmp_path / "settings.json"
             ),
