@@ -439,7 +439,7 @@ def test_graph_run_live_selection(monkeypatch, capsys, stdin_tty, stdout_tty, fl
         assert json.loads(output)["runId"] == "run-1"
 
 
-@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 1)])
+@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0)])
 def test_watch_finished_run(monkeypatch, capsys, status, code):
     serve(monkeypatch, {**RUN, "status": status, "terminal": True})
     assert main(["run", "watch", "run-1"]) == code
@@ -467,3 +467,24 @@ def test_pretty_run_lists_approvals_and_ui(monkeypatch, capsys):
     assert "UI: http://127.0.0.1:4364/runs/run-1" in out
     assert "approval a1 at work: pytest" in out
     assert "approval a2 at review: ruff check" in out
+
+
+@pytest.mark.parametrize("status,code", [
+    ("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0),
+])
+@pytest.mark.parametrize("args", [["run", "get", "run-1"], ["run", "wait", "run-1"],
+                                  ["graph", "run", "pair", "--wait"]])
+def test_run_result_codes_match_watch(monkeypatch, status, code, args):
+    run = {**RUN, "status": status, "terminal": True}
+    serve(monkeypatch, run, run)
+    assert main(args) == code
+
+
+def test_pretty_approval_escapes_terminal_controls(monkeypatch, capsys):
+    serve(monkeypatch, {**RUN, "pendingApprovals": [
+        {"approvalId": "a\x1b[2K", "node": "work\r", "command": "danger\nbenign\x9b2K"},
+    ]})
+    assert main(["run", "get", "run-1", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert r"approval a\x1b[2K at work\r: danger\nbenign\x9b2K" in out
+    assert "\x1b" not in out and "\r" not in out and "\x9b" not in out

@@ -418,10 +418,10 @@ def run_get(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     run = client.get(f"/runs/{quote(arguments.run_id)}")
     if arguments.pretty:
-        print(f"UI: {backend.url.rstrip('/')}/runs/{run['runId']}")
+        print(live.safe_text(f"UI: {backend.url.rstrip('/')}/runs/{run['runId']}"))
         for approval in run.get("pendingApprovals") or []:
             command = approval.get("command") or approval.get("reason") or ""
-            print(f"approval {approval['approvalId']} at {approval['node']}: {command}")
+            print(live.safe_text(f"approval {approval['approvalId']} at {approval['node']}: {command}"))
     return _show_run(run, backend, arguments.pretty)
 
 
@@ -434,11 +434,11 @@ def _watch_run(client: Client, run_id: str, backend: Backend) -> int:
     run, outcome = live.Watch(client, run_id).follow()
     if outcome == "detached":
         command = shlex.join(["engine", "run", "watch", run_id, "--backend", backend.name])
-        print(f"Detached. Reattach with: {command}")
+        print(live.safe_text(f"Detached. Reattach with: {command}"))
         return EXIT_OK
     for line in live.summary(run):
         print(line)
-    return EXIT_FAILED if outcome == "cancelled" or run["status"] in {"failed", "cancelled", "interrupted", "stopped"} else EXIT_OK
+    return EXIT_FAILED if outcome == "cancelled" or _run_failed(run) else EXIT_OK
 
 
 def run_wait(arguments: argparse.Namespace) -> int:
@@ -710,6 +710,10 @@ def _wait_for_steering(client: Client, execution_id: str, steering_id: str, time
         time.sleep(WAIT_INTERVAL_SECONDS)
 
 
+def _run_failed(run: dict[str, Any]) -> bool:
+    return run["status"] == "failed"
+
+
 def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
     auth = (run.get("failure") or {}).get("authRequired")
     if auth and backend.name != backends.LOCAL:
@@ -734,7 +738,7 @@ def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
         if auth:
             print(f"engine: {auth['runner'] or 'a runner'} is not signed in; run `{auth['command']}`",
                   file=sys.stderr)
-    return EXIT_FAILED if run["status"] == "failed" else EXIT_OK
+    return EXIT_FAILED if _run_failed(run) else EXIT_OK
 
 
 def _health(backend: Backend) -> str:

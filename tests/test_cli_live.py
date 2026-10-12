@@ -107,3 +107,47 @@ def test_ctrl_c(monkeypatch, answer, outcome):
     watch = live.Watch(client, "run-1", terminal=live.Terminal(io.StringIO()), ask=lambda _: answer)
     assert watch.follow() == (cancelled if answer == "c" else run, outcome)
     assert client.posts == ([("/runs/run-1/cancel", {})] if answer == "c" else [])
+
+
+UNTRUSTED = "danger\r\x1b[2K\x1b[1A\x1b]0;title\x07\x9b2K\b\t\u202e\nbenign"
+ESCAPED = r"danger\r\x1b[2K\x1b[1A\x1b]0;title\x07\x9b2K\x08\t\u202e\nbenign"
+
+
+@pytest.mark.parametrize("field", ["command", "reason", "kind"])
+def test_approval_controls_are_visible_before_prompt(field):
+    out = io.StringIO()
+    client = Client()
+
+    def ask(prompt):
+        assert ESCAPED in out.getvalue()
+        assert "\r" not in out.getvalue() and "\x1b" not in out.getvalue()
+        return "y"
+
+    watch = live.Watch(client, "run-1", terminal=live.Terminal(out), ask=ask)
+    assert watch._approve({"pendingApprovals": [
+        {"approvalId": "a1", "node": "work", field: UNTRUSTED},
+    ]})
+    assert client.posts == [("/runs/run-1/approvals/a1", {"decision": "accept"})]
+
+
+def test_live_messages_results_and_summary_escape_controls():
+    run = run_state()
+    run["graph"] = UNTRUSTED
+    run["graphNodes"][1]["latestMessage"] = UNTRUSTED
+    run["graphNodes"][1]["latestActivity"] = UNTRUSTED
+    run["results"] = {"spec": UNTRUSTED, "work": UNTRUSTED}
+    run["failure"] = {"error": UNTRUSTED}
+    run["workspace"] = {"path": UNTRUSTED, "ref": UNTRUSTED}
+    rendered = "\n".join(plain(run, width=500))
+    summary = "\n".join(live.summary(run))
+    for output in (rendered, summary):
+        assert ESCAPED.removesuffix(r"\nbenign") in output
+        assert all(char not in output for char in ("\r", "\x1b", "\x9b", "\b", "\t", "\u202e"))
+    assert "\nbenign" in summary
+
+
+def test_terminal_escapes_content_but_preserves_owned_styles():
+    terminal = live.Terminal(io.StringIO())
+    terminal.color = True
+    assert terminal._line([(UNTRUSTED, live._BOLD)], 500) == live._BOLD + ESCAPED + live._RESET
+    assert terminal._line([("\x1b[2K", "")], 4) == r"\x1b"

@@ -23,6 +23,7 @@ import shutil
 import sys
 import textwrap
 import time
+import unicodedata
 from collections.abc import Callable, Sequence
 from typing import Any, TextIO
 from urllib.parse import quote
@@ -45,6 +46,16 @@ Segment = tuple[str, str]
 
 def visible(text: str) -> str:
     return _ANSI.sub("", text)
+
+
+def safe_text(text: str, *, multiline: bool = False) -> str:
+    """Escape untrusted terminal controls, independently of renderer-owned styles."""
+    escapes = {"\n": r"\n", "\r": r"\r", "\t": r"\t"}
+    return "".join(
+        char if (multiline and char == "\n") or unicodedata.category(char) not in {"Cc", "Cf", "Zl", "Zp"}
+        else escapes.get(char) or (f"\\x{ord(char):02x}" if ord(char) < 256 else f"\\u{ord(char):04x}")
+        for char in text
+    )
 
 
 def status_mark(status: str, tick: int) -> Segment:
@@ -111,13 +122,13 @@ def frame(run: dict[str, Any], *, tick: int = 0, width: int = 80, elapsed: float
         last = max(enumerate(completed), key=lambda pair: (finished.get(pair[1].get("executionId"), ""), pair[0]))[1]
         result = (run.get("results") or {}).get(last["id"]) or last.get("latestMessage") or ""
         prefix = f"  ✓ {last['id']} · "
-        for index, text in enumerate(str(result).strip().splitlines()[:2] or [""]):
+        for index, text in enumerate(safe_text(str(result), multiline=True).strip().split("\n")[:2]):
             line = (prefix if index == 0 else " " * len(prefix)) + text
             lines.append([(line[:max(width - 1, 0)], _DIM)])
 
     speaking = current or [_last_heard(run)]
     for node in (node for node in speaking if node):
-        message = node.get("latestMessage") or ""
+        message = safe_text(node.get("latestMessage") or "", multiline=True)
         activity = node.get("latestActivity") or ""
         if not message and not activity:
             continue
@@ -126,7 +137,7 @@ def frame(run: dict[str, Any], *, tick: int = 0, width: int = 80, elapsed: float
             lines.append([(f"  {node['id']}", _BOLD)])
         wrapped = [
             piece
-            for paragraph in message.splitlines()
+            for paragraph in message.split("\n")
             for piece in (textwrap.wrap(paragraph, max(width - 6, 20)) or [""])
         ]
         style = "" if current else _DIM
@@ -134,7 +145,7 @@ def frame(run: dict[str, Any], *, tick: int = 0, width: int = 80, elapsed: float
             lines.append([("  ┃ ", _DIM), (piece, style)])
         if activity and current:
             lines.append([("  ┃ ", _DIM), (f"⚙ {activity}", _YELLOW)])
-    return lines
+    return [[(safe_text(text), style) for text, style in line] for line in lines]
 
 
 def levels(node_ids: Sequence[str], edges: Sequence[Sequence[str]]) -> list[list[str]]:
@@ -187,7 +198,7 @@ class Terminal:
     def _line(self, segments: list[Segment], width: int) -> str:
         written, used = [], 0
         for text, style in segments:
-            text = text[: max(width - used, 0)]
+            text = safe_text(text)[: max(width - used, 0)]
             used += len(text)
             written.append(f"{style}{text}{_RESET}" if style and self.color else text)
             if used >= width:
@@ -259,7 +270,8 @@ class Watch:
         item = waiting[0]
         self.terminal.keep()
         what = item.get("command") or item.get("reason") or item.get("kind")
-        self.terminal.out.write(f"\n{item['node']} asks to {item.get('kind', 'act').replace('_', ' ')}: {what}\n")
+        approval = safe_text(f"{item['node']} asks to {item.get('kind', 'act').replace('_', ' ')}: {what}")
+        self.terminal.out.write(f"\n{approval}\n")
         if self.terminal.color:
             self.terminal.out.write("\x1b[?25h")
         self.terminal.out.flush()
@@ -313,7 +325,7 @@ def summary(run: dict[str, Any]) -> list[str]:
     cost = (run.get("usage") or {}).get("costUsd")
     if cost is not None:
         lines.append(f"Usage: ${cost:.2f}" + ("" if run["usage"].get("complete", True) else " (some costs unknown)"))
-    return lines
+    return [safe_text(line, multiline=True) for line in lines]
 
 
 __all__ = ["Terminal", "Watch", "frame", "levels", "summary", "visible"]
