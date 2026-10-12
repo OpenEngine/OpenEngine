@@ -33,7 +33,7 @@ export const sharedUse = {
 
 /** The terminal bridge (terminal/server.ts) the specs drive the CLI through. */
 export const webServerConfig = {
-  command: `node terminal/server.ts --port ${process.env.E2E_TERMINAL_PORT} --static terminal/dist`,
+  command: `npm run build:terminal && node terminal/server.ts --port ${process.env.E2E_TERMINAL_PORT} --static terminal/dist`,
   url: `${terminalUrl}/healthz`,
   reuseExistingServer: false,
 }
