@@ -38,10 +38,11 @@ def capture(ledger: FindingsLedger | None, findings: Sequence[ReviewFinding]) ->
                 ledger.record_outcome(
                     finding.id, "comment_posted", source="github", value=str(finding.comment_id),
                 )
-        return True
     except Exception:
         log.exception("Could not capture review findings")
         return False
+    else:
+        return True
 
 
 def triage(
@@ -96,7 +97,8 @@ async def reconcile(
                     files[key] = await read_file(sha, finding.file)
             before, after = files[(finding.head_sha, finding.file)], files[(merge_sha, finding.file)]
             if finding.line > len(before.splitlines()):
-                raise ValueError("Finding line does not exist at the reviewed head")
+                log.warning("Finding line does not exist at the reviewed head: %s", finding.id)
+                continue
             changed = await asyncio.to_thread(changed_near_line, before, after, finding.line)
             ledger.record_outcome(
                 finding.id, "fixed_before_merge" if changed else "unchanged_at_merge",

@@ -269,10 +269,10 @@ class RoutingSourceControl:
         return await self._call(lambda source: source.resolve_review_thread(pr_url, thread_id), pr_url=pr_url)
 
     async def finding_head(self, pr_url: str) -> str:
-        return await self._call(lambda source: source.finding_head(pr_url), pr_url=pr_url)
+        return await self._call(lambda source: getattr(source, "finding_head")(pr_url), pr_url=pr_url)
 
     async def finding_file(self, pr_url: str, sha: str, path: str) -> str:
-        return await self._call(lambda source: source.finding_file(pr_url, sha, path), pr_url=pr_url)
+        return await self._call(lambda source: getattr(source, "finding_file")(pr_url, sha, path), pr_url=pr_url)
 
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int

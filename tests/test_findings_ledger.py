@@ -105,7 +105,7 @@ def test_triage_records_every_reranked_finding(store, monkeypatch, decision, not
 
 def test_failed_ledger_does_not_break_terminal_or_triage(monkeypatch, caplog):
     class Broken:
-        def record_findings(self, findings): raise RuntimeError("disk full")
+        def record_findings(self, findings): raise OSError()
     async def say(*args, **kwargs): pass
     async def ask(**kwargs): return ApprovalDecision.ACCEPT
     execution = SimpleNamespace(run_id="run", node_id="review", runtime=SimpleNamespace(findings_ledger=Broken()),
@@ -114,7 +114,7 @@ def test_failed_ledger_does_not_break_terminal_or_triage(monkeypatch, caplog):
     assert nodes.ReviewNode(agent="claude", facet="bugs", cwd="/tmp", output_key="review")._terminal_update(completed([FINDING])) == {"review": [FINDING]}
     assert nodes.RerankerNode(agent="codex", cwd="/tmp", output_key="review")._terminal_update(completed([FINDING])) == {"review": [FINDING]}
     assert asyncio.run(nodes.TriageNode(findings_key="review")({"review": [FINDING]})) == {"fix": [FINDING]}
-    assert "disk full" in caplog.text
+    assert "Could not capture" in caplog.text
 
 
 @pytest.mark.parametrize("line,expected", [(6, False), (7, True), (10, True), (13, True), (14, False)])
@@ -230,8 +230,7 @@ def test_ingress_reconciles_all_merges_without_approving_bot_work(automated):
     asyncio.run(scenario())
 
 
-def test_post_record_endpoint_uses_durable_lineage_and_checks_pr(store, workflow_app):
-    import httpx
+def test_post_record_endpoint_uses_durable_lineage_and_checks_pr(store, workflow_app, async_client):
     from engine.domain import RunId, RunState, TaskId, WorkflowId
     from web_fakes import ConcurrentRunner
 
@@ -239,7 +238,7 @@ def test_post_record_endpoint_uses_durable_lineage_and_checks_pr(store, workflow
         await store.save(RunState(run_id=RunId("run"), task_id=TaskId("task"), workflow_id=WorkflowId("review"), inputs={"pr_url": PR}))
         store.findings.record_findings([ReviewFinding(run_id="run", node_id="reranker", stage="reranked", **FINDING)])
         app = workflow_app(store, ConcurrentRunner())
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+        async with async_client(app) as client:
             body = {"finding": {**FINDING, "agent": "spoofed"}, "comment_id": 123, "pr_url": PR, "head_sha": "head"}
             response = await client.post("/api/runs/run/findings/posted", json=body)
             assert response.status_code == 200
@@ -272,7 +271,7 @@ def test_reconciliation_error_cannot_block_merge_approval():
     from test_github_ingress import _merged_pull_request
     async def scenario():
         approved = []
-        async def broken(merge): raise RuntimeError("ledger unavailable")
+        async def broken(merge): raise OSError()
         async def approve(merge): approved.append(merge)
         ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: "secret", handle_merge=approve, reconcile_merge=broken)
         assert ingress.accept("pull_request", _merged_pull_request())

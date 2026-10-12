@@ -7,6 +7,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import logging
+from typing import Any, cast
 
 from engine.domain.findings_ledger import ReviewFinding
 from engine.runtime.findings import capture
@@ -160,13 +161,13 @@ class TerminalMcpServer:
                     head = posted.result.head_sha
                     if head is None:
                         try:
-                            head = await source_control.finding_head(posted.pr_url)
+                            head = await getattr(source_control, "finding_head")(posted.pr_url)
                         except Exception:
                             logging.getLogger(__name__).exception("Could not resolve finding head")
                     try:
                         row = ReviewFinding(
                             run_id=str(execution.run_id), node_id=str(execution.node_id), stage="posted",
-                            pr_url=posted.pr_url, head_sha=head, comment_id=posted.result.id, **posted.finding,
+                            pr_url=posted.pr_url, head_sha=head, comment_id=posted.result.id, **cast(Mapping[str, Any], posted.finding),
                         )
                         capture(ledger, [row])
                     except Exception:

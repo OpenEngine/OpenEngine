@@ -1103,6 +1103,53 @@ def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None
     return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
+async def _record_posted_finding(request: Request, state_store, runtime, run_hidden) -> JSONResponse:
+    from engine.runtime.findings import capture
+    from engine.domain.findings_ledger import finding_id
+
+    run_id = RunId(request.path_params["run_id"])
+    state = await state_store.load(run_id)
+    if state is None or await run_hidden(request, run_id):
+        return JSONResponse({"error": "run not found"}, status_code=404)
+    ledger = getattr(state_store, "findings", None)
+    if ledger is None:
+        return JSONResponse({"recorded": False})
+    try:
+        body = await request.json()
+        finding = body["finding"]
+        identity = finding_id(str(run_id), "reranked", finding.get("file"), finding.get("line"), finding["tagline"])
+        rows = ledger.list_findings(run_id=str(run_id))
+        row = next((row for row in rows if row.id == identity), None)
+        if row is None:
+            return JSONResponse({"error": "finding not found"}, status_code=404)
+        comment_id, pr_url, head_sha = body["comment_id"], body["pr_url"], body.get("head_sha")
+        if type(comment_id) is not int or comment_id <= 0 or not isinstance(pr_url, str):
+            return JSONResponse({"error": "invalid comment metadata"}, status_code=400)
+        snapshot = await runtime.snapshot(run_id) if runtime else None
+        values = snapshot.values if snapshot else {}
+        expected = values.get("pr_url") or (values.get("inputs") or {}).get("pr_url") or state.inputs.get("pr_url")
+        if not expected or change_request(pr_url) is None or change_request(pr_url) != change_request(expected):
+            return JSONResponse({"error": "comment does not belong to this run's PR"}, status_code=400)
+        recorded = capture(ledger, [replace(row, stage="posted", comment_id=comment_id, pr_url=pr_url, head_sha=head_sha)])
+        return JSONResponse({"recorded": recorded})
+    except Exception:
+        log.exception("Could not record posted finding")
+        return JSONResponse({"recorded": False})
+
+
+async def _reconcile_merged_findings(merged: GithubMerge, state_store, source_control) -> None:
+    from engine.runtime.findings import reconcile
+
+    ledger = getattr(state_store, "findings", None)
+    if ledger is None or not merged.merge_sha:
+        return
+    try:
+        await reconcile(ledger, merged.url, merged.merge_sha,
+                        lambda sha, path: getattr(source_control, "finding_file")(merged.url, sha, path))
+    except Exception:
+        log.exception("Could not reconcile merged findings on %s", merged.url)
+
+
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -1599,7 +1646,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
                     if hasattr(surface.runtime, "findings_ledger"):
-                        surface.runtime.findings_ledger = getattr(session.state_store, "findings", None)
+                        setattr(surface.runtime, "findings_ledger", getattr(session.state_store, "findings", None))
                     bind_creator = getattr(surface.runtime, "bind_workorder_creator", None)
                     if bind_creator is not None:
                         bind_creator(agent_create_workorder)
@@ -2277,49 +2324,10 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         return Response(status_code=204)
 
     async def record_posted_finding(request: Request) -> JSONResponse:
-        from engine.runtime.findings import capture
-        from engine.domain.findings_ledger import finding_id
-
-        run_id = RunId(request.path_params["run_id"])
-        state = await session.state_store.load(run_id)
-        if state is None or await run_hidden(request, run_id):
-            return JSONResponse({"error": "run not found"}, status_code=404)
-        ledger = getattr(session.state_store, "findings", None)
-        if ledger is None:
-            return JSONResponse({"recorded": False})
-        try:
-            body = await request.json()
-            finding = body["finding"]
-            identity = finding_id(str(run_id), "reranked", finding.get("file"), finding.get("line"), finding["tagline"])
-            rows = ledger.list_findings(run_id=str(run_id))
-            row = next((row for row in rows if row.id == identity), None)
-            if row is None:
-                return JSONResponse({"error": "finding not found"}, status_code=404)
-            comment_id, pr_url, head_sha = body["comment_id"], body["pr_url"], body.get("head_sha")
-            if type(comment_id) is not int or comment_id <= 0 or not isinstance(pr_url, str):
-                return JSONResponse({"error": "invalid comment metadata"}, status_code=400)
-            snapshot = await surface.runtime.snapshot(run_id) if surface.runtime else None
-            values = snapshot.values if snapshot else {}
-            expected = values.get("pr_url") or (values.get("inputs") or {}).get("pr_url") or state.inputs.get("pr_url")
-            if not expected or change_request(pr_url) is None or change_request(pr_url) != change_request(expected):
-                return JSONResponse({"error": "comment does not belong to this run's PR"}, status_code=400)
-            recorded = capture(ledger, [replace(row, stage="posted", comment_id=comment_id, pr_url=pr_url, head_sha=head_sha)])
-            return JSONResponse({"recorded": recorded})
-        except Exception:
-            log.exception("Could not record posted finding")
-            return JSONResponse({"recorded": False})
+        return await _record_posted_finding(request, session.state_store, surface.runtime, run_hidden)
 
     async def reconcile_merged_findings(merged: GithubMerge) -> None:
-        from engine.runtime.findings import reconcile
-
-        ledger = getattr(session.state_store, "findings", None)
-        if ledger is None or not merged.merge_sha:
-            return
-        try:
-            await reconcile(ledger, merged.url, merged.merge_sha,
-                            lambda sha, path: session.capabilities.source_control.finding_file(merged.url, sha, path))
-        except Exception:
-            log.exception("Could not reconcile merged findings on %s", merged.url)
+        await _reconcile_merged_findings(merged, session.state_store, session.capabilities.source_control)
 
     async def cancel_graph_run(run_id: RunId) -> None:
         """Stop a graph WorkOrder in the engine, if there is one to stop.

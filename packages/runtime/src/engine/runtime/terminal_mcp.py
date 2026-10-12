@@ -16,7 +16,7 @@ import re
 import secrets
 import shlex
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -621,7 +621,7 @@ class TerminalMcpBroker:
             kind: Literal["issue", "review"] = (
                 "review" if file is not None or in_reply_to_id is not None else "issue"
             )
-            await self._record_comment(kind, result, pr_url=pr_url, finding=arguments.get("finding"))
+            await self._record_comment(kind, result, pr_url=pr_url, finding=arguments.get("finding") if isinstance(arguments, dict) else None)
             return {
                 "ok": True,
                 "acknowledgement": "comment added",
