@@ -26,6 +26,8 @@ jobs:
       # Exercise the oldest interpreter in the test matrix instead of inheriting
       # the repository's development version from `.python-version`.
       UV_PYTHON: "3.12"
+      # The runner's system Python may predate the required tarfile fixes.
+      UV_MANAGED_PYTHON: "true"
     steps:
       # Hosted runners start empty, so checkout is the fresh clone a new user
       # would begin with. Deliberately do not restore dependency caches here.
@@ -40,6 +42,9 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: false
+
+      - name: Install patched Python
+        run: uv python install "$UV_PYTHON"
 
       - name: Install workspace
         run: uv sync --all-packages
@@ -257,6 +262,7 @@ jobs:
       # interpreter. Without it, `.python-version` (3.14) would win and all three
       # matrix legs would quietly test the same thing.
       UV_PYTHON: ${{ matrix.python-version }}
+      UV_MANAGED_PYTHON: "true"
     steps:
       - uses: actions/checkout@v7
 
@@ -265,6 +271,9 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+
+      - name: Install patched Python
+        run: uv python install "$UV_PYTHON"
 
       - name: Install workspace
         run: uv sync --locked --all-packages
