@@ -87,6 +87,21 @@ def test_absolute_command_with_path_excluding_python(sandbox_backend):
     asyncio.run(asyncio.wait_for(run(), 120))
 
 
+def test_file_transfers_into_existing_directories_keep_basename(sandbox_backend, tmp_path):
+    source = tmp_path / "report.txt"
+    source.write_text("report")
+    output = tmp_path / "output"
+    output.mkdir()
+
+    async def run():
+        async with sandbox_backend.create(SandboxSpec()) as sandbox:
+            await sandbox.copy_in(source, ".")
+            await sandbox.copy_out("report.txt", output)
+        assert list(output.iterdir()) == [output / "report.txt"]
+        assert (output / "report.txt").read_text() == "report"
+    asyncio.run(run())
+
+
 def test_environment_and_secrets(sandbox_backend, command):
     async def run():
         spec = SandboxSpec(secrets={"SANDBOX_TEST_SECRET": "private"})

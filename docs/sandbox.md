@@ -101,6 +101,9 @@ outside `/workspace`. The image must provide the helper interpreter at
 `/usr/local/bin/python3`, so command PATH overrides do not affect helper startup.
 File copies use single-file archives over `machine cp`; archive traversal,
 escaping links and existing destination symlinks are refused.
+Links must stay within the transferred tree at both extraction and destination;
+internal relative links are preserved, while standalone symlinks are rejected.
+Copying a file into an existing directory preserves its original basename.
 Workspaces are copied, never host-mounted. `exec --interactive` provides binary
 streams without a TTY; secrets use temporary host environment references rather
 than plaintext CLI arguments or persistent VM configuration. Commands do not
