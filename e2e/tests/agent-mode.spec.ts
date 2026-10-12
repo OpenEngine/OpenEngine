@@ -14,14 +14,16 @@ implementation:
 `
 
 test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
-  test("resolves auto to the stub in CI and wherever no agent is set up", () => {
+  test("scripts the agents unless real ones are asked for", () => {
+    expect(resolveAgentMode({})).toBe("stub")
     expect(resolveAgentMode({ E2E_AGENT: "stub" })).toBe("stub")
-    expect(resolveAgentMode({ E2E_AGENT: "real" })).toBe("real")
-    expect(resolveAgentMode({ E2E_AGENT: "auto", CI: "true" }, { claudeLogin: true, npx: true })).toBe("stub")
-    expect(resolveAgentMode({}, { claudeLogin: false, npx: true })).toBe("stub")
-    expect(resolveAgentMode({}, { claudeLogin: true, npx: false })).toBe("stub")
-    expect(resolveAgentMode({}, { claudeLogin: true, npx: true })).toBe("real")
-    expect(() => resolveAgentMode({ E2E_AGENT: "sometimes" })).toThrow(/E2E_AGENT/)
+    expect(resolveAgentMode({ E2E_AGENT: "real" }, { claudeLogin: true, npx: true })).toBe("real")
+    expect(() => resolveAgentMode({ E2E_AGENT: "sometimes" })).toThrow(/E2E_AGENT must be real or stub/)
+  })
+
+  test("refuses real agents where none can run, rather than quietly scripting them", () => {
+    expect(() => resolveAgentMode({ E2E_AGENT: "real" }, { claudeLogin: false, npx: true })).toThrow(/Claude Code login/)
+    expect(() => resolveAgentMode({ E2E_AGENT: "real" }, { claudeLogin: true, npx: false })).toThrow(/npx/)
   })
 
   test("runs a graph to completion on whichever agent is in use", async ({ engine, terminal }) => {
