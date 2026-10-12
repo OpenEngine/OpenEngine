@@ -104,6 +104,14 @@ escaping links and existing destination symlinks are refused.
 Links must stay within the transferred tree at both extraction and destination;
 internal relative links are preserved, while standalone symlinks are rejected.
 Copying a file into an existing directory preserves its original basename.
+Transfers accept uncompressed tar archives with at most 256 MiB of archive data,
+256 MiB of extracted contents and 10,000 members. Copy-out streams are bounded
+by the host before writing excess bytes; extraction limits are checked before
+each member is extracted and before copying to the destination. Hard links are
+rejected to prevent amplification when files are copied. Rejected transfers
+clean up host temporary files and attempt guest archive removal. If removal
+also fails, the original transfer error is preserved with a cleanup failure note;
+a cleanup failure after an otherwise successful transfer is raised normally.
 Workspaces are copied, never host-mounted. `exec --interactive` provides binary
 streams without a TTY; secrets use temporary host environment references rather
 than plaintext CLI arguments or persistent VM configuration. Commands do not

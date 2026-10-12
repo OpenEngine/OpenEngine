@@ -204,11 +204,9 @@ class SmolvmInstance:
             with tempfile.TemporaryDirectory(prefix="oe-transfer-") as temporary:
                 archive = Path(temporary) / "transfer.tar"
                 await _filesystem(_guest.pack, Path(source), archive)
-                await self._command(["machine", "cp", str(archive), f"{self.name}:{guest_archive}"])
-                try:
+                async with self._transfer_archive(guest_archive):
+                    await self._command(["machine", "cp", str(archive), f"{self.name}:{guest_archive}"])
                     await self._helper("unpack", guest_archive, relative)
-                finally:
-                    await self._helper("remove", guest_archive)
 
     async def copy_out(self, source: str, destination: Path) -> None:
         async with self._lock:
@@ -217,12 +215,72 @@ class SmolvmInstance:
             guest_archive = f"/oe-transfer-{uuid.uuid4().hex}.tar"
             with tempfile.TemporaryDirectory(prefix="oe-transfer-") as temporary:
                 archive = Path(temporary) / "transfer.tar"
-                try:
+                async with self._transfer_archive(guest_archive):
                     await self._helper("pack", relative, guest_archive)
-                    await self._command(["machine", "cp", f"{self.name}:{guest_archive}", str(archive)])
+                    await self._receive_archive(guest_archive, archive)
                     await _filesystem(_guest.unpack, archive, Path(destination))
-                finally:
-                    await self._helper("remove", guest_archive)
+
+    @asynccontextmanager
+    async def _transfer_archive(self, archive: str):
+        primary = None
+        try:
+            yield
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            try:
+                _, cancelled = await _settle(asyncio.create_task(self._helper("remove", archive)))
+            except Exception as cleanup:
+                if primary is None:
+                    raise
+                primary.add_note(f"guest archive cleanup failed: {cleanup}")
+            else:
+                if cancelled and primary is None:
+                    raise asyncio.CancelledError
+
+    async def _receive_archive(self, guest_archive: str, archive: Path) -> None:
+        # Guest code can replace the helper or archive. Enforce the bound on
+        # host-observed bytes, rather than trusting a guest-side size check.
+        args, environment = self._exec_arguments([GUEST_PYTHON, HELPER, "stream", guest_archive])
+        process = await self._spawn(args, environment)
+        assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+        process.stdin.close()
+
+        async def drain_errors():
+            detail = bytearray()
+            while chunk := await process.stderr.read(65536):
+                detail.extend(chunk[:max(0, 8192 - len(detail))])
+            return detail
+
+        errors = asyncio.create_task(drain_errors())
+        try:
+            async with asyncio.timeout(300):
+                total = 0
+                with archive.open("wb") as output:
+                    while chunk := await process.stdout.read(65536):
+                        total += len(chunk)
+                        if total > _guest.MAX_ARCHIVE_BYTES:
+                            message = "transfer archive exceeds byte budget"
+                            raise ValueError(message)
+                        output.write(chunk)
+                code = await process.wait()
+                detail = (await asyncio.shield(errors)).decode(errors="replace")
+                if code:
+                    for secret in self.spec.secrets.values():
+                        if secret:
+                            detail = detail.replace(secret, "[redacted]")
+                    message = f"guest archive stream failed ({code}): {detail}"
+                    raise SmolvmError(message)
+        finally:
+            if process.returncode is None:
+                _kill(process)
+            async def drain_output():
+                while await process.stdout.read(65536):
+                    pass
+            await _settle(asyncio.create_task(drain_output()))
+            await _settle(asyncio.create_task(process.wait()))
+            await _settle(errors)
 
     def _begin_destroy(self):
         if self._cleanup is None:

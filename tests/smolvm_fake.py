@@ -67,7 +67,7 @@ elif action == "exec":
         command[1] = str(guest(command[1], machine))
         if command[2] == "pack":
             command[4] = str(guest(command[4], machine))
-        elif command[2] in {"unpack", "remove"}:
+        elif command[2] in {"unpack", "remove", "stream"}:
             command[3] = str(guest(command[3], machine))
     directory = option("--workdir") if "--workdir" in args else str(root / machine)
     os.chdir(directory)

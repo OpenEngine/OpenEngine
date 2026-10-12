@@ -304,3 +304,90 @@ def test_transfer_rejects_untrusted_basename(tmp_path, basename):
     with pytest.raises(ValueError, match="basename"):
         _guest.unpack(archive, destination)
     assert not list(destination.iterdir())
+
+
+@pytest.mark.parametrize("budget", ["archive", "bytes", "members", "hardlink"])
+def test_unpack_limits_before_destination_copy(tmp_path, monkeypatch, budget):
+    import io
+
+    archive = tmp_path / "input.tar"
+    with tarfile.open(archive, "w") as output:
+        root = tarfile.TarInfo("payload")
+        root.type = tarfile.DIRTYPE
+        output.addfile(root)
+        for index in range(2):
+            member = tarfile.TarInfo(f"payload/file{index}")
+            member.size = 4
+            output.addfile(member, io.BytesIO(b"data"))
+        if budget == "hardlink":
+            member = tarfile.TarInfo("payload/link")
+            member.type = tarfile.LNKTYPE
+            member.linkname = "payload/file0"
+            output.addfile(member)
+    if budget == "archive":
+        monkeypatch.setattr(_guest, "MAX_ARCHIVE_BYTES", archive.stat().st_size - 1)
+    elif budget == "bytes":
+        monkeypatch.setattr(_guest, "MAX_EXTRACTED_BYTES", 7)
+    elif budget == "members":
+        monkeypatch.setattr(_guest, "MAX_MEMBERS", 2)
+    monkeypatch.setattr(_guest.tempfile, "tempdir", str(tmp_path))
+    destination = tmp_path / "destination"
+    with pytest.raises(ValueError, match="budget|hard links"):
+        _guest.unpack(archive, destination)
+    assert not destination.exists()
+    assert not list(tmp_path.glob("oe-transfer-*"))
+
+
+def test_copy_out_bounds_untrusted_stream_and_cleans_up(smolvm_cli, tmp_path, monkeypatch):
+    launcher, root = smolvm_cli
+    monkeypatch.setattr(_guest, "MAX_ARCHIVE_BYTES", 10240)
+    destination = tmp_path / "output"
+    monkeypatch.setattr(_guest.tempfile, "tempdir", str(tmp_path))
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            workspace = root / sandbox.name / "workspace"
+            (workspace / "large").write_bytes(b"x" * 65536)
+            with pytest.raises(ValueError, match="archive exceeds byte budget"):
+                await asyncio.wait_for(sandbox.copy_out(".", destination), 10)
+            assert not list((root / sandbox.name).glob("oe-transfer-*"))
+            assert not list(tmp_path.glob("oe-transfer-*"))
+    asyncio.run(run())
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("direction", ["in", "out"])
+@pytest.mark.parametrize("failure", ["value", "missing", "cancel", None])
+def test_transfer_preserves_primary_error_when_cleanup_fails(smolvm_cli, tmp_path, monkeypatch, direction, failure):
+    launcher, root = smolvm_cli
+    source = tmp_path / "source"
+    source.write_text("input")
+    primary = {"value": ValueError("unsafe link"), "missing": FileNotFoundError("missing input"),
+               "cancel": asyncio.CancelledError("cancelled transfer"), None: None}[failure]
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            (root / sandbox.name / "workspace/input").write_text("input")
+            helper = sandbox._helper
+
+            async def fail(operation, *arguments, **kwargs):
+                if operation == "remove":
+                    message = "cleanup unavailable"
+                    raise SmolvmError(message)
+                if primary is not None and operation == ("unpack" if direction == "in" else "pack"):
+                    raise primary
+                return await helper(operation, *arguments, **kwargs)
+
+            monkeypatch.setattr(sandbox, "_helper", fail)
+            expected = type(primary) if primary is not None else SmolvmError
+            with pytest.raises(expected) as caught:
+                if direction == "in":
+                    await sandbox.copy_in(source, "input")
+                else:
+                    await sandbox.copy_out("input", tmp_path / "output")
+            if primary is not None:
+                assert caught.value is primary
+                assert "cleanup unavailable" in primary.__notes__[0]
+            else:
+                assert "cleanup unavailable" in str(caught.value)
+    asyncio.run(run())

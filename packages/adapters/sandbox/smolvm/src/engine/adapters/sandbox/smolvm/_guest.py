@@ -9,6 +9,9 @@ import tarfile
 import tempfile
 
 WORKSPACE = Path("/workspace")
+MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
+MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
+MAX_MEMBERS = 10_000
 
 
 def workspace_path(relative: str, *, destination: bool = False) -> Path:
@@ -74,12 +77,33 @@ def _check_links(source: Path, destination: Path, source_root: Path, destination
 
 
 def unpack(archive: Path, destination: Path) -> None:
+    if archive.stat().st_size > MAX_ARCHIVE_BYTES:
+        message = "transfer archive exceeds byte budget"
+        raise ValueError(message)
+    count = total = 0
+
+    def bounded_data(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
+        nonlocal count, total
+        if member.size < 0:
+            message = "invalid transfer member size"
+            raise ValueError(message)
+        count += 1
+        total += member.size
+        if count > MAX_MEMBERS or total > MAX_EXTRACTED_BYTES:
+            message = "transfer exceeds extracted byte or member budget"
+            raise ValueError(message)
+        # Re-copying hard links as independent files would amplify disk usage.
+        if member.islnk():
+            message = "transfer hard links are not supported"
+            raise ValueError(message)
+        return tarfile.data_filter(member, path)
+
     with tempfile.TemporaryDirectory(prefix="oe-transfer-") as temporary:
         root = Path(temporary).resolve()
         try:
-            with tarfile.open(archive) as incoming:
+            with tarfile.open(archive, "r:") as incoming:
                 # data filtering refuses escaping links, devices and traversal.
-                incoming.extractall(root, filter="data")
+                incoming.extractall(root, filter=bounded_data)
                 basename = incoming.getmember("payload").pax_headers.get("openengine.basename", "payload")
             if not basename or basename in {".", ".."} or any(char in basename for char in "/\\\0"):
                 message = "invalid transfer basename"
@@ -123,6 +147,9 @@ def _dispatch(operation: str, arguments: list[str]) -> None:
         unpack(Path(archive), workspace_path(destination, destination=True))
     elif operation == "remove":
         Path(arguments[0]).unlink(missing_ok=True)
+    elif operation == "stream":
+        with Path(arguments[0]).open("rb") as archive:
+            shutil.copyfileobj(archive, sys.stdout.buffer)
     else:
         message = "unknown transfer operation"
         raise ValueError(message)
