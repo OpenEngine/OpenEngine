@@ -23,6 +23,7 @@ from langgraph_acp.agent import ACPAgentProvider
 from langgraph_acp.providers import CodexACPProvider
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -2119,6 +2120,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             await dependencies_changed.wait()
             dependencies_changed.clear()
             async with scheduled_start_lock:
+                # One dispatch pass offers the same graphs to every run it starts.
+                offered = functools.cache(offered_graphs)
                 for state in await session.state_store.list_runs():
                     if (
                         state.phase is not RunPhase.SCHEDULED
@@ -2127,7 +2130,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                     ):
                         continue
                     try:
-                        graph = offered_graphs()[str(state.workflow_id)]
+                        graph = offered()[str(state.workflow_id)]
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
