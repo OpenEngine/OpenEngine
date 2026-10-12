@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiGraphEvent, ApiGraphRun } from "./api";
 import {
   GraphConversationPage,
+  formatQuiet,
   graphConversation,
   graphConversationId,
 } from "./graph-conversation";
@@ -158,6 +159,29 @@ describe("graphConversation", () => {
         id: "assistant-3",
         role: "assistant",
         content: [{ type: "text", text: "Reading the code." }],
+      },
+    ]);
+  });
+
+  it("folds thinking into the turn as reasoning, ahead of what it led to", () => {
+    const { messages } = graphConversation([
+      event({ sequence: 1, type: "thought", payload: { text: "Which file first?" } }),
+      event({ sequence: 2, type: "thought", payload: { text: "  " } }),
+      event({
+        sequence: 3,
+        type: "transcript",
+        payload: { role: "assistant", text: "Reading the code." },
+      }),
+    ]);
+
+    expect(messages).toEqual([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Which file first?" },
+          { type: "text", text: "Reading the code." },
+        ],
       },
     ]);
   });
@@ -365,6 +389,13 @@ describe("graphConversation", () => {
 
     expect(requests).toHaveLength(1);
     expect(unplaced).toEqual([]);
+  });
+});
+
+describe("formatQuiet", () => {
+  it("reads in seconds, then minutes", () => {
+    expect(formatQuiet(42)).toBe("42s");
+    expect(formatQuiet(65)).toBe("1m 05s");
   });
 });
 

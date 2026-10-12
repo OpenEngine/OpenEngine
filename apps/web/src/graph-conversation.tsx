@@ -63,6 +63,7 @@ export function graphConversationId(runId: string, nodeId: string): string {
 
 export type GraphMessagePart =
   | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
   | {
       type: "tool-call";
       toolCallId: string;
@@ -223,6 +224,13 @@ export function graphConversation(
         userTurn(event.sequence, text);
         break;
       }
+      case "thought": {
+        const text = String(payload.text ?? "");
+        // Into the turn it belongs to, as reasoning rather than speech: the
+        // page shows it folded, so a slow model reads as thinking, not hung.
+        if (text.trim()) assistantTurn(event.sequence).content.push({ type: "reasoning", text });
+        break;
+      }
       case "tool.call": {
         const callId = String(payload.callId ?? "");
         if (!callId) break;
@@ -371,6 +379,38 @@ async function readSnapshot(runId: string): Promise<ApiGraphRun | undefined | ty
  *  open. Both halves are needed and neither answers for the other: the feed is
  *  what happened, and the snapshot is what is true now -- which node is
  *  working, which questions are still open, where the checkout is. */
+/** How long a working node may say nothing before the page points it out. */
+const QUIET_AFTER_SECONDS = 20;
+
+/** Seconds since this page last saw the node do anything, while it works.
+ *
+ *  Measured from when an event arrived here rather than from when it was
+ *  raised -- events carry no time -- so a page opened mid-silence counts from
+ *  when it opened. That still answers the question somebody is asking: is it
+ *  doing anything right now? */
+export function useQuietSeconds(lastSequence: number | undefined, active: boolean) {
+  // Seconds counted by the timer since the last event, reset when one lands:
+  // no clock is read during render, so the count is the same however often
+  // the page redraws.
+  const [quiet, setQuiet] = useState({ sequence: lastSequence, seconds: 0 });
+  if (quiet.sequence !== lastSequence) setQuiet({ sequence: lastSequence, seconds: 0 });
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(
+      () => setQuiet((current) => ({ ...current, seconds: current.seconds + 1 })),
+      1000,
+    );
+    return () => clearInterval(timer);
+  }, [active]);
+  return active ? quiet.seconds : undefined;
+}
+
+export function formatQuiet(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 function useGraphRun(runId: string) {
   const [events, setEvents] = useState<ApiGraphEvent[]>([]);
   const [run, setRun] = useState<ApiGraphRun>();
@@ -561,7 +601,15 @@ export function GraphConversationPage({
   const node = topology && topology.graphId === graphId
     ? topology.nodes.find((node) => node.nodeId === nodeId)
     : undefined;
-  const runner = run?.runnerOverrides?.[nodeId] ?? node?.runner ?? "";
+  // The runner this node's latest execution announced, which the topology's
+  // default does not know when an input or a `not`/`same` rule chose it.
+  const announced = useMemo(() => {
+    const selected = events.findLast(
+      (event) => event.nodeId === nodeId && event.type === "runner.selected",
+    );
+    return typeof selected?.payload.runner === "string" ? selected.payload.runner : undefined;
+  }, [events, nodeId]);
+  const runner = run?.runnerOverrides?.[nodeId] ?? announced ?? node?.runner ?? "";
   const runners = [...new Set([node?.runner, ...(node?.runners ?? []), runner])]
     .filter((value): value is string => Boolean(value));
   const [runnerBusy, setRunnerBusy] = useState(false);
@@ -638,6 +686,7 @@ export function GraphConversationPage({
   const working = Boolean(
     run?.activeExecutions.some((execution) => execution.nodeId === nodeId),
   );
+  const quiet = useQuietSeconds(nodeEvents.at(-1)?.sequence, working);
   const canSteer = working || Boolean(
     graphId && topology?.graphId === graphId &&
     topology.nodes.some((node) => node.nodeId === nodeId && node.alwaysOpen),
@@ -748,6 +797,12 @@ export function GraphConversationPage({
                 ? "This node's agent is working. What you send reaches the turn it is in the middle of."
                 : "A WorkOrder node owns this transcript."}
             </p>
+            {working && quiet !== undefined && quiet >= QUIET_AFTER_SECONDS && (
+              <p className="micro node-quiet" role="status">
+                No new activity for {formatQuiet(quiet)}. A slow or local model can
+                spend this long reading its prompt or thinking.
+              </p>
+            )}
           </div>
           <div className="panel-head-controls">
             {node?.runner && (

@@ -345,6 +345,53 @@ def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: 
     asyncio.run(scenario())
 
 
+def test_a_node_names_the_runner_it_chose_before_it_finishes(tmp_path: Path) -> None:
+    # The runner comes from an input, so the graph's default cannot know it; a
+    # node that fails before finishing must still name the one it ran on.
+    source = yaml.safe_dump({
+        "apiVersion": "openengine.cc/v1",
+        "name": "chosen",
+        "inputs": {"runner": {"default": "stub", "choices": ["stub", "qwen"]}},
+        "implementation": {"work": {"agent": "${inputs.runner}", "prompt": "AUTH ${instruction}"}},
+    })
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            await service.add_agent("opencode", name="qwen", model="m", url="http://localhost:11434/v1")
+            await service.add_graph("default", source=source)
+            run, _ = await service.submit_run(
+                project="default", graph="chosen", instruction="x", inputs={"runner": "qwen"},
+            )
+            failed = await settled(service, run["runId"])
+            assert failed["status"] == "failed"
+            assert failed["failure"]["authRequired"]["command"] == "engine agent signin qwen"
+            assert {node["node"]: node["runner"] for node in failed["nodes"]}["work"] == "qwen"
+
+    asyncio.run(scenario())
+
+
+def test_an_agents_thinking_is_published_but_is_not_its_output(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            await service.add_graph("default", source=single("thinker", "THINK ${instruction}"))
+            run, _ = await service.submit_run(project="default", graph="thinker", instruction="x")
+            done = await settled(service, run["runId"])
+            assert done["results"] == {"work": "echo: THINK x"}
+            events = service.runtime.store.events_since(RunId(run["runId"]))
+            said = [
+                (event.kind.value, event.payload.get("text"))
+                for event in events
+                if event.node_id == "work" and (
+                    event.kind.value == "thought"
+                    or (event.kind.value == "transcript" and event.payload.get("role") == "assistant")
+                )
+            ]
+            # Published before the answer it led to, and never as speech.
+            assert said == [("thought", "Reading the prompt first."), ("transcript", "echo: THINK x")]
+
+    asyncio.run(scenario())
+
+
 def test_runs_list_newest_first_whoever_started_them(tmp_path: Path) -> None:
     async def scenario() -> None:
         clock = Clock()

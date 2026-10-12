@@ -603,6 +603,7 @@ class ACPNode:
         # overrides apply only to fresh executions, after this recovery finishes.
         if stored is not None and resuming is not None:
             runner = stored.agent
+        await execution.emit(EventKind.RUNNER_SELECTED, {"runner": runner})
         node = self._for_runner(runner)
         return await node._run(state, cwd, stored, resuming)
 
@@ -1006,12 +1007,23 @@ class ACPNode:
         said: list[str] = []
         cancelled = False
         pending: list[str] = []
+        thinking: list[str] = []
+
+        async def flush_thinking() -> None:
+            # Thinking is gathered like speech, and published as soon as the
+            # agent does anything else -- for a slow model it is the only sign
+            # of life between one tool call and the next.
+            text = "".join(thinking)
+            thinking.clear()
+            if text.strip():
+                await execution.emit(EventKind.THOUGHT, {"text": text})
 
         async def flush() -> None:
             # Emptied before anything is awaited, so the two tasks that can
             # call this cannot publish the same words twice.
             text = "".join(pending)
             pending.clear()
+            await flush_thinking()
             if text:
                 said.append(text)
                 await execution.say(text)
@@ -1026,6 +1038,14 @@ class ACPNode:
                     cancelled = event.data.get("stopReason") == "cancelled"
                 if event.type in _INTERRUPTS_THE_NARRATION:
                     await flush()
+                if event.type == ACPEventType.THOUGHT_DELTA:
+                    block = event.data.get("content")
+                    if isinstance(block, Mapping) and block.get("type") == "text":
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            thinking.append(text)
+                    continue
+                await flush_thinking()
                 await self._republish(execution, event)
                 if event.type == ACPEventType.MESSAGE_DELTA:
                     block = event.data.get("content")

@@ -8,6 +8,7 @@ node of a graph and the nodes are told different things:
     ...           -> answer "echo: <prompt>", reporting $STUB_COST dollars
     WAIT          -> work until cancelled, the way a long turn is steered
     AUTH          -> refuse the prompt the way an agent with no login does
+    THINK         -> stream reasoning first, then answer as usual
 """
 
 import json
@@ -97,6 +98,12 @@ def main() -> None:
                         send({"jsonrpc": "2.0", "id": message_id, "result": {"stopReason": "cancelled"}})
                         break
             else:
+                if "THINK" in text:
+                    for chunk in ("Reading the ", "prompt first."):
+                        update(session_id, {
+                            "sessionUpdate": "agent_thought_chunk",
+                            "content": {"type": "text", "text": chunk},
+                        })
                 answer(message_id, session_id, text)
         elif message_id is not None:
             send({"jsonrpc": "2.0", "id": message_id, "result": {}})
