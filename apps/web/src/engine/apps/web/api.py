@@ -1134,6 +1134,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     repo_modes: Mapping[str, str] | None = None,
     config_path: Path | None = None,
     trusted_repos: Collection[str] = (),
+    onboarding_directory: Path | None = None,
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
     repository_projects: Mapping[str, str] | None = None,
@@ -1172,6 +1173,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     onboarding = RepositoryOnboarding(
         repository_registry, config_path,
         lambda project, runner: register_starters(surface.service, project, runner),
+        onboarding_directory=onboarding_directory,
     )
 
     async def in_repositories(repository: str, checkouts: frozenset[Path]) -> bool:

@@ -172,13 +172,19 @@ async def register_starters(service: GraphService | None, project: str, runner: 
 
 class RepositoryOnboarding:
     def __init__(self, registry: RepositoryRegistry, config_path: Path | None,
-                 register_starters: Callable[[str, str], Awaitable[None]]) -> None:
+                 register_starters: Callable[[str, str], Awaitable[None]],
+                 onboarding_directory: Path | None = None) -> None:
         self.registry = registry
         self.config_path = config_path or machine_config_path()
         self.register_starters = register_starters
+        self.onboarding_directory = onboarding_directory
         self.jobs: dict[str, dict] = {}
         self.tasks: set[asyncio.Task] = set()
         self.lock = asyncio.Lock()
+
+    def _default_checkout(self, name: str) -> Path:
+        directory = self.onboarding_directory if self.onboarding_directory is not None else Path.home() / "code"
+        return Path(directory / name.split("/")[1]).expanduser().resolve()
 
     def start(self, reference: str, path: str | None, mode: str) -> dict:
         name = repository_name(reference)
@@ -188,7 +194,7 @@ class RepositoryOnboarding:
             if job["repository"] == name and job["status"] not in {"failed", "complete"}:
                 return dict(job)
         existing = self.registry.snapshot.repos.get(name)
-        checkout = Path(path or existing or Path.home() / "code" / name.split("/")[1]).expanduser().resolve()
+        checkout = Path(path or existing or self._default_checkout(name)).expanduser().resolve()
         if existing and Path(existing).expanduser().resolve() != checkout:
             raise OnboardingError("destination", f"{name} is already configured at {existing}", "Omit --path to use the configured checkout")
         for previous in self.jobs.values():

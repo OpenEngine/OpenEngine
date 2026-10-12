@@ -92,7 +92,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
     onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
     onboard.add_argument("url", nargs="?")
-    onboard.add_argument("--path", help="checkout path on the daemon machine")
+    onboard.add_argument("--path", help="checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
     onboard.add_argument("--mode", choices=("connected", "disconnected"))
 
     graph = commands.add_parser("graph", help="register, inspect and run graphs")
