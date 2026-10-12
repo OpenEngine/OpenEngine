@@ -1,9 +1,13 @@
+import { randomBytes } from "node:crypto"
 import { defineConfig, devices } from "@playwright/test"
 import { freePort } from "./support/freePort.ts"
 
 // Chosen once in the runner and inherited by its workers, which load this
 // config again and must agree on where the terminal server is.
 process.env.E2E_TERMINAL_PORT ??= String(freePort())
+// The terminal server's session token. The server reads it from its inherited
+// environment and the specs pass it to the page, so it never appears in argv.
+process.env.E2E_TERMINAL_TOKEN ??= randomBytes(24).toString("base64url")
 const terminalUrl = `http://127.0.0.1:${process.env.E2E_TERMINAL_PORT}`
 
 /**

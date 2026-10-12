@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process"
+import { request } from "node:http"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -7,9 +8,38 @@ import WebSocket from "ws"
 import { startTerminalServer, type TerminalServer } from "../terminal/server.ts"
 import type { ServerMessage, StartMessage } from "../terminal/protocol.ts"
 
+function socketUrl(server: TerminalServer) {
+  return `${server.url.replace(/^http/, "ws")}/pty`
+}
+
+/** The HTTP status a WebSocket upgrade was answered with: 101 if it was accepted. */
+function upgradeStatus(url: string, options: WebSocket.ClientOptions = {}) {
+  return new Promise<number>((resolve) => {
+    const socket = new WebSocket(url, options)
+    socket.once("open", () => {
+      socket.close()
+      resolve(101)
+    })
+    socket.once("unexpected-response", (_request, response) => resolve(response.statusCode ?? 0))
+    socket.once("error", () => resolve(0))
+  })
+}
+
+/** The status of a GET sent with a Host header of our choosing, as a DNS-rebinding page would. */
+function statusForHost(server: TerminalServer, pathname: string, host: string) {
+  return new Promise<number>((resolve, reject) => {
+    request({ hostname: "127.0.0.1", port: server.port, path: pathname, setHost: false, headers: { host } }, (response) => {
+      response.resume()
+      resolve(response.statusCode ?? 0)
+    })
+      .on("error", reject)
+      .end()
+  })
+}
+
 /** One PTY session over the bridge, as a test sees it. */
 async function openSession(server: TerminalServer, start: Omit<StartMessage, "type"> = {}) {
-  const socket = new WebSocket(`${server.url.replace(/^http/, "ws")}/pty`)
+  const socket = new WebSocket(`${socketUrl(server)}?token=${server.token}`)
   await new Promise((resolve, reject) => socket.once("open", resolve).once("error", reject))
   let output = ""
   let resolveExit!: (message: Extract<ServerMessage, { type: "exit" }>) => void
@@ -68,6 +98,23 @@ test.describe("terminal bridge server", { tag: ["@skip-docs"] }, () => {
     expect(new URL(server.url).hostname).toBe("127.0.0.1")
     const response = await fetch(`${server.url}/healthz`)
     expect(response.status).toBe(200)
+  })
+
+  test("refuses a session without this run's token", async () => {
+    expect(await upgradeStatus(socketUrl(server))).toBe(403)
+    expect(await upgradeStatus(`${socketUrl(server)}?token=wrong`)).toBe(403)
+  })
+
+  test("refuses a session opened from another site's page", async () => {
+    const url = `${socketUrl(server)}?token=${server.token}`
+    expect(await upgradeStatus(url, { origin: "https://evil.example" })).toBe(403)
+    expect(await upgradeStatus(url, { origin: server.url })).toBe(101)
+  })
+
+  test("refuses requests addressed to any other host name", async () => {
+    expect(await statusForHost(server, "/healthz", `evil.example:${server.port}`)).toBe(403)
+    expect(await statusForHost(server, "/healthz", `127.0.0.1:${server.port}`)).toBe(200)
+    expect(await statusForHost(server, "/healthz", `localhost:${server.port}`)).toBe(200)
   })
 
   test("round-trips input and output through an interactive shell", async () => {
