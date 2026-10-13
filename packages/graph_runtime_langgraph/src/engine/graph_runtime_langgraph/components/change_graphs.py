@@ -23,6 +23,7 @@ from engine.graph_runtime_langgraph.components.change_prompts import (
 from engine.graph_runtime_langgraph.components.forge import (
     ANSWER_REVIEW, CHANGE_UNDER_REVIEW, PUBLISH_CHANGE, PUBLISH_FINDINGS, PUBLISH_SUMMARY, UPDATE_CHANGE,
 )
+from engine.graph_runtime_langgraph.components.review_publish import ApprovalCheck, ApproveReview, PublishReview, publishing
 from engine.ports import WorkspaceProvider
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.runtime.change_requests import change_request
@@ -52,7 +53,14 @@ class TargetWorkspace(WorkspaceNode):
         if target and not inputs.get('ref'):
             path = f'pull/{target.number}/head' if target.kind == 'pull' else f'merge-requests/{target.number}/head'
             inputs['ref'] = f'origin/refs/{path}'
-        return {**await super().__call__({**state, 'inputs': inputs}), 'inputs': inputs,
+        workspace = await super().__call__({**state, 'inputs': inputs})
+        reviewed_sha = ''
+        source = current_execution().runtime.source_control
+        if source is not None:
+            result = await source.run_git(WorkspaceId(str(workspace['workspaceId'])), ('rev-parse', 'HEAD'))
+            if result.ok:
+                reviewed_sha = result.stdout.strip()
+        return {**workspace, 'inputs': inputs, 'reviewed_sha': reviewed_sha,
                 'pr_url': inputs.get('pr_url', '')}
 
 
@@ -199,22 +207,32 @@ class Components:
             node=FacetNode, facet=f.id, required=('findings',), validate=ReviewNode.validate_completion,
             tools=('view_change_request', 'get_job_logs', 'list_pipeline_status')) for f in REVIEW_FACETS}
 
-    def rank(self) -> ACPNode:
+    def rank(self, *, local: bool = False) -> ACPNode:
         return self.agent('reranker', lambda state: RERANKER_PROMPT.format(
-            reviewer_count=len(REVIEW_FACETS), publishing=PUBLISH_FINDINGS(state if pr_url(state) else {**state, 'inputs': {'mode': 'disconnected'}}, runner=state.get('inputs', {}).get('review_runner', self.runner)),
+            reviewer_count=len(REVIEW_FACETS),
+            publishing=(
+                'Do not post comments. Call complete_step with findings as a JSON array (or []), '
+                'preserving each finding’s agent and facet. ' if local else PUBLISH_FINDINGS(
+                    state if pr_url(state) else {**state, 'inputs': {'mode': 'disconnected'}},
+                    runner=state.get('inputs', {}).get('review_runner', self.runner))),
             findings_sections=json.dumps(state.get('refute', []) if enabled(state, 'adversarial') else
                                         [state.get(f'review-{f.id}', []) for f in REVIEW_FACETS]),
             change=change_description(state), task=state.get('task', '')),
             node=RankNode, output='review', required=('findings',), validate=RerankerNode.validate_completion,
-            tools=('view_change_request', 'add_comment'))
+            tools=('view_change_request',) if local else ('view_change_request', 'add_comment'))
 
-    def impact(self) -> ACPNode:
+    def impact(self, *, local: bool = False) -> ACPNode:
         return self.agent('impact', lambda state: IMPACT_ANALYSIS_PROMPT.format(
-            change=change_description(state), publishing=PUBLISH_SUMMARY(state if pr_url(state) else {**state, 'inputs': {'mode': 'disconnected'}}, pr_url=pr_url(state)),
+            change=change_description(state),
+            publishing=(
+                'Do not post comments. Return the impact rating and rationale using complete_step. '
+                if local else PUBLISH_SUMMARY(
+                    state if pr_url(state) else {**state, 'inputs': {'mode': 'disconnected'}},
+                    pr_url=pr_url(state))),
             task=state.get('task', ''), implementation=state.get('implementation', ''),
             ci=json.dumps(state.get('ci_check', {})), findings=json.dumps(state.get('review', []))),
             node=ReviewAgent, required=('impact_level', 'impact_rationale'), validate=_impact,
-            tools=('view_change_request', 'add_comment', 'list_pipeline_status', 'get_job_logs'))
+            tools=('view_change_request', 'list_pipeline_status', 'get_job_logs') + (() if local else ('add_comment',)))
 
 
 def _builder() -> Any:
@@ -269,8 +287,8 @@ def review(components: Components) -> GraphWorkflow:
         'Do not edit or publish. Complete with surviving findings as a JSON array, preserving agent and facet.\n'
         + json.dumps([s.get(f'review-{f.id}', []) for f in REVIEW_FACETS]),
         node=RefuteNode, required=('findings',), validate=RerankerNode.validate_completion))
-    b.add_node('reranker', c.rank())
-    b.add_node('impact', c.impact())
+    b.add_node('reranker', c.rank(local=True))
+    b.add_node('impact', c.impact(local=True))
     b.add_edge(START, 'workspace')
     b.add_conditional_edges('workspace', _fanout, list(c.reviews()))
     # A join node avoids racing the conditional fan-in when facets finish separately.
@@ -279,8 +297,19 @@ def review(components: Components) -> GraphWorkflow:
     b.add_conditional_edges('collected', lambda s: 'refute' if enabled(s, 'adversarial') else 'reranker', ['refute', 'reranker'])
     b.add_edge('refute', 'reranker')
     b.add_edge('reranker', 'impact')
-    b.add_edge('impact', END)
+    b.add_node('publish-review', PublishReview())
+    b.add_node('approval-check', ApprovalCheck())
+    b.add_node('approve', ApproveReview())
+    b.add_conditional_edges('impact', lambda s: 'publish-review' if publishing(s) else 'approval-check',
+                            ['publish-review', 'approval-check'])
+    b.add_edge('publish-review', 'approval-check')
+    b.add_conditional_edges('approval-check', lambda s: 'approve' if s.get('approval_eligible') else END,
+                            ['approve', END])
+    b.add_edge('approve', END)
     return _workflow(b, 'review', c.runner, WorkflowInput('ref', 'Branch'), WorkflowInput('pr_url', 'Pull request'),
+                     WorkflowInput('branch', 'PR branch'),
+                     WorkflowInput('publish', 'Publish review', default='false', choices=('false', 'true')),
+                     WorkflowInput('auto_approve_green', 'Auto-approve Green (empty uses configuration)', choices=('', 'false', 'true')),
                      WorkflowInput('adversarial', 'Refute findings', default='false', choices=('false', 'true')))
 
 

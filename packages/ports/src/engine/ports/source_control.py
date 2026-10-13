@@ -202,6 +202,10 @@ class SourceControl(Protocol):
         """
         ...
 
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> None:
+        """Approve only the reviewed commit on a canonical forge project."""
+        ...
+
     async def can_write_repository(
         self, pr_url: str, username: str, *, user_id: int | None = None
     ) -> bool:

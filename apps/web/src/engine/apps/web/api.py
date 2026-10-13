@@ -118,8 +118,6 @@ from engine.domain import (
     ForgeMode,
     MODE_INPUT,
     Message,
-    STATE_INPUT,
-    WorkState,
     Role,
     RunId,
     RunOrigin,
@@ -128,8 +126,8 @@ from engine.domain import (
     TaskId,
     WorkflowId,
     WorkspaceId,
-    review_inputs,
 )
+from engine.runtime.config import PullRequestsConfig
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, WorkflowInput, choose_runners, offer_runners, resolve_inputs,
 )
@@ -148,7 +146,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
-from engine.graph_service import GraphService, StartRequest, StartRun
+from engine.graph_service import GraphService, NotFound, StartRequest, StartRun
 from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph.components.human_review import (
@@ -1015,6 +1013,19 @@ class _GraphSurface:
         registered = self.service.workflows() if self.service is not None else ()
         return {**configured, **{str(graph.graph_id): graph for graph in registered}}
 
+    def named_workflow(self, configured: Mapping[str, GraphWorkflow], project: str,
+                       reference: str) -> GraphWorkflow | None:
+        """Resolve repository-scoped registered names as well as catalog graph IDs."""
+        offered = self.workflows(configured)
+        if self.service is not None:
+            try:
+                _, version = self.service.resolve(project, reference)
+            except NotFound:
+                pass
+            else:
+                return offered.get(version.version_id)
+        return offered.get(reference)
+
 
 
 class GithubProvenance(Protocol):
@@ -1106,6 +1117,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     github_webhook_secret: Callable[[], str] = lambda: "",
     github_repository: str = "",
     github_repositories: tuple[str, ...] = (),
+    review_request_workflow: str = "review",
+    pull_requests: PullRequestsConfig = PullRequestsConfig(),
     github_comment_handler: Callable[[GithubComment], Awaitable[None]] | None = None,
     communications_channel: str = "",
     public_url: str = "",
@@ -1910,6 +1923,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         """
         if requester is None and scheduled is not None:
             requester = scheduled.requester
+        if 'auto_approve_green' in inputs and not inputs['auto_approve_green']:
+            inputs = {**inputs, 'auto_approve_green': pull_requests.default_for(repository, repository_registry.snapshot.repos)}
         # Preserve the configured input for scheduled WorkOrder views as well.
         if (mode := await repository_mode(repository)) is not None:
             inputs = {**inputs, MODE_INPUT: str(mode)}
@@ -3531,6 +3546,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         store: GithubProvenance | None, repository: str, number: int, prompt: str,
         *, replacing: RunId | None, requester: str | None = None,
         inputs: Mapping[str, str] | None = None,
+        graph: GraphWorkflow | None = None,
     ) -> Continuation:
         """Start a work order for a pull request that has no run in flight.
 
@@ -3562,7 +3578,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         is cancelled before the failure is raised, so the redelivery that
         follows starts one run rather than adding one.
         """
-        graph = _mentioned_workflow()
+        graph = graph or _mentioned_workflow()
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
         if store is None:
@@ -3776,15 +3792,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         )
 
     async def github_review_pull_request(requested: GithubReviewRequest) -> None:
-        """A review requested from Engine starts a review of the pull request.
-
-        The same run `engine review <PR URL>` starts, in connected mode and
-        checked out at the pull request's branch, except that nobody waits at
-        triage: whoever asked reads the review on the pull request, so the
-        surviving findings and the impact analysis are posted there. A
-        pull request a work order is still working on is left to it: that run
-        reviews its own change.
-        """
+        """Start the dedicated review graph unless a work order still owns the PR."""
         delivery = urlsplit(requested.url)
         found = change_request(delivery._replace(
             path=f"/{requested.repository}/pull/{requested.number}", query="", fragment="",
@@ -3795,13 +3803,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         url = pull_request_url(repository, requested.number)
         # Whether the requester can write to the repository was asked by the
         # ingress before this was called; see `github_sender_may_act`.
-        graph = _mentioned_workflow()
+        graph = surface.named_workflow(graph_workflows, repository, review_request_workflow)
         if graph is None:
-            raise RuntimeError("no workflow is configured under `work_orders.workflow`")
-        declared = {item.name: item for item in getattr(graph, "inputs", ())}
-        state = declared.get(STATE_INPUT)
-        if state is None or WorkState.REVIEW not in state.choices:
-            raise RuntimeError("the configured workflow cannot start in review")
+            raise RuntimeError(f"review workflow {review_request_workflow!r} is unavailable")
         runtime = surface.runtime
         if runtime is None:
             raise RuntimeError("could not start a review: graph runtime unavailable")
@@ -3817,10 +3821,13 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             f"Review pull request {url}: {requested.title}",
             replacing=run_id,
             requester=github_requester(requested.sender_id, requested.sender),
-            inputs=review_inputs(
-                declared, ref=f"origin/{requested.branch}", pr_url=url, branch=requested.branch,
-                publish=True,
-            ),
+            graph=graph,
+            inputs={
+                "mode": "connected", "ref": f"origin/{requested.branch}",
+                "pr_url": url, "branch": requested.branch, "publish": "true",
+                "auto_approve_green": pull_requests.default_for(
+                    await github_checkout(repository), repository_registry.snapshot.repos),
+            },
         )
 
     async def github_refuse_comment(comment: GithubComment) -> None:

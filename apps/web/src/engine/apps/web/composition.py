@@ -423,6 +423,7 @@ def build_graph_service(
             allow_python=config.graphs.allow_python,
             session_tools=config.sessions.tools,
             approval_policy=config.approvals,
+            pull_requests=config.pull_requests,
         )
 
     return build

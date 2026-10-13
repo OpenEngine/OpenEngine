@@ -218,6 +218,8 @@ def slack_app(web_app):
         github_comment_handler=None,
         github_webhook_secret="",
         github_repositories=(),
+        review_request_workflow="review",
+        pull_requests=None,
         approval_policy=None,
         repos=None,
     ):
@@ -262,6 +264,8 @@ def slack_app(web_app):
                 github_webhook_secret=lambda: github_webhook_secret,
                 github_repository="acme/api",
                 github_repositories=github_repositories,
+                review_request_workflow=review_request_workflow,
+                **({"pull_requests": pull_requests} if pull_requests is not None else {}),
             ),
             capabilities,
             slack_store,

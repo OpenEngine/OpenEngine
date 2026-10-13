@@ -386,9 +386,6 @@ def test_implementation_and_review_receive_run_bound_workflow_tools() -> None:
     reviewing = reranker_binding.for_state({"inputs": {STATE_INPUT: WorkState.REVIEW}})
     assert "add_comment" not in reviewing.repository_tools
     assert reranker_binding.for_state({"inputs": {}}) is reranker_binding
-    # Unless it was asked to post its review to the pull request.
-    publishing = {"inputs": {STATE_INPUT: WorkState.REVIEW, module.PUBLISH_INPUT: "true"}}
-    assert reranker_binding.for_state(publishing) is reranker_binding
 
 
 def test_the_naming_node_uses_the_selected_runner_and_names_the_task() -> None:
@@ -620,74 +617,6 @@ def test_a_run_started_in_review_triages_before_it_fixes(monkeypatch) -> None:
     assert "Reply to each review comment" not in fix
 
 
-@pytest.mark.parametrize("verification_enabled", [False, True])
-def test_a_review_requested_on_the_forge_posts_its_findings_and_impact(
-    monkeypatch, tmp_path, verification_enabled,
-) -> None:
-    """Asked to publish, a run started in review posts instead of triaging.
-
-    The reranker posts the surviving findings and impact analysis posts its
-    rating to the pull request; nothing waits on a person afterwards.
-    """
-    from langchain_core.runnables import RunnableLambda
-    from engine.graph_runtime_langgraph.components import RerankerNode
-
-    module = definition_module()
-    from engine.graph_runtime_langgraph.components import OpenVerify
-
-    from unittest.mock import AsyncMock
-
-    verification = (
-        OpenVerify(uploader=AsyncMock(), output_directory=tmp_path)
-        if verification_enabled else None
-    )
-    builder = module.pipeline("codex", verification=verification)
-    nodes = nodes_of(builder)
-    visited = []
-    prompts = {}
-    findings = [
-        {"tagline": "Fix the bug", "description": "The result is wrong.", "agent": "claude", "facet": "bugs"},
-    ]
-    pr_url = "https://github.com/owner/repo/pull/42"
-
-    async def rerank(self, state):
-        visited.append(module.RERANKER)
-        prompts[module.RERANKER] = nodes[module.RERANKER].prompt(state)
-        return {module.REVIEW: findings}
-
-    monkeypatch.setattr(RerankerNode, "__call__", rerank)
-
-    def stub(name):
-        def run(state):
-            visited.append(name)
-            if name == module.IMPACT_ANALYSIS:
-                prompts[name] = nodes[name].prompt(state)
-            return {}
-        return RunnableLambda(run)
-
-    for name, spec in builder.nodes.items():
-        if name != module.RERANKER:
-            spec.runnable = stub(name)
-
-    asyncio.run(builder.compile().ainvoke({
-        "task": f"Review pull request {pr_url}",
-        "inputs": {
-            "state": "Review", "mode": "connected", "ref": "origin/feature",
-            "pr_url": pr_url, "branch": "feature", module.PUBLISH_INPUT: "true",
-        },
-    }))
-
-    assert visited.count(module.RERANKER) == 1
-    assert visited[-1] == module.IMPACT_ANALYSIS
-    for skipped in (
-        module.TRIAGE, module.IMPLEMENTATION, module.HUMAN_REVIEW, module.VERIFICATION,
-    ):
-        assert skipped not in visited
-    assert "add_comment" in prompts[module.RERANKER]
-    assert "add_comment" in prompts[module.IMPACT_ANALYSIS]
-    assert pr_url in prompts[module.IMPACT_ANALYSIS]
-    assert "Fix the bug" in prompts[module.IMPACT_ANALYSIS]
-
 
 def test_a_disconnected_run_is_served_no_forge_tools(monkeypatch) -> None:
     from types import SimpleNamespace
@@ -807,7 +736,6 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
         "instruction",
         "implementation_runner", "review_runner", "spec", "adversarial",
         "mode", "state", "ref", "pr_url", "branch",
-        "publish_review",
     ]]
 
 
@@ -850,7 +778,6 @@ def test_stage_runners_configure_models_and_mcp_identity(
         "instruction",
         "implementation_runner", "review_runner", "spec", "adversarial",
         "mode", "state", "ref", "pr_url", "branch",
-        "publish_review",
     ]
     nodes = nodes_of(graph.builder)
     observed = [
