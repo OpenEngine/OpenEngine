@@ -170,4 +170,4 @@ as the default flow, `${ }` placeholders, `flow` with `route` (so loops and
 branches), `facets`, `outputs`, `human`, `ci`, and the `apiVersion/kind`
 header. The registry gains a `format` and `source` per version. Starter graphs
 (`review`, `implement-review`, `spec-implement-review`) are written in it, and
-`engine onboard` and interactive `graph exec` land on top.
+`engine repo add` and interactive `graph exec` land on top.

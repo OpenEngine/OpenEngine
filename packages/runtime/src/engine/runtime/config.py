@@ -57,7 +57,7 @@ class WorkflowsConfig:
 
 @dataclass(frozen=True, slots=True)
 class OnboardingConfig:
-    """Where `engine onboard` clones a repository when no path is given.
+    """Where `engine repo add` clones a repository when no path is given.
 
     `directory`, when set, replaces the daemon home's `code` subdirectory, so
     a deployment that keeps checkouts elsewhere need not pass `--path` on every
@@ -270,9 +270,10 @@ class EngineConfig:
     repo_modes: Mapping[str, str] = field(default_factory=dict)
     """`[repos]` names mapped to the mode their WorkOrders run in.
 
-    Written by `engine onboard`. A repository named `disconnected` here has every
+    Written by `engine repo add`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
+    repository_trust: Mapping[str, bool] = field(default_factory=dict)
     trusted_repos: frozenset[str] = frozenset()
     """`[repos]` names whose WorkOrders are auto-approved.
 
@@ -646,11 +647,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             )
         repo_modes[name] = mode
     trusted_repos = set()
+    repository_trust: dict[str, bool] = {}
     for name, trusted in _table(document.get("trusted_repos", {}), "trusted_repos").items():
         if name not in repos:
             raise EngineConfigError(f"trusted_repos.{name} names no repository under [repos]")
         if not isinstance(trusted, bool):
             raise EngineConfigError(f"trusted_repos.{name} must be a boolean")
+        repository_trust[name] = trusted
         if trusted:
             trusted_repos.add(name)
 
@@ -661,6 +664,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         pull_requests=PullRequestsConfig(auto_approve_green, review_overrides),
         repo_modes=repo_modes,
         trusted_repos=frozenset(trusted_repos),
+        repository_trust=repository_trust,
         default_branch=default_branch,
         github_client_id=github_client_id,
         github_login_client_id=_optional_nonblank_string(

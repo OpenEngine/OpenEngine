@@ -270,6 +270,10 @@ class GraphService:
         self._scheduler: asyncio.Task[None] | None = None
         self._background: set[asyncio.Task[Any]] = set()
 
+    @property
+    def default_repository(self) -> str:
+        return self._default_repository
+
     # --- lifetime -----------------------------------------------------------
 
     async def open(self, *, schedule: bool = True) -> None:

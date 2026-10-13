@@ -93,7 +93,7 @@ def test_failed_clone_is_actionable_and_retryable(tmp_path, monkeypatch, failure
         raise failure
 
     monkeypatch.setattr(repositories.subprocess, "run", fail)
-    with pytest.raises(EngineConfigError, match="owner/repo.*GitHub SSH access"):
+    with pytest.raises(EngineConfigError, match="owner/repo.*remote access"):
         repositories.ensure_repository_checkouts({"owner/repo": str(target)})
     assert not target.exists()
     assert list(target.parent.iterdir()) == [target.parent / ".engine-clone-repo.lock"]

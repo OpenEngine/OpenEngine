@@ -42,6 +42,7 @@ class Daemon:
 def repository(tmp_path, monkeypatch, *, git_repo) -> Path:
     root = tmp_path / "repo"
     git_repo(root)
+    monkeypatch.setattr(session, "_check_trust", lambda *args: None)
     monkeypatch.setenv(backends.FILE_ENVIRONMENT_VARIABLE, str(tmp_path / "backends.json"))
     monkeypatch.delenv(backends.SELECTED_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.setattr(session.shutil, "which", lambda name: f"/bin/{name}")

@@ -48,6 +48,7 @@ class _Response(io.BytesIO):
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("engine.cli.commands._check_trust", lambda *args: None)
     monkeypatch.setenv(backends.FILE_ENVIRONMENT_VARIABLE, str(tmp_path / "backends.json"))
     monkeypatch.setenv("ENGINE_CLI_CONFIG", str(tmp_path / "cli.json"))
     monkeypatch.delenv(backends.SELECTED_ENVIRONMENT_VARIABLE, raising=False)
@@ -399,9 +400,9 @@ def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
         {"id": "job1", "status": "cloning", "message": "Cloning"},
         {"id": "job1", "status": "complete", "message": "Repository onboarded", "repository": "owner/repo", "path": "/code/repo"},
     )
-    assert main(["onboard", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
+    assert main(["repo", "add", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
     assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
-    assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo"}
+    assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo", "trusted": None}
     assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
     assert "Next: engine go review --project owner/repo --repo /code/repo" in capsys.readouterr().out
 
@@ -410,14 +411,14 @@ def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
     from engine.cli import repository
     monkeypatch.setattr(repository, "_git", lambda root, *args: "/checkout" if args[0] == "rev-parse" else "git@github.com:owner/repo.git")
     backend = serve(monkeypatch, {"status": "complete", "message": "Already onboarded", "repository": "owner/repo", "path": "/checkout"})
-    assert main(["onboard", "--mode", "connected"]) == 0
+    assert main(["repo", "add", "--mode", "connected"]) == 0
     assert backend.requests[0]["body"]["path"] == "/checkout"
     assert backend.requests[0]["body"]["repository"] == "git@github.com:owner/repo.git"
 
 
 def test_onboard_reports_fix(monkeypatch, capsys):
     serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "engine agent signin codex"}]})
-    assert main(["onboard", "owner/repo", "--mode", "connected"]) == 1
+    assert main(["repo", "add", "owner/repo", "--mode", "connected"]) == 1
     assert "engine agent signin codex" in capsys.readouterr().err
 
 
@@ -648,3 +649,25 @@ def test_verb_binding_checks_contract_before_writing(monkeypatch, capsys):
     recorded = serve(monkeypatch, {"name": "custom", "inputs": ["ref"]}, {"verbs": {"review": "custom"}})
     assert main(["verb", "set", "review", "custom"]) == 0
     assert recorded.requests[-1]["body"]["graph"] == "custom"
+
+
+@pytest.mark.parametrize('relative', [True, False])
+def test_repo_add_existing_path(tmp_path, monkeypatch, relative):
+    from engine.cli import repository
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    def git(path, *args):
+        calls.append((path, args))
+        return str(tmp_path) if args[0] == 'rev-parse' else 'https://gitlab.com/group/repo.git'
+    monkeypatch.setattr(repository, '_git', git)
+    backend = serve(monkeypatch, {'status': 'complete', 'message': 'Repository onboarded', 'repository': 'gitlab.com/group/repo', 'path': str(tmp_path)})
+    assert main(['repo', 'add', '.' if relative else str(tmp_path)]) == 0
+    assert calls[0][0] == str(tmp_path)
+    assert backend.requests[0]['body'] == {'repository': 'https://gitlab.com/group/repo.git', 'path': str(tmp_path), 'mode': 'connected', 'trusted': None}
+
+
+def test_repo_add_gitlab_url(monkeypatch):
+    backend = serve(monkeypatch, {'status': 'complete', 'message': 'Repository onboarded', 'repository': 'gitlab.com/group/repo', 'path': '/code/repo'})
+    assert main(['repo', 'add', 'https://gitlab.com/group/repo.git']) == 0
+    assert backend.requests[0]['body']['repository'] == 'https://gitlab.com/group/repo.git'
+    assert backend.requests[0]['body']['path'] is None
