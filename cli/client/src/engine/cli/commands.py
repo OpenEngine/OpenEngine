@@ -31,7 +31,7 @@ from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
-    "runner", "onboard", "go", "verb", "verbs",
+    "runner", "onboard", "repo", "go", "verb", "verbs",
 })
 #: Commands omitted from the bare `engine` menu.
 HIDDEN = frozenset({"runner", "verb", "verbs", "backends", "graphs", "runs", "loops", "nodes", "agents", "connections"})
@@ -81,6 +81,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     go.add_argument("words", nargs="*", metavar="VERB/TARGET/INSTRUCTION", help="instruction, or a verb and change target")
+    go.add_argument("--trust", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
     go.add_argument("--repo", default="", help="repository (default: the current checkout)")
     go.add_argument("--local", action="store_true", help="force disconnected mode; keep work local")
     go.add_argument("--review", metavar="PR_OR_BRANCH", help="review an existing change with the review verb graph")
@@ -120,9 +121,17 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     add_list_alias(commands, "backend", actions.choices["list"])
 
     onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
+    onboard.add_argument("--trust", "--trusted", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
     onboard.add_argument("url", nargs="?")
     onboard.add_argument("--path", help="checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
     onboard.add_argument("--mode", choices=("connected", "disconnected"))
+
+    repo = commands.add_parser("repo", help="manage repository trust")
+    repo_actions = repo.add_subparsers(dest="action", required=True)
+    for name in ("trust", "untrust"):
+        setting = repo_actions.add_parser(name, parents=[common],
+            help="auto-approve runs in a repository" if name == "trust" else "require approvals in a repository")
+        setting.add_argument("repo", nargs="?", default="", metavar="path", help="checkout path or configured name (default: current checkout)")
 
     graph = commands.add_parser("graph", help="register, inspect and run graphs")
     actions = graph.add_subparsers(dest="action", required=True)
@@ -144,6 +153,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     running.add_argument("--branch", default="", help="the branch to check out (sets the branch input)")
     running.add_argument("--agent", default="", help="the agent to run (sets the agent input)")
     running.add_argument("--local", action="store_true", help="keep commits and findings local; do not publish")
+    running.add_argument("--trust", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
     running.add_argument("--repo", default="", help="repository to check out")
     running.add_argument("--no-watch", action="store_true", help="return immediately without the live view")
     running.add_argument("--json", action="store_true", help="print JSON without the live view")
@@ -190,6 +200,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--every", default=None, help="cadence such as 30m, 6h, 1d (default: the graph's loop.every)")
     adding.add_argument("--max-prs", type=int, default=None, help="pause after this many new pull requests")
     adding.add_argument("--max-spend", type=float, default=None, metavar="USD", help="pause, and stop the active run, at this spend")
+    adding.add_argument("--trust", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
+    adding.add_argument("--json", action="store_true")
     adding.add_argument("--repo", default="")
     adding.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
     adding.add_argument("--no-run-now", action="store_true", help="first run after one interval, not now")
@@ -280,7 +292,7 @@ def onboard_repository(arguments: argparse.Namespace) -> int:
         mode = input("Mode [connected/disconnected] (connected): ").strip() or "connected"
         if mode not in {"connected", "disconnected"}:
             raise _UsageError("Mode must be connected or disconnected")
-    state = client.post("/repositories/onboard", {"repository": reference, "path": path, "mode": mode})
+    state = client.post("/repositories/onboard", {"repository": reference, "path": path, "mode": mode, "trusted": arguments.trust})
     previous = None
     while True:
         if state["message"] != previous:
@@ -513,6 +525,7 @@ def graph_run(arguments: argparse.Namespace) -> int:
         "repository": _repository(arguments, backend),
         "idempotencyKey": key,
     }
+    _check_trust(arguments, client, request["repository"])
     run = _submit_run(client, request)
     if arguments.command == "go" and (context := run.get("forgeContext")):
         target = arguments.target.get("pr_url") or arguments.target.get("ref") or request["repository"]
@@ -600,6 +613,7 @@ def run_wait(arguments: argparse.Namespace) -> int:
 
 def loop_add(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
+    _check_trust(arguments, client, _repository(arguments, backend))
     loop = client.post("/loops", {
         "project": _project(arguments, backend),
         "graph": arguments.graph,
@@ -800,6 +814,51 @@ def _repository(arguments: argparse.Namespace, backend: Backend) -> str:
     if here is not None:
         return here.target(local=backend.is_local)
     return backend.repository
+
+
+def _check_trust(arguments: argparse.Namespace, client: Client, repo: str) -> None:
+    decision = getattr(arguments, "trust", None)
+    backend_info = None
+    if not repo:
+        backend_info = client.get("/backend")
+        if backend_info.get("autoApprove") and decision is None:
+            return
+        graph = getattr(arguments, "graph", "")
+        definition = {}
+        if graph:
+            try:
+                definition = client.get(f"/graphs/{quote(graph, safe='')}",
+                    project=getattr(arguments, "project", None) or client.backend.project).get("definition", {})
+            except RequestFailed as error:
+                if error.status != 404:
+                    raise
+        repo = definition.get("repository") or backend_info.get("defaultRepository", "")
+        if not repo:
+            if decision is not None:
+                raise _UsageError("Pass --repo or run from a checkout to set repository trust")
+            return
+    if decision is not None:
+        client.post("/repositories/trust", {"repository": repo, "trusted": decision})
+        return
+    if (backend_info or client.get("/backend")).get("autoApprove"):
+        return
+    state = client.get("/repositories/trust", repository=repo)
+    if state["trusted"] is not None:
+        return
+    if not getattr(arguments, "json", False) and sys.stdin.isatty() and sys.stdout.isatty():
+        answer = input(f"Trust {state['name']} ({state['repository']})? Agents will edit files and run commands here without asking. [y/N] ")
+        client.post("/repositories/trust", {"repository": repo, "trusted": answer.strip().lower() in {"y", "yes"}})
+    else:
+        print("engine: repository is untrusted; use engine repo trust to remember your choice.", file=sys.stderr)
+
+
+def repo_trust(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    repo = _repository(arguments, backend)
+    if backend.is_local and arguments.repo and Path(arguments.repo).expanduser().exists():
+        repo = str(Path(arguments.repo).expanduser().resolve())
+    _print(client.post("/repositories/trust", {"repository": repo, "trusted": arguments.action == "trust"}))
+    return EXIT_OK
 
 
 def _read_graph(file: str) -> tuple[str, str]:
@@ -1008,6 +1067,8 @@ _HANDLERS = {
     ("verb", "set"): verb_set,
     ("go", None): go,
     ("onboard", None): onboard_repository,
+    ("repo", "trust"): repo_trust,
+    ("repo", "untrust"): repo_trust,
     ("backend", "add"): backend_add,
     ("backend", "list"): backend_list,
     ("backend", "use"): backend_use,

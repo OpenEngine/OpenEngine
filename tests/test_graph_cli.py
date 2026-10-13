@@ -48,6 +48,7 @@ class _Response(io.BytesIO):
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("engine.cli.commands._check_trust", lambda *args: None)
     monkeypatch.setenv(backends.FILE_ENVIRONMENT_VARIABLE, str(tmp_path / "backends.json"))
     monkeypatch.setenv("ENGINE_CLI_CONFIG", str(tmp_path / "cli.json"))
     monkeypatch.delenv(backends.SELECTED_ENVIRONMENT_VARIABLE, raising=False)
@@ -399,7 +400,7 @@ def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
     )
     assert main(["onboard", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
     assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
-    assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo"}
+    assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo", "trusted": None}
     assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
     assert "Next: engine go review --project owner/repo --repo /code/repo" in capsys.readouterr().out
 

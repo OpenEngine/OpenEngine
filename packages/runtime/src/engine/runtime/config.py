@@ -255,6 +255,7 @@ class EngineConfig:
     Written by `engine onboard`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
+    repository_trust: Mapping[str, bool] = field(default_factory=dict)
     trusted_repos: frozenset[str] = frozenset()
     """`[repos]` names whose WorkOrders are auto-approved.
 
@@ -615,11 +616,13 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             )
         repo_modes[name] = mode
     trusted_repos = set()
+    repository_trust: dict[str, bool] = {}
     for name, trusted in _table(document.get("trusted_repos", {}), "trusted_repos").items():
         if name not in repos:
             raise EngineConfigError(f"trusted_repos.{name} names no repository under [repos]")
         if not isinstance(trusted, bool):
             raise EngineConfigError(f"trusted_repos.{name} must be a boolean")
+        repository_trust[name] = trusted
         if trusted:
             trusted_repos.add(name)
 
@@ -629,6 +632,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         repos=repos,
         repo_modes=repo_modes,
         trusted_repos=frozenset(trusted_repos),
+        repository_trust=repository_trust,
         default_branch=default_branch,
         github_client_id=github_client_id,
         github_login_client_id=_optional_nonblank_string(

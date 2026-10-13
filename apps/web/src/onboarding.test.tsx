@@ -21,11 +21,12 @@ it("submits the URL and mode, polls, then selects the new checkout in the WorkOr
   render(<NewWorkflowPage config={{ ...config, hasRepositories: false, repositories: [] }} />);
   expect(screen.queryByText("Create a WorkOrder")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("GitHub URL"), { target: { value: "https://github.com/owner/repo" } });
+  expect(screen.getByRole("checkbox")).not.toBeChecked();
   fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "disconnected" } });
   fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
   expect(await screen.findByRole("status")).toHaveTextContent("Cloning");
   await waitFor(() => expect(screen.getByLabelText("Repository")).toHaveValue("/code/repo"), { timeout: 3000 });
-  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ repository: "https://github.com/owner/repo", mode: "disconnected" });
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ repository: "https://github.com/owner/repo", mode: "disconnected", trusted: false });
   expect(fetch.mock.calls[1][0]).toBe("/api/repositories/onboard/job1");
   expect(screen.getByRole("button", { name: "Add repository" })).toBeInTheDocument();
 });
@@ -39,4 +40,18 @@ it("shows a preflight fix and permits a retry", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("engine agent signin codex");
   expect(screen.getByRole("button", { name: "Add repository" })).toBeEnabled();
+});
+
+
+it("persists an explicit trust choice", async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "failed", message: "Retry", problems: [],
+  }) });
+  vi.stubGlobal("fetch", fetch);
+  render(<AddRepository onComplete={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("GitHub URL"), { target: { value: "owner/repo" } });
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
+  await screen.findByRole("status");
+  expect(JSON.parse(fetch.mock.calls[0][1].body).trusted).toBe(true);
 });

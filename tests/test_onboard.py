@@ -87,7 +87,8 @@ def test_preflight_failures_leave_destination_and_config_untouched(tmp_path, mon
 
 
 @pytest.mark.parametrize('existing', [True, False])
-def test_job_reuses_checkout_persists_applies_and_is_idempotent(tmp_path, monkeypatch, existing):
+@pytest.mark.parametrize('trusted', [None, True, False])
+def test_job_reuses_checkout_persists_applies_and_is_idempotent(tmp_path, monkeypatch, existing, trusted):
     target = tmp_path / 'repo'
     if existing:
         target.mkdir()
@@ -105,7 +106,7 @@ def test_job_reuses_checkout_persists_applies_and_is_idempotent(tmp_path, monkey
     service = onboard.RepositoryOnboarding(registry, config, starters)
 
     async def run():
-        first = service.start('owner/repo', str(target), 'disconnected')
+        first = service.start('owner/repo', str(target), 'disconnected', trusted)
         duplicate = service.start('owner/repo', str(target), 'disconnected')
         assert first['id'] == duplicate['id']
         await service.close()
@@ -118,6 +119,7 @@ def test_job_reuses_checkout_persists_applies_and_is_idempotent(tmp_path, monkey
     asyncio.run(run())
     assert registry.snapshot.repos == {'owner/repo': str(target)}
     assert registry.snapshot.repo_modes == {'owner/repo': 'disconnected'}
+    assert registry.lookup('owner/repo')[1] is trusted
     assert tomllib.loads(config.read_text())['repos'] == dict(registry.snapshot.repos)
     starters.assert_awaited_once_with('owner/repo', 'codex')
     clone.assert_called_once()
@@ -173,7 +175,7 @@ def test_api_job_and_config_share_running_registry(tmp_path, monkeypatch, origin
             assert result['status'] == 'complete', result
             config = (await client.get('/api/config')).json()
             assert config['hasRepositories'] is True
-            assert config['repositories'] == [{'name': 'owner/repo', 'path': str(target)}]
+            assert config['repositories'] == [{'name': 'owner/repo', 'path': str(target), 'trusted': None}]
 
     asyncio.run(run())
 
@@ -265,7 +267,15 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
                 assert len(config['workflows']) == 3
                 graphs = (await client.get('/api/v1/graphs', params={'project': 'owner/repo'})).json()['graphs']
                 assert {graph['name'] for graph in graphs} == set(onboard.starters.NAMES)
-                assert config['repositories'] == [{'name': 'owner/repo', 'path': str(target)}]
+                assert config['repositories'] == [{'name': 'owner/repo', 'path': str(target), 'trusted': None}]
+                from engine.apps.web.github_login import GitHubLogin
+                monkeypatch.setattr(GitHubLogin, 'visible_repositories', AsyncMock(return_value={'owner/repo'}))
+                for method in ('GET', 'POST'):
+                    response = await client.request(method, '/api/v1/repositories/trust',
+                        params={'repository': 'owner/repo'}, json={'repository': 'owner/repo', 'trusted': True})
+                    assert response.status_code == 403
+                assert registry.lookup('owner/repo')[1] is None
+
     asyncio.run(run())
 
 
@@ -337,6 +347,8 @@ def test_cross_origin_onboarding_never_starts(tmp_path, monkeypatch, origin):
 @pytest.mark.parametrize('method,path', [
     ('POST', '/api/repositories/onboard'),
     ('GET', '/api/repositories/onboard/job1'),
+    ('GET', '/api/v1/repositories/trust?repository=owner/repo'),
+    ('POST', '/api/v1/repositories/trust'),
     ('GET', '/api/config'),
     ('POST', '/api/github/connect'),
 ])

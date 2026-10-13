@@ -35,6 +35,7 @@ from urllib.parse import quote
 
 from engine.apps.cli import connect
 from engine.cli import backends, repository
+from engine.cli.commands import _check_trust
 from engine.cli.backends import BackendError
 from engine.cli.http import Client, RequestFailed
 
@@ -69,6 +70,7 @@ def add_parser(agent_actions: argparse._SubParsersAction) -> None:
             ),
         )
         parser.add_argument("--repo", default=".", help="a path inside the repository (default: the current directory)")
+        parser.add_argument("--trust", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
         parser.add_argument("--base", default="", metavar="REF", help="what the workspace starts from (default: the backend's)")
         parser.add_argument("--backend", metavar="NAME", help="the backend to use; it must run on this machine")
         parser.add_argument("agent_args", nargs=argparse.REMAINDER, help=f"passed to {agent.name} after --")
@@ -118,6 +120,7 @@ def start(client: Client, agent: str, arguments: argparse.Namespace) -> dict[str
     found = repository.current(Path(arguments.repo))
     if found is None:
         raise RuntimeError(f"{arguments.repo} is not inside a git repository")
+    _check_trust(arguments, client, found.target(local=True))
     session = client.post("/sessions", {"agent": agent, "repository": found.target(local=True), "baseRef": arguments.base})
     told = False
     while session["status"] == "starting":

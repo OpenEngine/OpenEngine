@@ -18,7 +18,9 @@
     POST /sessions                    start {agent, repository, baseRef?}: a run whose implementation node is your CLI
     GET  /sessions/{id}               starting | ready (workspace, mcp, instructions, settings) | ended | failed
     POST /sessions/{id}/end           {summary?}: the CLI exited; finish the run
-    GET  /backend                     what this backend runs graphs with
+    GET  /repositories/trust          repository name, checkout and saved trust decision
+    POST /repositories/trust          persist {repository, trusted} and apply it immediately
+    GET  /backend                     execution, default repository and global approval policy
 
 `project` is a query parameter on reads and a body field on writes. JSON in
 and out; a refusal is `{"error": ..., ...details}` with 400 for a bad request,
@@ -27,6 +29,8 @@ and out; a refusal is `{"error": ..., ...details}` with 400 for a bad request,
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from starlette.applications import Starlette
@@ -40,13 +44,34 @@ from engine.graph_service.service import DEFAULT_RUN_LIMIT, GraphService, Servic
 API_VERSION = 1
 
 
-def create_app(service: GraphService) -> Starlette:
+def create_app(service: GraphService, *, repository_trust: Callable[[str, bool | None], dict] | None = None,
+               auto_approve: bool = False) -> Starlette:
     async def backend(_request: Request) -> JSONResponse:
         return JSONResponse({
             "apiVersion": API_VERSION,
+            "autoApprove": auto_approve,
+            "defaultRepository": service.default_repository,
             "runners": list(service.runners()),
             "execution": "langgraph-acp",
         })
+
+    async def trust(request: Request) -> JSONResponse:
+        if repository_trust is None:
+            return JSONResponse({"error": "repository trust is unavailable"}, status_code=503)
+        trusted = None
+        repository = request.query_params.get("repository", "")
+        if request.method == "POST":
+            body = await _body(request)
+            repository = _text(body, "repository")
+            trusted = body.get("trusted")
+            if not isinstance(trusted, bool):
+                raise _BadRequest("trusted must be a boolean")
+        if not repository:
+            raise _BadRequest("repository is required")
+        try:
+            return JSONResponse(await asyncio.to_thread(repository_trust, repository, trusted))
+        except ValueError as error:
+            raise _BadRequest(str(error)) from error
 
     async def verbs(request: Request) -> JSONResponse:
         return JSONResponse({"verbs": service.verbs(request.query_params.get("project"))})
@@ -208,6 +233,7 @@ def create_app(service: GraphService) -> Starlette:
     app = Starlette(
         routes=[
             Route("/backend", _guard(backend)),
+            Route("/repositories/trust", _guard(trust), methods=["GET", "POST"]),
             Route("/agents", _guard(list_agents)),
             Route("/agents", _guard(add_agent), methods=["POST"]),
             Route("/agents/{name}", _guard(get_agent)),

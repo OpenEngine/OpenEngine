@@ -321,7 +321,7 @@ def compose_app(
     """Wire the capability graph and hand it to the HTTP surface."""
     settings = _settings(loaded)
     registry = RepositoryRegistry(
-        loaded.config.repos, loaded.config.repo_modes, loaded.config.trusted_repos,
+        loaded.config.repos, loaded.config.repo_modes, loaded.config.repository_trust,
         host_aliases=loaded.config.github.host_aliases,
     )
     github_login_config = _github_login_config(loaded, registry)

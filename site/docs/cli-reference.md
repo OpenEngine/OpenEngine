@@ -12,9 +12,9 @@ Backend commands talk to the selected backend (`--backend`, else `ENGINE_BACKEND
 Make a change with the default graph and follow it live.
 
 ```text
-engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--local]
-          [--review PR_OR_BRANCH] [--spec] [--input KEY=VALUE] [--wait] [--json]
-          [--timeout SECONDS]
+engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--trust | --no-trust]
+          [--repo REPO] [--local] [--review PR_OR_BRANCH] [--spec] [--input KEY=VALUE]
+          [--wait] [--json] [--timeout SECONDS]
           [VERB/TARGET/INSTRUCTION ...]
 ```
 
@@ -24,6 +24,7 @@ engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--loc
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
 | `VERB/TARGET/INSTRUCTION` | instruction, or a verb and change target |
+| `--trust, --no-trust` | remember whether agents may run without approval here |
 | `--repo REPO` | repository (default: the current checkout) |
 | `--local` | force disconnected mode; keep work local |
 | `--review PR_OR_BRANCH` | review an existing change with the review verb graph |
@@ -179,7 +180,8 @@ engine backends [-h] [--json] [--check] [{list}]
 Onboard a GitHub repository.
 
 ```text
-engine onboard [-h] [--backend NAME] [--pretty] [--path PATH]
+engine onboard [-h] [--backend NAME] [--pretty]
+               [--trust | --no-trust | --trusted | --no-trusted] [--path PATH]
                [--mode {connected,disconnected}]
                [url]
 ```
@@ -188,9 +190,46 @@ engine onboard [-h] [--backend NAME] [--pretty] [--path PATH]
 | --- | --- |
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
+| `--trust, --no-trust, --trusted, --no-trusted` | remember whether agents may run without approval here |
 | `url` |  |
 | `--path PATH` | checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo) |
 | `--mode MODE` |  |
+
+## `engine repo`
+
+Manage repository trust.
+
+```text
+engine repo [-h] {trust,untrust} ...
+```
+
+### `engine repo trust`
+
+Auto-approve runs in a repository.
+
+```text
+engine repo trust [-h] [--backend NAME] [--pretty] [path]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `path` | checkout path or configured name (default: current checkout) |
+
+### `engine repo untrust`
+
+Require approvals in a repository.
+
+```text
+engine repo untrust [-h] [--backend NAME] [--pretty] [path]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `path` | checkout path or configured name (default: current checkout) |
 
 ## `engine graph`
 
@@ -248,8 +287,9 @@ Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch
 
 ```text
 engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME=VALUE]
-                 [--branch BRANCH] [--agent AGENT] [--local] [--repo REPO] [--no-watch]
-                 [--json] [--wait] [--timeout SECONDS] [--idempotency-key IDEMPOTENCY_KEY]
+                 [--branch BRANCH] [--agent AGENT] [--local] [--trust | --no-trust]
+                 [--repo REPO] [--no-watch] [--json] [--wait] [--timeout SECONDS]
+                 [--idempotency-key IDEMPOTENCY_KEY]
                  graph [instruction]
 ```
 
@@ -264,6 +304,7 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--branch BRANCH` | the branch to check out (sets the branch input) |
 | `--agent AGENT` | the agent to run (sets the agent input) |
 | `--local` | keep commits and findings local; do not publish |
+| `--trust, --no-trust` | remember whether agents may run without approval here |
 | `--repo REPO` | repository to check out |
 | `--no-watch` | return immediately without the live view |
 | `--json` | print JSON without the live view |
@@ -426,7 +467,8 @@ Run a graph on a cadence.
 ```text
 engine loop add [-h] [--backend NAME] [--pretty] [--project NAME] [--name NAME]
                 [--instruction INSTRUCTION] [--every EVERY] [--max-prs MAX_PRS]
-                [--max-spend USD] [--repo REPO] [--input NAME=VALUE] [--no-run-now]
+                [--max-spend USD] [--trust | --no-trust] [--json] [--repo REPO]
+                [--input NAME=VALUE] [--no-run-now]
                 graph
 ```
 
@@ -441,6 +483,8 @@ engine loop add [-h] [--backend NAME] [--pretty] [--project NAME] [--name NAME]
 | `--every EVERY` | cadence such as 30m, 6h, 1d (default: the graph's loop.every) |
 | `--max-prs MAX_PRS` | pause after this many new pull requests |
 | `--max-spend USD` | pause, and stop the active run, at this spend |
+| `--trust, --no-trust` | remember whether agents may run without approval here |
+| `--json` |  |
 | `--repo REPO` |  |
 | `--input, -i NAME=VALUE` |  |
 | `--no-run-now` | first run after one interval, not now |
@@ -686,12 +730,14 @@ Drive an implementation node with Claude Code in this terminal.
 Start a run whose implementation node is Claude Code in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to claude.
 
 ```text
-engine agent claude [-h] [--repo REPO] [--base REF] [--backend NAME] ...
+engine agent claude [-h] [--repo REPO] [--trust | --no-trust] [--base REF] [--backend NAME]
+                    ...
 ```
 
 | Argument | Meaning |
 | --- | --- |
 | `--repo REPO` | a path inside the repository (default: the current directory) |
+| `--trust, --no-trust` | remember whether agents may run without approval here |
 | `--base REF` | what the workspace starts from (default: the backend's) |
 | `--backend NAME` | the backend to use; it must run on this machine |
 | `agent_args` | passed to claude after -- |
@@ -703,12 +749,14 @@ Drive an implementation node with Codex in this terminal.
 Start a run whose implementation node is Codex in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to codex.
 
 ```text
-engine agent codex [-h] [--repo REPO] [--base REF] [--backend NAME] ...
+engine agent codex [-h] [--repo REPO] [--trust | --no-trust] [--base REF] [--backend NAME]
+                   ...
 ```
 
 | Argument | Meaning |
 | --- | --- |
 | `--repo REPO` | a path inside the repository (default: the current directory) |
+| `--trust, --no-trust` | remember whether agents may run without approval here |
 | `--base REF` | what the workspace starts from (default: the backend's) |
 | `--backend NAME` | the backend to use; it must run on this machine |
 | `agent_args` | passed to codex after -- |
@@ -720,12 +768,14 @@ Drive an implementation node with OpenCode in this terminal.
 Start a run whose implementation node is OpenCode in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to opencode.
 
 ```text
-engine agent opencode [-h] [--repo REPO] [--base REF] [--backend NAME] ...
+engine agent opencode [-h] [--repo REPO] [--trust | --no-trust] [--base REF] [--backend NAME]
+                      ...
 ```
 
 | Argument | Meaning |
 | --- | --- |
 | `--repo REPO` | a path inside the repository (default: the current directory) |
+| `--trust, --no-trust` | remember whether agents may run without approval here |
 | `--base REF` | what the workspace starts from (default: the backend's) |
 | `--backend NAME` | the backend to use; it must run on this machine |
 | `agent_args` | passed to opencode after -- |
