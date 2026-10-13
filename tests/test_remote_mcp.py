@@ -657,6 +657,61 @@ def test_control_failure_does_not_retry_or_expose_upstream(failure):
     assert len(requests) == (1 if failure == "repository" else 2)
 
 
+def tool_error_text(result) -> str:
+    return " ".join(item.get("text", "") for item in result["content"])
+
+
+@pytest.mark.parametrize("failure,expected", [
+    (httpx.Response(409, json={"error": "node implementation has not been reached"}),
+     "OE rejected the request (HTTP 409): node implementation has not been reached"),
+    (httpx.Response(409, json={"error": "  spread\n over\tlines  "}), "(HTTP 409): spread over lines"),
+    (httpx.Response(409, json={"error": "x" * 900}), "x" * 499 + "…"),
+    (httpx.Response(502, text="<html>proxy</html>"), "OE rejected the request (HTTP 502)."),
+    (httpx.Response(409, json={"error": {"nested": True}}), "OE rejected the request (HTTP 409)."),
+])
+def test_control_failure_says_why(failure, expected):
+    def upstream(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"repository": SETTINGS.repository})
+        return failure
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "node_steer", "arguments": {"run_id": "run-123", "nodename": "implementation", "instruction": "Fix tests"},
+        }).json()["result"]
+    assert result["isError"]
+    assert expected in tool_error_text(result)
+    assert "proxy" not in tool_error_text(result)
+
+
+@pytest.mark.parametrize("name,arguments,expected", [
+    ("workorder_status", {"run_id": "../runs"}, "identifier must be non-blank"),
+    ("node_status", {"nodename": "implementation", "last_n": 0}, "last_n must be between 1 and 1000"),
+    ("steer_workorder", {"instruction": " "}, "instruction must contain"),
+])
+def test_invalid_arguments_say_why(name, arguments, expected):
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(
+        lambda request: pytest.fail("invalid arguments reached OE"),
+    ))) as client:
+        result = rpc(client, "tools/call", {
+            "name": name, "arguments": {"run_id": "run-123", **arguments},
+        }).json()["result"]
+    assert result["isError"]
+    assert expected in tool_error_text(result)
+
+
+def test_other_repository_says_why():
+    def upstream(request):
+        return httpx.Response(200, json={"runId": "run-123", "repository": "elsewhere"})
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "workorder_status", "arguments": {"run_id": "run-123"},
+        }).json()["result"]
+    assert result["isError"]
+    assert "outside the configured repository" in tool_error_text(result)
+
+
 def test_status_reports_parallel_nodes_and_idle_frontier(workorder_upstream):
     client, _, snapshot = workorder_upstream
     snapshot["activeExecutions"].append({"nodeId": "review", "executionId": "exec-2"})
@@ -837,14 +892,15 @@ def test_create_loop_accepts_lower_limits_and_trims_hours():
     ("create_loop", {"name": "Triage", "prompt": "Triage issues"}, "Nothing was created; retry create_loop."),
     ("loop_status", {"loop_id": "loop-1"}, "Retry loop_status."),
 ])
-def test_loop_reads_name_the_right_retry(caplog, name, arguments, hint):
+def test_loop_reads_name_the_right_retry(name, arguments, hint):
     def upstream(request):
         raise httpx.ConnectError("down", request=request)
 
     with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
-        assert rpc(client, "tools/call", {"name": name, "arguments": arguments}).json()["result"]["isError"]
-    assert f"OE could not confirm the request. {hint}" in caplog.text
-    assert "workorder_status" not in caplog.text
+        result = rpc(client, "tools/call", {"name": name, "arguments": arguments}).json()["result"]
+    assert result["isError"]
+    assert f"OE could not confirm the request. {hint}" in tool_error_text(result)
+    assert "workorder_status" not in tool_error_text(result)
 
 
 def test_oidc_callers_cannot_create_loops(oidc):
