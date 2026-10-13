@@ -14,6 +14,7 @@ from pathlib import Path
 from engine.adapters.agent_runner.acp import codex_acp_runner
 from engine.adapters.communications.buzz import BuzzCommunications
 from engine.adapters.sandbox.process import ProcessSandbox
+from engine.adapters.sandbox.smolvm import SmolvmSandbox
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.postgres import PostgresStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
@@ -54,10 +55,12 @@ def build_capabilities(settings: Settings) -> Capabilities:
         "source_control composition=worker github_identity=service credential=settings.github_token configured=%s",
         bool(settings.github_token),
     )
-    if settings.engine_config.sandbox.backend != "process":
-        raise NotImplementedError("smolvm sandbox backend is not installed")
+    sandbox = (
+        SmolvmSandbox(image=settings.engine_config.sandbox.image or None)
+        if settings.engine_config.sandbox.backend == "smolvm" else ProcessSandbox()
+    )
     return Capabilities(
-        sandbox=ProcessSandbox(),
+        sandbox=sandbox,
         workflow_runtime=TemporalWorkflowRuntime(settings.temporal_host, task_queue=settings.task_queue),
         source_control=GitHubSourceControl(
             settings.github_token, workspace_provider=workspace_provider,

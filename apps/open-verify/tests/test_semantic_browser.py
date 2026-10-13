@@ -218,7 +218,15 @@ def test_node_actions_export_and_cache_only_durable_locators(tmp_path, web_app):
     _, replayed = asyncio.run(run(judge))
     assert read_steps(replayed)[0]['cache'] == 'hit'
     assert read_steps(replayed)[0]['model_calls'] == 0
-    assert set(judge.judgments[0][1]) <= {'url', 'snapshot', 'truncated'}
+    evidence = judge.judgments[0][1]
+    assert set(evidence) <= {'url', 'snapshot', 'truncated', 'recent_action_receipts', 'action_history_truncated'}
+    assert evidence['action_history_truncated'] is False
+    (receipt,) = evidence['recent_action_receipts']
+    assert receipt['tool'] == 'browser_click' and receipt['ok'] is True
+    replay_receipt = next(item for item in replayed.observations if item['id'] == receipt['evidence_id'])
+    assert replay_receipt['tool'] == 'browser_click' and replay_receipt['ok'] is True
+    assert 'node_id' not in json.dumps(evidence)
+    assert 'observation_id' not in json.dumps(evidence)
     assert 'screen_diff' not in judge.judgments[0][1]
 
 

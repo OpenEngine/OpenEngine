@@ -103,9 +103,8 @@ def write_manifest(
         for result in latest_results.values():
             manifest.omissions.extend(result.omissions)
             attachments = [(result.test_file, "test", "text/x-python")]
-            if (report.get("impact") or {}).get("material_ui_change"):
-                attachments.extend((p, "screenshot", "image/gif" if Path(p).suffix == '.gif' else "image/png") for p in result.screenshots)
-                attachments.extend((p, "video", "video/mp4") for p in result.videos)
+            attachments.extend((p, "screenshot", "image/gif" if Path(p).suffix == '.gif' else "image/png") for p in result.screenshots)
+            attachments.extend((p, "video", "video/mp4") for p in result.videos)
             accepted_test = None
             for relative, kind, mime in attachments:
                 try:

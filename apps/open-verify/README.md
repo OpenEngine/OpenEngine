@@ -66,9 +66,12 @@ failed attempts remain available for diagnosis.
 
 Plan complete user journeys: entry, action, successful result, and any requested
 exit or reversal belong to one case. Pages and individual assertions are not
-separate use cases. Publication selects the final attempt's Playwright test and
-one GIF for each case. The PR comment contains a short result, a test link, and
-that GIF; individual PNGs and earlier attempts stay in the local run directory.
+separate use cases. Publication selects one GIF from the final attempt for each browser case.
+The PR comment contains a short result and that GIF; generated Python scripts,
+individual PNGs and earlier attempts stay in the local run directory.
+Browser smoke tests capture visual evidence even when the PR only changes backend code.
+For web applications, planning includes one standard UI smoke journey unless the
+request explicitly limits verification to backend checks.
 If the final GIF is unavailable, at most one screenshot is attached with an
 explicit omission. An older attempt's GIF is never substituted for the final one.
 
@@ -389,13 +392,15 @@ After the CLI exits, read `<run>/manifest.json` (`schema_version: 1`):
   inspected diff text; it is not a full working-tree content hash.
 - `tests`: case ID, runner, actual execution status, test path, and `rerun` argv
   with `cwd: "."` relative to the bundle. Every attempt is retained.
-- `artifacts`: only publishable `test`, `screenshot`, and `video` entries, each with
+- `artifacts`: validated `test`, `screenshot`, and `video` entries, each with
   a bundle-relative path, MIME type, byte size, and associated case ID.
 - `findings`, `support_files`, `omissions`: assessments, rerun prerequisites, and
   explanations for unavailable artifacts. Skipped/planned runs have no attachments.
 
 OE owns MR publication; this CLI has no GitHub/Engine dependency. Consumers should
-attach only the manifest's `artifacts`, not scan the run folder for media. A partial
+publish only visual entries from the manifest's `artifacts`, not scan the run folder
+for media. Generated `test` entries support local inspection and replay; the GitHub
+publisher does not upload or link those scripts. A partial
 or failed run still saves its report/manifest; cleanup errors prevent a success status.
 
 ## Execution options
@@ -638,7 +643,12 @@ Legacy plans without `journey` continue through the existing workflow.
 
 For a provisioned fixture, the planner declares `journey.readiness`: up to five
 assertion steps proving the required data is visible through the running app's
-API or UI. The host runs these checks in a fresh session before journey actions.
+API or initial UI. Each readiness assertion requires an exact `expect_json`,
+`expect_text`, or `expect_url` check. Check fixture registration through the API
+when the entry page does not display it; keep that check separate from visible
+entry controls. Actions such as submitting a message or approving a command belong
+in the journey, not readiness. Semantic/visual judgments remain available for
+product assertions. The host runs readiness in a fresh session before journey actions.
 A seed command exiting successfully is insufficient. Failed readiness returns
 `SETUP_NOT_READY` evidence to the setup executor for log/API inspection and
 correction. After two repair opportunities, continued failure finalizes the case
@@ -685,8 +695,9 @@ JSON response check, with no model call. JSON comparison checks types recursivel
 `{"enabled": true}` differs from `{"enabled": 1}`, including inside arrays.
 Live checks and newly generated browser tests share the same comparison. Omitting
 `check` invokes a separate judge.
-The default `mode: "semantic"` supplies only the requirement, current URL and fresh
+The default `mode: "semantic"` supplies the requirement, current URL and fresh
 accessibility snapshot; `mode: "visual"` supplies fresh viewport pixels instead.
+Both include bounded browser-operation receipts from this journey.
 The judge receives no actor transcript, summaries or tool access. It returns an
 explanation and `holds`, `fails` or `inconclusive`; only `holds` passes. An
 inconclusive judgment fails with `ASSERTION_INCONCLUSIVE`, distinguishing missing
@@ -746,7 +757,7 @@ to four million pixels. PNG framing, checksums and bounded pixel data are checke
 The reader accepts the 8-bit non-interlaced PNG formats produced by the engine.
 
 The visual judge starts a fresh conversation with only the requirement, current
-URL, image metadata and the image attachment. It receives no accessibility text,
+URL, image metadata, the image attachment and bounded host action receipts. It receives no accessibility text,
 node table, screen diff, planner/actor transcript or prior judgment. The transport
 uses an ACP `image` content block with `image/png`; a filename or textual
 base64 representation cannot substitute for image input. Both schema repair and
@@ -761,6 +772,15 @@ An engine without capture support or with a failed capture blocks with
 block with `VISUAL_EVIDENCE_INVALID`. Runtime model errors and timeouts also block;
 there is no text-only fallback. `inconclusive` is a failed verification with
 `ASSERTION_INCONCLUSIVE`, never a pass or a confirmed visual defect.
+
+Semantic and visual judges also receive the last 12 browser-operation receipts
+from completed steps in the current journey, including evidence IDs, success or
+failure and recorded URLs. Arguments, actor reasons, completion claims and prior
+verdicts are excluded. Truncation is marked explicitly. These receipts establish
+that a reload, navigation or interaction occurred before the fresh observation;
+they do not establish the expected product result. For example, a persistence
+check requires both a successful reload receipt and the expected content in the
+fresh screen. Missing or failed operations cannot be replaced by actor claims.
 
 Assertions evaluate only the captured viewport. Content outside it requires
 another explicit action and fresh assertion; full-page stitching and screenshot
@@ -829,8 +849,9 @@ semantic observations cannot guard cached actions.
 
 This implementation covers Chromium's main document and exposed open shadow DOM
 controls. Frame targeting and actions on visual-only controls remain future work.
-The semantic judge receives only the fresh full snapshot and URL; the visual judge
-receives fresh pixels instead. Neither receives node tables, diffs or actor history.
+The semantic judge receives the fresh full snapshot and URL; the visual judge
+receives fresh pixels instead. Both receive bounded host action receipts, without
+node tables, diffs or actor-written history.
 
 Node references are temporary execution handles. For replay/export, the engine
 can translate an action into an ordinary role/name locator only after proving that

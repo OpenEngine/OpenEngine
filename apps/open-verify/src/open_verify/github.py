@@ -163,7 +163,9 @@ class GitHub:
                 item.type == "video" and data[4:8] != b"ftyp"
             ):
                 raise ValueError("Invalid media file")
-            files.append((item, data, hashlib.sha256(data).hexdigest() + path.suffix))
+            # Generated scripts remain local; publish visual evidence and results.
+            if item.type != "test":
+                files.append((item, data, hashlib.sha256(data).hexdigest() + path.suffix))
         release = None
         prefix = f"/repos/{target.repository}"
         tag = f"open-verify/pr-{target.number}/{target.head}"
@@ -237,7 +239,7 @@ class GitHub:
             if asset.get("digest") and asset["digest"] != "sha256:" + name.split(".")[0]:
                 raise ValueError("GitHub asset digest mismatch")
             url = url.replace("<", "%3C").replace(">", "%3E").replace("\n", "%0A")
-            label = f"{'Journey summary' if item.media_type == 'image/gif' else 'Playwright test' if item.type == 'test' else 'Screenshot'} — {safe_text(item.case_id)}"
+            label = f"{'Journey summary' if item.media_type == 'image/gif' else 'Screenshot'} — {safe_text(item.case_id)}"
             lines.extend(["", f"{'!' if item.type == 'screenshot' else ''}[{label}](<{url}>)"])
         if manifest.reason:
             lines.extend(["", safe_text(manifest.reason)])

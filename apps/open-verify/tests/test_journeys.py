@@ -89,7 +89,8 @@ def test_semantic_judge_sees_fresh_screen_and_replay_cannot_claim_success(tmp_pa
     requirement, screen = actor.judgments[0]
     assert requirement == 'Cart contains one item'
     assert 'Cart: 1' in screen['snapshot']
-    assert set(screen) <= {'url', 'snapshot', 'truncated'}
+    assert set(screen) <= {'url', 'snapshot', 'truncated', 'recent_action_receipts', 'action_history_truncated'}
+    assert screen['recent_action_receipts'][0]['tool'] == 'browser_click'
     source = (artifacts.path / result.test_file).read_text()
     assert 'raise RuntimeError' in source and 'Live semantic judgment required' in source
     assert result.omissions
@@ -508,3 +509,128 @@ def test_real_browser_readiness_gates_fixed_journey(tmp_path, web_app, visible):
     else:
         assert not actor.contexts and not runner.test_results
         assert not list((artifacts.path / "tests").glob("*.py"))
+
+
+def test_semantic_readiness_claim_is_rejected_before_execution():
+    raw = case('http://localhost', semantic=True).model_dump()
+    raw['journey']['readiness'] = [{
+        'kind': 'assert',
+        'instruction': 'Repository is visible and message submission works',
+    }]
+    with pytest.raises(ValueError, match='Readiness requires an exact'):
+        Case.model_validate(raw)
+    raw['journey']['readiness'] = []
+    assert Case.model_validate(raw).journey.steps[-1].check is None
+
+
+@pytest.mark.parametrize('registered', [True, False])
+def test_api_fixture_readiness_does_not_require_fixture_on_entry_screen(tmp_path, web_app, registered):
+    from open_verify.journey_spec import AssertStep
+
+    artifacts = Artifacts(tmp_path / 'runs')
+    target = case(web_app)
+    target.journey.readiness = [AssertStep(kind='assert', instruction='Fixture is registered in the API',
+        check={'kind': 'expect_json', 'path': '/api', 'field': ['items'],
+               'value': [1, 2] if registered else [99]})]
+    planned = plan()
+    planned['plan']['cases'] = [target.model_dump()]
+    actions = [action('run_journey', case_id=target.id)] * (1 if registered else 3)
+    actor = Actor()
+    runner = VerificationRunner(ScriptedAgent([planned, *actions]),
+        LocalTools(tmp_path, artifacts, headless=True), artifacts,
+        journey_executor=actor, progress=lambda _: None)
+    report = asyncio.run(runner.run('Check the cart and retain visual evidence'))
+    assert report['findings'][0]['status'] == ('passed' if registered else 'blocked')
+    if registered:
+        assert actor.contexts
+        assert any(name.endswith('.gif') for name in runner.test_results[-1].screenshots)
+        manifest = json.loads((artifacts.path / 'manifest.json').read_text())
+        assert any(item['media_type'] == 'image/gif' for item in manifest['artifacts'])
+    else:
+        assert not actor.contexts and not runner.test_results
+
+
+@pytest.mark.parametrize('reload_ok', [True, False, None])
+def test_after_reload_judge_uses_host_receipt_not_actor_claim(tmp_path, reload_ok):
+    artifacts = Artifacts(tmp_path / 'runs')
+    unrelated = artifacts.record('browser_reload', {}, {'url': 'http://another-case'}, True)
+
+    class ReloadEngine(FakeEngine):
+        def catalog(self, stage):
+            return {**super().catalog(stage), 'browser_reload': {}}
+
+        async def execute(self, tool, arguments, **kwargs):
+            if tool == 'browser_reload':
+                self.calls.append(tool)
+                return self.artifacts.record(tool, arguments, {'url': 'http://localhost/cart'}, bool(reload_ok))
+            return await super().execute(tool, arguments, **kwargs)
+
+    class ReceiptJudge(Actor):
+        async def judge(self, instruction, observation, *, on_call):
+            on_call()
+            self.judgments.append((instruction, observation))
+            reloaded = any(item['tool'] == 'browser_reload' and item['ok']
+                           for item in observation['recent_action_receipts'])
+            return Judgment(explanation='Reload receipt and fresh cart checked',
+                            verdict='holds' if reloaded and 'Cart: 1' in observation['snapshot'] else 'inconclusive')
+
+    actions = [] if reload_ok is None else [ActDecision(kind='action', action={
+        'tool': 'browser_reload', 'arguments': {}, 'reason': 'actor-private-reason'})]
+    actions.append(ActDecision(kind='complete', outcome='done', summary='actor-private-claim: reload succeeded'))
+    actor = ReceiptJudge(actions)
+    target = case('http://localhost', semantic=True)
+    target.journey.steps[0].instruction = 'Reload the current page'
+    target.journey.steps[-1].instruction = 'Cart remains visible after reload'
+    result = asyncio.run(JourneyRunner(ReloadEngine(artifacts), artifacts, actor,
+        progress=lambda _: None).run(target))
+    assert result.status == ('passed' if reload_ok is True else 'failed')
+    evidence = actor.judgments[-1][1]
+    assert unrelated['id'] not in json.dumps(evidence['recent_action_receipts'])
+    assert 'actor-private' not in json.dumps(evidence)
+    if reload_ok is not None:
+        receipt = evidence['recent_action_receipts'][0]
+        assert receipt['ok'] is reload_ok
+        assert receipt['evidence_id'] in read_steps(artifacts)[-1]['evidence']
+    else:
+        assert evidence['recent_action_receipts'] == []
+
+
+def test_judge_action_history_is_bounded_and_excludes_snapshot_payloads(tmp_path):
+    artifacts = Artifacts(tmp_path / 'runs')
+    receipts = [artifacts.record('browser_reload', {'private': 'omit'},
+                {'url': 'http://localhost', 'snapshot': 'omit'}, True) for _ in range(15)]
+    screenshot = artifacts.record('browser_snapshot', {}, {'snapshot': 'omit'}, True)
+    completed = [SimpleNamespace(evidence=[item['id'] for item in [*receipts, screenshot]])]
+    history = JourneyRunner(FakeEngine(artifacts), artifacts, None).action_history(completed)
+    assert history['action_history_truncated'] is True
+    assert [item['evidence_id'] for item in history['recent_action_receipts']] == [item['id'] for item in receipts[-12:]]
+    assert 'omit' not in json.dumps(history)
+
+
+@pytest.mark.parametrize('expected_text', ['Cart: 0', 'Cart: 1'])
+def test_real_reload_receipt_does_not_replace_post_reload_screen_check(tmp_path, web_app, expected_text):
+    artifacts = Artifacts(tmp_path / 'runs')
+
+    class ReloadJudge(Actor):
+        async def judge(self, instruction, observation, *, on_call):
+            on_call()
+            self.judgments.append((instruction, observation))
+            assert any(item['tool'] == 'browser_reload' and item['ok']
+                       for item in observation['recent_action_receipts'])
+            return Judgment(explanation='Inspect fresh state after recorded reload',
+                verdict='holds' if expected_text in observation['snapshot'] else 'fails')
+
+    actor = ReloadJudge([
+        ActDecision(kind='action', action={'tool': 'browser_click',
+            'arguments': {'by': 'role', 'role': 'button', 'name': 'Add item'}, 'reason': 'Add item'}),
+        ActDecision(kind='action', action={'tool': 'browser_reload', 'arguments': {}, 'reason': 'Reload'}),
+        complete(),
+    ])
+    target = case(web_app, semantic=True)
+    target.journey.steps[0].instruction = 'Add an item and reload the page'
+    target.journey.steps[-1].instruction = f'{expected_text} is visible after reload'
+    result = asyncio.run(JourneyRunner(LocalTools(tmp_path, artifacts, headless=True), artifacts,
+        actor, progress=lambda _: None).run(target))
+    # This fixture intentionally loses its cart on reload: receipt success alone
+    # cannot turn the persistence assertion into a pass.
+    assert result.status == ('passed' if expected_text == 'Cart: 0' else 'failed')

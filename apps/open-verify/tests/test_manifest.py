@@ -40,7 +40,7 @@ def test_manifest_limits_media_and_rejects_escaping_paths(tmp_path):
         assert item.size_bytes == (bundle / item.path).stat().st_size
 
 
-def test_cleanup_failure_prevents_success_and_non_ui_change_suppresses_media(tmp_path):
+def test_cleanup_failure_prevents_success_and_non_ui_smoke_retains_media(tmp_path):
     (tmp_path / "test.py").write_text("pass", encoding="utf-8")
     (tmp_path / "image.png").write_bytes(b"image")
     result = RunnerResult(
@@ -53,13 +53,13 @@ def test_cleanup_failure_prevents_success_and_non_ui_change_suppresses_media(tmp
     )
     manifest = write_manifest(
         tmp_path,
-        {"status": "complete", "findings": []},
+        {"status": "complete", "findings": [], "impact": {"decision": "verify", "reason": "Backend change", "material_ui_change": False, "journeys": ["UI smoke"]}},
         None,
         [result],
         cleanup_errors=["browser did not close"],
     )
     assert manifest.status == "blocked"
-    assert [item.type for item in manifest.artifacts] == ["test"]
+    assert [item.type for item in manifest.artifacts] == ["test", "screenshot"]
 
 
 def test_only_final_journey_summary_and_test_are_publishable(tmp_path):

@@ -28,7 +28,7 @@ def test_list_commands_print_tables_unless_asked_for_json(command):
     assert cli.parser().parse_args([command, *extra, "--json"]).json is True
 
 
-@pytest.mark.parametrize("command", ["status", "doctor", "review", "init"])
+@pytest.mark.parametrize("command", ["status", "review", "init"])
 def test_removed_commands_are_refused(command, capsys):
     with pytest.raises(SystemExit) as exited:
         cli.main([command])

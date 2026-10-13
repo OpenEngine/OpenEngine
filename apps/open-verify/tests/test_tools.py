@@ -156,6 +156,16 @@ def test_real_browser_form_flow(tmp_path, web_app):
             assert result["ok"], result
             assert "Hello Ada" in result["result"]["snapshot"]
             assert (artifacts.path / result["result"]["screenshot"]).is_file()
+            result = await tools.execute("browser_snapshot", {"name": "settings-before"})
+            assert result["ok"], result
+            first = result["result"]["screenshot"]
+            assert first.endswith('-settings-before.png')
+            assert (artifacts.path / first).is_file()
+            result = await tools.execute("browser_snapshot", {"name": "settings-before"})
+            assert result["ok"] and result["result"]["screenshot"] != first
+            assert (artifacts.path / first).is_file()
+            result = await tools.execute("browser_snapshot", {"name": "../outside"})
+            assert not result["ok"]
         finally:
             assert await tools.close() == []
         assert (artifacts.path / "browser-trace.zip").is_file()

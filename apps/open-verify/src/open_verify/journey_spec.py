@@ -43,7 +43,15 @@ class BrowserJourney(Contract):
     authenticated: bool = False
     steps: list[JourneyStep] = Field(min_length=1, max_length=20)
     readiness: list[AssertStep] = Field(default_factory=list, max_length=5,
-        description="Independent app-visible setup checks, run before any journey action; required for provisioned fixtures")
+        description="Exact API or initial-page setup checks, run before any journey action; required for provisioned fixtures")
+
+    @model_validator(mode="after")
+    def readiness_requires_exact_checks(self):
+        if any(step.check is None for step in self.readiness):
+            raise ValueError("Readiness requires an exact expect_json, expect_text or expect_url check. "
+                             "Check fixture registration through its API; do not require it to appear "
+                             "on an unrelated entry screen or require actions before the journey starts.")
+        return self
 
     @model_validator(mode="after")
     def ends_with_verification(self):
