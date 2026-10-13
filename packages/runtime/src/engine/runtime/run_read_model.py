@@ -6,9 +6,9 @@ built here is identity, submission metadata and the lifecycle projection, and
 nothing that would have to be kept in step with a running graph.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import OrderedDict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from time import monotonic
 from datetime import UTC, datetime, timedelta
 
@@ -41,6 +41,7 @@ class WorkflowRunView:
     depends_on_run_id: RunId | None = None
     requester: str | None = None
     started_at: datetime | None = None
+    approval_policy: Mapping[str, object] = field(default_factory=dict)
 
 
 class RunReader:
@@ -88,12 +89,12 @@ class RunReader:
             self._listing_cache.move_to_end(row.run_id)
             while len(self._listing_cache) > 1000:
                 self._listing_cache.popitem(last=False)
-            states.append(state)
-        return tuple(self._view(state) for state in states)
+            states.append(self._view(state, getattr(row, "approval_policy", {})))
+        return tuple(states)
 
     async def get(self, run_id: RunId) -> WorkflowRunView | None:
-        state = await self.load(run_id)
-        return self._view(state) if state is not None else None
+        record = await self.store.run(run_id) if self.store else None
+        return self._view(await self._state(record), getattr(record, "approval_policy", {})) if record else None
 
     async def load(self, run_id: RunId) -> RunState | None:
         record = await self.store.run(run_id) if self.store else None
@@ -202,7 +203,7 @@ class RunReader:
             started_at=datetime.fromisoformat(metadata.started_at) if metadata.started_at else None,
         )
 
-    def _view(self, state: RunState) -> WorkflowRunView:
+    def _view(self, state: RunState, policy: Mapping[str, object]) -> WorkflowRunView:
         return WorkflowRunView(
             run_id=state.run_id,
             name=state.name or state.prompt or str(state.run_id),
@@ -220,6 +221,7 @@ class RunReader:
             depends_on_run_id=state.depends_on_run_id,
             requester=state.requester,
             started_at=state.started_at,
+            approval_policy=policy,
         )
 
 

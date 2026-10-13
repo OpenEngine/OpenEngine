@@ -677,7 +677,7 @@ def test_run_list_leaves_the_prose_to_the_run_it_names(
     # listing can be trimmed before a screen loses something it draws.
     # Usage is summed from the run's events, so only the page about it pays.
     assert run == {
-        key: value for key, value in body.items() if key not in prose | {"usage"}
+        key: value for key, value in body.items() if key not in prose | {"usage", "approvalPolicy"}
     }
     assert body["failureReason"] == "the reviewer gave up"
     assert body["usage"]["costUsd"] is None and body["usage"]["nodes"] == {}
@@ -2850,7 +2850,7 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(
     asyncio.run(scenario())
 
 
-def test_a_trusted_repository_auto_approves_its_workorders_only(
+def test_a_trusted_repository_cannot_exceed_the_backend_ceiling(
     tmp_path, *, async_client, workflow_app
 ):
     graph = ScriptedGraph(
@@ -2873,7 +2873,7 @@ def test_a_trusted_repository_auto_approves_its_workorders_only(
                     assert response.status_code == 201
                     snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
                     approved[path.name] = snapshot.auto_approve_nodes
-                assert approved == {"trusted": (NodeId("work"),), "other": ()}
+                assert approved == {"trusted": (), "other": ()}
 
     asyncio.run(scenario())
 

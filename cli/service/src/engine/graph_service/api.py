@@ -37,6 +37,8 @@ from starlette.routing import Route
 from engine.graph_service.language import GraphError
 from engine.graph_service.service import DEFAULT_RUN_LIMIT, GraphService, ServiceError
 
+from engine.runtime.layered_approvals import PolicyError
+
 API_VERSION = 1
 
 
@@ -47,6 +49,10 @@ def create_app(service: GraphService) -> Starlette:
             "runners": list(service.runners()),
             "execution": "langgraph-acp",
         })
+
+    async def policy(request: Request) -> JSONResponse:
+        repository = service.resolve_repository(request.query_params.get("repo", ""))
+        return JSONResponse(await service.policy_json(repository))
 
     async def verbs(request: Request) -> JSONResponse:
         return JSONResponse({"verbs": service.verbs(request.query_params.get("project"))})
@@ -101,6 +107,7 @@ def create_app(service: GraphService) -> Starlette:
             inputs=_object(body, "inputs"),
             repository=_text(body, "repository"),
             idempotency_key=_text(body, "idempotencyKey") or request.headers.get("Idempotency-Key", ""),
+            approvals=body.get("approvals"),
         )
         return JSONResponse({**run, "created": created}, status_code=201 if created else 200)
 
@@ -222,6 +229,7 @@ def create_app(service: GraphService) -> Starlette:
             Route("/graphs", _guard(add_graph), methods=["POST"]),
             Route("/graphs/{ref:path}", _guard(get_graph)),
             Route("/runs", _guard(list_runs)),
+            Route("/policy", _guard(policy)),
             Route("/runs", _guard(submit_run), methods=["POST"]),
             Route("/runs/{run_id}", _guard(get_run)),
             Route("/runs/{run_id}/nodes", _guard(list_nodes)),
@@ -254,7 +262,7 @@ def _guard(handler: Any) -> Any:
             )
         except ServiceError as refused:
             return JSONResponse({"error": str(refused), **refused.details}, status_code=refused.status)
-        except _BadRequest as bad:
+        except (PolicyError, _BadRequest) as bad:
             return JSONResponse({"error": str(bad)}, status_code=400)
 
     return guarded

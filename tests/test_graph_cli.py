@@ -642,3 +642,13 @@ def test_verb_binding_checks_contract_before_writing(monkeypatch, capsys):
     recorded = serve(monkeypatch, {"name": "custom", "inputs": ["ref"]}, {"verbs": {"review": "custom"}})
     assert main(["verb", "set", "review", "custom"]) == 0
     assert recorded.requests[-1]["body"]["graph"] == "custom"
+
+
+def test_run_sends_tightening_overrides_and_pretty_prints_policy(monkeypatch, capsys):
+    policy = {"auto_approve": False, "allow": ["read"], "warnings": []}
+    recorded = serve(monkeypatch, {**RUN, "approvalPolicy": policy}, {**RUN, "approvalPolicy": policy})
+    assert main(["graph", "run", "pair", "fix it", "--repo", "o/r", "--no-auto-approve", "--allow", "read"]) == 0
+    assert recorded.requests[0]["body"]["approvals"] == {"auto_approve": False, "allow": ["read"]}
+    capsys.readouterr()
+    assert main(["run", "get", "run-1", "--pretty"]) == 0
+    assert "approvals: auto_approve=false, allow=read" in capsys.readouterr().out

@@ -146,6 +146,7 @@ class RunSnapshot:
     auto_approve_nodes: tuple[NodeId, ...] = ()
     runner_overrides: Mapping[NodeId, str] = field(default_factory=dict)
     forge_context: Mapping[str, str] = field(default_factory=dict)
+    approval_policy: Mapping[str, object] = field(default_factory=dict)
 
 
 #: Why a cancelled run stopped, as its `error` and as the payload of the

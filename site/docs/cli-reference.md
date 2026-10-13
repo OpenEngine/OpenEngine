@@ -14,7 +14,7 @@ Make a change with the default graph and follow it live.
 ```text
 engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--local]
           [--review PR_OR_BRANCH] [--spec] [--input KEY=VALUE] [--wait] [--json]
-          [--timeout SECONDS]
+          [--timeout SECONDS] [--no-auto-approve] [--allow ALLOW]
           [VERB/TARGET/INSTRUCTION ...]
 ```
 
@@ -32,6 +32,30 @@ engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--loc
 | `--wait` | wait non-interactively for completion |
 | `--json` | JSON output; mode banner goes to stderr |
 | `--timeout SECONDS` |  |
+| `--no-auto-approve` | disable automatic blanket approval for this run |
+| `--allow ALLOW` | narrow allowed capabilities (repeatable) |
+
+## `engine policy`
+
+Inspect the effective approval policy.
+
+```text
+engine policy [-h] {show} ...
+```
+
+### `engine policy show`
+
+Show values, provenance and clamped settings.
+
+```text
+engine policy show [-h] [--backend NAME] [--pretty] [--repo REPO]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--repo REPO` | OWNER/REPO (default: the current checkout) |
 
 ## `engine verbs`
 
@@ -226,9 +250,10 @@ Run a graph with an instruction.
 Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch is given.
 
 ```text
-engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME=VALUE]
-                 [--branch BRANCH] [--agent AGENT] [--local] [--repo REPO] [--no-watch]
-                 [--json] [--wait] [--timeout SECONDS] [--idempotency-key IDEMPOTENCY_KEY]
+engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--no-auto-approve]
+                 [--allow ALLOW] [--input NAME=VALUE] [--branch BRANCH] [--agent AGENT]
+                 [--local] [--repo REPO] [--no-watch] [--json] [--wait] [--timeout SECONDS]
+                 [--idempotency-key IDEMPOTENCY_KEY]
                  graph [instruction]
 ```
 
@@ -237,6 +262,8 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
+| `--no-auto-approve` | disable automatic blanket approval for this run |
+| `--allow ALLOW` | narrow allowed capabilities (repeatable) |
 | `graph` | a graph, or a built-in one: implementation-review-rerank |
 | `instruction` | what to do (default: run the graph) |
 | `--input, -i NAME=VALUE` |  |

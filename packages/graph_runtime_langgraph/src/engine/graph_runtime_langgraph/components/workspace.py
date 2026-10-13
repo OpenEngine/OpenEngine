@@ -86,6 +86,7 @@ class WorkspaceNode:
             base_ref = requested or "HEAD"
             if base_ref.startswith("origin/"):
                 base_ref = "refs/remotes/" + base_ref
+        base_ref = await execution.policy_base_revision() or base_ref
         await execution.say(f"Checking {repository} out at {base_ref}.")
         workspace = await self.provider.provision(
             repository, base_ref, co_author=str(state.get(CO_AUTHOR) or ""),
@@ -100,6 +101,7 @@ class WorkspaceNode:
                 f"{type(self.provider).__name__} provisioned a workspace with no "
                 f"path for {repository!r}."
             )
+        await execution.runtime.resolve_workspace_policy(execution.run_id, workspace.root_path)
         # Reported as a tool call, not just as prose: a checkout is a thing that
         # happened to the world, and a client showing the run should be able to
         # render it beside the agent's own calls rather than parse a sentence.

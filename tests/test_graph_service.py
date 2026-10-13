@@ -1261,3 +1261,35 @@ def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp
             assert (await service.run_json("reserved"))["status"] == "scheduled"
 
     asyncio.run(scenario())
+
+
+def test_policy_preview_and_run_overrides_use_the_same_resolver(tmp_path, monkeypatch):
+    from engine.runtime.config import ApprovalConfig
+
+    async def read(repository, ref="HEAD", **kwargs):
+        return {"auto_approve": False}, ""
+    monkeypatch.setattr("engine.graph_runtime_langgraph.runtime.read_repository_policy", read)
+
+    async def scenario():
+        async with graph_service(tmp_path, approval_policy=ApprovalConfig(auto_approve=True)) as service:
+            transport = httpx.ASGITransport(app=create_app(service))
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                await client.post("/graphs", json={"project": "p", "source": PAIR})
+                preview = await client.get("/policy", params={"repo": "example/repo"})
+                assert preview.status_code == 200
+                assert preview.json()["auto_approve"] is False
+                assert preview.json()["provenance"]["auto_approve"] == "repository"
+                body = {"project": "p", "graph": "pair", "instruction": "work", "repository": "example/repo"}
+                refused = await client.post("/runs", json={**body, "approvals": {"auto_approve": True}})
+                assert refused.status_code == 400
+                assert "only tighten" in refused.json()["error"]
+                assert (await client.post("/runs", json={**body, "approvals": "yes"})).status_code == 400
+                accepted = await client.post("/runs", json={**body, "idempotencyKey": "same", "approvals": {"allow": []}})
+                assert accepted.status_code == 201, accepted.text
+                assert accepted.json()["approvalPolicy"]["allow"] == []
+                assert accepted.json()["approvalPolicy"]["provenance"]["allow"] == "run"
+                # Changing only the approvals is still a different submission.
+                retry = await client.post("/runs", json={**body, "idempotencyKey": "same", "approvals": {"allow": ["read"]}})
+                assert retry.status_code == 409
+                await settled(service, accepted.json()["runId"])
+    asyncio.run(scenario())

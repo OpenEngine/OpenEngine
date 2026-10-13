@@ -46,6 +46,8 @@ class ApprovalConfig:
     auto_approve: bool = False
     allow: tuple[ApprovalCapability, ...] = (ApprovalCapability.READ,)
     bash: BashApprovalConfig = BashApprovalConfig()
+    repositories: tuple[str, ...] = ("*",)
+    """Repositories allowed to supply defaults, matched by name or checkout path."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,10 +257,10 @@ class EngineConfig:
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
     trusted_repos: frozenset[str] = frozenset()
-    """`[repos]` names whose WorkOrders are auto-approved.
+    """Deprecated delegation alias for repository-owned approval defaults.
 
-    Configured explicitly when approvals are left to trusted repositories:
-    `approvals.auto_approve` covers every repository, this only the ones named.
+    These repositories may set defaults up to the backend ceiling, even when
+    not matched by `approvals.repositories`. They cannot exceed that ceiling.
     """
 
 
@@ -325,8 +327,8 @@ def load_engine_config(
     ``$XDG_CONFIG_HOME/openengine/engine.toml`` (defaulting to
     ``~/.config/openengine/engine.toml``), then ``.engine/config.toml`` and
     ``engine.toml`` in the current directory.
-    Files are not merged, so the effective permission policy always has one
-    inspectable source.
+    Backend configuration files are not merged. Committed repository approval
+    defaults and tightening run overrides are resolved separately.
     """
 
     environment = os.environ if environ is None else environ
@@ -516,7 +518,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     output_style = _output_style(claude.get("output_style", ""))
 
     approvals = _table(document.get("approvals", {}), "approvals")
-    _reject_unknown(approvals, {"auto_approve", "allow", "bash"}, "approvals")
+    _reject_unknown(approvals, {"auto_approve", "allow", "bash", "repositories"}, "approvals")
 
     auto_approve = approvals.get("auto_approve", False)
     if not isinstance(auto_approve, bool):
@@ -666,6 +668,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         model_tiers=model_tiers,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
+            repositories=_patterns(approvals.get("repositories", ("*",)), "approvals.repositories"),
             allow=tuple(capabilities),
             bash=BashApprovalConfig(
                 allow=_patterns(bash.get("allow", ()), "approvals.bash.allow"),

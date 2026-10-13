@@ -1,0 +1,9 @@
+# Copy to the repository root and commit it. The backend remains the ceiling.
+[approvals]
+auto_approve = false
+allow = ["read", "edit"]
+
+[approvals.bash]
+# The backend must permit these patterns too.
+allow = ["uv run pytest **"]
+deny = ["rm -rf **"]

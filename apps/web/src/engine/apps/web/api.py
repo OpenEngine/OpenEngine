@@ -23,6 +23,8 @@ from langgraph_acp.agent import ACPAgentProvider
 from langgraph_acp.providers import CodexACPProvider
 
 import asyncio
+from fnmatch import fnmatchcase
+from engine.runtime.layered_approvals import parse_overrides
 import functools
 import json
 import logging
@@ -1170,6 +1172,15 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 return True
         return False
 
+    async def repository_policy_access(repository: str) -> tuple[bool, bool]:
+        names = [repository]
+        for name, path in repository_registry.snapshot.repos.items():
+            if await in_repositories(repository, frozenset({Path(path).expanduser().resolve()})):
+                names.append(name)
+        allowed = any(fnmatchcase(name, pattern) for name in names for pattern in approval_policy.repositories)
+        trusted = await in_repositories(repository, repository_registry.snapshot.trusted)
+        return allowed, trusted
+
     async def repository_mode(repository: str) -> ForgeMode | None:
         """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any."""
         if await in_repositories(repository, repository_registry.snapshot.disconnected):
@@ -1266,7 +1277,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         elif event.kind is EventKind.NODE_STARTED:
             text = f"*{label}* started."
         elif event.kind is EventKind.APPROVAL_REQUESTED:
-            if event.payload.get("autoApproved"):
+            if event.payload.get("autoApproved") or event.payload.get("policyRejected"):
                 # The run answers this one itself, so there is nobody to ask.
                 # A single work order asks to run dozens of commands, and
                 # announcing each would bury the requests that are real.
@@ -1391,6 +1402,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 inputs=dict(request.inputs),
                 prompt=request.instruction,
                 repository=request.repository,
+                approvals=request.approvals,
             )
             return state.run_id
 
@@ -1543,6 +1555,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                         legacy = legacy_runs()
                         await run_reader.backfill(legacy)
                         getattr(session.state_store, "clear_legacy_runs")([state.run_id for state in legacy])
+                    bind_policy = getattr(surface.runtime, "bind_approval_policy", None)
+                    if bind_policy is not None:
+                        bind_policy(approval_policy, repository_policy_access)
                     bind_mode = getattr(surface.runtime, "bind_repository_mode", None)
                     if bind_mode is not None:
                         bind_mode(repository_mode)
@@ -1883,6 +1898,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         parent_run_id: RunId | None = None,
         depends_on_run_id: RunId | None = None,
         requester: str | None = None,
+        approvals: Mapping[str, object] | None = None,
+        reject_instead_of_ask: bool = False,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -1952,6 +1969,10 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                         inputs=inputs, requester=requester,
                     )
                     await run_reader.save(state)
+                    if (approvals is not None or reject_instead_of_ask) and run_reader.store is not None:
+                        record = await getattr(run_reader.store, "run")(state.run_id)
+                        if record is not None:
+                            await getattr(run_reader.store, "remember_run")(replace(record, approval_policy={"overrides": dict(approvals or {}), "reject_instead_of_ask": reject_instead_of_ask}))
                     # Recheck after saving to cover completion racing with creation.
                     dependencies_changed.set()
                     return state
@@ -1975,28 +1996,30 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             await run_reader.save(reserved)
             if defer_notifications and origin is not None:
                 deferred_graph_notifications[reserved.run_id] = origin
-            snapshot = await runtime.start(
-                GraphId(str(graph.graph_id)),
-                {
-                    "task": prompt,
-                    "repository": repository,
-                    **({"inputs": inputs} if inputs else {}),
-                    **({"coAuthor": co_author} if co_author else {}),
-                    **({"issue": {"repository": origin.issue_repository, "number": origin.issue_number}}
-                       if origin and origin.issue_number else {}),
-                },
-                run_id=reserved.run_id,
-            )
+            try:
+                snapshot = await runtime.start(
+                    GraphId(str(graph.graph_id)),
+                    {
+                        "task": prompt,
+                        "repository": repository,
+                        **({"approvals": approvals} if approvals is not None else {}),
+                        **({"reject_instead_of_ask": True} if reject_instead_of_ask else {}),
+                        **({"inputs": inputs} if inputs else {}),
+                        **({"coAuthor": co_author} if co_author else {}),
+                        **({"issue": {"repository": origin.issue_repository, "number": origin.issue_number}}
+                           if origin and origin.issue_number else {}),
+                    },
+                    run_id=reserved.run_id,
+                )
+            except ValueError:
+                if scheduled is None:
+                    await run_reader.delete_run(reserved.run_id)
+                raise
             # Register before saving the row: earlier events already wait for
             # the row, and later ones must wait for the concierge reply too.
             if defer_notifications and origin is not None:
                 deferred_graph_notifications[snapshot.run_id] = origin
             seed_graph_progress(runtime, snapshot)
-            if approval_policy.auto_approve or await in_repositories(repository, repository_registry.snapshot.trusted):
-                topology = runtime.topology(GraphId(str(graph.graph_id)))
-                if topology is not None:
-                    for node in topology.nodes:
-                        await runtime.set_auto_approve(snapshot.run_id, node.node_id, True)
             state = RunState(
                 run_id=snapshot.run_id,
                 task_id=reserved.task_id,
@@ -2133,6 +2156,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             repository = _required_string(body, "repository")
             workflow_id = WorkflowId(_required_string(body, "workflowId"))
             dependency_value = _optional_string(body, "dependsOnRunId")
+            approvals = parse_overrides(body.get("approvals"))
         except ValueError as error:
             return _error(str(error), 400)
         if not repository_visible(await github_login.visible_repositories(request), repository):
@@ -2159,6 +2183,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 inputs=inputs,
                 prompt=prompt,
                 repository=repository,
+                approvals=approvals,
                 depends_on_run_id=RunId(dependency_value) if dependency_value else None,
                 requester=_web_requester(request),
             )
@@ -4561,6 +4586,7 @@ def _run_json(run: WorkflowRunView, *, listing: bool = False) -> dict[str, objec
     }
     if listing:
         return result
+    result["approvalPolicy"] = dict(run.approval_policy)
     result["taskPrompt"] = run.task_prompt
     result["failureReason"] = run.failure_reason
     result["requester"] = run.requester

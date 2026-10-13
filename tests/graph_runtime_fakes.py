@@ -423,6 +423,12 @@ class ScriptedGraphRuntime:
         from engine.graph_runtime_langgraph.store import InMemoryGraphRuntimeStore
         self.store = InMemoryGraphRuntimeStore()
         self.seeded_snapshots = {}
+        self.approval_policy = None
+        self.repository_policy_access = None
+
+    def bind_approval_policy(self, policy, access):
+        self.approval_policy = policy
+        self.repository_policy_access = access
 
     # --- the control surface's contract ------------------------------------
 
@@ -456,6 +462,15 @@ class ScriptedGraphRuntime:
         await self.store.save_metadata(run_id, graph_id, replace(
             metadata, scheduled=False, started_at=datetime.now(UTC).isoformat()))
         run = _Run(run_id, graph)
+        if self.approval_policy is not None:
+            from engine.runtime.layered_approvals import resolve_policy
+            allowed, trusted = await self.repository_policy_access(str(values.get("repository") or ""))
+            policy = resolve_policy(self.approval_policy, overrides=values.get("approvals"),
+                                    repository_allowed=allowed, trusted=trusted)
+            record = await self.store.run(run_id)
+            await self.store.remember_run(replace(record, approval_policy=policy))
+            if policy["auto_approve"]:
+                run.auto_approve_nodes = tuple(node.node_id for node in graph.nodes)
         run.values.update(values)
         self._runs[run.run_id] = run
         await self.emit(run, EventKind.RUN_STARTED, {"values": dict(run.values)})

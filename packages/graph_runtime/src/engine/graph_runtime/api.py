@@ -98,6 +98,8 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
             return _error(str(error), 400)
         try:
             run = await runtime.start(graph_id, values)
+        except ValueError as error:
+            return _error(str(error), 400)
         except Exception as error:  # noqa: BLE001 -- #779: HTTP boundary reports known refusals; _refusal re-raises unknown errors
             return _refusal(error)
         return JSONResponse(_snapshot_json(run), status_code=201)
@@ -412,6 +414,7 @@ def _snapshot_json(
 ) -> dict[str, object]:
     return {
         "forgeContext": dict(run.forge_context),
+        "approvalPolicy": dict(run.approval_policy),
         "runId": str(run.run_id),
         "graphId": str(run.graph_id),
         "status": run.status.value,

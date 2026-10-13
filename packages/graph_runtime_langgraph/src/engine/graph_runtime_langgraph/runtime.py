@@ -52,9 +52,14 @@ from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
-from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
+from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, ApprovalStatus, RunId, WorkspaceId
 from engine.ports import SourceControl, WorkspaceState
 from engine.runtime.terminal_mcp import WorkorderCreator
+from engine.runtime.config import ApprovalConfig
+from engine.runtime.approval_policy import PolicyDecision, policy_decision_for
+from engine.runtime.layered_approvals import parse_policy, read_repository_policy, resolve_policy, policy_values, parse_overrides
+from engine.ports.permissions import ApprovalCapability, PermissionScope
+from fnmatch import fnmatchcase
 from langgraph.checkpoint.base import create_checkpoint
 
 from engine.graph_runtime.checkpoints import Checkpoint, CheckpointId
@@ -152,6 +157,7 @@ class LangGraphRuntime:
         store: GraphRuntimeStore | None = None,
         source_control: SourceControl | None = None,
         checkpointer: Any | None = None,
+        approval_policy: ApprovalConfig = ApprovalConfig(),
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
         self.checkpointer = checkpointer
@@ -178,8 +184,63 @@ class LangGraphRuntime:
         self._live: dict[RunId, _Live] = {}
         self._entries: dict[NodeId, int] = {}
         self._source_control = source_control
+        self.approval_policy = approval_policy
+        self.repository_policy_access: Callable[[str], Awaitable[tuple[bool, bool]]] | None = None
         self.workorder_creator: WorkorderCreator | None = None
         self.repository_mode: Callable[[str], Awaitable[str | None]] | None = None
+
+    def bind_approval_policy(
+        self, policy: ApprovalConfig,
+        access: Callable[[str], Awaitable[tuple[bool, bool]]],
+    ) -> None:
+        self.approval_policy = policy
+        self.repository_policy_access = access
+
+    async def policy_for(
+        self, repository: str, ref: str = "HEAD",
+        overrides: object = None,
+        *, reject_instead_of_ask: bool = False, defer_missing_ref: bool = False,
+    ) -> dict[str, object]:
+        overrides = parse_overrides(overrides)
+        allowed, trusted = (
+            await self.repository_policy_access(repository)
+            if self.repository_policy_access else
+            (any(fnmatchcase(repository, pattern) for pattern in self.approval_policy.repositories), False)
+        )
+        document, revision = await read_repository_policy(repository, ref, defer_missing_ref=defer_missing_ref)
+        return {
+            **resolve_policy(self.approval_policy, document, overrides,
+                             repository_allowed=allowed, trusted=trusted,
+                             reject_instead_of_ask=reject_instead_of_ask),
+            "base_ref": ref, "base_revision": revision,
+            "backend": policy_values(self.approval_policy), "overrides": dict(overrides or {}),
+            "repository_allowed": allowed, "trusted": trusted,
+        }
+
+    async def resolve_workspace_policy(self, run_id: RunId, checkout: str) -> None:
+        """Freeze the actual provisioned base before any downstream agent runs."""
+        record = await self._require(run_id)
+        initial = record.approval_policy
+        if not initial or initial.get("workspace_resolved"):
+            return
+        document, revision = await read_repository_policy(checkout)
+        if not revision:
+            return
+        policy = {
+            **initial,
+            **resolve_policy(parse_policy(parse_overrides(initial["backend"]) or {}), document, parse_overrides(initial.get("overrides")),
+                             repository_allowed=bool(initial["repository_allowed"]),
+                             trusted=bool(initial["trusted"]),
+                             reject_instead_of_ask=bool(initial["reject_instead_of_ask"])),
+            "base_revision": revision, "workspace_resolved": True,
+        }
+        nodes = record.auto_approve_nodes
+        if policy["auto_approve"] and not initial["auto_approve"]:
+            nodes = tuple(node.node_id for node in self._graph_of(record).topology.nodes)
+        await self._store.remember_run(replace(
+            record, approval_policy=policy,
+            auto_approve_nodes=nodes if policy["auto_approve"] else (),
+        ))
 
     def bind_repository_mode(self, resolve: Callable[[str], Awaitable[str | None]]) -> None:
         self.repository_mode = resolve
@@ -243,8 +304,21 @@ class LangGraphRuntime:
         if configured == "disconnected":
             context["reason"] = "repository configured for local execution"
         values = {**values, "inputs": {**inputs, "mode": context["mode"]}}
+        workspace = definition.workspace_node
+        repository = (workspace.repository if workspace else "") or str(values.get("repository") or "")
+        ref = workspace.base_ref if workspace else "HEAD"
+        requested = inputs.get(workspace.ref_input) if workspace and workspace.ref_input else None
+        ref = str(requested or ("HEAD" if context["mode"] == "disconnected" else ref))
+        overrides = values.get("approvals")
+        if overrides is None and existing is not None:
+            overrides = existing.approval_policy.get("overrides")
+        policy = await self.policy_for(repository, ref, overrides,
+                                       reject_instead_of_ask=bool(values.get("reject_instead_of_ask") or (existing and existing.approval_policy.get("reject_instead_of_ask"))),
+                                       defer_missing_ref=workspace is not None)
         await self._store.remember_run(RunRecord(
             run_id, graph_id,
+            approval_policy=policy,
+            auto_approve_nodes=tuple(node.node_id for node in definition.topology.nodes) if policy["auto_approve"] else (),
             forge_context=context,
             runner_overrides=definition.initial_runner_overrides(values),
         ))
@@ -481,13 +555,15 @@ class LangGraphRuntime:
         record = await self._require(run_id)
         if self._graph_of(record).topology.node(node_id) is None:
             raise UnknownNodeError(f"unknown node: {node_id}")
+        if enabled and not record.approval_policy.get("auto_approve", False):
+            raise RunNotSteerableError("node auto-approve exceeds the run approval policy")
         nodes = tuple(node for node in record.auto_approve_nodes if node != node_id)
         if enabled:
             nodes += (node_id,)
         await self._store.remember_run(replace(record, auto_approve_nodes=nodes))
         if enabled:
             for approval in await self._store.pending_approvals(run_id):
-                if approval.node_id == node_id and _auto_approvable(approval.kind):
+                if approval.node_id == node_id and _configured_decision(record.approval_policy, approval.kind, approval.command, approval.tool_name) is PolicyDecision.ALLOW:
                     try:
                         await self.decide(run_id, approval.approval_id, ApprovalDecision.ACCEPT)
                     except ApprovalNotPendingError:
@@ -660,6 +736,13 @@ class LangGraphRuntime:
         shows the request beside the call it is about either way, and only one of
         them is somebody's to answer.
         """
+        run = await self._require(execution.run_id)
+        policy = dict(run.approval_policy)
+        if policy and execution.node_id not in run.auto_approve_nodes:
+            policy["auto_approve"] = False
+        configured = _configured_decision(policy, kind, command, tool_name)
+        automatic = configured is PolicyDecision.ALLOW
+        rejected = configured is PolicyDecision.DENY
         chosen = approval_id or ApprovalId(f"approval-{uuid4().hex[:12]}")
         record = ApprovalRecord(
             approval_id=chosen,
@@ -673,15 +756,13 @@ class LangGraphRuntime:
             session_key=session_key,
             continuation=continuation,
             request=dict(request or {}),
-            cancel_run=cancel_run,
+            cancel_run=cancel_run and not rejected,
+            status=ApprovalStatus.DECIDED if rejected else ApprovalStatus.PENDING,
+            decision=ApprovalDecision.CANCEL if rejected else None,
         )
         await self._store.remember_approval(record)
         waiting = execution.expect(chosen)
         try:
-            run = await self._require(execution.run_id)
-            automatic = (
-                execution.node_id in run.auto_approve_nodes and _auto_approvable(kind)
-            )
             await self.publish(
                 execution.run_id,
                 EventKind.APPROVAL_REQUESTED,
@@ -693,11 +774,21 @@ class LangGraphRuntime:
                     "toolName": tool_name,
                     "toolCallId": tool_call_id,
                     "autoApproved": automatic,
+                    "policyRejected": rejected,
                 },
                 execution.node_id,
                 execution.execution_id,
             )
-            if automatic:
+            if rejected:
+                # Persisted as decided before publishing: even an observer
+                # answering immediately cannot override a backend denial.
+                waiting.set_result(ApprovalDecision.CANCEL)
+                await self.publish(
+                    execution.run_id, EventKind.APPROVAL_RESOLVED,
+                    {"approvalId": str(chosen), "decision": ApprovalDecision.CANCEL.value},
+                    execution.node_id, execution.execution_id,
+                )
+            elif automatic:
                 current = await self._store.approval(chosen)
                 if current is not None and current.pending:
                     await self.decide(execution.run_id, chosen, ApprovalDecision.ACCEPT)
@@ -1185,7 +1276,31 @@ class LangGraphRuntime:
             auto_approve_nodes=record.auto_approve_nodes,
             runner_overrides=record.runner_overrides,
             forge_context=record.forge_context,
+            approval_policy=record.approval_policy,
         )
+
+
+def _configured_decision(policy: Mapping[str, object], kind: ApprovalKind, command: str, tool: str) -> PolicyDecision:
+    if not policy:
+        return PolicyDecision.ASK
+    scope = None
+    if tool.startswith("mcp__") or tool in {"git_subcommand", "open_pull_request"}:
+        scope = PermissionScope(ApprovalCapability.MCP)
+    elif command:
+        scope = PermissionScope(ApprovalCapability.BASH, command)
+    elif kind is ApprovalKind.FILE_CHANGE or tool == "edit":
+        scope = PermissionScope(ApprovalCapability.EDIT)
+    elif tool in {"Read", "Glob", "Grep", "read", "search"}:
+        scope = PermissionScope(ApprovalCapability.READ)
+    elif tool in {"WebFetch", "WebSearch", "fetch"}:
+        scope = PermissionScope(ApprovalCapability.WEB)
+    decision = (
+        policy_decision_for(parse_policy({key: policy[key] for key in ("auto_approve", "allow", "bash")}), scope)
+        if _auto_approvable(kind) else PolicyDecision.ASK
+    )
+    if decision is PolicyDecision.ASK and policy.get("reject_instead_of_ask"):
+        return PolicyDecision.DENY
+    return decision
 
 
 def _auto_approvable(kind: ApprovalKind) -> bool:
