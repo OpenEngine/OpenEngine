@@ -272,6 +272,9 @@ def _policy_summary(policy: dict[str, Any]) -> str:
 def policy_show(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     policy = client.get("/policy", repo=_repository(arguments, backend))
+    if not arguments.pretty:
+        _print(policy)
+        return EXIT_OK
     print(_policy_summary(policy))
     for key, layer in policy["provenance"].items():
         value = policy["bash"][key[5:]] if key.startswith("bash.") else policy[key]

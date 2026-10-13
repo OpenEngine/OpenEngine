@@ -1,5 +1,6 @@
 """The approval ceiling, repository defaults, and immutable run snapshots."""
 import asyncio
+import json
 from dataclasses import replace
 import subprocess
 
@@ -214,7 +215,8 @@ def test_provisioned_policy_is_finalized_once_and_unattended_never_waits(tmp_pat
     asyncio.run(scenario())
 
 
-def test_policy_show_prints_provenance_and_clamping(monkeypatch, capsys):
+@pytest.mark.parametrize("pretty", [False, True])
+def test_policy_show_prints_provenance_and_clamping(monkeypatch, capsys, pretty):
     from engine.apps.cli.__main__ import parser
     from engine.cli import commands
     from engine.cli.backends import Backend
@@ -224,11 +226,15 @@ def test_policy_show_prints_provenance_and_clamping(monkeypatch, capsys):
             return resolve_policy(ApprovalConfig(), {"auto_approve": True})
     backend = Backend(name="test", url="https://example.test")
     monkeypatch.setattr(commands, "_connect", lambda args: (backend, Client()))
-    args = parser().parse_args(["policy", "show", "--repo", "acme/repo", "--backend", "test"])
+    args = parser().parse_args(["policy", "show", "--repo", "acme/repo", "--backend", "test"]
+                               + (["--pretty"] if pretty else []))
     assert commands.policy_show(args) == 0
     out = capsys.readouterr().out
-    assert 'auto_approve = false  [repository ∩ backend]' in out
-    assert 'clamped to backend ceiling' in out
+    if pretty:
+        assert 'auto_approve = false  [repository ∩ backend]' in out
+        assert 'clamped to backend ceiling' in out
+    else:
+        assert json.loads(out) == resolve_policy(ApprovalConfig(), {"auto_approve": True})
 
 
 def test_narrow_shell_patterns_are_allowed_without_globbing_globs():

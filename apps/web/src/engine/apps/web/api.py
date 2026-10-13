@@ -169,7 +169,7 @@ from engine.ports import (
     UserInputAnswer,
     WorkspaceState,
 )
-from engine.runtime.repositories import RepositoryRegistry
+from engine.runtime.repositories import RepositoryRegistry, RepositorySnapshot
 from engine.runtime.change_requests import change_request, pull_request_url, remote_project
 from engine.runtime import (
     AgentSession,
@@ -1068,6 +1068,40 @@ async def _repository_identity(path: Path) -> Path:
     return Path(output.decode().strip()).resolve()
 
 
+async def _repository_policy_access(
+    repository: str, snapshot: RepositorySnapshot, patterns: Collection[str],
+) -> tuple[bool, bool]:
+    allowed = any(fnmatchcase(repository, pattern) for pattern in patterns)
+    # Only eligible names can grant access. Resolve each identity at most
+    # once per check, including when a checkout is also in trusted_repos.
+    candidates = frozenset(
+        Path(path).expanduser().resolve() for name, path in snapshot.repos.items()
+        if not allowed and any(fnmatchcase(name, pattern) for pattern in patterns)
+    )
+    identities: dict[Path, Path] = {}
+
+    async def identity(path: Path) -> Path:
+        if path not in identities:
+            identities[path] = await _repository_identity(path)
+        return identities[path]
+
+    async def matches(checkouts: frozenset[Path]) -> bool:
+        if not repository or not checkouts:
+            return False
+        path = Path(repository).expanduser().resolve()
+        if path in checkouts:
+            return True
+        target = await identity(path)
+        for checkout in checkouts:
+            if await identity(checkout) == target:
+                return True
+        return False
+
+    allowed = allowed or await matches(candidates)
+    trusted = await matches(snapshot.trusted)
+    return allowed, trusted
+
+
 def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None:
     """Where feedback re-enters this run, or ``None`` to steer whatever runs.
 
@@ -1173,13 +1207,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         return False
 
     async def repository_policy_access(repository: str) -> tuple[bool, bool]:
-        names = [repository]
-        for name, path in repository_registry.snapshot.repos.items():
-            if await in_repositories(repository, frozenset({Path(path).expanduser().resolve()})):
-                names.append(name)
-        allowed = any(fnmatchcase(name, pattern) for name in names for pattern in approval_policy.repositories)
-        trusted = await in_repositories(repository, repository_registry.snapshot.trusted)
-        return allowed, trusted
+        return await _repository_policy_access(
+            repository, repository_registry.snapshot, approval_policy.repositories,
+        )
 
     async def repository_mode(repository: str) -> ForgeMode | None:
         """The mode `[repo_modes]` fixes for WorkOrders on `repository`, if any."""
