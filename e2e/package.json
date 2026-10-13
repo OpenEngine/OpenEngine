@@ -1,0 +1,35 @@
+{
+  "name": "openengine-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "doc": "TEST2DOC=true playwright test --config=playwright-test2doc.config.ts --grep-invert @skip-docs",
+    "types": "tsc",
+    "postinstall": "node scripts/fix-node-pty.mjs",
+    "build:terminal": "esbuild terminal/page/main.ts --bundle --format=esm --target=es2022 --outdir=terminal/dist --loader:.woff2=file --loader:.woff=file --asset-names=assets/[name]-[hash] && cp terminal/page/index.html terminal/dist/"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@test2doc/playwright": "^1.10.0",
+    "@test2doc/playwright-utils": "^0.1.1",
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.22.0"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true,
+    "esbuild@0.28.2": true
+  }
+}

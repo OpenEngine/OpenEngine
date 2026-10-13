@@ -9,7 +9,7 @@ Print the current graph specification as Markdown, without contacting a backend.
 A graph is a YAML definition or a Python LangGraph file. Register it with
 `engine graph add FILE`; run it with `engine graph run GRAPH INSTRUCTION`.
 Names belong to projects, versions are immutable, and registering an unchanged
-definition is a no-op. `engine graph get GRAPH --pretty` prints stored source.
+definition is a no-op. `engine graph get GRAPH` prints stored source.
 
 ### YAML graph specification (openengine.cc/v1)
 
@@ -175,7 +175,7 @@ Limits are cumulative over the loop's lifetime and survive restarts.
 
 `engine loops list` lists loops. `engine loop get NAME_OR_ID` reports state,
 the pinned graph version, instruction, inputs, cadence, next run, active run,
-runs, pull requests, spend and limits. Use `--pretty` for readable output.
+runs, pull requests, spend and limits. Use `--json` for JSON.
 
 `engine loop pause NAME_OR_ID --reason TEXT` stops new runs.
 `engine loop resume NAME_OR_ID` restarts scheduling; it is refused while a

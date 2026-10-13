@@ -37,7 +37,14 @@ const config = {
         docs: {
           routeBasePath: 'docs',
           sidebarPath: './sidebars.js',
-          editUrl: `${REPO}/edit/main/site/`,
+          // The Guides category links to its landing page already; don't list it again among the guides.
+          async sidebarItemsGenerator({defaultSidebarItemsGenerator, ...args}) {
+            const items = await defaultSidebarItemsGenerator(args);
+            return items.filter((item) => !(item.type === 'doc' && item.id === 'guides/index'));
+          },
+          // Generated guides have no source here to edit; they come from e2e/tests.
+          editUrl: ({versionDocsDirPath, docPath}) =>
+            docPath.startsWith('guides/test2doc-') ? undefined : `${REPO}/edit/main/site/${versionDocsDirPath}/${docPath}`,
         },
         blog: {
           routeBasePath: 'blog',

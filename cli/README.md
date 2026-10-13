@@ -58,7 +58,7 @@ and `engine backends list` are equivalent.
 
 Backend commands use the selected backend. List commands (`engine graphs`,
 `runs`, `loops`, `nodes`, `agents`, `backends`, `connections`) print a table;
-add `--json` for JSON. Other commands print JSON unless `--pretty` is given, except the live run view on a TTY. `engine graph spec` and
+add `--json` for JSON. Other commands print readable lines, or the live run view on a TTY; add `--json` for JSON. `engine graph spec` and
 `engine loop spec` print the current specifications as Markdown locally, without
 a running daemon. Their specifications and the site reference are generated from
 the parser’s field definitions, expression rules, and accompanying prose; the
@@ -94,7 +94,7 @@ repositories.
 ```bash
 engine graph add ./graph.yaml
 engine graphs list
-engine graph get fix-flaky-test --pretty        # or fix-flaky-test@2, g-..., gv-...
+engine graph get fix-flaky-test        # or fix-flaky-test@2, g-..., gv-...
 ```
 
 ```yaml
@@ -152,7 +152,7 @@ still works for one release.
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
 engine go review feat/my_feat -i adversarial=true
-engine run get run-0123abcd --pretty
+engine run get run-0123abcd
 engine runs
 engine runs --graph fix-flaky-test --status failed
 ```
@@ -165,7 +165,7 @@ exits non-zero, while detaching exits 0.
 
 Use `--no-watch` to return immediately on a TTY, or `--json` for JSON output.
 Non-TTY invocations return immediately as before. `--wait` always polls without
-interaction and exits non-zero if the run failed. `engine run get RUN_ID --pretty`
+interaction and exits non-zero if the run failed. `engine run get RUN_ID`
 lists pending approval IDs, nodes and commands, plus the run's UI URL. Each submission carries an idempotency key
 (`--idempotency-key` to choose it), and the client retries a dropped
 connection with the same key, so a retry never starts a second run. A run
@@ -260,7 +260,7 @@ engine loop resume fix-flaky-test --max-spend 40
 ```bash
 engine nodes list --run run-0123abcd
 engine node steer 1a0055fa-... "Use the existing retry helper instead" --wait
-engine node get 1a0055fa-... --pretty
+engine node get 1a0055fa-...
 ```
 
 Steering addresses one node attempt and is kept in order, once per

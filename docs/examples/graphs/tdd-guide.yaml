@@ -1,0 +1,333 @@
+apiVersion: openengine.cc/v1
+kind: Graph
+name: tdd-guide
+description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them; a panel reviews the change for security, bugs, performance, conciseness, duplication and how its guides read, security findings count only once a test reproduces them, a reranker keeps what matters for another pass, and impact analysis rates the change before the pull request opens. Once CI is done a person approves it or sends it back with a note.
+
+inputs:
+  instruction:
+    description: Anything to add to the issue, such as what to leave alone
+  issue:
+    description: The issue number to work; leave empty to pick the next unblocked issue in the milestone
+    default: ""
+  milestone:
+    description: The milestone to pick from when no issue is given
+    default: CLI e2e tests & generated guides
+  base:
+    description: "The branch to build on and open the pull request against, such as origin/agent/e2e-agent-mode; empty means main"
+    default: ""
+  runner:
+    description: The runner that picks the issue and writes the tests
+    default: claude
+    choices: [claude, codex, opencode]
+  implementer:
+    description: The runner that makes the tests pass; a different one from the test writer gives the change a second model's eyes
+    default: claude
+    choices: [claude, codex, opencode]
+  reviewer:
+    description: The runner that reviews the generated guide
+    default: claude
+    choices: [claude, codex, opencode]
+
+plan:
+  workspace:
+    base_ref: origin/main
+    ref: ${inputs.base}
+
+  pick:
+    name: Pick
+    agent: ${inputs.runner}
+    prompt: |
+      Choose the issue this run works on. Do not edit anything.
+
+      Issue given: "${inputs.issue}".
+
+      If an issue number is given, use it. Otherwise list the open issues in
+      the milestone "${inputs.milestone}" with
+      `gh issue list --milestone "${inputs.milestone}" --state open --json number,title,body`
+      and pick the lowest-numbered one that:
+      - has every issue it "Depends on" closed (check with `gh issue view N --json state`),
+        or already done in this checkout: on a branch that hasn't landed yet, a
+        dependency's work can be here while its issue is still open, and
+      - has no open pull request (`gh pr list --state open --search "N in:body" --json number,headRefName`)
+        and no pushed `agent/issue-N-*` branch (`git ls-remote --heads origin "agent/issue-N-*"`).
+
+      Read the chosen issue in full with `gh issue view N --comments`.
+      If nothing qualifies, set found to no and every other output to "none".
+
+      ${instruction}
+    # Every output is required text: complete_step accepts nothing else yet.
+    outputs:
+      found: {type: string, enum: ["yes", "no"], required: true, description: whether there is an issue to work}
+      issue: {type: string, required: true, description: the issue number}
+      title: {type: string, required: true, description: the issue title}
+      brief: {type: string, required: true, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
+      branch: {type: string, required: true, description: "agent/issue-N-short-slug, the branch the pull request will use"}
+      guide: {type: string, enum: ["yes", "no"], required: true, description: whether the issue adds or changes a guide spec under e2e/tests}
+
+implementation:
+  tdd:
+    name: Write failing tests
+    agent: {same: pick}
+    tools: [git_subcommand]
+    prompt: |
+      Write the tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, before any
+      implementation exists. Change only test files and test fixtures.
+
+      This checkout is fresh. Prepare it first, for every step after this one too:
+      `uv sync --all-packages` and `npm ci --prefix e2e`. Read `e2e/README.md`
+      before writing a spec under `e2e/`: specs check what happened, not what an
+      agent said; example graphs stay tiny; and anything that needs precise
+      timing is scripted with `engine.script(...)`. A guide spec's titles and
+      steps are a user guide for someone new to OpenEngine and not deeply
+      technical: write them by `e2e/WRITING.md`, one task per guide, in plain
+      words, with its glossary's explanations.
+
+      ${outputs.pick.brief}
+
+      ${instruction}
+
+      Cover every acceptance criterion in the issue. For a guide spec under
+      `e2e/tests`, the test is the guide: give each `test.step` a title that
+      tells a reader what to do ("Run `engine graphs list`."), keep setup and
+      cleanup in `[nodoc]` steps, and use `screenshot(testInfo, locator, {annotation})`
+      where a reader needs to see the screen.
+
+      Run the new tests and confirm they fail because the behaviour is missing,
+      not because of a typo or a broken import. Commit them with git_subcommand
+      as a Conventional Commit (`test(...): ...`).
+    outputs:
+      tests: {type: string, required: true, description: "the test files and test names written, one per line"}
+      failure: {type: string, required: true, description: "why the tests fail now, from their output"}
+
+  implement:
+    name: Implement
+    agent: ${inputs.implementer}
+    tools: [git_subcommand]
+    prompt: |
+      Make the failing tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, pass.
+
+      ${outputs.pick.brief}
+
+      Tests written first:
+      ${outputs.tdd.tests}
+      Why they fail: ${outputs.tdd.failure}
+
+      Do not delete, skip or weaken those tests. If one is wrong, fix it
+      as narrowly as you can and say why in the summary.
+
+      Review findings to address, if any: ${json(outputs.reranker.findings)}
+      A security finding comes with a committed test that reproduces it and
+      fails now; make it pass without weakening it, like the tests above.
+      CI result, if any: ${json(outputs.ci)}
+      What the person reviewing the pull request asked to change, if they sent
+      it back: ${json(outputs.human_review)}
+
+      Run the tests touched by this change, and the e2e suite (`npm test` in `e2e/`)
+      when it exists. Commit with git_subcommand as Conventional Commits.
+
+      The site's guides are generated from the e2e specs and committed. If this
+      change touches `e2e/tests`, run `npm run doc` in `e2e/` (scripted agents,
+      the default) and commit everything it changed under `site/docs/guides/`
+      with the spec, as `docs(site): ...`. A reviewer reads those pages next.
+
+      ${instruction}
+
+review:
+  reviewers:
+    name: Review
+    agent: ${inputs.reviewer}
+    facets:
+      - {facet: security, model: elevated}
+      - {facet: bugs}
+      - {facet: performance}
+      - {facet: conciseness}
+      - {facet: dryness}
+      - facet:
+          id: guide
+          name: Guides
+          focus: |
+            Whether the user-facing guides this change adds or changes read well
+            for their reader and are current. If it touches `e2e/tests`, read
+            `e2e/WRITING.md`, then every page the change adds or changes under
+            `site/docs/guides/`, each screenshot included, as that reader:
+            someone new to OpenEngine and not deeply technical. Flag anything
+            that breaks WRITING.md: a page that isn't one task in the reader's
+            words or doesn't say why before how; jargon, or an OpenEngine word
+            left unexplained or explained differently from its glossary; a
+            command with no screenshot or a label that doesn't say what it means;
+            anything that sounds like a test or leaks setup that belongs in a
+            `[nodoc]` step. Also flag an annotation on the wrong row, an
+            unreadable, cropped or mid-spinner screenshot, and machine-specific
+            paths, user names, tokens or ports. Then
+            run `npm run doc` in `e2e/`: if `git status --porcelain site/docs/guides`
+            isn't empty the committed guides are stale, which is a finding, and
+            put the directory back with `git restore --source=HEAD -- site/docs/guides`
+            and `git clean -fdq site/docs/guides`. If the change touches no guide,
+            there is nothing to find.
+    prompt: |
+      Review the change this run made for issue #${outputs.pick.issue},
+      ${outputs.pick.title}, focusing only on **${item.facet.name}**.
+
+      ${item.facet.focus}
+
+      The change is the commits on this branch: `git log` and
+      `git diff ${inputs.base}...HEAD` (an empty base means origin/main). The
+      issue asked for:
+      ${outputs.pick.brief}
+
+      Read the changed code and the code around it before judging. Inspect
+      only: do not edit or commit anything. Each finding names the file and
+      line to change.
+    outputs:
+      findings: {type: findings, required: true}
+
+  reproduce:
+    name: Reproduce security findings
+    agent: ${inputs.reviewer}
+    tools: [git_subcommand]
+    prompt: |
+      Prove or disprove the security findings on the change for issue
+      #${outputs.pick.issue}, ${outputs.pick.title}. A finding no test can
+      reproduce is not treated as a real risk.
+
+      The reviews; only the findings whose facet is security matter here:
+      ${json(outputs.reviewers)}
+
+      If there are none, change nothing and report "none" for both outputs.
+
+      For each security finding, write a test that shows the problem through
+      what a user or attacker can actually reach: an e2e spec under `e2e/tests`
+      driving the real CLI and daemon (read `e2e/README.md`; tag it `@skip-docs`
+      so it isn't published as a guide), or a pytest test when the problem
+      can't be reached from there. Run it. It reproduces the finding only if it
+      fails because of the problem the finding describes, not because of a
+      typo, a broken import or a missing fixture.
+
+      Commit each test that reproduces its finding with git_subcommand as
+      `test(security): ...`; the implementer makes it pass next. Delete each
+      test that doesn't, and don't commit it. Don't change anything but tests.
+    outputs:
+      reproduced: {type: string, required: true, description: "each security finding a test reproduces, with the test's file and name, one per line; or none"}
+      unconfirmed: {type: string, required: true, description: "each security finding no test reproduced, with what was tried, one per line; or none"}
+
+  reranker:
+    name: Consolidate
+    agent: {same: implement}
+    prompt: |
+      ${size(outputs.reviewers)} reviewers examined the same change, each from one
+      angle. Consolidate their findings, somewhat aggressively squashing noise.
+
+      Remove a finding that is a nitpick or a matter of taste, a duplicate of
+      another (even across angles), an unlikely hypothetical, not actionable, or
+      already handled by code the reviewer missed. Keep what a senior engineer
+      would want fixed before merging. Keep each finding's agent and facet
+      unchanged. Do not edit anything.
+
+      Keep a security finding only if a test reproduces it, and name that test
+      in the finding. Drop the rest: they are reported as unconfirmed.
+      Reproduced: ${outputs.reproduce.reproduced}
+      Unconfirmed: ${outputs.reproduce.unconfirmed}
+
+      The issue: #${outputs.pick.issue}, ${outputs.pick.title}
+
+      The reviews:
+      ${json(outputs.reviewers)}
+    outputs:
+      findings: {type: findings, required: true, lineage: required}
+
+  impact:
+    name: Impact analysis
+    agent: ${inputs.reviewer}
+    prompt: |
+      Assess the impact of the final change for issue #${outputs.pick.issue}:
+      the commits on this branch (`git diff ${inputs.base}...HEAD`; an empty base
+      means origin/main). Read the diff and surrounding code, tests and review
+      findings. Inspect only: do not edit, commit, merge, or deploy anything.
+
+      Rank the change at exactly one level:
+      Green 🟢: No significant UI or architectural changes. Administrative
+      changes, narrowly scoped bug fixes, or minor product behavior changes.
+      Well tested with few testing blind spots, and no new integrated component
+      requiring human setup.
+      Orange 🟠: Moderate UI adjustments, a new architectural component, or
+      significant code changes to prevent a bug. Well tested, but a new
+      integrated component may require human setup, or integration testing may
+      be incomplete for a known reason.
+      Red 🔴: Significant architectural alterations, a major new feature, or
+      excess complexity. May touch sensitive components such as security or
+      auth, and requires human involvement to deploy. Requires careful review
+      and must not be merged without a human.
+
+      Choose the highest applicable level; passing tests alone does not lower
+      the impact. Explain uncertainty and testing gaps rather than assuming
+      untested behavior is safe. Give evidence for UI/product and architectural
+      scope, complexity, sensitive components, test coverage and blind spots,
+      and human setup or deployment work.
+
+      Review findings still open: ${json(outputs.reranker.findings)}
+    outputs:
+      impact_level: {type: string, enum: [Green, Orange, Red], required: true}
+      impact_rationale: {type: string, required: true, description: your evidence and the human actions required}
+
+  publish:
+    name: Open pull request
+    agent: {same: implement}
+    tools: [git_subcommand, open_pull_request]
+    prompt: |
+      Publish the work on issue #${outputs.pick.issue}.
+
+      Push this checkout's commits with git_subcommand to `${outputs.pick.branch}`
+      (`["push", "origin", "HEAD:refs/heads/${outputs.pick.branch}"]`).
+      Never push an engine/ws-* branch.
+
+      The pull request's base is the branch this run was built on: "${inputs.base}"
+      without its `origin/` prefix, or `main` if that is empty.
+
+      If no pull request is open for that branch yet, open one with
+      open_pull_request against that base: a Conventional Commit title, a body
+      that summarises the change, the tests written first, the impact
+      (${outputs.impact.impact_level}: ${outputs.impact.impact_rationale}) and
+      any review findings still open (${json(outputs.reranker.findings)}),
+      security findings no test could reproduce (${outputs.reproduce.unconfirmed}),
+      and `issue_resolution: resolves`.
+      If one is already open, pushing is enough.
+
+      Report the pull request's URL as pr_url, whether you opened it or it was
+      already open: the CI step after this one finds the change by it.
+    outputs:
+      pr_url: {type: string, required: true, description: the pull request's URL}
+
+  ci:
+    name: CI
+    ci: true
+
+  human_review:
+    name: Human review
+    human: >-
+      Review the pull request this run opened (its link is in the Open pull
+      request step) and the tests it wrote first. Approve to finish the run.
+      To send it back, reject it with a note saying what to change: the
+      implementer makes the change, and the review, CI and this step run
+      again. Rejecting without a note ends the run.
+
+flow:
+  - from: pick
+    route:
+      - {when: "outputs.pick.found == 'yes'", to: tdd}
+      - {to: end}
+  - from: reranker
+    route:
+      - {when: "size(outputs.reranker.findings) > 0 && visits.implement < 3", to: implement}
+      - {to: impact}
+  - from: ci
+    route:
+      - {when: "outputs.ci.passed == false && visits.implement < 4", to: implement}
+      - {to: human_review}
+  - from: human_review
+    route:
+      - {when: "outputs.human_review.decision == 'rejected' && size(outputs.human_review.note) > 0 && visits.human_review < 3", to: implement}
+      - {to: end}
+
+loop:
+  every: 1h
+  instruction: Work the next unblocked issue in the milestone.

@@ -11,8 +11,8 @@ Use one for recurring work: fix a flaky test every six hours, triage new issues 
 
 ```bash
 engine loop add fix-flaky-test --every 6h --max-prs 5 --max-spend 20
-engine loops list --pretty
-engine loop get fix-flaky-test --pretty
+engine loops list
+engine loop get fix-flaky-test
 ```
 
 The instruction and cadence come from the graph's `loop` section, and `--instruction` and `--every` override them:
