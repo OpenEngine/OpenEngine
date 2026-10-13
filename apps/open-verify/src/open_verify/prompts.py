@@ -161,8 +161,16 @@ End every journey with an assert. Keep assertions separate from actions; the act
 claim of success is not verification. Each act has a fresh conversation; each semantic
 assert has a separate evidence-only judge. Preserve every requested completion check.
 When a journey needs provisioned test data, declare journey.readiness as assertion
-steps that prove the required records are visible through the running app's API or
-UI before the journey begins. Use exact checks where possible. A successful seed
+steps with exact checks that prove the required records are visible through the running app's API or
+initial UI before the journey begins. Each readiness step must supply check; semantic or visual
+model judgments are reserved for journey assertions. Use separate checks for fixture registration
+and entry-page controls. Confirm fixture registration with expect_json against the documented
+API even when the entry screen does not display the fixture. A fixture can be available to
+the application without being rendered on the workflow's entry page. Do not require every fixture
+to be displayed on journey.url. Inspect API fields and initial-page controls before selecting
+exact checks; do not invent fields or labels. Readiness runs without actor actions: submission,
+enabled controls that require input, approval, completion and reload persistence belong in the
+journey steps, not setup. A successful seed
 command or database write does not establish readiness. Prefer supported app APIs
 or existing fixture helpers. If direct seeding is necessary, inspect all application
 indexes, ownership and state stores required for visibility, not just runtime state.

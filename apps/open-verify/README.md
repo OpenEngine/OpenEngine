@@ -643,7 +643,12 @@ Legacy plans without `journey` continue through the existing workflow.
 
 For a provisioned fixture, the planner declares `journey.readiness`: up to five
 assertion steps proving the required data is visible through the running app's
-API or UI. The host runs these checks in a fresh session before journey actions.
+API or initial UI. Each readiness assertion requires an exact `expect_json`,
+`expect_text`, or `expect_url` check. Check fixture registration through the API
+when the entry page does not display it; keep that check separate from visible
+entry controls. Actions such as submitting a message or approving a command belong
+in the journey, not readiness. Semantic/visual judgments remain available for
+product assertions. The host runs readiness in a fresh session before journey actions.
 A seed command exiting successfully is insufficient. Failed readiness returns
 `SETUP_NOT_READY` evidence to the setup executor for log/API inspection and
 correction. After two repair opportunities, continued failure finalizes the case

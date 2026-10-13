@@ -508,3 +508,42 @@ def test_real_browser_readiness_gates_fixed_journey(tmp_path, web_app, visible):
     else:
         assert not actor.contexts and not runner.test_results
         assert not list((artifacts.path / "tests").glob("*.py"))
+
+
+def test_semantic_readiness_claim_is_rejected_before_execution():
+    raw = case('http://localhost', semantic=True).model_dump()
+    raw['journey']['readiness'] = [{
+        'kind': 'assert',
+        'instruction': 'Repository is visible and message submission works',
+    }]
+    with pytest.raises(ValueError, match='Readiness requires an exact'):
+        Case.model_validate(raw)
+    raw['journey']['readiness'] = []
+    assert Case.model_validate(raw).journey.steps[-1].check is None
+
+
+@pytest.mark.parametrize('registered', [True, False])
+def test_api_fixture_readiness_does_not_require_fixture_on_entry_screen(tmp_path, web_app, registered):
+    from open_verify.journey_spec import AssertStep
+
+    artifacts = Artifacts(tmp_path / 'runs')
+    target = case(web_app)
+    target.journey.readiness = [AssertStep(kind='assert', instruction='Fixture is registered in the API',
+        check={'kind': 'expect_json', 'path': '/api', 'field': ['items'],
+               'value': [1, 2] if registered else [99]})]
+    planned = plan()
+    planned['plan']['cases'] = [target.model_dump()]
+    actions = [action('run_journey', case_id=target.id)] * (1 if registered else 3)
+    actor = Actor()
+    runner = VerificationRunner(ScriptedAgent([planned, *actions]),
+        LocalTools(tmp_path, artifacts, headless=True), artifacts,
+        journey_executor=actor, progress=lambda _: None)
+    report = asyncio.run(runner.run('Check the cart and retain visual evidence'))
+    assert report['findings'][0]['status'] == ('passed' if registered else 'blocked')
+    if registered:
+        assert actor.contexts
+        assert any(name.endswith('.gif') for name in runner.test_results[-1].screenshots)
+        manifest = json.loads((artifacts.path / 'manifest.json').read_text())
+        assert any(item['media_type'] == 'image/gif' for item in manifest['artifacts'])
+    else:
+        assert not actor.contexts and not runner.test_results
