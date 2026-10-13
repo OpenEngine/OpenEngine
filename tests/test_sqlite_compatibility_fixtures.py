@@ -24,7 +24,7 @@ def test_v0_database_restores_history_and_accepts_new_writes(
     async def scenario() -> None:
         store = sqlite_store(database)
         try:
-            run = await store.load(RunId("run-seeded-history"))
+            run = next(row for row in store.legacy_runs() if row.run_id == RunId("run-seeded-history"))
             assert run is not None
             assert run.phase is RunPhase.SUCCEEDED
 

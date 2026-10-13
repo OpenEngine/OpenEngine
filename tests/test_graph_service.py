@@ -19,7 +19,7 @@ import httpx
 import pytest
 import yaml
 from engine.domain import RunId, WorkspaceId
-from engine.graph_runtime import RunStatus
+from engine.graph_runtime import GraphId, RunStatus
 from engine.graph_runtime_langgraph import (
     LangGraphRuntime,
     PullRequestRecord,
@@ -942,6 +942,17 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
                     assert body["results"]["review"] == "echo: review echo: do it (plain)"
                     listed = (await client.get("/api/runs")).json()["runs"]
                     assert [item["runId"] for item in listed] == [run_id]
+                    assert listed[0]["phase"] == "succeeded"
+                    web_run = await client.post("/api/runs", json={
+                        "workflowId": run.json()["versionId"], "prompt": "from web",
+                        "repository": "example/repo",
+                    })
+                    assert web_run.status_code == 201, web_run.text
+                    web_id = web_run.json()["runId"]
+                    cli_runs = (await client.get("/api/v1/runs")).json()["runs"]
+                    row = next(item for item in cli_runs if item["runId"] == web_id)
+                    assert row["graphId"] is None and row["version"] is None
+                    assert (await client.get(f"/api/v1/runs/{web_id}")).status_code == 200
             store.close()
 
     asyncio.run(scenario())
@@ -1226,5 +1237,27 @@ def test_onboarded_runner_survives_python_rebuild_with_session_config(tmp_path):
                 assert inputs[name].default == "opencode"
                 assert "opencode" in inputs[name].choices
             assert graph["name"] == starters.DEFAULT
+    asyncio.run(scenario())
+
+
+def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp_path):
+    from engine.graph_runtime.metadata import RunMetadata
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            await service.runtime.store.save_metadata(
+                RunId("reserved"), GraphId("unregistered"),
+                RunMetadata(name="Waiting", requester="alice", origin_channel="slack", scheduled=True),
+            )
+            rows = await service.list_runs(None, requester="alice", origin="slack")
+            assert len(rows) == 1
+            assert rows[0]["runId"] == "reserved"
+            assert rows[0]["status"] == "scheduled"
+            assert rows[0]["name"] == "Waiting"
+            assert (await service.list_runs("default"))[0]["runId"] == "reserved"
+            assert rows[0]["graphId"] is None and rows[0]["version"] is None
+            assert await service.list_runs(None, requester="bob") == []
+            assert await service.list_runs(None, origin="github") == []
+            assert (await service.run_json("reserved"))["status"] == "scheduled"
 
     asyncio.run(scenario())

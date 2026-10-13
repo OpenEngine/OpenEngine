@@ -72,7 +72,7 @@ def test_slack_controls_graph_workorder(
         graph_runtime=opened,
     )
     with client(app) as browser:
-        browser.portal.call(capabilities.state_store.save, saved_run())
+        browser.portal.call(app.state.run_reader.save, saved_run())
         send(browser, app, "Please handle this", author)
         result = provider.clients[0].result
         if author == "STRANGER":
@@ -96,7 +96,7 @@ def test_slack_controls_graph_workorder(
                 assert "requested changes" in runtime.steer.await_args.args[1]
                 assert arguments["summary"] in runtime.steer.await_args.args[1]
                 assert "implementation resumed" in result["content"][0]["text"]
-            assert len(browser.portal.call(capabilities.state_store.list_runs)) == 1
+            assert len(browser.portal.call(app.state.run_reader.list_runs)) == 1
         runtime.start.assert_not_awaited()
 
 
@@ -112,7 +112,7 @@ def test_pending_question_cannot_be_bypassed(action, *, slack_app, client):
         graph_runtime=opened,
     )
     with client(app) as browser:
-        browser.portal.call(capabilities.state_store.save, saved_run())
+        browser.portal.call(app.state.run_reader.save, saved_run())
         send(browser, app, "Do it")
         assert provider.clients[0].result["isError"]
         runtime.steer.assert_not_awaited()
@@ -135,7 +135,7 @@ def test_multiple_workorders_are_selected_in_slack_per_sender(*, slack_app, clie
             replace(saved_run("first"), name='Ask <@U123> & keep "quotes"'),
             replace(saved_run("second"), prompt="Fix <!channel> & <@U456>"),
         ):
-            browser.portal.call(capabilities.state_store.save, run)
+            browser.portal.call(app.state.run_reader.save, run)
         send(browser, app, "Fix it")
         assert not provider.clients
         assert "Which WorkOrder" in communications.posts[-1][1].text
@@ -212,7 +212,8 @@ def test_followup_reenters_same_real_graph(tmp_path, ending, *, slack_app, clien
     )
     with client(app) as browser:
         runtime = runtimes[0]
-        browser.portal.call(capabilities.state_store.save, saved_run())
+        from engine.domain import RunPhase
+        browser.portal.call(app.state.run_reader.save, replace(saved_run(), phase=RunPhase.SCHEDULED))
 
         async def start():
             await runtime.start(GraphId("implementation-review-v1"), {}, run_id=RunId("existing"))
@@ -229,7 +230,7 @@ def test_followup_reenters_same_real_graph(tmp_path, ending, *, slack_app, clien
         assert not provider.clients[0].result.get("isError"), provider.clients[0].result
         browser.portal.call(settle, runtime, lambda s: len(received) == 2)
         assert "Fix the broken login" in received[1][0]
-        assert len(browser.portal.call(capabilities.state_store.list_runs)) == 1
+        assert len(browser.portal.call(app.state.run_reader.list_runs)) == 1
 
 
 @pytest.mark.parametrize("pending,approval_id", [
@@ -252,7 +253,7 @@ def test_answers_cannot_approve_reviews_permissions_or_stale_questions(
         graph_runtime=opened,
     )
     with client(app) as browser:
-        browser.portal.call(capabilities.state_store.save, saved_run())
+        browser.portal.call(app.state.run_reader.save, saved_run())
         send(browser, app, "yes")
         assert provider.clients[0].result["isError"]
         runtime.steer.assert_not_awaited()

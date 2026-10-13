@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -46,9 +46,12 @@ from engine.domain import (
     ApprovalKind,
     ApprovalStatus,
     RunId,
+    RunOrigin,
 )
 from langgraph_acp import ACPContinuation
 from migrations.migration import upgrade_connection
+
+from engine.graph_runtime.metadata import RunMetadata, RunMetadataStore
 
 from engine.graph_runtime.events import EventKind, EventStore, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
@@ -66,6 +69,7 @@ class RunRecord:
     auto_approve_nodes: tuple[NodeId, ...] = ()
     runner_overrides: Mapping[NodeId, str] = field(default_factory=dict)
     forge_context: Mapping[str, str] = field(default_factory=dict)
+    metadata: RunMetadata = field(default_factory=RunMetadata)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +182,7 @@ class PullRequestRecord:
 
 
 @runtime_checkable
-class GraphRuntimeStore(EventStore, Protocol):
+class GraphRuntimeStore(EventStore, RunMetadataStore, Protocol):
     """The durable half of the runtime, including the event history."""
 
     async def remember_run(self, record: RunRecord) -> None:
@@ -327,13 +331,47 @@ class InMemoryGraphRuntimeStore:
         return tuple(event for event in self._events.get(run_id, ())[cursor:] if kind is None or event.kind is kind)
 
     async def remember_run(self, record: RunRecord) -> None:
-        self._runs[record.run_id] = record
+        previous = self._runs.get(record.run_id)
+        self._runs[record.run_id] = replace(record, metadata=previous.metadata) if previous else record
 
     async def run(self, run_id: RunId) -> RunRecord | None:
         return self._runs.get(run_id)
 
     async def runs(self) -> tuple[RunRecord, ...]:
         return tuple(self._runs.values())
+
+    async def save_metadata(self, run_id: RunId, graph_id: GraphId,
+                            metadata: RunMetadata, *, only_missing: bool = False) -> None:
+        record = self._runs.get(run_id)
+        if record is None:
+            record = RunRecord(run_id, graph_id)
+        elif only_missing:
+            metadata = replace(metadata, **{
+                item.name: getattr(record.metadata, item.name)
+                for item in fields(RunMetadata)
+                if getattr(record.metadata, item.name) is not None
+            })
+        self._runs[run_id] = replace(record, metadata=metadata)
+
+    async def import_metadata(self, records: Sequence[tuple[RunId, GraphId, RunMetadata]]) -> None:
+        previous = self._runs.copy()
+        try:
+            for run_id, graph_id, metadata in records:
+                await self.save_metadata(run_id, graph_id, metadata, only_missing=True)
+        except BaseException:
+            self._runs = previous
+            raise
+
+    async def list_runs(self) -> tuple[RunRecord, ...]:
+        return tuple(sorted(reversed(tuple(self._runs.values())),
+                            key=lambda row: row.metadata.created_at or "", reverse=True))
+
+    async def list_runs_for_origin(self, channel: str, thread_id: str) -> tuple[RunRecord, ...]:
+        return tuple(row for row in await self.list_runs()
+                     if row.metadata.origin_channel == channel and row.metadata.origin_thread_id == thread_id)
+
+    async def delete_run(self, run_id: RunId) -> bool:
+        return self._runs.pop(run_id, None) is not None
 
     async def remember_session(
         self, run_id: RunId, session_key: str, continuation: ACPContinuation
@@ -466,6 +504,7 @@ class SqliteGraphRuntimeStore:
         return self._ordinal
 
     async def remember_run(self, record: RunRecord) -> None:
+        existing = await self.run(record.run_id)
         self._connection.execute(
             "INSERT INTO runs (run_id, graph_id, error, ordinal, auto_approve_nodes, runner_overrides, forge_context) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) "
@@ -482,6 +521,8 @@ class SqliteGraphRuntimeStore:
                 json.dumps(dict(record.forge_context)),
             ),
         )
+        if existing is None and record.metadata != RunMetadata():
+            await self.save_metadata(record.run_id, record.graph_id, record.metadata)
 
     async def run(self, run_id: RunId) -> RunRecord | None:
         row = self._connection.execute(
@@ -492,6 +533,48 @@ class SqliteGraphRuntimeStore:
     async def runs(self) -> tuple[RunRecord, ...]:
         rows = self._connection.execute("SELECT * FROM runs ORDER BY ordinal").fetchall()
         return tuple(_run_from(row) for row in rows)
+
+    async def save_metadata(self, run_id: RunId, graph_id: GraphId,
+                            metadata: RunMetadata, *, only_missing: bool = False) -> None:
+        names = tuple(item.name for item in fields(RunMetadata))
+        values = asdict(metadata)
+        for name in ("inputs", "origin"):
+            if values[name] is not None:
+                values[name] = json.dumps(values[name])
+        updates = ", ".join(
+            f"{name} = COALESCE(runs.{name}, excluded.{name})" if only_missing
+            else f"{name} = excluded.{name}" for name in names
+        )
+        self._connection.execute(
+            f"INSERT INTO runs (run_id, graph_id, error, ordinal, {', '.join(names)}) "
+            f"VALUES (?, ?, '', ?, {', '.join('?' for _ in names)}) "
+            f"ON CONFLICT(run_id) DO UPDATE SET {updates}",
+            (str(run_id), str(graph_id), self._next(), *(values[name] for name in names)),
+        )
+
+    async def import_metadata(self, records: Sequence[tuple[RunId, GraphId, RunMetadata]]) -> None:
+        # Commit the entire startup handoff before acknowledging legacy rows.
+        self._connection.execute("SAVEPOINT import_run_metadata")
+        try:
+            for run_id, graph_id, metadata in records:
+                await self.save_metadata(run_id, graph_id, metadata, only_missing=True)
+        except BaseException:
+            self._connection.execute("ROLLBACK TO import_run_metadata")
+            raise
+        finally:
+            self._connection.execute("RELEASE import_run_metadata")
+
+    async def list_runs(self) -> tuple[RunRecord, ...]:
+        return tuple(_run_from(row) for row in self._connection.execute(
+            "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC"))
+
+    async def list_runs_for_origin(self, channel: str, thread_id: str) -> tuple[RunRecord, ...]:
+        return tuple(_run_from(row) for row in self._connection.execute(
+            "SELECT * FROM runs WHERE origin_channel = ? AND origin_thread_id = ? "
+            "ORDER BY created_at DESC, rowid DESC", (channel, thread_id)))
+
+    async def delete_run(self, run_id: RunId) -> bool:
+        return self._connection.execute("DELETE FROM runs WHERE run_id = ?", (str(run_id),)).rowcount > 0
 
     async def remember_session(
         self, run_id: RunId, session_key: str, continuation: ACPContinuation
@@ -678,6 +761,16 @@ def _run_from(row: sqlite3.Row) -> RunRecord:
         run_id=RunId(row["run_id"]),
         graph_id=GraphId(row["graph_id"]),
         error=row["error"],
+        metadata=RunMetadata(
+            name=row["name"], prompt=row["prompt"], repository=row["repository"],
+            inputs=json.loads(row["inputs"]) if row["inputs"] is not None else None,
+            requester=row["requester"], origin_channel=row["origin_channel"],
+            origin_thread_id=row["origin_thread_id"],
+            origin=RunOrigin(**json.loads(row["origin"])) if row["origin"] is not None else None,
+            task_id=row["task_id"], parent_run_id=row["parent_run_id"],
+            depends_on_run_id=row["depends_on_run_id"], scheduled=bool(row["scheduled"]),
+            failure_reason=row["failure_reason"], created_at=row["created_at"], started_at=row["started_at"],
+        ),
         runner_overrides=json.loads(row["runner_overrides"]),
         forge_context=json.loads(row["forge_context"]),
         auto_approve_nodes=tuple(

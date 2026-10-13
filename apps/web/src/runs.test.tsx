@@ -1152,3 +1152,19 @@ it("polls graph events incrementally and retains completed nodes", async () => {
     expect(within(node).getByText("completed", { selector: ".chip" })).toBeVisible();
   }
 });
+
+it("pages older WorkOrders and returns to the current page", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => json(
+    url.includes("offset=100")
+      ? { runs: [run({ runId: "older" })], nextOffset: null }
+      : { runs: [run({ runId: "newer" })], nextOffset: 100 },
+  )));
+  const { result } = renderHook(() => useRuns());
+  await waitFor(() => expect(result.current.runs[0]?.runId).toBe("newer"));
+  expect(result.current.previousPage).toBeUndefined();
+  act(() => result.current.nextPage?.());
+  await waitFor(() => expect(result.current.runs[0]?.runId).toBe("older"));
+  expect(result.current.nextPage).toBeUndefined();
+  act(() => result.current.previousPage?.());
+  await waitFor(() => expect(result.current.runs[0]?.runId).toBe("newer"));
+});

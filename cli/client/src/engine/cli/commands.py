@@ -113,7 +113,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
     onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
     onboard.add_argument("url", nargs="?")
-    onboard.add_argument("--path", help="checkout path on the daemon machine")
+    onboard.add_argument("--path", help="checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
     onboard.add_argument("--mode", choices=("connected", "disconnected"))
 
     graph = commands.add_parser("graph", help="register, inspect and run graphs")
@@ -164,6 +164,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     runs.add_argument("--all-projects", action="store_true")
     runs.add_argument("--graph", default="", help="only runs of this graph")
     runs.add_argument("--loop", default="", help="only runs this loop started")
+    runs.add_argument("--requester", default="", help="only runs requested by this identity")
+    runs.add_argument("--origin", default="", help="only runs from this origin channel")
     runs.add_argument("--status", default="", help="only runs in this status, such as running or failed")
     runs.add_argument("--limit", type=int, default=20, help="at most this many (default: 20)")
 
@@ -549,10 +551,11 @@ def runs_list(arguments: argparse.Namespace) -> int:
     runs = client.get(
         "/runs", project=project, graph=arguments.graph or None, loop=arguments.loop or None,
         status=arguments.status or None, limit=str(arguments.limit),
+        requester=arguments.requester or None, origin=arguments.origin or None,
     )["runs"]
     if not arguments.json:
         _table(runs, [
-            ("RUN ID", "runId"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}"), ("STATUS", "status"),
+            ("RUN ID", "runId"), ("NAME", "name"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}" if r["version"] is not None else r["graph"]), ("STATUS", "status"),
             ("LOOP", "loop"), ("STARTED", "startedAt"), ("SPEND", _run_spend),
         ])
     else:

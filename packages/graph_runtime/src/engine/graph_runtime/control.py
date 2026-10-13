@@ -48,6 +48,7 @@ from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
 class RunStatus(Enum):
     """Where a run is, as far as anyone outside it can tell."""
 
+    SCHEDULED = "scheduled"
     RUNNING = "running"
     AWAITING_APPROVAL = "awaiting_approval"
     """At least one execution is waiting on a person.

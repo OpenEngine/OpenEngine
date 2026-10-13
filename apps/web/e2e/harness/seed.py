@@ -1,4 +1,4 @@
-"""Seed a completed WorkOrder and chat through the SQLite adapter.
+"""Seed a historical WorkOrder and chat through their SQLite stores.
 
 The browser opens this file in a separate process to exercise cold-start
 navigation, including a WorkOrder whose workflow is no longer installed.
@@ -14,14 +14,21 @@ from engine.domain import (
     AgentId, AgentInstanceId, ConversationId, Message,
     RunId, RunPhase, RunState, TaskId, WorkflowId,
 )
+from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore
+from engine.runtime.run_read_model import RunReader
 
 CHAT_INSTANCE = AgentInstanceId("agi-seeded-chat")
 
 async def seed(path: Path, repository: str) -> None:
     store = SQLiteStateStore(path)
+    graph_directory = path.parent / "graph-state"
+    graph_directory.mkdir(parents=True, exist_ok=True)
+    graph_store = SqliteGraphRuntimeStore(graph_directory / "graph-runs.sqlite3")
+    runs = RunReader()
+    runs.store = graph_store
     try:
         await _seed_chat(store)
-        await store.save(RunState(
+        await runs.save(RunState(
             run_id=RunId("run-seeded-history"),
             task_id=TaskId("task-seeded-history"),
             workflow_id=WorkflowId("retired-workflow"),
@@ -31,6 +38,7 @@ async def seed(path: Path, repository: str) -> None:
             name="Seeded navigation coverage",
         ))
     finally:
+        graph_store.close()
         store.close()
 
 

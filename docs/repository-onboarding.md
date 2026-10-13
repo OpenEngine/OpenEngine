@@ -2,8 +2,18 @@
 
 Run `engine onboard https://github.com/owner/repo` and choose connected or
 disconnected mode. Use `--mode connected` (or `disconnected`) to skip the prompt,
-and `--path /absolute/checkout` to choose a destination instead of `~/code/repo`.
-With no URL, `engine onboard` registers the current GitHub checkout with a local daemon.
+and `--path /absolute/checkout` to choose a destination instead of the default
+checkout directory. With no URL, `engine onboard` registers the current GitHub
+checkout with a local daemon.
+
+By default a pathless onboarding clones into `~/code/repo`. Set
+`[onboarding] directory` in `engine.toml` to change that parent directory, for
+example `directory = "~/code/work"`, so a deployment that keeps checkouts
+elsewhere need not pass `--path` on every call, from every surface. An explicit
+`--path` (CLI, web, MCP) and an existing checkout of the same remote still take
+precedence. When set, a relative value resolves against the configuration
+file's directory, as do the other configuration-relative paths; an empty value
+keeps the `~/code` default.
 
 The web UI offers **Add repository** on the WorkOrder form and on first run.
 MCP clients can call `onboard_repository(repository, path?, mode?)`, then poll

@@ -96,14 +96,14 @@ def test_agent_transcript_is_mirrored(
                 "workflowId": "mirror-test", "prompt": "Implement it", "repository": "acme/api",
             })
             assert response.status_code < 300, response.text
-        runs = browser.portal.call(capabilities.state_store.list_runs)
+        runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
         run_id = runs[0].run_id
 
         async def finished():
             async with asyncio.timeout(10):
                 while True:
-                    state = await capabilities.state_store.load(run_id)
+                    state = await app.state.run_reader.load(run_id)
                     if state.phase in (RunPhase.SUCCEEDED, RunPhase.FAILED):
                         return state
                     await asyncio.sleep(0.01)
@@ -201,22 +201,21 @@ def test_human_review_slack_sequence(
         }}).encode()
         assert browser.post("/api/slack/events", content=body, headers=_signed(body)).status_code == 200
         browser.portal.call(app.state.slack_ingress.drain)
-        runs = browser.portal.call(capabilities.state_store.list_runs)
+        runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
         run_id = runs[0].run_id
 
         async def wait_for_phase(phase):
             async with asyncio.timeout(10):
-                while (await capabilities.state_store.load(run_id)).phase is not phase:
+                while (await app.state.run_reader.load(run_id)).phase is not phase:
                     await asyncio.sleep(0.01)
 
-        async def wait_for_review():
+        async def wait_for_message(text):
             async with asyncio.timeout(10):
-                while not any(m.text == "Review complete and ready for your decision."
-                              for _, m, _ in communications.posts):
+                while not any(m.text == text for _, m, _ in communications.posts):
                     await asyncio.sleep(0.01)
 
-        browser.portal.call(wait_for_review)
+        browser.portal.call(wait_for_message, "Review complete and ready for your decision.")
         events = browser.get(f"/api/runs/{run_id}/graph-events").json()["events"]
         approval = next(e for e in events if e["type"] == "approval.requested")
         response = browser.post(
@@ -225,6 +224,11 @@ def test_human_review_slack_sequence(
         )
         assert response.status_code < 300, response.text
         browser.portal.call(wait_for_phase, RunPhase.SUCCEEDED if decision == "accept" else RunPhase.FAILED)
+        # The runtime snapshot can be terminal before its notification is delivered.
+        browser.portal.call(wait_for_message, (
+            "Work order finished." if decision == "accept"
+            else "Work order failed: approval of this run was not allowed"
+        ))
         events = browser.get(f"/api/runs/{run_id}/graph-events").json()["events"]
         # Internal narration remains available in OE but cannot count as a report.
         transcripts = [e["payload"]["text"] for e in events if e["type"] == "transcript"]
