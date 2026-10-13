@@ -1087,7 +1087,7 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                     assert registered.status_code == 201, registered.text
                     refused = await client.post("/api/v1/runs", json={
                         "project": "default", "graph": starters.DEFAULT,
-                        "instruction": "Fix the review", "inputs": {"fix_only": "true"},
+                        "instruction": "Implement the task",
                     })
                     assert refused.status_code == 400, refused.text
                     assert "engine agent signin" in refused.text
