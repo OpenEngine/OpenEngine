@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from importlib.metadata import version
 
-from engine.apps.cli import connect, daemon, session
+from engine.apps.cli import connect, daemon, session, vm
 from engine.cli import commands as graph_commands
 
 EXIT_OK = 0
@@ -25,6 +25,7 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command")
     connect.add_parsers(commands)
     daemon.add_parser(commands)
+    vm.add_parser(commands)
     doctor = commands.add_parser("doctor", help="check local configuration, tools and SmolVM support")
     doctor.add_argument("--json", action="store_true")
     session.add_parser(graph_commands.add_parsers(commands))
@@ -45,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
         return connect.disconnect(arguments)
     if arguments.command == "daemon":
         return daemon.main(arguments)
+    if arguments.command == "vm":
+        return vm.main(arguments)
     if arguments.command == "doctor":
         return daemon.command_doctor(arguments)
     if arguments.command == "agent" and arguments.action == "claude":

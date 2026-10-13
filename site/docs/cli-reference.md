@@ -140,6 +140,21 @@ engine daemon doctor [-h] [--json]
 | --- | --- |
 | `--json` |  |
 
+## `engine vm`
+
+Show or select the local sandbox backend.
+
+```text
+engine vm [-h] [--image IMAGE] [--config CONFIG] [--json] [{process,smolvm}]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `backend` | process is the default; one of `process`, `smolvm` |
+| `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
+| `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
+| `--json` | print the configured backend as JSON |
+
 ## `engine doctor`
 
 Check local configuration, tools and SmolVM support.

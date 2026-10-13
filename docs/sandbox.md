@@ -58,6 +58,31 @@ host execution. `engine doctor` (also `engine daemon doctor`) reports platform,
 KVM access and binary/version availability. Missing SmolVM is a warning with
 the default process backend and an error when the VM backend is selected.
 
+Select the local sandbox backend with the CLI:
+
+```sh
+engine vm                         # Show the configured backend (process by default)
+engine vm process                 # Use local subprocesses
+engine vm smolvm --image /absolute/path/to/openengine-sandbox.tar
+```
+
+`engine vm` uses `ENGINE_CONFIG` or the installed user's configuration. Add
+`--config /path/to/engine.toml` to select another file and `--json` for structured
+output. Selection updates only the sandbox settings, preserving other settings,
+comments and file permissions. Switching to SmolVM requires a readable, nonempty
+local image archive and a supported host with SmolVM 1.25.2 or newer. The command
+checks the managed service's PATH when configured; it does not boot a VM or verify
+the image's guest tools or architecture. An omitted `--image` reuses the configured
+image, with relative paths resolved beside the config file. A supplied relative
+image path resolves against the current directory and is saved as an absolute path.
+Switching back to `process` keeps the image setting for later reuse and requires
+no SmolVM installation. Failed checks leave configuration unchanged.
+
+Restart running services after changing the backend (`engine daemon restart` for
+the managed local service). The command selects the sandbox capability; it does
+not move existing agent or LangGraph node execution into VMs. That routing is
+follow-up work in #674. Local subprocesses remain the default.
+
 This port is available through `Capabilities.sandbox` in the application
 composition roots. Existing node and agent execution paths retain their current
 host behavior; routing those paths through this port is follow-up work.

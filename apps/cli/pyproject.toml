@@ -3,7 +3,7 @@ name = "engine-cli"
 version = "1.6.0"
 description = "Terminal control surface for a local or remote OpenEngine service."
 requires-python = ">=3.11"
-dependencies = ["engine-runtime", "engine-graph-cli", "platformdirs>=4", "engine-adapter-sandbox-smolvm"]
+dependencies = ["engine-runtime", "engine-graph-cli", "platformdirs>=4", "tomlkit>=0.13", "engine-adapter-sandbox-smolvm"]
 
 [project.scripts]
 engine = "engine.apps.cli.__main__:main"
