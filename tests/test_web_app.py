@@ -3639,6 +3639,8 @@ def test_retired_project_routes_and_conversation_ownership_are_absent(
 
 def _scoped_app(tmp_path, runtime=None, *, live=False, workflow_app):
     """Two checkouts behind GitHub login, and a run in each place a run can be."""
+    from engine.runtime.config import WorkOrdersConfig
+
     graph = _review_graph()
     store = WebStores()
     repos = {"api": str(tmp_path / "api"), "web": str(tmp_path / "web")}
@@ -3648,6 +3650,7 @@ def _scoped_app(tmp_path, runtime=None, *, live=False, workflow_app):
         github_login_config=GitHubLoginConfig(
             "client", "secret", "https://engine.test/api/auth/github/callback"
         ),
+        work_orders=WorkOrdersConfig(repository="api"),
         repos=registry if live else repos,
         login_repositories=("acme/api", "acme/web"),
         repository_projects={"api": "acme/api", "web": "acme/web"},
@@ -3665,6 +3668,7 @@ def _scoped_app(tmp_path, runtime=None, *, live=False, workflow_app):
         ("run-web", "web", RunPhase.SUCCEEDED),
         ("run-web-scheduled", "web", RunPhase.SCHEDULED),
         ("run-elsewhere", "/srv/unknown", RunPhase.SUCCEEDED),
+        ("run-repositoryless", "", RunPhase.SUCCEEDED),
     ):
         asyncio.run(store.seed_run(RunState(
             run_id=RunId(run_id), task_id=TaskId(f"task-{run_id}"),
@@ -3704,10 +3708,19 @@ def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(
                 assert sorted(run["runId"] for run in listed) == [
                     "run-api", "run-api-path", "run-github",
                 ]
+                page = (await client.get("/api/runs?limit=1")).json()
+                assert len(page["runs"]) == 1
+                assert page["nextOffset"] == 1
+                next_page = (await client.get("/api/runs?limit=1&offset=1")).json()
+                assert next_page["runs"][0]["runId"] != page["runs"][0]["runId"]
+                assert (await client.get("/api/runs?limit=invalid")).status_code == 400
                 assert (await client.get("/api/runs/run-api")).status_code == 200
                 for method, path in (
                     ("GET", "/api/runs/run-web"),
                     ("GET", "/api/runs/run-elsewhere"),
+                    ("GET", "/api/runs/run-repositoryless"),
+                    ("GET", "/graph/api/runs/run-repositoryless"),
+                    ("GET", "/api/runs/run-repositoryless/graph-events"),
                     ("POST", "/api/runs/run-web-scheduled/start"),
                     ("DELETE", "/api/runs/run-web"),
                     ("GET", "/api/runs/run-web/graph-events"),
@@ -3966,7 +3979,7 @@ def test_operators_see_every_run(async_client, tmp_path, *, workflow_app) -> Non
     ):
         runs, repositories = asyncio.run(scenario())
     assert runs == {
-        "run-api", "run-api-path", "run-github", "run-web", "run-web-scheduled", "run-elsewhere",
+        "run-api", "run-api-path", "run-github", "run-web", "run-web-scheduled", "run-elsewhere", "run-repositoryless",
     }
     assert [repo["name"] for repo in repositories] == ["api", "web"]
 

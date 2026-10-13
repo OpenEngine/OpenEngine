@@ -353,6 +353,15 @@ class InMemoryGraphRuntimeStore:
             })
         self._runs[run_id] = replace(record, metadata=metadata)
 
+    async def import_metadata(self, records: Sequence[tuple[RunId, GraphId, RunMetadata]]) -> None:
+        previous = self._runs.copy()
+        try:
+            for run_id, graph_id, metadata in records:
+                await self.save_metadata(run_id, graph_id, metadata, only_missing=True)
+        except BaseException:
+            self._runs = previous
+            raise
+
     async def list_runs(self) -> tuple[RunRecord, ...]:
         return tuple(sorted(reversed(tuple(self._runs.values())),
                             key=lambda row: row.metadata.created_at or "", reverse=True))
@@ -542,6 +551,18 @@ class SqliteGraphRuntimeStore:
             f"ON CONFLICT(run_id) DO UPDATE SET {updates}",
             (str(run_id), str(graph_id), self._next(), *(values[name] for name in names)),
         )
+
+    async def import_metadata(self, records: Sequence[tuple[RunId, GraphId, RunMetadata]]) -> None:
+        # Commit the entire startup handoff before acknowledging legacy rows.
+        self._connection.execute("SAVEPOINT import_run_metadata")
+        try:
+            for run_id, graph_id, metadata in records:
+                await self.save_metadata(run_id, graph_id, metadata, only_missing=True)
+        except BaseException:
+            self._connection.execute("ROLLBACK TO import_run_metadata")
+            raise
+        finally:
+            self._connection.execute("RELEASE import_run_metadata")
 
     async def list_runs(self) -> tuple[RunRecord, ...]:
         return tuple(_run_from(row) for row in self._connection.execute(

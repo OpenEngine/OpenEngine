@@ -172,6 +172,8 @@ export function useGraphNodes(runs: ApiWorkflowRunListing[]) {
 /** The runs behind both the workflow pages and the rail's Workflows section,
  *  kept current by the shell so every screen shows the same list. */
 export function useRuns() {
+  const [offset, setOffset] = useState(0);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [runs, setRuns] = useState<ApiWorkflowRunListing[]>([]);
   const [error, setError] = useState("");
   // An empty list means "nothing has been run" only once a poll has answered.
@@ -182,10 +184,11 @@ export function useRuns() {
     let cancelled = false;
     let timer: number | undefined;
     const load = () => {
-      api<{ runs: ApiWorkflowRunListing[] }>("/api/runs")
+      api<{ runs: ApiWorkflowRunListing[]; nextOffset?: number | null }>(offset ? `/api/runs?offset=${offset}` : "/api/runs")
         .then((value) => {
           if (cancelled) return;
           setRuns(value.runs);
+          setNextOffset(value.nextOffset ?? null);
           setError("");
           setLoaded(true);
         })
@@ -201,7 +204,7 @@ export function useRuns() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, []);
+  }, [offset]);
   // Deleting is not archiving: there is no list the run moves into and nothing
   // to restore it from, so the click is asked about before it is made. The row
   // then leaves on the click rather than a second later, when the poll next
@@ -211,10 +214,17 @@ export function useRuns() {
     setRuns((current) => current.filter((item) => item.runId !== run.runId));
     void deleteRun(run.runId).catch(() => {});
   };
-  return { runs, error, loaded, remove };
+  return {
+    runs, error, loaded, remove,
+    previousPage: offset > 0 ? () => setOffset(Math.max(0, offset - 100)) : undefined,
+    nextPage: nextOffset !== null ? () => setOffset(nextOffset) : undefined,
+  };
 }
 
-export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error: string }) {
+export function RunsPage({ runs, error, previousPage, nextPage }: {
+  runs: ApiWorkflowRunListing[]; error: string;
+  previousPage?: () => void; nextPage?: () => void;
+}) {
   const [filter, setFilter] = useState<string>("");
   // What the reader typed to narrow the list by name. Held apart from the
   // phase buttons so the two narrow together: a title is how a WorkOrder is
@@ -262,6 +272,12 @@ export function RunsPage({ runs, error }: { runs: ApiWorkflowRunListing[]; error
           Each WorkOrder brings the task, agent steps, outputs, and human decision together.
         </p>
       </header>
+      {(previousPage || nextPage) && (
+        <nav aria-label="WorkOrder pages">
+          <button disabled={!previousPage} onClick={previousPage}>Newer WorkOrders</button>
+          <button disabled={!nextPage} onClick={nextPage}>Older WorkOrders</button>
+        </nav>
+      )}
       <StatStrip>
         <Stat label="WorkOrders" value={listed.length} />
         <Stat label="Awaiting review" value={awaiting} tone={awaiting ? "alert" : undefined} />

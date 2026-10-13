@@ -1847,16 +1847,24 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             if surface.runtime else set()
         )
         runs = []
-        for run in await run_reader.list():
-            if not repository_visible(visible, run.repository):
-                continue
+        try:
+            limit = min(100, max(1, int(request.query_params.get("limit", "100"))))
+            offset = max(0, int(request.query_params.get("offset", "0")))
+        except ValueError:
+            return JSONResponse({"error": "limit and offset must be integers"}, status_code=400)
+        for run in await run_reader.list(
+            visible=lambda repository: visible is None or (
+                bool(repository) and repository_visible(visible, repository)
+            ),
+            limit=limit, offset=offset,
+        ):
             row = _run_json(run, listing=True)
             if run.phase not in {"scheduled", "succeeded", "failed"}:
                 progress = graph_progress.get(run.run_id)
                 if progress is not None and progress.topology.graph_id in available:
                     row["graphProgress"] = progress.json()
             runs.append(row)
-        return JSONResponse({"runs": runs})
+        return JSONResponse({"runs": runs, "nextOffset": offset + limit if len(runs) == limit else None})
 
     round_robin_turns: dict[str, int] = {}
 
@@ -4257,8 +4265,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         visible = await github_login.visible_repositories(request)
         if visible is None:
             return False
-        state = await run_reader.load(run_id)
-        return state is None or not repository_visible(visible, state.repository)
+        record = await run_reader.store.run(run_id) if run_reader.store else None
+        repository = record.metadata.repository if record else None
+        return not repository or not repository_visible(visible, repository)
 
     # The GitHub repository whose checkout holds each chat's workspace branch,
     # once found: the branch stays in the repository it was made in, attached

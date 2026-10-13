@@ -7,8 +7,10 @@ nothing that would have to be kept in step with a running graph.
 """
 
 from dataclasses import dataclass
-from collections.abc import Sequence
-from datetime import UTC, datetime
+from collections import OrderedDict
+from collections.abc import Callable, Sequence
+from time import monotonic
+from datetime import UTC, datetime, timedelta
 
 from engine.domain import (
     RunId,
@@ -45,6 +47,7 @@ class RunReader:
     """Build run views from durable state and the catalog's workflow names."""
 
     def __init__(self, catalog: WorkflowCatalog | None = None) -> None:
+        self._listing_cache: OrderedDict[RunId, tuple[float, MetadataRecord, RunState]] = OrderedDict()
         self.store: RunMetadataStore | None = None
         self.runtime: GraphRuntime | None = None
         self._catalog = catalog if catalog is not None else WorkflowCatalog.from_graphs(())
@@ -64,8 +67,29 @@ class RunReader:
             )
         }
 
-    async def list(self) -> tuple[WorkflowRunView, ...]:
-        return tuple(self._view(state) for state in await self.list_runs())
+    async def list(
+        self, *, visible: Callable[[str], bool] | None = None,
+        limit: int | None = None, offset: int = 0,
+    ) -> tuple[WorkflowRunView, ...]:
+        if self.store is None:
+            return ()
+        rows = [row for row in await self.store.list_runs()
+                if visible is None or visible(row.metadata.repository or "")]
+        rows = rows[offset:offset + limit if limit is not None else None]
+        states = []
+        for row in rows:
+            cached = self._listing_cache.get(row.run_id)
+            if cached and cached[0] > monotonic() and cached[1] == row:
+                state = cached[2]
+            else:
+                state = await self._state(row)
+                # Even completed runs expire: steering can resume them.
+                self._listing_cache[row.run_id] = (monotonic() + 5, row, state)
+            self._listing_cache.move_to_end(row.run_id)
+            while len(self._listing_cache) > 1000:
+                self._listing_cache.popitem(last=False)
+            states.append(state)
+        return tuple(self._view(state) for state in states)
 
     async def get(self, run_id: RunId) -> WorkflowRunView | None:
         state = await self.load(run_id)
@@ -107,7 +131,13 @@ class RunReader:
             message = "graph run store is unavailable"
             raise RuntimeError(message)
         old = await self.store.run(state.run_id)
-        metadata = RunMetadata(
+        metadata = self._metadata(state, created_at=old.metadata.created_at if old and old.metadata.created_at else datetime.now(UTC).isoformat())
+        await self.store.save_metadata(state.run_id, GraphId(str(state.workflow_id)), metadata, only_missing=only_missing)
+        self._listing_cache.pop(state.run_id, None)
+
+    @staticmethod
+    def _metadata(state: RunState, *, created_at: str | None) -> RunMetadata:
+        return RunMetadata(
             name=state.name, prompt=state.prompt, repository=state.repository,
             inputs=state.inputs, requester=state.requester, origin=state.origin,
             origin_channel=state.origin.channel if state.origin else None,
@@ -115,14 +145,22 @@ class RunReader:
             task_id=str(state.task_id), parent_run_id=state.parent_run_id,
             depends_on_run_id=state.depends_on_run_id, scheduled=state.phase is RunPhase.SCHEDULED,
             failure_reason=state.failure_reason,
-            created_at=old.metadata.created_at if old and old.metadata.created_at else datetime.now(UTC).isoformat(),
+            created_at=created_at,
             started_at=state.started_at.isoformat() if state.started_at else None,
         )
-        await self.store.save_metadata(state.run_id, GraphId(str(state.workflow_id)), metadata, only_missing=only_missing)
 
     async def backfill(self, states: Sequence[RunState]) -> None:
-        for state in states:
-            await self.save(state, only_missing=True)
+        if self.store is None:
+            raise RuntimeError("graph run store is unavailable")
+        # Legacy rows arrive oldest first. A historical fallback preserves that
+        # order even when existing graph rows were inserted in another order.
+        await self.store.import_metadata([
+            (state.run_id, GraphId(str(state.workflow_id)), self._metadata(
+                state, created_at=(state.started_at or (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=index))).isoformat(),
+            ))
+            for index, state in enumerate(states)
+        ])
+        self._listing_cache.clear()
 
     async def _state(self, record: MetadataRecord) -> RunState:
         metadata = record.metadata
