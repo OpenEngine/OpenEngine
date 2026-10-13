@@ -256,7 +256,7 @@ def main(arguments: argparse.Namespace) -> int:
 
 def onboard_repository(arguments: argparse.Namespace) -> int:
     backend, _ = _connect(arguments)
-    client = Client(backend, api_prefix="/api")
+    client = Client(backend)
     reference, path = arguments.url, arguments.path
     if not reference:
         if not backend.is_local:

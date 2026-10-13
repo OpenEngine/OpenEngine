@@ -36,9 +36,10 @@ class OnboardingError(ValueError):
 def repository_name(reference: str) -> str:
     # The adapter also accepts other hosts and trailing URL components. Onboarding
     # deliberately supports only complete GitHub repository references.
+    reference = re.sub(r"^gh\s+repo\s+clone\s+", "", reference.strip())
     if not re.fullmatch(
         r"(?:https://github\.com/|git@github\.com:)?"
-        r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", reference.strip(),
+        r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", reference,
     ):
         raise OnboardingError("repository", "Invalid GitHub repository reference", "Use https://github.com/owner/repo")
     return "/".join(_parse_repo_coords(reference))
@@ -240,7 +241,7 @@ class RepositoryOnboarding:
         return self.start(body["repository"], body.get("path"), mode)
 
     def routes(self, visible_repositories: Callable[[Request], Awaitable[object]],
-               is_local_request: Callable[[Request], bool]) -> list[Route]:
+                is_local_request: Callable[[Request], bool]) -> list[Route]:
         async def start(request: Request) -> JSONResponse:
             if not is_local_request(request):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
@@ -262,8 +263,31 @@ class RepositoryOnboarding:
                 return JSONResponse({"error": "onboarding job not found; retry onboarding"}, status_code=404)
             return JSONResponse(dict(job))
 
-        return [Route("/api/repositories/onboard", start, methods=["POST"]),
-                Route("/api/repositories/onboard/{job_id}", status)]
+        async def api_v1_start(request: Request) -> JSONResponse:
+            if await visible_repositories(request) is not None:
+                return JSONResponse({"error": "repository onboarding is for operators"}, status_code=403)
+            try:
+                body = await request.json()
+                return JSONResponse(self.start_request(body), status_code=202)
+            except OnboardingError as error:
+                return JSONResponse({"status": "failed", "message": str(error), "problems": [error.problem]})
+            except ValueError:
+                return JSONResponse({"error": "invalid JSON request"}, status_code=400)
+
+        async def api_v1_status(request: Request) -> JSONResponse:
+            if await visible_repositories(request) is not None:
+                return JSONResponse({"error": "repository onboarding is for operators"}, status_code=403)
+            job = self.jobs.get(request.path_params["job_id"])
+            if job is None:
+                return JSONResponse({"error": "onboarding job not found; retry onboarding"}, status_code=404)
+            return JSONResponse(dict(job))
+
+        return [
+            Route("/api/repositories/onboard", start, methods=["POST"]),
+            Route("/api/repositories/onboard/{job_id}", status),
+            Route("/api/v1/repositories/onboard", api_v1_start, methods=["POST"]),
+            Route("/api/v1/repositories/onboard/{job_id}", api_v1_status),
+        ]
 
     async def close(self) -> None:
         # Do not cancel a to_thread clone/config write while it is still running.

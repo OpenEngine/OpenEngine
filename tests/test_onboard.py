@@ -19,6 +19,14 @@ def test_repository_references(reference):
 
 
 @pytest.mark.parametrize('reference', [
+    'gh repo clone owner/repo', 'gh repo clone git@github.com:owner/repo.git',
+    'gh repo clone https://github.com/owner/repo',
+])
+def test_gh_repo_clone_prefix_stripped(reference):
+    assert onboard.repository_name(reference) == 'owner/repo'
+
+
+@pytest.mark.parametrize('reference', [
     'https://gitlab.com/owner/repo', 'git@evil.example:owner/repo.git',
     'https://github.com/owner/repo/tree/main', '../repo', 'owner', 'owner/repo?query',
 ])

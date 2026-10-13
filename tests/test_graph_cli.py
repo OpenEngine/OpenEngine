@@ -398,9 +398,9 @@ def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
         {"id": "job1", "status": "complete", "message": "Repository onboarded", "repository": "owner/repo", "path": "/code/repo"},
     )
     assert main(["onboard", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
-    assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
+    assert backend.requests[0]["url"].endswith("/api/v1/repositories/onboard")
     assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo"}
-    assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
+    assert backend.requests[1]["url"].endswith("/api/v1/repositories/onboard/job1")
     assert "Next: engine go review --project owner/repo --repo /code/repo" in capsys.readouterr().out
 
 

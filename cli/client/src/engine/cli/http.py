@@ -96,8 +96,11 @@ def _refusal(backend: Backend, error: HTTPError) -> RequestFailed:
         payload = {}
     message = str(payload.get("error") or f"HTTP {error.code}")
     if error.code == 401:
-        variable = backend.token_env or "ENGINE_SERVICE_TOKEN"
-        message = f"backend {backend.name} requires a token; set {variable} (see `engine backend add --token-env`)"
+        if backend.token():
+            message = f"backend {backend.name} refused the service token for {error.url}"
+        else:
+            variable = backend.token_env or "ENGINE_SERVICE_TOKEN"
+            message = f"backend {backend.name} requires a token; set {variable} (see `engine backend add --token-env`)"
     elif error.code == 404 and not payload:
         message = f"backend {backend.name} does not serve the graph API; upgrade its daemon"
     elif error.code == 503 and "graph" in message:
