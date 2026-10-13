@@ -188,10 +188,7 @@ shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # `engine` is the terminal client; `engine daemon` manages the web service.
 write_shim() {
   if [ -e "$1" ] && ! grep -q '^# Written by the OpenEngine installer' "$1"; then
-    if [ -L "$1" ] && grep -q '@openengine.cc/engine' "$1"; then
-      die "engine is installed with npm; upgrade with npm i -g @openengine.cc/engine, or npm rm -g @openengine.cc/engine before using this installer"
-    fi
-    die "$1 exists and was not written by this installer; move it aside and rerun"
+    die 'engine is installed with npm; upgrade with `npm i -g @openengine.cc/engine`, or `npm rm -g @openengine.cc/engine` before using this installer'
   fi
   cat >"$work/shim" <<EOF
 #!/bin/sh

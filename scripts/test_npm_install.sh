@@ -21,13 +21,20 @@ if [ "$SCENARIO" = npm-migrate ]; then
 else
   npm i -g "$archive"
 fi
+trap 'engine daemon stop || true' EXIT
 assert_npm_link() {
   test -L "$npm_prefix/bin/engine"
   node -e 'const fs = require("fs"); const path = require("path"); if (fs.realpathSync(process.argv[1]) !== fs.realpathSync(path.join(process.argv[2], "lib/node_modules/@openengine.cc/engine/bin/engine.js"))) process.exit(1)' "$npm_prefix/bin/engine" "$npm_prefix"
 }
+assert_ready() {
+  engine daemon status --json > "$RUNNER_TEMP/daemon-status.json"
+  node -e 'const status = require(process.argv[1]); if (status.health !== "ready" || status.version !== process.argv[2]) throw Error(JSON.stringify(status))' "$RUNNER_TEMP/daemon-status.json" "$1"
+}
 assert_npm_link
 engine --help
 assert_npm_link
+version=$(node -p 'require("./npm/engine/package.json").version')
+assert_ready "$version"
 
 if [ "$SCENARIO" = npm-default ]; then
   [ ! -e "$HOME/.local/bin/engine" ]
@@ -42,4 +49,5 @@ if [ "$SCENARIO" = npm-upgrade ]; then
   engine --version | tee "$RUNNER_TEMP/engine-version.txt"
   grep -F "$version" "$RUNNER_TEMP/engine-version.txt"
   assert_npm_link
+  assert_ready "$version"
 fi

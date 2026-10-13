@@ -76,7 +76,7 @@ class InstallerTests(unittest.TestCase):
             self.assertNotIn('not on PATH', skipped.stderr)
             refused = subprocess.run(command + ['--no-start'], env=environment, capture_output=True, text=True)
             self.assertNotEqual(refused.returncode, 0)
-            self.assertIn('engine is installed with npm; upgrade with npm i -g @openengine.cc/engine', refused.stderr)
+            self.assertIn('engine is installed with npm; upgrade with `npm i -g @openengine.cc/engine`', refused.stderr)
             self.assertTrue(shim.is_symlink())
             # --no-shim alone still supports service setup using the actual executable.
             shim.unlink()

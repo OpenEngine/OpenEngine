@@ -16,8 +16,9 @@ npm i -g @openengine.cc/engine
 engine --help
 ```
 
-Install and upgrade with `npm i -g @openengine.cc/engine`. Run `engine daemon setup`
-to configure and start the local service. Coming from the curl installer, use
+Install and upgrade with `npm i -g @openengine.cc/engine`. The first command
+automatically configures and starts the local service, including after an upgrade.
+Coming from the curl installer, use
 `npm i -g --force @openengine.cc/engine` once to replace its launcher.
 
 The curl installer remains an alternative:

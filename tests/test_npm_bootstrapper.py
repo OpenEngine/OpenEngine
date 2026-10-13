@@ -49,6 +49,7 @@ class NpmBootstrapperTests(unittest.TestCase):
         executable.write_text('#!/usr/bin/env node\n' + body)
         executable.chmod(0o755)
         (self.target / '.installed').touch()
+        self.env['OPENENGINE_NO_START'] = '1'
 
     def run_engine(self, *args):
         return subprocess.run(self.command + list(args), env=self.env, capture_output=True, text=True, timeout=20)
@@ -97,18 +98,52 @@ class NpmBootstrapperTests(unittest.TestCase):
         self.install_fake("process.kill(process.pid, 'SIGTERM');")
         self.assertEqual(self.run_engine().returncode, -signal.SIGTERM)
 
-    def test_commands_do_not_initialize_daemon(self):
-        self.install_fake("""
+    def test_daemon_initialization_and_retry(self):
+        self.install_fake(r"""
+const fs = require('fs');
 const args = process.argv.slice(2);
-if (args[0] === 'daemon') process.exit(17);
-console.log(JSON.stringify(args));
+fs.appendFileSync(process.env.HOME + '/calls', JSON.stringify([process.env.ENGINE_CONFIG, args]) + '\n');
+if (args[1] === 'status') {
+  console.log(JSON.stringify({health: process.env.HEALTH_STATE || 'ready', version: process.env.HEALTH_VERSION}));
+} else if (args[1] === 'setup') process.exit(Number(process.env.SETUP_EXIT || 0));
 """)
-        self.env.pop('OPENENGINE_NO_START', None)
-        for args in [('--help',), ('--version',), ('go', '--help')]:
-            result = self.run_engine(*args)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(result.stdout), list(args))
-            self.assertFalse((self.target / '.npm-daemon-ready').exists())
+        marker = self.target / '.npm-daemon-ready'
+        self.env['ENGINE_CONFIG'] = '/custom/config.toml'
+        calls = self.home / 'calls'
+        for args in [('daemon', 'status'), ('--help',)]:
+            self.env['OPENENGINE_NO_START'] = '1'
+            self.assertEqual(self.run_engine(*args).returncode, 0)
+            self.assertFalse(marker.exists())
+        calls.unlink()
+        self.env.pop('OPENENGINE_NO_START')
+        self.assertEqual(self.run_engine('daemon', 'status').returncode, 0)
+        self.assertFalse(marker.exists())
+        self.assertEqual(len(calls.read_text().splitlines()), 1)
+        calls.unlink()
+        self.env['HEALTH_VERSION'] = '0.0.1'
+        self.env['SETUP_EXIT'] = '17'
+        failed = self.run_engine('--help')
+        self.assertEqual(failed.returncode, 17)
+        self.assertIn('engine daemon logs -n 20', failed.stderr)
+        self.assertFalse(marker.exists())
+        records = [json.loads(line)[1] for line in calls.read_text().splitlines()]
+        self.assertEqual(records, [['daemon', 'status', '--json'], ['daemon', 'setup'], ['daemon', 'logs', '-n', '20']])
+        self.env['SETUP_EXIT'] = '0'
+        calls.unlink()
+        self.assertEqual(self.run_engine('--version').returncode, 0)
+        records = [json.loads(line) for line in calls.read_text().splitlines()]
+        self.assertEqual([r[1] for r in records], [['daemon', 'status', '--json'], ['daemon', 'setup'], ['--version']])
+        self.assertTrue(all(r[0] == '/custom/config.toml' for r in records))
+        calls.unlink()
+        self.env['HEALTH_VERSION'] = self.version
+        self.assertEqual(self.run_engine('--help').returncode, 0)
+        self.assertNotIn('setup', calls.read_text())
+        marker.touch()  # A marker from an older launcher must not mask a stopped service.
+        calls.unlink()
+        self.env['HEALTH_STATE'] = 'down'
+        self.assertEqual(self.run_engine('go', 'review').returncode, 0)
+        records = [json.loads(line)[1] for line in calls.read_text().splitlines()]
+        self.assertEqual(records, [['daemon', 'status', '--json'], ['daemon', 'setup'], ['go', 'review']])
 
     def test_only_installer_shims_are_removed(self):
         self.install_fake('')
