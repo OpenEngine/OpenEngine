@@ -476,6 +476,8 @@ def test_acp_human_requests_require_manual_approval(
             tmp_path, asks=True, tool_call={"toolCallId": "call_1", **tool_call}
         )
         async with runtime_over(tmp_path, agents) as (runtime, log):
+            from engine.runtime.config import ApprovalConfig
+            runtime.approval_policy = ApprovalConfig(auto_approve=True)
             run = await runtime.start(GRAPH, {})
             if enable_before_request:
                 await runtime.set_auto_approve(run.run_id, IMPLEMENTATION, True)
@@ -496,6 +498,8 @@ def test_acp_human_requests_require_manual_approval(
 def test_acp_commands_can_still_be_auto_approved(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with runtime_over(tmp_path, registry(tmp_path, asks=True)) as (runtime, log):
+            from engine.runtime.config import ApprovalConfig
+            runtime.approval_policy = ApprovalConfig(auto_approve=True)
             run = await runtime.start(GRAPH, {})
             await runtime.set_auto_approve(run.run_id, IMPLEMENTATION, True)
             events = await until(log, run.run_id, "run.finished")

@@ -167,3 +167,10 @@ engine node steer EXECUTION_ID "Use the existing retry helper instead" --wait
 Steering sends a running agent an updated instruction for its next turn. It moves from `accepted` to `delivered` to `applied`, or ends `rejected` or `undelivered` when the attempt has no live session. Steering is not a retry and not an approval.
 
 To run something on a schedule, add a [loop](loops.md). Every command is in the [CLI reference](cli-reference.md).
+
+## Repository approval defaults
+
+Commit `.openengine.toml` to set approval defaults below the daemon ceiling.
+`engine policy show` prints the resolved values and their sources;
+`--no-auto-approve` and `--allow` tighten an individual run. See
+[Approval policy](approval-policy.md) for configuration and examples.

@@ -184,6 +184,7 @@ class StartRequest:
     instruction: str
     repository: str
     inputs: Mapping[str, str]
+    approvals: Mapping[str, object] | None = None
 
 
 StartRun = Callable[[GraphWorkflow, StartRequest], Awaitable[RunId]]
@@ -234,6 +235,8 @@ class GraphService:
         if runtime.checkpointer is None:
             raise ValueError("graphs can only be registered on a runtime that has a checkpointer")
         self.runtime = runtime
+        if approval_policy is not None:
+            runtime.approval_policy = approval_policy
         self.store = GraphServiceStore(database)
         self._workspace_provider = workspace_provider
         self._registry = registry
@@ -561,6 +564,17 @@ class GraphService:
 
     # --- runs ---------------------------------------------------------------
 
+    async def policy_json(self, repository: str) -> dict[str, object]:
+        from engine.graph_runtime_langgraph.forge import resolve_forge_context
+
+        repository = self.resolve_repository(repository)
+        mode = await self.runtime.repository_mode(repository) if self.runtime.repository_mode else None
+        context = await resolve_forge_context(self.runtime.source_control, {
+            "repository": repository, "inputs": {"mode": mode} if mode else {},
+        })
+        ref = self._default_base_ref if context["mode"] == "connected" else "HEAD"
+        return await self.runtime.policy_for(repository, ref)
+
     async def submit_run(
         self,
         *,
@@ -570,6 +584,7 @@ class GraphService:
         inputs: Mapping[str, object] | None = None,
         repository: str = "",
         idempotency_key: str = "",
+        approvals: Mapping[str, object] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Start a run of the graph's pinned version, at most once per key.
 
@@ -578,13 +593,14 @@ class GraphService:
         a different request is refused, since it cannot be both.
         """
         graph_row, version = self.resolve(project, graph)
-        request = self._start_request(version, instruction, inputs, repository)
+        request = replace(self._start_request(version, instruction, inputs, repository), approvals=approvals)
         key = idempotency_key.strip() or f"anonymous-{uuid.uuid4().hex}"
         digest = _digest({
             "versionId": version.version_id,
             "instruction": request.instruction,
             "inputs": dict(request.inputs),
             "repository": request.repository,
+            **({"approvals": approvals} if approvals is not None else {}),
         })
         async with self._lock:
             previous = self.store.submission(key)
@@ -636,6 +652,7 @@ class GraphService:
 
         return {
             "forgeContext": dict(snapshot.forge_context),
+            "approvalPolicy": dict(snapshot.approval_policy),
             "runId": run_id,
             "name": run_name(record.metadata if record else RunMetadata(), dict(values), RunId(run_id)),
             "graphId": graph.graph_id if graph else None,
@@ -1114,7 +1131,7 @@ class GraphService:
             self.store.set_execution_status(execution, "completed", at)
             self.store.abandon_undelivered_steering("the node finished first", execution_id=execution)
         elif kind is EventKind.APPROVAL_REQUESTED and execution:
-            if not event.payload.get("autoApproved"):
+            if not (event.payload.get("autoApproved") or event.payload.get("policyRejected")):
                 self.store.set_execution_status(execution, "awaiting_approval")
         elif kind is EventKind.APPROVAL_RESOLVED and execution:
             row = self.store.execution(execution)
@@ -1254,6 +1271,7 @@ class GraphService:
             {
                 "task": request.instruction,
                 "repository": request.repository,
+                **({"approvals": request.approvals} if request.approvals is not None else {}),
                 **({"inputs": dict(request.inputs)} if request.inputs else {}),
             },
         )
@@ -1450,7 +1468,7 @@ def _latest_activity(events: Sequence[RuntimeEvent]) -> dict[str, dict[str, str]
             entry["activity"] = str(event.payload.get("name", ""))
         elif event.kind is EventKind.THOUGHT:
             entry["activity"] = "thinking"
-        elif event.kind is EventKind.APPROVAL_REQUESTED and not event.payload.get("autoApproved"):
+        elif event.kind is EventKind.APPROVAL_REQUESTED and not (event.payload.get("autoApproved") or event.payload.get("policyRejected")):
             entry["activity"] = f"waiting for approval: {event.payload.get('reason', '')}".strip()
     return latest
 

@@ -1179,6 +1179,8 @@ class ACPNode:
                 return ApprovalKind.USER_INPUT
             if value in ("ExitPlanMode", "switch_mode"):
                 return ApprovalKind.PLAN_APPROVAL
+        if request.tool_call.get("kind") == "edit":
+            return ApprovalKind.FILE_CHANGE
         return self.kind
 
     def reason_for(self, request: ACPPermissionRequest) -> str:
@@ -1196,7 +1198,7 @@ class ACPNode:
         return command if isinstance(command, str) else ""
 
     def tool_of(self, request: ACPPermissionRequest) -> str:
-        for name in ("kind", "toolCallId"):
+        for name in ("name", "toolName", "kind", "toolCallId"):
             value = request.tool_call.get(name)
             if isinstance(value, str) and value:
                 return value

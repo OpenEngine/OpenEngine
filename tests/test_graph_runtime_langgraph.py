@@ -694,6 +694,7 @@ def test_auto_approve_keeps_human_requests_manual() -> None:
     apart: auto-approve raises the same request it then answers, so without the
     flag every command an agent runs is announced as a question.
     """
+    from engine.runtime.config import ApprovalConfig
     from httpx import ASGITransport, AsyncClient
     from engine.graph_runtime.api import create_app
 
@@ -716,7 +717,7 @@ def test_auto_approve_keeps_human_requests_manual() -> None:
         builder.add_edge(str(TRIAGE), END)
         runtime = LangGraphRuntime(LangGraphDefinition(
             graph_id=GRAPH, name="Triage", graph=builder.compile(checkpointer=InMemorySaver())
-        ))
+        ), approval_policy=ApprovalConfig(auto_approve=True))
         app = create_app(runtime)
         # After the app, which installs an observer of its own: last one wins,
         # and what this test reads is the events, not the endpoint serving them.
@@ -734,7 +735,7 @@ def test_auto_approve_keeps_human_requests_manual() -> None:
                         await asyncio.sleep(0.001)
 
             url = f"/api/runs/{run.run_id}/auto-approve"
-            await pending(ApprovalKind.COMMAND_EXECUTION)
+            await pending(ApprovalKind.PLAN_APPROVAL)
             assert (await client.patch(url, json={"node": str(TRIAGE), "autoApprove": "yes"})).status_code == 400
             assert (await client.patch(url, json={"node": "missing", "autoApprove": True})).status_code == 400
             response = await client.patch(url, json={"node": str(TRIAGE), "autoApprove": True})
@@ -753,8 +754,8 @@ def test_auto_approve_keeps_human_requests_manual() -> None:
                 if event.kind is EventKind.APPROVAL_REQUESTED
             }
             assert announced == {
-                # Raised before the preference was set, so still a question.
-                ApprovalKind.COMMAND_EXECUTION.value: False,
+                # The policy is installed before the first node starts.
+                ApprovalKind.COMMAND_EXECUTION.value: True,
                 # Auto-approve was on, and a file change is the kind it covers.
                 ApprovalKind.FILE_CHANGE.value: True,
                 # On too, but these are nobody's to hand to a machine.

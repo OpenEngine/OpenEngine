@@ -31,7 +31,7 @@ from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
-    "runner", "onboard", "go", "verb", "verbs",
+    "runner", "onboard", "go", "verb", "verbs", "policy",
 })
 #: Commands that still parse but are not advertised in `engine --help`.
 HIDDEN = frozenset({"runner"})
@@ -82,6 +82,13 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     go.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
     go.set_defaults(graph=starters.DEFAULT, branch="", agent="", no_watch=False, idempotency_key="")
 
+    policy = commands.add_parser("policy", help="inspect the effective approval policy")
+    policies = policy.add_subparsers(dest="action", required=True)
+    showing = policies.add_parser("show", parents=[common], help="show values, provenance and clamped settings")
+    showing.add_argument("--repo", default="", help="OWNER/REPO (default: the current checkout)")
+    go.add_argument("--no-auto-approve", action="store_true", help="disable automatic blanket approval for this run")
+    go.add_argument("--allow", action="append", help="narrow allowed capabilities (repeatable)")
+
     commands.add_parser("verbs", parents=[scoped], help="show the project's verb bindings")
     verb = commands.add_parser("verb", help="bind a project verb to a graph")
     actions = verb.add_subparsers(dest="action", required=True)
@@ -130,6 +137,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
         "run", parents=[scoped], help="run a graph with an instruction",
         description="Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch is given.",
     )
+    running.add_argument("--no-auto-approve", action="store_true", help="disable automatic blanket approval for this run")
+    running.add_argument("--allow", action="append", help="narrow allowed capabilities (repeatable)")
     running.add_argument("graph", help=f"a graph, or a built-in one: {', '.join(starters.NAMES)}")
     running.add_argument("instruction", nargs="?", default="", help="what to do (default: run the graph)")
     running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
@@ -252,6 +261,27 @@ def main(arguments: argparse.Namespace) -> int:
             return EXIT_USAGE
         _report(error)
         return EXIT_FAILED
+
+
+def _policy_summary(policy: dict[str, Any]) -> str:
+    return (f"approvals: auto_approve={str(policy['auto_approve']).lower()}, "
+            f"allow={','.join(policy['allow']) or 'none'}; "
+            f"{len(policy.get('warnings', []))} clamped/deprecation warnings")
+
+
+def policy_show(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    policy = client.get("/policy", repo=_repository(arguments, backend))
+    if not arguments.pretty:
+        _print(policy)
+        return EXIT_OK
+    print(_policy_summary(policy))
+    for key, layer in policy["provenance"].items():
+        value = policy["bash"][key[5:]] if key.startswith("bash.") else policy[key]
+        print(f"{key} = {json.dumps(value)}  [{layer}]")
+    for warning in policy.get("warnings", []):
+        print(f"warning: {warning}")
+    return EXIT_OK
 
 
 def onboard_repository(arguments: argparse.Namespace) -> int:
@@ -513,6 +543,13 @@ def graph_run(arguments: argparse.Namespace) -> int:
         "repository": _repository(arguments, backend),
         "idempotencyKey": key,
     }
+    approvals = {}
+    if getattr(arguments, "no_auto_approve", False):
+        approvals["auto_approve"] = False
+    if getattr(arguments, "allow", None) is not None:
+        approvals["allow"] = arguments.allow
+    if approvals:
+        request["approvals"] = approvals
     run = _submit_run(client, request)
     if arguments.command == "go" and (context := run.get("forgeContext")):
         target = arguments.target.get("pr_url") or arguments.target.get("ref") or request["repository"]
@@ -871,6 +908,8 @@ def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
         if context := run.get("forgeContext"):
             print(context["summary"])
         print(f"{run['runId']}  {run['graph']} v{run['version']}  {run['status']}")
+        if policy := run.get("approvalPolicy"):
+            print(_policy_summary(policy))
         if run.get("nodes"):
             _table(run["nodes"], _NODE_COLUMNS)
         for node, value in (run.get("results") or {}).items():
@@ -1004,6 +1043,7 @@ _STEERING_COLUMNS: list[tuple[str, Any]] = [
 ]
 
 _HANDLERS = {
+    ("policy", "show"): policy_show,
     ("verbs", None): verbs_list,
     ("verb", "set"): verb_set,
     ("go", None): go,

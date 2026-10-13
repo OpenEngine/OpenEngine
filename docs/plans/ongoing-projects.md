@@ -163,14 +163,13 @@ keep an idle Resource spinning forever. A failure increments
 
 ### Approvals for unattended runs
 
-Nobody is watching a project run, so it cannot use the deployment's
-`[approvals]`. `start_graph_run` turns on auto-approve for every node when
-`[approvals] auto_approve = true`, which would give an unattended run blanket
-approval. With it off, the run would wait on a permission request nobody
-answers and hold the Resource's slot.
+Nobody is watching a project run, so it must never wait for approval.
+Project runs pass `[projects.approvals]` as tightening overrides to the shared
+layered resolver, with `reject_instead_of_ask=True`. Backend and committed
+repository restrictions still apply, and the resolved policy and provenance
+are stored on the run. Requests that would ask are refused instead.
 
-Project runs get their own policy, `[projects.approvals]`, with the same shape
-as `[approvals]`, and `start_graph_run` takes the policy as a parameter:
+The project scheduler will pass its policy through `start_graph_run`:
 
 ```toml
 [projects.approvals]

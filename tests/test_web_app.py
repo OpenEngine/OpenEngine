@@ -677,7 +677,7 @@ def test_run_list_leaves_the_prose_to_the_run_it_names(
     # listing can be trimmed before a screen loses something it draws.
     # Usage is summed from the run's events, so only the page about it pays.
     assert run == {
-        key: value for key, value in body.items() if key not in prose | {"usage"}
+        key: value for key, value in body.items() if key not in prose | {"usage", "approvalPolicy"}
     }
     assert body["failureReason"] == "the reviewer gave up"
     assert body["usage"]["costUsd"] is None and body["usage"]["nodes"] == {}
@@ -2850,7 +2850,77 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(
     asyncio.run(scenario())
 
 
-def test_a_trusted_repository_auto_approves_its_workorders_only(
+@pytest.mark.parametrize("patterns, expected", [((), False), (("*",), True), (("acme/eligible",), True)])
+def test_repository_policy_access_only_resolves_eligible_checkouts(
+    tmp_path, monkeypatch, patterns, expected, *, workflow_app
+):
+    from engine.apps.web import api
+
+    root, worktree = tmp_path / "eligible", tmp_path / "worktree"
+    repos = {f"acme/other-{i}": str(tmp_path / f"other-{i}") for i in range(50)}
+    repos["acme/eligible"] = str(root)
+    registry = RepositoryRegistry(repos, projects={})
+    calls = []
+
+    async def identity(path):
+        calls.append(path)
+        return root if path == worktree else path
+
+    monkeypatch.setattr(api, "_repository_identity", identity)
+    app, runtime = _graph_app(
+        WebStores(), _review_graph(), repos=registry,
+        approval_policy=ApprovalConfig(repositories=patterns), workflow_app=workflow_app,
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            access = runtime.repository_policy_access
+            assert await access(str(worktree)) == (expected, False)
+            assert calls == ([worktree, root] if patterns == ("acme/eligible",) else [])
+            calls.clear()
+            # A literal checkout match needs no git process either.
+            assert await access(str(root)) == (expected, False)
+            assert calls == []
+
+    asyncio.run(scenario())
+
+
+def test_repository_policy_access_reuses_identities_for_trust_and_sees_registry_updates(
+    tmp_path, monkeypatch, *, workflow_app
+):
+    from engine.apps.web import api
+
+    root, worktree = tmp_path / "eligible", tmp_path / "worktree"
+    registry = RepositoryRegistry(projects={})
+    calls = []
+
+    async def identity(path):
+        calls.append(path)
+        return root if path == worktree else path
+
+    monkeypatch.setattr(api, "_repository_identity", identity)
+    monkeypatch.setattr(registry, "_project", lambda path: None)
+    app, runtime = _graph_app(
+        WebStores(), _review_graph(), repos=registry,
+        approval_policy=ApprovalConfig(repositories=("acme/eligible",)), workflow_app=workflow_app,
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            access = runtime.repository_policy_access
+            assert await access(str(worktree)) == (False, False)
+            assert calls == []
+            registry.add("acme/eligible", str(root), trusted=True)
+            assert await access(str(worktree)) == (True, True)
+            assert calls == [worktree, root]
+            calls.clear()
+            assert await access(str(tmp_path / "unrelated")) == (False, False)
+            assert calls == [tmp_path / "unrelated", root]
+
+    asyncio.run(scenario())
+
+
+def test_a_trusted_repository_cannot_exceed_the_backend_ceiling(
     tmp_path, *, async_client, workflow_app
 ):
     graph = ScriptedGraph(
@@ -2873,7 +2943,7 @@ def test_a_trusted_repository_auto_approves_its_workorders_only(
                     assert response.status_code == 201
                     snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
                     approved[path.name] = snapshot.auto_approve_nodes
-                assert approved == {"trusted": (NodeId("work"),), "other": ()}
+                assert approved == {"trusted": (), "other": ()}
 
     asyncio.run(scenario())
 

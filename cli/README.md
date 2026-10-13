@@ -283,3 +283,25 @@ Mounted at `/api/v1` on the daemon:
 
 The service's tables live in the graph database and are created by the
 `migrations/sqlite_graph` Alembic history.
+
+## Approval policy
+
+The backend's `[approvals]` is the ceiling. A committed `.openengine.toml` at the
+repository root supplies defaults within it; run settings can only tighten.
+Policy is read at the run's base commit and stored with per-setting provenance
+and clamping warnings in `approvalPolicy`. Working-tree edits cannot change it.
+
+```bash
+engine policy show --repo OWNER/REPO --backend NAME
+engine policy show  # infer the current checkout
+engine go --no-auto-approve "Fix the parser"
+engine graph run default "Fix the parser" --allow read --allow edit
+engine run get RUN_ID --pretty  # includes a one-line policy summary
+```
+
+An explicit `--allow` list disables blanket auto-approval. A looser override is
+refused. With no repo file, backend defaults apply; fresh installs still ask
+for unlisted operations. `[trusted_repos]` is a deprecated delegation alias
+and cannot exceed the backend ceiling. See the
+[approval reference](../site/docs/approval-policy.md) and
+[example repository file](../examples/.openengine.toml).

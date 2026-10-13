@@ -151,6 +151,10 @@ class NodeExecution:
         self._waiting: dict[ApprovalId, asyncio.Future[ApprovalDecision]] = {}
         self._session: Any | None = None
 
+    async def policy_base_revision(self) -> str:
+        record = await self._runtime.store.run(self.run_id)
+        return str(record.approval_policy.get("base_revision") or "") if record and record.approval_policy.get("workspace_resolved") else ""
+
     # --- what external control routes to us --------------------------------
 
     async def steer(self, message: str) -> None:

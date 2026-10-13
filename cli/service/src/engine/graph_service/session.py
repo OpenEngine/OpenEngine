@@ -41,6 +41,7 @@ from engine.graph_service.language import STAGE_GROUPS
 from engine.ports import ApprovalRequest, WorkspaceProvider
 from engine.ports.permissions import ApprovalCapability, PermissionScope
 from engine.runtime import ApprovalConfig, PolicyDecision, policy_decision_for
+from engine.runtime.layered_approvals import parse_policy
 from langgraph.graph import END, START, StateGraph
 
 SESSION_GRAPH_ID = "engine-session"
@@ -100,6 +101,7 @@ class SessionNode:
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
+        effective_policy = await self._effective_policy()
         inputs = state.get("inputs")
         session_id = inputs.get(SESSION_INPUT) if isinstance(inputs, Mapping) else None
         session = self.sessions.get(str(session_id or ""))
@@ -118,7 +120,7 @@ class SessionNode:
                     },
                     "mcp": dict(bound.config),
                     "instructions": session_instructions(state),
-                    "settings": agent_settings(session.agent, self.policy),
+                    "settings": agent_settings(session.agent, effective_policy),
                 })
                 summary = await self._summary(session, bound.result)
         except BaseException as error:
@@ -143,9 +145,16 @@ class SessionNode:
                 return event.summary
         return ended or "The interactive session ended."
 
+    async def _effective_policy(self) -> ApprovalConfig:
+        execution = current_execution()
+        record = await execution.runtime.store.run(execution.run_id)
+        if record is not None and record.approval_policy:
+            return parse_policy({key: record.approval_policy[key] for key in ("auto_approve", "allow", "bash")})
+        return self.policy
+
     async def _approve(self, request: ApprovalRequest) -> ApprovalDecision:
         """The person approved this call in their CLI; Engine's policy can still refuse it."""
-        decision = policy_decision_for(self.policy, PermissionScope(ApprovalCapability.MCP, request.tool_name))
+        decision = policy_decision_for(await self._effective_policy(), PermissionScope(ApprovalCapability.MCP, request.tool_name))
         return ApprovalDecision.CANCEL if decision is PolicyDecision.DENY else ApprovalDecision.ACCEPT
 
 
