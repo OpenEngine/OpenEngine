@@ -15,6 +15,8 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
+import http from "node:http"
+import type { AddressInfo } from "node:net"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -150,7 +152,8 @@ function fixtureRepository(root: string) {
 export async function startEngine({
   keepRoot = () => false,
   agentMode = resolveAgentMode(),
-}: { keepRoot?: () => boolean; agentMode?: AgentMode } = {}): Promise<Engine> {
+  token = randomBytes(24).toString("hex"),
+}: { keepRoot?: () => boolean; agentMode?: AgentMode; token?: string } = {}): Promise<Engine> {
   const root = mkdtempSync(path.join(os.tmpdir(), "openengine-e2e-"))
   const repository = fixtureRepository(root)
   const scriptPath = path.join(root, "agent-script.json")
@@ -161,7 +164,6 @@ export async function startEngine({
   const githubConfig = path.join(root, "gh")
   mkdirSync(githubConfig)
   writeFileSync(config, "# The e2e daemon's configuration: built-in defaults unless a spec says otherwise.\n")
-  const token = randomBytes(24).toString("hex")
 
   const passed = agentMode === "real" ? [...INHERITED, ...AGENT_LOGINS] : INHERITED
   const inherited = Object.fromEntries(passed.flatMap((name) => (process.env[name] ? [[name, process.env[name]!]] : [])))
@@ -243,7 +245,51 @@ async function terminate(daemon: ChildProcess) {
   clearTimeout(killed)
 }
 
-export const test = terminalTest.extend<{ engine: Engine }>({
+/** A second daemon standing in for another computer, and the address terminal sessions reach it at. */
+export type AnotherComputer = Engine & { address: string }
+
+/**
+ * An HTTP proxy that answers for `address` (host:port) by forwarding to
+ * `target`, and refuses every other host. Terminal sessions use it through
+ * `http_proxy`, so a guide types an address such as `http://mac-mini.local:4364`
+ * rather than a port the OS picked.
+ */
+async function startProxy(address: string, target: string) {
+  const server = http.createServer((request, response) => {
+    let url: URL
+    try {
+      url = new URL(request.url ?? "")
+    } catch {
+      response.writeHead(400).end()
+      return
+    }
+    if (url.host !== address) {
+      response.writeHead(502).end(`no computer at ${url.host}`)
+      return
+    }
+    const forwarded = http.request(
+      new URL(url.pathname + url.search, target),
+      { method: request.method, headers: { ...request.headers, host: new URL(target).host } },
+      (answer) => {
+        response.writeHead(answer.statusCode ?? 502, answer.headers)
+        answer.pipe(response)
+      },
+    )
+    forwarded.on("error", () => response.writeHead(502).end())
+    request.pipe(forwarded)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  }
+}
+
+export const test = terminalTest.extend<{
+  engine: Engine
+  anotherComputerAt: string | undefined
+  anotherComputer: AnotherComputer | undefined
+}>({
   engine: async ({}, use, testInfo) => {
     const failed = () => testInfo.status !== testInfo.expectedStatus
     const engine = await startEngine({ keepRoot: failed })
@@ -260,8 +306,37 @@ export const test = terminalTest.extend<{ engine: Engine }>({
       }
     }
   },
-  terminalEnv: async ({ engine }, use) => {
-    await use(engine.env)
+  /** Where another computer answers, such as `mac-mini.local:4364`; set it with `test.use` to get `anotherComputer`. */
+  anotherComputerAt: [undefined, { option: true }],
+  // A daemon of its own sharing the first one's token: one person's two
+  // computers, so a guide needn't cover tokens. Not added as a backend; that
+  // is the guide's to do.
+  anotherComputer: async ({ engine, anotherComputerAt }, use, testInfo) => {
+    if (!anotherComputerAt) {
+      await use(undefined)
+      return
+    }
+    const failed = () => testInfo.status !== testInfo.expectedStatus
+    const other = await startEngine({ keepRoot: failed, agentMode: engine.agentMode, token: engine.env.ENGINE_SERVICE_TOKEN })
+    try {
+      await use({ ...other, address: anotherComputerAt })
+    } finally {
+      await other.stop()
+      if (failed()) await testInfo.attach("another computer's daemon", { body: other.log(), contentType: "text/plain" })
+    }
+  },
+  terminalEnv: async ({ engine, anotherComputer }, use) => {
+    if (!anotherComputer) {
+      await use(engine.env)
+      return
+    }
+    const proxy = await startProxy(anotherComputer.address, anotherComputer.url)
+    try {
+      // Only the other computer goes through the proxy; this one is reached directly.
+      await use({ ...engine.env, http_proxy: proxy.url, no_proxy: "127.0.0.1,localhost" })
+    } finally {
+      await proxy.close()
+    }
   },
   // The CLI sends a run "the repository you are in": start sessions in the
   // fixture repository, as a reader of a guide would be in their own project.

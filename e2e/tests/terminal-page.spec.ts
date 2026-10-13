@@ -110,6 +110,28 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(id).not.toBe("g-0123456789ab")
   })
 
+  test("shows a port the OS picked on this computer as a stand-in that is the same on every run", async ({ browser }) => {
+    const shown = async (port: number) => {
+      const page = await browser.newPage()
+      await openTerminal(page)
+      await page.locator("#terminal").click()
+      await page.keyboard.type(`echo "local http://127.0.0.1:${port} | mac-mini http://mac-mini.local:4364"`)
+      await page.keyboard.press("Enter")
+      await expect.poll(() => bufferText(page)).toMatch(new RegExp(`^local http://127\\.0\\.0\\.1:${port} \\|`, "m"))
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^local http/ }).last()
+      const text = (await row.textContent())!.trim()
+      await page.close()
+      return text
+    }
+    const first = await shown(51234)
+    const second = await shown(60789)
+    // The same stand-in whatever the real port was, the same length so nothing
+    // moves; a port someone chose, like the Mac mini's, shows as it is.
+    expect(first).toBe(second)
+    expect(first).toMatch(/^local http:\/\/127\.0\.0\.1:\d{5} \| mac-mini http:\/\/mac-mini\.local:4364$/)
+    expect(first).not.toContain("51234")
+  })
+
   test("says so when the server refuses the session", async ({ page }) => {
     await page.goto("/?token=wrong")
     await page.waitForFunction(() => window.__term?.error !== undefined)

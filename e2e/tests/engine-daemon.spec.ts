@@ -30,6 +30,28 @@ test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
     expect((await terminal.run("engine graphs list")).output).toMatch(/^dead-code\s+1\s/m)
   })
 
+  test.describe("with another computer", () => {
+    test.use({ anotherComputerAt: "mac-mini.local:4364" })
+
+    test("reaches a second daemon at the address a spec names", async ({ engine, anotherComputer, terminal }) => {
+      expect(anotherComputer!.url).not.toBe(engine.url)
+      expect(anotherComputer!.root).not.toBe(engine.root)
+      await terminal.run("engine backend add mac-mini http://mac-mini.local:4364")
+      const { output } = await terminal.run("engine backends list --check")
+      expect(output).toMatch(/^\*\s+local\s.*\bup\b/m)
+      expect(output).toMatch(/^\s+mac-mini\s+http:\/\/mac-mini\.local:4364\s.*\bup\b/m)
+    })
+
+    test("reaches no other address through it", async ({ terminal }) => {
+      await terminal.run("engine backend add elsewhere http://elsewhere.local:4364")
+      expect((await terminal.run("engine backends list --check")).output).toMatch(/^\s+elsewhere\s.*\bdown\b/m)
+    })
+  })
+
+  test("has no other computer unless a spec asks for one", async ({ anotherComputer }) => {
+    expect(anotherComputer).toBeUndefined()
+  })
+
   test("starts a separate daemon each time", async ({ engine }) => {
     const other = await startEngine()
     try {
