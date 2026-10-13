@@ -292,6 +292,40 @@ def test_direct_fix_provisions_the_pr_branch(monkeypatch, mode):
 
 
 @pytest.mark.parametrize('mode', ['connected', 'disconnected'])
+@pytest.mark.parametrize('source_id', [10, 20, None])
+def test_direct_gitlab_fix_inspects_source_before_provisioning(monkeypatch, mode, source_id):
+    from engine.adapters.source_control.gitlab import GitLabSourceControl
+
+    project = 'gitlab.com/group/nested/project'
+    workspace = SimpleNamespace(root_path='/checkout', workspace_id='ws')
+    provider = SimpleNamespace(provision_branch=AsyncMock(return_value=workspace))
+    transport = SimpleNamespace(request=AsyncMock(side_effect=[
+        {'source_project_id': source_id, 'target_project_id': 10, 'source_branch': 'mr-branch'},
+        {'path_with_namespace': 'fork/project'},
+    ]))
+    source = GitLabSourceControl('token', transport=transport)
+    monkeypatch.setattr(graphs, 'current_execution', lambda: SimpleNamespace(runtime=SimpleNamespace(source_control=source)))
+    state = {'repository': project, 'inputs': {
+        'mode': mode, 'pr_url': f'https://{project}/-/merge_requests/9', 'ref': 'origin/main',
+    }}
+    if source_id == 10:
+        result = asyncio.run(graphs.FixWorkspace(provider=provider)(state))
+        provider.provision_branch.assert_awaited_once_with(project, 'mr-branch')
+        assert result['branch'] == result['inputs']['ref'] == 'mr-branch'
+    else:
+        with pytest.raises(ValueError, match='cannot fix a fork PR'):
+            asyncio.run(graphs.FixWorkspace(provider=provider)(state))
+        provider.provision_branch.assert_not_called()
+    assert transport.request.await_args_list[0].args == (
+        'GET', '/projects/group%2Fnested%2Fproject/merge_requests/9',
+    )
+    if source_id == 20:
+        assert transport.request.await_args_list[1].args == ('GET', '/projects/20')
+    else:
+        assert transport.request.await_count == 1
+
+
+@pytest.mark.parametrize('mode', ['connected', 'disconnected'])
 @pytest.mark.parametrize('inputs,ref', [
     ({'pr_url': 'https://github.com/o/r/pull/9'}, 'origin/refs/pull/9/head'),
     ({'pr_url': 'https://gitlab.com/o/r/-/merge_requests/9'}, 'origin/refs/merge-requests/9/head'),

@@ -120,6 +120,31 @@ class GitLabSourceControl:
                 tips[name] = sha
         return tips
 
+    async def inspect_target(self, project: str, *, number: int) -> dict[str, object]:
+        """Read a merge request's source before provisioning its branch workspace."""
+        origin = self._origin_source() if callable(self._origin_source) else self._origin_source
+        host, separator, path = project.partition("/")
+        if (
+            host != urlparse(origin).netloc.lower() or not separator
+            or not all(names_a_project_step(step) for step in path.split("/"))
+        ):
+            raise ValueError("project must be on the configured GitLab origin")
+        mr = await self._api("GET", f"/projects/{quote(path, safe='')}/merge_requests/{number}")
+        source_id = mr.get("source_project_id")
+        head_repository = ""
+        if source_id is not None:
+            if source_id == mr.get("target_project_id"):
+                head_repository = project
+            else:
+                source = await self._api("GET", f"/projects/{source_id}")
+                source_path = self._str(source, "path_with_namespace")
+                if source_path:
+                    head_repository = f"{host}/{source_path}"
+        return {
+            "head_repository": head_repository,
+            "branch": self._str(mr, "source_branch"),
+        }
+
     async def add_reaction(
         self, pr_url: str, comment_id: int, content: str, *, review_comment: bool = False,
     ) -> None:
