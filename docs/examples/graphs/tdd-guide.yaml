@@ -22,7 +22,7 @@ inputs:
   implementer:
     description: The runner that makes the tests pass; a different one from the test writer gives the change a second model's eyes
     default: claude
-    choices: [claude, codex, opencode]
+    choices: [claude, codex, opencode, qwen]
   reviewer:
     description: The runner that reviews the generated guide
     default: claude
