@@ -1351,3 +1351,126 @@ def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp
             assert (await service.run_json("reserved"))["status"] == "scheduled"
 
     asyncio.run(scenario())
+
+
+def typed_completion(values):
+    from engine.domain import AgentRunId, StepCompleted, StepId, StepOutput
+
+    return StepCompleted(
+        run_id=RunId("typed-run"), step_id=StepId("s"),
+        agent_run_id=AgentRunId("typed-agent"), outcome="success", summary="Done",
+        outputs=tuple(StepOutput(name, value) for name, value in values.items()),
+    )
+
+
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("kind,wire,expected", [
+    ("object", '{"a": 1}', {"a": 1}),
+    ("list", '[1, {"a": 2}]', [1, {"a": 2}]),
+    ("number", "1.5", 1.5),
+    ("integer", "1", 1),
+    ("boolean", "false", False),
+    ("string", '{"a": 1}', '{"a": 1}'),
+    ("findings", "[]", []),
+])
+def test_typed_outputs_validate_and_reach_graph_state(kind, wire, expected, required):
+    from engine.graph_service.compile import GraphAgentNode, _validator
+    from engine.graph_service.language import OutputSpec, RunnerRule
+
+    outputs = (OutputSpec("model", kind, required=required),)
+    event = typed_completion({"model": wire})
+    _validator(outputs)(event)
+    node = GraphAgentNode(
+        agent="stub", cwd="/tmp", state_key="s", output_key="s", rule=RunnerRule("literal", "stub"),
+        outputs=outputs,
+    )
+    value = node._terminal_update(event)["s"]["model"]
+    assert value == expected
+    assert type(value) is type(expected)
+    if not required:
+        _validator(outputs)(typed_completion({}))
+        assert "model" not in node._terminal_update(typed_completion({}))["s"]
+
+
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("kind,wire", [
+    ("object", "[1]"), ("list", "{}"), ("number", "true"),
+    ("integer", "1.5"), ("integer", "true"), ("boolean", "1"),
+    ("object", "null"),
+])
+def test_typed_outputs_reject_wrong_json_type(kind, wire, required):
+    from engine.graph_service.compile import _validator
+    from engine.graph_service.language import OutputSpec
+
+    with pytest.raises(ValueError, match=f"output model must be a {kind}"):
+        _validator((OutputSpec("model", kind, required=required),))(
+            typed_completion({"model": wire}),
+        )
+
+
+@pytest.mark.parametrize("kind", ["object", "list", "number", "integer", "boolean"])
+@pytest.mark.parametrize("wire", ["not JSON", ""])
+def test_typed_outputs_reject_invalid_json(kind, wire):
+    from engine.graph_service.compile import _validator
+    from engine.graph_service.language import OutputSpec
+
+    with pytest.raises(ValueError, match=f"output model must be JSON for type {kind}:"):
+        _validator((OutputSpec("model", kind),))(typed_completion({"model": wire}))
+
+
+def test_typed_completion_flows_through_broker_and_downstream_nodes():
+    from engine.domain import AgentId, AgentRunId, StepId, StepSpec
+    from engine.graph_service.compile import GraphAgentNode, _completion_instructions, _validator, environment
+    from engine.graph_service.expressions import parse, template
+    from engine.graph_service.language import OutputSpec, RunnerRule
+    from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
+    from langgraph.graph import END, START, StateGraph
+    from engine.graph_runtime_langgraph import State
+    from tests.test_terminal_mcp import _direct_request
+
+    outputs = tuple(OutputSpec(name, kind, required=True) for name, kind in (
+        ("model", "object"), ("items", "list"), ("ready", "boolean"), ("count", "number"),
+    ))
+    node = GraphAgentNode(
+        agent="stub", cwd="/tmp", state_key="s", output_key="s", rule=RunnerRule("literal", "stub"),
+        outputs=outputs,
+    )
+    groups = {"s": (("s",), False)}
+    instructions = _completion_instructions(outputs)
+    assert "JSON-encoded strings" in instructions
+    assert '"model": "{\\"a\\": 1}"' in instructions
+
+    async def source(state):
+        broker = TerminalMcpBroker(
+            run_id=RunId("typed-run"), agent_run_id=AgentRunId("typed-agent"),
+            step=StepSpec(StepId("s"), AgentId("stub"), tuple(o.name for o in outputs)),
+            registry=TerminalResultRegistry(), validate_completion=_validator(outputs),
+        )
+        async with broker:
+            response = await broker._submit(_direct_request(broker, 1, "complete_step", {
+                "outcome": "success", "summary": "Done", "outputs": {
+                    "model": '{"a": 1}', "items": '[{"a": 1}, {"a": 2}]',
+                    "ready": "false", "count": "2.5",
+                },
+            }))
+            assert response["ok"] is True
+            return node._terminal_update(await broker.result())
+
+    def route(state):
+        names = environment(state, groups)
+        return "map" if parse("outputs.s.ready == false && outputs.s.count > 2").evaluate(names) else END
+
+    def consume(state):
+        names = environment(state, groups)
+        assert isinstance(state["s"]["model"], dict)
+        assert json.loads(template("${outputs.s.model}").render(names)) == {"a": 1}
+        return {"mapped": [item["a"] for item in parse("outputs.s.items").evaluate(names)]}
+
+    builder = StateGraph(State)
+    builder.add_node("s", source)
+    builder.add_node("map", consume)
+    builder.add_edge(START, "s")
+    builder.add_conditional_edges("s", route, ["map", END])
+    builder.add_edge("map", END)
+    result = asyncio.run(builder.compile().ainvoke({}))
+    assert result["mapped"] == [1, 2]

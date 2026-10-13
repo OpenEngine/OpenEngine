@@ -25,6 +25,7 @@ The graph's id is the version's id, so a run pins exactly what it started.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -395,7 +396,7 @@ class GraphAgentNode(_GraphRunner, ACPNode):
         for output in self.outputs:
             if output.name not in base:
                 continue
-            raw = base[output.name]
+            raw = _decode_output(base[output.name], output)
             if output.type == "findings":
                 findings = parse_findings(raw, require_lineage=output.lineage)
                 if not output.lineage:
@@ -508,6 +509,11 @@ def _completion_instructions(outputs: Sequence[OutputSpec]) -> str:
         lines[-1] += "."
         return "\n".join(lines)
     lines[-1] += " and these outputs:"
+    if any(output.type not in ("string", "findings") for output in outputs):
+        lines.append(
+            'Send typed outputs as JSON-encoded strings, for example '
+            '"model": "{\\"a\\": 1}". All output values must be strings on the wire.'
+        )
     for output in outputs:
         detail = {
             "findings": (
@@ -549,10 +555,11 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
         values = {output.name: output.value for output in event.outputs}
         for output in outputs:
             value = values.get(output.name)
-            if value is None or value == "":
+            if value is None or (value == "" and output.type in ("string", "findings")):
                 if output.required:
                     raise ValueError(f"output {output.name} is required")
                 continue
+            value = _decode_output(value, output)
             if output.type == "findings":
                 parse_findings(value, require_lineage=output.lineage)
             elif output.enum and value not in output.enum:
@@ -561,6 +568,18 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
                 raise ValueError(f"output {output.name} must be a {output.type}")
 
     return validate
+
+
+def _decode_output(value: object, output: OutputSpec) -> Any:
+    """Decode wire values consistently for validation and downstream graph state."""
+    if output.type not in ("string", "findings") and isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"output {output.name} must be JSON for type {output.type}: {error}"
+            ) from error
+    return value
 
 
 def _typed(value: object, kind: str) -> bool:
