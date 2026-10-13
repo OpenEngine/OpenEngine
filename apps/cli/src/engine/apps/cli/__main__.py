@@ -13,7 +13,7 @@ OUTPUT = """\
 output:
   List commands (backends, graphs, runs, loops, nodes, agents, connections)
   print a table; add --json for JSON, such as `engine runs --json`.
-  Other commands print JSON; add --pretty for readable output.
+  Other commands print readable lines; add --json for JSON.
 """
 
 

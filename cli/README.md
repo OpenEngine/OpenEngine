@@ -27,7 +27,7 @@ started — a daemon that is up already serves it.
 
 Backend commands use the selected backend. List commands (`engine graphs`,
 `runs`, `loops`, `nodes`, `agents`, `backends`, `connections`) print a table;
-add `--json` for JSON. Other commands print JSON unless `--pretty` is given. `engine graph spec` and
+add `--json` for JSON. Other commands print readable lines; add `--json` for JSON. `engine graph spec` and
 `engine loop spec` print the current specifications as Markdown locally, without
 a running daemon. Their specifications and the site reference are generated from
 the parser’s field definitions, expression rules, and accompanying prose; the
@@ -63,7 +63,7 @@ repositories.
 ```bash
 engine graph add ./graph.yaml
 engine graphs list
-engine graph get fix-flaky-test --pretty        # or fix-flaky-test@2, g-..., gv-...
+engine graph get fix-flaky-test        # or fix-flaky-test@2, g-..., gv-...
 ```
 
 ```yaml
@@ -121,7 +121,7 @@ still works for one release.
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
 engine graph run adversarial-review --branch feat/my_feat --agent codex
-engine run get run-0123abcd --pretty
+engine run get run-0123abcd
 engine runs
 engine runs --graph fix-flaky-test --status failed
 ```
@@ -185,7 +185,7 @@ engine loop resume fix-flaky-test --max-spend 40
 ```bash
 engine nodes list --run run-0123abcd
 engine node steer 1a0055fa-... "Use the existing retry helper instead" --wait
-engine node get 1a0055fa-... --pretty
+engine node get 1a0055fa-...
 ```
 
 Steering addresses one node attempt and is kept in order, once per

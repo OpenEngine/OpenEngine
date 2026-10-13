@@ -1,8 +1,8 @@
 """`engine backend|graph|graphs|run|runs|loop|loops|node|nodes|agent|agents|runner`.
 
 Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
-the one `engine backend use` chose -- and print JSON unless `--pretty` asks
-for something to read. List commands print a table unless `--json` asks for JSON. Errors go to stderr; the exit status is 0 on success,
+the one `engine backend use` chose -- and print readable lines, or a table for
+list commands, unless `--json` asks for JSON. Errors go to stderr; the exit status is 0 on success,
 1 on a refusal or a failed run, and 2 on a usage mistake.
 `graph spec` and `loop spec` print local Markdown specifications offline.
 """
@@ -58,11 +58,13 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     Answers `engine agent`'s actions, so the terminal app can add the ones that
     run here rather than on a backend, such as `engine agent claude`.
     """
-    common = argparse.ArgumentParser(add_help=False)
+    # Readable output is the default; `--pretty` is still accepted so older scripts keep working.
+    readable = argparse.ArgumentParser(add_help=False)
+    readable.add_argument("--json", action="store_true", help="JSON instead of readable output")
+    readable.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
+    common = argparse.ArgumentParser(add_help=False, parents=[readable])
     common.add_argument("--backend", metavar="NAME", help="the backend to use (default: the selected one)")
-    common.add_argument("--pretty", action="store_true", help="human-readable output instead of JSON")
     scoped = argparse.ArgumentParser(add_help=False, parents=[common])
-    # List commands print a table by default; `--pretty` is still accepted so older scripts keep working.
     listed = argparse.ArgumentParser(add_help=False)
     listed.add_argument("--json", action="store_true", help="JSON instead of a table")
     listed.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
@@ -70,7 +72,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
     backend = commands.add_parser("backend", help="choose which engine daemon commands talk to")
     actions = backend.add_subparsers(dest="action", required=True)
-    adding = actions.add_parser("add", help="name a daemon URL, such as the Mac mini's")
+    adding = actions.add_parser("add", parents=[readable], help="name a daemon URL, such as the Mac mini's")
     adding.add_argument("name")
     adding.add_argument("url", help="such as http://mac-mini.local:4364")
     adding.add_argument("--project", default=backends.DEFAULT_PROJECT, help="project graph names resolve in")
@@ -78,12 +80,10 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--repo", default="", help="repository runs check out when none is given")
     adding.add_argument("--use", action="store_true", help="also make it the selected backend")
     adding.add_argument("--replace", action="store_true", help="overwrite a backend with this name")
-    adding.add_argument("--pretty", action="store_true")
     for name, help_text in (("list", "list backends"), ("use", "select a backend"), ("remove", "forget a backend")):
-        action = actions.add_parser(name, parents=[listed] if name == "list" else [], help=help_text)
+        action = actions.add_parser(name, parents=[listed] if name == "list" else [readable], help=help_text)
         if name != "list":
             action.add_argument("name")
-            action.add_argument("--pretty", action="store_true")
         else:
             action.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
     listing = commands.add_parser("backends", parents=[listed], help="list backends")
@@ -214,6 +214,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 def main(arguments: argparse.Namespace) -> int:
     try:
         handler = _HANDLERS[(arguments.command, getattr(arguments, "action", None))]
+        arguments.pretty = not getattr(arguments, "json", False)
         return handler(arguments)
     except (BackendError, RequestFailed, _UsageError, OSError) as error:
         if isinstance(error, _UsageError):

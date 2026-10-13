@@ -11,14 +11,14 @@ Each step is a stage: a checkout, an agent writing code, reviewers, a CI check, 
 
 ```bash
 engine graph add ./graph.yaml
-engine graphs list --pretty
-engine graph get implement-review --pretty   # or implement-review@2, a graph id or a version id
+engine graphs list
+engine graph get implement-review   # or implement-review@2, a graph id or a version id
 engine graph run implement-review "Retry webhook deliveries with backoff" --wait
 ```
 
 A graph's name belongs to a project, and its versions are immutable. Registering a changed definition adds a version; registering an identical one does nothing. A run pins the version it started on, so registering a new version never changes a run already underway.
 
-`graph run` returns the run ID immediately; `--wait` follows it to the end and exits non-zero if it failed. Inspect runs with `engine run get RUN_ID --pretty` and `engine runs --graph NAME --status failed`. Runs appear in the web UI and are approved under the daemon's `[approvals]` policy.
+`graph run` returns the run ID immediately; `--wait` follows it to the end and exits non-zero if it failed. Inspect runs with `engine run get RUN_ID` and `engine runs --graph NAME --status failed`. Runs appear in the web UI and are approved under the daemon's `[approvals]` policy.
 
 ## Built-in graphs
 
@@ -107,7 +107,7 @@ Python runs on the backend with the daemon's privileges, so only operators can r
 ## While it runs
 
 ```bash
-engine nodes list --run RUN_ID --pretty
+engine nodes list --run RUN_ID
 engine node steer EXECUTION_ID "Use the existing retry helper instead" --wait
 ```
 

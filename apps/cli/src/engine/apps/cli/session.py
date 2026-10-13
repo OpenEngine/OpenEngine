@@ -82,7 +82,7 @@ def main(arguments: argparse.Namespace) -> int:
             print(f"engine: could not end the session: {error}", file=sys.stderr)
     print(
         f"Session ended. The work is on {workspace['ref']} at {workspace['path']}; "
-        f"see `engine run get {session['runId']} --pretty`.",
+        f"see `engine run get {session['runId']}`.",
         file=sys.stderr,
     )
     return status

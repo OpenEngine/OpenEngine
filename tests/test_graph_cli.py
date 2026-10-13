@@ -69,7 +69,9 @@ RUN = {
 
 def test_backends_are_added_selected_and_listed(capsys) -> None:
     assert main(["backend", "add", "mini", "mac-mini.local:4364", "--token-env", "MINI_TOKEN", "--use"]) == 0
-    capsys.readouterr()
+    assert capsys.readouterr().out == "* mini  http://mac-mini.local:4364  project default\n"
+    assert main(["backend", "use", "mini", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["name"] == "mini"
     assert main(["backends", "list", "--json"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["current"] == "mini"
@@ -103,7 +105,7 @@ def test_every_command_goes_to_the_selected_backend_with_its_token(monkeypatch, 
 
 def test_graph_run_retries_a_dropped_connection_under_the_same_key(monkeypatch, capsys) -> None:
     recorded = serve(monkeypatch, URLError("connection reset"), {**RUN, "created": True})
-    assert main(["graph", "run", "pair", "fix the flaky test", "-i", "tone=terse", "--repo", "o/r"]) == 0
+    assert main(["graph", "run", "pair", "fix the flaky test", "-i", "tone=terse", "--repo", "o/r", "--json"]) == 0
     first, retry = recorded.requests
     assert first["body"] == retry["body"]
     assert first["body"]["idempotencyKey"].startswith("cli-")
@@ -197,7 +199,7 @@ def test_loop_add_sends_limits_and_explains_what_spend_counts(monkeypatch, capsy
         "limits": {"maxPrs": 5, "maxSpendUsd": 20.0, "spendScope": "Agent usage reported by each node."},
     }
     recorded = serve(monkeypatch, loop)
-    assert main(["loop", "add", "pair", "--max-prs", "5", "--max-spend", "20", "--every", "6h"]) == 0
+    assert main(["loop", "add", "pair", "--max-prs", "5", "--max-spend", "20", "--every", "6h", "--json"]) == 0
     body = recorded.requests[0]["body"]
     assert (body["maxPrs"], body["maxSpendUsd"], body["every"], body["startNow"]) == (5, 20.0, "6h", True)
     assert "max-spend counts agent usage" in capsys.readouterr().err
@@ -216,7 +218,7 @@ def test_loop_get_prints_the_latest_output(monkeypatch, capsys) -> None:
         },
     }
     serve(monkeypatch, loop)
-    assert main(["loop", "get", "dead-code", "--pretty"]) == 0
+    assert main(["loop", "get", "dead-code"]) == 0
     out = capsys.readouterr().out
     assert "latest output: challenge of run-1, finished 2026-10-09T18:26:25+00:00" in out
     assert "summary: One candidate survived." in out
@@ -262,7 +264,7 @@ def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys)
     )
     assert main(["agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1"]) == 0
     assert main(["agents"]) == 0
-    assert main(["agent", "remove", "qwen", "--pretty"]) == 0
+    assert main(["agent", "remove", "qwen"]) == 0
     assert [(r["method"], r["url"].removeprefix("http://127.0.0.1:4364/api/v1")) for r in backend.requests] == [
         ("POST", "/agents"), ("GET", "/agents"), ("DELETE", "/agents/qwen"),
     ]
