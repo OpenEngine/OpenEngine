@@ -70,7 +70,9 @@ RUN = {
 
 def test_backends_are_added_selected_and_listed(capsys) -> None:
     assert main(["backend", "add", "mini", "mac-mini.local:4364", "--token-env", "MINI_TOKEN", "--use"]) == 0
-    capsys.readouterr()
+    assert capsys.readouterr().out == "* mini  http://mac-mini.local:4364  project default\n"
+    assert main(["backend", "use", "mini", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["name"] == "mini"
     assert main(["backends", "list", "--json"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["current"] == "mini"
@@ -104,7 +106,7 @@ def test_every_command_goes_to_the_selected_backend_with_its_token(monkeypatch, 
 
 def test_graph_run_retries_a_dropped_connection_under_the_same_key(monkeypatch, capsys) -> None:
     recorded = serve(monkeypatch, URLError("connection reset"), {**RUN, "created": True})
-    assert main(["graph", "run", "pair", "fix the flaky test", "-i", "tone=terse", "--repo", "o/r"]) == 0
+    assert main(["graph", "run", "pair", "fix the flaky test", "-i", "tone=terse", "--repo", "o/r", "--json"]) == 0
     first, retry = recorded.requests
     assert first["body"] == retry["body"]
     assert first["body"]["idempotencyKey"].startswith("cli-")
@@ -202,7 +204,7 @@ def test_loop_add_sends_limits_and_explains_what_spend_counts(monkeypatch, capsy
         "limits": {"maxPrs": 5, "maxSpendUsd": 20.0, "spendScope": "Agent usage reported by each node."},
     }
     recorded = serve(monkeypatch, loop)
-    assert main(["loop", "add", "pair", "--max-prs", "5", "--max-spend", "20", "--every", "6h"]) == 0
+    assert main(["loop", "add", "pair", "--max-prs", "5", "--max-spend", "20", "--every", "6h", "--json"]) == 0
     body = recorded.requests[0]["body"]
     assert (body["maxPrs"], body["maxSpendUsd"], body["every"], body["startNow"]) == (5, 20.0, "6h", True)
     assert "max-spend counts agent usage" in capsys.readouterr().err
@@ -221,7 +223,7 @@ def test_loop_get_prints_the_latest_output(monkeypatch, capsys) -> None:
         },
     }
     serve(monkeypatch, loop)
-    assert main(["loop", "get", "dead-code", "--pretty"]) == 0
+    assert main(["loop", "get", "dead-code"]) == 0
     out = capsys.readouterr().out
     assert "latest output: challenge of run-1, finished 2026-10-09T18:26:25+00:00" in out
     assert "summary: One candidate survived." in out
@@ -267,7 +269,7 @@ def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys)
     )
     assert main(["agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1"]) == 0
     assert main(["agents"]) == 0
-    assert main(["agent", "remove", "qwen", "--pretty"]) == 0
+    assert main(["agent", "remove", "qwen"]) == 0
     assert [(r["method"], r["url"].removeprefix("http://127.0.0.1:4364/api/v1")) for r in backend.requests] == [
         ("POST", "/agents"), ("GET", "/agents"), ("DELETE", "/agents/qwen"),
     ]
@@ -398,7 +400,7 @@ def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
         {"id": "job1", "status": "cloning", "message": "Cloning"},
         {"id": "job1", "status": "complete", "message": "Repository onboarded", "repository": "owner/repo", "path": "/code/repo"},
     )
-    assert main(["onboard", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
+    assert main(["repo", "add", "https://github.com/owner/repo", "--mode", "disconnected", "--path", "/code/repo"]) == 0
     assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
     assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo", "trusted": None}
     assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
@@ -409,14 +411,14 @@ def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
     from engine.cli import repository
     monkeypatch.setattr(repository, "_git", lambda root, *args: "/checkout" if args[0] == "rev-parse" else "git@github.com:owner/repo.git")
     backend = serve(monkeypatch, {"status": "complete", "message": "Already onboarded", "repository": "owner/repo", "path": "/checkout"})
-    assert main(["onboard", "--mode", "connected"]) == 0
+    assert main(["repo", "add", "--mode", "connected"]) == 0
     assert backend.requests[0]["body"]["path"] == "/checkout"
     assert backend.requests[0]["body"]["repository"] == "git@github.com:owner/repo.git"
 
 
 def test_onboard_reports_fix(monkeypatch, capsys):
     serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "engine agent signin codex"}]})
-    assert main(["onboard", "owner/repo", "--mode", "connected"]) == 1
+    assert main(["repo", "add", "owner/repo", "--mode", "connected"]) == 1
     assert "engine agent signin codex" in capsys.readouterr().err
 
 
@@ -440,8 +442,10 @@ def test_graph_run_live_selection(monkeypatch, capsys, stdin_tty, stdout_tty, fl
     output = capsys.readouterr().out
     if watched:
         assert "run-1 · completed" in output
-    else:
+    elif "--json" in flags:
         assert json.loads(output)["runId"] == "run-1"
+    else:
+        assert "run-1  pair v1" in output
 
 
 @pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0)])
@@ -645,3 +649,25 @@ def test_verb_binding_checks_contract_before_writing(monkeypatch, capsys):
     recorded = serve(monkeypatch, {"name": "custom", "inputs": ["ref"]}, {"verbs": {"review": "custom"}})
     assert main(["verb", "set", "review", "custom"]) == 0
     assert recorded.requests[-1]["body"]["graph"] == "custom"
+
+
+@pytest.mark.parametrize('relative', [True, False])
+def test_repo_add_existing_path(tmp_path, monkeypatch, relative):
+    from engine.cli import repository
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    def git(path, *args):
+        calls.append((path, args))
+        return str(tmp_path) if args[0] == 'rev-parse' else 'https://gitlab.com/group/repo.git'
+    monkeypatch.setattr(repository, '_git', git)
+    backend = serve(monkeypatch, {'status': 'complete', 'message': 'Repository onboarded', 'repository': 'gitlab.com/group/repo', 'path': str(tmp_path)})
+    assert main(['repo', 'add', '.' if relative else str(tmp_path)]) == 0
+    assert calls[0][0] == str(tmp_path)
+    assert backend.requests[0]['body'] == {'repository': 'https://gitlab.com/group/repo.git', 'path': str(tmp_path), 'mode': 'connected', 'trusted': None}
+
+
+def test_repo_add_gitlab_url(monkeypatch):
+    backend = serve(monkeypatch, {'status': 'complete', 'message': 'Repository onboarded', 'repository': 'gitlab.com/group/repo', 'path': '/code/repo'})
+    assert main(['repo', 'add', 'https://gitlab.com/group/repo.git']) == 0
+    assert backend.requests[0]['body']['repository'] == 'https://gitlab.com/group/repo.git'
+    assert backend.requests[0]['body']['path'] is None

@@ -19,7 +19,7 @@ def test_repository_references(reference):
 
 
 @pytest.mark.parametrize('reference', [
-    'https://gitlab.com/owner/repo', 'git@evil.example:owner/repo.git',
+    'git@evil.example:owner/repo.git',
     'https://github.com/owner/repo/tree/main', '../repo', 'owner', 'owner/repo?query',
 ])
 def test_invalid_references(reference):
@@ -57,10 +57,10 @@ def test_new_config_uses_machine_path(tmp_path, monkeypatch):
     assert tomllib.loads(service.config_path.read_text())['repos']['owner/repo'] == str(tmp_path / 'repo')
 
 
-@pytest.mark.parametrize('failure', ['git', 'github_ssh', 'agent'])
+@pytest.mark.parametrize('failure', ['git', 'agent'])
 def test_preflight_failures_leave_destination_and_config_untouched(tmp_path, monkeypatch, failure):
     monkeypatch.setattr(onboard.shutil, 'which', lambda binary: None if failure == 'git' and binary == 'git' else binary)
-    monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(args, 255 if failure == 'github_ssh' else 1, '', 'successfully authenticated'))
+    monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(args, 1, '', 'successfully authenticated'))
     monkeypatch.setattr(onboard, 'signed_in_agent', lambda: None if failure == 'agent' else 'codex')
     clone = Mock()
     monkeypatch.setattr(onboard, 'ensure_repository_checkouts', clone)
@@ -97,7 +97,7 @@ def test_job_reuses_checkout_persists_applies_and_is_idempotent(tmp_path, monkey
     monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(
         args, 0, str(target) if 'rev-parse' in args else 'git@github.com:owner/repo.git', '',
     ))
-    clone = Mock(side_effect=lambda repos: target.mkdir(exist_ok=True))
+    clone = Mock(side_effect=lambda repos, **kwargs: target.mkdir(exist_ok=True))
     monkeypatch.setattr(onboard, 'ensure_repository_checkouts', clone)
     monkeypatch.setattr(RepositoryRegistry, '_project', lambda self, path: 'owner/repo')
     registry = RepositoryRegistry(projects={})
@@ -153,7 +153,7 @@ def test_api_job_and_config_share_running_registry(tmp_path, monkeypatch, origin
     target = tmp_path / 'repo'
     monkeypatch.setattr(onboard, 'preflight', lambda: ([], 'codex'))
     monkeypatch.setattr(onboard, 'validate_checkout', lambda *args: None)
-    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', lambda repos: target.mkdir())
+    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', lambda repos, **kwargs: target.mkdir())
     monkeypatch.setattr(onboard, 'register_starters', AsyncMock())
     monkeypatch.setattr(RepositoryRegistry, '_project', lambda self, path: 'owner/repo')
     registry = RepositoryRegistry(projects={})
@@ -191,12 +191,13 @@ def test_detects_each_signed_in_agent(agent, tmp_path, monkeypatch):
     assert onboard.signed_in_agent() == agent
 
 
-def test_no_credentials_and_ssh_timeout_are_actionable(monkeypatch):
+def test_no_credentials_are_actionable_without_ssh_probe(monkeypatch):
     monkeypatch.setattr(onboard.shutil, 'which', lambda binary: binary if binary == 'git' else None)
     monkeypatch.setattr(onboard, '_run', Mock(side_effect=subprocess.TimeoutExpired('ssh', 20)))
     problems, agent = onboard.preflight()
     assert agent is None
-    assert {item['code'] for item in problems} == {'agent', 'github_ssh'}
+    assert {item['code'] for item in problems} == {'agent'}
+    onboard._run.assert_not_called()
 
 
 def test_onboarding_is_operator_only(tmp_path):
@@ -217,7 +218,7 @@ def test_failed_job_can_be_retried_without_recloning(tmp_path, monkeypatch):
     target = tmp_path / 'repo'
     monkeypatch.setattr(onboard, 'preflight', lambda: ([], 'codex'))
     monkeypatch.setattr(onboard, 'validate_checkout', lambda *args: None)
-    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', lambda repos: target.mkdir(exist_ok=True))
+    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', lambda repos, **kwargs: target.mkdir(exist_ok=True))
     monkeypatch.setattr(RepositoryRegistry, '_project', lambda self, path: 'owner/repo')
     register = AsyncMock(side_effect=[RuntimeError('unavailable'), None])
     service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), tmp_path / 'config.toml', register)
@@ -242,7 +243,7 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
     target = tmp_path / 'repo'
     monkeypatch.setattr(onboard, 'preflight', lambda: ([], 'codex'))
     monkeypatch.setattr(onboard, 'validate_checkout', lambda *args: None)
-    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', lambda repos: target.mkdir())
+    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', lambda repos, **kwargs: target.mkdir())
     monkeypatch.setattr(RepositoryRegistry, '_project', lambda self, path: 'owner/repo')
     registry = RepositoryRegistry(projects={})
     settings = Settings(graph_state_directory=str(tmp_path / 'graphs'), workspace_root=str(tmp_path / 'workspaces'))
@@ -400,3 +401,54 @@ def test_trusted_hosts_can_onboard(tmp_path, monkeypatch, base_url, public_url):
             assert response.status_code == 202
     asyncio.run(run())
     start.assert_called_once()
+
+
+@pytest.mark.parametrize('reference', [
+    'https://gitlab.com/group/subgroup/repo.git',
+    'git@gitlab.com:group/subgroup/repo.git',
+    'ssh://git@gitlab.com/group/subgroup/repo.git',
+])
+def test_gitlab_repository_references(reference):
+    assert onboard.repository_name(reference) == 'gitlab.com/group/subgroup/repo'
+
+
+@pytest.mark.parametrize('reference', ['https://github.com/owner/repo.git', 'https://gitlab.com/group/sub/repo.git'])
+def test_clone_preserves_remote_url(tmp_path, monkeypatch, reference):
+    from engine.apps.web import repositories
+    name = onboard.repository_name(reference)
+    target = tmp_path / 'repo'
+    commands = []
+    def clone(args, **kwargs):
+        commands.append(args)
+        from pathlib import Path
+        Path(args[-1]).mkdir()
+        return subprocess.CompletedProcess(args, 0, '', '')
+    monkeypatch.setattr(repositories.subprocess, 'run', clone)
+    repositories.ensure_repository_checkouts({name: str(target)}, clone_urls={name: reference})
+    assert commands[0][0:4] == ['git', 'clone', '--', reference]
+    assert target.is_dir()
+    repositories.ensure_repository_checkouts({name: str(target)}, clone_urls={name: reference})
+    assert len(commands) == 1
+
+
+@pytest.mark.parametrize('local', [True, False])
+def test_add_gitlab_local_or_remote(tmp_path, monkeypatch, local):
+    target = tmp_path / 'repo'
+    if local:
+        target.mkdir()
+    origin = 'https://gitlab.com/group/sub/repo.git'
+    monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(
+        args, 0, str(target) if 'rev-parse' in args else origin, ''))
+    monkeypatch.setattr(onboard, 'preflight', lambda: ([], 'codex'))
+    monkeypatch.setattr(RepositoryRegistry, '_project', lambda *args: None)
+    clone = Mock(side_effect=lambda repos, **kwargs: target.mkdir(exist_ok=True))
+    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', clone)
+    config = tmp_path / 'engine.toml'
+    service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), config, AsyncMock(), tmp_path)
+    async def run():
+        job = service.start(str(target) if local else origin, None, 'connected')
+        await service.close()
+        assert service.jobs[job['id']]['status'] == 'complete'
+    asyncio.run(run())
+    assert tomllib.loads(config.read_text())['repos'] == {'gitlab.com/group/sub/repo': str(target)}
+    assert clone.call_args.kwargs['clone_urls'] == {'gitlab.com/group/sub/repo': origin}

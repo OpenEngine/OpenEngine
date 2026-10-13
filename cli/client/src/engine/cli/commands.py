@@ -1,8 +1,8 @@
 """`engine backend|graph|graphs|run|runs|loop|loops|node|nodes|agent|agents|runner`.
 
 Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
-the one `engine backend use` chose -- and print JSON unless `--pretty` asks
-for something to read. List commands print a table unless `--json` asks for JSON. Errors go to stderr; the exit status is 0 on success,
+the one `engine backend use` chose -- and print readable lines, or a table for
+list commands, unless `--json` asks for JSON. Errors go to stderr; the exit status is 0 on success,
 1 on a refusal or a failed run, and 2 on a usage mistake.
 `graph spec` and `loop spec` print local Markdown specifications offline.
 """
@@ -31,7 +31,7 @@ from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
-    "runner", "onboard", "repo", "go", "verb", "verbs",
+    "runner", "repo", "go", "verb", "verbs",
 })
 #: Commands omitted from the bare `engine` menu.
 HIDDEN = frozenset({"runner", "verb", "verbs", "backends", "graphs", "runs", "loops", "nodes", "agents", "connections"})
@@ -65,11 +65,13 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     Answers `engine agent`'s actions, so the terminal app can add the ones that
     run here rather than on a backend, such as `engine agent claude`, `codex` and `opencode`.
     """
-    common = argparse.ArgumentParser(add_help=False)
+    # Readable output is the default; `--pretty` is still accepted so older scripts keep working.
+    readable = argparse.ArgumentParser(add_help=False)
+    readable.add_argument("--json", action="store_true", help="JSON instead of readable output")
+    readable.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
+    common = argparse.ArgumentParser(add_help=False, parents=[readable])
     common.add_argument("--backend", metavar="NAME", help="the backend to use (default: the selected one)")
-    common.add_argument("--pretty", action="store_true", help="human-readable output instead of JSON")
     scoped = argparse.ArgumentParser(add_help=False, parents=[common])
-    # List commands print a table by default; `--pretty` is still accepted so older scripts keep working.
     listed = argparse.ArgumentParser(add_help=False)
     listed.add_argument("--json", action="store_true", help="JSON instead of a table")
     listed.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
@@ -77,6 +79,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
     go = commands.add_parser(
         "go", parents=[scoped], help="make a change with the default graph and follow it live",
+        description="Follows live on a TTY. With --json, prints JSON and sends the mode banner to stderr.",
         epilog='examples:\n  engine go "add a widget"\n  engine go fix https://github.com/OpenEngine/OpenEngine/pull/855',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -88,7 +91,6 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     go.add_argument("--spec", action="store_true", help="write a specification before implementing")
     go.add_argument("--input", "-i", action="append", default=[], metavar="KEY=VALUE")
     go.add_argument("--wait", action="store_true", help="wait non-interactively for completion")
-    go.add_argument("--json", action="store_true", help="JSON output; mode banner goes to stderr")
     go.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
     go.set_defaults(graph=starters.DEFAULT, branch="", agent="", no_watch=False, idempotency_key="")
 
@@ -102,7 +104,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
     backend = commands.add_parser("backend", help="choose which engine daemon commands talk to")
     actions = backend.add_subparsers(dest="action", required=True)
-    adding = actions.add_parser("add", help="name a daemon URL, such as the Mac mini's")
+    adding = actions.add_parser("add", parents=[readable], help="name a daemon URL, such as the Mac mini's")
     adding.add_argument("name")
     adding.add_argument("url", help="such as http://mac-mini.local:4364")
     adding.add_argument("--project", default=backends.DEFAULT_PROJECT, help="project graph names resolve in")
@@ -110,24 +112,22 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--repo", default="", help="repository runs check out when none is given")
     adding.add_argument("--use", action="store_true", help="also make it the selected backend")
     adding.add_argument("--replace", action="store_true", help="overwrite a backend with this name")
-    adding.add_argument("--pretty", action="store_true")
     for name, help_text in (("list", "list backends"), ("use", "select a backend"), ("remove", "forget a backend")):
-        action = actions.add_parser(name, parents=[listed] if name == "list" else [], help=help_text)
+        action = actions.add_parser(name, parents=[listed] if name == "list" else [readable], help=help_text)
         if name != "list":
             action.add_argument("name")
-            action.add_argument("--pretty", action="store_true")
         else:
             action.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
     add_list_alias(commands, "backend", actions.choices["list"])
 
-    onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
-    onboard.add_argument("--trust", "--trusted", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
-    onboard.add_argument("url", nargs="?")
-    onboard.add_argument("--path", help="checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
-    onboard.add_argument("--mode", choices=("connected", "disconnected"))
-
-    repo = commands.add_parser("repo", help="manage repository trust")
+    repo = commands.add_parser("repo", help="add repositories and manage trust")
     repo_actions = repo.add_subparsers(dest="action", required=True)
+    onboard = repo_actions.add_parser("add", parents=[common], help="add a local checkout or clone a GitHub/GitLab URL")
+    onboard.add_argument("--trust", "--trusted", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
+    onboard.add_argument("url", nargs="?", default=".", metavar="repository", help="existing checkout path or GitHub/GitLab URL (default: .)")
+    onboard.add_argument("--path", help="clone destination on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
+    onboard.add_argument("--mode", choices=("connected", "disconnected"), default="connected", help="repository workflow mode (default: connected)")
+
     for name in ("trust", "untrust"):
         setting = repo_actions.add_parser(name, parents=[common],
             help="auto-approve runs in a repository" if name == "trust" else "require approvals in a repository")
@@ -156,7 +156,6 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     running.add_argument("--trust", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
     running.add_argument("--repo", default="", help="repository to check out")
     running.add_argument("--no-watch", action="store_true", help="return immediately without the live view")
-    running.add_argument("--json", action="store_true", help="print JSON without the live view")
     running.add_argument("--wait", action="store_true", help="wait for the run to finish")
     running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
     running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
@@ -201,7 +200,6 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--max-prs", type=int, default=None, help="pause after this many new pull requests")
     adding.add_argument("--max-spend", type=float, default=None, metavar="USD", help="pause, and stop the active run, at this spend")
     adding.add_argument("--trust", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
-    adding.add_argument("--json", action="store_true")
     adding.add_argument("--repo", default="")
     adding.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
     adding.add_argument("--no-run-now", action="store_true", help="first run after one interval, not now")
@@ -264,6 +262,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 def main(arguments: argparse.Namespace) -> int:
     try:
         handler = _HANDLERS[(arguments.command, getattr(arguments, "action", None))]
+        arguments.pretty = not getattr(arguments, "json", False)
         return handler(arguments)
     except (BackendError, RequestFailed, _UsageError, OSError) as error:
         if isinstance(error, _UsageError):
@@ -277,21 +276,19 @@ def onboard_repository(arguments: argparse.Namespace) -> int:
     backend, _ = _connect(arguments)
     client = Client(backend, api_prefix="/api")
     reference, path = arguments.url, arguments.path
-    if not reference:
-        if not backend.is_local:
-            raise _UsageError("Pass a GitHub URL when onboarding through a remote backend")
-        root = repository._git(str(Path.cwd()), "rev-parse", "--show-toplevel")
-        reference = repository._git(root, "remote", "get-url", "origin") if root else ""
-        if not reference:
-            raise _UsageError("Run inside a GitHub checkout with an origin, or pass a GitHub URL")
-        path = path or root
+    if backend.is_local:
+        local = Path(reference).expanduser()
+        if local.exists() or reference.startswith((".", "/", "~")):
+            root = repository._git(str(local.resolve()), "rev-parse", "--show-toplevel")
+            reference = repository._git(root, "remote", "get-url", "origin") if root else ""
+            if not reference:
+                raise _UsageError("Choose an existing checkout with an origin, or pass a GitHub/GitLab URL")
+            if path and Path(path).expanduser().resolve() != Path(root).resolve():
+                raise _UsageError("--path is a clone destination; omit it when adding an existing checkout")
+            path = root
+        elif path:
+            path = str(Path(path).expanduser().resolve())
     mode = arguments.mode
-    if not mode:
-        if not sys.stdin.isatty():
-            raise _UsageError("Pass --mode connected or --mode disconnected when not using a terminal")
-        mode = input("Mode [connected/disconnected] (connected): ").strip() or "connected"
-        if mode not in {"connected", "disconnected"}:
-            raise _UsageError("Mode must be connected or disconnected")
     state = client.post("/repositories/onboard", {"repository": reference, "path": path, "mode": mode, "trusted": arguments.trust})
     previous = None
     while True:
@@ -1066,7 +1063,7 @@ _HANDLERS = {
     ("verb", "list"): verbs_list,
     ("verb", "set"): verb_set,
     ("go", None): go,
-    ("onboard", None): onboard_repository,
+    ("repo", "add"): onboard_repository,
     ("repo", "trust"): repo_trust,
     ("repo", "untrust"): repo_trust,
     ("backend", "add"): backend_add,

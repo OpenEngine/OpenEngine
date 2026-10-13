@@ -14,7 +14,7 @@ output:
   List operations print a table; add --json for JSON,
   such as `engine run list --json`.
   engine go follows live on a TTY; use --wait --json for scripts.
-  Other commands print JSON; add --pretty for readable output.
+  Other commands print readable lines; add --json for JSON.
 """
 
 

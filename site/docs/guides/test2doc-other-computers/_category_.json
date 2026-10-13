@@ -1,0 +1,9 @@
+{
+  "label": "Other Computers",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "slug": "/guides/other-computers",
+    "description": "Use OpenEngine on more than one computer, such as this one and a Mac mini."
+  }
+}

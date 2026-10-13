@@ -48,7 +48,7 @@ list will not work.
 ## Pick the backend
 
 ```bash
-uv run engine backends list --check --pretty
+uv run engine backends list --check
 ```
 
 `local` (`http://127.0.0.1:4364`) always exists. Use `--backend NAME` for a
@@ -77,8 +77,8 @@ Start from `apiVersion: openengine.cc/v1`, `kind: Graph`, a `name` matching
 
 ```bash
 uv run engine graph add path/to/graph.yaml
-uv run engine graphs list --pretty
-uv run engine graph get NAME --pretty        # also NAME@VERSION, g-..., gv-...
+uv run engine graphs list
+uv run engine graph get NAME        # also NAME@VERSION, g-..., gv-...
 ```
 
 Versions are immutable. Registering a changed file adds a version;
@@ -89,8 +89,8 @@ problem at once with its path; fix them all and register again.
 
 ```bash
 uv run engine graph run NAME "instruction" --repo OWNER/REPO -i KEY=VALUE --wait
-uv run engine run get RUN_ID --pretty
-uv run engine runs --graph NAME --status failed --pretty
+uv run engine run get RUN_ID
+uv run engine runs --graph NAME --status failed
 ```
 
 Always use `--wait` for agent invocations: it polls non-interactively and exits
@@ -102,14 +102,14 @@ with the same `--idempotency-key` to avoid starting a second run.
 failure. To follow or correct a node while it works:
 
 ```bash
-uv run engine nodes list --run RUN_ID --pretty
-uv run engine node get EXECUTION_ID --pretty
+uv run engine nodes list --run RUN_ID
+uv run engine node get EXECUTION_ID
 uv run engine node steer EXECUTION_ID "use the existing retry helper" --wait
 ```
 
 Steering is a message into the turn the agent is in, not a retry or an
 approval. A run stopped on an approval or a human step is answered in the web
-UI; `run get --pretty` lists approval IDs, nodes, commands and the UI URL.
+UI; `run get` lists approval IDs, nodes, commands and the UI URL.
 People can also use `engine run watch RUN_ID` to answer approvals inline;
 agents should keep using non-interactive `--wait`.
 
@@ -117,8 +117,8 @@ agents should keep using non-interactive `--wait`.
 
 ```bash
 uv run engine loop add NAME --max-spend 20 --max-prs 5   # --every/--instruction override the graph's loop
-uv run engine loops list --pretty
-uv run engine loop get NAME --pretty
+uv run engine loops list
+uv run engine loop get NAME
 uv run engine loop pause NAME --reason "release freeze"
 uv run engine loop resume NAME --max-spend 40
 ```
@@ -138,9 +138,9 @@ uv run engine loop resume NAME --max-spend 40
 | Symptom | Check |
 | --- | --- |
 | Registration refused | The listed paths against `engine graph spec`: unknown fields, undeclared inputs, outputs not yet available, unreachable steps. |
-| Run failed: agent not signed in | `uv run engine agent signin AGENT` on the backend's host; `engine agents --pretty` lists what exists. |
-| Run failed otherwise | `failure` in `engine run get RUN_ID --pretty`, then the node's own result with `engine node get`. |
-| Loop paused | `pauseReason` and spend in `engine loop get NAME --pretty`. |
+| Run failed: agent not signed in | `uv run engine agent signin AGENT` on the backend's host; `engine agents` lists what exists. |
+| Run failed otherwise | `failure` in `engine run get RUN_ID`, then the node's own result with `engine node get`. |
+| Loop paused | `pauseReason` and spend in `engine loop get NAME`. |
 | Run or graph version not found | The version may no longer load (for example an older `apiVersion`). Register the graph again under the current `apiVersion` and start new runs or loops from it. |
 
 ## Do not

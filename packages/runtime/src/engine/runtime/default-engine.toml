@@ -40,7 +40,7 @@ directory = "workflows"
 [sandbox]
 backend = "process"
 
-# Where `engine onboard` clones a repository when no path is given, instead of
+# Where `engine repo add` clones a repository when no path is given, instead of
 # ~/code. Expand ~ and resolve relative to this file. Omit to keep ~/code.
 # [onboarding]
 # directory = "~/code/work"

@@ -48,3 +48,21 @@ skips the trust prompt and auto-approves across repositories; repository trust
 opts in individual repositories while that global setting stays false. Explicit
 false means manual approvals and no repeat prompt. Unattended project runs remain
 subject to their own manual approval policy. Tool allow rules are unchanged.
+
+## Add a repository
+
+Use `engine repo add .` (or `engine repo add /path/to/repo`) to register an
+existing clone without cloning it again. The checkout must have a GitHub or
+GitLab origin. To clone and register a remote repository, use:
+
+```sh
+engine repo add https://github.com/owner/repo
+engine repo add https://gitlab.com/group/repo --path ~/code/repo
+```
+
+HTTPS and SSH URLs retain their transport and host. The default clone location
+is `[onboarding] directory` or `~/code`, followed by the repository's final name.
+Local paths and clone destinations belong to the selected daemon; with a local
+backend, relative paths resolve from your current directory. Connected mode is
+the default; use `--mode disconnected` for local-only work. Trust can be set with
+`--trust` or `--no-trust`. `engine repo add` replaces `engine onboard`.

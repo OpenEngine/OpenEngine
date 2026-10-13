@@ -136,7 +136,7 @@ def test_first_checkout_registration(tmp_path, monkeypatch):
     assert tomllib.loads(config.read_text())['repos'] == {'owner/repo': str(root)}
 
 
-@pytest.mark.parametrize('command', [['go', 'change'], ['graph', 'run', 'default'], ['loop', 'add', 'default'], ['agent', 'codex'], ['onboard', 'owner/repo']])
+@pytest.mark.parametrize('command', [['go', 'change'], ['graph', 'run', 'default'], ['loop', 'add', 'default'], ['agent', 'codex'], ['repo', 'add', 'owner/repo']])
 @pytest.mark.parametrize('flag,decision', [('--trust', True), ('--no-trust', False)])
 def test_trust_flags(command, flag, decision):
     from engine.apps.cli.__main__ import parser

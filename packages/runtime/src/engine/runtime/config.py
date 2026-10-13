@@ -57,7 +57,7 @@ class WorkflowsConfig:
 
 @dataclass(frozen=True, slots=True)
 class OnboardingConfig:
-    """Where `engine onboard` clones a repository when no path is given.
+    """Where `engine repo add` clones a repository when no path is given.
 
     `directory`, when set, replaces the daemon home's `code` subdirectory, so
     a deployment that keeps checkouts elsewhere need not pass `--path` on every
@@ -252,7 +252,7 @@ class EngineConfig:
     repo_modes: Mapping[str, str] = field(default_factory=dict)
     """`[repos]` names mapped to the mode their WorkOrders run in.
 
-    Written by `engine onboard`. A repository named `disconnected` here has every
+    Written by `engine repo add`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
     repository_trust: Mapping[str, bool] = field(default_factory=dict)
