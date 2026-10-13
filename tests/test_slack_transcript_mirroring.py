@@ -210,13 +210,12 @@ def test_human_review_slack_sequence(
                 while (await app.state.run_reader.load(run_id)).phase is not phase:
                     await asyncio.sleep(0.01)
 
-        async def wait_for_review():
+        async def wait_for_message(text):
             async with asyncio.timeout(10):
-                while not any(m.text == "Review complete and ready for your decision."
-                              for _, m, _ in communications.posts):
+                while not any(m.text == text for _, m, _ in communications.posts):
                     await asyncio.sleep(0.01)
 
-        browser.portal.call(wait_for_review)
+        browser.portal.call(wait_for_message, "Review complete and ready for your decision.")
         events = browser.get(f"/api/runs/{run_id}/graph-events").json()["events"]
         approval = next(e for e in events if e["type"] == "approval.requested")
         response = browser.post(
@@ -225,6 +224,11 @@ def test_human_review_slack_sequence(
         )
         assert response.status_code < 300, response.text
         browser.portal.call(wait_for_phase, RunPhase.SUCCEEDED if decision == "accept" else RunPhase.FAILED)
+        # The runtime snapshot can be terminal before its notification is delivered.
+        browser.portal.call(wait_for_message, (
+            "Work order finished." if decision == "accept"
+            else "Work order failed: approval of this run was not allowed"
+        ))
         events = browser.get(f"/api/runs/{run_id}/graph-events").json()["events"]
         # Internal narration remains available in OE but cannot count as a report.
         transcripts = [e["payload"]["text"] for e in events if e["type"] == "transcript"]
