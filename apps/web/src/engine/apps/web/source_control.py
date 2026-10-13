@@ -222,9 +222,9 @@ class RoutingSourceControl:
             )
         )
 
-    async def approve_change_request(self, project: str, number: int, body: str) -> None:
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> None:
         url = f"https://github.com/{project}" if project.count('/') == 1 else f"https://{project}"
-        await self._call(lambda source: source.approve_change_request(project, number, body), pr_url=url)
+        await self._call(lambda source: source.approve_change_request(project, number, body, commit_sha=commit_sha), pr_url=url)
 
     async def can_write_repository(
         self, pr_url: str, username: str, *, user_id: int | None = None

@@ -61,12 +61,20 @@ async def approval_reason(state: Mapping[str, Any]) -> str:
     try:
         workspace = WorkspaceId(str(state['workspaceId']))
         change = await source.view_change_request(workspace, target.number)
+        # The workspace-scoped lookup must name the exact PR we will approve.
+        if change_request(change.url) != target:
+            return 'target PR does not match the workspace repository'
+        reviewed_sha = state.get('reviewed_sha')
+        if not reviewed_sha or reviewed_sha != change.head_sha:
+            return 'reviewed commit does not match the PR head'
         login = await source.authenticated_login(target_url(state))
         if not login or not change.author:
             return 'approving identity or PR author is unavailable'
         if login.casefold() == change.author.casefold():
             return 'PR author is the approving identity'
         status = await source.list_pipeline_status(workspace, change_request_number=target.number)
+        if status.ref != reviewed_sha:
+            return 'CI commit does not match the reviewed commit'
         allowed = {'success', 'neutral', 'skipped', 'pending', 'queued', 'in_progress',
                    'running', 'created', 'waiting', 'requested', 'preparing', 'scheduled'}
         if any((job.conclusion or job.status).lower() not in allowed
@@ -104,6 +112,7 @@ class ApproveReview:
         target = change_request(target_url(state))
         assert target is not None and execution.runtime.source_control is not None
         body = f"Approved automatically because impact was Green 🟢.\n\n{state['impact_rationale']}"
-        await execution.runtime.source_control.approve_change_request(target.project, target.number, body)
+        await execution.runtime.source_control.approve_change_request(
+            target.project, target.number, body, commit_sha=str(state['reviewed_sha']))
         await execution.say(body)
         return {'approved': True, 'approval_reason': body}

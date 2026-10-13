@@ -18,7 +18,7 @@ URL = 'https://github.com/owner/repo/pull/42'
 @pytest.fixture
 def execution(monkeypatch):
     source = SimpleNamespace(
-        view_change_request=AsyncMock(return_value=SimpleNamespace(author='contributor')),
+        view_change_request=AsyncMock(return_value=SimpleNamespace(author='contributor', url=URL, head_sha='sha')),
         authenticated_login=AsyncMock(return_value='engine'),
         list_pipeline_status=AsyncMock(return_value=PipelineStatus('sha', (), ())),
         add_comment=AsyncMock(), approve_change_request=AsyncMock(),
@@ -29,7 +29,7 @@ def execution(monkeypatch):
 
 
 def state(**updates):
-    return {'workspaceId': 'ws', 'impact_level': 'Green', 'impact_rationale': 'A small, covered change.',
+    return {'workspaceId': 'ws', 'reviewed_sha': 'sha', 'impact_level': 'Green', 'impact_rationale': 'A small, covered change.',
             'review': [], 'inputs': {'mode': 'connected', 'pr_url': URL, 'publish': 'true',
                                      'auto_approve_green': 'true'}, **updates}
 
@@ -172,3 +172,46 @@ def test_webhook_resolves_review_name_in_repository_project(tmp_path):
             assert str(workflow.graph_id) == version.version_id
             assert 'approve' in workflow.builder.nodes
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('reviewed_sha', ['', 'different-ref'])
+def test_missing_or_unreviewed_head_skips(execution, reviewed_sha):
+    result = asyncio.run(publish.ApproveReview()(state(reviewed_sha=reviewed_sha)))
+    assert not result['approved']
+    assert 'reviewed commit' in result['approval_reason']
+    execution.runtime.source_control.approve_change_request.assert_not_awaited()
+
+
+def test_push_after_eligibility_check_skips(execution):
+    assert asyncio.run(publish.ApprovalCheck()(state()))['approval_eligible']
+    execution.runtime.source_control.view_change_request.return_value.head_sha = 'new-head'
+    result = asyncio.run(publish.ApproveReview()(state()))
+    assert not result['approved']
+    execution.runtime.source_control.approve_change_request.assert_not_awaited()
+
+
+def test_approval_is_bound_to_reviewed_sha(execution):
+    asyncio.run(publish.ApproveReview()(state()))
+    assert execution.runtime.source_control.approve_change_request.await_args.kwargs == {'commit_sha': 'sha'}
+
+
+@pytest.mark.parametrize('url', [
+    'https://github.com/other/repo/pull/42',
+    'https://other.example/owner/repo/pull/42',
+    '',
+])
+def test_workspace_target_mismatch_skips_before_identity_and_ci(execution, url):
+    execution.runtime.source_control.view_change_request.return_value.url = url
+    result = asyncio.run(publish.ApproveReview()(state()))
+    assert not result['approved']
+    assert 'workspace repository' in result['approval_reason']
+    execution.runtime.source_control.authenticated_login.assert_not_awaited()
+    execution.runtime.source_control.list_pipeline_status.assert_not_awaited()
+    execution.runtime.source_control.approve_change_request.assert_not_awaited()
+
+
+def test_push_during_ci_lookup_skips(execution):
+    execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus('new-head', (), ())
+    result = asyncio.run(publish.ApproveReview()(state()))
+    assert not result['approved']
+    assert 'CI commit' in result['approval_reason']

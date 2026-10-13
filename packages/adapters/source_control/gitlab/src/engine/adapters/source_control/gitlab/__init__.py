@@ -67,7 +67,7 @@ class GitLabSourceControl:
         if not url: raise GitLabSourceControlError("GitLab returned no merge-request URL")
         return url
 
-    async def approve_change_request(self, project: str, number: int, body: str) -> None:
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> None:
         origin = self._origin_source() if callable(self._origin_source) else self._origin_source
         host, separator, path = project.partition("/")
         if (host != urlparse(origin).netloc.lower() or not separator
@@ -78,7 +78,7 @@ class GitLabSourceControl:
         root = f"/projects/{quote(path, safe='')}/merge_requests/{number}"
         # GitLab approvals have no review body; preserve the rationale as a note.
         await self._api("POST", f"{root}/notes", json={"body": body})
-        await self._api("POST", f"{root}/approve")
+        await self._api("POST", f"{root}/approve", json={"sha": commit_sha})
 
     async def can_write_repository(self, pr_url: str, username: str, *, user_id: int | None = None) -> bool:
         """Check direct and inherited membership on the configured GitLab."""

@@ -220,7 +220,7 @@ class RecordingSourceControl:
         self.reviews: list[tuple[object, ...]] = []
         self.git_calls: list[tuple[WorkspaceId, tuple[str, ...]]] = []
 
-    async def approve_change_request(self, project: str, number: int, body: str) -> None:
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> None:
         raise AssertionError("not called")
 
     async def run_git(

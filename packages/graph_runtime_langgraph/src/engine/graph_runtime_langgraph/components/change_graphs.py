@@ -53,7 +53,14 @@ class TargetWorkspace(WorkspaceNode):
         if target and not inputs.get('ref'):
             path = f'pull/{target.number}/head' if target.kind == 'pull' else f'merge-requests/{target.number}/head'
             inputs['ref'] = f'origin/refs/{path}'
-        return {**await super().__call__({**state, 'inputs': inputs}), 'inputs': inputs,
+        workspace = await super().__call__({**state, 'inputs': inputs})
+        reviewed_sha = ''
+        source = current_execution().runtime.source_control
+        if source is not None:
+            result = await source.run_git(WorkspaceId(str(workspace['workspaceId'])), ('rev-parse', 'HEAD'))
+            if result.ok:
+                reviewed_sha = result.stdout.strip()
+        return {**workspace, 'inputs': inputs, 'reviewed_sha': reviewed_sha,
                 'pr_url': inputs.get('pr_url', '')}
 
 
