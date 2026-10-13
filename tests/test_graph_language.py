@@ -192,13 +192,16 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
 
     source = Path(__file__).parents[1] / "docs/examples/graphs/tdd-guide.yaml"
     spec = graph(source.read_text())
-    assert [node.id for node in spec.nodes] == ["pick", "tdd", "implement", "reviewers", "reranker", "impact", "publish", "ci"]
+    assert [node.id for node in spec.nodes] == [
+        "pick", "tdd", "implement", "reviewers", "reproduce", "reranker", "impact", "publish", "ci", "human_review",
+    ]
     # A run can build on an unmerged branch instead of main, and publishes against it.
     assert (spec.base_ref, spec.ref_input) == ("origin/main", "base")
     assert {
         ("tdd", "implement", False),
         ("implement", "reviewers", False),
-        ("reviewers", "reranker", False),
+        ("reviewers", "reproduce", False),
+        ("reproduce", "reranker", False),
         ("impact", "publish", False),
         ("publish", "ci", False),
     } <= set(spec.edges())
@@ -213,6 +216,7 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
         ("tdd", "same", "pick"),
         ("implement", "input", "implementer"),
         ("reviewers", "input", "reviewer"),
+        ("reproduce", "input", "reviewer"),
         ("reranker", "same", "implement"),
         ("impact", "input", "reviewer"),
         ("publish", "same", "implement"),
@@ -242,8 +246,16 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 3}) == "impact"
     assert after("reranker", {"reranker": {"findings": []}}, {"implement": 1}) == "impact"
     assert after("ci", {"ci": {"passed": False}}, {"implement": 1}) == "implement"
-    assert after("ci", {"ci": {"passed": False}}, {"implement": 4}) == "end"
-    assert after("ci", {"ci": {"passed": True}}, {"implement": 1}) == "end"
+    # A person has the last word once CI is done, and can send the change back
+    # with a note saying what to change.
+    assert after("ci", {"ci": {"passed": False}}, {"implement": 4}) == "human_review"
+    assert after("ci", {"ci": {"passed": True}}, {"implement": 1}) == "human_review"
+    approved = {"decision": "approved", "note": ""}
+    assert after("human_review", {"human_review": approved}, {"human_review": 1}) == "end"
+    sent_back = {"decision": "rejected", "note": "Name the flag --check, not --verify."}
+    assert after("human_review", {"human_review": sent_back}, {"human_review": 1}) == "implement"
+    assert after("human_review", {"human_review": sent_back}, {"human_review": 3}) == "end"
+    assert after("human_review", {"human_review": {"decision": "rejected", "note": ""}}, {"human_review": 1}) == "end"
 
 
 @pytest.mark.parametrize(("field", "value", "path"), [

@@ -1,7 +1,7 @@
 apiVersion: openengine.cc/v1
 kind: Graph
 name: tdd-guide
-description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them; a panel reviews the change for security, bugs, performance, conciseness, duplication and how its guides read, a reranker keeps what matters for another pass, and impact analysis rates the change before the pull request opens.
+description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them; a panel reviews the change for security, bugs, performance, conciseness, duplication and how its guides read, security findings count only once a test reproduces them, a reranker keeps what matters for another pass, and impact analysis rates the change before the pull request opens. Once CI is done a person approves it or sends it back with a note.
 
 inputs:
   instruction:
@@ -116,7 +116,11 @@ implementation:
       as narrowly as you can and say why in the summary.
 
       Review findings to address, if any: ${json(outputs.reranker.findings)}
+      A security finding comes with a committed test that reproduces it and
+      fails now; make it pass without weakening it, like the tests above.
       CI result, if any: ${json(outputs.ci)}
+      What the person reviewing the pull request asked to change, if they sent
+      it back: ${json(outputs.human_review)}
 
       Run the tests touched by this change, and the e2e suite (`npm test` in `e2e/`)
       when it exists. Commit with git_subcommand as Conventional Commits.
@@ -177,6 +181,35 @@ review:
     outputs:
       findings: {type: findings, required: true}
 
+  reproduce:
+    name: Reproduce security findings
+    agent: ${inputs.reviewer}
+    tools: [git_subcommand]
+    prompt: |
+      Prove or disprove the security findings on the change for issue
+      #${outputs.pick.issue}, ${outputs.pick.title}. A finding no test can
+      reproduce is not treated as a real risk.
+
+      The reviews; only the findings whose facet is security matter here:
+      ${json(outputs.reviewers)}
+
+      If there are none, change nothing and report "none" for both outputs.
+
+      For each security finding, write a test that shows the problem through
+      what a user or attacker can actually reach: an e2e spec under `e2e/tests`
+      driving the real CLI and daemon (read `e2e/README.md`; tag it `@skip-docs`
+      so it isn't published as a guide), or a pytest test when the problem
+      can't be reached from there. Run it. It reproduces the finding only if it
+      fails because of the problem the finding describes, not because of a
+      typo, a broken import or a missing fixture.
+
+      Commit each test that reproduces its finding with git_subcommand as
+      `test(security): ...`; the implementer makes it pass next. Delete each
+      test that doesn't, and don't commit it. Don't change anything but tests.
+    outputs:
+      reproduced: {type: string, required: true, description: "each security finding a test reproduces, with the test's file and name, one per line; or none"}
+      unconfirmed: {type: string, required: true, description: "each security finding no test reproduced, with what was tried, one per line; or none"}
+
   reranker:
     name: Consolidate
     agent: {same: implement}
@@ -189,6 +222,11 @@ review:
       already handled by code the reviewer missed. Keep what a senior engineer
       would want fixed before merging. Keep each finding's agent and facet
       unchanged. Do not edit anything.
+
+      Keep a security finding only if a test reproduces it, and name that test
+      in the finding. Drop the rest: they are reported as unconfirmed.
+      Reproduced: ${outputs.reproduce.reproduced}
+      Unconfirmed: ${outputs.reproduce.unconfirmed}
 
       The issue: #${outputs.pick.issue}, ${outputs.pick.title}
 
@@ -249,8 +287,9 @@ review:
       open_pull_request against that base: a Conventional Commit title, a body
       that summarises the change, the tests written first, the impact
       (${outputs.impact.impact_level}: ${outputs.impact.impact_rationale}) and
-      any review findings still open (${json(outputs.reranker.findings)}), and
-      `issue_resolution: resolves`.
+      any review findings still open (${json(outputs.reranker.findings)}),
+      security findings no test could reproduce (${outputs.reproduce.unconfirmed}),
+      and `issue_resolution: resolves`.
       If one is already open, pushing is enough.
 
       Report the pull request's URL as pr_url, whether you opened it or it was
@@ -261,6 +300,15 @@ review:
   ci:
     name: CI
     ci: true
+
+  human_review:
+    name: Human review
+    human: >-
+      Review the pull request this run opened (its link is in the Open pull
+      request step) and the tests it wrote first. Approve to finish the run.
+      To send it back, reject it with a note saying what to change: the
+      implementer makes the change, and the review, CI and this step run
+      again. Rejecting without a note ends the run.
 
 flow:
   - from: pick
@@ -274,6 +322,10 @@ flow:
   - from: ci
     route:
       - {when: "outputs.ci.passed == false && visits.implement < 4", to: implement}
+      - {to: human_review}
+  - from: human_review
+    route:
+      - {when: "outputs.human_review.decision == 'rejected' && size(outputs.human_review.note) > 0 && visits.human_review < 3", to: implement}
       - {to: end}
 
 loop:
