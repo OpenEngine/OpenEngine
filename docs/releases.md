@@ -86,10 +86,14 @@ After the GitHub archive and manifest are uploaded and installer checks pass,
 `release.yml` runs `npm publish --provenance --access public` with GitHub OIDC
 (`id-token: write`), using Node 24 and npm 11 rather than a stored npm token.
 Publishing is explicitly gated by the repository variable
-`NPM_PUBLISH_ENABLED == 'true'`. Before enabling it, a maintainer must configure
-the trusted publisher for `@openengine.cc/engine` on npmjs.com: repository
-`OpenEngine/OpenEngine`, workflow `release.yml`. This manual prerequisite must
-be completed before the first publish.
+`NPM_PUBLISH_ENABLED == 'true'`. Before enabling it, a maintainer must create the
+`npm` GitHub environment (Settings > Environments > npm) and restrict its deployment
+branches to `main` only. Configure the trusted publisher for `@openengine.cc/engine`
+on npmjs.com with repository `OpenEngine/OpenEngine`, workflow `release.yml`, and
+environment `npm`. Both settings are required so another branch's copy of the
+workflow cannot mint a publishing credential. These manual prerequisites must
+be completed before the first publish. Actions in the npm publish job are pinned
+to full commit SHAs because the job can request an OIDC token.
 
 ## Background service
 

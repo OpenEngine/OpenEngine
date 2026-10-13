@@ -176,15 +176,19 @@ jobs:
     needs: [release-please, upload-release, install]
     if: github.event_name == 'push' && needs.release-please.outputs.created == 'true' && vars.NPM_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
+    # Name this environment in npm's trusted publisher and restrict its deployment
+    # branches to main (Settings > Environments > npm) before enabling publishing.
+    # Pin actions to commit SHAs because this job runs with id-token: write.
+    environment: npm
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
