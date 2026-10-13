@@ -18,9 +18,15 @@ function files(directory: string): string[] {
 const pages = readdirSync(tests)
   .filter((name) => name.endsWith(".spec.ts"))
   .flatMap((name) =>
-    [...readFileSync(path.join(tests, name), "utf8").matchAll(/withDocMeta\(\s*"([^"]+)",\s*\{[^}]*?slug:\s*"([^"]+)"/g)].map(
-      ([, title, slug]) => ({ spec: name, title: title!, slug: slug! }),
-    ),
+    // Each withDocMeta call up to the next one, so braces inside its options can't hide its slug.
+    readFileSync(path.join(tests, name), "utf8")
+      .split(/(?=withDocMeta\()/)
+      .slice(1)
+      .map((call) => {
+        const title = call.match(/^withDocMeta\(\s*"([^"]+)"/)?.[1]
+        const slug = call.match(/\bslug:\s*"([^"]+)"/)?.[1]
+        return { spec: name, title: title ?? `(no title in ${call.slice(0, 40)})`, slug: slug ?? "(no slug)" }
+      }),
   )
 
 test.describe("committed guides", { tag: ["@skip-docs"] }, () => {

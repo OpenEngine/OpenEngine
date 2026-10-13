@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } fr
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { test, expect, startEngine } from "../fixtures/engine.ts"
+import { HELLO } from "../fixtures/graphs.ts"
 
 const EXAMPLE_GRAPH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/examples/graphs/dead-code.yaml")
 
@@ -56,7 +57,7 @@ test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
     try {
       const terminal = await Terminal.open(page, { cwd: engine.repository, env: engine.env })
       const graph = path.join(engine.root, "hello.yaml")
-      writeFileSync(graph, "apiVersion: openengine.cc/v1\nkind: Graph\nname: hello\nimplementation:\n  greet:\n    agent: claude\n    prompt: Say hello.\n")
+      writeFileSync(graph, HELLO)
       await terminal.run(`engine graph add ${graph}`)
       await terminal.run('engine graph run hello "Say hello" --wait')
       expect(ours().length).toBeGreaterThan(0)

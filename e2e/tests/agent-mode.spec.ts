@@ -1,17 +1,7 @@
 import { realpathSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { test, expect, resolveAgentMode } from "../fixtures/engine.ts"
-
-/** A one-step graph any agent can finish quickly, and nothing it does can be wrong. */
-const HELLO = `apiVersion: openengine.cc/v1
-kind: Graph
-name: hello
-description: Greet the reader.
-implementation:
-  greet:
-    agent: claude
-    prompt: Reply with one short, friendly sentence greeting the reader. Do not run commands or edit files.
-`
+import { HELLO } from "../fixtures/graphs.ts"
 
 test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
   test("scripts the agents unless real ones are asked for", () => {
