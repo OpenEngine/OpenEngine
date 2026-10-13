@@ -3,7 +3,7 @@ import path from "node:path"
 import type { Page } from "@playwright/test"
 import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { screenshot } from "@test2doc/playwright/screenshots"
-import { test as engineTest, expect, startEngine, type Engine } from "../fixtures/engine.ts"
+import { test as engineTest, engineFixture, expect, type Engine } from "../fixtures/engine.ts"
 import type { Terminal } from "../fixtures/terminal.ts"
 import { backendsCategory } from "./docCategories"
 
@@ -30,13 +30,8 @@ async function expectNoRealPorts(page: Page, engines: Engine[]) {
 // A second daemon for the guide to connect to, standing in for one on another
 // machine on your network.
 const test = engineTest.extend<{ macMini: Engine }>({
-  macMini: async ({}, use) => {
-    const macMini = await startEngine()
-    try {
-      await use(macMini)
-    } finally {
-      await macMini.stop()
-    }
+  macMini: async ({}, use, testInfo) => {
+    await engineFixture(use, testInfo, "mac-mini")
   },
 })
 
@@ -77,7 +72,7 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Run `engine backend add` with a name for the daemon, its URL, and, with `--token-env`, the variable holding its token: `engine backend add mac-mini http://<its host>:4364 --token-env MAC_MINI_TOKEN`. (Both daemons in this guide run on `127.0.0.1`.)",
+          "Run `engine backend add` with a name for the daemon, its URL, and, with `--token-env`, the variable holding its token: `engine backend add mac-mini http://<its host>:4364 --token-env MAC_MINI_TOKEN --pretty`. (`--pretty` prints a line to read rather than JSON for a script; both daemons in this guide run on `127.0.0.1`.)",
           async () => {
             await terminal.run(`engine backend add mac-mini ${macMini.url} --token-env MAC_MINI_TOKEN --pretty`)
             expect(backendsFile(engine).backends["mac-mini"]).toMatchObject({
@@ -115,7 +110,7 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Run `engine backend use mac-mini` to send every command after it to that daemon. `engine backends list` now marks `mac-mini` with `*`.",
+          "Run `engine backend use mac-mini --pretty` to send every command after it to that daemon. `engine backends list` now marks `mac-mini` with `*`.",
           async () => {
             await terminal.run("engine backend use mac-mini --pretty")
             expect(backendsFile(engine).current).toBe("mac-mini")
@@ -133,24 +128,30 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Commands now go to `mac-mini`. Run `engine graph add hello.yaml` to register a graph file from your project there.",
+          "Commands now go to `mac-mini`. Register a graph there with `engine graph add FILE --pretty`, where `FILE` is any graph file in your project; here it is `hello.yaml`, a graph with one node.",
           async () => {
             await terminal.run("engine graph add hello.yaml --pretty")
+            expect(await graphNames(terminal, "engine graphs list --backend mac-mini")).toContain("hello")
+            expect(await graphNames(terminal, "engine graphs list --backend local")).not.toContain("hello")
           },
         )
 
-        await test.step("[nodoc] The graph is on mac-mini, not on local", async () => {
-          expect(await graphNames(terminal, "engine graphs list --backend mac-mini")).toContain("hello")
-          expect(await graphNames(terminal, "engine graphs list --backend local")).not.toContain("hello")
+        await test.step("[nodoc] Clear the screen", async () => {
           await terminal.run("clear")
         })
 
         await test.step(
-          "To reach a different backend for one command only, add `--backend NAME` to it. `engine graphs list --backend local` lists the graphs on `local`, and leaves `mac-mini` selected.",
+          "To reach a different backend for one command only, add `--backend NAME` to it. `engine graphs list` lists `hello` on `mac-mini`; `engine graphs list --backend local` lists the graphs on `local`, which has none, and leaves `mac-mini` selected.",
           async () => {
-            await terminal.run("engine graphs list --backend local")
+            expect((await terminal.run("engine graphs list")).output).toMatch(/^hello\s/m)
+            const { output } = await terminal.run("engine graphs list --backend local")
+            expect(output).not.toMatch(/^hello\s/m)
             expect(backendsFile(engine).current).toBe("mac-mini")
-            expect(await graphNames(terminal, "engine graphs list")).toContain("hello")
+            await expectNoRealPorts(page, [engine, macMini])
+            await screenshot(testInfo, await terminal.rows(/engine graphs list --backend local$/, /^NAME\s/), {
+              annotation: { text: "Just this command went to local" },
+              clip: await terminal.usedArea(),
+            })
           },
         )
 

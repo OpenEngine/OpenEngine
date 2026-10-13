@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import type { TestInfo } from "@playwright/test"
 import { engineBin } from "../support/engine.ts"
 import { test as terminalTest } from "./terminal.ts"
 
@@ -218,22 +219,31 @@ async function terminate(daemon: ChildProcess) {
   clearTimeout(killed)
 }
 
+/**
+ * A daemon for the length of one test, as a fixture body: `name` labels it in
+ * the report when a spec starts more than one. A failed test keeps its
+ * directory and attaches what it printed.
+ */
+export async function engineFixture(use: (engine: Engine) => Promise<void>, testInfo: TestInfo, name = "engine") {
+  const failed = () => testInfo.status !== testInfo.expectedStatus
+  const engine = await startEngine({ keepRoot: failed })
+  if (name === "engine") testInfo.annotations.push({ type: "agents", description: engine.agentMode })
+  if (engine.agentMode === "real") console.log(`[${name}] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
+  try {
+    await use(engine)
+  } finally {
+    await engine.stop()
+    if (failed()) {
+      // What the daemon said usually explains the failure; its directory holds the databases.
+      await testInfo.attach(`${name} daemon`, { body: engine.log(), contentType: "text/plain" })
+      console.log(`[${name}] kept the failed test's daemon directory: ${engine.root}`)
+    }
+  }
+}
+
 export const test = terminalTest.extend<{ engine: Engine }>({
   engine: async ({}, use, testInfo) => {
-    const failed = () => testInfo.status !== testInfo.expectedStatus
-    const engine = await startEngine({ keepRoot: failed })
-    testInfo.annotations.push({ type: "agents", description: engine.agentMode })
-    if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
-    try {
-      await use(engine)
-    } finally {
-      await engine.stop()
-      if (failed()) {
-        // What the daemon said usually explains the failure; its directory holds the databases.
-        await testInfo.attach("engine daemon", { body: engine.log(), contentType: "text/plain" })
-        console.log(`[engine] kept the failed test's daemon directory: ${engine.root}`)
-      }
-    }
+    await engineFixture(use, testInfo)
   },
   terminalEnv: async ({ engine }, use) => {
     await use(engine.env)
