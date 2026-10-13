@@ -266,7 +266,7 @@ def main(arguments: argparse.Namespace) -> int:
 def _policy_summary(policy: dict[str, Any]) -> str:
     return (f"approvals: auto_approve={str(policy['auto_approve']).lower()}, "
             f"allow={','.join(policy['allow']) or 'none'}; "
-            f"{len(policy.get('warnings', []))} clamped/deprecation warnings")
+            f"{len(policy.get('warnings', []))} policy warnings")
 
 
 def policy_show(arguments: argparse.Namespace) -> int:
@@ -278,7 +278,8 @@ def policy_show(arguments: argparse.Namespace) -> int:
     print(_policy_summary(policy))
     for key, layer in policy["provenance"].items():
         value = policy["bash"][key[5:]] if key.startswith("bash.") else policy[key]
-        print(f"{key} = {json.dumps(value)}  [{layer}]")
+        source = layer.replace("repository", "repository engine.toml")
+        print(f"{key} = {json.dumps(value)}  [{source}]")
     for warning in policy.get("warnings", []):
         print(f"warning: {warning}")
     return EXIT_OK

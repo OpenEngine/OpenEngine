@@ -155,7 +155,7 @@ When YAML is not enough, such as computed prompts, custom routers or your own no
 engine graph add workflows/implementation_review_graph.py
 ```
 
-Python runs on the backend with the daemon's privileges, so only operators can register it, and a backend can refuse it with `[graphs] allow_python = false` in `engine.toml`. YAML never executes code. Both formats share one registry, version history, checkpoints, approvals, steering and run feed.
+Python runs on the backend with the daemon's privileges, so only operators can register it, and a backend can refuse it with `[graphs] allow_python = false` in the backend's `engine.toml`. YAML never executes code. Both formats share one registry, version history, checkpoints, approvals, steering and run feed.
 
 ## While it runs
 
@@ -170,7 +170,9 @@ To run something on a schedule, add a [loop](loops.md). Every command is in the 
 
 ## Repository approval defaults
 
-Commit `.openengine.toml` to set approval defaults below the daemon ceiling.
+Commit the repository's `engine.toml` to set approval defaults below the ceiling
+in the backend's `engine.toml`. Only `[approvals]` and `[approvals.bash]` apply
+to repository policy; other sections are ignored with a warning on the run.
 `engine policy show` prints the resolved values and their sources;
 `--no-auto-approve` and `--allow` tighten an individual run. See
 [Approval policy](approval-policy.md) for configuration and examples.

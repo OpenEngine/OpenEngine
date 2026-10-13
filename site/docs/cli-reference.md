@@ -609,7 +609,7 @@ engine agent signin [-h] [--backend NAME] name
 
 Drive an implementation node with Claude Code in this terminal.
 
-Start a run whose implementation node is Claude Code in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to claude.
+Start a run whose implementation node is Claude Code in this terminal, working in a fresh workspace with the tools [sessions] grants in the backend's engine.toml. Arguments after -- go to claude.
 
 ```text
 engine agent claude [-h] [--repo REPO] [--base REF] [--backend NAME] ...
@@ -626,7 +626,7 @@ engine agent claude [-h] [--repo REPO] [--base REF] [--backend NAME] ...
 
 Drive an implementation node with Codex in this terminal.
 
-Start a run whose implementation node is Codex in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to codex.
+Start a run whose implementation node is Codex in this terminal, working in a fresh workspace with the tools [sessions] grants in the backend's engine.toml. Arguments after -- go to codex.
 
 ```text
 engine agent codex [-h] [--repo REPO] [--base REF] [--backend NAME] ...
@@ -643,7 +643,7 @@ engine agent codex [-h] [--repo REPO] [--base REF] [--backend NAME] ...
 
 Drive an implementation node with OpenCode in this terminal.
 
-Start a run whose implementation node is OpenCode in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to opencode.
+Start a run whose implementation node is OpenCode in this terminal, working in a fresh workspace with the tools [sessions] grants in the backend's engine.toml. Arguments after -- go to opencode.
 
 ```text
 engine agent opencode [-h] [--repo REPO] [--base REF] [--backend NAME] ...

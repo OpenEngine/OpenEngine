@@ -2,6 +2,8 @@
 import asyncio
 import json
 from dataclasses import replace
+from pathlib import Path
+import tomllib
 import subprocess
 
 import pytest
@@ -85,23 +87,62 @@ def test_malformed_policy_is_refused(document):
 
 def test_repository_policy_comes_from_base_commit_not_working_tree(git_repo):
     root = git_repo(commit=True)
-    policy = root / ".openengine.toml"
+    policy = root / "engine.toml"
     policy.write_text('[approvals]\nauto_approve = false\n')
     def git(*args):
         return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
-    git("add", ".openengine.toml")
+    git("add", "engine.toml")
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "policy")
     base = git("rev-parse", "HEAD")
     policy.write_text('[approvals]\nauto_approve = true\n')
-    git("add", ".openengine.toml")
+    git("add", "engine.toml")
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "looser")
     policy.write_text('invalid toml !')
     nested = root / "nested"
     nested.mkdir()
-    document, revision = asyncio.run(read_repository_policy(str(nested), base))
+    document, revision, warnings = asyncio.run(read_repository_policy(str(nested), base))
     assert revision == base and document == {"auto_approve": False}
-    absent, _ = asyncio.run(read_repository_policy(str(root), f"{base}^"))
+    absent, _, _ = asyncio.run(read_repository_policy(str(root), f"{base}^"))
     assert absent is None
+
+
+@pytest.mark.parametrize("with_approvals", [False, True])
+def test_repository_ignores_daemon_sections_with_one_warning(git_repo, with_approvals):
+    root = git_repo(commit=True)
+    # Deliberately invalid backend values must never reach the backend parser.
+    sections = ("github", "access", "communications", "work_orders", "server", "state")
+    content = "\n".join(f'[{section}]\ninvalid = [false, 123]' for section in sections)
+    if with_approvals:
+        content += '\n[approvals]\nauto_approve = false\n[approvals.bash]\ndeny = ["git push **"]\n'
+    (root / "engine.toml").write_text(content)
+    subprocess.run(["git", "-C", str(root), "add", "engine.toml"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                    "commit", "-m", "policy"], check=True, capture_output=True)
+    document, _, warnings = asyncio.run(read_repository_policy(str(root)))
+    assert document == ({"auto_approve": False, "bash": {"deny": ["git push **"]}} if with_approvals else None)
+    resolved = resolve_policy(BACKEND, document, repository_warnings=warnings)
+    assert resolved["warnings"] == [
+        "repository engine.toml ignored sections/settings: " + ", ".join(sorted(sections))
+    ]
+
+
+def test_own_repository_engine_config_has_coherent_policy():
+    root = Path(__file__).resolve().parents[1]
+    backend = parse_engine_config(tomllib.loads((root / "engine.toml").read_text())).approvals
+    document, _, warnings = asyncio.run(read_repository_policy(str(root)))
+    assert document is not None
+    assert document["bash"]["deny"] == list(backend.bash.deny)
+    resolved = resolve_policy(backend, document, repository_warnings=warnings)
+    assert resolved["auto_approve"] is False
+    assert resolved["allow"] == ["read", "edit"]
+    assert resolved["bash"]["allow"] == list(backend.bash.allow)
+    assert resolved["bash"]["deny"] == list(backend.bash.deny)
+    assert len(warnings) == 1 and "github" in warnings[0] and "work_orders" in warnings[0]
+    for command in ("git add file", "git commit -m change", "git branch feature",
+                    "git checkout feature", "git switch feature", "git push origin feature",
+                    "gh pr create --title change"):
+        assert _configured_decision(resolved, ApprovalKind.COMMAND_EXECUTION, command, "execute") is PolicyDecision.DENY
+    assert _configured_decision(resolved, ApprovalKind.COMMAND_EXECUTION, "uv run pytest tests/test_layered_approvals.py", "execute") is PolicyDecision.ALLOW
 
 
 def test_two_repositories_share_a_daemon_but_have_different_approvals(tmp_path, git_repo):
@@ -115,8 +156,8 @@ def test_two_repositories_share_a_daemon_but_have_different_approvals(tmp_path, 
     roots = {}
     for name, enabled in (("relaxed", True), ("strict", False)):
         root = git_repo(path=tmp_path / name, commit=True)
-        (root / ".openengine.toml").write_text(f"[approvals]\nauto_approve = {str(enabled).lower()}\n")
-        subprocess.run(["git", "-C", str(root), "add", ".openengine.toml"], check=True, capture_output=True)
+        (root / "engine.toml").write_text(f"[approvals]\nauto_approve = {str(enabled).lower()}\n[server]\ninvalid = true\n")
+        subprocess.run(["git", "-C", str(root), "add", "engine.toml"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.com",
                         "commit", "-m", "policy"], check=True, capture_output=True)
         roots[name] = str(root)
@@ -143,12 +184,13 @@ def test_two_repositories_share_a_daemon_but_have_different_approvals(tmp_path, 
                     await asyncio.sleep(.01)
             assert a.approval_policy["auto_approve"] is True
             assert b.approval_policy["auto_approve"] is False
+            assert b.approval_policy["warnings"] == ["repository engine.toml ignored sections/settings: server"]
             with pytest.raises(RunNotSteerableError, match="exceeds"):
                 await runtime.set_auto_approve(strict.run_id, NodeId("work"), True)
             with pytest.raises(PolicyError, match="only tighten"):
                 await runtime.start(GraphId("g"), {"repository": roots["strict"], "approvals": {"auto_approve": True}})
             # An agent's subsequent file edits cannot replace the run record.
-            (tmp_path / "strict" / ".openengine.toml").write_text("[approvals]\nauto_approve = true\n")
+            (tmp_path / "strict" / "engine.toml").write_text("[approvals]\nauto_approve = true\n")
             assert (await runtime.snapshot(strict.run_id)).approval_policy == b.approval_policy
             reopened = SqliteGraphRuntimeStore(tmp_path / "runs.sqlite3")
             assert (await reopened.run(strict.run_id)).approval_policy == b.approval_policy
@@ -169,7 +211,7 @@ def test_provisioned_policy_is_finalized_once_and_unattended_never_waits(tmp_pat
     from langgraph.graph import START, END, StateGraph
 
     async def read(repository, ref="HEAD", **kwargs):
-        return {"auto_approve": repository != "checkout"}, repository
+        return {"auto_approve": repository != "checkout"}, repository, ("ignored sections",)
     monkeypatch.setattr("engine.graph_runtime_langgraph.runtime.read_repository_policy", read)
 
     async def scenario():
@@ -202,6 +244,7 @@ def test_provisioned_policy_is_finalized_once_and_unattended_never_waits(tmp_pat
             final = (await runtime.store.run(run.run_id)).approval_policy
             assert final["base_revision"] == "checkout"
             assert final["workspace_resolved"] is True
+            assert final["warnings"].count("ignored sections") == 1
             assert final["allow"] == [] and final["reject_instead_of_ask"] is True
             await runtime.resolve_workspace_policy(run.run_id, "agent-edited-checkout")
             assert (await runtime.store.run(run.run_id)).approval_policy == final
@@ -231,7 +274,7 @@ def test_policy_show_prints_provenance_and_clamping(monkeypatch, capsys, pretty)
     assert commands.policy_show(args) == 0
     out = capsys.readouterr().out
     if pretty:
-        assert 'auto_approve = false  [repository ∩ backend]' in out
+        assert 'auto_approve = false  [repository engine.toml ∩ backend]' in out
         assert 'clamped to backend ceiling' in out
     else:
         assert json.loads(out) == resolve_policy(ApprovalConfig(), {"auto_approve": True})

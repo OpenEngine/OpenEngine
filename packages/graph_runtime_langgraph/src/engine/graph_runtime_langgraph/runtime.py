@@ -207,10 +207,10 @@ class LangGraphRuntime:
             if self.repository_policy_access else
             (any(fnmatchcase(repository, pattern) for pattern in self.approval_policy.repositories), False)
         )
-        document, revision = await read_repository_policy(repository, ref, defer_missing_ref=defer_missing_ref)
+        document, revision, warnings = await read_repository_policy(repository, ref, defer_missing_ref=defer_missing_ref)
         return {
             **resolve_policy(self.approval_policy, document, overrides,
-                             repository_allowed=allowed, trusted=trusted,
+                             repository_warnings=warnings, repository_allowed=allowed, trusted=trusted,
                              reject_instead_of_ask=reject_instead_of_ask),
             "base_ref": ref, "base_revision": revision,
             "backend": policy_values(self.approval_policy), "overrides": dict(overrides or {}),
@@ -223,13 +223,13 @@ class LangGraphRuntime:
         initial = record.approval_policy
         if not initial or initial.get("workspace_resolved"):
             return
-        document, revision = await read_repository_policy(checkout)
+        document, revision, warnings = await read_repository_policy(checkout)
         if not revision:
             return
         policy = {
             **initial,
             **resolve_policy(parse_policy(parse_overrides(initial["backend"]) or {}), document, parse_overrides(initial.get("overrides")),
-                             repository_allowed=bool(initial["repository_allowed"]),
+                             repository_warnings=warnings, repository_allowed=bool(initial["repository_allowed"]),
                              trusted=bool(initial["trusted"]),
                              reject_instead_of_ask=bool(initial["reject_instead_of_ask"])),
             "base_revision": revision, "workspace_resolved": True,

@@ -12,12 +12,12 @@ OpenEngine opens the pull request, and the rest of the review happens on it. Rev
 
 Only comments from owners, members and collaborators are acted on. Merges by bots and merge queues don't count as approval.
 
-```toml title="engine.toml"
+```toml title="Backend engine.toml"
 [github]
 repository = "owner/name"
 ```
 
-```bash title=".env (beside engine.toml, never committed)"
+```bash title=".env (beside the backend's engine.toml, never committed)"
 ENGINE_GITHUB_WEBHOOK_SECRET=...
 ```
 

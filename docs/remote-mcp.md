@@ -113,7 +113,7 @@ control. Rotate it by changing the private env file and restarting the gateway.
    Use the HTTPS origin printed by Funnel as `OE_MCP_PUBLIC_URL` and restart
    the gateway if it changed. The client URL is that origin plus `/mcp`.
    Publishing the gateway at `/` would shadow OE's interface when `public_url`
-   in `engine.toml` uses the same origin, so browsers would receive
+   in the backend's `engine.toml` uses the same origin, so browsers would receive
    `{"error":"Unauthorized"}` instead of the UI.
 
    To keep the interface private, leave it on a tailnet-only Serve listener

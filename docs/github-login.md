@@ -2,7 +2,7 @@
 
 Register a separate GitHub OAuth App for login and configure its callback as
 `https://your-engine-host/api/auth/github/callback`. Set these top-level values
-in `engine.toml`:
+in the backend's `engine.toml`:
 
 ```toml
 github_login_client_id = "your-login-client-id"
@@ -14,7 +14,7 @@ environment variables override those defaults. HTTP callbacks are accepted only
 for loopback development hosts.
 
 Store `ENGINE_GITHUB_LOGIN_CLIENT_SECRET=your-secret` in a server-local `.env`
-beside the loaded `engine.toml` (or in the working directory if no config file
+beside the backend's loaded `engine.toml` (or in the working directory if no config file
 is loaded). This file is gitignored; restrict its permissions to the service
 owner (`chmod 600 .env`) and edit it via SSH. The app reads it directly, with
 dotenv interpolation disabled, without sourcing it into a shell. An explicit
@@ -23,7 +23,7 @@ The secret file is reread at each token exchange, so updating it takes effect
 without a restart; changing the client ID or callback URL requires a restart.
 All three values are required when enabling login.
 
-Keep these values out of the repository's `engine.toml`: a checkout started
+Keep these values out of the repository's `engine.toml`: a development backend started from that file
 with the client ID and callback but no secret refuses to start. Give the
 deployment its own config outside the checkout, such as
 `~/.config/openengine/engine.toml` with its `.env` beside it, and point the
@@ -52,7 +52,7 @@ A GitHub account alone does not open the app: WorkOrder links are posted to
 GitHub issues, which anyone can read. At the callback, the server asks GitHub
 whether the signed-in account has write access (write, maintain, or admin) to
 any of this deployment's repositories: the `[github] repository` or `repositories` named in
-`engine.toml`, and the GitHub repository behind each `[repos]` checkout (read
+the backend's `engine.toml`, and the GitHub repository behind each `[repos]` checkout (read
 from its `origin` remote). Team and organization grants count. The check uses
 the server's own GitHub connection, the one selected under **GitHub** in
 Settings: the host's `gh` login for **GH CLI**, or the token saved by

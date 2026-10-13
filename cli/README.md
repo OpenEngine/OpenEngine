@@ -286,8 +286,10 @@ The service's tables live in the graph database and are created by the
 
 ## Approval policy
 
-The backend's `[approvals]` is the ceiling. A committed `.openengine.toml` at the
-repository root supplies defaults within it; run settings can only tighten.
+The backend's `engine.toml` sets the ceiling in `[approvals]`. The repository's
+`engine.toml` at its root supplies defaults within it; run settings can only tighten.
+Only `[approvals]` and `[approvals.bash]` are read for repository policy. Other
+sections are ignored with one warning naming them on the run.
 Policy is read at the run's base commit and stored with per-setting provenance
 and clamping warnings in `approvalPolicy`. Working-tree edits cannot change it.
 
@@ -304,4 +306,4 @@ refused. With no repo file, backend defaults apply; fresh installs still ask
 for unlisted operations. `[trusted_repos]` is a deprecated delegation alias
 and cannot exceed the backend ceiling. See the
 [approval reference](../site/docs/approval-policy.md) and
-[example repository file](../examples/.openengine.toml).
+[example repository file](../examples/engine.toml).

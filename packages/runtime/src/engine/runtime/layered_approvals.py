@@ -12,6 +12,9 @@ from engine.runtime.approval_policy import _matches
 from engine.runtime.config import ApprovalConfig, EngineConfigError, parse_engine_config
 
 
+REPOSITORY_SECTIONS = ("approvals", "approvals.bash")
+
+
 class PolicyError(ValueError):
     """A policy is malformed or a run attempts to loosen its defaults."""
 
@@ -84,6 +87,7 @@ def resolve_policy(
     repository: Mapping[str, Any] | None = None,
     overrides: Mapping[str, Any] | None = None,
     *,
+    repository_warnings: tuple[str, ...] = (),
     repository_allowed: bool = True,
     trusted: bool = False,
     reject_instead_of_ask: bool = False,
@@ -101,7 +105,7 @@ def resolve_policy(
         overrides = {**(overrides or {}), "auto_approve": False}
     current = _flatten(policy_values(backend))
     provenance = dict.fromkeys(current, "backend")
-    warnings: list[str] = []
+    warnings: list[str] = list(repository_warnings)
     if trusted:
         warnings.append("[trusted_repos] is deprecated; use approvals.repositories (the backend ceiling still applies)")
         repository_allowed = True
@@ -150,15 +154,15 @@ def resolve_policy(
     }
 
 
-async def read_repository_policy(repository: str, ref: str = "HEAD", *, defer_missing_ref: bool = False) -> tuple[Mapping[str, Any] | None, str]:
+async def read_repository_policy(repository: str, ref: str = "HEAD", *, defer_missing_ref: bool = False) -> tuple[Mapping[str, Any] | None, str, tuple[str, ...]]:
     """Read a committed blob at a pinned base revision, never a working file."""
     root = Path(repository).expanduser()
     if not root.is_dir():
-        return None, ""
+        return None, "", ()
     root = root.resolve()
     root = next((parent for parent in (root, *root.parents) if (parent / ".git").exists()), root)
     if not any((parent / ".git").exists() for parent in (root, *root.parents)):
-        return None, ""
+        return None, "", ()
 
     async def git(*arguments: str) -> str:
         process = await asyncio.create_subprocess_exec(
@@ -182,20 +186,42 @@ async def read_repository_policy(repository: str, ref: str = "HEAD", *, defer_mi
         if defer_missing_ref:
             # Provisioning can fetch a remote ref not present in the source
             # checkout. It will resolve policy at that actual base before agents.
-            return None, ""
+            return None, "", ()
         raise
-    entry = await git("ls-tree", revision, "--", ".openengine.toml")
+    entry = await git("ls-tree", revision, "--", "engine.toml")
     if not entry:
-        return None, revision
+        return None, revision, ()
     if not entry.startswith("100644 blob ") and not entry.startswith("100755 blob "):
-        message = ".openengine.toml must be a regular committed file"
+        message = "engine.toml must be a regular committed file"
         raise PolicyError(message)
     try:
-        document = tomllib.loads(await git("show", f"{revision}:.openengine.toml"))
+        document = tomllib.loads(await git("show", f"{revision}:engine.toml"))
     except tomllib.TOMLDecodeError as error:
-        message = f"invalid .openengine.toml: {error}"
+        message = f"invalid engine.toml: {error}"
         raise PolicyError(message) from error
-    values = document.get("approvals")
+    selected: dict[str, Any] = {}
+    ignored: list[str] = []
+
+    def select_sections(source: Mapping[str, Any], target: dict[str, Any], prefix: str = "") -> None:
+        for key, value in source.items():
+            section = f"{prefix}.{key}" if prefix else key
+            if section in REPOSITORY_SECTIONS:
+                if isinstance(value, Mapping):
+                    target[key] = {}
+                    select_sections(value, target[key], section)
+                else:
+                    target[key] = value  # Keep malformed opted-in sections for validation.
+            elif prefix in REPOSITORY_SECTIONS and not isinstance(value, Mapping):
+                target[key] = value
+            else:
+                ignored.append(section)
+
+    select_sections(document, selected)
+    warnings = (
+        (f"repository engine.toml ignored sections/settings: {', '.join(sorted(ignored))}",)
+        if ignored else ()
+    )
+    values = selected.get("approvals")
     if values is not None:
         _flatten(values)
-    return values, revision
+    return values, revision, warnings

@@ -65,7 +65,7 @@ def add_parser(agent_actions: argparse._SubParsersAction) -> None:
             help=f"drive an implementation node with {agent.title} in this terminal",
             description=(
                 f"Start a run whose implementation node is {agent.title} in this terminal, working in a "
-                f"fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to {agent.name}."
+                f"fresh workspace with the tools [sessions] grants in the backend's engine.toml. Arguments after -- go to {agent.name}."
             ),
         )
         parser.add_argument("--repo", default=".", help="a path inside the repository (default: the current directory)")

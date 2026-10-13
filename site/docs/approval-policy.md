@@ -1,11 +1,11 @@
 # Approval policy
 
-A daemon sets the approval ceiling in `engine.toml`. A repository can check in
-`.openengine.toml` at its root to set defaults beneath that ceiling. A run can
+The backend's `engine.toml` sets the approval ceiling. The repository's
+`engine.toml` can be checked in at its root to set defaults beneath that ceiling. A run can
 only tighten those defaults. Fresh installations still use `auto_approve = false`.
 
 ```toml
-# engine.toml: owned by the daemon operator
+# The backend's engine.toml: owned by the daemon operator
 [approvals]
 auto_approve = true
 allow = ["read", "edit"]
@@ -35,7 +35,7 @@ Spend and PR caps remain backend-owned; repository and run approval tables canno
 A repository might commit:
 
 ```toml
-# .openengine.toml
+# The repository's engine.toml
 [approvals]
 auto_approve = false
 allow = ["read", "edit"]
@@ -44,6 +44,17 @@ allow = ["read", "edit"]
 allow = ["uv run pytest **"]
 deny = ["rm -rf **"]
 ```
+
+Both files use the same schema and section names. Only `[approvals]` and
+`[approvals.bash]` are read from the repository's `engine.toml`. Other sections
+(such as `[github]`, `[access]`, `[communications]`, `[work_orders]`, `[server]`,
+and `[state]`) are ignored for policy, with one warning on the run naming them;
+their contents do not fail policy resolution.
+
+This repository's root `engine.toml` also configures the development backend.
+Its approval tables supply repository defaults: explicit allow lists disable
+blanket auto-approval, and its shell-git denials still apply. Daemon-only sections
+apply only when the file is loaded as the backend's `engine.toml`.
 
 Missing settings inherit from the enclosing layer. With no repository file,
 the backend's own settings are the defaults. Repo requests exceeding the

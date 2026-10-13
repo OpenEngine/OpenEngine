@@ -1,5 +1,9 @@
 # Development server
 
+Here `engine.toml` is the backend's configuration, loaded from the repository's
+root file during development. That committed file also supplies repository
+approval defaults; see [approval policy](../site/docs/approval-policy.md).
+
 Status: phase 1 implemented as `uv run engine-dev`; phases 2 and 3 proposed
 
 This plan replaces the manual edit-build-restart loop for a source checkout

@@ -1267,7 +1267,7 @@ def test_policy_preview_and_run_overrides_use_the_same_resolver(tmp_path, monkey
     from engine.runtime.config import ApprovalConfig
 
     async def read(repository, ref="HEAD", **kwargs):
-        return {"auto_approve": False}, ""
+        return {"auto_approve": False}, "", ()
     monkeypatch.setattr("engine.graph_runtime_langgraph.runtime.read_repository_policy", read)
 
     async def scenario():

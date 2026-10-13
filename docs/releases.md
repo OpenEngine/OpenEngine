@@ -17,7 +17,7 @@ The default GitHub token does not trigger CI on bot-created release PRs; run the
 
 Each release attaches `openengine-<version>.tar.gz` and `release-manifest.json`.
 The archive contains all first-party wheels (including migrations and the
-standalone ACP package), workflow definitions, a default `engine.toml`, a
+standalone ACP package), workflow definitions, a default backend `engine.toml`, a
 hash-locked `requirements.txt`, license notices, and the manifest.
 `requirements.txt` pins every third-party Python dependency exported from
 `uv.lock` and every first-party wheel in the bundle, each with its SHA-256. The web wheel includes the
@@ -98,7 +98,7 @@ The wheels are installed through `requirements.txt` rather than named on the
 command line, because hash-checking mode refuses a wheel given without a hash.
 
 No source checkout is needed, and the server can be started from any directory.
-The bundled `engine.toml` listens on `127.0.0.1:4364`, keeps its databases in
+The backend's bundled `engine.toml` listens on `127.0.0.1:4364`, keeps its databases in
 `state/` beside itself, and reads the bundled `workflows` directory. Relative
 paths resolve against the config file's directory. `[server]` sets `host` and
 `port`; `[state]` sets `directory`, and `sqlite_path` and

@@ -7,7 +7,7 @@ checkout directory. With no URL, `engine onboard` registers the current GitHub
 checkout with a local daemon.
 
 By default a pathless onboarding clones into `~/code/repo`. Set
-`[onboarding] directory` in `engine.toml` to change that parent directory, for
+`[onboarding] directory` in the backend's `engine.toml` to change that parent directory, for
 example `directory = "~/code/work"`, so a deployment that keeps checkouts
 elsewhere need not pass `--path` on every call, from every surface. An explicit
 `--path` (CLI, web, MCP) and an existing checkout of the same remote still take
@@ -26,7 +26,7 @@ Preflight failures leave the checkout and configuration untouched. Onboarding
 never changes credentials. Existing checkouts of the same remote are reused.
 Repeating successful onboarding reports that the repository is already onboarded.
 
-Onboarding writes to `$XDG_CONFIG_HOME/openengine/engine.toml`, defaulting to
+Onboarding writes the backend's `engine.toml` to `$XDG_CONFIG_HOME/openengine/engine.toml`, defaulting to
 `~/.config/openengine/engine.toml`, unless the daemon selected an explicit
 `--config` / `ENGINE_CONFIG` file. It preserves existing settings and comments
 in that destination and leaves automatically discovered project-local files
@@ -43,13 +43,15 @@ Requests to other hostnames are rejected, including read-only requests.
 ## Manual configuration reference
 
 Use the untracked `.engine/config.toml` in the server's working directory to
-configure repositories and approvals without editing the committed `engine.toml`.
+configure repositories and approvals without editing the repository's committed `engine.toml`.
 Configuration selection is: explicit `--config`, then `ENGINE_CONFIG`, then the machine config
 (`$XDG_CONFIG_HOME/openengine/engine.toml`, defaulting to
 `~/.config/openengine/engine.toml`), then `.engine/config.toml`, then the root
 `engine.toml`. Use `--config .engine/config.toml` to explicitly select local
 settings when a machine config exists. Only one file is loaded;
-settings and approval policies are not merged.
+backend settings are not merged. Separately, the repository's committed
+`engine.toml` supplies approval defaults beneath the backend ceiling; see
+[approval policy](../site/docs/approval-policy.md).
 
 For a new local deployment, adapt [the optional repository example](examples/repository.toml) and save it as
 `.engine/config.toml` (create `.engine` first). For an existing deployment,

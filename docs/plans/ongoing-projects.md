@@ -72,7 +72,7 @@ The engine's side:
 ### Resource
 
 A Resource describes the deployment: which command runs, on which host, and
-against which model. So it lives in `engine.toml`, not in the database:
+against which model. So it lives in the backend's `engine.toml`, not in the database:
 
 ```toml
 [resources.bazzite-qwen]
@@ -186,7 +186,7 @@ allow = ["uv run pytest **"] # explicit allowlist; `[approvals.bash].deny` also 
   human.
 
 There is also a global switch, `[projects] enabled = true | false`, in
-`engine.toml`.
+the backend's `engine.toml`.
 
 ## Review of project PRs
 

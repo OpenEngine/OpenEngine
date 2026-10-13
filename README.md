@@ -92,7 +92,7 @@ The binary is `engine`. Run it with no arguments to list its commands:
   start a run whose implementation node is that CLI in this terminal: the
   daemon checks the repository out into a fresh workspace and gives the agent
   the same `git_subcommand` and `open_pull_request` tools an implementation
-  node gets (`[sessions] tools` in `engine.toml` changes which). The run ends
+  node gets (`[sessions] tools` in the backend's `engine.toml` changes which). The run ends
   when the CLI exits. Arguments after `--` go to the CLI.
 - `engine graph`, `engine run`, `engine loop`, `engine node` and their list
   forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
@@ -104,10 +104,12 @@ While working on OpenEngine itself, run the development server instead:
 uv run engine-dev
 ```
 
-## engine.toml
-The main configuration file for OpenEngine. It's defined [here](./engine.toml).
-While we use sensible defaults, if you need to configure engine, point it at a new 
-`engine.toml` file.
+## The backend's engine.toml
+The backend's `engine.toml` configures OpenEngine. Point the backend at a new
+file to customize its defaults. The [root file](./engine.toml) configures this
+repository's development backend and also serves as the repository's `engine.toml`.
+Only `[approvals]` and `[approvals.bash]` supply repository policy; other sections
+are ignored for policy with a warning. See [approval policy](site/docs/approval-policy.md).
 ```
 uv run \
   --project /path/to/openengine \
@@ -209,7 +211,7 @@ If you deploy OpenEngine on a server where no keychain is available, set the
 client ID and a pre-generated token as environment variables instead:
 
 ```toml
-# engine.toml
+# The backend's engine.toml
 github_client_id = "Ov23liXXXXXXXXXX"
 github_token     = "ghp_XXXXXXXXXXXX"
 ```
