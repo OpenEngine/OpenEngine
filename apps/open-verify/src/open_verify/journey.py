@@ -250,6 +250,7 @@ class JourneyRunner:
         budget = StepBudget(step)
         first = len(self.artifacts.observations)
         code = None
+        context_evidence = []
         try:
             async with asyncio.timeout(step.timeout):
                 if isinstance(step, ActStep):
@@ -265,6 +266,8 @@ class JourneyRunner:
                     else:
                         if self.executor is None:
                             raise StepStopped("MODEL_UNAVAILABLE", "Model assertion requires a journey executor")
+                        history = self.action_history(completed)
+                        context_evidence = [item["evidence_id"] for item in history["recent_action_receipts"]]
                         if step.mode == "visual":
                             judge = getattr(self.executor, "judge_visual", None)
                             if not callable(judge):
@@ -276,11 +279,12 @@ class JourneyRunner:
                                 raise VisualUnavailable("VISUAL_EVIDENCE_UNAVAILABLE", "The engine could not capture visual evidence")
                             fresh = receipt["result"]
                             image = load_visual(self.artifacts.path, fresh)
-                            evidence = {"url": fresh["url"], "image": image.metadata()}
+                            evidence = {"url": fresh["url"], "image": image.metadata(), **history}
                             response = await judge(step.instruction, deepcopy(evidence), image, on_call=budget.model_call)
                         else:
                             fresh = (await self.observe(engine))["result"]
                             evidence = {key: fresh[key] for key in ("url", "snapshot", "truncated") if key in fresh}
+                            evidence.update(history)
                             response = await self.executor.judge(step.instruction, deepcopy(evidence), on_call=budget.model_call)
                         judgment = Judgment.model_validate(response.model_dump())
                         status = {"holds": "passed", "fails": "failed", "inconclusive": "failed"}[judgment.verdict]
@@ -301,7 +305,22 @@ class JourneyRunner:
             status, detail, code = "blocked", f"{type(exc).__name__}: {exc}", "STEP_ERROR"
         return StepResult(index=index, kind=step.kind, instruction=step.instruction, status=status,
             detail=detail, code=code, model_calls=budget.model_calls, actions=budget.actions,
-            evidence=[e["id"] for e in self.artifacts.observations[first:]], **cache.step_info.get(index, {}))
+            evidence=list(dict.fromkeys(context_evidence + [e["id"] for e in self.artifacts.observations[first:]])),
+            **cache.step_info.get(index, {}))
+
+    def action_history(self, completed):
+        """Supply bounded host receipts from this journey, never actor conclusions."""
+        ids = {evidence for step in completed for evidence in step.evidence}
+        receipts = []
+        for item in self.artifacts.observations:
+            if item["id"] not in ids or item["tool"] not in ACT_TOOLS - {"browser_snapshot"}:
+                continue
+            receipt = {"evidence_id": item["id"], "tool": item["tool"], "ok": item["ok"]}
+            url = item.get("result", {}).get("url")
+            if isinstance(url, str):
+                receipt["url"] = url[:2048]
+            receipts.append(receipt)
+        return {"recent_action_receipts": receipts[-12:], "action_history_truncated": len(receipts) > 12}
 
     async def act(self, engine, step, budget, completed, trace, entry_url, cache, index):
         """Only the engine's offered browser tools can execute inside an action step."""

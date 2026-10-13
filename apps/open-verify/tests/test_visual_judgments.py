@@ -78,7 +78,8 @@ def test_visual_judge_uses_exact_fresh_viewport_and_export_barrier(tmp_path, web
     step = read_steps(artifacts)[-1]
     assert step['code'] == code and step['model_calls'] == 1
     instruction, evidence, image = actor.judgments[0]
-    assert set(evidence) == {'url', 'image'}
+    assert set(evidence) == {'url', 'image', 'recent_action_receipts', 'action_history_truncated'}
+    assert evidence['recent_action_receipts'][0]['tool'] == 'browser_click'
     assert 'snapshot' not in evidence and 'screen_diff' not in evidence
     assert (image.width, image.height) == (1280, 720)
     capture = next(e for e in artifacts.observations if e['tool'] == 'browser_visual_snapshot')
