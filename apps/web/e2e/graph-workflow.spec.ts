@@ -417,6 +417,7 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
     "Refute findings",
     "Reranker",
     "Impact analysis",
+    "Auto-approve",
   ]);
 
   await conversations.getByRole("link", { name: "Implementation", exact: true }).click();
