@@ -20,7 +20,7 @@ it("submits the URL and mode, polls, then selects the new checkout in the WorkOr
   vi.stubGlobal("fetch", fetch);
   render(<NewWorkflowPage config={{ ...config, hasRepositories: false, repositories: [] }} />);
   expect(screen.queryByText("Create a WorkOrder")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("GitHub URL"), { target: { value: "https://github.com/owner/repo" } });
+  fireEvent.change(screen.getByLabelText("Repository URL or local path"), { target: { value: "https://github.com/owner/repo" } });
   expect(screen.getByRole("checkbox")).not.toBeChecked();
   fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "disconnected" } });
   fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
@@ -36,7 +36,7 @@ it("shows a preflight fix and permits a retry", async () => {
     status: "failed", message: "Preflight failed", problems: [{ code: "agent", message: "No agent signed in", fix: "engine agent signin codex" }],
   }) }));
   render(<AddRepository onComplete={vi.fn()} />);
-  fireEvent.change(screen.getByLabelText("GitHub URL"), { target: { value: "owner/repo" } });
+  fireEvent.change(screen.getByLabelText("Repository URL or local path"), { target: { value: "owner/repo" } });
   fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("engine agent signin codex");
   expect(screen.getByRole("button", { name: "Add repository" })).toBeEnabled();
@@ -49,9 +49,21 @@ it("persists an explicit trust choice", async () => {
   }) });
   vi.stubGlobal("fetch", fetch);
   render(<AddRepository onComplete={vi.fn()} />);
-  fireEvent.change(screen.getByLabelText("GitHub URL"), { target: { value: "owner/repo" } });
+  fireEvent.change(screen.getByLabelText("Repository URL or local path"), { target: { value: "owner/repo" } });
   fireEvent.click(screen.getByRole("checkbox"));
   fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
   await screen.findByRole("status");
   expect(JSON.parse(fetch.mock.calls[0][1].body).trusted).toBe(true);
+});
+
+it("submits a local path with automatic mode", async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "failed", message: "Retry", problems: [],
+  }) });
+  vi.stubGlobal("fetch", fetch);
+  render(<AddRepository onComplete={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Repository URL or local path"), { target: { value: "/code/demo" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
+  await screen.findByRole("status");
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ repository: "/code/demo", trusted: false });
 });

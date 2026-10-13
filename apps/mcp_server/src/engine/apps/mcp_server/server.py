@@ -252,8 +252,8 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         # configuration beyond its pinned repository. Reserve it and its
         # machine-wide job details for the operator holding the static token.
         @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
-        async def onboard_repository(repository: str, path: str | None = None, mode: str = "connected", trusted: bool | None = None) -> dict[str, object]:
-            """Clone a GitHub repository and configure it on the daemon. Poll repository_onboarding_status with the returned id until complete or failed. Failures include fixes to run as the daemon account."""
+        async def onboard_repository(repository: str, path: str | None = None, mode: str | None = None, trusted: bool | None = None) -> dict[str, object]:
+            """Add a local checkout or clone a GitHub/GitLab repository on the daemon. Omit mode to automatically use disconnected mode for local-only repositories. Poll repository_onboarding_status with the returned id until complete or failed. Failures include fixes to run as the daemon account."""
             return await request_engine("POST", "/api/repositories/onboard", {
                 "repository": repository, "path": path, "mode": mode, "trusted": trusted,
             }, retry_hint="Retry onboard_repository with the same inputs to recover its state.")

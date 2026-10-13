@@ -413,7 +413,7 @@ def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
     backend = serve(monkeypatch, {"status": "complete", "message": "Already onboarded", "repository": "owner/repo", "path": "/checkout"})
     assert main(["repo", "add", "--mode", "connected"]) == 0
     assert backend.requests[0]["body"]["path"] == "/checkout"
-    assert backend.requests[0]["body"]["repository"] == "git@github.com:owner/repo.git"
+    assert backend.requests[0]["body"]["repository"] == "/checkout"
 
 
 def test_onboard_reports_fix(monkeypatch, capsys):
@@ -651,19 +651,20 @@ def test_verb_binding_checks_contract_before_writing(monkeypatch, capsys):
     assert recorded.requests[-1]["body"]["graph"] == "custom"
 
 
+@pytest.mark.parametrize('origin', ['', 'https://bitbucket.org/team/repo.git', 'https://gitlab.com/group/repo.git'])
 @pytest.mark.parametrize('relative', [True, False])
-def test_repo_add_existing_path(tmp_path, monkeypatch, relative):
+def test_repo_add_existing_path(tmp_path, monkeypatch, relative, origin):
     from engine.cli import repository
     monkeypatch.chdir(tmp_path)
     calls = []
     def git(path, *args):
         calls.append((path, args))
-        return str(tmp_path) if args[0] == 'rev-parse' else 'https://gitlab.com/group/repo.git'
+        return str(tmp_path) if args[0] == 'rev-parse' else origin
     monkeypatch.setattr(repository, '_git', git)
     backend = serve(monkeypatch, {'status': 'complete', 'message': 'Repository onboarded', 'repository': 'gitlab.com/group/repo', 'path': str(tmp_path)})
     assert main(['repo', 'add', '.' if relative else str(tmp_path)]) == 0
     assert calls[0][0] == str(tmp_path)
-    assert backend.requests[0]['body'] == {'repository': 'https://gitlab.com/group/repo.git', 'path': str(tmp_path), 'mode': 'connected', 'trusted': None}
+    assert backend.requests[0]['body'] == {'repository': str(tmp_path), 'path': str(tmp_path), 'mode': None, 'trusted': None}
 
 
 def test_repo_add_gitlab_url(monkeypatch):

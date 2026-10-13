@@ -911,7 +911,8 @@ def test_oidc_callers_cannot_create_loops(oidc):
 
 
 @pytest.mark.parametrize("trusted", [None, True, False])
-def test_repository_onboarding_tools_forward_inputs_and_progress(trusted):
+@pytest.mark.parametrize("repository,mode", [("owner/repo", "disconnected"), ("/code/demo", None)])
+def test_repository_onboarding_tools_forward_inputs_and_progress(trusted, repository, mode):
     requests = []
     state = {"id": "job1", "status": "failed", "message": "Preflight failed", "problems": [{"code": "agent", "fix": "engine agent signin codex"}]}
 
@@ -924,7 +925,7 @@ def test_repository_onboarding_tools_forward_inputs_and_progress(trusted):
         assert tools["onboard_repository"]["annotations"]["readOnlyHint"] is False
         assert tools["onboard_repository"]["annotations"]["openWorldHint"] is True
         assert tools["repository_onboarding_status"]["annotations"]["readOnlyHint"] is True
-        inputs = {"repository": "owner/repo", "path": "/code/repo", "mode": "disconnected", "trusted": trusted}
+        inputs = {"repository": repository, "path": "/code/repo", "mode": mode, "trusted": trusted}
         created = rpc(client, "tools/call", {"name": "onboard_repository", "arguments": inputs}).json()["result"]
         assert created.get("structuredContent") == state, created
         read = rpc(client, "tools/call", {"name": "repository_onboarding_status", "arguments": {"job_id": "job1"}}).json()["result"]
