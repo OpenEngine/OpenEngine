@@ -4078,4 +4078,29 @@ def test_policy_submission_checks_backend_availability(available, expected_statu
                     assert "engine agent signin" in response.text
                     assert not runtime._runs
 
+@pytest.mark.parametrize('explicit,expected', [(None, 'true'), ('false', 'false'), ('true', 'true')])
+def test_review_form_input_overrides_configuration(explicit, expected, tmp_path, *, async_client, workflow_app):
+    from engine.graph_runtime.inputs import WorkflowInput
+    from engine.runtime.config import PullRequestsConfig
+    from graph_runtime_fakes import InputGraph
+
+    graph = InputGraph(
+        GraphId('review'), 'Review', (ScriptedNode(NodeId('work'), (Say('Done'),)),),
+        inputs=(WorkflowInput('auto_approve_green', 'Auto-approve Green', choices=('', 'false', 'true')),),
+    )
+    app, runtime = _graph_app(
+        WebStores(), graph, workflow_app=workflow_app,
+        repos={'api': str(tmp_path)}, pull_requests=PullRequestsConfig(False, {'api': True}),
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with async_client(app, base_url='http://localhost') as client:
+                response = await client.post('/api/runs', json={
+                    'workflowId': 'review', 'repository': str(tmp_path), 'prompt': 'Review',
+                    'inputs': {} if explicit is None else {'auto_approve_green': explicit},
+                })
+                assert response.status_code == 201
+                snapshot = await runtime.snapshot(RunId(response.json()['runId']))
+                assert snapshot.values['inputs']['auto_approve_green'] == expected
     asyncio.run(scenario())

@@ -308,7 +308,6 @@ test("a graph workflow accepts independent stage runners", async ({
     ref: "",
     pr_url: "",
     branch: "",
-    publish_review: "",
   });
   await openConversation(page, runUrl);
   await expect(page.getByLabel("Runner", { exact: true })).toHaveValue("claude");

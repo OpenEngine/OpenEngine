@@ -264,6 +264,14 @@ class GitHubSourceControl:
             ):
                 raise ValueError(denied)
 
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> None:
+        owner, repo, _ = _pull_request_parts(
+            pull_request_url(project, number), self._hosts | {self._transport.host}
+        )
+        number = _positive_number(number, "number")
+        await self._api("POST", f"/repos/{owner}/{repo}/pulls/{number}/reviews",
+                        json={"event": "APPROVE", "body": body, "commit_id": commit_sha})
+
     async def can_write_repository(
         self, pr_url: str, username: str, *, user_id: int | None = None
     ) -> bool:

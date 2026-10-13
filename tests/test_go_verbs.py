@@ -194,7 +194,7 @@ def test_builtin_disconnected_bindings_expose_no_forge_tools(tmp_path, monkeypat
         served.append((tuple(names), self._step.required_outputs))
     monkeypatch.setattr(TerminalMcpBroker, 'enable_repository_tools', enable)
     execution = SimpleNamespace(run_id=RunId('run'), execution_id='one', node_id='node',
-        runtime=SimpleNamespace(source_control=SimpleNamespace(), store=SimpleNamespace(), workorder_creator=None))
+        runtime=SimpleNamespace(public_url="", source_control=SimpleNamespace(), store=SimpleNamespace(), workorder_creator=None))
     async def scenario():
         for spec in workflow.builder.nodes.values():
             for binding in getattr(unwrapped(spec.runnable), 'mcp_server_bindings', ()):
@@ -330,14 +330,31 @@ def test_direct_gitlab_fix_inspects_source_before_provisioning(monkeypatch, mode
     ({'pr_url': 'https://github.com/o/r/pull/9'}, 'origin/refs/pull/9/head'),
     ({'pr_url': 'https://gitlab.com/o/r/-/merge_requests/9'}, 'origin/refs/merge-requests/9/head'),
     ({'ref': 'topic'}, 'topic'),
+    ({'pr_url': 'https://github.com/o/r/pull/9', 'ref': 'other-commit'}, 'other-commit'),
 ])
 def test_review_workspace_uses_target(monkeypatch, mode, inputs, ref):
     from engine.graph_runtime_langgraph.components import WorkspaceNode
-    checkout = AsyncMock(return_value={'workspace': '/checkout'})
+    source = SimpleNamespace(run_git=AsyncMock(return_value=SimpleNamespace(ok=True, stdout='reviewed-sha\n')))
+    monkeypatch.setattr(graphs, 'current_execution', lambda: SimpleNamespace(runtime=SimpleNamespace(source_control=source)))
+    checkout = AsyncMock(return_value={'workspace': '/checkout', 'workspaceId': 'ws'})
     monkeypatch.setattr(WorkspaceNode, '__call__', checkout)
     result = asyncio.run(graphs.TargetWorkspace(provider=None)({'inputs': {'mode': mode, **inputs}}))
+    assert result['reviewed_sha'] == 'reviewed-sha'
+    source.run_git.assert_awaited_once_with('ws', ('rev-parse', 'HEAD'))
     assert result['inputs']['ref'] == ref
     assert checkout.call_args.args[0]['inputs']['mode'] == mode
+
+
+@pytest.mark.parametrize('available', [False, True])
+def test_review_workspace_without_verified_sha(monkeypatch, available):
+    from engine.graph_runtime_langgraph.components import WorkspaceNode
+    source = SimpleNamespace(run_git=AsyncMock(return_value=SimpleNamespace(ok=False, stdout='')))
+    monkeypatch.setattr(graphs, 'current_execution', lambda: SimpleNamespace(
+        runtime=SimpleNamespace(source_control=source if available else None)))
+    monkeypatch.setattr(WorkspaceNode, '__call__', AsyncMock(return_value={
+        'workspace': '/checkout', 'workspaceId': 'ws'}))
+    result = asyncio.run(graphs.TargetWorkspace(provider=None)({'inputs': {}}))
+    assert result['reviewed_sha'] == ''
 
 
 @pytest.mark.parametrize('mode', ['connected', 'disconnected'])

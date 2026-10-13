@@ -152,8 +152,10 @@ class LangGraphRuntime:
         store: GraphRuntimeStore | None = None,
         source_control: SourceControl | None = None,
         checkpointer: Any | None = None,
+        public_url: str = "",
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
+        self.public_url = public_url
         self.checkpointer = checkpointer
         """What a graph added after construction is compiled against.
 

@@ -19,12 +19,6 @@ at an existing change -- a pull request, or a branch -- through the `ref` and
 Nothing is posted; a person is shown the surviving findings at *triage* and
 chooses which to fix, and each fix is reviewed again before triage asks again.
 
-A review requested from Engine on the forge sets the `publish_review` input
-instead: whoever asked reads the review on the pull request, so the survivors
-are posted there and impact analysis posts its rating, and nothing waits:
-
-    workspace -> [review facets] -> reranker -> impact-analysis
-
 The workflow offers both forge modes (`engine.domain.forge`) through
 `mode_input`. Nothing here branches on the mode: the components narrow the
 tools and skip CI themselves, and the prompts are filled from the shared
@@ -82,8 +76,8 @@ from engine.graph_runtime_langgraph.components.forge import (
     UPDATE_CHANGE,
 )
 from engine.domain import (
-    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_PUBLISH_INPUT, REVIEW_REF_INPUT,
-    ForgeMode, StepCompleted, WorkState, forge_mode, publishes_review, start_state,
+    REVIEW_BRANCH_INPUT, REVIEW_PR_INPUT, REVIEW_REF_INPUT,
+    ForgeMode, StepCompleted, WorkState, forge_mode, start_state,
 )
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, ROUND_ROBIN, mode_input, state_input,
@@ -125,8 +119,6 @@ FIX = "fix"
 
 #: The creation inputs naming the change a run started in review looks at.
 REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
-#: Set on a run started in review to post its review rather than triage it.
-PUBLISH_INPUT = REVIEW_PUBLISH_INPUT
 
 #: Codex and Claude, reached through their ACP adapters, and any agent added
 #: with `engine agent add`.  `agent_registry` is what routes an agent's
@@ -289,14 +281,9 @@ def _reviewing(state: Mapping[str, Any]) -> bool:
             or bool(inputs.get(REF_INPUT) or inputs.get(PR_INPUT)))
 
 
-def _publishing(state: Mapping[str, Any]) -> bool:
-    """Whether a run started in review posts its review instead of triaging it."""
-    return _reviewing(state) and publishes_review(state.get("inputs"))
-
-
 def _keeping_findings(state: Mapping[str, Any]) -> bool:
     """Whether the surviving findings are left for a person at triage."""
-    return _reviewing(state) and not _publishing(state)
+    return _reviewing(state)
 
 
 def _pr_url(state: Mapping[str, Any]) -> str:
@@ -358,15 +345,10 @@ def _after_workspace(state: dict[str, Any]) -> str | list[Send]:
 
 def _after_reranker(state: dict[str, Any]) -> str:
     if _reviewing(state):
-        return IMPACT_ANALYSIS if _publishing(state) else TRIAGE
+        return TRIAGE
     if state.get(REVIEW) and state.get("review_rounds") == 1:
         return IMPLEMENTATION
     return IMPACT_ANALYSIS
-
-
-def _after_impact_analysis(state: dict[str, Any]) -> str:
-    # A change this run did not make has no work order for a person to accept.
-    return END if _publishing(state) else HUMAN_REVIEW
 
 
 def _after_triage(state: dict[str, Any]) -> str:
@@ -642,15 +624,10 @@ def pipeline(
     builder.add_conditional_edges(TRIAGE, _after_triage, [IMPLEMENTATION, END])
     if verification is not None:
         builder.add_node(VERIFICATION, verification)
-        builder.add_conditional_edges(
-            IMPACT_ANALYSIS, _after_impact_analysis,
-            {HUMAN_REVIEW: VERIFICATION, END: END},
-        )
+        builder.add_edge(IMPACT_ANALYSIS, VERIFICATION)
         builder.add_edge(VERIFICATION, HUMAN_REVIEW)
     else:
-        builder.add_conditional_edges(
-            IMPACT_ANALYSIS, _after_impact_analysis, [HUMAN_REVIEW, END],
-        )
+        builder.add_edge(IMPACT_ANALYSIS, HUMAN_REVIEW)
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
 
@@ -716,7 +693,6 @@ def graph_for(
             WorkflowInput(REF_INPUT, "Ref to review"),
             WorkflowInput(PR_INPUT, "Pull request to review"),
             WorkflowInput(BRANCH_INPUT, "Pull request branch"),
-            WorkflowInput(PUBLISH_INPUT, "Post the review to the pull request"),
         ),
     )
 
