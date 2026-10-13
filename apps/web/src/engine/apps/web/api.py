@@ -1417,6 +1417,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             )(scope, receive, send)
             return
         if scope["type"] == "http":
+            if scope["method"] == "POST" and not _is_local_request(Request(scope)):
+                await _error("forbidden", 403)(scope, receive, send)
+                return
             if await github_login.visible_repositories(Request(scope)) is not None:
                 await _error("the graph API is for operators", 403)(scope, receive, send)
                 return

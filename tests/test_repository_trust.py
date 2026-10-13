@@ -89,6 +89,58 @@ def test_api_trust_updates_live_registry(tmp_path):
     asyncio.run(run())
 
 
+def test_trust_preserves_home_relative_config_path(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    config_path = tmp_path / 'engine.toml'
+    original = '[repos]\n"owner/repo" = "~/checkout" # keep this path\n'
+    config_path.write_text(original)
+    config = parse_engine_config(tomllib.loads(original))
+    registry = RepositoryRegistry(config.repos, projects={})
+    onboarding = RepositoryOnboarding(registry, config_path, AsyncMock())
+    for decision in (True, False):
+        assert onboarding.repository_trust('owner/repo', decision)['trusted'] is decision
+        assert registry.lookup(str(tmp_path / 'checkout')) == ('owner/repo', decision)
+        assert config_path.read_text().startswith(original)
+        saved = parse_engine_config(tomllib.loads(config_path.read_text()))
+        assert saved.repository_trust == {'owner/repo': decision}
+
+
+def test_trust_api_checks_origin_before_mutating_config(tmp_path):
+    from test_web_app import ConcurrentRunner, _session
+    from engine.apps.web.api import create_app as create_web_app
+    from engine.apps.web.composition import Settings, build_graph_runtime, build_graph_service
+    from engine.runtime import WorkflowCatalog
+
+    config_path = tmp_path / 'engine.toml'
+    registry = RepositoryRegistry({'owner/repo': str(tmp_path / 'checkout')}, projects={})
+    settings = Settings(graph_state_directory=str(tmp_path / 'graphs'), workspace_root=str(tmp_path / 'workspaces'))
+    runner = ConcurrentRunner()
+    app = create_web_app(_session(runner), {'test': runner}, repos=registry,
+                         workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=config_path,
+                         public_url='https://engine.example',
+                         graph_runtime=build_graph_runtime(settings, ()),
+                         graph_service=build_graph_service(settings, repositories=registry))
+
+    async def run():
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://localhost:4364') as client:
+                for origin in ('https://evil.example', 'http://localhost.evil.example', 'null', 'http://localhost:9999'):
+                    response = await client.post('/api/v1/repositories/trust',
+                        content='{"repository":"owner/repo","trusted":true}',
+                        headers={'Origin': origin, 'Content-Type': 'text/plain'})
+                    assert response.status_code == 403
+                    assert registry.lookup('owner/repo')[1] is None
+                    assert not config_path.exists()
+                for origin in (None, 'http://localhost:4364', 'https://engine.example'):
+                    response = await client.post('/api/v1/repositories/trust',
+                        json={'repository': 'owner/repo', 'trusted': True},
+                        headers={'Origin': origin} if origin else {})
+                    assert response.status_code == 200
+                    assert registry.lookup('owner/repo')[1] is True
+                    assert tomllib.loads(config_path.read_text())['trusted_repos'] == {'owner/repo': True}
+    asyncio.run(run())
+
+
 def test_lookup_uses_git_identity(tmp_path, monkeypatch):
     import subprocess
     import engine.runtime.repositories as repositories

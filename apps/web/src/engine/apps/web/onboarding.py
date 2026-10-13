@@ -114,7 +114,7 @@ def _updated_config(path: Path, name: str, checkout: str, mode: str, trusted: bo
     original = path.read_text(encoding="utf-8") if path.exists() else ""
     document = tomlkit.parse(original)
     repos = document.setdefault("repos", tomlkit.table())
-    if name in repos and Path(str(repos[name])).expanduser().resolve() != Path(checkout):
+    if name in repos and Path(str(repos[name])).expanduser().resolve() != Path(checkout).expanduser().resolve():
         raise OnboardingError("config", f"{name} is already configured at another path", "Use its configured path or edit the existing repository entry")
     if name not in repos:
         repos[name] = checkout
