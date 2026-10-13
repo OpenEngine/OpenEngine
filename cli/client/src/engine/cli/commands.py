@@ -33,8 +33,8 @@ COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
     "runner", "onboard", "go", "verb", "verbs",
 })
-#: Commands that still parse but are not advertised in `engine --help`.
-HIDDEN = frozenset({"runner"})
+#: Commands omitted from the bare `engine` menu.
+HIDDEN = frozenset({"runner", "verb", "verbs", "backends", "graphs", "runs", "loops", "nodes", "agents", "connections"})
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
@@ -50,6 +50,13 @@ SIGNIN = {
     "claude": (["claude"], "type /login, finish signing in, then /exit"),
     "opencode": (["opencode", "auth", "login"], ""),
 }
+
+
+def add_list_alias(commands: argparse._SubParsersAction, name: str, listing: argparse.ArgumentParser) -> None:
+    """Share a singular list parser with its optional-`list` plural alias."""
+    alias = commands.add_parser(f"{name}s", parents=[listing], add_help=False, help=f"alias for {name} list")
+    alias.add_argument("action", nargs="?", choices=("list",), default="list")
+    alias.set_defaults(command=name)
 
 
 def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAction:
@@ -70,6 +77,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
     go = commands.add_parser(
         "go", parents=[scoped], help="make a change with the default graph and follow it live",
+        epilog='examples:\n  engine go "add a widget"\n  engine go fix https://github.com/OpenEngine/OpenEngine/pull/855',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     go.add_argument("words", nargs="*", metavar="VERB/TARGET/INSTRUCTION", help="instruction, or a verb and change target")
     go.add_argument("--repo", default="", help="repository (default: the current checkout)")
@@ -82,9 +91,10 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     go.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
     go.set_defaults(graph=starters.DEFAULT, branch="", agent="", no_watch=False, idempotency_key="")
 
-    commands.add_parser("verbs", parents=[scoped], help="show the project's verb bindings")
     verb = commands.add_parser("verb", help="bind a project verb to a graph")
     actions = verb.add_subparsers(dest="action", required=True)
+    listing = actions.add_parser("list", parents=[scoped], help="show the project's verb bindings")
+    add_list_alias(commands, "verb", listing)
     setting = actions.add_parser("set", parents=[scoped], help="bind a verb after checking the graph's inputs")
     setting.add_argument("verb")
     setting.add_argument("graph")
@@ -107,9 +117,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
             action.add_argument("--pretty", action="store_true")
         else:
             action.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
-    listing = commands.add_parser("backends", parents=[listed], help="list backends")
-    listing.add_argument("action", nargs="?", choices=("list",), default="list")
-    listing.add_argument("--check", action="store_true", help="also ask each backend whether it is up")
+    add_list_alias(commands, "backend", actions.choices["list"])
 
     onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
     onboard.add_argument("url", nargs="?")
@@ -142,11 +150,11 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     running.add_argument("--wait", action="store_true", help="wait for the run to finish")
     running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
     running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
-    graphs = commands.add_parser("graphs", parents=[listed], help="list graphs")
-    graphs.add_argument("action", nargs="?", choices=("list",), default="list")
+    graphs = actions.add_parser("list", parents=[listed], help="list graphs")
     graphs.add_argument("--backend", metavar="NAME")
     graphs.add_argument("--project", metavar="NAME")
     graphs.add_argument("--all-projects", action="store_true")
+    add_list_alias(commands, "graph", graphs)
 
     run = commands.add_parser("run", help="inspect a run")
     actions = run.add_subparsers(dest="action", required=True)
@@ -157,8 +165,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     waiting = actions.add_parser("wait", parents=[common], help="wait for a run to finish")
     waiting.add_argument("run_id")
     waiting.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
-    runs = commands.add_parser("runs", parents=[listed], help="list runs, newest first")
-    runs.add_argument("action", nargs="?", choices=("list",), default="list")
+    runs = actions.add_parser("list", parents=[listed], help="list runs, newest first")
     runs.add_argument("--backend", metavar="NAME")
     runs.add_argument("--project", metavar="NAME")
     runs.add_argument("--all-projects", action="store_true")
@@ -168,6 +175,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     runs.add_argument("--origin", default="", help="only runs from this origin channel")
     runs.add_argument("--status", default="", help="only runs in this status, such as running or failed")
     runs.add_argument("--limit", type=int, default=20, help="at most this many (default: 20)")
+    add_list_alias(commands, "run", runs)
 
     loop = commands.add_parser("loop", help="recurring runs of a graph, within limits")
     actions = loop.add_subparsers(dest="action", required=True)
@@ -193,18 +201,18 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
         if name == "resume":
             action.add_argument("--max-prs", type=int, default=None)
             action.add_argument("--max-spend", type=float, default=None, metavar="USD")
-    loops = commands.add_parser("loops", parents=[listed], help="list loops")
-    loops.add_argument("action", nargs="?", choices=("list",), default="list")
+    loops = actions.add_parser("list", parents=[listed], help="list loops")
     loops.add_argument("--backend", metavar="NAME")
     loops.add_argument("--project", metavar="NAME")
     loops.add_argument("--all-projects", action="store_true")
+    add_list_alias(commands, "loop", loops)
 
-    nodes = commands.add_parser("nodes", parents=[listed], help="list a run's node executions")
-    nodes.add_argument("action", nargs="?", choices=("list",), default="list")
-    nodes.add_argument("--run", required=True, metavar="RUN_ID")
-    nodes.add_argument("--backend", metavar="NAME")
     node = commands.add_parser("node", help="inspect or steer one node execution")
     actions = node.add_subparsers(dest="action", required=True)
+    nodes = actions.add_parser("list", parents=[listed], help="list a run's node executions")
+    nodes.add_argument("--run", required=True, metavar="RUN_ID")
+    nodes.add_argument("--backend", metavar="NAME")
+    add_list_alias(commands, "node", nodes)
     getting = actions.add_parser("get", parents=[common], help="one node execution and its steering")
     getting.add_argument("execution_id")
     steering = actions.add_parser("steer", parents=[common], help="send a running node an updated instruction")
@@ -214,7 +222,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     steering.add_argument("--wait", action="store_true", help="wait until it is applied or cannot be")
     steering.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
 
-    agent = commands.add_parser("agent", help="add, inspect, remove and sign in the agents graphs name")
+    agent = commands.add_parser("agent", help="list, add, remove and sign in agents")
     actions = agent_actions = agent.add_subparsers(dest="action", required=True)
     adding = actions.add_parser("add", parents=[common], help="offer claude, codex or opencode under a name")
     adding.add_argument("kind", choices=AGENT_KINDS)
@@ -228,13 +236,12 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     signin = actions.add_parser("signin", help="sign an agent in where the backend runs")
     signin.add_argument("name", help="an agent name, such as claude")
     signin.add_argument("--backend", metavar="NAME")
-    agents = commands.add_parser("agents", parents=[listed], help="list agents")
-    agents.add_argument("action", nargs="?", choices=("list",), default="list")
+    agents = actions.add_parser("list", parents=[listed], help="list agents")
     agents.add_argument("--backend", metavar="NAME")
+    add_list_alias(commands, "agent", agents)
 
     # `engine runner signin` before agents had their own command; kept for one release.
-    # Without `help`, it is left out of the command list; HIDDEN keeps it out of the usage line.
-    runner = commands.add_parser("runner")
+    runner = commands.add_parser("runner", help="legacy agent sign-in command")
     actions = runner.add_subparsers(dest="action", required=True)
     signin = actions.add_parser("signin")
     signin.add_argument("name", choices=sorted(SIGNIN))
@@ -997,7 +1004,7 @@ _STEERING_COLUMNS: list[tuple[str, Any]] = [
 ]
 
 _HANDLERS = {
-    ("verbs", None): verbs_list,
+    ("verb", "list"): verbs_list,
     ("verb", "set"): verb_set,
     ("go", None): go,
     ("onboard", None): onboard_repository,
@@ -1005,30 +1012,29 @@ _HANDLERS = {
     ("backend", "list"): backend_list,
     ("backend", "use"): backend_use,
     ("backend", "remove"): backend_remove,
-    ("backends", "list"): backend_list,
     ("graph", "spec"): graph_spec,
     ("graph", "add"): graph_add,
     ("graph", "get"): graph_get,
     ("graph", "run"): graph_run,
-    ("graphs", "list"): graphs_list,
+    ("graph", "list"): graphs_list,
     ("run", "get"): run_get,
     ("run", "wait"): run_wait,
     ("run", "watch"): run_watch,
-    ("runs", "list"): runs_list,
+    ("run", "list"): runs_list,
     ("loop", "spec"): loop_spec,
     ("loop", "add"): loop_add,
     ("loop", "get"): loop_get,
     ("loop", "pause"): loop_pause,
     ("loop", "resume"): loop_resume,
-    ("loops", "list"): loops_list,
-    ("nodes", "list"): nodes_list,
+    ("loop", "list"): loops_list,
+    ("node", "list"): nodes_list,
     ("node", "get"): node_get,
     ("node", "steer"): node_steer,
     ("agent", "add"): agent_add,
     ("agent", "get"): agent_get,
     ("agent", "remove"): agent_remove,
     ("agent", "signin"): agent_signin,
-    ("agents", "list"): agents_list,
+    ("agent", "list"): agents_list,
     ("runner", "signin"): runner_signin,
 }
 

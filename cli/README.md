@@ -51,6 +51,11 @@ started — a daemon that is up already serves it.
 - A **loop** creates recurring runs of one pinned version.
 - A **node execution ID** identifies one attempt at one node within a run.
 
+The bare `engine` menu shows primary commands; `engine --help` or `engine --all`
+shows every command, including hidden aliases. Each plural list command is an
+alias for its singular `list` operation: `engine backend list`, `engine backends`,
+and `engine backends list` are equivalent.
+
 Backend commands use the selected backend. List commands (`engine graphs`,
 `runs`, `loops`, `nodes`, `agents`, `backends`, `connections`) print a table;
 add `--json` for JSON. Other commands print JSON unless `--pretty` is given, except the live run view on a TTY. `engine graph spec` and
