@@ -9,6 +9,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import ToolAnnotations
 from starlette.requests import Request
@@ -22,10 +23,26 @@ from .auth import OIDCTokenVerifier, https_url
 MIN_LOOP_MINUTES = 15
 
 
+def engine_error(response: httpx.Response, most: int = 500) -> str:
+    """OE's own `error` message from a JSON refusal, or nothing.
+
+    Only that field is passed on: it is what OE says to its clients. A body OE
+    did not shape (a proxy page, a traceback) stays on the server.
+    """
+    try:
+        reason = response.json().get("error")
+    except (ValueError, AttributeError):
+        return ""
+    if not isinstance(reason, str):
+        return ""
+    reason = " ".join(reason.split())
+    return reason if len(reason) <= most else reason[: most - 1] + "…"
+
+
 def text(value: str, label: str, most: int = 100_000) -> str:
     """The value without surrounding whitespace, refused when blank or too long."""
     if not value.strip() or len(value) > most:
-        raise ValueError(f"{label} must contain 1–{most} characters and not be blank")
+        raise ToolError(f"{label} must contain 1–{most} characters and not be blank")
     return value.strip()
 
 
@@ -177,7 +194,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         }
         if depends_on_run_id is not None:
             if not depends_on_run_id.strip():
-                raise ValueError("depends_on_run_id must not be blank")
+                raise ToolError("depends_on_run_id must not be blank")
             payload["dependsOnRunId"] = depends_on_run_id.strip()
         # Never retry this POST: a lost response can still mean work was started.
         async with httpx.AsyncClient(
@@ -188,19 +205,21 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             try:
                 response = await client.post("/api/runs", json=payload, headers=headers)
             except httpx.RequestError as error:
-                raise RuntimeError(
+                raise ToolError(
                     "OE could not confirm creation. Check the OE work-order list before retrying."
                 ) from error
         if response.status_code != 201:
-            raise RuntimeError(
-                f"OE rejected creation (HTTP {response.status_code}). Check OE configuration and logs."
+            reason = engine_error(response)
+            raise ToolError(
+                f"OE rejected creation (HTTP {response.status_code})"
+                + (f": {reason}" if reason else ". Check OE configuration and logs.")
             )
         try:
             run_id = response.json()["runId"]
             if not isinstance(run_id, str) or not run_id:
                 raise ValueError("missing run ID")
         except (ValueError, KeyError, TypeError) as error:
-            raise RuntimeError("OE returned an invalid result. Check the work-order list before retrying.") from error
+            raise ToolError("OE returned an invalid result. Check the work-order list before retrying.") from error
         return {"run_id": run_id}
 
     async def request_engine(
@@ -214,15 +233,18 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             try:
                 response = await client.request(method, path, json=payload, headers=headers)
             except httpx.RequestError as error:
-                raise RuntimeError(f"OE could not confirm the request. {retry_hint}") from error
+                raise ToolError(f"OE could not confirm the request. {retry_hint}") from error
         if not response.is_success:
-            raise RuntimeError(f"OE rejected the request (HTTP {response.status_code}).")
+            reason = engine_error(response)
+            raise ToolError(
+                f"OE rejected the request (HTTP {response.status_code})" + (f": {reason}" if reason else ".")
+            )
         try:
             result = response.json()
             if not isinstance(result, dict):
                 raise ValueError("expected an object")
         except ValueError as error:
-            raise RuntimeError("OE returned an invalid result. Check OE before retrying.") from error
+            raise ToolError("OE returned an invalid result. Check OE before retrying.") from error
         return result
 
     if not settings.oidc_issuer:
@@ -243,14 +265,14 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
 
     def identifier(value: str) -> str:
         if not value.strip() or value.strip() in {".", ".."} or "/" in value or "\\" in value:
-            raise ValueError("identifier must be non-blank and contain no path separators")
+            raise ToolError("identifier must be non-blank and contain no path separators")
         return quote(value.strip(), safe="")
 
     async def workorder(run_id: str) -> tuple[str, dict]:
         key = identifier(run_id)
         run = await request_engine("GET", f"/api/runs/{key}")
         if run.get("repository") != settings.repository:
-            raise ValueError("work order is outside the configured repository")
+            raise ToolError("work order is outside the configured repository")
         return key, run
 
     async def graph_state(key: str, run: dict) -> tuple[dict, dict]:
@@ -320,12 +342,12 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         """
         identifier(nodename)
         if not 1 <= last_n <= 1000:
-            raise ValueError("last_n must be between 1 and 1000")
+            raise ToolError("last_n must be between 1 and 1000")
         key, run = await workorder(run_id)
         snapshot, topology = await graph_state(key, run)
         node = nodename.strip()
         if not any(item["nodeId"] == node for item in topology["nodes"]):
-            raise ValueError("unknown node")
+            raise ToolError("unknown node")
         return {
             "run_id": run["runId"], "node": node, "status": snapshot["status"],
             "messages": await transcript(key, node, last_n),
@@ -346,7 +368,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         """
         payload = {"message": text(instruction, "instruction")}
         if nodename is not None and execution_id is not None:
-            raise ValueError("give at most one of nodename or execution_id")
+            raise ToolError("give at most one of nodename or execution_id")
         if execution_id is not None:
             identifier(execution_id)
             payload["execution"] = execution_id.strip()
@@ -375,7 +397,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
 
     def loop_summary(loop: dict) -> dict[str, object]:
         if loop.get("repository") != settings.repository:
-            raise ValueError("loop is outside the configured repository")
+            raise ToolError("loop is outside the configured repository")
         return {
             "loop_id": loop["loopId"], "name": loop["name"], "prompt": loop["prompt"],
             "every_minutes": loop["everyMinutes"], "active_hours": loop["activeHours"],
@@ -403,16 +425,16 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         """
         payload = {"name": text(name, "name", 200), "prompt": text(prompt, "prompt")}
         if every_minutes < MIN_LOOP_MINUTES:
-            raise ValueError(f"every_minutes must be at least {MIN_LOOP_MINUTES}")
+            raise ToolError(f"every_minutes must be at least {MIN_LOOP_MINUTES}")
         defaults = await request_engine(
             "GET", "/api/loops/defaults", retry_hint="Nothing was created; retry create_loop.",
         )
         most, budget, hours = defaults["maxWorkOrders"], defaults["maxDailySpend"], defaults["activeHours"]
         if max_workorders is not None and max_workorders > most:
-            raise ValueError(f"max_workorders may not exceed OE's loop setting of {most}")
+            raise ToolError(f"max_workorders may not exceed OE's loop setting of {most}")
         # OE treats a zero spending limit as none, so only the operator may set one.
         if max_daily_spend is not None and budget > 0 and not 0 < max_daily_spend <= budget:
-            raise ValueError(f"max_daily_spend must be more than 0 and at most OE's loop setting of {budget}")
+            raise ToolError(f"max_daily_spend must be more than 0 and at most OE's loop setting of {budget}")
         payload |= {
             "repository": settings.repository, "everyMinutes": every_minutes,
             "activeHours": {"start": (active_hours_start or hours["start"]).strip(),
