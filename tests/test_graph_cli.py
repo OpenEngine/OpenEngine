@@ -122,10 +122,10 @@ def test_a_built_in_graph_is_registered_the_first_time_it_is_run(monkeypatch, ca
     ]) == 0
     first, adding, retry = recorded.requests
     assert first["method"] == "GET"
-    assert retry["body"]["inputs"] == {"review_only": "true", "adversarial": "true",
+    assert retry["body"]["inputs"] == {"adversarial": "true",
                                                "ref": "feat/my_feat", "implementation_runner": "codex",
                                                "review_runner": "codex"}
-    assert retry["body"]["graph"] == starters.DEFAULT
+    assert retry["body"]["graph"] == "review"
     assert "deprecated" in capsys.readouterr().err
     assert retry["body"]["instruction"] == "Run adversarial-review on feat/my_feat."
     assert adding["url"].endswith("/api/v1/graphs")
@@ -557,12 +557,13 @@ def test_go_does_not_reregister_for_unrelated_service_failure(monkeypatch):
 
 
 @pytest.mark.parametrize("option", ["review", "--review"])
-@pytest.mark.parametrize("target,key", [("topic", "ref"), ("https://github.com/o/r/pull/9", "pr_url")])
+@pytest.mark.parametrize("target,key", [("topic", "ref"), ("#9", "pr_url"), ("https://github.com/o/r/pull/9", "pr_url")])
 def test_go_review_target(monkeypatch, target, key, option):
-    recorded = serve_go(monkeypatch, RUN, graph=starters.DEFAULT, target={key: target})
+    resolved = "https://github.com/o/r/pull/9" if target == "#9" else target
+    recorded = serve_go(monkeypatch, RUN, graph="review", target={key: resolved})
     assert main(["go", option, target, "--repo", "o/r"]) == 0
-    assert recorded.requests[-1]["body"]["inputs"] == {key: target, "review_only": "true", **({"publish_review": "true"} if key == "pr_url" else {})}
-    assert recorded.requests[-1]["body"]["graph"] == starters.DEFAULT
+    assert recorded.requests[-1]["body"]["inputs"] == {key: resolved}
+    assert recorded.requests[-1]["body"]["graph"] == "review"
 
 
 def test_go_wait_json_keeps_banner_off_stdout(monkeypatch, capsys):
@@ -602,13 +603,15 @@ def test_go_wait_disconnected_reports_branch_and_push(monkeypatch, capsys):
 
 def serve_go(monkeypatch, *answers, repo="o/r", graph=starters.DEFAULT, target=None):
     return serve(monkeypatch, {"verbs": starters.VERBS}, {"repo": repo, **(target or {})},
-        {"name": graph, "source": starters.source(graph), "inputs": ["instruction", "ref", "pr_url", "spec", "review_only", "publish_review", "fix_only"]}, *answers)
+        {"name": graph, "source": starters.source(graph), "inputs": ["instruction", "ref", "pr_url", "spec", "adversarial", "review_threads"]}, *answers)
 
 
 @pytest.mark.parametrize("words,verb,target,instruction", [
     (["review", "#839", "focus", "on migration"], "review", {"pr_url": "https://github.com/o/r/pull/839"}, "focus on migration"),
     (["review"], "review", {"ref": "topic"}, "Review this change"),
     (["review the auth module for races"], "go", {}, "review the auth module for races"),
+    (["fix", "https://github.com/o/r/pull/9", "focus on tests"], "fix", {"pr_url": "https://github.com/o/r/pull/9", "ref": "origin/topic"}, "focus on tests"),
+    (["fix", "#9"], "fix", {"pr_url": "https://github.com/o/r/pull/9", "ref": "origin/topic"}, "Fix this change"),
     (["fix", "topic"], "fix", {"ref": "topic"}, "Fix this change"),
 ])
 def test_go_verb_grammar(monkeypatch, words, verb, target, instruction):
@@ -617,8 +620,7 @@ def test_go_verb_grammar(monkeypatch, words, verb, target, instruction):
     request = recorded.requests[-1]["body"]
     assert request["graph"] == starters.VERBS[verb]
     assert request["instruction"] == instruction
-    defaults = {"review_only": "true", **({"publish_review": "true"} if target.get("pr_url") else {})} if verb == "review" else {"fix_only": "true"} if verb == "fix" else {}
-    assert request["inputs"] == {**defaults, **target}
+    assert request["inputs"] == target
 
 
 def test_go_ambiguous_prose_and_missing_target(monkeypatch, capsys):

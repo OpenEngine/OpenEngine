@@ -26,7 +26,7 @@ engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--loc
 | `VERB/TARGET/INSTRUCTION` | instruction, or a verb and change target |
 | `--repo REPO` | repository (default: the current checkout) |
 | `--local` | force disconnected mode; keep work local |
-| `--review PR_OR_BRANCH` | review an existing change with the default graph |
+| `--review PR_OR_BRANCH` | review an existing change with the review verb graph |
 | `--spec` | write a specification before implementing |
 | `--input, -i KEY=VALUE` |  |
 | `--wait` | wait non-interactively for completion |
@@ -237,7 +237,7 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
-| `graph` | a graph, or a built-in one: implementation-review-rerank |
+| `graph` | a graph, or a built-in one: implementation-review-rerank, review, fix |
 | `instruction` | what to do (default: run the graph) |
 | `--input, -i NAME=VALUE` |  |
 | `--branch BRANCH` | the branch to check out (sets the branch input) |

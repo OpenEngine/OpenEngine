@@ -19,8 +19,9 @@ unless `--repo` is supplied, and uses the selected backend. It prints the forge
 mode first (to stderr with `--json`); `--local` forces disconnected mode.
 On a TTY it follows live with inline approvals; agents use `--wait` instead.
 The result includes the PR URL or local branch and how to push it later.
-Use `go review PR_OR_BRANCH` to set `review_only=true` on the default graph, `go fix PR_OR_BRANCH`
-to set `fix_only=true` for unresolved review threads, `--spec` to plan first, and
+The default bindings are `go → implementation-review-rerank`, `review → review`,
+and `fix → fix`. Use `go review PR_OR_BRANCH` for findings and an impact rating,
+`go fix PR_OR_BRANCH` for unresolved review threads, `--spec` to plan first, and
 `-i KEY=VALUE` for runner inputs and `adversarial=true`. The old four starter
 names are deprecated aliases for one release. `engine verbs` shows project
 bindings; `engine verb set review NAME` selects a replacement declaring `pr_url`
