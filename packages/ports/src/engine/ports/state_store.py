@@ -22,40 +22,14 @@ from engine.domain.ids import (
     AgentRunId,
     ApprovalId,
     ConversationId,
-    RunId,
     TaskId,
     WorkspaceId,
 )
-from engine.domain.state import RunState
 
 
 @runtime_checkable
 class StateStore(Protocol):
     """Persists run state, agent identity, and conversation history."""
-
-    async def load(self, run_id: RunId) -> RunState | None:
-        """Return the stored state, or None if the run is unknown."""
-        ...
-
-    async def save(self, state: RunState) -> None:
-        ...
-
-    async def list_runs(self) -> Sequence[RunState]:
-        """Return persisted workflow runs, newest first."""
-        ...
-
-    async def list_runs_for_origin(
-        self, channel: str, thread_id: str
-    ) -> Sequence[RunState]:
-        """Return runs linked to one communications thread, newest first."""
-        ...
-
-    async def delete_run(self, run_id: RunId) -> bool:
-        """Forget one run, returning whether it existed."""
-        ...
-
-
-    # --- agent identity and conversation ---------------------------------
 
     async def create_instance(
         self,

@@ -234,7 +234,7 @@ function App() {
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState("");
   const [runner, setRunner] = useState("");
-  const { runs, error: runsError, remove: deleteRun } = useRuns();
+  const { runs, error: runsError, remove: deleteRun, previousPage, nextPage } = useRuns();
   // What a graph WorkOrder offers in the rail: its graph's nodes, since a
   // graph run has no steps for the list to carry.
   const graphNodes = useGraphNodes(runs);
@@ -301,7 +301,7 @@ function App() {
         {route.kind === "runs" ? (
           firstRun
             ? <NewWorkflowPage config={config} onConfig={setConfig} />
-            : <RunsPage runs={runs.filter((run) => run.phase !== "scheduled")} error={runsError} />
+            : <RunsPage runs={runs.filter((run) => run.phase !== "scheduled")} error={runsError} previousPage={previousPage} nextPage={nextPage} />
         ) : route.kind === "new-run" ? (
           <NewWorkflowPage config={config} onConfig={setConfig} />
         ) : route.kind === "run" ? (

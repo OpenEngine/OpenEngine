@@ -15,15 +15,13 @@ from engine.domain.ids import (
     AgentRunId,
     ApprovalId,
     ConversationId,
-    RunId,
     TaskId,
     WorkspaceId,
 )
-from engine.domain.state import RunState
 
 
 class PostgresStateStore:
-    """Persists run state, agent identity, and conversations in Postgres.
+    """Persists agent identity and conversations in Postgres.
 
     Implements `engine.ports.StateStore`.
     """
@@ -32,24 +30,6 @@ class PostgresStateStore:
         # TODO: Implement PostgreSQL storage when OpenEngine has a need for it.
         self._dsn = dsn
         self._schema = schema
-
-    async def load(self, run_id: RunId) -> RunState | None:
-        raise NotImplementedError("Postgres reads land with the state-store ticket")
-
-    async def save(self, state: RunState) -> None:
-        raise NotImplementedError("Postgres writes land with the state-store ticket")
-
-    async def list_runs(self) -> Sequence[RunState]:
-        raise NotImplementedError("Postgres reads land with the state-store ticket")
-
-    async def list_runs_for_origin(
-        self, channel: str, thread_id: str
-    ) -> Sequence[RunState]:
-        raise NotImplementedError("Postgres reads land with the state-store ticket")
-
-    async def delete_run(self, run_id: RunId) -> bool:
-        raise NotImplementedError("Postgres writes land with the state-store ticket")
-
 
     async def create_instance(
         self,

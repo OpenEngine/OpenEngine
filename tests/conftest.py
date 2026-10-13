@@ -14,7 +14,7 @@ from engine.runtime.config import CONFIG_ENVIRONMENT_VARIABLE
 
 
 @pytest.fixture(autouse=True)
-def _engine_config_is_not_inherited(monkeypatch):
+def _engine_config_is_not_inherited(monkeypatch, tmp_path):
     """Keep an exported ``ENGINE_CONFIG`` out of every test.
 
     A developer with Engine running has this set to their own checkout's
@@ -26,6 +26,7 @@ def _engine_config_is_not_inherited(monkeypatch):
     """
 
     monkeypatch.delenv(CONFIG_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
 
 @pytest.fixture
@@ -130,7 +131,16 @@ def web_app():
             )
         if runners is None:
             runners = session.runners
-        return api.create_app(session, runners, *args, **overrides)
+        app = api.create_app(session, runners, *args, **overrides)
+        inner = app
+        while not hasattr(inner, "state"):
+            inner = inner.app
+        if inner.state.run_reader.store is None:
+            from engine.graph_runtime_langgraph.store import InMemoryGraphRuntimeStore
+            inner.state.run_reader.store = InMemoryGraphRuntimeStore()
+        if app is not inner:
+            app.state = inner.state
+        return app
 
     return build
 
@@ -282,7 +292,7 @@ def workflow_app(web_app):
         **options,
     ):
         """Wire the app the way the composition root does."""
-        return web_app(
+        app = web_app(
             state_store=store,
             runner=runner,
             runners=dict(runners or {"test": runner}),
@@ -297,6 +307,14 @@ def workflow_app(web_app):
             ),
             **options,
         )
+        if hasattr(store, "graph_store"):
+            inner = app
+            while not hasattr(inner, "state"):
+                inner = inner.app
+            inner.state.run_reader.store = store.graph_store
+            inner.state.run_reader.runtime = store.runs.runtime
+            store.runs = inner.state.run_reader
+        return app
 
     return build
 

@@ -842,3 +842,68 @@ def test_start_preserves_scheduled_run_identity_and_refuses_duplicates() -> None
         finally:
             await runtime.aclose()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_remember_run_preserves_metadata_and_origin_lookup(tmp_path, persistent):
+    from engine.domain import RunOrigin
+    from engine.graph_runtime.metadata import RunMetadata
+
+    store = SqliteGraphRuntimeStore(tmp_path / "runs.sqlite3") if persistent else InMemoryGraphRuntimeStore()
+
+    async def scenario():
+        metadata = RunMetadata(
+            name="A workorder", prompt="Fix it", repository="acme/repo",
+            inputs={"runner": "test"}, requester="alice",
+            origin_channel="slack", origin_thread_id="123",
+            origin=RunOrigin(channel="slack", thread_id="123", author="alice"),
+            parent_run_id=RunId("parent"), depends_on_run_id=RunId("prerequisite"),
+            created_at="2026-01-01T00:00:00+00:00", scheduled=True,
+        )
+        await store.save_metadata(RunId("first"), GRAPH, metadata)
+        await store.remember_run(RunRecord(RunId("first"), GRAPH, error="failure"))
+        assert (await store.run(RunId("first"))).metadata == metadata
+        await store.save_metadata(RunId("second"), GRAPH, replace(metadata, created_at="2026-02-01T00:00:00+00:00"))
+        assert [row.run_id for row in await store.list_runs()] == ["second", "first"]
+        assert [row.run_id for row in await store.list_runs_for_origin("slack", "123")] == ["second", "first"]
+        assert await store.list_runs_for_origin("slack", "other") == ()
+        await store.save_metadata(RunId("first"), GRAPH, RunMetadata(name="overwrite", failure_reason="failed"), only_missing=True)
+        updated = (await store.run(RunId("first"))).metadata
+        assert updated.name == metadata.name
+        assert updated.failure_reason == "failed"
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        if persistent:
+            store.close()
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_scheduled_run_starts_once_under_reserved_id(tmp_path, persistent):
+    from engine.graph_runtime import RunStatus
+    from engine.graph_runtime.metadata import RunMetadata
+
+    store = SqliteGraphRuntimeStore(tmp_path / "runs.sqlite3") if persistent else InMemoryGraphRuntimeStore()
+
+    async def scenario():
+        run_id = RunId("reserved")
+        await store.save_metadata(run_id, GRAPH, RunMetadata(name="Reserved", scheduled=True))
+        runtime = LangGraphRuntime(_branching(), store=store)
+        try:
+            assert (await runtime.snapshot(run_id)).status is RunStatus.SCHEDULED
+            await runtime.start(GRAPH, {"size": "small"}, run_id=run_id)
+            record = await store.run(run_id)
+            assert record.metadata.name == "Reserved"
+            assert not record.metadata.scheduled
+            assert record.metadata.started_at is not None
+            with pytest.raises(ValueError, match="already exists"):
+                await runtime.start(GRAPH, {}, run_id=run_id)
+        finally:
+            await runtime.aclose()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        if persistent:
+            store.close()

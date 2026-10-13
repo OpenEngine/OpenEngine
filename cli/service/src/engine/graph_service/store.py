@@ -75,8 +75,8 @@ class SubmissionRow:
 @dataclass(frozen=True)
 class StartedRunRow:
     run_id: str
-    version_id: str
-    started_at: str
+    version_id: str | None
+    started_at: str | None
     loop_id: str | None
 
 
@@ -269,30 +269,30 @@ class GraphServiceStore:
         project: str | None = None,
         graph_id: str | None = None,
         loop_id: str | None = None,
+        requester: str | None = None,
+        origin: str | None = None,
     ) -> tuple[StartedRunRow, ...]:
-        """Every run this service started, submitted or by a loop, newest first."""
+        """Every graph run, with optional CLI registration and loop information."""
         clauses, parameters = [], []
-        for column, value in (("g.project", project), ("g.graph_id", graph_id), ("started.loop_id", loop_id)):
+        # Unregistered workorders have no CLI project and must remain visible
+        # when the CLI supplies its default project filter.
+        for column, value in (("g.project", project), ("g.graph_id", graph_id), ("lr.loop_id", loop_id), ("r.requester", requester), ("r.origin_channel", origin)):
             if value is not None:
-                clauses.append(f"{column} = ?")
+                clauses.append(f"({column} = ? OR g.project IS NULL)" if column == "g.project" else f"{column} = ?")
                 parameters.append(value)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._connection.execute(
             f"""
-            SELECT started.run_id, started.version_id, started.started_at, started.loop_id
-            FROM (
-                SELECT run_id, version_id, created_at AS started_at, NULL AS loop_id
-                FROM cli_run_submissions
-                UNION ALL
-                -- A claimed tick has no run until it starts one.
-                SELECT r.run_id, l.version_id, r.started_at, r.loop_id
-                FROM cli_loop_runs r JOIN cli_loops l ON l.loop_id = r.loop_id
-                WHERE r.run_id != ''
-            ) started
-            JOIN cli_graph_versions v ON v.version_id = started.version_id
-            JOIN cli_graphs g ON g.graph_id = v.graph_id
+            SELECT DISTINCT r.run_id, COALESCE(s.version_id, l.version_id) AS version_id,
+                r.started_at, lr.loop_id
+            FROM runs r
+            LEFT JOIN cli_run_submissions s ON s.run_id = r.run_id
+            LEFT JOIN cli_loop_runs lr ON lr.run_id = r.run_id
+            LEFT JOIN cli_loops l ON l.loop_id = lr.loop_id
+            LEFT JOIN cli_graph_versions v ON v.version_id = COALESCE(s.version_id, l.version_id)
+            LEFT JOIN cli_graphs g ON g.graph_id = v.graph_id
             {where}
-            ORDER BY started.started_at DESC, started.run_id DESC
+            ORDER BY r.created_at DESC, r.run_id DESC
             """,
             parameters,
         )

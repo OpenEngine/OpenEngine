@@ -20,6 +20,8 @@ The vocabulary, kept the same in every response:
 
 from __future__ import annotations
 
+from engine.graph_runtime.metadata import RunMetadata, run_name
+
 import asyncio
 import hashlib
 import json
@@ -627,6 +629,7 @@ class GraphService:
         return {
             "forgeContext": dict(snapshot.forge_context),
             "runId": run_id,
+            "name": run_name(record.metadata if record else RunMetadata(), dict(values), RunId(run_id)),
             "graphId": graph.graph_id if graph else None,
             "versionId": str(snapshot.graph_id),
             "graph": graph.name if graph else str(snapshot.graph_id),
@@ -670,9 +673,11 @@ class GraphService:
         graph: str = "",
         loop: str = "",
         status: str = "",
+        requester: str = "",
+        origin: str = "",
         limit: int = DEFAULT_RUN_LIMIT,
     ) -> list[dict[str, Any]]:
-        """The runs this service started, newest first: a summary of each, not its nodes."""
+        """All graph runs, newest first, with optional registration metadata."""
         if status and status not in {item.value for item in RunStatus}:
             raise ServiceError(
                 f"unknown status {status!r}; one of {', '.join(item.value for item in RunStatus)}"
@@ -683,6 +688,7 @@ class GraphService:
             project=_project(project) if project else None,
             graph_id=self.resolve(project, graph)[0].graph_id if graph else None,
             loop_id=self.resolve_loop(project, loop).loop_id if loop else None,
+            requester=requester or None, origin=origin or None,
         )
         runs: list[dict[str, Any]] = []
         for row in rows:
@@ -694,14 +700,16 @@ class GraphService:
                 snapshot = None
             if snapshot is None or (status and snapshot.status.value != status):
                 continue
-            version = self.store.version(row.version_id)
+            version = self.store.version(row.version_id) if row.version_id else None
             graph_row = self.store.graph(version.graph_id) if version else None
             loop_row = self.store.loop(row.loop_id) if row.loop_id else None
+            record = await self.runtime.store.run(RunId(row.run_id))
             runs.append({
                 "runId": row.run_id,
+                "name": run_name(record.metadata if record else RunMetadata(), dict(snapshot.values or {}), RunId(row.run_id)),
                 "graphId": graph_row.graph_id if graph_row else None,
                 "versionId": row.version_id,
-                "graph": graph_row.name if graph_row else row.version_id,
+                "graph": graph_row.name if graph_row else str(snapshot.graph_id),
                 "project": graph_row.project if graph_row else None,
                 "version": version.number if version else None,
                 "status": snapshot.status.value,
