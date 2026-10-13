@@ -14,9 +14,19 @@ export const gettingStartedCategory = withDocCategory("Getting Started", {
   },
 })
 
+export const graphsCategory = withDocCategory("Graphs", {
+  label: "Graphs",
+  position: 2,
+  link: {
+    type: "generated-index",
+    slug: "/guides/graphs",
+    description: "Write down a piece of work as a graph, OpenEngine's recipe for it, and save it to use again.",
+  },
+})
+
 export const anotherComputerCategory = withDocCategory("Other Computers", {
   label: "Other Computers",
-  position: 2,
+  position: 3,
   link: {
     type: "generated-index",
     slug: "/guides/other-computers",

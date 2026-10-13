@@ -1,0 +1,9 @@
+{
+  "label": "Graphs",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "slug": "/guides/graphs",
+    "description": "Write down a piece of work as a graph, OpenEngine's recipe for it, and save it to use again."
+  }
+}
