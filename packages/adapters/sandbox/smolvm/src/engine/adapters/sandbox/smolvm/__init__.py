@@ -192,6 +192,8 @@ class SmolvmInstance:
             async def finish():
                 await asyncio.gather(*readers, return_exceptions=True)
                 await _discard_process_output(process)
+                # The spawn waiter's done callback may still be queued.
+                self._processes.discard(process)
             await _settle(asyncio.create_task(finish()))
         if check and process.returncode:
             detail = self._redact(stderr.decode(errors="replace").strip())
