@@ -17,8 +17,8 @@ const TIMESTAMP = /\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[
 /** A port on this computer's loopback address, where a test daemon listens on a port the OS picked. */
 const LOOPBACK_PORT = /(?<![\w.])((?:127\.0\.0\.1|localhost|\[::1\]):)(\d{2,5})\b/g
 
-/** The ports drawn in their place, the nth new one getting the nth, cut to the original's length. */
-const PORTS = ["54321", "54322", "54323", "54324", "54325", "54326", "54327", "54328"]
+/** The first port drawn in their place; the nth new one of a length gets the nth after it, cut to that length. */
+const FIRST_PORT = 54321
 
 /** Every timestamp shows this moment, cut or padded to the original's shape. */
 const MOMENT = "2026-01-15T09:30:00.000000"
@@ -58,8 +58,11 @@ export class StandIns {
     if ([...this.ports.values()].includes(port)) return port // already a stand-in
     let standIn = this.ports.get(port)
     if (!standIn) {
-      const next = PORTS[this.ports.size % PORTS.length]!
-      standIn = next.slice(-port.length).padStart(port.length, "5")
+      // Counted per length, so the shorter ports a command shows while it is
+      // being typed don't move a whole one's stand-in. Distinct for every new
+      // port of one length; ports of different lengths can't share one.
+      const before = [...this.ports.keys()].filter((seen) => seen.length === port.length).length
+      standIn = String(FIRST_PORT + before).slice(-port.length).padStart(port.length, "0")
       this.ports.set(port, standIn)
     }
     return standIn
