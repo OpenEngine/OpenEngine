@@ -16,6 +16,8 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import http from "node:http"
+import type { Duplex } from "node:stream"
+import tls from "node:tls"
 import type { AddressInfo } from "node:net"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -250,24 +252,30 @@ async function terminate(daemon: ChildProcess) {
 export type AnotherComputer = Engine & { address: string }
 
 /**
+ * A certificate for `host`, signed by itself, and where it is saved: a client
+ * that trusts that file trusts `host` over HTTPS.
+ */
+function selfSignedCertificate(host: string) {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "engine-e2e-tls-"))
+  const [cert, key] = [path.join(directory, "cert.pem"), path.join(directory, "key.pem")]
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", `/CN=${host}`,
+    "-addext", `subjectAltName=DNS:${host}`, "-addext", "basicConstraints=critical,CA:FALSE",
+    "-addext", "keyUsage=critical,digitalSignature,keyEncipherment", "-addext", "extendedKeyUsage=serverAuth",
+    "-keyout", key, "-out", cert,
+  ], { stdio: "ignore" })
+  return { file: cert, cert: readFileSync(cert), key: readFileSync(key), remove: () => rmSync(directory, { recursive: true, force: true }) }
+}
+
+/**
  * An HTTP proxy that answers for `address` (host:port) by forwarding to
  * `target`, and refuses every other host. Terminal sessions use it through
- * `http_proxy`, so a guide types an address such as `http://mac-mini.local:4364`
- * rather than a port the OS picked.
+ * `https_proxy`, so a guide types an address such as `https://mac-mini.local:4364`
+ * rather than a port the OS picked. It answers HTTPS itself, with a certificate
+ * for `address` saved at `certificate`, so the sessions must trust that file.
  */
 async function startProxy(address: string, target: string) {
-  const server = http.createServer((request, response) => {
-    let url: URL
-    try {
-      url = new URL(request.url ?? "")
-    } catch {
-      response.writeHead(400).end()
-      return
-    }
-    if (url.host !== address) {
-      response.writeHead(502).end(`no computer at ${url.host}`)
-      return
-    }
+  const forward = (request: http.IncomingMessage, response: http.ServerResponse, url: URL) => {
     const forwarded = http.request(
       new URL(url.pathname + url.search, target),
       { method: request.method, headers: { ...request.headers, host: new URL(target).host } },
@@ -280,11 +288,44 @@ async function startProxy(address: string, target: string) {
     // Once the answer has started, a failure can only cut it short.
     forwarded.on("error", () => (response.headersSent ? response.destroy() : response.writeHead(502).end()))
     request.pipe(forwarded)
+  }
+  const server = http.createServer((request, response) => {
+    let url: URL
+    try {
+      url = new URL(request.url ?? "")
+    } catch {
+      response.writeHead(400).end()
+      return
+    }
+    if (url.host !== address) {
+      response.writeHead(502).end(`no computer at ${url.host}`)
+      return
+    }
+    forward(request, response, url)
+  })
+  // HTTPS arrives as CONNECT: answer the TLS inside the tunnel as `address` would.
+  const certificate = selfSignedCertificate(address.split(":")[0]!)
+  const secure = http.createServer((request, response) => forward(request, response, new URL(request.url ?? "/", `https://${address}`)))
+  const context = tls.createSecureContext({ cert: certificate.cert, key: certificate.key })
+  server.on("connect", (request: http.IncomingMessage, socket: Duplex) => {
+    if (request.url !== address) {
+      socket.end(`HTTP/1.1 502 Bad Gateway\r\n\r\nno computer at ${request.url}`)
+      return
+    }
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n")
+    const tunnel = new tls.TLSSocket(socket, { isServer: true, secureContext: context })
+    tunnel.on("error", () => socket.destroy())
+    secure.emit("connection", tunnel)
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    certificate: certificate.file,
+    close: () => new Promise<void>((resolve) => {
+      server.closeAllConnections()
+      secure.closeAllConnections()
+      server.close(() => resolve())
+    }).finally(certificate.remove),
   }
 }
 
@@ -345,7 +386,10 @@ export const test = terminalTest.extend<{
     const proxy = await startProxy(anotherComputer.address, anotherComputer.url)
     try {
       // Only the other computer goes through the proxy; this one is reached directly.
-      await use({ ...engine.env, http_proxy: proxy.url, no_proxy: "127.0.0.1,localhost" })
+      await use({
+        ...engine.env, http_proxy: proxy.url, https_proxy: proxy.url, no_proxy: "127.0.0.1,localhost",
+        SSL_CERT_FILE: proxy.certificate,
+      })
     } finally {
       await proxy.close()
     }
