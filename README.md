@@ -244,20 +244,3 @@ it available immediately without restarting. The web UI's **Add repository**
 action and MCP's `onboard_repository` tool provide the same onboarding.
 See [repository onboarding](docs/repository-onboarding.md) for options and the
 manual configuration reference.
-
-## What is it.
-
-We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.
-
-OpenEngine is fundamentally this: A planning agent which projects the timeline and relative issue + milestone sizes based on the user's stated goals. Then, it automates the distribution and production of the code required to reach those milestones according to the token flow rates set by the engine operator. 
-
-The key concepts are:
-- A "Project". An end-to-end product that the operator is working on. Timelines and milestones are associated with this.
-- A "Milestone". Some measurable outcome that you want to reach using code. Must come with acceptance criteria.
-- A "WorkOrder". WorkOrders belong to a project+milestone. They are the tasks necessary to complete a milestone.
-
-Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine drives Codex and Claude over ACP with your local logins. 
-
-![sdlc](docs/images/oe_sdlc.png)
-
-Remote clients can [create and immediately execute work orders through MCP](docs/remote-mcp.md), hosted on a Mac mini behind Tailscale Funnel.
