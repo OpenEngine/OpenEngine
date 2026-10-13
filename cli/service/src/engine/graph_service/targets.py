@@ -64,11 +64,16 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
         raise ServiceError(OUTSIDE_REPOSITORY)
     if not repository:
         raise ServiceError(NO_REPOSITORY)
-    if not target and not number and verb != 'go' and checkout:
-        target = await _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
     context = await resolve_forge_context(service.runtime.source_control,
         {'repository': path, 'inputs': {'mode': 'disconnected'} if local else {}})
     disconnected = context['mode'] == 'disconnected'
+    if not target and not number and checkout and (verb != 'go' or disconnected):
+        target = await _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+        if not target and disconnected:
+            raise ServiceError('no current branch; switch to a branch or pass one explicitly')
+    exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
+    if disconnected and verb in {'review', 'go'} and exists and not number:
+        return {'repo': repository, 'mode': context['mode'], 'ref': target}
     inspector = getattr(service.runtime.source_control, 'inspect_target', None)
     details: dict[str, Any] = {}
     if project and inspector:
@@ -86,7 +91,6 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
             raise ServiceError(OUTSIDE_REPOSITORY)
     if verb == 'fix' and details.get('pr_url') and str(details.get('head_repository', '')).casefold() != project.casefold():
         raise ServiceError(FORK_FIX)
-    exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
     if target and not exists and not details.get('exists'):
         raise NotFound(NO_TARGET)
     if number and not details.get('pr_url'):

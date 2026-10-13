@@ -571,6 +571,19 @@ def test_go_review_target(monkeypatch, target, key, option):
     assert recorded.requests[-1]["body"]["graph"] == "review"
 
 
+@pytest.mark.parametrize('target', ['', 'topic'])
+def test_go_review_disconnected_shows_local_banner(monkeypatch, capsys, tmp_path, target):
+    from engine.cli import repository
+    monkeypatch.setattr(repository, 'current', lambda: repository.Repository(tmp_path, 'o/r', 'topic', False))
+    context = {'mode': 'disconnected',
+               'summary': 'disconnected · local branch only (run engine connect github to publish)'}
+    recorded = serve_go(monkeypatch, {**RUN, 'forgeContext': context}, repo=str(tmp_path),
+                        graph='review', target={'ref': 'topic', 'mode': 'disconnected'})
+    assert main(['go', 'review', *([target] if target else [])]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == 'review · disconnected · topic · will keep results and commits local'
+    assert recorded.requests[-1]['body']['inputs'] == {'ref': 'topic'}
+
+
 def test_go_wait_json_keeps_banner_off_stdout(monkeypatch, capsys):
     run = {**RUN, "forgeContext": {"mode": "connected", "summary": "connected · o/r"}}
     done = {**run, "status": "completed", "terminal": True, "prUrl": "https://github.com/o/r/pull/9"}
