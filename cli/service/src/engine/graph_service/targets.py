@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any
 
-from engine.runtime.change_requests import remote_project
+from engine.runtime.change_requests import change_request, remote_project
 from engine.graph_runtime_langgraph.forge import resolve_forge_context
 from engine.graph_service.service import NotFound, ServiceError
 
@@ -36,15 +36,13 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
                          local: bool = False, verb: str = 'review') -> dict[str, Any]:
     """One resolver for URLs, qualified/unqualified numbers, branches and inference."""
     number = 0
-    match = re.fullmatch(r'https://github\.com/([^/]+/[^/]+)/pull/([1-9][0-9]*)/?', target)
+    parsed = change_request(target)
     shorthand = re.fullmatch(r'(?:(\w[\w.-]*/[\w.-]+))?#([1-9][0-9]*)', target)
-    if match or shorthand:
-        chosen = match or shorthand
-        assert chosen is not None
-        repository = chosen[1] or repository
-        number = int(chosen[2])
-        target = ''
-    elif target.startswith(('https://', '#')):
+    if parsed and parsed.kind == 'pull' and parsed.host == 'github.com' and parsed.project == parsed.path.lower():
+        repository, number, target = parsed.path, parsed.number, ''
+    elif shorthand:
+        repository, number, target = shorthand[1] or repository, int(shorthand[2]), ''
+    elif target.startswith(('https://', 'http://', '#')):
         raise NotFound(NO_TARGET)
     path = service.resolve_repository(repository)
     checkout = Path(path).is_dir() if path else False

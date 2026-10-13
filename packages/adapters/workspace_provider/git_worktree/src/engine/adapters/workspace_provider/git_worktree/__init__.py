@@ -71,10 +71,10 @@ class GitWorktreeWorkspaceProvider:
             co_author=co_author, issue=issue,
         )
 
-    async def provision_branch(self, repository: str, branch: str) -> Workspace:
+    async def provision_branch(self, repository: str, branch: str, *, borrow_existing: bool = False) -> Workspace:
         """Fix an existing local branch, retaining a clean checkout already holding it.
 
-        A borrowed checkout is recorded separately so lifecycle cleanup never
+        Borrowing requires explicit opt-in. A borrowed checkout is recorded separately so lifecycle cleanup never
         removes the developer's worktree. Unoccupied branches get a new worktree.
         """
         root = await _repository_root(repository)
@@ -85,6 +85,8 @@ class GitWorktreeWorkspaceProvider:
         workspace_id = WorkspaceId(f"ws-{uuid4().hex[:12]}")
         path = self._path_for(workspace_id)
         if holder is not None:
+            if not borrow_existing:
+                raise GitWorktreeError("branch is already checked out; use an unoccupied branch or explicitly opt in to borrowing")
             if await _git(str(holder), "status", "--porcelain"):
                 raise GitWorktreeError("commit or stash local changes before fixing this branch")
             marker = self._borrowed_marker(workspace_id)

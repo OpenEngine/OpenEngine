@@ -603,7 +603,8 @@ class GitHubSourceControl:
                 comments = await self._paginated_objects(f"{root}/pulls/{pull['number']}/comments")
                 unresolved = {thread.comment_id: thread for thread in threads if not thread.is_resolved}
                 result["review_threads"] = json.dumps([{**comment, "thread_id": unresolved[comment["id"]].thread_id}
-                    for comment in comments if comment.get("id") in unresolved])
+                    for comment in comments if comment.get("id") in unresolved
+                    and comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}])
         return result
 
     async def view_change_request(
@@ -1007,6 +1008,7 @@ def _discussion(value: dict) -> Discussion:
     line = value.get("line")
     return Discussion(
         comment_id=value.get("id"),
+        author_association=_string(value, "author_association"),
         author=_nested_string(value, "user", "login"),
         body=_string(value, "body"),
         url=_string(value, "html_url"),

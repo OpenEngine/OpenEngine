@@ -1258,11 +1258,13 @@ def test_inspect_target_returns_unresolved_threads_and_branch(monkeypatch):
     monkeypatch.setattr(source, '_review_threads', AsyncMock(return_value=[
         SimpleNamespace(comment_id=1, thread_id='T', is_resolved=False),
         SimpleNamespace(comment_id=2, thread_id='R', is_resolved=True),
+        SimpleNamespace(comment_id=3, thread_id='U', is_resolved=False),
     ]))
     monkeypatch.setattr(source, '_paginated_objects', AsyncMock(return_value=[
-        {'id': 1, 'body': 'fix this'}, {'id': 2, 'body': 'already fixed'},
+        {'id': 1, 'body': 'fix this', 'author_association': 'MEMBER'}, {'id': 2, 'body': 'already fixed'},
+        {'id': 3, 'body': 'untrusted', 'author_association': 'CONTRIBUTOR'},
     ]))
     result = asyncio.run(source.inspect_target('o/r', number=9, include_threads=True))
     assert result['branch'] == 'topic'
     assert result['head_repository'] == 'fork/r'
-    assert json.loads(result['review_threads']) == [{'id': 1, 'body': 'fix this', 'thread_id': 'T'}]
+    assert json.loads(result['review_threads']) == [{'id': 1, 'body': 'fix this', 'author_association': 'MEMBER', 'thread_id': 'T'}]

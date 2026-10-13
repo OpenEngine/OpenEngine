@@ -507,7 +507,7 @@ def test_fix_borrows_clean_branch_without_deleting_checkout(tmp_path, git_repo):
     provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
 
     async def scenario():
-        workspace = await provider.provision_branch(str(repository), 'topic')
+        workspace = await provider.provision_branch(str(repository), 'topic', borrow_existing=True)
         assert Path(workspace.root_path) == repository
         assert await provider.root_path(workspace.workspace_id) == str(repository)
         assert (await provider.state(workspace.workspace_id)).ref == 'topic'
@@ -541,7 +541,7 @@ def test_fix_refuses_dirty_borrowed_checkout(tmp_path, git_repo):
     (repository / 'README.md').write_text('uncommitted\n')
     provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
     with pytest.raises(GitWorktreeError, match='commit or stash'):
-        asyncio.run(provider.provision_branch(str(repository), 'topic'))
+        asyncio.run(provider.provision_branch(str(repository), 'topic', borrow_existing=True))
 
 
 @pytest.mark.parametrize('lifecycle', ['detach', 'dispose'])
@@ -567,8 +567,19 @@ def test_borrowed_metadata_validates_checkout_branch(tmp_path, git_repo):
     repository = git_repo(commit=True, branch='topic')
     provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
     async def scenario():
-        workspace = await provider.provision_branch(str(repository), 'topic')
+        workspace = await provider.provision_branch(str(repository), 'topic', borrow_existing=True)
         _git(repository, 'checkout', '-b', 'other')
         with pytest.raises(GitWorktreeError, match='invalid borrowed checkout metadata'):
             await provider.root_path(workspace.workspace_id)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('dirty', [False, True])
+def test_fix_rejects_existing_checkout_without_opt_in(tmp_path, git_repo, dirty):
+    repository = git_repo(commit=True, branch='topic')
+    if dirty:
+        (repository / 'README.md').write_text('local edits')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    with pytest.raises(GitWorktreeError, match='explicitly opt in'):
+        asyncio.run(provider.provision_branch(str(repository), 'topic'))
+    assert _git(repository, 'branch', '--show-current') == 'topic'

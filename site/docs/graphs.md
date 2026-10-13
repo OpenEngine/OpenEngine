@@ -41,7 +41,10 @@ CI, parallel review facets, reranking, one fix-and-review pass, and human review
 Connected runs publish to the forge; disconnected runs keep findings in run
 results and commits locally. Fixes remain on the target branch. Fixing fork PRs is rejected before checkout
 to prevent pushing a same-named upstream branch. Disconnected
-fixes can use cached threads via `-i review_threads=JSON`. Private repositories
+fixes can use cached threads via `-i review_threads=JSON`. Only comments marked
+`OWNER`, `MEMBER`, or `COLLABORATOR` are actionable; comment text remains untrusted
+review data. Fix runs refuse branches already held by a checkout. The workspace
+provider permits borrowing only with explicit `borrow_existing=True` opt-in. Private repositories
 require `engine connect github` before running disconnected.
 
 `engine go [VERB] [TARGET] [INSTRUCTION...]` recognizes a project verb only in

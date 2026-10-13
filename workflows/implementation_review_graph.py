@@ -39,7 +39,7 @@ from engine.graph_runtime_langgraph.components.change_prompts import (
 )
 
 
-from engine.graph_runtime_langgraph.components.change_graphs import Components, FixWorkspace, review_threads
+from engine.graph_runtime_langgraph.components.change_graphs import Components, FixWorkspace, review_threads, review_data
 from engine.runtime.change_requests import change_request
 from collections.abc import Mapping
 from dataclasses import replace
@@ -423,7 +423,7 @@ def pipeline(
     builder.add_node("fix-ci", CICheck())
     builder.add_node("reply", fix_components.agent("reply", lambda state: ANSWER_REVIEW(state)
         + "Report the completed fixes and remaining unresolved requests. Do not modify code.\n"
-        + str(state.get("threads", "")) + "\n" + str(state.get("implementation", "")),
+        + review_data(state) + "\n" + str(state.get("implementation", "")),
         tools=("view_change_request", "add_comment")))
     builder.add_conditional_edges("threads", lambda state: "fix-implementation" if state.get("threads") else END,
                                   ["fix-implementation", END])
