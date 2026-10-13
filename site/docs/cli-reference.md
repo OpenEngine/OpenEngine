@@ -33,12 +33,26 @@ engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--loc
 | `--json` | JSON output; mode banner goes to stderr |
 | `--timeout SECONDS` |  |
 
-## `engine verbs`
+```text
+examples:
+  engine go "add a widget"
+  engine go fix https://github.com/OpenEngine/OpenEngine/pull/855
+```
+
+## `engine verb`
+
+Bind a project verb to a graph.
+
+```text
+engine verb [-h] {list,set} ...
+```
+
+### `engine verb list`
 
 Show the project's verb bindings.
 
 ```text
-engine verbs [-h] [--backend NAME] [--pretty] [--project NAME]
+engine verb list [-h] [--backend NAME] [--pretty] [--project NAME]
 ```
 
 | Argument | Meaning |
@@ -46,14 +60,6 @@ engine verbs [-h] [--backend NAME] [--pretty] [--project NAME]
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
-
-## `engine verb`
-
-Bind a project verb to a graph.
-
-```text
-engine verb [-h] {set} ...
-```
 
 ### `engine verb set`
 
@@ -70,6 +76,21 @@ engine verb set [-h] [--backend NAME] [--pretty] [--project NAME] verb graph
 | `--project NAME` | the project names resolve in (default: the backend's) |
 | `verb` |  |
 | `graph` |  |
+
+## `engine verbs`
+
+Alias for verb list.
+
+```text
+engine verbs [-h] [--backend NAME] [--pretty] [--project NAME] [{list}]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+| `action` | one of `list` |
 
 ## `engine backend`
 
@@ -141,7 +162,7 @@ engine backend remove [-h] [--pretty] name
 
 ## `engine backends`
 
-List backends.
+Alias for backend list.
 
 ```text
 engine backends [-h] [--json] [--check] [{list}]
@@ -150,8 +171,8 @@ engine backends [-h] [--json] [--check] [{list}]
 | Argument | Meaning |
 | --- | --- |
 | `--json` | JSON instead of a table |
-| `action` | one of `list` |
 | `--check` | also ask each backend whether it is up |
+| `action` | one of `list` |
 
 ## `engine onboard`
 
@@ -176,7 +197,7 @@ engine onboard [-h] [--backend NAME] [--pretty] [--path PATH]
 Register, inspect and run graphs.
 
 ```text
-engine graph [-h] {spec,add,get,run} ...
+engine graph [-h] {spec,add,get,run,list} ...
 ```
 
 ### `engine graph spec`
@@ -250,9 +271,24 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--timeout SECONDS` | give up waiting after this long |
 | `--idempotency-key IDEMPOTENCY_KEY` | reuse to make a resubmission safe |
 
-## `engine graphs`
+### `engine graph list`
 
 List graphs.
+
+```text
+engine graph list [-h] [--json] [--backend NAME] [--project NAME] [--all-projects]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of a table |
+| `--backend NAME` |  |
+| `--project NAME` |  |
+| `--all-projects` |  |
+
+## `engine graphs`
+
+Alias for graph list.
 
 ```text
 engine graphs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [{list}]
@@ -261,17 +297,17 @@ engine graphs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [
 | Argument | Meaning |
 | --- | --- |
 | `--json` | JSON instead of a table |
-| `action` | one of `list` |
 | `--backend NAME` |  |
 | `--project NAME` |  |
 | `--all-projects` |  |
+| `action` | one of `list` |
 
 ## `engine run`
 
 Inspect a run.
 
 ```text
-engine run [-h] {get,watch,wait} ...
+engine run [-h] {get,watch,wait,list} ...
 ```
 
 ### `engine run get`
@@ -317,9 +353,32 @@ engine run wait [-h] [--backend NAME] [--pretty] [--timeout SECONDS] run_id
 | `run_id` |  |
 | `--timeout SECONDS` |  |
 
-## `engine runs`
+### `engine run list`
 
 List runs, newest first.
+
+```text
+engine run list [-h] [--json] [--backend NAME] [--project NAME] [--all-projects]
+                [--graph GRAPH] [--loop LOOP] [--requester REQUESTER] [--origin ORIGIN]
+                [--status STATUS] [--limit LIMIT]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of a table |
+| `--backend NAME` |  |
+| `--project NAME` |  |
+| `--all-projects` |  |
+| `--graph GRAPH` | only runs of this graph |
+| `--loop LOOP` | only runs this loop started |
+| `--requester REQUESTER` | only runs requested by this identity |
+| `--origin ORIGIN` | only runs from this origin channel |
+| `--status STATUS` | only runs in this status, such as running or failed |
+| `--limit LIMIT` | at most this many (default: 20) |
+
+## `engine runs`
+
+Alias for run list.
 
 ```text
 engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--graph GRAPH]
@@ -331,7 +390,6 @@ engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--
 | Argument | Meaning |
 | --- | --- |
 | `--json` | JSON instead of a table |
-| `action` | one of `list` |
 | `--backend NAME` |  |
 | `--project NAME` |  |
 | `--all-projects` |  |
@@ -341,13 +399,14 @@ engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--
 | `--origin ORIGIN` | only runs from this origin channel |
 | `--status STATUS` | only runs in this status, such as running or failed |
 | `--limit LIMIT` | at most this many (default: 20) |
+| `action` | one of `list` |
 
 ## `engine loop`
 
 Recurring runs of a graph, within limits.
 
 ```text
-engine loop [-h] {spec,add,get,pause,resume} ...
+engine loop [-h] {spec,add,get,pause,resume,list} ...
 ```
 
 ### `engine loop spec`
@@ -436,9 +495,24 @@ engine loop resume [-h] [--backend NAME] [--pretty] [--project NAME] [--max-prs 
 | `--max-prs MAX_PRS` |  |
 | `--max-spend USD` |  |
 
-## `engine loops`
+### `engine loop list`
 
 List loops.
+
+```text
+engine loop list [-h] [--json] [--backend NAME] [--project NAME] [--all-projects]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of a table |
+| `--backend NAME` |  |
+| `--project NAME` |  |
+| `--all-projects` |  |
+
+## `engine loops`
+
+Alias for loop list.
 
 ```text
 engine loops [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [{list}]
@@ -447,33 +521,32 @@ engine loops [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [{
 | Argument | Meaning |
 | --- | --- |
 | `--json` | JSON instead of a table |
-| `action` | one of `list` |
 | `--backend NAME` |  |
 | `--project NAME` |  |
 | `--all-projects` |  |
-
-## `engine nodes`
-
-List a run's node executions.
-
-```text
-engine nodes [-h] [--json] --run RUN_ID [--backend NAME] [{list}]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--json` | JSON instead of a table |
 | `action` | one of `list` |
-| `--run RUN_ID` |  |
-| `--backend NAME` |  |
 
 ## `engine node`
 
 Inspect or steer one node execution.
 
 ```text
-engine node [-h] {get,steer} ...
+engine node [-h] {list,get,steer} ...
 ```
+
+### `engine node list`
+
+List a run's node executions.
+
+```text
+engine node list [-h] [--json] --run RUN_ID [--backend NAME]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of a table |
+| `--run RUN_ID` |  |
+| `--backend NAME` |  |
 
 ### `engine node get`
 
@@ -509,12 +582,27 @@ engine node steer [-h] [--backend NAME] [--pretty] [--idempotency-key IDEMPOTENC
 | `--wait` | wait until it is applied or cannot be |
 | `--timeout SECONDS` |  |
 
-## `engine agent`
+## `engine nodes`
 
-Add, inspect, remove and sign in the agents graphs name.
+Alias for node list.
 
 ```text
-engine agent [-h] {add,get,remove,signin,claude,codex,opencode} ...
+engine nodes [-h] [--json] --run RUN_ID [--backend NAME] [{list}]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of a table |
+| `--run RUN_ID` |  |
+| `--backend NAME` |  |
+| `action` | one of `list` |
+
+## `engine agent`
+
+List, add, remove and sign in agents.
+
+```text
+engine agent [-h] {add,get,remove,signin,list,claude,codex,opencode} ...
 ```
 
 ### `engine agent add`
@@ -578,6 +666,19 @@ engine agent signin [-h] [--backend NAME] name
 | `name` | an agent name, such as claude |
 | `--backend NAME` |  |
 
+### `engine agent list`
+
+List agents.
+
+```text
+engine agent list [-h] [--json] [--backend NAME]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of a table |
+| `--backend NAME` |  |
+
 ### `engine agent claude`
 
 Drive an implementation node with Claude Code in this terminal.
@@ -631,7 +732,7 @@ engine agent opencode [-h] [--repo REPO] [--base REF] [--backend NAME] ...
 
 ## `engine agents`
 
-List agents.
+Alias for agent list.
 
 ```text
 engine agents [-h] [--json] [--backend NAME] [{list}]
@@ -640,8 +741,16 @@ engine agents [-h] [--json] [--backend NAME] [{list}]
 | Argument | Meaning |
 | --- | --- |
 | `--json` | JSON instead of a table |
-| `action` | one of `list` |
 | `--backend NAME` |  |
+| `action` | one of `list` |
+
+## `engine runner`
+
+Legacy agent sign-in command.
+
+```text
+engine runner [-h] {signin} ...
+```
 
 ## `engine connect`
 
@@ -660,12 +769,20 @@ engine connect [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--open]
 | `--origin ORIGIN` | the GitLab instance to connect |
 | `--open` | open the authorization page in a browser |
 
-## `engine connections`
+## `engine connection`
+
+List source control and Slack connections.
+
+```text
+engine connection [-h] {list} ...
+```
+
+### `engine connection list`
 
 Show source control and Slack connections.
 
 ```text
-engine connections [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--json]
+engine connection list [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--json]
 ```
 
 | Argument | Meaning |
@@ -674,6 +791,22 @@ engine connections [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--jso
 | `--backend NAME` | the backend to ask (default: the selected one) |
 | `--origin ORIGIN` | the GitLab instance to report |
 | `--json` | JSON instead of a table |
+
+## `engine connections`
+
+Alias for connection list.
+
+```text
+engine connections [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--json] [{list}]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--server URL` | override the selected backend's URL |
+| `--backend NAME` | the backend to ask (default: the selected one) |
+| `--origin ORIGIN` | the GitLab instance to report |
+| `--json` | JSON instead of a table |
+| `action` | one of `list` |
 
 ## `engine disconnect`
 
