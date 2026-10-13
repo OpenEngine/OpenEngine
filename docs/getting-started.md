@@ -170,15 +170,17 @@ The browser run page is `{backend}/runs/{run_id}`, for example
 
 ## 4. Approvals
 
-The current install template sets `[approvals] auto_approve = true`: ordinary
-tool permission requests are automatically accepted. Explicit shell deny rules
-still apply, and graph steps that ask for a human decision can still pause.
+The current install template sets `[approvals] auto_approve = false` and
+`allow = ["read"]`: reads are automatically accepted; edits, shell commands,
+and other tool permission requests ask for approval. Graph steps that ask for
+a human decision can also pause.
 Reinstalling preserves an existing configuration, so your settings may differ.
 
-To ask before tools outside your grants run, edit `[approvals]` in
-`~/.config/openengine/engine.toml` and set `auto_approve = false`. Review the
-existing `allow` and shell rules too: the install template allows reads and
-edits. `[trusted_repos]` can auto-approve WorkOrders for selected repository
+To change these grants, edit `[approvals]` in
+`~/.config/openengine/engine.toml`: adjust `allow` and the shell rules, or set
+`auto_approve = true` to automatically accept ordinary tool permission requests.
+Explicit shell ask and deny rules still apply. `[trusted_repos]` can
+auto-approve WorkOrders for selected repository
 names already declared in `[repos]`, by setting a name to `true` (for example,
 `"owner/repo" = true`); it is not a shell-command allow list.
 For details, consult the
