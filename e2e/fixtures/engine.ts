@@ -15,7 +15,7 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -32,6 +32,29 @@ const INHERITED = ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG"]
 
 /** What a real agent additionally needs to find its login: never a GitHub credential. */
 const AGENT_LOGINS = ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CODEX_HOME", "OPENAI_API_KEY"]
+
+/**
+ * Where engine-web puts each run's git worktree. It has no setting for this,
+ * so a test's runs land here, outside its own directory, and are removed when
+ * its daemon stops.
+ */
+const WORKSPACES = "/tmp/engine-workspaces"
+
+/** Remove the run worktrees whose repository is inside `root`. */
+function removeWorkspaces(root: string) {
+  if (!existsSync(WORKSPACES)) return
+  const roots = [root, realpathSync(root)]
+  for (const name of readdirSync(WORKSPACES)) {
+    const workspace = path.join(WORKSPACES, name)
+    let gitdir = ""
+    try {
+      gitdir = readFileSync(path.join(workspace, ".git"), "utf8")
+    } catch {
+      continue
+    }
+    if (roots.some((prefix) => gitdir.includes(prefix + path.sep))) rmSync(workspace, { recursive: true, force: true })
+  }
+}
 
 const STUB_DAEMON = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../harness/daemon.py")
 
@@ -168,7 +191,9 @@ export async function startEngine({
 
   const stop = async () => {
     await terminate(daemon)
-    if (!keepRoot()) rmSync(root, { recursive: true, force: true })
+    if (keepRoot()) return
+    removeWorkspaces(root)
+    rmSync(root, { recursive: true, force: true })
   }
 
   try {
