@@ -1,7 +1,7 @@
 apiVersion: openengine.cc/v1
 kind: Graph
 name: tdd-guide
-description: Work one issue test-first. One agent writes the failing tests, a fresh session makes them pass without weakening them, and a third checks that any generated guide reads like documentation rather than a test before the pull request opens.
+description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them; a panel reviews the change for security, bugs, performance, conciseness, duplication and how its guides read, a reranker keeps what matters for another pass, and impact analysis rates the change before the pull request opens.
 
 inputs:
   instruction:
@@ -112,7 +112,7 @@ implementation:
       Do not delete, skip or weaken those tests. If one is wrong, fix it
       as narrowly as you can and say why in the summary.
 
-      Review findings to address, if any: ${json(outputs.guide_review.findings)}
+      Review findings to address, if any: ${json(outputs.reranker.findings)}
       CI result, if any: ${json(outputs.ci)}
 
       Run the tests touched by this change, and the e2e suite (`npm test` in `e2e/`)
@@ -126,36 +126,104 @@ implementation:
       ${instruction}
 
 review:
-  guide_review:
-    name: Guide review
+  reviewers:
+    name: Review
+    agent: ${inputs.reviewer}
+    facets:
+      - {facet: security, model: elevated}
+      - {facet: bugs}
+      - {facet: performance}
+      - {facet: conciseness}
+      - {facet: dryness}
+      - facet:
+          id: guide
+          name: Guides
+          focus: |
+            Whether the user-facing guides this change adds or changes read well
+            and are current. If it touches `e2e/tests`, read every page it adds or
+            changes under `site/docs/guides/`, each screenshot included, as
+            someone new to the `engine` CLI, and flag anything that sounds like a
+            test rather than instructions ("verify", "assert", "expect", fixture
+            or helper names), leaks setup that belongs in a `[nodoc]` step, skips
+            a step a reader needs or explains one they don't, has an annotation on
+            the wrong row or an unreadable, cropped or mid-spinner screenshot,
+            shows machine-specific paths, user names, tokens or ports, or has a
+            title or description that doesn't say what the reader will do. Then
+            run `npm run doc` in `e2e/`: if `git status --porcelain site/docs/guides`
+            isn't empty the committed guides are stale, which is a finding, and
+            put the directory back with `git restore --source=HEAD -- site/docs/guides`
+            and `git clean -fdq site/docs/guides`. If the change touches no guide,
+            there is nothing to find.
+    prompt: |
+      Review the change this run made for issue #${outputs.pick.issue},
+      ${outputs.pick.title}, focusing only on **${item.facet.name}**.
+
+      ${item.facet.focus}
+
+      The change is the commits on this branch: `git log` and
+      `git diff ${inputs.base}...HEAD` (an empty base means origin/main). The
+      issue asked for:
+      ${outputs.pick.brief}
+
+      Read the changed code and the code around it before judging. Inspect
+      only: do not edit or commit anything. Each finding names the file and
+      line to change.
+    outputs:
+      findings: {type: findings, required: true}
+
+  reranker:
+    name: Consolidate
+    agent: {same: implement}
+    prompt: |
+      ${size(outputs.reviewers)} reviewers examined the same change, each from one
+      angle. Consolidate their findings, somewhat aggressively squashing noise.
+
+      Remove a finding that is a nitpick or a matter of taste, a duplicate of
+      another (even across angles), an unlikely hypothetical, not actionable, or
+      already handled by code the reviewer missed. Keep what a senior engineer
+      would want fixed before merging. Keep each finding's agent and facet
+      unchanged. Do not edit anything.
+
+      The issue: #${outputs.pick.issue}, ${outputs.pick.title}
+
+      The reviews:
+      ${json(outputs.reviewers)}
+    outputs:
+      findings: {type: findings, required: true, lineage: required}
+
+  impact:
+    name: Impact analysis
     agent: ${inputs.reviewer}
     prompt: |
-      Review the guides issue #${outputs.pick.issue} changes, as a reader will
-      get them. Do not change or commit any tracked file.
+      Assess the impact of the final change for issue #${outputs.pick.issue}:
+      the commits on this branch (`git diff ${inputs.base}...HEAD`; an empty base
+      means origin/main). Read the diff and surrounding code, tests and review
+      findings. Inspect only: do not edit, commit, merge, or deploy anything.
 
-      Changes a guide spec: ${outputs.pick.guide}.
+      Rank the change at exactly one level:
+      Green 🟢: No significant UI or architectural changes. Administrative
+      changes, narrowly scoped bug fixes, or minor product behavior changes.
+      Well tested with few testing blind spots, and no new integrated component
+      requiring human setup.
+      Orange 🟠: Moderate UI adjustments, a new architectural component, or
+      significant code changes to prevent a bug. Well tested, but a new
+      integrated component may require human setup, or integration testing may
+      be incomplete for a known reason.
+      Red 🔴: Significant architectural alterations, a major new feature, or
+      excess complexity. May touch sensitive components such as security or
+      auth, and requires human involvement to deploy. Requires careful review
+      and must not be merged without a human.
 
-      If this change touches `e2e/tests`, read every page it adds or changes
-      under `site/docs/guides/` (`git diff --stat ${inputs.base}...HEAD` lists
-      them; empty base means origin/main), including each screenshot. Then
-      run `npm run doc` in `e2e/` and check `git status --porcelain site/docs/guides`
-      is empty: if it isn't, the committed guides are stale, and that is a
-      finding. If the change touches no guide, return no findings and pass.
+      Choose the highest applicable level; passing tests alone does not lower
+      the impact. Explain uncertainty and testing gaps rather than assuming
+      untested behavior is safe. Give evidence for UI/product and architectural
+      scope, complexity, sensitive components, test coverage and blind spots,
+      and human setup or deployment work.
 
-      Read each page as someone new to the `engine` CLI and flag anything that:
-      - sounds like a test rather than instructions ("verify", "assert",
-        "expect", "should be visible", fixture or helper names)
-      - leaks setup that should be a `[nodoc]` step
-      - skips a step a reader needs, or explains something they don't
-      - has a screenshot annotation that points at the wrong row, or a
-        screenshot that is unreadable, cropped or shows a spinner mid-frame
-      - shows machine-specific paths, user names, tokens or ports
-      - has a title or description that doesn't say what the reader will do
-
-      Each finding names the spec file and line to change.
+      Review findings still open: ${json(outputs.reranker.findings)}
     outputs:
-      verdict: {type: string, enum: [pass, revise], required: true}
-      findings: {type: findings, required: true}
+      impact_level: {type: string, enum: [Green, Orange, Red], required: true}
+      impact_rationale: {type: string, required: true, description: your evidence and the human actions required}
 
   publish:
     name: Open pull request
@@ -173,8 +241,10 @@ review:
 
       If no pull request is open for that branch yet, open one with
       open_pull_request against that base: a Conventional Commit title, a body
-      that summarises the change, the tests written first, and anything the
-      guide review left unresolved, and `issue_resolution: resolves`.
+      that summarises the change, the tests written first, the impact
+      (${outputs.impact.impact_level}: ${outputs.impact.impact_rationale}) and
+      any review findings still open (${json(outputs.reranker.findings)}), and
+      `issue_resolution: resolves`.
       If one is already open, pushing is enough.
 
       Report the pull request's URL as pr_url, whether you opened it or it was
@@ -191,10 +261,10 @@ flow:
     route:
       - {when: "outputs.pick.found == 'yes'", to: tdd}
       - {to: end}
-  - from: guide_review
+  - from: reranker
     route:
-      - {when: "outputs.guide_review.verdict == 'revise' && visits.implement < 3", to: implement}
-      - {to: publish}
+      - {when: "size(outputs.reranker.findings) > 0 && visits.implement < 3", to: implement}
+      - {to: impact}
   - from: ci
     route:
       - {when: "outputs.ci.passed == false && visits.implement < 4", to: implement}
