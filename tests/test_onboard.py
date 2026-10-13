@@ -341,6 +341,31 @@ def test_cross_origin_onboarding_never_starts(tmp_path, monkeypatch, origin):
     assert not (tmp_path / 'config.toml').exists()
 
 
+@pytest.mark.parametrize("origin", ["https://evil.example", "http://localhost.evil.example", "null"])
+@pytest.mark.parametrize("path", ['/api/v1/repositories/onboard', '/api/v1/repositories/onboard/job1'])
+def test_cross_origin_v1_onboarding_never_starts(tmp_path, monkeypatch, origin, path):
+    from test_web_app import ConcurrentRunner, _session
+    from engine.apps.web.api import create_app
+    from engine.runtime import WorkflowCatalog
+
+    start = Mock()
+    monkeypatch.setattr(onboard.RepositoryOnboarding, 'start_request', start)
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
+                     workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'config.toml')
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
+            response = await client.request('POST' if path.endswith('onboard') else 'GET', path,
+                                            content='{"repository": "owner/repo"}',
+                                            headers={'Origin': origin, 'Content-Type': 'text/plain'})
+            assert response.status_code == 403
+            assert response.json() == {'error': 'forbidden'}
+    asyncio.run(run())
+    start.assert_not_called()
+    assert not (tmp_path / 'config.toml').exists()
+
+
 @pytest.mark.parametrize('origin', [None, 'http://evil.example', 'http://localhost'])
 @pytest.mark.parametrize('method,path', [
     ('POST', '/api/repositories/onboard'),

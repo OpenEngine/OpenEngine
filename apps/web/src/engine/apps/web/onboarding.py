@@ -264,6 +264,8 @@ class RepositoryOnboarding:
             return JSONResponse(dict(job))
 
         async def api_v1_start(request: Request) -> JSONResponse:
+            if not is_local_request(request):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
             if await visible_repositories(request) is not None:
                 return JSONResponse({"error": "repository onboarding is for operators"}, status_code=403)
             try:
@@ -275,6 +277,8 @@ class RepositoryOnboarding:
                 return JSONResponse({"error": "invalid JSON request"}, status_code=400)
 
         async def api_v1_status(request: Request) -> JSONResponse:
+            if not is_local_request(request):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
             if await visible_repositories(request) is not None:
                 return JSONResponse({"error": "repository onboarding is for operators"}, status_code=403)
             job = self.jobs.get(request.path_params["job_id"])
