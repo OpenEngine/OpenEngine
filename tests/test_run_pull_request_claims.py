@@ -79,7 +79,7 @@ def test_api_cancels_run_when_claim_fails(mode, failure, github_app, client, cat
 
 
 @pytest.mark.parametrize("mode,inputs", [
-    (starters.DEFAULT, {}),
+    (starters.DEFAULT, {"implementation_runner": "codex", "review_runner": "claude"}),
     ("fix", {"ref": "topic"}),
     ("review", {"ref": "topic"}),
 ])
