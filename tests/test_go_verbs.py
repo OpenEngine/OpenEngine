@@ -69,13 +69,13 @@ def test_project_bindings_are_validated_persisted_and_exposed(tmp_path):
             with pytest.raises(ServiceError, match='must declare pr_url or ref'):
                 service.bind_verb('one', 'review', 'pair')
             await service.add_graph('one', source=starters.source('review'), format='python')
-            assert service.bind_verb('one', 'audit', starters.DEFAULT)['audit'] == starters.DEFAULT
+            assert service.bind_verb('one', 'audit', 'review')['audit'] == 'review'
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service)), base_url='http://test') as client:
                 assert (await client.get('/verbs', params={'project': 'one'})).json()['verbs']['go'] == 'pair'
                 refused = await client.post('/verbs/review', json={'project': 'one', 'graph': 'pair'})
                 assert refused.status_code == 400
-                registered = (await client.get(f'/graphs/{starters.DEFAULT}', params={'project': 'one'})).json()
-                assert {'spec', 'review_only', 'adversarial', 'fix_only'} <= set(registered['inputs'])
+                registered = (await client.get('/graphs/review', params={'project': 'one'})).json()
+                assert {'ref', 'pr_url', 'adversarial'} <= set(registered['inputs'])
 
         async with graph_service(tmp_path) as service:
             assert service.verbs('one')['go'] == 'pair'
@@ -85,14 +85,16 @@ def test_project_bindings_are_validated_persisted_and_exposed(tmp_path):
 
 @pytest.mark.parametrize('entry', ['implement', 'review', 'fix'])
 @pytest.mark.parametrize('mode', ['connected', 'disconnected'])
-def test_builtin_default_routes_inputs(tmp_path, entry, mode):
-    name = starters.DEFAULT
+@pytest.mark.parametrize('adversarial', [False, True])
+def test_builtin_default_routes_inputs(tmp_path, entry, mode, adversarial):
+    name = starters.DEFAULT if entry == 'implement' else entry
     path = tmp_path / f'{name}.py'
     path.write_text(starters.source(name))
     workflow = load_workflow_file(path)[0]
     assert str(workflow.graph_id) == name
     inputs = {item.name for item in workflow.inputs}
-    assert {'spec', 'review_only', 'adversarial', 'fix_only'} <= inputs
+    assert not {'review_only', 'fix_only'} & inputs
+    assert {'instruction', 'mode'} <= inputs
     visited = []
 
     def stub(key):
@@ -108,17 +110,20 @@ def test_builtin_default_routes_inputs(tmp_path, entry, mode):
         return RunnableLambda(invoke)
     for key, node in workflow.builder.nodes.items():
         node.runnable = stub(key)
-    asyncio.run(workflow.builder.compile().ainvoke({'task': 'docs', 'inputs': {'mode': mode, 'spec': 'true', 'adversarial': 'true', 'review_only': str(entry == 'review').lower(), 'publish_review': 'true', 'fix_only': str(entry == 'fix').lower()}}))
+    asyncio.run(workflow.builder.compile().ainvoke({'task': 'docs', 'inputs': {'mode': mode, 'spec': 'true', 'adversarial': str(adversarial).lower(), 'ref': 'topic' if entry != 'implement' else ''}}))
     if entry == 'implement':
         assert visited.count('implementation') == 2 and visited.count('reranker') == 2
         assert visited.index('spec') < visited.index('implementation')
-        assert 'threads' not in visited and visited.count('refute') == 2
+        assert 'threads' not in visited and visited.count('refute') == (2 if adversarial else 0)
         assert visited[-1] == 'human-review'
     elif entry == 'review':
         assert 'implementation' not in visited and 'ci-check' not in visited
-        assert visited.index('refute') < visited.index('reranker') < visited.index('impact-analysis')
+        assert visited.index('reranker') < visited.index('impact')
+        assert ('refute' in visited) == adversarial
+        if adversarial:
+            assert visited.index('refute') < visited.index('reranker')
     else:
-        assert visited == ['workspace', 'threads', 'fix-implementation', 'fix-ci', 'reply']
+        assert visited == ['workspace', 'threads', 'implementation', 'ci-check', 'reply']
 
 
 @pytest.mark.parametrize('mode', ['connected', 'disconnected'])
@@ -244,3 +249,94 @@ def test_packaged_default_graph_is_regular_file_matching_workflow():
     resource = root / 'cli/client/src/engine/cli/starters/default_graph.py.txt'
     assert not resource.is_symlink()
     assert resource.read_bytes() == (root / 'workflows/implementation_review_graph.py').read_bytes()
+
+
+def test_default_verb_graphs_are_independent():
+    assert starters.VERBS == {'go': 'implementation-review-rerank', 'review': 'review', 'fix': 'fix'}
+
+
+@pytest.mark.parametrize('alias,name,defaults', [
+    ('review', 'review', {}),
+    ('adversarial-review', 'review', {'adversarial': 'true'}),
+    ('implement-review', starters.DEFAULT, {}),
+    ('spec-implement-review', starters.DEFAULT, {'spec': 'true'}),
+])
+def test_starter_aliases_load_the_right_graph(tmp_path, alias, name, defaults):
+    path = tmp_path / 'alias.py'
+    path.write_text(starters.source(alias))
+    assert str(load_workflow_file(path)[0].graph_id) == name
+    assert starters.ALIASES[alias] == (name, defaults)
+
+
+@pytest.mark.parametrize('name', ['review_only', 'fix_only', 'review_threads'])
+def test_implementation_rejects_removed_inputs(tmp_path, name):
+    from engine.graph_runtime.inputs import resolve_inputs
+    path = tmp_path / 'implementation.py'
+    path.write_text(starters.source())
+    workflow = load_workflow_file(path)[0]
+    with pytest.raises(ValueError, match='unknown workflow inputs'):
+        resolve_inputs(workflow.inputs, {name: 'true'})
+
+
+@pytest.mark.parametrize('mode', ['connected', 'disconnected'])
+def test_direct_fix_provisions_the_pr_branch(monkeypatch, mode):
+    workspace = SimpleNamespace(root_path='/checkout', workspace_id='ws')
+    provider = SimpleNamespace(provision_branch=AsyncMock(return_value=workspace))
+    source = SimpleNamespace(inspect_target=AsyncMock(return_value={'head_repository': 'o/r', 'branch': 'pr-branch'}))
+    monkeypatch.setattr(graphs, 'current_execution', lambda: SimpleNamespace(runtime=SimpleNamespace(source_control=source)))
+    result = asyncio.run(graphs.FixWorkspace(provider=provider)({
+        'repository': 'o/r', 'inputs': {'mode': mode, 'pr_url': 'https://github.com/o/r/pull/9'},
+    }))
+    provider.provision_branch.assert_awaited_once_with('o/r', 'pr-branch')
+    assert result['branch'] == result['inputs']['ref'] == 'pr-branch'
+
+
+@pytest.mark.parametrize('mode', ['connected', 'disconnected'])
+@pytest.mark.parametrize('inputs,ref', [
+    ({'pr_url': 'https://github.com/o/r/pull/9'}, 'origin/refs/pull/9/head'),
+    ({'pr_url': 'https://gitlab.com/o/r/-/merge_requests/9'}, 'origin/refs/merge-requests/9/head'),
+    ({'ref': 'topic'}, 'topic'),
+])
+def test_review_workspace_uses_target(monkeypatch, mode, inputs, ref):
+    from engine.graph_runtime_langgraph.components import WorkspaceNode
+    checkout = AsyncMock(return_value={'workspace': '/checkout'})
+    monkeypatch.setattr(WorkspaceNode, '__call__', checkout)
+    result = asyncio.run(graphs.TargetWorkspace(provider=None)({'inputs': {'mode': mode, **inputs}}))
+    assert result['inputs']['ref'] == ref
+    assert checkout.call_args.args[0]['inputs']['mode'] == mode
+
+
+@pytest.mark.parametrize('mode', ['connected', 'disconnected'])
+def test_fix_without_threads_finishes_without_implementation(mode):
+    workflow = graphs.fix(graphs.Components('codex', None, None))
+    workflow.builder.nodes['workspace'].runnable = RunnableLambda(lambda state: {})
+    result = asyncio.run(workflow.builder.compile().ainvoke({'inputs': {'mode': mode}}))
+    assert result['fix_summary'] == 'No unresolved review threads.'
+
+
+@pytest.mark.parametrize('name', ['review', 'fix'])
+def test_verb_graphs_preserve_deployment_session_config(tmp_path, name):
+    from engine.graph_runtime_langgraph.graphs import unwrapped
+    path = tmp_path / f'{name}.py'
+    path.write_text(starters.source(name))
+    workflow = load_workflow_file(path, session_config={'model': 'deployment-model'})[0]
+    for spec in workflow.builder.nodes.values():
+        node = unwrapped(spec.runnable)
+        if isinstance(node, graphs.ACPNode):
+            assert node.session_config == {'model': 'deployment-model'}
+
+
+@pytest.mark.parametrize('mode', ['connected', 'disconnected'])
+def test_review_and_fix_prompts_keep_focus_and_publish_by_mode(mode):
+    from engine.graph_runtime_langgraph.graphs import unwrapped
+    state = {'task': 'Focus on migrations', 'inputs': {'mode': mode, 'pr_url': 'https://github.com/o/r/pull/9'},
+             'threads': [{'thread_id': 'T', 'body': 'Fix the migration'}]}
+    c = graphs.Components('codex', None, None)
+    for node in c.reviews().values():
+        assert 'Focus on migrations' in node.prompt(state)
+    assert 'Focus on migrations' in c.implementation(fixing=True).prompt(state)
+    assert ('post one general comment' in c.impact().prompt(state)) == (mode == 'connected')
+    reply = unwrapped(graphs.fix(c).builder.nodes['reply'].runnable)
+    assert ('resolve=true' in reply.prompt(state)) == (mode == 'connected')
+    assert 'Fix the migration' in reply.prompt(state)
+    assert 'open_pull_request' not in c.implementation(fixing=True).mcp_server_bindings[0].repository_tools

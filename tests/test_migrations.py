@@ -323,7 +323,7 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
         assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "github_pull_requests", "cli_graphs", "cli_graph_versions", "cli_run_submissions", "cli_loops", "cli_loop_runs", "cli_node_executions", "cli_steering", "cli_agents", "cli_projects", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("c3836c457cf8",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("a01559975f87",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -392,7 +392,7 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("c3836c457cf8",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("a01559975f87",)
 
 
 def test_github_comments_migration_preserves_graph_data_and_downgrades(
@@ -673,3 +673,29 @@ def test_legacy_metadata_survives_migration_and_idempotent_backfill(tmp_path):
     finally:
         graph.close()
         state.close()
+
+
+def test_verb_graph_migration_preserves_custom_bindings(tmp_path):
+    database = tmp_path / "verbs.sqlite3"
+    url = f"sqlite:///{database}"
+    upgrade(url, "c3836c457cf8", store="graph")
+    defaults = dict.fromkeys(("go", "review", "fix"), "implementation-review-rerank")
+    projects = {
+        "untouched": defaults,
+        "custom-go": {**defaults, "go": "my-implementation"},
+        "custom-review": {**defaults, "review": "my-review", "audit": "my-audit"},
+        "custom-fix": {**defaults, "fix": "my-fix"},
+        "empty": {},
+    }
+    with sqlite3.connect(database) as connection:
+        connection.executemany("INSERT INTO cli_projects(name, verbs) VALUES (?, ?)",
+                               [(name, json.dumps(verbs)) for name, verbs in projects.items()])
+    upgrade(url, store="graph")
+    upgrade(url, store="graph")
+    with sqlite3.connect(database) as connection:
+        actual = {name: json.loads(raw) for name, raw in connection.execute("SELECT name, verbs FROM cli_projects")}
+    for name, verbs in projects.items():
+        assert actual[name] == {
+            verb: verb if verb in {"review", "fix"} and graph == "implementation-review-rerank" else graph
+            for verb, graph in verbs.items()
+        }

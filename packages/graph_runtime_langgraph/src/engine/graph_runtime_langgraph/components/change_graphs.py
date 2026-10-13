@@ -46,14 +46,19 @@ class TargetWorkspace(WorkspaceNode):
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
         inputs = dict(state.get('inputs', {}))
         target = change_request(str(inputs.get('pr_url', '')))
+        if inputs.get('pr_url') and not target:
+            message = 'pr_url must be a pull request or merge request URL'
+            raise ValueError(message)
         if target and not inputs.get('ref'):
-            inputs['ref'] = f'origin/refs/pull/{target.number}/head'
+            path = f'pull/{target.number}/head' if target.kind == 'pull' else f'merge-requests/{target.number}/head'
+            inputs['ref'] = f'origin/refs/{path}'
         return {**await super().__call__({**state, 'inputs': inputs}), 'inputs': inputs,
                 'pr_url': inputs.get('pr_url', '')}
 
 
 class FixWorkspace(TargetWorkspace):
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
+        inputs = dict(state.get('inputs', {}))
         target = change_request(pr_url(state))
         if target:
             source = current_execution().runtime.source_control
@@ -62,13 +67,16 @@ class FixWorkspace(TargetWorkspace):
             if str(details.get("head_repository", "")).casefold() != target.project.casefold():
                 message = "cannot fix a fork PR or a PR with an unavailable head repository"
                 raise ValueError(message)
+            inputs["ref"] = details.get("branch") or inputs.get("ref", "")
+        state = {**state, "inputs": inputs}
         branch = str(state.get('inputs', {}).get('ref', '')).removeprefix('refs/remotes/origin/').removeprefix('origin/')
         provision = getattr(self.provider, 'provision_branch', None)
         if branch and provision:
             workspace = await provision(str(state.get('repository', '')), branch)
             return {'workspace': workspace.root_path, 'workspaceId': str(workspace.workspace_id),
-                    'workspaceRef': branch, 'branch': branch, 'pr_url': pr_url(state)}
-        return await super().__call__(state)
+                    'workspaceRef': branch, 'branch': branch, 'pr_url': pr_url(state), 'inputs': inputs}
+        message = 'fix requires a target branch and a provider supporting provision_branch'
+        raise ValueError(message)
 
 
 async def review_threads(state: Mapping[str, Any]) -> dict[str, object]:
@@ -179,7 +187,8 @@ class Components:
             return IMPLEMENTATION_PROMPT.format(publish=PUBLISH_CHANGE(state),
                 task=str(state.get('task', '')) + '\nSpecification:\n' + str(state.get('spec', '')))
         return self.agent('implementation', prompt, required=('pr_url', 'branch'),
-            tools=('git_subcommand', 'open_pull_request', 'view_change_request', 'get_job_logs', 'list_pipeline_status'))
+            tools=('git_subcommand', 'view_change_request', 'get_job_logs', 'list_pipeline_status')
+                  + (() if fixing else ('open_pull_request',)))
 
     def reviews(self) -> dict[str, ACPNode]:
         return {f'review-{f.id}': self.agent(f'review-{f.id}',
@@ -192,7 +201,7 @@ class Components:
 
     def rank(self) -> ACPNode:
         return self.agent('reranker', lambda state: RERANKER_PROMPT.format(
-            reviewer_count=len(REVIEW_FACETS), publishing=PUBLISH_FINDINGS(state if pr_url(state) else {**state, 'inputs': {'mode': 'disconnected'}}, runner=self.runner),
+            reviewer_count=len(REVIEW_FACETS), publishing=PUBLISH_FINDINGS(state if pr_url(state) else {**state, 'inputs': {'mode': 'disconnected'}}, runner=state.get('inputs', {}).get('review_runner', self.runner)),
             findings_sections=json.dumps(state.get('refute', []) if enabled(state, 'adversarial') else
                                         [state.get(f'review-{f.id}', []) for f in REVIEW_FACETS]),
             change=change_description(state), task=state.get('task', '')),

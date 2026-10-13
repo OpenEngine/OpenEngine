@@ -155,7 +155,7 @@ class GraphServiceStore:
 
     def verbs(self, project: str) -> dict[str, str]:
         row = self._connection.execute("SELECT verbs FROM cli_projects WHERE name = ?", (project,)).fetchone()
-        return {"go": "implementation-review-rerank", "review": "implementation-review-rerank", "fix": "implementation-review-rerank", **(json.loads(row[0]) if row else {})}
+        return {"go": "implementation-review-rerank", "review": "review", "fix": "fix", **(json.loads(row[0]) if row else {})}
 
     def bind_verb(self, project: str, verb: str, graph: str) -> dict[str, str]:
         with self.transaction():

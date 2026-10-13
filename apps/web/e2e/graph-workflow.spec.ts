@@ -300,12 +300,9 @@ test("a graph workflow accepts independent stage runners", async ({
   expect(run.values.inputs).toEqual({
     mode: "connected",
     instruction: "",
-    fix_only: "false",
-    review_threads: "",
     implementation_runner: "claude",
     review_runner: "codex",
     spec: "false",
-    review_only: "false",
     adversarial: "false",
     state: "Planning",
     ref: "",
