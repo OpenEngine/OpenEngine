@@ -58,32 +58,42 @@ def _run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(arguments, capture_output=True, text=True, timeout=20, check=False)
 
 
-def signed_in_agent() -> str | None:
-    for agent, command in (("claude", ["claude", "auth", "status", "--json"]),
-                           ("codex", ["codex", "login", "status"])):
-        if not shutil.which(agent):
-            continue
+def agent_available(kind: str, *, model: str = "", url: str = "") -> bool:
+    """Whether this backend can launch a signed-in harness, without starting a session."""
+    if not shutil.which(kind):
+        return False
+    if kind in ("claude", "codex"):
+        command = ["claude", "auth", "status", "--json"] if kind == "claude" else ["codex", "login", "status"]
         try:
             result = _run(command)
-            if result.returncode == 0:
-                if agent == "codex" or json.loads(result.stdout).get("loggedIn") is True:
-                    return agent
+            return result.returncode == 0 and (
+                kind == "codex" or json.loads(result.stdout).get("loggedIn") is True
+            )
         except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
-            continue
-    if shutil.which("opencode"):
+            return False
+    if kind == "opencode":
+        # An added agent with its own endpoint needs no provider sign-in.
+        if url:
+            return True
         data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
         try:
             credentials = json.loads((data_home / "opencode/auth.json").read_text())
-            if isinstance(credentials, dict) and any(
-                isinstance(item, dict) and (
-                    (item.get("type") == "api" and item.get("key"))
-                    or (item.get("type") == "oauth" and item.get("refresh"))
-                ) for item in credentials.values()
-            ):
-                return "opencode"
+            if not isinstance(credentials, dict):
+                return False
+            provider = model.split("/", 1)[0] if "/" in model else ""
+            return any(
+                (not provider or name == provider) and isinstance(item, dict) and (
+                    (item.get("type") == "api" and bool(item.get("key")))
+                    or (item.get("type") == "oauth" and bool(item.get("refresh")))
+                ) for name, item in credentials.items()
+            )
         except (OSError, ValueError):
-            pass
-    return None
+            return False
+    return False
+
+
+def signed_in_agent() -> str | None:
+    return next((kind for kind in ("claude", "codex", "opencode") if agent_available(kind)), None)
 
 
 def preflight() -> tuple[list[dict[str, str]], str | None]:
@@ -151,7 +161,8 @@ async def register_starters(service: GraphService | None, project: str, runner: 
     if service is None:
         raise OnboardingError("graphs", "The graph service is unavailable", "Check daemon health and graph configuration, then retry")
     for name in starters.NAMES:
-        await service.add_graph(project, source=starters.source(name, runner=runner), format="python")
+        source = starters.source(name, runner="" if name == starters.DEFAULT else runner)
+        await service.add_graph(project, source=source, format="python")
 
 
 class RepositoryOnboarding:

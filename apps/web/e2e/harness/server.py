@@ -27,6 +27,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 #: apps/web/e2e/harness/server.py -> the repository root.
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -201,7 +202,9 @@ def main(argv: list[str] | None = None) -> int:
     # free port in the parent and releasing it races other parallel fixtures.
     with config.bind_socket() as sock:
         print(f"ENGINE_E2E_URL=http://{settings.host}:{sock.getsockname()[1]}", flush=True)
-        uvicorn.Server(config).run(sockets=[sock])
+        # Scripted providers need no host installation or provider credentials.
+        with patch("engine.apps.web.onboarding.agent_available", return_value=True):
+            uvicorn.Server(config).run(sockets=[sock])
     return 0
 
 

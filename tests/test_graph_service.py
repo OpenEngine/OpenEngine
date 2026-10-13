@@ -1069,6 +1069,28 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                     assert started.status_code == 201, started.text
                     snapshot = await runtime.snapshot(RunId(started.json()["runId"]))
                     assert snapshot.values["inputs"]["implementation_runner"] == "qwen"
+                    monkeypatch.setattr("engine.apps.web.onboarding.agent_available",
+                                        lambda kind, **kwargs: kind == "opencode")
+                    for policy in (ROUND_ROBIN, LEAST_UTILIZED):
+                        selected = await client.post("/api/runs", json={
+                            "workflowId": "runners", "repository": ".", "prompt": "Task",
+                            "inputs": {"implementation_runner": policy},
+                        })
+                        assert selected.status_code == 201, selected.text
+                        snapshot = await runtime.snapshot(RunId(selected.json()["runId"]))
+                        assert snapshot.values["inputs"]["implementation_runner"] == "qwen"
+                    monkeypatch.setattr("engine.apps.web.onboarding.agent_available",
+                                        lambda *args, **kwargs: False)
+                    registered = await client.post("/api/v1/graphs", json={
+                        "project": "default", "format": "python", "source": starters.source(),
+                    })
+                    assert registered.status_code == 201, registered.text
+                    refused = await client.post("/api/v1/runs", json={
+                        "project": "default", "graph": starters.DEFAULT,
+                        "instruction": "Implement the task",
+                    })
+                    assert refused.status_code == 400, refused.text
+                    assert "engine agent signin" in refused.text
                     saved = await client.put("/api/loops/settings", json={
                         "activeHours": {"start": "00:00", "end": "00:00"}, "maxPrs": 1, "maxDailySpend": 0,
                         "runnerStrategy": "manual", "implementationRunner": "qwen", "reviewRunner": "test",

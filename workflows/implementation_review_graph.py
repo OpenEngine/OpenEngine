@@ -634,10 +634,13 @@ def pipeline(
 
 #: Runner choices for the implementation and review stages.  An agent added
 #: with `engine agent add` is offered beside these by the process serving it,
-#: but is left out of the policies: it reports no utilization to place by.
-DEFAULT_RUNNER = "codex"
-DEFAULT_REVIEW_RUNNER = ""
-RUNNER_CHOICES = tuple(dict.fromkeys(("codex", "claude", DEFAULT_RUNNER)))
+#: and joins the policies when installed and signed in on the backend.
+DEFAULT_RUNNER = "round-robin"
+DEFAULT_REVIEW_RUNNER = "round-robin"
+RUNNER_CHOICES = tuple(dict.fromkeys(
+    runner for runner in ("codex", "claude", DEFAULT_RUNNER)
+    if runner not in (LEAST_UTILIZED, ROUND_ROBIN)
+))
 #: What the runner dropdowns offer: a runner, or a policy that picks one per run.
 RUNNER_INPUT_CHOICES = (*RUNNER_CHOICES, LEAST_UTILIZED, ROUND_ROBIN)
 #: What this workflow was called when the runner was part of its id, before the
@@ -659,7 +662,9 @@ def graph_for(
     """Build the workflow with the requested initial implementation runner."""
     return graph_workflow(
         pipeline(
-            runner,
+            # Nodes need a concrete construction default; submission resolves
+            # policies into the stage inputs before any node starts.
+            "codex" if runner in (LEAST_UTILIZED, ROUND_ROBIN) else runner,
             workspace_provider=workspace_provider,
             agents=agents,
             session_config=session_config,

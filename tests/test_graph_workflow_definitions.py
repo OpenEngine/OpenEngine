@@ -822,8 +822,8 @@ def test_an_added_implementer_is_reviewed_by_claude() -> None:
     assert nodes["review-security"].agent == "claude"
     assert nodes["review-security"].session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
     defaults = {item.name: item.default for item in module.graph_for("codex").inputs}
-    assert defaults["implementation_runner"] == "codex" and defaults["review_runner"] == "claude"
-    assert {item.name: item.default for item in module.graph_for("claude").inputs}["review_runner"] == "codex"
+    assert defaults["implementation_runner"] == "codex" and defaults["review_runner"] == "round-robin"
+    assert {item.name: item.default for item in module.graph_for("claude").inputs}["review_runner"] == "round-robin"
 
 
 def test_input_runner_can_be_reset_to_workflow_default_and_retried(tmp_path):
@@ -1063,3 +1063,10 @@ def test_default_review_resolves_the_checkout_ref(monkeypatch, inputs, expected)
     result = asyncio.run(node({"inputs": inputs}))
     assert seen == [expected]
     assert result["inputs"]["ref"] == expected
+
+
+def test_default_graph_uses_runner_policies():
+    module = definition_module()
+    defaults = {item.name: item.default for item in module.workflow.inputs}
+    assert defaults["implementation_runner"] == "round-robin"
+    assert defaults["review_runner"] == "round-robin"

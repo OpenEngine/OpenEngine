@@ -2966,8 +2966,9 @@ def _least_utilized_app(
 
 
 def test_graph_workorder_round_robin_runner_resolves_at_start(
-    async_client, workflow_app
+    async_client, workflow_app, monkeypatch
 ):
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available", lambda *args, **kwargs: True)
     from engine.graph_runtime.inputs import ROUND_ROBIN
 
     graph = _runner_input_graph("codex", "claude", ROUND_ROBIN)
@@ -2991,9 +2992,10 @@ def test_graph_workorder_round_robin_runner_resolves_at_start(
 
 
 def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(
-    tmp_path, *, async_client, workflow_app
+    tmp_path, *, async_client, workflow_app, monkeypatch
 ):
     """Nothing else keeps the utilization cache warm, so starting the run reads it."""
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available", lambda *args, **kwargs: True)
     from engine.graph_runtime.inputs import LEAST_UTILIZED
 
     async def read_test(_client) -> RunnerUtilization:
@@ -3022,6 +3024,7 @@ def test_graph_workorder_least_utilized_runner_scrapes_before_choosing(
 def test_graph_workorder_least_utilized_falls_back_to_the_cache_when_the_scrape_hangs(
     monkeypatch, tmp_path, *, async_client, workflow_app
 ):
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available", lambda *args, **kwargs: True)
     from engine.apps.web import api as web_api
     from engine.graph_runtime.inputs import LEAST_UTILIZED
 
@@ -3046,9 +3049,10 @@ def test_graph_workorder_least_utilized_falls_back_to_the_cache_when_the_scrape_
 
 
 def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(
-    tmp_path, *, async_client, workflow_app
+    tmp_path, *, async_client, workflow_app, monkeypatch
 ):
     """The scrape runs outside the lock every WorkOrder creation takes."""
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available", lambda *args, **kwargs: True)
     from engine.graph_runtime.inputs import LEAST_UTILIZED
 
     scraping, release = asyncio.Event(), asyncio.Event()
@@ -3086,9 +3090,10 @@ def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(
 
 
 def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts(
-    async_client, workflow_app
+    async_client, workflow_app, monkeypatch
 ):
     """A scheduled dependent keeps the policy and is placed once it can run."""
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available", lambda *args, **kwargs: True)
     from engine.graph_runtime.inputs import ROUND_ROBIN
 
     graph = _runner_input_graph("codex", "claude", ROUND_ROBIN)
@@ -4054,6 +4059,31 @@ def test_added_repository_writers_can_sign_in(monkeypatch, tmp_path, web_app):
     assert asyncio.run(authorize(1, "writer")) == {"acme/new": True}
     assert registry.snapshot.run_projects[str(tmp_path)] == "acme/new"
 
+
+@pytest.mark.parametrize("available, expected_status", [(True, 201), (False, 400)])
+def test_policy_submission_checks_backend_availability(available, expected_status, monkeypatch,
+                                                       async_client, workflow_app):
+    from engine.graph_runtime.inputs import ROUND_ROBIN
+
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available",
+                        lambda kind, **kwargs: available and kind == "claude")
+    app, runtime = _graph_app(WebStores(), _runner_input_graph("codex", "claude", ROUND_ROBIN),
+                             workflow_app=workflow_app)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with async_client(app, base_url="http://localhost") as client:
+                response = await client.post("/api/runs", json={
+                    "workflowId": "inputs", "repository": ".", "prompt": "Task",
+                    "inputs": {"implementation_runner": ROUND_ROBIN},
+                })
+                assert response.status_code == expected_status, response.text
+                if available:
+                    snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                    assert snapshot.values["inputs"]["implementation_runner"] == "claude"
+                else:
+                    assert "engine agent signin" in response.text
+                    assert not runtime._runs
 
 @pytest.mark.parametrize('explicit,expected', [(None, 'true'), ('false', 'false'), ('true', 'true')])
 def test_review_form_input_overrides_configuration(explicit, expected, tmp_path, *, async_client, workflow_app):

@@ -275,9 +275,9 @@ test("a graph workflow accepts independent stage runners", async ({
   const implementation = page.getByLabel("Implementation runner");
   const review = page.getByLabel("Review runner");
   await expect(implementation).toHaveValue("codex");
-  await expect(review).toHaveValue("claude");
+  await expect(review).toHaveValue("round-robin");
   await implementation.selectOption("claude");
-  await expect(review).toHaveValue("claude");
+  await expect(review).toHaveValue("round-robin");
   await review.selectOption("codex");
   await expect(implementation).toHaveValue("claude");
   await page.getByText("Workflow inputs", { exact: true }).click();
