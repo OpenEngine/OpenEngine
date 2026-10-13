@@ -7,6 +7,11 @@
       "include-component-in-tag": false,
       "extra-files": [
         {
+          "type": "json",
+          "path": "npm/engine/package.json",
+          "jsonpath": "$.version"
+        },
+        {
           "type": "toml",
           "path": "apps/cli/pyproject.toml",
           "jsonpath": "$.project.version"
