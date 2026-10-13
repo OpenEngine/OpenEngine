@@ -131,15 +131,21 @@ def test_wrong_checkout_is_never_replaced(tmp_path, monkeypatch):
         onboard.validate_checkout('owner/repo', tmp_path)
 
 
-def test_registers_the_default_graph_with_runner_policies():
+@pytest.mark.parametrize('runner', ['claude', 'opencode', 'codex'])
+def test_registers_starters_with_detected_runner_and_default_graph_policies(runner):
     service = Mock()
     service.add_graph = AsyncMock()
-    asyncio.run(onboard.register_starters(service, 'owner/repo', 'opencode'))
+    asyncio.run(onboard.register_starters(service, 'owner/repo', runner))
     assert service.add_graph.await_count == 3
-    for name in onboard.starters.NAMES:
-        service.add_graph.assert_any_await(
-            'owner/repo', source=onboard.starters.source(name), format='python',
-        )
+    for name, call in zip(onboard.starters.NAMES, service.add_graph.await_args_list):
+        assert call.args == ('owner/repo',)
+        assert call.kwargs['format'] == 'python'
+        source = call.kwargs['source']
+        if name == onboard.starters.DEFAULT:
+            assert 'DEFAULT_RUNNER = "round-robin"' in source
+            assert 'DEFAULT_REVIEW_RUNNER = "round-robin"' in source
+        else:
+            assert f'DEFAULT_RUNNER = {runner!r}' in source
 
 
 @pytest.mark.parametrize("origin", [None, "http://localhost", "http://127.0.0.1"])

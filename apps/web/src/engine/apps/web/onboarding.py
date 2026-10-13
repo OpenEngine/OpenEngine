@@ -165,7 +165,8 @@ async def register_starters(service: GraphService | None, project: str, runner: 
     if service is None:
         raise OnboardingError("graphs", "The graph service is unavailable", "Check daemon health and graph configuration, then retry")
     for name in starters.NAMES:
-        await service.add_graph(project, source=starters.source(name), format="python")
+        source = starters.source(name, runner="" if name == starters.DEFAULT else runner)
+        await service.add_graph(project, source=source, format="python")
 
 
 class RepositoryOnboarding:
