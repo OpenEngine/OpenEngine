@@ -3083,9 +3083,10 @@ def test_graph_workorder_least_utilized_scrape_does_not_hold_up_other_starts(
 
 
 def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts(
-    async_client, workflow_app
+    async_client, workflow_app, monkeypatch
 ):
     """A scheduled dependent keeps the policy and is placed once it can run."""
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available", lambda *args, **kwargs: True)
     from engine.graph_runtime.inputs import ROUND_ROBIN
 
     graph = _runner_input_graph("codex", "claude", ROUND_ROBIN)
