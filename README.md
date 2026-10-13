@@ -6,6 +6,9 @@
 
 OpenEngine is a graph execution engine that meets you where you work.
 
+New here? [Start with `engine go`](docs/getting-started.md): make a local change,
+connect GitHub, and take it through review to a pull request.
+
 ![](docs/images/oe_land.png)
 
 We give you an out-of-the-box configuration to get you up and running. The out-of-the-box graph lives [here](./workflows/implementation_review_graph.py) and looks like this:

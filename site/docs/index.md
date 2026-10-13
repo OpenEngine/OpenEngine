@@ -6,6 +6,9 @@ description: OpenEngine runs every change through a graph you define, on the cod
 
 OpenEngine runs every change through a graph you define, on the coding CLIs you already pay for.
 
+New here? [Start with `engine go`](getting-started.md) to make your first local
+change, connect GitHub, and work through PR reviews and fixes.
+
 ## Quickstart
 
 On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
