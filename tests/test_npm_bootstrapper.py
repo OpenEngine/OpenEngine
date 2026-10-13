@@ -25,7 +25,8 @@ class NpmBootstrapperTests(unittest.TestCase):
             cwd=ROOT / 'npm/engine', check=True, capture_output=True,
             env={**os.environ, 'npm_config_cache': str(directory / 'cache')},
         )
-        with tarfile.open(next(directory.glob('*.tgz'))) as archive:
+        cls.archive = next(directory.glob('*.tgz'))
+        with tarfile.open(cls.archive) as archive:
             archive.extractall(directory, filter='data')
         cls.package = directory / 'package'
         cls.version = json.loads((cls.package / 'package.json').read_text())['version']
@@ -48,6 +49,7 @@ class NpmBootstrapperTests(unittest.TestCase):
         executable.write_text('#!/usr/bin/env node\n' + body)
         executable.chmod(0o755)
         (self.target / '.installed').touch()
+        (self.target / '.npm-daemon-ready').touch()
 
     def run_engine(self, *args):
         return subprocess.run(self.command + list(args), env=self.env, capture_output=True, text=True, timeout=20)
@@ -96,6 +98,81 @@ class NpmBootstrapperTests(unittest.TestCase):
         self.install_fake("process.kill(process.pid, 'SIGTERM');")
         self.assertEqual(self.run_engine().returncode, -signal.SIGTERM)
 
+    def test_daemon_initialization_and_retry(self):
+        self.install_fake(r"""
+const fs = require('fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.HOME + '/calls', JSON.stringify([process.env.ENGINE_CONFIG, args]) + '\n');
+if (args[1] === 'status') {
+  console.log(JSON.stringify({health: 'ready', version: process.env.HEALTH_VERSION}));
+} else if (args[1] === 'setup') process.exit(Number(process.env.SETUP_EXIT || 0));
+""")
+        marker = self.target / '.npm-daemon-ready'
+        marker.unlink()
+        self.env['ENGINE_CONFIG'] = '/custom/config.toml'
+        calls = self.home / 'calls'
+        for args in [('daemon', 'status'), ('--help',)]:
+            self.env['OPENENGINE_NO_START'] = '1'
+            self.assertEqual(self.run_engine(*args).returncode, 0)
+            self.assertFalse(marker.exists())
+        self.env.pop('OPENENGINE_NO_START')
+        self.assertEqual(self.run_engine('daemon', 'status').returncode, 0)
+        self.assertFalse(marker.exists())
+        self.env['HEALTH_VERSION'] = '0.0.1'
+        self.env['SETUP_EXIT'] = '17'
+        failed = self.run_engine('--help')
+        self.assertEqual(failed.returncode, 17)
+        self.assertIn('engine daemon logs -n 20', failed.stderr)
+        self.assertFalse(marker.exists())
+        self.env['SETUP_EXIT'] = '0'
+        calls.unlink()
+        self.assertEqual(self.run_engine('--version').returncode, 0)
+        records = [json.loads(line) for line in calls.read_text().splitlines()]
+        self.assertEqual([r[1] for r in records], [['daemon', 'status', '--json'], ['daemon', 'setup'], ['--version']])
+        self.assertTrue(all(r[0] == '/custom/config.toml' for r in records))
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        calls.unlink()
+        self.env['HEALTH_VERSION'] = self.version
+        self.assertEqual(self.run_engine('--help').returncode, 0)
+        self.assertNotIn('setup', calls.read_text())
+        self.assertTrue(marker.exists())
+
+    def test_only_installer_shims_are_removed(self):
+        self.install_fake('')
+        for directory in [self.home / '.local/bin', self.home / 'custom-bin']:
+            directory.mkdir(parents=True)
+            if directory.name == 'custom-bin':
+                self.env['XDG_BIN_HOME'] = str(directory)
+            shim = directory / 'engine'
+            shim.write_text('#!/bin/sh\n# Written by the OpenEngine installer; test\n')
+            result = self.run_engine('--help')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(shim.exists())
+            self.assertIn('replaced the curl-installer launcher', result.stderr)
+            shim.write_text('user executable')
+            self.assertEqual(self.run_engine('--help').returncode, 0)
+            self.assertEqual(shim.read_text(), 'user executable')
+            shim.unlink()
+            shim.symlink_to(self.package / 'bin/engine.js')
+            self.assertEqual(self.run_engine('--help').returncode, 0)
+            self.assertTrue(shim.is_symlink())
+
+    def test_shim_removal_failure_warns_and_continues(self):
+        self.install_fake('')
+        shim = self.home / '.local/bin/engine'
+        shim.parent.mkdir(parents=True)
+        shim.write_text('#!/bin/sh\n# Written by the OpenEngine installer; test\n')
+        self.command = ['node', '-e', """
+const fs = require('node:fs');
+fs.unlinkSync = () => { throw new Error('permission denied'); };
+require(process.argv[1]);
+""", str(self.package / 'bin/engine.js')]
+        result = self.run_engine()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('could not remove old launcher', result.stderr)
+        self.assertTrue(shim.exists())
+
     def test_windows_guidance(self):
         result = subprocess.run(['node', '-e', "Object.defineProperty(process, 'platform', {value: 'win32'}); require(process.argv[1]);", str(self.package / 'bin/engine.js')], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
@@ -109,6 +186,15 @@ class NpmBootstrapperTests(unittest.TestCase):
         self.assertEqual(self.run_engine().returncode, 42)
 
     def test_file_release_first_run_and_reuse(self):
+        self.check_file_release()
+
+    def test_global_local_prefix(self):
+        self.check_file_release(global_install=True)
+
+    def test_global_curl_migration(self):
+        self.check_file_release(global_install=True, migrate=True)
+
+    def check_file_release(self, global_install=False, migrate=False):
         # As in test_installer.py, provide pinned uv locally. The real installer
         # still downloads, verifies and extracts the release archive.
         uv = self.prefix / 'bin/uv'
@@ -136,9 +222,28 @@ esac
             tar.add(bundle, arcname=bundle.name)
         (release / 'release-manifest.json').write_text(json.dumps({'version': self.version, 'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}, indent=2))
         self.env['OPENENGINE_RELEASE_URL'] = release.as_uri()
+        if global_install:
+            npm_prefix = self.home / '.local'
+            launcher = npm_prefix / 'bin/engine'
+            if migrate:
+                launcher.parent.mkdir(parents=True)
+                launcher.write_text('#!/bin/sh\n# Written by the OpenEngine installer; fixture\n')
+            subprocess.run(
+                ['npm', 'install', '--global', '--offline', '--no-audit', '--prefix', str(npm_prefix),
+                 *(['--force'] if migrate else []), str(self.archive)],
+                env={**self.env, 'npm_config_cache': str(self.home / 'npm-cache')},
+                check=True, capture_output=True, timeout=30,
+            )
+            self.assertTrue(launcher.is_symlink())
+            self.command = ['node', str(launcher)]
         first = self.run_engine('go', '--help')
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.assertTrue((self.target / '.installed').is_file())
+        if global_install:
+            self.assertTrue(launcher.is_symlink())
+            self.assertEqual(launcher.resolve(), (npm_prefix / 'lib/node_modules/@openengine.cc/engine/bin/engine.js').resolve())
+        else:
+            self.assertFalse((self.home / '.local/bin/engine').exists())
         self.assertIn('fixture:', first.stdout)
         self.assertTrue(first.stdout.rstrip().endswith(':go --help'))
         shutil.rmtree(release)

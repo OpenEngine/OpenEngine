@@ -65,3 +65,26 @@ class InstallerTests(unittest.TestCase):
                     str(root / "config/openengine/engine.toml"), "argument with spaces", "--json",
                 ]
                 self.assertEqual([path.name for path in bin_dir.iterdir()], ["engine"])
+            # npm owns its bin link; --no-shim preserves it and suppresses PATH warnings.
+            shim = bin_dir / 'engine'
+            shim.unlink()
+            shim.symlink_to(ROOT / 'npm/engine/bin/engine.js')
+            command = ['sh', str(ROOT / 'scripts/install.sh'), '--prefix', str(prefix)]
+            skipped = subprocess.run(command + ['--no-shim', '--no-start'], env=environment, capture_output=True, text=True)
+            self.assertEqual(skipped.returncode, 0, skipped.stderr)
+            self.assertTrue(shim.is_symlink())
+            self.assertNotIn('not on PATH', skipped.stderr)
+            refused = subprocess.run(command + ['--no-start'], env=environment, capture_output=True, text=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('engine is installed with npm; upgrade with npm i -g @openengine.cc/engine', refused.stderr)
+            self.assertTrue(shim.is_symlink())
+            # --no-shim alone still supports service setup using the actual executable.
+            shim.unlink()
+            started = subprocess.run(command + ['--no-shim'], env=environment, capture_output=True, text=True)
+            self.assertEqual(started.returncode, 0, started.stderr)
+            self.assertIn('setup', started.stdout)
+            self.assertFalse(shim.exists())
+            shim.write_text('unrelated executable')
+            refused = subprocess.run(command + ['--no-start'], env=environment, capture_output=True, text=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual(shim.read_text(), 'unrelated executable')

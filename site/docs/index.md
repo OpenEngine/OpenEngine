@@ -9,18 +9,24 @@ OpenEngine runs every change through a graph you define, on the coding CLIs you 
 ## Quickstart
 
 On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
-logged in on this machine, run:
+logged in on this machine:
+
+```sh
+npm i -g @openengine.cc/engine
+engine --help
+```
+
+Install and upgrade with `npm i -g @openengine.cc/engine`. The first command
+starts the service automatically; no setup step is needed. Coming from the curl
+installer, use `npm i -g --force @openengine.cc/engine` once to replace its launcher.
+
+The curl installer remains an alternative:
 
 ```sh
 curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
-This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
-opens [http://127.0.0.1:4364](http://127.0.0.1:4364). If `engine` is not found
-afterwards, add `~/.local/bin` to your `PATH`.
-
-Run `engine daemon` to reopen it, `engine daemon doctor` to diagnose problems,
-and rerun the installer to upgrade.
+Run `engine daemon doctor` to diagnose service problems.
 
 ## Concepts
 

@@ -75,6 +75,37 @@ jobs:
             dist/release-manifest.json
           if-no-files-found: error
 
+      - name: Build a newer release for the npm upgrade test
+        env:
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha || github.sha }}
+        run: |
+          uv run --no-project python - <<'PYTHON'
+          from pathlib import Path
+          import tomllib
+          root = Path('.')
+          project = tomllib.loads((root / 'pyproject.toml').read_text())
+          old = project['project']['version']
+          major, minor, patch = map(int, old.split('.'))
+          new = f'{major}.{minor}.{patch + 1}'
+          workspace = project['tool']['uv']['workspace']
+          sources = {root, root / 'langgraph-acp'}
+          excluded = {p for pattern in workspace['exclude'] for p in root.glob(pattern)}
+          for pattern in workspace['members']:
+              sources.update(p for p in root.glob(pattern) if p not in excluded)
+          for source in sources:
+              path = source / 'pyproject.toml'
+              path.write_text(path.read_text().replace(f'version = "{old}"', f'version = "{new}"'))
+          PYTHON
+          uv lock
+          uv run --no-project python scripts/build_release.py --commit "$RELEASE_SHA" --output dist-upgrade
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle-upgrade
+          path: |
+            dist-upgrade/openengine-*.tar.gz
+            dist-upgrade/release-manifest.json
+          if-no-files-found: error
+
   # The one-line installer on a clean runner of each supported OS, installing
   # the bundle this run built instead of a published release.
   install:
@@ -84,6 +115,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        scenario: [curl, npm-local, npm-migrate, npm-upgrade, npm-default]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -101,22 +133,24 @@ jobs:
           node-version: "24"
       - name: Test npm bootstrapper
         run: python3 -m unittest tests.test_npm_bootstrapper
-      - name: Install packed npm launcher and matching release
+      - uses: actions/download-artifact@v8
+        if: matrix.scenario == 'npm-upgrade'
+        with:
+          name: release-bundle-upgrade
+          path: ${{ runner.temp }}/release-upgrade
+      - name: Test packed npm installation and service
+        if: matrix.scenario != 'curl'
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
-        run: |
-          set -eu
-          cd npm/engine
-          npm pack --pack-destination "$RUNNER_TEMP"
-          npm install --global --prefix "$RUNNER_TEMP/npm-global" "$RUNNER_TEMP"/openengine.cc-engine-*.tgz
-          "$RUNNER_TEMP/npm-global/bin/engine" --help
-          "$RUNNER_TEMP/npm-global/bin/engine" daemon setup
-          "$RUNNER_TEMP/npm-global/bin/engine" daemon stop
+          SCENARIO: ${{ matrix.scenario }}
+        run: bash scripts/test_npm_install.sh
       - name: Install and start OpenEngine
+        if: matrix.scenario == 'curl'
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
         run: sh scripts/install.sh
       - name: engine is on PATH and healthy
+        if: matrix.scenario == 'curl'
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
@@ -127,6 +161,7 @@ jobs:
       # Setup again (as an upgrade would), then the background service's
       # status and a graceful stop that leaves nothing answering.
       - name: engine daemon setup, status and stop
+        if: matrix.scenario == 'curl'
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
@@ -137,6 +172,7 @@ jobs:
           if engine daemon status; then exit 1; fi
           if curl --silent --output /dev/null http://127.0.0.1:4364/api/health; then exit 1; fi
       - name: Running it again keeps the config
+        if: matrix.scenario == 'curl'
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
         run: |

@@ -671,3 +671,17 @@ def test_repo_add_gitlab_url(monkeypatch):
     assert main(['repo', 'add', 'https://gitlab.com/group/repo.git']) == 0
     assert backend.requests[0]['body']['repository'] == 'https://gitlab.com/group/repo.git'
     assert backend.requests[0]['body']['path'] is None
+
+
+@pytest.mark.parametrize('url, local', [
+    ('http://127.0.0.1:4364', True),
+    ('http://localhost:4364', True),
+    ('http://[::1]:4364', True),
+    ('http://mini.example:4364', False),
+])
+def test_unreachable_backend_start_guidance(monkeypatch, url, local):
+    serve(monkeypatch, URLError('connection refused'))
+    with pytest.raises(http.RequestFailed) as failure:
+        http.Client(backends.Backend('test', url)).post('/runs', {})
+    assert ('start it with `engine daemon setup`' in str(failure.value)) is local
+    assert ('reachable from here?' in str(failure.value)) is not local

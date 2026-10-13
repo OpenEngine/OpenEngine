@@ -83,7 +83,7 @@ class Client:
         reason = getattr(last, "reason", last)
         raise RequestFailed(
             f"cannot reach backend {self.backend.name} at {self.backend.url}: {reason}"
-            + ("" if self.backend.is_local else "; is its daemon running and reachable from here?")
+            + ("; start it with `engine daemon setup`" if self.backend.is_local else "; is its daemon running and reachable from here?")
         )
 
 

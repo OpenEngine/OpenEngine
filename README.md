@@ -21,6 +21,16 @@ npm i -g @openengine.cc/engine
 cd your-repo
 engine go "add a dark mode toggle to the settings page"
 ```
+Install and upgrade with `npm i -g @openengine.cc/engine`. The first command
+starts the service automatically; no setup step is needed. Coming from the curl
+installer, use `npm i -g --force @openengine.cc/engine` once to replace its launcher.
+
+The curl installer remains an alternative:
+
+```sh
+curl -LsSf https://openengine.cc/install.sh | sh
+```
+
 Or try it without installing:
 ```
 npx @openengine.cc/engine go "add a dark mode toggle to the settings page"
