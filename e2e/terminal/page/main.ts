@@ -55,7 +55,7 @@ const terminal = new Terminal({
 })
 terminal.open(document.getElementById("terminal")!)
 
-// Draw IDs and timestamps as stand-ins (see stand-ins.ts) by rewriting the
+// Draw IDs, timestamps and loopback ports as stand-ins (see stand-ins.ts) by rewriting the
 // rows xterm renders; the buffer underneath keeps the real values.
 const standIns = new StandIns()
 const rowsElement = document.querySelector("#terminal .xterm-rows")!

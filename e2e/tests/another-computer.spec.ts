@@ -73,7 +73,7 @@ OpenEngine saves the Mac mini under the name \`mac-mini\` and shows what it save
             await expectNoPickedPort(terminal, engine)
             await screenshot(testInfo, await terminal.row(/"name": "mac-mini"/), {
               annotation: { text: "The Mac mini is saved as mac-mini" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ labelBelow: true }),
             })
           },
         )
@@ -95,7 +95,7 @@ If you see *down* beside the Mac mini instead, check that it's switched on, that
             await expectNoPickedPort(terminal, engine)
             await screenshot(testInfo, await terminal.row(/^\s+mac-mini\s.*\bup\b/), {
               annotation: { text: "The Mac mini is up: OpenEngine can reach it" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ labelBelow: true }),
             })
           },
         )
@@ -114,7 +114,7 @@ OpenEngine shows the computer you switched to.`,
             await expectNoPickedPort(terminal, engine)
             await screenshot(testInfo, await terminal.row(/"name": "mac-mini"/), {
               annotation: { text: "Your commands now go to the Mac mini" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ labelBelow: true }),
             })
           },
         )
@@ -131,9 +131,9 @@ You'll see the Mac mini's graphs. It has none yet, so the list is empty, even th
             const { output } = await terminal.run("engine graphs list")
             expect(output).not.toMatch(/^hello\s/m)
             await expectNoPickedPort(terminal, engine)
-            await screenshot(testInfo, terminal.screen(), {
+            await screenshot(testInfo, await terminal.row(/^NAME\s+VERSION\s/), {
               annotation: { text: "The Mac mini has no graphs yet" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ labelBelow: true }),
             })
           },
         )
@@ -153,7 +153,7 @@ You'll see this computer's graphs. Your other commands still go to the Mac mini.
             await expectNoPickedPort(terminal, engine)
             await screenshot(testInfo, await terminal.row(/^hello\s/), {
               annotation: { text: "A graph on this computer" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ labelBelow: true }),
             })
           },
         )
@@ -170,7 +170,7 @@ You'll see this computer's graphs. Your other commands still go to the Mac mini.
             await expectNoPickedPort(terminal, engine)
             await screenshot(testInfo, await terminal.row(/"name": "local"/), {
               annotation: { text: "Your commands go to this computer again" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ labelBelow: true }),
             })
           },
         )

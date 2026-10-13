@@ -1,6 +1,7 @@
-// What the page draws in place of IDs and timestamps, so a guide's screenshots
-// are the same on every run: the daemon makes new IDs and the clock moves on,
-// but a reader needs neither to be real. Each stand-in is as long as what it
+// What the page draws in place of IDs, timestamps and ports the OS picked on
+// this computer, so a guide's screenshots are the same on every run: the
+// daemon makes new IDs, the clock moves on and a test daemon listens wherever
+// the OS put it, but a reader needs none of them to be real. Each stand-in is as long as what it
 // replaces, so nothing on screen moves, and an ID gets the same stand-in
 // wherever it appears -- in output, or in a command a test typed. The buffer,
 // and so every assertion, keeps the real values.
@@ -13,18 +14,26 @@ const IDENTIFIER = /\b(?:[a-z]+-[0-9a-f]{12}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 /** ISO 8601 date-times, with or without seconds' fractions; the offset is kept as it is. */
 const TIMESTAMP = /\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})?/g
 
+/** A port on this computer's loopback address, where a test daemon listens on a port the OS picked. */
+const LOOPBACK_PORT = /(?<![\w.])((?:127\.0\.0\.1|localhost|\[::1\]):)(\d{2,5})\b/g
+
+/** The ports drawn in their place, the nth new one getting the nth, cut to the original's length. */
+const PORTS = ["54321", "54322", "54323", "54324", "54325", "54326", "54327", "54328"]
+
 /** Every timestamp shows this moment, cut or padded to the original's shape. */
 const MOMENT = "2026-01-15T09:30:00.000000"
 
 export class StandIns {
   private readonly standIns = new Map<string, string>()
   private readonly used = new Set<string>()
+  private readonly ports = new Map<string, string>()
   private seed = 0x2f6e2b1
 
-  /** `text` with every ID and timestamp replaced, or `text` itself if it has none. */
+  /** `text` with every ID, timestamp and loopback port replaced, or `text` itself if it has none. */
   apply(text: string): string {
     return text
       .replace(IDENTIFIER, (id) => this.standInFor(id))
+      .replace(LOOPBACK_PORT, (_address, host: string, port: string) => host + this.portFor(port))
       .replace(
         TIMESTAMP,
         (_time, moment: string, offset?: string) =>
@@ -41,6 +50,17 @@ export class StandIns {
       standIn = prefix + digits.replace(/[0-9a-f]/g, () => HEX[this.next() % 16]!)
       this.standIns.set(id, standIn)
       this.used.add(standIn)
+    }
+    return standIn
+  }
+
+  private portFor(port: string): string {
+    if ([...this.ports.values()].includes(port)) return port // already a stand-in
+    let standIn = this.ports.get(port)
+    if (!standIn) {
+      const next = PORTS[this.ports.size % PORTS.length]!
+      standIn = next.slice(-port.length).padStart(port.length, "5")
+      this.ports.set(port, standIn)
     }
     return standIn
   }
