@@ -110,6 +110,47 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(id).not.toBe("g-0123456789ab")
   })
 
+  test("shows the ports of daemons on this machine as stand-ins that are the same on every run", async ({ browser }) => {
+    // Each e2e daemon listens on a port the OS picked, and a guide about
+    // backends shows their URLs.
+    const shown = async (ports: number[]) => {
+      const page = await browser.newPage()
+      await openTerminal(page)
+      await page.locator("#terminal").click()
+      const urls = `http://127.0.0.1:${ports[0]} http://localhost:${ports[1]} http://127.0.0.1:${ports[0]}/api`
+      await page.keyboard.type(`echo "${urls} |"`)
+      await page.keyboard.press("Enter")
+      await expect.poll(() => bufferText(page)).toContain(`${urls} |`)
+      // The echoed line, not the command that typed it.
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^\s*http:.*\|\s*$/ })
+      await expect(row).toHaveCount(1)
+      const text = (await row.textContent())!.trim()
+      await page.close()
+      return text
+    }
+    const first = await shown([53117, 61904])
+    const second = await shown([49852, 50331])
+    // The same stand-ins whatever the real ports were, the same length so
+    // nothing moves, and the same one wherever a port repeats.
+    expect(first).toBe(second)
+    const [local, other, again] = first.split(" ")
+    const [, port] = /^http:\/\/127\.0\.0\.1:(\d{5})$/.exec(local!) ?? []
+    expect(port).toBeDefined()
+    expect(port).not.toBe("53117")
+    expect(other).toMatch(/^http:\/\/localhost:\d{5}$/)
+    expect(other!.split(":")[2]).not.toBe(port)
+    expect(again).toBe(`${local}/api`)
+  })
+
+  test("shows a port someone chose as it is", async ({ page }) => {
+    await openTerminal(page)
+    await page.locator("#terminal").click()
+    await page.keyboard.type(`echo "http://127.0.0.1:4364 |"`)
+    await page.keyboard.press("Enter")
+    const row = page.locator(".xterm-rows > div").filter({ hasText: /^\s*http:.*\|\s*$/ })
+    await expect(row).toHaveText(/^\s*http:\/\/127\.0\.0\.1:4364 \|\s*$/)
+  })
+
   test("says so when the server refuses the session", async ({ page }) => {
     await page.goto("/?token=wrong")
     await page.waitForFunction(() => window.__term?.error !== undefined)
