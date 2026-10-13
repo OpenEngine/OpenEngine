@@ -2,7 +2,7 @@
 // screenshots are the same on every run: the daemon makes new IDs, the clock
 // moves on and a test daemon listens on whichever port is free, but a reader
 // needs none of them to be real. Each stand-in is as long as what it replaces,
-// so nothing on screen moves, and an ID gets the same stand-in wherever it
+// so nothing on screen moves (a port's is padded after the address it ends), and an ID gets the same stand-in wherever it
 // appears -- in output, or in a command a test typed. The buffer, and so every
 // assertion, keeps the real values.
 
@@ -14,11 +14,11 @@ const IDENTIFIER = /\b(?:[a-z]+-[0-9a-f]{12}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 /** ISO 8601 date-times, with or without seconds' fractions; the offset is kept as it is. */
 const TIMESTAMP = /\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})?/g
 
-/** A port on this computer, as in a test daemon's http://127.0.0.1:PORT. */
-const LOCAL_PORT = /\b((?:127\.0\.0\.1|localhost):)(\d{2,5})\b/g
+/** A port on this computer, as in a test daemon's http://127.0.0.1:PORT, and the rest of that address. */
+const LOCAL_PORT = /\b((?:127\.0\.0\.1|localhost):)(\d{2,5})\b(\S*)/g
 
-/** Every local port shows this one, cut to the original's length. */
-const PORT = "43640"
+/** Every local port shows OpenEngine's own, as a reader's would; a longer port's spare columns follow the address. */
+const PORT = "4364"
 
 /** Every timestamp shows this moment, cut or padded to the original's shape. */
 const MOMENT = "2026-01-15T09:30:00.000000"
@@ -37,7 +37,11 @@ export class StandIns {
         (_time, moment: string, offset?: string) =>
           moment.replace(/\d/g, (_digit, index: number) => MOMENT[index] ?? "0") + (offset ?? ""),
       )
-      .replace(LOCAL_PORT, (_address, host: string, port: string) => host + PORT.slice(0, port.length))
+      .replace(
+        LOCAL_PORT,
+        (_address, host: string, port: string, rest: string) =>
+          host + PORT.slice(0, port.length) + rest + " ".repeat(Math.max(0, port.length - PORT.length)),
+      )
   }
 
   private standInFor(id: string): string {

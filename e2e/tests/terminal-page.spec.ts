@@ -117,7 +117,8 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     await page.keyboard.press("Enter")
     await expect.poll(() => bufferText(page)).toMatch(/^port http:\/\/127\.0\.0\.1:59741 /m)
     const row = page.locator(".xterm-rows > div").filter({ hasText: /^port / }).last()
-    await expect(row).toHaveText(/^port http:\/\/127\.0\.0\.1:(\d{5}) http:\/\/127\.0\.0\.1:\1 mac-mini\.local:4364\s*$/)
+    // OpenEngine's own port, with the spare column after each address so nothing after it moves.
+    await expect(row).toHaveText(/^port http:\/\/127\.0\.0\.1:4364  http:\/\/127\.0\.0\.1:4364  mac-mini\.local:4364\s*$/)
     await expect(row).not.toContainText("59741")
   })
 

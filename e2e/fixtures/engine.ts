@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import type { TestInfo } from "@playwright/test"
 import { engineBin } from "../support/engine.ts"
 import { test as terminalTest } from "./terminal.ts"
 
@@ -267,15 +268,20 @@ async function startProxy(address: string, target: string) {
       response.writeHead(502).end(`no computer at ${url.host}`)
       return
     }
+    // Joined as text: a path such as //elsewhere/ would resolve, as a URL, to another host.
     const forwarded = http.request(
-      new URL(url.pathname + url.search, target),
+      new URL(target).origin + url.pathname + url.search,
       { method: request.method, headers: { ...request.headers, host: new URL(target).host } },
       (answer) => {
         response.writeHead(answer.statusCode ?? 502, answer.headers)
         answer.pipe(response)
       },
     )
-    forwarded.on("error", () => response.writeHead(502).end())
+    forwarded.on("error", () => {
+      if (response.headersSent) response.destroy()
+      else response.writeHead(502).end()
+    })
+    request.on("error", () => forwarded.destroy())
     request.pipe(forwarded)
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -285,26 +291,41 @@ async function startProxy(address: string, target: string) {
   }
 }
 
+/**
+ * Starts a daemon for `body` and stops it after. If the test failed, its
+ * directory is kept and its log attached under `name`.
+ */
+async function withDaemon(
+  name: string,
+  testInfo: TestInfo,
+  options: Omit<NonNullable<Parameters<typeof startEngine>[0]>, "keepRoot">,
+  body: (engine: Engine) => Promise<void>,
+) {
+  const failed = () => testInfo.status !== testInfo.expectedStatus
+  const engine = await startEngine({ ...options, keepRoot: failed })
+  try {
+    await body(engine)
+  } finally {
+    await engine.stop()
+    if (failed()) {
+      // What the daemon said usually explains the failure; its directory holds the databases.
+      await testInfo.attach(name, { body: engine.log(), contentType: "text/plain" })
+      console.log(`[engine] kept the failed test's ${name} directory: ${engine.root}`)
+    }
+  }
+}
+
 export const test = terminalTest.extend<{
   engine: Engine
   otherComputerAt: string | undefined
   otherComputer: OtherComputer | undefined
 }>({
   engine: async ({}, use, testInfo) => {
-    const failed = () => testInfo.status !== testInfo.expectedStatus
-    const engine = await startEngine({ keepRoot: failed })
-    testInfo.annotations.push({ type: "agents", description: engine.agentMode })
-    if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
-    try {
+    await withDaemon("engine daemon", testInfo, {}, async (engine) => {
+      testInfo.annotations.push({ type: "agents", description: engine.agentMode })
+      if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
       await use(engine)
-    } finally {
-      await engine.stop()
-      if (failed()) {
-        // What the daemon said usually explains the failure; its directory holds the databases.
-        await testInfo.attach("engine daemon", { body: engine.log(), contentType: "text/plain" })
-        console.log(`[engine] kept the failed test's daemon directory: ${engine.root}`)
-      }
-    }
+    })
   },
   /** Where another computer answers, such as `mac-mini.local:4364`; set it with `test.use` to get `otherComputer`. */
   otherComputerAt: [undefined, { option: true }],
@@ -315,14 +336,8 @@ export const test = terminalTest.extend<{
       await use(undefined)
       return
     }
-    const failed = () => testInfo.status !== testInfo.expectedStatus
-    const other = await startEngine({ keepRoot: failed, agentMode: engine.agentMode, token: engine.env.ENGINE_SERVICE_TOKEN })
-    try {
-      await use({ ...other, address: otherComputerAt })
-    } finally {
-      await other.stop()
-      if (failed()) await testInfo.attach("other computer's daemon", { body: other.log(), contentType: "text/plain" })
-    }
+    const options = { agentMode: engine.agentMode, token: engine.env.ENGINE_SERVICE_TOKEN }
+    await withDaemon("other computer's daemon", testInfo, options, (other) => use({ ...other, address: otherComputerAt }))
   },
   terminalEnv: async ({ engine, otherComputer }, use) => {
     if (!otherComputer) {
