@@ -11,6 +11,7 @@ from engine.graph_runtime_langgraph.forge import resolve_forge_context
 from engine.graph_service.service import NotFound, ServiceError
 
 NO_TARGET = 'no such branch or PR; to give an instruction, quote it'
+NO_BRANCH = 'no current branch; switch to a branch or pass one explicitly'
 NO_REPOSITORY = 'no repository: run in a checkout or pass --repo or a full PR URL'
 CONNECT = 'cannot read this repository while disconnected; run engine connect github'
 FORK_FIX = 'cannot fix a fork PR or a PR with an unavailable head repository; check out the fork and fix it there'
@@ -70,7 +71,7 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
     if not target and not number and checkout and (verb != 'go' or disconnected):
         target = await _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
         if not target and disconnected:
-            raise ServiceError('no current branch; switch to a branch or pass one explicitly')
+            raise ServiceError(NO_BRANCH)
     exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
     if disconnected and verb in {'review', 'go'} and exists and not number:
         return {'repo': repository, 'mode': context['mode'], 'ref': target}
