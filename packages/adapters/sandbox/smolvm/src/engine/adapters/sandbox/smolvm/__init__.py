@@ -193,6 +193,7 @@ class SmolvmInstance:
                 await asyncio.gather(*readers, return_exceptions=True)
                 await _discard_process_output(process)
             await _settle(asyncio.create_task(finish()))
+            self._processes.discard(process)
         if check and process.returncode:
             detail = self._redact(stderr.decode(errors="replace").strip())
             message = f"smolvm {arguments[1]} failed ({process.returncode}): {detail}"
