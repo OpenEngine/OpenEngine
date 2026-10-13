@@ -22,6 +22,7 @@
 
 * **cli:** unify list aliases and command help ([#869](https://github.com/OpenEngine/OpenEngine/issues/869)) ([68b130a](https://github.com/OpenEngine/OpenEngine/commit/68b130a817d31e87417c814ae1bf11654feea071))
 * provide clearer errors on mcp calls ([#883](https://github.com/OpenEngine/OpenEngine/issues/883)) ([b303aa3](https://github.com/OpenEngine/OpenEngine/commit/b303aa3910a8424a8dc52cecad4af2960606afc6))
+* **runners:** default to round-robin across installed signed-in agents ([#871](https://github.com/OpenEngine/OpenEngine/issues/871)) ([f56f8a6](https://github.com/OpenEngine/OpenEngine/commit/f56f8a69cc2c5e6f58273699e194c929ffe0c52e))
 
 ## [1.7.0](https://github.com/OpenEngine/OpenEngine/compare/v1.6.0...v1.7.0) (2026-10-13)
 
