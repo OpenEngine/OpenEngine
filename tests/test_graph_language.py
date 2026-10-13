@@ -193,17 +193,17 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     source = Path(__file__).parents[1] / "docs/examples/graphs/tdd-guide.yaml"
     spec = graph(source.read_text())
     assert [node.id for node in spec.nodes] == [
-        "pick", "tdd", "implement", "reviewers", "reproduce", "reranker", "impact", "publish", "ci", "human_review",
+        "pick", "tdd", "implement", "publish", "ci", "reviewers", "reproduce", "reranker", "impact", "human_review",
     ]
     # A run can build on an unmerged branch instead of main, and publishes against it.
     assert (spec.base_ref, spec.ref_input) == ("origin/main", "base")
     assert {
         ("tdd", "implement", False),
-        ("implement", "reviewers", False),
+        ("implement", "publish", False),
+        ("publish", "ci", False),
         ("reviewers", "reproduce", False),
         ("reproduce", "reranker", False),
-        ("impact", "publish", False),
-        ("publish", "ci", False),
+        ("impact", "human_review", False),
     } <= set(spec.edges())
     # The house review panel, with how the guides read as a sixth angle.
     assert spec.node("reviewers").keys == tuple(
@@ -215,16 +215,20 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
         ("pick", "input", "runner"),
         ("tdd", "same", "pick"),
         ("implement", "input", "implementer"),
+        ("publish", "same", "implement"),
         ("reviewers", "input", "reviewer"),
         ("reproduce", "input", "reviewer"),
         ("reranker", "same", "implement"),
         ("impact", "input", "reviewer"),
-        ("publish", "same", "implement"),
     ]
-    # Only the last step publishes; nothing before it can open a pull request.
+    # Only publish opens the pull request; CI and the review find it by the URL it reports.
     assert [node.id for node in spec.nodes if "open_pull_request" in node.tools] == ["publish"]
-    # The CI step finds the change through the pull request URL publish reports.
     assert [output.name for output in spec.node("publish").outputs] == ["pr_url"]
+    # The reranker's findings and the impact rating are posted on the pull
+    # request, and the implementer answers the threads it acts on.
+    assert [node.id for node in spec.nodes if "add_comment" in node.tools] == ["implement", "reranker", "impact"]
+    # A comment on the pull request re-enters the run at the implementer.
+    assert [node.id for node in spec.nodes if node.always_open] == ["implement"]
 
     # complete_step accepts only the required outputs, and only as text, so
     # every output a step can finish with must be one (see the runtime's
@@ -246,10 +250,10 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 3}) == "impact"
     assert after("reranker", {"reranker": {"findings": []}}, {"implement": 1}) == "impact"
     assert after("ci", {"ci": {"passed": False}}, {"implement": 1}) == "implement"
-    # A person has the last word once CI is done, and can send the change back
-    # with a note saying what to change.
-    assert after("ci", {"ci": {"passed": False}}, {"implement": 4}) == "human_review"
-    assert after("ci", {"ci": {"passed": True}}, {"implement": 1}) == "human_review"
+    # The panel reviews once CI is done; a person has the last word after
+    # impact analysis, and can send the change back with a note.
+    assert after("ci", {"ci": {"passed": False}}, {"implement": 4}) == "reviewers"
+    assert after("ci", {"ci": {"passed": True}}, {"implement": 1}) == "reviewers"
     approved = {"decision": "approved", "note": ""}
     assert after("human_review", {"human_review": approved}, {"human_review": 1}) == "end"
     sent_back = {"decision": "rejected", "note": "Name the flag --check, not --verify."}

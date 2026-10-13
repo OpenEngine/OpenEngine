@@ -1,7 +1,7 @@
 apiVersion: openengine.cc/v1
 kind: Graph
 name: tdd-guide
-description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them; a panel reviews the change for security, bugs, performance, conciseness, duplication and how its guides read, security findings count only once a test reproduces them, a reranker keeps what matters for another pass, and impact analysis rates the change before the pull request opens. Once CI is done a person approves it or sends it back with a note.
+description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them, then opens the pull request and waits for CI; a panel reviews the change for security, bugs, performance, conciseness, duplication and how its guides read, security findings count only once a test reproduces them, a reranker posts what matters on the pull request for another pass, and impact analysis posts its rating there. A person then approves it or sends it back with a note, and a comment on the pull request sends it back too.
 
 inputs:
   instruction:
@@ -102,7 +102,9 @@ implementation:
   implement:
     name: Implement
     agent: ${inputs.implementer}
-    tools: [git_subcommand]
+    # A comment on the pull request re-enters the run here.
+    steering: always-open
+    tools: [git_subcommand, view_change_request, add_comment]
     prompt: |
       Make the failing tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, pass.
 
@@ -122,6 +124,14 @@ implementation:
       What the person reviewing the pull request asked to change, if they sent
       it back: ${json(outputs.human_review)}
 
+      Once the pull request is open (${json(outputs.publish)}), its review
+      findings and comments are threads on it. Reply to each one you act on
+      with add_comment, using its in_reply_to_id and thread_id from
+      view_change_request: for a fix, resolve=true, the commit_sha and a
+      one-line explanation; for disagreement or a decision someone needs to
+      make, say why with resolve=false so the thread stays open. The next
+      step pushes your commits; don't push them yourself.
+
       Run the tests touched by this change, and the e2e suite (`npm test` in `e2e/`)
       when it exists. Commit with git_subcommand as Conventional Commits.
 
@@ -131,6 +141,36 @@ implementation:
       with the spec, as `docs(site): ...`. A reviewer reads those pages next.
 
       ${instruction}
+
+  publish:
+    name: Open pull request
+    agent: {same: implement}
+    tools: [git_subcommand, open_pull_request]
+    prompt: |
+      Publish the work on issue #${outputs.pick.issue}.
+
+      Push this checkout's commits with git_subcommand to `${outputs.pick.branch}`
+      (`["push", "origin", "HEAD:refs/heads/${outputs.pick.branch}"]`).
+      Never push an engine/ws-* branch.
+
+      The pull request's base is the branch this run was built on: "${inputs.base}"
+      without its `origin/` prefix, or `main` if that is empty.
+
+      If no pull request is open for that branch yet, open one with
+      open_pull_request against that base: a Conventional Commit title, a body
+      that summarises the change and the tests written first, and
+      `issue_resolution: resolves`. Review findings and the impact rating are
+      posted on it as comments later, so leave them out of the body.
+      If one is already open, pushing is enough.
+
+      Report the pull request's URL as pr_url, whether you opened it or it was
+      already open: the steps after this one find the change by it.
+    outputs:
+      pr_url: {type: string, required: true, description: the pull request's URL}
+
+  ci:
+    name: CI
+    ci: true
 
 review:
   reviewers:
@@ -213,6 +253,7 @@ review:
   reranker:
     name: Consolidate
     agent: {same: implement}
+    tools: [view_change_request, add_comment]
     prompt: |
       ${size(outputs.reviewers)} reviewers examined the same change, each from one
       angle. Consolidate their findings, somewhat aggressively squashing noise.
@@ -232,12 +273,30 @@ review:
 
       The reviews:
       ${json(outputs.reviewers)}
+
+      Then post the result on pull request ${outputs.publish.pr_url} with
+      add_comment. Read it first with view_change_request, and don't post a
+      finding an earlier round already left there unresolved. Post each
+      surviving finding as its own comment, inline at the finding's file and
+      line where it has one and as a general comment otherwise, formatted as:
+
+      **<tagline>**
+
+      <description>
+
+      _Produced by <agent> reviewing <facet>_
+
+      If no finding survives, leave one general comment saying the review
+      found nothing actionable. Either way, if any security finding is
+      unconfirmed, list those in one more general comment, with what was
+      tried, so a person can judge them.
     outputs:
       findings: {type: findings, required: true, lineage: required}
 
   impact:
     name: Impact analysis
     agent: ${inputs.reviewer}
+    tools: [view_change_request, add_comment]
     prompt: |
       Assess the impact of the final change for issue #${outputs.pick.issue}:
       the commits on this branch (`git diff ${inputs.base}...HEAD`; an empty base
@@ -265,41 +324,14 @@ review:
       and human setup or deployment work.
 
       Review findings still open: ${json(outputs.reranker.findings)}
+      CI: ${json(outputs.ci)}
+
+      Before completing, use add_comment to post one general comment on pull
+      request ${outputs.publish.pr_url} with the level, your rationale and
+      evidence, testing gaps, and the human actions required.
     outputs:
       impact_level: {type: string, enum: [Green, Orange, Red], required: true}
       impact_rationale: {type: string, required: true, description: your evidence and the human actions required}
-
-  publish:
-    name: Open pull request
-    agent: {same: implement}
-    tools: [git_subcommand, open_pull_request]
-    prompt: |
-      Publish the work on issue #${outputs.pick.issue}.
-
-      Push this checkout's commits with git_subcommand to `${outputs.pick.branch}`
-      (`["push", "origin", "HEAD:refs/heads/${outputs.pick.branch}"]`).
-      Never push an engine/ws-* branch.
-
-      The pull request's base is the branch this run was built on: "${inputs.base}"
-      without its `origin/` prefix, or `main` if that is empty.
-
-      If no pull request is open for that branch yet, open one with
-      open_pull_request against that base: a Conventional Commit title, a body
-      that summarises the change, the tests written first, the impact
-      (${outputs.impact.impact_level}: ${outputs.impact.impact_rationale}) and
-      any review findings still open (${json(outputs.reranker.findings)}),
-      security findings no test could reproduce (${outputs.reproduce.unconfirmed}),
-      and `issue_resolution: resolves`.
-      If one is already open, pushing is enough.
-
-      Report the pull request's URL as pr_url, whether you opened it or it was
-      already open: the CI step after this one finds the change by it.
-    outputs:
-      pr_url: {type: string, required: true, description: the pull request's URL}
-
-  ci:
-    name: CI
-    ci: true
 
   human_review:
     name: Human review
@@ -322,7 +354,7 @@ flow:
   - from: ci
     route:
       - {when: "outputs.ci.passed == false && visits.implement < 4", to: implement}
-      - {to: human_review}
+      - {to: reviewers}
   - from: human_review
     route:
       - {when: "outputs.human_review.decision == 'rejected' && size(outputs.human_review.note) > 0 && visits.human_review < 3", to: implement}
