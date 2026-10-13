@@ -1403,7 +1403,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         opened.push_async_callback(service.aclose)
         surface.service = service
         surface.service_app = create_graph_service_app(service, repository_trust=onboarding.repository_trust,
-                                                       auto_approve=approval_policy.auto_approve)
+                                                       auto_approve=approval_policy.auto_approve,
+                                                       trust_request_allowed=request_security.is_local_request)
 
     async def graph_service_surface(scope: Scope, receive: Receive, send: Send) -> None:
         """Pass `/api/v1` to the registered-graph service, for operators only.
@@ -1417,9 +1418,6 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             )(scope, receive, send)
             return
         if scope["type"] == "http":
-            if scope["method"] == "POST" and not _is_local_request(Request(scope)):
-                await _error("forbidden", 403)(scope, receive, send)
-                return
             if await github_login.visible_repositories(Request(scope)) is not None:
                 await _error("the graph API is for operators", 403)(scope, receive, send)
                 return

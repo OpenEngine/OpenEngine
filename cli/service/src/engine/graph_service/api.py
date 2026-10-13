@@ -45,7 +45,8 @@ API_VERSION = 1
 
 
 def create_app(service: GraphService, *, repository_trust: Callable[[str, bool | None], dict] | None = None,
-               auto_approve: bool = False) -> Starlette:
+               auto_approve: bool = False,
+               trust_request_allowed: Callable[[Request], bool] | None = None) -> Starlette:
     async def backend(_request: Request) -> JSONResponse:
         return JSONResponse({
             "apiVersion": API_VERSION,
@@ -61,6 +62,8 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
         trusted = None
         repository = request.query_params.get("repository", "")
         if request.method == "POST":
+            if trust_request_allowed is not None and not trust_request_allowed(request):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
             body = await _body(request)
             repository = _text(body, "repository")
             trusted = body.get("trusted")

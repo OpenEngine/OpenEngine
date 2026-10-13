@@ -124,6 +124,12 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path):
     async def run():
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://localhost:4364') as client:
+                # Other graph API POSTs still reach their handlers with a proxy Origin.
+                for route in ('runs', 'loops', 'agents', 'sessions'):
+                    response = await client.post(f'/api/v1/{route}', content='invalid JSON',
+                        headers={'Origin': 'https://proxy.example', 'Content-Type': 'application/json'})
+                    assert response.status_code == 400
+                    assert response.json()['error'] == 'the request body must be JSON'
                 for origin in ('https://evil.example', 'http://localhost.evil.example', 'null', 'http://localhost:9999'):
                     response = await client.post('/api/v1/repositories/trust',
                         content='{"repository":"owner/repo","trusted":true}',
