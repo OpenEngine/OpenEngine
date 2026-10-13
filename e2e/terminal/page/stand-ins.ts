@@ -18,7 +18,7 @@ const TIMESTAMP = /\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[
  * A port on this machine in the range operating systems pick from (Linux from
  * 32768, macOS from 49152). A port someone chose, like 4364, is shown as it is.
  */
-const LOOPBACK_PORT = /\b(127\.0\.0\.1|localhost|\[::1\]):(\d{5})\b/g
+const LOOPBACK_PORT = /(?<![\w.])(127\.0\.0\.1|localhost|\[::1\]):(\d{5})\b/g
 const FIRST_PICKED_PORT = 32768
 
 /** Port stand-ins count up from here: five digits, like the ports they replace, and never one the OS picks. */

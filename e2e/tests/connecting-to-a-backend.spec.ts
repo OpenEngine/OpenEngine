@@ -93,7 +93,7 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each one is up.",
+          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each one is up. The URLs are your own: `local` is usually `http://127.0.0.1:4364`, but both daemons in this guide run on one machine, each on a port of its own.",
           async () => {
             const { output } = await terminal.run("engine backends list --check")
             expect(output).toMatch(/^\*\s+local\s.*\bup\b/m)
