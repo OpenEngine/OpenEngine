@@ -75,10 +75,11 @@ class SmolvmError(RuntimeError):
 
 
 class SmolvmProcess:
-    def __init__(self, process: asyncio.subprocess.Process, instance: "SmolvmInstance"):
+    def __init__(self, process: asyncio.subprocess.Process, reaper: asyncio.Task, instance: "SmolvmInstance"):
         assert process.stdin is not None and process.stdout is not None and process.stderr is not None
         self.stdin, self.stdout, self.stderr = process.stdin, process.stdout, process.stderr
         self._process = process
+        self._reaper = reaper
         self._expired = False
         self._waiter = asyncio.create_task(process.wait())
         self._timer = None
@@ -98,6 +99,9 @@ class SmolvmProcess:
         if self._expired:
             message = "sandbox command timed out"
             raise TimeoutError(message)
+        # Settle the spawn reaper so the process is removed from
+        # _processes when the command is done, not only on the next loop turn.
+        await _settle(self._reaper)
         return status
 
 
@@ -157,14 +161,21 @@ class SmolvmInstance:
         ))
         process, cancelled = await _settle(task)
         self._processes.add(process)
-        waiter = asyncio.create_task(process.wait())
-        waiter.add_done_callback(lambda _: self._processes.discard(process))
+
+        async def reap():
+            await process.wait()
+            self._processes.discard(process)
+
+        reaper = asyncio.create_task(reap())
         if cancelled:
             raise asyncio.CancelledError
-        return process
+        # The caller settles the reaper so the process is removed from
+        # _processes when this method's process is done, instead of a
+        # done-callback firing after the return on a busy loop.
+        return process, reaper
 
     async def _command(self, arguments, environment=None, *, check=True):
-        process = await self._spawn(arguments, environment)
+        process, reaper = await self._spawn(arguments, environment)
         assert process.stdin is not None and process.stdout is not None and process.stderr is not None
         process.stdin.close()
         total = 0
@@ -193,7 +204,7 @@ class SmolvmInstance:
                 await asyncio.gather(*readers, return_exceptions=True)
                 await _discard_process_output(process)
             await _settle(asyncio.create_task(finish()))
-            self._processes.discard(process)
+            await _settle(reaper)
         if check and process.returncode:
             detail = self._redact(stderr.decode(errors="replace").strip())
             message = f"smolvm {arguments[1]} failed ({process.returncode}): {detail}"
@@ -231,7 +242,8 @@ class SmolvmInstance:
             checked = json.loads(await self._helper("check", directory, argv[0], env=env))
             args, environment = self._exec_arguments([checked["executable"], *argv[1:]], env)
             args[2:2] = ["--workdir", checked["cwd"]]
-            return SmolvmProcess(await self._spawn(args, environment), self)
+            process, reaper = await self._spawn(args, environment)
+            return SmolvmProcess(process, reaper, self)
 
     async def copy_in(self, source: Path, destination: str) -> None:
         async with self._lock:
@@ -281,7 +293,7 @@ class SmolvmInstance:
         # Guest code can replace the helper or archive. Enforce the bound on
         # host-observed bytes, rather than trusting a guest-side size check.
         args, environment = self._exec_arguments([GUEST_PYTHON, HELPER, "stream", guest_archive])
-        process = await self._spawn(args, environment)
+        process, reaper = await self._spawn(args, environment)
         assert process.stdin is not None and process.stdout is not None and process.stderr is not None
         process.stdin.close()
 
@@ -315,7 +327,7 @@ class SmolvmInstance:
                 while await process.stdout.read(65536):
                     pass
             await _settle(asyncio.create_task(drain_output()))
-            await _settle(asyncio.create_task(process.wait()))
+            await _settle(reaper)
             await _settle(errors)
 
     def _begin_destroy(self):

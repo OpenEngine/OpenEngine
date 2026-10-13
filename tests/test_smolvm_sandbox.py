@@ -449,6 +449,30 @@ def test_replaced_guest_helper_cannot_flood_host(smolvm_cli, monkeypatch):
     asyncio.run(run())
 
 
+def test_copy_out_reaps_its_stream_process(smolvm_cli, tmp_path):
+    launcher, root = smolvm_cli
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            (root / sandbox.name / "workspace/result").write_text("payload")
+            await sandbox.copy_out("result", tmp_path / "output")
+            assert not sandbox._processes
+    asyncio.run(run())
+    assert (tmp_path / "output").read_text() == "payload"
+
+
+def test_exec_reaps_its_process_when_waited(smolvm_cli):
+    launcher, root = smolvm_cli
+
+    async def run():
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec()) as sandbox:
+            process = await sandbox.exec([sys.executable, "-c", "print('ready')"])
+            assert (await process.stdout.read()) == b"ready\n"
+            assert await process.wait() == 0
+            assert not sandbox._processes
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("kind", ["file", "directory"])
 def test_copy_out_leaves_existing_host_destination_untouched(smolvm_cli, tmp_path, kind):
     launcher, root = smolvm_cli
