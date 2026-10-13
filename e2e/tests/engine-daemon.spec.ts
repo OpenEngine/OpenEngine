@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { existsSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { test, expect, startEngine } from "../fixtures/engine.ts"
@@ -38,6 +38,32 @@ test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
     } finally {
       await other.stop()
     }
+  })
+
+  test("leaves none of its runs' worktrees behind", async ({ page }) => {
+    const { Terminal } = await import("../fixtures/terminal.ts")
+    const engine = await startEngine({ agentMode: "stub" })
+    const root = realpathSync(engine.root)
+    const workspaces = "/tmp/engine-workspaces"
+    const ours = () =>
+      (existsSync(workspaces) ? readdirSync(workspaces) : []).filter((name) => {
+        try {
+          return readFileSync(path.join(workspaces, name, ".git"), "utf8").includes(root)
+        } catch {
+          return false
+        }
+      })
+    try {
+      const terminal = await Terminal.open(page, { cwd: engine.repository, env: engine.env })
+      const graph = path.join(engine.root, "hello.yaml")
+      writeFileSync(graph, "apiVersion: openengine.cc/v1\nkind: Graph\nname: hello\nimplementation:\n  greet:\n    agent: claude\n    prompt: Say hello.\n")
+      await terminal.run(`engine graph add ${graph}`)
+      await terminal.run('engine graph run hello "Say hello" --wait')
+      expect(ours().length).toBeGreaterThan(0)
+    } finally {
+      await engine.stop()
+    }
+    expect(ours()).toEqual([])
   })
 
   test("stops and removes its directory when done", async () => {
