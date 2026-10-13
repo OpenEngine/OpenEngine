@@ -73,7 +73,10 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
         if not target and disconnected and verb == 'review':
             raise ServiceError(NO_BRANCH)
     exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
-    if disconnected and verb == 'review' and exists and not number:
+    # Free-form instructions must not acquire a ref: that selects review mode.
+    if disconnected and verb == 'go' and checkout and not target and not number:
+        return {'repo': repository, 'mode': context['mode']}
+    if disconnected and verb in ('review', 'go') and exists and not number:
         return {'repo': repository, 'mode': context['mode'], 'ref': target}
     inspector = getattr(service.runtime.source_control, 'inspect_target', None)
     details: dict[str, Any] = {}

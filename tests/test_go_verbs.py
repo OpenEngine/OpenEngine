@@ -45,9 +45,9 @@ def test_target_infers_current_branch_and_open_pr(monkeypatch, tmp_path):
     inspect.assert_awaited_once_with('o/r', number=0, branch='topic', include_threads=False)
 
 
-@pytest.mark.parametrize('target', ['', 'topic'])
+@pytest.mark.parametrize('verb,target', [('review', ''), ('review', 'topic'), ('go', 'topic')])
 @pytest.mark.parametrize('failure', [None, RuntimeError('network unavailable')])
-def test_disconnected_local_branch_skips_forge(monkeypatch, tmp_path, target, failure):
+def test_disconnected_local_branch_skips_forge(monkeypatch, tmp_path, verb, target, failure):
     async def git(path, *args):
         return {'remote': 'git@github.com:o/r.git', 'symbolic-ref': 'topic', 'show-ref': 'abc'}[args[0]]
     inspect = AsyncMock(return_value={'private': True}, side_effect=failure)
@@ -55,17 +55,18 @@ def test_disconnected_local_branch_skips_forge(monkeypatch, tmp_path, target, fa
         runtime=SimpleNamespace(source_control=SimpleNamespace(inspect_target=inspect)))
     monkeypatch.setattr(targets, '_git', git)
     monkeypatch.setattr(targets, 'resolve_forge_context', AsyncMock(return_value={'mode': 'disconnected'}))
-    result = asyncio.run(targets.resolve_target(service, str(tmp_path), target, verb='review'))
+    result = asyncio.run(targets.resolve_target(service, str(tmp_path), target, verb=verb))
     assert result == {'repo': str(tmp_path), 'mode': 'disconnected', 'ref': 'topic'}
     inspect.assert_not_awaited()
 
 
 @pytest.mark.parametrize('head', ['topic', ''])
-def test_disconnected_go_does_not_infer_head(monkeypatch, tmp_path, head):
+@pytest.mark.parametrize('failure', [None, RuntimeError('network unavailable')])
+def test_disconnected_go_does_not_infer_head(monkeypatch, tmp_path, head, failure):
     git = AsyncMock(side_effect=lambda path, *args: {
         'remote': 'git@github.com:o/r.git', 'symbolic-ref': head,
     }[args[0]])
-    inspect = AsyncMock(return_value={})
+    inspect = AsyncMock(return_value={'private': True}, side_effect=failure)
     service = SimpleNamespace(resolve_repository=lambda value: str(tmp_path),
         runtime=SimpleNamespace(source_control=SimpleNamespace(inspect_target=inspect)))
     monkeypatch.setattr(targets, '_git', git)
@@ -73,12 +74,13 @@ def test_disconnected_go_does_not_infer_head(monkeypatch, tmp_path, head):
     result = asyncio.run(targets.resolve_target(service, str(tmp_path), '', verb='go'))
     assert result == {'repo': str(tmp_path), 'mode': 'disconnected'}
     git.assert_awaited_once_with(str(tmp_path), 'remote', 'get-url', 'origin')
-    inspect.assert_awaited_once_with('o/r', number=0, branch='', include_threads=False)
+    inspect.assert_not_awaited()
 
 
 @pytest.mark.parametrize('verb,target', [
     ('review', 'https://github.com/o/r/pull/1'), ('review', '#1'),
-    ('review', 'o/r#1'), ('review', 'remote-only'), ('fix', ''), ('fix', 'topic'), ('go', 'topic'),
+    ('review', 'o/r#1'), ('review', 'remote-only'), ('fix', ''), ('fix', 'topic'),
+    ('go', 'https://github.com/o/r/pull/1'), ('go', '#1'), ('go', 'o/r#1'), ('go', 'remote-only'),
 ])
 @pytest.mark.parametrize('failure,error', [(None, targets.PRIVATE), (RuntimeError('network unavailable'), targets.CONNECT)])
 def test_disconnected_forge_targets_still_require_connection(monkeypatch, tmp_path, verb, target, failure, error):
