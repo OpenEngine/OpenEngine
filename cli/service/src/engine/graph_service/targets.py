@@ -68,12 +68,12 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
     context = await resolve_forge_context(service.runtime.source_control,
         {'repository': path, 'inputs': {'mode': 'disconnected'} if local else {}})
     disconnected = context['mode'] == 'disconnected'
-    if not target and not number and checkout and (verb != 'go' or disconnected):
+    if not target and not number and checkout and verb != 'go':
         target = await _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
-        if not target and disconnected:
+        if not target and disconnected and verb == 'review':
             raise ServiceError(NO_BRANCH)
     exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
-    if disconnected and verb in {'review', 'go'} and exists and not number:
+    if disconnected and verb == 'review' and exists and not number:
         return {'repo': repository, 'mode': context['mode'], 'ref': target}
     inspector = getattr(service.runtime.source_control, 'inspect_target', None)
     details: dict[str, Any] = {}
