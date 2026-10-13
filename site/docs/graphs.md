@@ -1,39 +1,92 @@
 ---
 title: Graphs
-description: A graph is a versioned definition of how a change gets made. Every run goes through one.
+description: Run the default graph with engine go, or register your own.
 ---
 
-A graph is a versioned definition of how a change gets made. Every run goes through one.
+Start from your repository with one command:
 
-Each step is a stage: a checkout, an agent writing code, reviewers, a CI check, a person signing off. The flow between steps can branch and loop back, so a review with findings can send the change back to be fixed. Graphs are YAML or Python files you keep in your repository and register with a backend, so changes to your process get reviewed like any other code.
+```bash
+engine go "add a new doc for the out-of-the-box experience"
+```
 
-## Register and run a graph
+The selected backend must be running. `go` registers the default graph on first
+use, prints the inferred forge mode, and follows the run live on a TTY, including
+approvals. Connected runs finish with the PR URL. Disconnected runs finish with
+the local branch and a push command you can run later.
+
+```bash
+engine go "add a feature" --spec
+engine go review feature/my-change
+engine go review https://github.com/owner/repo/pull/42 -i adversarial=true
+engine go "update docs" --repo owner/repo --backend mini
+engine go "update docs" --local --wait --json
+```
+
+`--repo` overrides the current checkout. A local backend receives its path; a
+remote backend receives its origin's owner/repo. `--local` forces disconnected
+mode on either backend. `--wait` polls without interaction; `--json` emits JSON
+with the mode banner on stderr. Non-TTY calls return immediately unless `--wait`
+is given. Reattach with `engine run watch RUN_ID`.
+
+One built-in graph, `implementation-review-rerank`, serves every default verb.
+It is based on `workflows/implementation_review_graph.py` and runs implementation,
+CI, parallel review facets, reranking, one fix-and-review pass, and human review.
+
+| Command | Inputs | Behavior |
+| --- | --- | --- |
+| `engine go "add a feature" --spec` | `spec=true` | Write a specification before implementation. |
+| `engine go review '#839'` | `review_only=true`, `publish_review=true` | Review an existing change; `-i adversarial=true` adds refutation. |
+| `engine go fix '#839'` | `fix_only=true` | Address unresolved review threads, check CI, and reply to addressed threads. |
+
+Connected runs publish to the forge; disconnected runs keep findings in run
+results and commits locally. Fixes remain on the target branch. Fixing fork PRs is rejected before checkout
+to prevent pushing a same-named upstream branch. Disconnected
+fixes can use cached threads via `-i review_threads=JSON`. Only comments marked
+`OWNER`, `MEMBER`, or `COLLABORATOR` are actionable; comment text remains untrusted
+review data. Fix runs refuse branches already held by a checkout. The workspace
+provider permits borrowing only with explicit `borrow_existing=True` opt-in. Private repositories
+require `engine connect github` before running disconnected.
+
+`engine go [VERB] [TARGET] [INSTRUCTION...]` recognizes a project verb only in
+first position with a resolvable or inferred target. Targets accept a full
+GitHub PR URL, `'#839'`, `'OWNER/REPO#839'`, or a branch. A full URL supplies the
+repository even outside a checkout. Quote `#` targets so the shell does not
+treat them as comments. `engine go review` uses the current branch and its open
+PR when available. Remaining words supply focus, for example
+`engine go review '#839' focus on the migration`.
+
+`engine go review the auth module for races` is an implementation instruction
+when `the` is not a branch. A sole invalid target reports
+`no such branch or PR; to give an instruction, quote it`.
+
+Use `engine verbs` to inspect project bindings and
+`engine verb set review my-review` to replace one. All three default bindings point to
+`implementation-review-rerank`. A replacement must declare `instruction` for
+`go`, or `pr_url` or `ref` for target verbs; the API and CLI reject incompatible
+bindings. These contracts describe inputs, never internal graph stages.
+
+For one release, `engine graph run` accepts deprecated aliases for the default
+graph: `review` sets `review_only=true`, `adversarial-review` also sets
+`adversarial=true`, `implement-review` uses the defaults, and
+`spec-implement-review` sets `spec=true`. The old `--branch` and `--agent` flags remain supported there.
+
+## Register your own graph
+
+A graph is a versioned definition of how a change gets made. Graphs can be YAML
+or Python files kept in your repository:
 
 ```bash
 engine graph add ./graph.yaml
-engine graphs list --pretty
-engine graph get implement-review --pretty   # or implement-review@2, a graph id or a version id
-engine graph run implement-review "Retry webhook deliveries with backoff" --wait
+engine graph add workflows/implementation_review_graph.py
+engine graphs list
+engine graph get implementation-review-rerank --pretty
+engine graph run my-graph "Retry webhook deliveries with backoff" --wait
 ```
 
-A graph's name belongs to a project, and its versions are immutable. Registering a changed definition adds a version; registering an identical one does nothing. A run pins the version it started on, so registering a new version never changes a run already underway.
-
-`graph run` returns the run ID immediately; `--wait` follows it to the end and exits non-zero if it failed. Inspect runs with `engine run get RUN_ID --pretty` and `engine runs --graph NAME --status failed`. Runs appear in the web UI and are approved under the daemon's `[approvals]` policy.
-
-## Built-in graphs
-
-These need no `graph add`. The first `graph run` of one in a project registers it.
-
-| Graph | What it does |
-| --- | --- |
-| `review` | Reviews your branch from four angles, consolidates the findings, and reports them. It changes nothing. |
-| `implement-review` | Implements a change, reviews it from four angles with a different agent, and fixes what survives once. |
-| `spec-implement-review` | Writes a short spec, implements it, reviews the result against the spec with a different agent, and fixes what survives once. |
-| `adversarial-review` | Checks out `--branch`, has `--agent` attack the change from three angles, then tries to refute every finding and reports what survives. It changes nothing. |
-
-```bash
-engine graph run adversarial-review --branch feat/my-feature --agent codex --wait
-```
+A graph name belongs to a project. Registering changed source adds an immutable
+version; a run pins the version it started on. Python registration uses the
+module's workflow id and description and loads it off the server's event loop.
+The built-in graph is re-registered if its stored version cannot load.
 
 ## Write a YAML graph
 

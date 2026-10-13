@@ -60,6 +60,8 @@ def resolve_inputs(
     """Apply defaults and reject invalid values before starting a run."""
     if not isinstance(values, Mapping):
         raise ValueError("inputs must be an object")
+    if "mode" in values and not any(item.name == "mode" for item in declarations):
+        declarations = (*declarations, mode_input())
     unknown = set(values) - {item.name for item in declarations}
     if unknown:
         raise ValueError(f"unknown workflow inputs: {', '.join(sorted(unknown))}")

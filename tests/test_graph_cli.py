@@ -121,9 +121,13 @@ def test_a_built_in_graph_is_registered_the_first_time_it_is_run(monkeypatch, ca
         "graph", "run", "adversarial-review", "--branch", "feat/my_feat", "--agent", "codex", "--repo", "o/r",
     ]) == 0
     first, adding, retry = recorded.requests
-    assert first["body"] == retry["body"]
-    assert first["body"]["inputs"] == {"branch": "feat/my_feat", "agent": "codex"}
-    assert first["body"]["instruction"] == "Run adversarial-review on feat/my_feat."
+    assert first["method"] == "GET"
+    assert retry["body"]["inputs"] == {"review_only": "true", "adversarial": "true",
+                                               "ref": "feat/my_feat", "implementation_runner": "codex",
+                                               "review_runner": "codex"}
+    assert retry["body"]["graph"] == starters.DEFAULT
+    assert "deprecated" in capsys.readouterr().err
+    assert retry["body"]["instruction"] == "Run adversarial-review on feat/my_feat."
     assert adding["url"].endswith("/api/v1/graphs")
     assert adding["body"]["source"] == starters.source("adversarial-review")
 
@@ -397,7 +401,7 @@ def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
     assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
     assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo"}
     assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
-    assert "Next: engine graph run review --project owner/repo --repo /code/repo" in capsys.readouterr().out
+    assert "Next: engine go review --project owner/repo --repo /code/repo" in capsys.readouterr().out
 
 
 def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
@@ -413,3 +417,228 @@ def test_onboard_reports_fix(monkeypatch, capsys):
     serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "engine agent signin codex"}]})
     assert main(["onboard", "owner/repo", "--mode", "connected"]) == 1
     assert "engine agent signin codex" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("stdin_tty,stdout_tty,flags,watched", [
+    (True, True, [], True), (False, True, [], False), (True, False, [], False),
+    (True, True, ["--wait"], False), (True, True, ["--json"], False),
+    (True, True, ["--no-watch"], False),
+])
+def test_graph_run_live_selection(monkeypatch, capsys, stdin_tty, stdout_tty, flags, watched):
+    import sys
+    from engine.cli import live
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: stdin_tty)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: stdout_tty)
+    done = {**RUN, "status": "completed", "terminal": True}
+    serve(monkeypatch, RUN, done)
+    calls = []
+    monkeypatch.setattr(live.Watch, "follow", lambda self: calls.append(self.run_id) or (done, "finished"))
+    assert main(["graph", "run", "pair", "go", "--repo", "o/r", *flags]) == 0
+    assert calls == (["run-1"] if watched else [])
+    output = capsys.readouterr().out
+    if watched:
+        assert "run-1 · completed" in output
+    else:
+        assert json.loads(output)["runId"] == "run-1"
+
+
+@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0)])
+def test_watch_finished_run(monkeypatch, capsys, status, code):
+    serve(monkeypatch, {**RUN, "status": status, "terminal": True})
+    assert main(["run", "watch", "run-1"]) == code
+    assert f"run-1 · {status}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("outcome,code", [("detached", 0), ("cancelled", 1)])
+def test_watch_outcome(monkeypatch, capsys, outcome, code):
+    from engine.cli import live
+
+    backends.add("mini", "http://mini:4364", use=True)
+    monkeypatch.setattr(live.Watch, "follow", lambda self: (RUN, outcome))
+    assert main(["run", "watch", "run-1"]) == code
+    if outcome == "detached":
+        assert "engine run watch run-1 --backend mini" in capsys.readouterr().out
+
+
+def test_pretty_run_lists_approvals_and_ui(monkeypatch, capsys):
+    serve(monkeypatch, {**RUN, "pendingApprovals": [
+        {"approvalId": "a1", "node": "work", "command": "pytest"},
+        {"approvalId": "a2", "node": "review", "command": "ruff check"},
+    ]})
+    assert main(["run", "get", "run-1", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert "UI: http://127.0.0.1:4364/runs/run-1" in out
+    assert "approval a1 at work: pytest" in out
+    assert "approval a2 at review: ruff check" in out
+
+
+@pytest.mark.parametrize("status,code", [
+    ("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0),
+])
+@pytest.mark.parametrize("args", [["run", "get", "run-1"], ["run", "wait", "run-1"],
+                                  ["graph", "run", "pair", "--wait"]])
+def test_run_result_codes_match_watch(monkeypatch, status, code, args):
+    run = {**RUN, "status": status, "terminal": True}
+    serve(monkeypatch, run, run)
+    assert main(args) == code
+
+
+def test_pretty_approval_escapes_terminal_controls(monkeypatch, capsys):
+    serve(monkeypatch, {**RUN, "pendingApprovals": [
+        {"approvalId": "a\x1b[2K", "node": "work\r", "command": "danger\nbenign\x9b2K"},
+    ]})
+    assert main(["run", "get", "run-1", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert r"approval a\x1b[2K at work\r: danger\nbenign\x9b2K" in out
+    assert "\x1b" not in out and "\r" not in out and "\x9b" not in out
+
+
+def test_local_run_sends_override_and_pretty_output_starts_with_mode(monkeypatch, capsys):
+    context = {"mode": "disconnected", "reason": "explicitly requested local execution",
+               "summary": "disconnected · local branch only (run engine connect github to publish)"}
+    recorded = serve(monkeypatch, {**RUN, "forgeContext": context})
+    assert main(["graph", "run", "pair", "do it", "--repo", "o/r", "--local", "--pretty"]) == 0
+    assert recorded.requests[0]["body"]["inputs"] == {"mode": "disconnected"}
+    assert capsys.readouterr().out.splitlines()[0] == context["summary"]
+
+
+@pytest.mark.parametrize("backend_name", ["local", "mini"])
+@pytest.mark.parametrize("explicit_repo", [False, True])
+@pytest.mark.parametrize("local", [False, True])
+def test_go_repository_backend_and_mode(monkeypatch, capsys, tmp_path, backend_name, explicit_repo, local):
+    from engine.cli import repository
+    backends.add("mini", "http://mini:4364")
+    monkeypatch.setattr(repository, "current", lambda: repository.Repository(tmp_path, "owner/repo", "feature", False))
+    mode = "disconnected" if local else "connected"
+    run = {**RUN, "forgeContext": {"mode": mode, "summary": f"{mode} · owner/repo"}}
+    expected_repo = "other/repo" if explicit_repo else str(tmp_path) if backend_name == "local" else "owner/repo"
+    recorded = serve_go(monkeypatch, run, repo=expected_repo)
+    args = ["go", "add docs", "--backend", backend_name, "-i", "spec=true"]
+    if explicit_repo:
+        args += ["--repo", "other/repo"]
+    if local:
+        args += ["--local"]
+    assert main(args) == 0
+    request = recorded.requests[-1]
+    expected_repo = "other/repo" if explicit_repo else str(tmp_path) if backend_name == "local" else "owner/repo"
+    assert request["body"]["repository"] == expected_repo
+    assert request["body"]["graph"] == starters.DEFAULT
+    assert request["body"]["inputs"] == {"spec": "true", **({"mode": "disconnected"} if local else {})}
+    assert ("mini:4364" in request["url"]) == (backend_name == "mini")
+    assert capsys.readouterr().out.splitlines()[0] == f"{starters.DEFAULT} · {mode} · {expected_repo} · " + ("will keep results and commits local" if local else "will open a pull request")
+
+
+@pytest.mark.parametrize("alias,inputs", list(starters.ALIASES.items()))
+def test_starter_aliases_use_default_graph(monkeypatch, capsys, alias, inputs):
+    recorded = serve(monkeypatch, {"name": inputs[0], "source": starters.source(inputs[0])}, RUN)
+    assert main(["graph", "run", alias, "task", "--repo", "o/r"]) == 0
+    assert recorded.requests[-1]["body"]["graph"] == inputs[0]
+    assert recorded.requests[-1]["body"]["inputs"] == inputs[1]
+    assert "deprecated" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("status,message", [(404, "no graph"), (503, "graph version gv-old is not loaded on this backend")])
+def test_go_reregisters_missing_or_unloaded_default(monkeypatch, capsys, status, message):
+    refused = HTTPError("http://x", status, message, {}, io.BytesIO(json.dumps({"error": message}).encode()))
+    recorded = serve_go(monkeypatch, refused, {"created": True}, RUN)
+    assert main(["go", "task", "--repo", "o/r"]) == 0
+    first, registration, retry = recorded.requests[-3:]
+    assert first["body"] == retry["body"]
+    assert registration["body"]["format"] == "python"
+    assert registration["body"]["source"] == starters.source()
+
+
+def test_go_does_not_reregister_for_unrelated_service_failure(monkeypatch):
+    refused = HTTPError("http://x", 503, "offline", {}, io.BytesIO(b'{"error":"backend offline"}'))
+    recorded = serve_go(monkeypatch, refused)
+    assert main(["go", "task", "--repo", "o/r"]) == 1
+    assert len(recorded.requests) == 4
+
+
+@pytest.mark.parametrize("option", ["review", "--review"])
+@pytest.mark.parametrize("target,key", [("topic", "ref"), ("https://github.com/o/r/pull/9", "pr_url")])
+def test_go_review_target(monkeypatch, target, key, option):
+    recorded = serve_go(monkeypatch, RUN, graph=starters.DEFAULT, target={key: target})
+    assert main(["go", option, target, "--repo", "o/r"]) == 0
+    assert recorded.requests[-1]["body"]["inputs"] == {key: target, "review_only": "true", **({"publish_review": "true"} if key == "pr_url" else {})}
+    assert recorded.requests[-1]["body"]["graph"] == starters.DEFAULT
+
+
+def test_go_wait_json_keeps_banner_off_stdout(monkeypatch, capsys):
+    run = {**RUN, "forgeContext": {"mode": "connected", "summary": "connected · o/r"}}
+    done = {**run, "status": "completed", "terminal": True, "prUrl": "https://github.com/o/r/pull/9"}
+    serve_go(monkeypatch, run, done)
+    assert main(["go", "docs", "--repo", "o/r", "--wait", "--json"]) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)["prUrl"] == done["prUrl"]
+    assert output.err.splitlines()[0] == f"{starters.DEFAULT} · connected · o/r · will open a pull request"
+
+
+def test_go_live_banner_and_final_pull_request(monkeypatch, capsys):
+    import sys
+    from engine.cli import live
+    run = {**RUN, "forgeContext": {"mode": "connected", "summary": "connected · o/r"}}
+    serve_go(monkeypatch, run)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(live.Watch, "follow", lambda self: ({**run, "status": "completed", "prUrl": "https://github.com/o/r/pull/9"}, "completed"))
+    assert main(["go", "docs", "--repo", "o/r"]) == 0
+    output = capsys.readouterr().out
+    assert output.splitlines()[0] == f"{starters.DEFAULT} · connected · o/r · will open a pull request"
+    assert output.splitlines()[-1] == "Pull request: https://github.com/o/r/pull/9"
+
+
+def test_go_wait_disconnected_reports_branch_and_push(monkeypatch, capsys):
+    run = {**RUN, "forgeContext": {"mode": "disconnected", "summary": "disconnected · o/r"}}
+    done = {**run, "status": "completed", "terminal": True, "branch": "agent/docs", "workspace": {"path": "/repo/worktree", "ref": "engine/ws-1"}}
+    serve_go(monkeypatch, run, done)
+    assert main(["go", "docs", "--repo", "o/r", "--local", "--wait"]) == 0
+    output = capsys.readouterr().out
+    assert output.splitlines()[0] == f"{starters.DEFAULT} · disconnected · o/r · will keep results and commits local"
+    assert "Local branch: agent/docs" in output
+    assert output.splitlines()[-1] == "To publish: git -C /repo/worktree push -u origin agent/docs"
+
+
+def serve_go(monkeypatch, *answers, repo="o/r", graph=starters.DEFAULT, target=None):
+    return serve(monkeypatch, {"verbs": starters.VERBS}, {"repo": repo, **(target or {})},
+        {"name": graph, "source": starters.source(graph), "inputs": ["instruction", "ref", "pr_url", "spec", "review_only", "publish_review", "fix_only"]}, *answers)
+
+
+@pytest.mark.parametrize("words,verb,target,instruction", [
+    (["review", "#839", "focus", "on migration"], "review", {"pr_url": "https://github.com/o/r/pull/839"}, "focus on migration"),
+    (["review"], "review", {"ref": "topic"}, "Review this change"),
+    (["review the auth module for races"], "go", {}, "review the auth module for races"),
+    (["fix", "topic"], "fix", {"ref": "topic"}, "Fix this change"),
+])
+def test_go_verb_grammar(monkeypatch, words, verb, target, instruction):
+    recorded = serve_go(monkeypatch, RUN, graph=starters.VERBS[verb], target=target)
+    assert main(["go", *words, "--repo", "o/r"]) == 0
+    request = recorded.requests[-1]["body"]
+    assert request["graph"] == starters.VERBS[verb]
+    assert request["instruction"] == instruction
+    defaults = {"review_only": "true", **({"publish_review": "true"} if target.get("pr_url") else {})} if verb == "review" else {"fix_only": "true"} if verb == "fix" else {}
+    assert request["inputs"] == {**defaults, **target}
+
+
+def test_go_ambiguous_prose_and_missing_target(monkeypatch, capsys):
+    message = "no such branch or PR; to give an instruction, quote it"
+    def missing():
+        return HTTPError("http://x", 404, message, {}, io.BytesIO(json.dumps({"error": message}).encode()))
+    recorded = serve(monkeypatch, {"verbs": starters.VERBS}, missing(), {"repo": "o/r"},
+        {"name": "implement", "source": starters.source(), "inputs": ["instruction"]}, RUN)
+    assert main(["go", "review", "the", "auth", "module", "for", "races", "--repo", "o/r"]) == 0
+    assert recorded.requests[-1]["body"]["instruction"] == "review the auth module for races"
+    serve(monkeypatch, {"verbs": starters.VERBS}, missing())
+    assert main(["go", "review", "foo", "--repo", "o/r"]) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_verb_binding_checks_contract_before_writing(monkeypatch, capsys):
+    recorded = serve(monkeypatch, {"name": "custom", "inputs": ["instruction"]})
+    assert main(["verb", "set", "review", "custom"]) == 2
+    assert "must declare pr_url or ref" in capsys.readouterr().err
+    assert len(recorded.requests) == 1
+    recorded = serve(monkeypatch, {"name": "custom", "inputs": ["ref"]}, {"verbs": {"review": "custom"}})
+    assert main(["verb", "set", "review", "custom"]) == 0
+    assert recorded.requests[-1]["body"]["graph"] == "custom"

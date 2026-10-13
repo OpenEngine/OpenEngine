@@ -29,12 +29,10 @@ from engine.domain.ids import (
     ApprovalId,
     ConversationId,
     MessageId,
-    RunId,
     SessionGrantId,
     TaskId,
     WorkspaceId,
 )
-from engine.domain.state import RunState
 
 
 class InMemoryStateStore:
@@ -48,7 +46,6 @@ class InMemoryStateStore:
 
     def __init__(self) -> None:
         self._lock = Lock()
-        self._states: dict[RunId, RunState] = {}
         self._instances: dict[AgentInstanceId, AgentInstance] = {}
         self._conversations: dict[AgentInstanceId, Conversation] = {}
         self._agent_runs: dict[AgentRunId, AgentRun] = {}
@@ -57,38 +54,6 @@ class InMemoryStateStore:
         self._message_numbers = count(1)
 
     # --- runs ------------------------------------------------------------
-
-    async def load(self, run_id: RunId) -> RunState | None:
-        with self._lock:
-            return self._states.get(run_id)
-
-    async def save(self, state: RunState) -> None:
-        with self._lock:
-            self._states[state.run_id] = state
-
-    async def list_runs(self) -> Sequence[RunState]:
-        with self._lock:
-            states = list(self._states.values())
-        return tuple(reversed(states))
-
-    async def list_runs_for_origin(
-        self, channel: str, thread_id: str
-    ) -> Sequence[RunState]:
-        with self._lock:
-            states = [
-                state for state in self._states.values()
-                if state.origin is not None
-                and state.origin.channel == channel
-                and state.origin.thread_id == thread_id
-            ]
-        return tuple(reversed(states))
-
-    async def delete_run(self, run_id: RunId) -> bool:
-        with self._lock:
-            return self._states.pop(run_id, None) is not None
-
-
-    # --- agent identity and conversation ---------------------------------
 
     async def create_instance(
         self,

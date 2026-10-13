@@ -1,4 +1,4 @@
-"""Run the OpenEngine daemon and drive its graphs, runs and loops from a terminal."""
+'''Start a change with engine go "INSTRUCTION", or manage graphs, runs and backends.'''
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ OUTPUT = """\
 output:
   List commands (backends, graphs, runs, loops, nodes, agents, connections)
   print a table; add --json for JSON, such as `engine runs --json`.
+  engine go follows live on a TTY; use --wait --json for scripts.
   Other commands print JSON; add --pretty for readable output.
 """
 
@@ -23,12 +24,12 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--version", action="version", version=version("engine-cli"))
     commands = result.add_subparsers(dest="command")
+    session.add_parser(graph_commands.add_parsers(commands))
     connect.add_parsers(commands)
     daemon.add_parser(commands)
     vm.add_parser(commands)
     doctor = commands.add_parser("doctor", help="check local configuration, tools and SmolVM support")
     doctor.add_argument("--json", action="store_true")
-    session.add_parser(graph_commands.add_parsers(commands))
     commands.metavar = "{" + ",".join(name for name in commands.choices if name not in graph_commands.HIDDEN) + "}"
     return result
 
@@ -50,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         return vm.main(arguments)
     if arguments.command == "doctor":
         return daemon.command_doctor(arguments)
-    if arguments.command == "agent" and arguments.action == "claude":
+    if arguments.command == "agent" and arguments.action in session.AGENTS:
         return session.main(arguments)
     if arguments.command in graph_commands.COMMANDS:
         return graph_commands.main(arguments)

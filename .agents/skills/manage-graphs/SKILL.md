@@ -5,6 +5,27 @@ description: Write, register, run, schedule and debug OpenEngine graphs with the
 
 # Managing OpenEngine graphs
 
+Start with the project's default graph:
+
+```bash
+uv run engine go "add a new doc for the out-of-the-box experience" --wait
+uv run engine go "implement the feature" --spec --wait
+uv run engine go review feature/my-change -i adversarial=true --wait
+uv run engine go "update docs" --local --repo OWNER/REPO --backend mini --wait --json
+```
+
+`go` registers the built-in default graph on first use, chooses the current checkout
+unless `--repo` is supplied, and uses the selected backend. It prints the forge
+mode first (to stderr with `--json`); `--local` forces disconnected mode.
+On a TTY it follows live with inline approvals; agents use `--wait` instead.
+The result includes the PR URL or local branch and how to push it later.
+Use `go review PR_OR_BRANCH` to set `review_only=true` on the default graph, `go fix PR_OR_BRANCH`
+to set `fix_only=true` for unresolved review threads, `--spec` to plan first, and
+`-i KEY=VALUE` for runner inputs and `adversarial=true`. The old four starter
+names are deprecated aliases for one release. `engine verbs` shows project
+bindings; `engine verb set review NAME` selects a replacement declaring `pr_url`
+or `ref`. The `go` binding requires a declared `instruction` input.
+
 Graphs, runs and loops live on a daemon (a *backend*). The `engine` CLI talks
 to it over HTTP; it never runs a graph itself. Inside this repository, run the
 CLI as `uv run engine ...`.
@@ -71,8 +92,9 @@ uv run engine run get RUN_ID --pretty
 uv run engine runs --graph NAME --status failed --pretty
 ```
 
-`graph run` prints the run id straight away; `--wait` polls and exits 1 if the
-run fails. A run pins the version that was latest when it started. Resubmit
+Always use `--wait` for agent invocations: it polls non-interactively and exits
+1 if the run fails. Without it, `graph run` opens an interactive live view when
+stdin and stdout are TTYs. `--no-watch` returns immediately instead. A run pins the version that was latest when it started. Resubmit
 with the same `--idempotency-key` to avoid starting a second run.
 
 `run get` shows status, each node's result, usage, pull requests and the
@@ -86,7 +108,9 @@ uv run engine node steer EXECUTION_ID "use the existing retry helper" --wait
 
 Steering is a message into the turn the agent is in, not a retry or an
 approval. A run stopped on an approval or a human step is answered in the web
-UI; `run get` lists what it is waiting for.
+UI; `run get --pretty` lists approval IDs, nodes, commands and the UI URL.
+People can also use `engine run watch RUN_ID` to answer approvals inline;
+agents should keep using non-interactive `--wait`.
 
 ## Run on a schedule
 

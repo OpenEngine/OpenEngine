@@ -129,3 +129,46 @@ class GreetingRunner:
 
     async def cancel(self, agent_run_id):
         pass
+
+
+class WebStores:
+    """Separate conversation and graph stores plus explicit checkpoint fixtures."""
+
+    def __init__(self):
+        from engine.adapters.state_store.memory import InMemoryStateStore
+        from engine.graph_runtime_langgraph.store import InMemoryGraphRuntimeStore
+        from engine.runtime.run_read_model import RunReader
+        self.state = InMemoryStateStore()
+        self.graph_store = InMemoryGraphRuntimeStore()
+        self.runs = RunReader()
+        self.runs.store = self.graph_store
+        self.runs.runtime = self
+        self.snapshots = {}
+
+    def __getattr__(self, name):
+        return getattr(self.state, name)
+
+    async def snapshot(self, run_id):
+        return self.snapshots.get(run_id)
+
+    async def seed_run(self, state):
+        from engine.domain import RunPhase
+        from engine.graph_runtime import RunSnapshot, RunStatus
+        from engine.graph_runtime.topology import GraphId
+        self.snapshots[state.run_id] = RunSnapshot(
+            run_id=state.run_id, graph_id=GraphId(str(state.workflow_id)),
+            status={
+                RunPhase.SCHEDULED: RunStatus.SCHEDULED,
+                RunPhase.PENDING: RunStatus.RUNNING,
+                RunPhase.RUNNING_AGENT: RunStatus.RUNNING,
+                RunPhase.SUCCEEDED: RunStatus.COMPLETED,
+                RunPhase.FAILED: RunStatus.FAILED,
+            }[state.phase], error=state.failure_reason,
+        )
+        await self.runs.save(state)
+
+    def bind(self, runtime, *, seeded_snapshots=True):
+        runtime.store = self.graph_store
+        if seeded_snapshots:
+            runtime.seeded_snapshots = self.snapshots
+        self.runs.runtime = runtime

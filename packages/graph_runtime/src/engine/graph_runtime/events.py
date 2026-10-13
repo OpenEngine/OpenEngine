@@ -47,10 +47,25 @@ class EventKind(Enum):
     NODE_STARTED = "node.started"
     """A node began an execution: `startedAt`, an ISO-8601 UTC timestamp."""
     NODE_FINISHED = "node.finished"
+    RUNNER_SELECTED = "runner.selected"
+    """An agent node settled on the runner it executes with: `runner`.
+
+    Raised before the session opens, so the runner is known while the node is
+    still starting -- and when it fails to start at all, which is when a
+    sign-in hint has to name the right agent.
+    """
     CONVERSATION_STARTED = "conversation.started"
     """An agent session is established and ready for its first prompt."""
     TRANSCRIPT = "transcript"
     """One message in a node's conversation: `role` and `text`."""
+    THOUGHT = "thought"
+    """Reasoning the agent streamed before acting or answering: `text`.
+
+    Kept out of the transcript on purpose. It is how somebody watching a slow
+    model can tell thinking from hanging, but it is not something the agent
+    said: a resumed session must not be replayed it, and it is not the
+    node's output.
+    """
     TOOL_CALL = "tool.call"
     """A call the node made: `callId`, `name`, `arguments`."""
     TOOL_RESULT = "tool.result"
@@ -127,7 +142,7 @@ EventObserver = Callable[[RuntimeEvent], Awaitable[None]]
 class EventStore(Protocol):
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent: ...
 
-    def events_since(self, run_id: RunId, cursor: int = 0) -> tuple[RuntimeEvent, ...]: ...
+    def events_since(self, run_id: RunId, cursor: int = 0, *, kind: EventKind | None = None) -> tuple[RuntimeEvent, ...]: ...
 
 
 class EventLog:

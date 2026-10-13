@@ -23,6 +23,7 @@ from langgraph_acp.agent import ACPAgentProvider
 from langgraph_acp.providers import CodexACPProvider
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -909,18 +910,9 @@ class ThreadService:
 #: are `/graph/api/runs/...` and cannot collide with this app's own `/api`.
 GRAPH_PREFIX = "/graph"
 
-#: Graph lifecycle events that change what a WorkOrder row should read.
-GRAPH_EVENT_PHASES: Mapping[EventKind, RunPhase] = {
-    EventKind.RUN_FORKED: RunPhase.RUNNING_AGENT,
-    EventKind.RUN_FINISHED: RunPhase.SUCCEEDED,
-    EventKind.RUN_FAILED: RunPhase.FAILED,
-}
-
-#: The same three answers, as the graph engine reports them when asked rather
-#: than when it announces them. A run waiting on a person is still working as
-#: far as a WorkOrder row is concerned: what it is waiting for is a question
-#: only the graph engine's own API can show today.
+#: Project graph status into the workorder view model.
 GRAPH_PHASES: Mapping[RunStatus, RunPhase] = {
+    RunStatus.SCHEDULED: RunPhase.SCHEDULED,
     RunStatus.RUNNING: RunPhase.RUNNING_AGENT,
     RunStatus.AWAITING_APPROVAL: RunPhase.RUNNING_AGENT,
     RunStatus.COMPLETED: RunPhase.SUCCEEDED,
@@ -940,17 +932,6 @@ def _slack_task_report(text: str) -> str:
             for key, value in outputs.items()
         )
     return escape(text, quote=False)
-
-
-def _graph_workorder_name(values: object) -> str:
-    """The concise name a graph's naming node left in its state."""
-    if not isinstance(values, Mapping):
-        return ""
-    value = values.get("name")
-    if not isinstance(value, str) or not value.strip():
-        return ""
-    first_line = value.strip().splitlines()[0]
-    return first_line.strip(" \t\"'`).:;!?")[:120]
 
 
 #: Where this module says what went wrong with something nobody asked it about
@@ -1133,6 +1114,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     repo_modes: Mapping[str, str] | None = None,
     config_path: Path | None = None,
     trusted_repos: Collection[str] = (),
+    onboarding_directory: Path | None = None,
     login_repositories: Sequence[str] = (),
     login_operators: Collection[int] = (),
     repository_projects: Mapping[str, str] | None = None,
@@ -1171,6 +1153,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     onboarding = RepositoryOnboarding(
         repository_registry, config_path,
         lambda project, runner: register_starters(surface.service, project, runner),
+        onboarding_directory=onboarding_directory,
     )
 
     async def in_repositories(repository: str, checkouts: frozenset[Path]) -> bool:
@@ -1222,7 +1205,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         approval_policy,
         approval_observer=approval_feed.publish,
     )
-    run_reader = RunReader(session.state_store, catalog)
+    run_reader = RunReader(catalog)
 
     pending_graph_notifications: dict[RunId, list[RuntimeEvent]] = {}
     deferred_graph_notifications: dict[RunId, RunOrigin] = {}
@@ -1348,7 +1331,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         ):
             return
         async with graph_notification_lock:
-            state = await session.state_store.load(event.run_id)
+            state = await run_reader.load(event.run_id)
             if state is None or event.run_id in deferred_graph_notifications:
                 pending_graph_notifications.setdefault(event.run_id, []).append(event)
                 return
@@ -1357,21 +1340,10 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             await notify_graph_event(state, event)
 
     async def graph_event(event: RuntimeEvent) -> None:
-        """Everything the graph engine says, kept where two readers can see it.
-
-        The feed is one reader: a browser or a script watching a graph run gets
-        these back in order from the sub-application below.
-
-        The WorkOrder row is the other. A graph run keeps its real progress in
-        the graph engine's own files, and this app only holds a row for it, so
-        without this the row would say "an agent is working" long after the run
-        had finished or fallen over. Restarts, endings, and the name produced by
-        a naming node are copied across. Node and approval events also maintain
-        the small frontier projection read by the runs list.
-        """
+        """Publish graph events, progress, and origin notifications."""
         if event.kind is EventKind.RUN_FORKED and event.run_id not in graph_progress:
             # Terminal rows are not restored at startup, but can be resumed later.
-            state = await session.state_store.load(event.run_id)
+            state = await run_reader.load(event.run_id)
             if state is not None and surface.runtime is not None:
                 seed_graph_progress(surface.runtime, RunSnapshot(
                     run_id=event.run_id,
@@ -1398,25 +1370,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                     "could not accept the human review of work order %s from its merge",
                     event.run_id,
                 )
-        phase = GRAPH_EVENT_PHASES.get(event.kind)
-        name = _graph_workorder_name(event.payload.get("values"))
-        if phase is None and not name:
-            return
-        state = await session.state_store.load(event.run_id)
-        if state is None:
-            return
-        updated = replace(
-            state,
-            name=name or state.name,
-            phase=phase or state.phase,
-            failure_reason=(
-                "" if event.kind is EventKind.RUN_FORKED
-                else str(event.payload.get("error", "")) or state.failure_reason
-            ),
-        )
-        if updated != state:
-            await session.state_store.save(updated)
-        if updated.phase is RunPhase.SUCCEEDED:
+        if event.kind is EventKind.RUN_FINISHED:
             dependencies_changed.set()
 
     async def open_graph_service(runtime: GraphRuntime, opened: AsyncExitStack) -> None:
@@ -1485,8 +1439,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
           which is the honest cost of the process having died mid-sentence;
         * **waiting on a person** -- left exactly as it is. Answering the
           question is what starts it again, and that already works;
-        * **finished or failed** -- the row missed the ending because the
-          process was gone when it was announced, so it is copied over now.
+        * **finished or failed** -- no driver needs to be restored.
 
         A run the engine has never heard of is one whose state was deleted from
         under it. It cannot be recovered and cannot be waited for, so the row is
@@ -1497,14 +1450,14 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         either, and a row left mid-flight would say an agent is working on it
         forever, so it is failed saying which workflow went missing.
         """
-        for state in await session.state_store.list_runs():
+        for state in await run_reader.list_runs():
             if state.is_terminal or state.phase is RunPhase.SCHEDULED:
                 continue
             try:
                 try:
                     snapshot = await runtime.snapshot(state.run_id)
                 except UnknownGraphError:
-                    await session.state_store.save(
+                    await run_reader.save(
                         replace(
                             state,
                             phase=RunPhase.FAILED,
@@ -1516,7 +1469,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                     )
                     continue
                 if snapshot is None:
-                    await session.state_store.save(
+                    await run_reader.save(
                         replace(
                             state,
                             phase=RunPhase.FAILED,
@@ -1535,21 +1488,6 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                         continue
                     await runtime.resume_from(state.run_id, snapshot.checkpoint_id)
                     continue
-                phase = GRAPH_PHASES[snapshot.status]
-                name = _graph_workorder_name(snapshot.values)
-                if (
-                    phase is not state.phase
-                    or snapshot.error != state.failure_reason
-                    or (name and name != state.name)
-                ):
-                    await session.state_store.save(
-                        replace(
-                            state,
-                            name=name or state.name,
-                            phase=phase,
-                            failure_reason=snapshot.error or state.failure_reason,
-                        )
-                    )
             except Exception:
                 # One unrecoverable run must not stop the others from being
                 # recovered, and none of them may stop the server from serving.
@@ -1598,6 +1536,16 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 # therefore no graph entries offered anywhere.
                 try:
                     surface.runtime = await opened.enter_async_context(graph_runtime)
+                    run_reader.runtime = surface.runtime
+                    run_reader.store = getattr(surface.runtime, "store", None)
+                    legacy_runs = getattr(session.state_store, "legacy_runs", None)
+                    if legacy_runs is not None and run_reader.store is not None:
+                        legacy = legacy_runs()
+                        await run_reader.backfill(legacy)
+                        getattr(session.state_store, "clear_legacy_runs")([state.run_id for state in legacy])
+                    bind_mode = getattr(surface.runtime, "bind_repository_mode", None)
+                    if bind_mode is not None:
+                        bind_mode(repository_mode)
                     bind_creator = getattr(surface.runtime, "bind_workorder_creator", None)
                     if bind_creator is not None:
                         bind_creator(agent_create_workorder)
@@ -1660,7 +1608,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
 
         if not thread.editable or thread.workflow_run_id is None:  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             raise RuntimeError("this workflow conversation is read-only")
-        state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        state = await run_reader.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if (
             state is None
             or state.phase is not RunPhase.RUNNING_AGENT
@@ -1687,7 +1635,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             task = workflow_tasks.get(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUndefinedVariable]  # Baseline: see docs/pyright.md
             if task is None or task.done():
                 return
-            state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            state = await run_reader.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             if (
                 state is None
                 or state.phase is not RunPhase.RUNNING_AGENT
@@ -1702,7 +1650,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             # The completed turn may have advanced to another agent between the
             # first state read and cancellation. Resume whichever conversation is
             # now current, without applying this conversation's choice to another.
-            state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+            state = await run_reader.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
             if (
                 state is None
                 or state.phase is not RunPhase.RUNNING_AGENT
@@ -1738,7 +1686,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             raise RuntimeError("this workflow conversation is read-only")
         await service.require_somewhere_to_run(thread.instance_id)
         before = len(await service.history(thread.instance_id))
-        state = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        state = await run_reader.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if state is None:
             raise RuntimeError("this workflow step is no longer active")
         if resume_only:
@@ -1766,7 +1714,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        latest = await session.state_store.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
+        latest = await run_reader.load(thread.workflow_run_id)  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         if active_only and (
             latest is None or latest.phase is not RunPhase.RUNNING_AGENT
             or latest.current_step_id != thread.workflow_step_id  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
@@ -1901,16 +1849,24 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             if surface.runtime else set()
         )
         runs = []
-        for run in await run_reader.list():
-            if not repository_visible(visible, run.repository):
-                continue
+        try:
+            limit = min(100, max(1, int(request.query_params.get("limit", "100"))))
+            offset = max(0, int(request.query_params.get("offset", "0")))
+        except ValueError:
+            return JSONResponse({"error": "limit and offset must be integers"}, status_code=400)
+        for run in await run_reader.list(
+            visible=lambda repository: visible is None or (
+                bool(repository) and repository_visible(visible, repository)
+            ),
+            limit=limit, offset=offset,
+        ):
             row = _run_json(run, listing=True)
             if run.phase not in {"scheduled", "succeeded", "failed"}:
                 progress = graph_progress.get(run.run_id)
                 if progress is not None and progress.topology.graph_id in available:
                     row["graphProgress"] = progress.json()
             runs.append(row)
-        return JSONResponse({"runs": runs})
+        return JSONResponse({"runs": runs, "nextOffset": offset + limit if len(runs) == limit else None})
 
     round_robin_turns: dict[str, int] = {}
 
@@ -1954,9 +1910,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         """
         if requester is None and scheduled is not None:
             requester = scheduled.requester
-        # A repository onboarded as disconnected is never reached from, however
-        # the WorkOrder was asked for.
-        if MODE_INPUT in inputs and (mode := await repository_mode(repository)) is not None:
+        # Preserve the configured input for scheduled WorkOrder views as well.
+        if (mode := await repository_mode(repository)) is not None:
             inputs = {**inputs, MODE_INPUT: str(mode)}
         async def runner_usage() -> dict[str, float]:
             # Scraped here rather than trusting the cache, which otherwise only
@@ -1983,7 +1938,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         co_author = await _co_author(requester)
         async with dependency_lock:
             if depends_on_run_id is not None:
-                prerequisite = await session.state_store.load(depends_on_run_id)
+                prerequisite = await run_reader.load(depends_on_run_id)
                 if prerequisite is None or depends_on_run_id in deleting_runs:
                     raise ValueError(f"unknown prerequisite workorder: {depends_on_run_id}")
                 if prerequisite.phase is not RunPhase.SUCCEEDED:
@@ -1996,7 +1951,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                         parent_run_id=parent_run_id, depends_on_run_id=depends_on_run_id,
                         inputs=inputs, requester=requester,
                     )
-                    await session.state_store.save(state)
+                    await run_reader.save(state)
                     # Recheck after saving to cover completion racing with creation.
                     dependencies_changed.set()
                     return state
@@ -2009,6 +1964,17 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             )
             # Taken before start(), which may already run nodes.
             started_at = datetime.now(UTC)
+            reserved = scheduled or RunState(
+                run_id=RunId(f"run-{uuid4().hex[:12]}"),
+                task_id=TaskId(f"task-{uuid4().hex[:12]}"),
+                workflow_id=WorkflowId(str(graph.graph_id)), phase=RunPhase.SCHEDULED,
+                prompt=prompt, repository=repository, origin=origin,
+                parent_run_id=parent_run_id, depends_on_run_id=depends_on_run_id,
+                inputs=inputs, requester=requester,
+            )
+            await run_reader.save(reserved)
+            if defer_notifications and origin is not None:
+                deferred_graph_notifications[reserved.run_id] = origin
             snapshot = await runtime.start(
                 GraphId(str(graph.graph_id)),
                 {
@@ -2019,7 +1985,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                     **({"issue": {"repository": origin.issue_repository, "number": origin.issue_number}}
                        if origin and origin.issue_number else {}),
                 },
-                run_id=scheduled.run_id if scheduled else None,
+                run_id=reserved.run_id,
             )
             # Register before saving the row: earlier events already wait for
             # the row, and later ones must wait for the concierge reply too.
@@ -2033,46 +1999,27 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                         await runtime.set_auto_approve(snapshot.run_id, node.node_id, True)
             state = RunState(
                 run_id=snapshot.run_id,
-                task_id=scheduled.task_id if scheduled else TaskId(f"task-{uuid4().hex[:12]}"),
+                task_id=reserved.task_id,
                 name=scheduled.name if scheduled else "",
                 workflow_id=WorkflowId(str(graph.graph_id)),
-                # Working, as the engine has just reported it. `graph_event` above
-                # moves this when the run ends.
+                # Phase is projected from the runtime snapshot on every read.
                 phase=GRAPH_PHASES[snapshot.status],
                 prompt=prompt,
                 repository=repository,
                 origin=origin,
                 parent_run_id=scheduled.parent_run_id if scheduled else parent_run_id,
                 depends_on_run_id=scheduled.depends_on_run_id if scheduled else depends_on_run_id,
-                inputs=inputs,
+                inputs={**inputs, MODE_INPUT: snapshot.forge_context.get("mode", inputs.get(MODE_INPUT, "connected"))},
                 requester=requester,
                 started_at=started_at,
             )
-            await session.state_store.save(state)
+            await run_reader.save(state)
         # Nodes may publish before start() returns and before the origin exists.
         async with graph_notification_lock:
             if state.run_id not in deferred_graph_notifications:
                 for event in pending_graph_notifications.pop(state.run_id, []):
                     await notify_graph_event(state, event)
-        # A very short run can be over before the row above exists, and the
-        # ending it announced would then have had nothing to land on -- leaving
-        # a WorkOrder that claims to be working forever. So the engine is asked
-        # once more, now that there is a row for its answer.
-        latest = await runtime.snapshot(state.run_id)
-        latest_name = (
-            _graph_workorder_name(latest.values) if latest is not None else ""
-        )
-        if latest is not None and (
-            GRAPH_PHASES[latest.status] is not state.phase
-            or (latest_name and latest_name != state.name)
-        ):
-            state = replace(
-                state,
-                name=latest_name or state.name,
-                phase=GRAPH_PHASES[latest.status],
-                failure_reason=latest.error,
-            )
-            await session.state_store.save(state)
+        state = await run_reader.load(state.run_id) or state
         if state.phase is RunPhase.SUCCEEDED:
             dependencies_changed.set()
         return state
@@ -2080,7 +2027,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     async def agent_create_workorder(
         parent_run_id: RunId, prompt: str, depends_on_run_id: RunId | None = None,
     ) -> tuple[str, str]:
-        parent = await session.state_store.load(parent_run_id)
+        parent = await run_reader.load(parent_run_id)
         if parent is None:
             raise ValueError("the creating workorder does not exist")
         graph = _mentioned_workflow()
@@ -2089,7 +2036,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if depends_on_run_id is not None and github_login_config is not None:
             # An agent acts for its own WorkOrder's repository, so another
             # repository's run is as unknown to it as one that does not exist.
-            prerequisite = await session.state_store.load(depends_on_run_id)
+            prerequisite = await run_reader.load(depends_on_run_id)
             if prerequisite is None or not same_repository(
                 prerequisite.repository, parent.repository
             ):
@@ -2110,7 +2057,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     async def dependency_ready(state: RunState) -> bool:
         if state.depends_on_run_id is None:
             return True
-        prerequisite = await session.state_store.load(state.depends_on_run_id)
+        prerequisite = await run_reader.load(state.depends_on_run_id)
         return prerequisite is not None and prerequisite.phase is RunPhase.SUCCEEDED
 
     async def dispatch_dependencies() -> None:
@@ -2119,7 +2066,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             await dependencies_changed.wait()
             dependencies_changed.clear()
             async with scheduled_start_lock:
-                for state in await session.state_store.list_runs():
+                # One dispatch pass offers the same graphs to every run it starts.
+                offered = functools.cache(offered_graphs)
+                for state in await run_reader.dependency_candidates():
                     if (
                         state.phase is not RunPhase.SCHEDULED
                         or state.depends_on_run_id is None
@@ -2127,7 +2076,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                     ):
                         continue
                     try:
-                        graph = offered_graphs()[str(state.workflow_id)]
+                        graph = offered()[str(state.workflow_id)]
                         assert surface.runtime is not None
                         await start_graph_run(
                             surface.runtime, graph,
@@ -2145,7 +2094,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if await run_hidden(request, run_id):
             return _error("run not found", 404)
         async with scheduled_start_lock:
-            state = await session.state_store.load(run_id)
+            state = await run_reader.load(run_id)
             if state is None:
                 return _error("run not found", 404)
             if state.phase is not RunPhase.SCHEDULED:
@@ -2246,12 +2195,12 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         async with dependency_lock:
             if run_id in deleting_runs:
                 return _error("workorder deletion is already in progress", 409)
-            state = await session.state_store.load(run_id)
+            state = await run_reader.load(run_id)
             if state is None:
                 return _error("run not found", 404)
             dependents = [
                 str(run.run_id)
-                for run in await session.state_store.list_runs()
+                for run in await run_reader.list_runs()
                 if run.phase is RunPhase.SCHEDULED and run.depends_on_run_id == run_id
             ]
             if dependents:
@@ -2267,7 +2216,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             if state.phase is not RunPhase.SCHEDULED:
                 await cancel_graph_run(run_id)
             async with dependency_lock:
-                await session.state_store.delete_run(run_id)
+                await run_reader.delete_run(run_id)
                 graph_progress.pop(run_id, None)
         finally:
             async with dependency_lock:
@@ -2318,7 +2267,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         the ability to draw the graph and not the transcripts underneath it.
         """
         run_id = RunId(request.path_params["run_id"])
-        if await session.state_store.load(run_id) is None or await run_hidden(request, run_id):
+        if await run_reader.load(run_id) is None or await run_hidden(request, run_id):
             return _error("run not found", 404)
         raw_cursor = request.query_params.get("cursor")
         if raw_cursor is None:
@@ -2353,7 +2302,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         summary = str(body.get("summary", "")).strip()
         lock = workflow_restart_locks.setdefault(run_id, asyncio.Lock())  # pyright: ignore[reportUndefinedVariable]  # Baseline: see docs/pyright.md
         async with lock:
-            state = await session.state_store.load(run_id)
+            state = await run_reader.load(run_id)
             if state is None:
                 return _error("run not found", 404)
             if (
@@ -2792,7 +2741,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
 
     async def loop_list_runs(repository: str) -> list[RunState]:
         return [
-            state for state in await session.state_store.list_runs()
+            state for state in await run_reader.list_runs()
             if same_repository(state.repository, repository)
         ]
 
@@ -2821,7 +2770,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         await loop_direct(run_id, prompt, resume=True)
 
     async def loop_load(run_id: str) -> RunState | None:
-        return await session.state_store.load(RunId(run_id))
+        return await run_reader.load(RunId(run_id))
 
     def loop_spend(run_id: str) -> float:
         return usage_rollup(graph_events.since(RunId(run_id))).cost_usd or 0.0  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
@@ -3308,7 +3257,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 if (run_origin.channel, run_origin.thread_id) != (origin.channel, origin.thread_id):
                     continue
                 del deferred_graph_notifications[run_id]
-                state = await session.state_store.load(run_id)
+                state = await run_reader.load(run_id)
                 for event in pending_graph_notifications.pop(run_id, []):
                     if state is not None:
                         await notify_graph_event(state, event)
@@ -3336,7 +3285,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         slack_selections[(origin.channel, origin.thread_id, origin.author)] = run_id
 
     async def concierge_find_workorders(origin: RunOrigin) -> list[RunState]:
-        linked = list(await session.state_store.list_runs_for_origin(
+        linked = list(await run_reader.list_runs_for_origin(
             origin.channel, origin.thread_id
         ))
 
@@ -3689,7 +3638,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if snapshot is None:
             raise RuntimeError("could not reach the work order for this pull request")
         await runtime.steer(run_id, prompt, node_id=_reentry_node(runtime, snapshot))
-        state = await session.state_store.load(run_id)
+        state = await run_reader.load(run_id)
         link = run_notifier.work_order_link(state) if state is not None else None
         return Continuation(url=link.url if link else "", run_id=str(run_id))
 
@@ -4199,7 +4148,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if pull_request:
             repository = pull_request[0]
         else:
-            state = await session.state_store.load(RunId(run_id))
+            state = await run_reader.load(RunId(run_id))
             repository = (
                 run_project(state.repository or work_orders.repository) or ""
                 if state is not None else github_repository
@@ -4318,8 +4267,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         visible = await github_login.visible_repositories(request)
         if visible is None:
             return False
-        state = await session.state_store.load(run_id)
-        return state is None or not repository_visible(visible, state.repository)
+        record = await run_reader.store.run(run_id) if run_reader.store else None
+        repository = record.metadata.repository if record else None
+        return not repository or not repository_visible(visible, repository)
 
     # The GitHub repository whose checkout holds each chat's workspace branch,
     # once found: the branch stays in the repository it was made in, attached
@@ -4551,6 +4501,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5),
         ],
     )
+    app.state.run_reader = run_reader
     app.state.thread_service = service
     app.state.slack_ingress = slack_ingress
     app.state.github_ingress = github_ingress

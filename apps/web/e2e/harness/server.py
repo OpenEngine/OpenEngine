@@ -54,6 +54,7 @@ from engine.runtime import (  # noqa: E402
     load_engine_config,
 )
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
+from engine.graph_runtime_langgraph import forge  # noqa: E402
 from graph_workflow_fakes import scripted_catalog  # noqa: E402
 from provider_fakes import fake_acp  # noqa: E402
 
@@ -143,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
             return {"html_url": f"https://github.com/{owner}/{repo}/pull/7"}
         if method == "GET" and path == "/user":
             return {"login": "engine-e2e"}
+        if method == "GET" and path.endswith("/collaborators/engine-e2e/permission"):
+            return {"permission": "write"}
         if method == "GET" and "/pulls/" in path:
             owner, repo, _, number = path.removeprefix("/repos/").split("/")[:4]
             if path.count("/") > 5:
@@ -184,6 +187,13 @@ def main(argv: list[str] | None = None) -> int:
 
     GitHubSourceControl._api = _fake_api  # type: ignore[method-assign]
     GitHubSourceControl._repo_coords = _fake_repo_coords  # type: ignore[method-assign]
+    # Mode inference reads the origin before a workspace exists. Give the
+    # fixture's local bare remote the same forge identity as _repo_coords.
+    remote_project = forge.remote_project
+    fixture_origin = str(Path(args.repository).parent / "origin.git")
+    forge.remote_project = lambda remote: (
+        "acme/repository" if remote == fixture_origin else remote_project(remote)
+    )
 
     print(describe_loaded_config(loaded), flush=True)
     config = uvicorn.Config(app, host=settings.host, port=settings.port, log_level="warning")

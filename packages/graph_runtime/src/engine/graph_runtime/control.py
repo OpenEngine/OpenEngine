@@ -48,6 +48,7 @@ from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
 class RunStatus(Enum):
     """Where a run is, as far as anyone outside it can tell."""
 
+    SCHEDULED = "scheduled"
     RUNNING = "running"
     AWAITING_APPROVAL = "awaiting_approval"
     """At least one execution is waiting on a person.
@@ -144,6 +145,7 @@ class RunSnapshot:
     error: str = ""
     auto_approve_nodes: tuple[NodeId, ...] = ()
     runner_overrides: Mapping[NodeId, str] = field(default_factory=dict)
+    forge_context: Mapping[str, str] = field(default_factory=dict)
 
 
 #: Why a cancelled run stopped, as its `error` and as the payload of the

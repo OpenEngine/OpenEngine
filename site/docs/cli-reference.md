@@ -7,165 +7,69 @@ description: Every engine command, its arguments and options.
 
 Backend commands talk to the selected backend (`--backend`, else `ENGINE_BACKEND`, else the one `engine backend use` chose). List commands print a table unless `--json` is given; other backend commands print JSON unless `--pretty` is given. Exit status is 0 on success, 1 on a refusal or failed run, and 2 on a usage mistake. See [Graphs](graphs.md), [Loops](loops.md) and the [graph and loop specifications](cli-specs.md).
 
-## `engine connect`
+## `engine go`
 
-Connect shared source control or Slack.
+Make a change with the default graph and follow it live.
 
 ```text
-engine connect [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--open]
-               {gh,github,gitlab,slack}
+engine go [-h] [--backend NAME] [--pretty] [--project NAME] [--repo REPO] [--local]
+          [--review PR_OR_BRANCH] [--spec] [--input KEY=VALUE] [--wait] [--json]
+          [--timeout SECONDS]
+          [VERB/TARGET/INSTRUCTION ...]
 ```
 
 | Argument | Meaning |
 | --- | --- |
-| `provider` | one of `gh`, `github`, `gitlab`, `slack` |
-| `--server URL` | override the selected backend's URL |
-| `--backend NAME` | the backend to connect (default: the selected one) |
-| `--origin ORIGIN` | the GitLab instance to connect |
-| `--open` | open the authorization page in a browser |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+| `VERB/TARGET/INSTRUCTION` | instruction, or a verb and change target |
+| `--repo REPO` | repository (default: the current checkout) |
+| `--local` | force disconnected mode; keep work local |
+| `--review PR_OR_BRANCH` | review an existing change with the default graph |
+| `--spec` | write a specification before implementing |
+| `--input, -i KEY=VALUE` |  |
+| `--wait` | wait non-interactively for completion |
+| `--json` | JSON output; mode banner goes to stderr |
+| `--timeout SECONDS` |  |
 
-## `engine connections`
+## `engine verbs`
 
-Show source control and Slack connections.
+Show the project's verb bindings.
 
 ```text
-engine connections [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--json]
+engine verbs [-h] [--backend NAME] [--pretty] [--project NAME]
 ```
 
 | Argument | Meaning |
 | --- | --- |
-| `--server URL` | override the selected backend's URL |
-| `--backend NAME` | the backend to ask (default: the selected one) |
-| `--origin ORIGIN` | the GitLab instance to report |
-| `--json` | JSON instead of a table |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--project NAME` | the project names resolve in (default: the backend's) |
 
-## `engine disconnect`
+## `engine verb`
 
-Disconnect shared source control or Slack.
+Bind a project verb to a graph.
 
 ```text
-engine disconnect [-h] [--server URL] [--backend NAME] [--origin ORIGIN]
-                  {github,gitlab,slack}
+engine verb [-h] {set} ...
+```
+
+### `engine verb set`
+
+Bind a verb after checking the graph's inputs.
+
+```text
+engine verb set [-h] [--backend NAME] [--pretty] [--project NAME] verb graph
 ```
 
 | Argument | Meaning |
 | --- | --- |
-| `provider` | one of `github`, `gitlab`, `slack` |
-| `--server URL` | override the selected backend's URL |
-| `--backend NAME` | the backend to disconnect (default: the selected one) |
-| `--origin ORIGIN` | the GitLab instance to disconnect |
-
-## `engine daemon`
-
-Run the local OpenEngine service in the background.
-
-```text
-engine daemon [-h] [--no-browser] {open,setup,start,stop,status,logs,doctor} ...
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--no-browser` | start without opening a browser |
-
-### `engine daemon open`
-
-Start the service if needed and open it in a browser.
-
-```text
-engine daemon open [-h] [--no-browser]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--no-browser` | do not open a browser |
-
-### `engine daemon setup`
-
-Register the service to run at login, then start it.
-
-```text
-engine daemon setup [-h]
-```
-
-### `engine daemon start`
-
-Start the service if it is not running.
-
-```text
-engine daemon start [-h]
-```
-
-### `engine daemon stop`
-
-Stop the service gracefully.
-
-```text
-engine daemon stop [-h]
-```
-
-### `engine daemon status`
-
-Show version, health and URL.
-
-```text
-engine daemon status [-h] [--json]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--json` |  |
-
-### `engine daemon logs`
-
-Print the service log.
-
-```text
-engine daemon logs [-h] [-n LINES] [-f]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `-n, --lines LINES` | lines to print (default: 100) |
-| `-f, --follow` | keep printing new lines |
-
-### `engine daemon doctor`
-
-Check config, port and tools.
-
-```text
-engine daemon doctor [-h] [--json]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--json` |  |
-
-## `engine vm`
-
-Show or select the local sandbox backend.
-
-```text
-engine vm [-h] [--image IMAGE] [--config CONFIG] [--json] [{process,smolvm}]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `backend` | process is the default; one of `process`, `smolvm` |
-| `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
-| `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
-| `--json` | print the configured backend as JSON |
-
-## `engine doctor`
-
-Check local configuration, tools and SmolVM support.
-
-```text
-engine doctor [-h] [--json]
-```
-
-| Argument | Meaning |
-| --- | --- |
-| `--json` |  |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+| `verb` |  |
+| `graph` |  |
 
 ## `engine backend`
 
@@ -264,7 +168,7 @@ engine onboard [-h] [--backend NAME] [--pretty] [--path PATH]
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `url` |  |
-| `--path PATH` | checkout path on the daemon machine |
+| `--path PATH` | checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo) |
 | `--mode MODE` |  |
 
 ## `engine graph`
@@ -319,10 +223,12 @@ engine graph get [-h] [--backend NAME] [--pretty] [--project NAME] graph
 
 Run a graph with an instruction.
 
+Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch is given.
+
 ```text
 engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME=VALUE]
-                 [--branch BRANCH] [--agent AGENT] [--repo REPO] [--wait] [--timeout SECONDS]
-                 [--idempotency-key IDEMPOTENCY_KEY]
+                 [--branch BRANCH] [--agent AGENT] [--local] [--repo REPO] [--no-watch]
+                 [--json] [--wait] [--timeout SECONDS] [--idempotency-key IDEMPOTENCY_KEY]
                  graph [instruction]
 ```
 
@@ -331,12 +237,15 @@ engine graph run [-h] [--backend NAME] [--pretty] [--project NAME] [--input NAME
 | `--backend NAME` | the backend to use (default: the selected one) |
 | `--pretty` | human-readable output instead of JSON |
 | `--project NAME` | the project names resolve in (default: the backend's) |
-| `graph` | a graph, or a built-in one: review, adversarial-review, implement-review, spec-implement-review |
+| `graph` | a graph, or a built-in one: implementation-review-rerank |
 | `instruction` | what to do (default: run the graph) |
 | `--input, -i NAME=VALUE` |  |
 | `--branch BRANCH` | the branch to check out (sets the branch input) |
 | `--agent AGENT` | the agent to run (sets the agent input) |
+| `--local` | keep commits and findings local; do not publish |
 | `--repo REPO` | repository to check out |
+| `--no-watch` | return immediately without the live view |
+| `--json` | print JSON without the live view |
 | `--wait` | wait for the run to finish |
 | `--timeout SECONDS` | give up waiting after this long |
 | `--idempotency-key IDEMPOTENCY_KEY` | reuse to make a resubmission safe |
@@ -362,7 +271,7 @@ engine graphs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [
 Inspect a run.
 
 ```text
-engine run [-h] {get,wait} ...
+engine run [-h] {get,watch,wait} ...
 ```
 
 ### `engine run get`
@@ -371,6 +280,20 @@ Status, nodes, results and failure.
 
 ```text
 engine run get [-h] [--backend NAME] [--pretty] run_id
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--pretty` | human-readable output instead of JSON |
+| `run_id` |  |
+
+### `engine run watch`
+
+Follow a run live and answer approvals inline.
+
+```text
+engine run watch [-h] [--backend NAME] [--pretty] run_id
 ```
 
 | Argument | Meaning |
@@ -400,7 +323,8 @@ List runs, newest first.
 
 ```text
 engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--graph GRAPH]
-            [--loop LOOP] [--status STATUS] [--limit LIMIT]
+            [--loop LOOP] [--requester REQUESTER] [--origin ORIGIN] [--status STATUS]
+            [--limit LIMIT]
             [{list}]
 ```
 
@@ -413,6 +337,8 @@ engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--
 | `--all-projects` |  |
 | `--graph GRAPH` | only runs of this graph |
 | `--loop LOOP` | only runs this loop started |
+| `--requester REQUESTER` | only runs requested by this identity |
+| `--origin ORIGIN` | only runs from this origin channel |
 | `--status STATUS` | only runs in this status, such as running or failed |
 | `--limit LIMIT` | at most this many (default: 20) |
 
@@ -588,7 +514,7 @@ engine node steer [-h] [--backend NAME] [--pretty] [--idempotency-key IDEMPOTENC
 Add, inspect, remove and sign in the agents graphs name.
 
 ```text
-engine agent [-h] {add,get,remove,signin,claude} ...
+engine agent [-h] {add,get,remove,signin,claude,codex,opencode} ...
 ```
 
 ### `engine agent add`
@@ -667,7 +593,41 @@ engine agent claude [-h] [--repo REPO] [--base REF] [--backend NAME] ...
 | `--repo REPO` | a path inside the repository (default: the current directory) |
 | `--base REF` | what the workspace starts from (default: the backend's) |
 | `--backend NAME` | the backend to use; it must run on this machine |
-| `claude_args` | passed to claude after -- |
+| `agent_args` | passed to claude after -- |
+
+### `engine agent codex`
+
+Drive an implementation node with Codex in this terminal.
+
+Start a run whose implementation node is Codex in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to codex.
+
+```text
+engine agent codex [-h] [--repo REPO] [--base REF] [--backend NAME] ...
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--repo REPO` | a path inside the repository (default: the current directory) |
+| `--base REF` | what the workspace starts from (default: the backend's) |
+| `--backend NAME` | the backend to use; it must run on this machine |
+| `agent_args` | passed to codex after -- |
+
+### `engine agent opencode`
+
+Drive an implementation node with OpenCode in this terminal.
+
+Start a run whose implementation node is OpenCode in this terminal, working in a fresh workspace with the tools [sessions] grants in engine.toml. Arguments after -- go to opencode.
+
+```text
+engine agent opencode [-h] [--repo REPO] [--base REF] [--backend NAME] ...
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--repo REPO` | a path inside the repository (default: the current directory) |
+| `--base REF` | what the workspace starts from (default: the backend's) |
+| `--backend NAME` | the backend to use; it must run on this machine |
+| `agent_args` | passed to opencode after -- |
 
 ## `engine agents`
 
@@ -682,3 +642,163 @@ engine agents [-h] [--json] [--backend NAME] [{list}]
 | `--json` | JSON instead of a table |
 | `action` | one of `list` |
 | `--backend NAME` |  |
+
+## `engine connect`
+
+Connect shared source control or Slack.
+
+```text
+engine connect [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--open]
+               {gh,github,gitlab,slack}
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `provider` | one of `gh`, `github`, `gitlab`, `slack` |
+| `--server URL` | override the selected backend's URL |
+| `--backend NAME` | the backend to connect (default: the selected one) |
+| `--origin ORIGIN` | the GitLab instance to connect |
+| `--open` | open the authorization page in a browser |
+
+## `engine connections`
+
+Show source control and Slack connections.
+
+```text
+engine connections [-h] [--server URL] [--backend NAME] [--origin ORIGIN] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--server URL` | override the selected backend's URL |
+| `--backend NAME` | the backend to ask (default: the selected one) |
+| `--origin ORIGIN` | the GitLab instance to report |
+| `--json` | JSON instead of a table |
+
+## `engine disconnect`
+
+Disconnect shared source control or Slack.
+
+```text
+engine disconnect [-h] [--server URL] [--backend NAME] [--origin ORIGIN]
+                  {github,gitlab,slack}
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `provider` | one of `github`, `gitlab`, `slack` |
+| `--server URL` | override the selected backend's URL |
+| `--backend NAME` | the backend to disconnect (default: the selected one) |
+| `--origin ORIGIN` | the GitLab instance to disconnect |
+
+## `engine daemon`
+
+Run the local OpenEngine service in the background.
+
+```text
+engine daemon [-h] [--no-browser] {open,setup,start,stop,status,logs,doctor} ...
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--no-browser` | start without opening a browser |
+
+### `engine daemon open`
+
+Start the service if needed and open it in a browser.
+
+```text
+engine daemon open [-h] [--no-browser]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--no-browser` | do not open a browser |
+
+### `engine daemon setup`
+
+Register the service to run at login, then start it.
+
+```text
+engine daemon setup [-h]
+```
+
+### `engine daemon start`
+
+Start the service if it is not running.
+
+```text
+engine daemon start [-h]
+```
+
+### `engine daemon stop`
+
+Stop the service gracefully.
+
+```text
+engine daemon stop [-h]
+```
+
+### `engine daemon status`
+
+Show version, health and URL.
+
+```text
+engine daemon status [-h] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` |  |
+
+### `engine daemon logs`
+
+Print the service log.
+
+```text
+engine daemon logs [-h] [-n LINES] [-f]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `-n, --lines LINES` | lines to print (default: 100) |
+| `-f, --follow` | keep printing new lines |
+
+### `engine daemon doctor`
+
+Check config, port and tools.
+
+```text
+engine daemon doctor [-h] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` |  |
+
+## `engine vm`
+
+Show or select the local sandbox backend.
+
+```text
+engine vm [-h] [--image IMAGE] [--config CONFIG] [--json] [{process,smolvm}]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `backend` | process is the default; one of `process`, `smolvm` |
+| `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
+| `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
+| `--json` | print the configured backend as JSON |
+
+## `engine doctor`
+
+Check local configuration, tools and SmolVM support.
+
+```text
+engine doctor [-h] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` |  |

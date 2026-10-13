@@ -19,7 +19,7 @@ import httpx
 import pytest
 import yaml
 from engine.domain import RunId, WorkspaceId
-from engine.graph_runtime import RunStatus
+from engine.graph_runtime import GraphId, RunStatus
 from engine.graph_runtime_langgraph import (
     LangGraphRuntime,
     PullRequestRecord,
@@ -229,7 +229,13 @@ def test_the_instruction_is_builtin_and_runners_must_exist() -> None:
 
 
 def test_a_runner_input_is_not_checked_at_registration() -> None:
-    parse_graph(yaml.safe_load(starters.source("adversarial-review")), runners=["codex"])
+    parse_graph(yaml.safe_load("""apiVersion: openengine.cc/v1
+name: runner-input
+inputs:
+  agent: {default: claude}
+implementation:
+  work: {agent: '${inputs.agent}', prompt: hi}
+"""), runners=["codex"])
 
 
 # --- graphs and runs ----------------------------------------------------------
@@ -273,21 +279,19 @@ def test_registering_discovering_and_running_a_graph(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_a_built_in_graph_registers_without_its_default_agent(tmp_path: Path) -> None:
+def test_default_python_graph_uses_module_metadata(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
-            _, created = await service.add_graph("default", source=starters.source("adversarial-review"))
-            assert created
-            with pytest.raises(ServiceError, match=r"agent 'claude' is not available .*available: stub.*--agent"):
-                await service.submit_run(
-                    project="default", graph="adversarial-review", instruction="x",
-                    inputs={"branch": "feat/x"},
-                )
-            run, created = await service.submit_run(
-                project="default", graph="adversarial-review", instruction="x",
-                inputs={"branch": "feat/x", "agent": "stub"},
-            )
-            assert created and run["runId"]
+            graph, created = await service.add_graph("default", source=starters.source(), format="python")
+            assert created and graph["name"] == starters.DEFAULT
+            assert graph["description"].startswith("Implement, check CI")
+            assert graph["definition"]["workflowId"] == starters.DEFAULT
+            assert str(service.workflows()[0].graph_id) == graph["versionId"]
+            again, created = await service.add_graph("default", source=starters.source(), format="python")
+            assert not created and again["versionId"] == graph["versionId"]
+        async with graph_service(tmp_path) as service:
+            assert service.get_graph("default", starters.DEFAULT)["name"] == starters.DEFAULT
+            assert service.workflows()[0].graph_id == graph["versionId"]
 
     asyncio.run(scenario())
 
@@ -341,6 +345,58 @@ def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: 
             assert failed["status"] == "failed"
             assert failed["failure"]["node"] == "work"
             assert failed["failure"]["authRequired"]["command"] == "engine agent signin stub"
+
+    asyncio.run(scenario())
+
+
+def test_a_node_names_the_runner_it_chose_before_it_finishes(tmp_path: Path) -> None:
+    # The runner comes from an input, so the graph's default cannot know it; a
+    # node that fails before finishing must still name the one it ran on.
+    source = yaml.safe_dump({
+        "apiVersion": "openengine.cc/v1",
+        "name": "chosen",
+        "inputs": {"runner": {"default": "stub", "choices": ["stub", "qwen"]}},
+        "implementation": {"work": {"agent": "${inputs.runner}", "prompt": "AUTH ${instruction}"}},
+    })
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            await service.add_agent("opencode", name="qwen", model="m", url="http://localhost:11434/v1")
+            await service.add_graph("default", source=source)
+            run, _ = await service.submit_run(
+                project="default", graph="chosen", instruction="x", inputs={"runner": "qwen"},
+            )
+            failed = await settled(service, run["runId"])
+            assert failed["status"] == "failed"
+            assert failed["failure"]["authRequired"]["command"] == "engine agent signin qwen"
+            assert {node["node"]: node["runner"] for node in failed["nodes"]}["work"] == "qwen"
+
+    asyncio.run(scenario())
+
+
+def test_an_agents_thinking_is_published_but_is_not_its_output(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            await service.add_graph("default", source=single("thinker", "THINK ${instruction}"))
+            run, _ = await service.submit_run(project="default", graph="thinker", instruction="x")
+            done = await settled(service, run["runId"])
+            assert done["results"] == {"work": "Let me look. echo: THINK x"}
+            events = service.runtime.store.events_since(RunId(run["runId"]))
+            said = [
+                (event.kind.value, event.payload.get("text"))
+                for event in events
+                if event.node_id == "work" and (
+                    event.kind.value == "thought"
+                    or (event.kind.value == "transcript" and event.payload.get("role") == "assistant")
+                )
+            ]
+            # In the order it happened, a line at a time, and never as speech.
+            assert said == [
+                ("transcript", "Let me look. "),
+                ("thought", "Reading the prompt.\n"),
+                ("thought", "Then answering."),
+                ("transcript", "echo: THINK x"),
+            ]
 
     asyncio.run(scenario())
 
@@ -649,9 +705,22 @@ def test_a_session_is_a_run_whose_implementation_node_is_the_callers_cli(tmp_pat
             with pytest.raises(NotFound):
                 service.session_json("s-missing")
             with pytest.raises(ServiceError, match="agent must be"):
-                await service.start_session(agent="codex", repository="example/repo")
+                await service.start_session(agent="gemini", repository="example/repo")
 
     asyncio.run(scenario())
+
+
+def test_each_session_agent_is_told_engines_shell_rules_in_its_own_terms() -> None:
+    from engine.graph_service.session import agent_settings
+    from engine.runtime.config import ApprovalConfig, BashApprovalConfig
+
+    policy = ApprovalConfig(bash=BashApprovalConfig(deny=("git push **", "gh pr create", "rm *.txt")))
+    assert agent_settings("claude", policy) == {"permissions": {"deny": ["Bash(git push:*)", "Bash(gh pr create)"]}}
+    assert agent_settings("opencode", policy) == {
+        "permission": {"bash": {"git push": "deny", "git push *": "deny", "gh pr create": "deny"}},
+    }
+    assert agent_settings("codex", policy) == {}
+    assert agent_settings("opencode", ApprovalConfig(bash=BashApprovalConfig(deny=()))) == {}
 
 
 # --- agents -------------------------------------------------------------------
@@ -873,6 +942,17 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
                     assert body["results"]["review"] == "echo: review echo: do it (plain)"
                     listed = (await client.get("/api/runs")).json()["runs"]
                     assert [item["runId"] for item in listed] == [run_id]
+                    assert listed[0]["phase"] == "succeeded"
+                    web_run = await client.post("/api/runs", json={
+                        "workflowId": run.json()["versionId"], "prompt": "from web",
+                        "repository": "example/repo",
+                    })
+                    assert web_run.status_code == 201, web_run.text
+                    web_id = web_run.json()["runId"]
+                    cli_runs = (await client.get("/api/v1/runs")).json()["runs"]
+                    row = next(item for item in cli_runs if item["runId"] == web_id)
+                    assert row["graphId"] is None and row["version"] is None
+                    assert (await client.get(f"/api/v1/runs/{web_id}")).status_code == 200
             store.close()
 
     asyncio.run(scenario())
@@ -1016,5 +1096,168 @@ def test_running_graph_service_resolves_added_repository(tmp_path: Path, monkeyp
             snapshot = await service.runtime.snapshot(RunId(run["runId"]))
             assert snapshot.values["repository"] == str(tmp_path)
             assert (await settled(service, run["runId"]))["status"] == "completed"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_v1_runs_infer_forge_mode_and_accept_local_without_a_graph_input(tmp_path, monkeypatch, local):
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            source = service.runtime.source_control
+            login = AsyncMock(return_value="bot")
+            monkeypatch.setattr(source, "authenticated_login", login, raising=False)
+            monkeypatch.setattr(source, "can_write_repository", AsyncMock(return_value=True), raising=False)
+            app = Starlette(routes=[Mount("/api/v1", app=create_app(service))])
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                added = await client.post("/api/v1/graphs", json={"source": PAIR, "format": "yaml"})
+                assert added.status_code in {200, 201}, added.text
+                started = await client.post("/api/v1/runs", json={
+                    "graph": "pair", "instruction": "do it", "repository": "acme/api",
+                    "inputs": {"mode": "disconnected"} if local else {},
+                })
+                assert started.status_code == 201, started.text
+                context = started.json()["forgeContext"]
+                assert context["mode"] == ("disconnected" if local else "connected")
+                assert context["reason"]
+                completed = await settled(service, started.json()["runId"])
+                assert completed["forgeContext"] == context
+                if local:
+                    login.assert_not_called()
+    asyncio.run(scenario())
+
+
+PYTHON_GRAPH = '''
+from engine.graph_runtime_langgraph import graph_workflow, State
+from langgraph.graph import StateGraph, START, END
+builder = StateGraph(State)
+builder.add_node("work", lambda state: {"answer": "done"})
+builder.add_edge(START, "work")
+builder.add_edge("work", END)
+workflow = graph_workflow(builder, id="python-example", name="Python example", description="A module description.")
+'''
+
+
+def test_python_registration_and_reload_do_not_block_health(tmp_path):
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            app = Starlette(routes=[
+                Route("/api/health", lambda request: JSONResponse({"ok": True})),
+                Mount("/api/v1", create_app(service)),
+            ])
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                # Sleep represents a slow import; health must answer while it is still importing.
+                task = asyncio.create_task(client.post("/api/v1/graphs", json={
+                    "project": "default", "format": "python",
+                    "source": "import time\ntime.sleep(0.3)\n" + PYTHON_GRAPH,
+                }))
+                await asyncio.sleep(0.05)
+                assert (await client.get("/api/health")).status_code == 200
+                assert not task.done(), "Python registration blocked health until the import finished"
+                response = await task
+                assert response.status_code == 201, response.text
+                graph = response.json()
+                assert graph["name"] == "python-example"
+                assert graph["description"] == "A module description."
+        # Startup uses the same off-thread loading path, and also yields to health.
+        context = graph_service(tmp_path)
+        reloading = asyncio.create_task(context.__aenter__())
+        try:
+            await asyncio.sleep(0.05)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                assert (await client.get("/api/health")).status_code == 200
+            assert not reloading.done(), "Python reload blocked health until the import finished"
+            service = await reloading
+            assert service.get_graph("default", "python-example")["versionId"] == graph["versionId"]
+            run, _ = await service.submit_run(project="default", graph="python-example", instruction="go")
+            assert (await settled(service, run["runId"]))["status"] == "completed"
+        finally:
+            await reloading
+            await context.__aexit__(None, None, None)
+
+    asyncio.run(scenario())
+
+
+def test_registration_loads_an_identical_but_unloaded_version(tmp_path):
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            graph, _ = await service.add_graph("default", source=PAIR)
+            version_id = graph["versionId"]
+            service._loaded.pop(version_id)
+            # Simulate a version whose original startup load failed before runtime registration.
+            from unittest.mock import patch
+            with patch.object(service.runtime, "register") as register:
+                again, created = await service.add_graph("default", source=PAIR)
+                register.assert_called_once()
+            assert not created and again["versionId"] == version_id
+            assert version_id in service._loaded
+
+    asyncio.run(scenario())
+
+
+def test_corrected_api_version_does_not_dedupe_to_stale_source(tmp_path):
+    import hashlib
+    from engine.graph_service.store import GraphRow, VersionRow, now_iso
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            spec = parse_graph(yaml.safe_load(PAIR))
+            at = now_iso()
+            old_manifest = spec.json()
+            old_manifest.pop("apiVersion")
+            old_digest = hashlib.sha256(json.dumps(old_manifest, sort_keys=True, default=str).encode()).hexdigest()
+            stale = VersionRow("gv-stale", "g-stale", 1, {}, old_digest,
+                               at, source=PAIR.replace("openengine.cc/v1", "openengine.dev/v1"))
+            with service.store.transaction():
+                service.store.insert_graph(GraphRow("g-stale", "default", "pair", "gv-stale", at, at))
+                service.store.insert_version(stale)
+            corrected, created = await service.add_graph("default", source=PAIR)
+            assert created and corrected["version"] == 2
+            assert corrected["versionId"] != "gv-stale"
+            run, _ = await service.submit_run(project="default", graph="pair", instruction="hi")
+            assert (await settled(service, run["runId"]))["status"] == "completed"
+
+    asyncio.run(scenario())
+
+
+def test_onboarded_runner_survives_python_rebuild_with_session_config(tmp_path):
+    async def scenario():
+        async with graph_service(tmp_path, session_config={"model": "test-model"}) as service:
+            graph, _ = await service.add_graph("default", source=starters.source(runner="opencode"), format="python")
+            inputs = {item.name: item for item in service.workflows()[0].inputs}
+            for name in ("implementation_runner", "review_runner"):
+                assert inputs[name].default == "opencode"
+                assert "opencode" in inputs[name].choices
+            assert graph["name"] == starters.DEFAULT
+    asyncio.run(scenario())
+
+
+def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp_path):
+    from engine.graph_runtime.metadata import RunMetadata
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            await service.runtime.store.save_metadata(
+                RunId("reserved"), GraphId("unregistered"),
+                RunMetadata(name="Waiting", requester="alice", origin_channel="slack", scheduled=True),
+            )
+            rows = await service.list_runs(None, requester="alice", origin="slack")
+            assert len(rows) == 1
+            assert rows[0]["runId"] == "reserved"
+            assert rows[0]["status"] == "scheduled"
+            assert rows[0]["name"] == "Waiting"
+            assert (await service.list_runs("default"))[0]["runId"] == "reserved"
+            assert rows[0]["graphId"] is None and rows[0]["version"] is None
+            assert await service.list_runs(None, requester="bob") == []
+            assert await service.list_runs(None, origin="github") == []
+            assert (await service.run_json("reserved"))["status"] == "scheduled"
 
     asyncio.run(scenario())

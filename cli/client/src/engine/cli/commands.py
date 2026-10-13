@@ -24,14 +24,14 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
-from engine.cli import backends, repository, starters
+from engine.cli import backends, live, repository, starters
 from engine.cli.backends import Backend, BackendError
 from engine.cli.http import Client, RequestFailed
 from engine.cli.specs import graph_spec, loop_spec
 
 COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
-    "runner", "onboard",
+    "runner", "onboard", "go", "verb", "verbs",
 })
 #: Commands that still parse but are not advertised in `engine --help`.
 HIDDEN = frozenset({"runner"})
@@ -56,7 +56,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     """Add these commands to the `engine` parser.
 
     Answers `engine agent`'s actions, so the terminal app can add the ones that
-    run here rather than on a backend, such as `engine agent claude`.
+    run here rather than on a backend, such as `engine agent claude`, `codex` and `opencode`.
     """
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--backend", metavar="NAME", help="the backend to use (default: the selected one)")
@@ -67,6 +67,27 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     listed.add_argument("--json", action="store_true", help="JSON instead of a table")
     listed.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
     scoped.add_argument("--project", metavar="NAME", help="the project names resolve in (default: the backend's)")
+
+    go = commands.add_parser(
+        "go", parents=[scoped], help="make a change with the default graph and follow it live",
+    )
+    go.add_argument("words", nargs="*", metavar="VERB/TARGET/INSTRUCTION", help="instruction, or a verb and change target")
+    go.add_argument("--repo", default="", help="repository (default: the current checkout)")
+    go.add_argument("--local", action="store_true", help="force disconnected mode; keep work local")
+    go.add_argument("--review", metavar="PR_OR_BRANCH", help="review an existing change with the default graph")
+    go.add_argument("--spec", action="store_true", help="write a specification before implementing")
+    go.add_argument("--input", "-i", action="append", default=[], metavar="KEY=VALUE")
+    go.add_argument("--wait", action="store_true", help="wait non-interactively for completion")
+    go.add_argument("--json", action="store_true", help="JSON output; mode banner goes to stderr")
+    go.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
+    go.set_defaults(graph=starters.DEFAULT, branch="", agent="", no_watch=False, idempotency_key="")
+
+    commands.add_parser("verbs", parents=[scoped], help="show the project's verb bindings")
+    verb = commands.add_parser("verb", help="bind a project verb to a graph")
+    actions = verb.add_subparsers(dest="action", required=True)
+    setting = actions.add_parser("set", parents=[scoped], help="bind a verb after checking the graph's inputs")
+    setting.add_argument("verb")
+    setting.add_argument("graph")
 
     backend = commands.add_parser("backend", help="choose which engine daemon commands talk to")
     actions = backend.add_subparsers(dest="action", required=True)
@@ -92,7 +113,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
 
     onboard = commands.add_parser("onboard", parents=[common], help="onboard a GitHub repository")
     onboard.add_argument("url", nargs="?")
-    onboard.add_argument("--path", help="checkout path on the daemon machine")
+    onboard.add_argument("--path", help="checkout path on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
     onboard.add_argument("--mode", choices=("connected", "disconnected"))
 
     graph = commands.add_parser("graph", help="register, inspect and run graphs")
@@ -105,13 +126,19 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("file", help="the graph file, or - for YAML on stdin")
     getting = actions.add_parser("get", parents=[scoped], help="a graph and its exact definition")
     getting.add_argument("graph", help="a name, name@VERSION, graph id or version id")
-    running = actions.add_parser("run", parents=[scoped], help="run a graph with an instruction")
+    running = actions.add_parser(
+        "run", parents=[scoped], help="run a graph with an instruction",
+        description="Follows live when stdin and stdout are TTYs, unless --wait, --json or --no-watch is given.",
+    )
     running.add_argument("graph", help=f"a graph, or a built-in one: {', '.join(starters.NAMES)}")
     running.add_argument("instruction", nargs="?", default="", help="what to do (default: run the graph)")
     running.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
     running.add_argument("--branch", default="", help="the branch to check out (sets the branch input)")
     running.add_argument("--agent", default="", help="the agent to run (sets the agent input)")
+    running.add_argument("--local", action="store_true", help="keep commits and findings local; do not publish")
     running.add_argument("--repo", default="", help="repository to check out")
+    running.add_argument("--no-watch", action="store_true", help="return immediately without the live view")
+    running.add_argument("--json", action="store_true", help="print JSON without the live view")
     running.add_argument("--wait", action="store_true", help="wait for the run to finish")
     running.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS", help="give up waiting after this long")
     running.add_argument("--idempotency-key", default="", help="reuse to make a resubmission safe")
@@ -125,6 +152,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     actions = run.add_subparsers(dest="action", required=True)
     getting = actions.add_parser("get", parents=[common], help="status, nodes, results and failure")
     getting.add_argument("run_id")
+    watching = actions.add_parser("watch", parents=[common], help="follow a run live and answer approvals inline")
+    watching.add_argument("run_id")
     waiting = actions.add_parser("wait", parents=[common], help="wait for a run to finish")
     waiting.add_argument("run_id")
     waiting.add_argument("--timeout", type=float, default=0.0, metavar="SECONDS")
@@ -135,6 +164,8 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     runs.add_argument("--all-projects", action="store_true")
     runs.add_argument("--graph", default="", help="only runs of this graph")
     runs.add_argument("--loop", default="", help="only runs this loop started")
+    runs.add_argument("--requester", default="", help="only runs requested by this identity")
+    runs.add_argument("--origin", default="", help="only runs from this origin channel")
     runs.add_argument("--status", default="", help="only runs in this status, such as running or failed")
     runs.add_argument("--limit", type=int, default=20, help="at most this many (default: 20)")
 
@@ -253,7 +284,7 @@ def onboard_repository(arguments: argparse.Namespace) -> int:
                 print(f"{problem['message']}. Fix: {problem['fix']}", file=sys.stderr)
             return EXIT_FAILED
         if state["status"] == "complete":
-            command = ["engine", "graph", "run", "review", "--project", state["repository"],
+            command = ["engine", "go", "review", "--project", state["repository"],
                        "--repo", state["path"], "--backend", backend.name, "--input", "ref=HEAD"]
             print(f"Next: {shlex.join(command)}")
             return EXIT_OK
@@ -353,36 +384,164 @@ def graph_get(arguments: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _ensure_graph(client: Client, project: str, graph: str) -> dict[str, Any]:
+    try:
+        found = client.get(f"/graphs/{quote(graph, safe='')}", project=project)
+    except RequestFailed as error:
+        if graph not in starters.NAMES or error.status != 404:
+            raise
+        found = {}
+    if graph in starters.NAMES and (not found or found.get("format") == "yaml"):
+        found = client.post("/graphs", {"project": project, "format": "python", "source": starters.source(graph)})
+    return found
+
+
+def _contract(graph: dict[str, Any], verb: str) -> None:
+    declared = set(graph.get("inputs", []))
+    if not ("instruction" in declared if verb == "go" else declared.intersection({"pr_url", "ref"})):
+        required = "instruction" if verb == "go" else "pr_url or ref"
+        raise _UsageError(f"graph {graph.get('name')!r} cannot bind {verb!r}: it must declare {required}")
+
+
+def verbs_list(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    _print(client.get("/verbs", project=_project(arguments, backend)))
+    return EXIT_OK
+
+
+def verb_set(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    project = _project(arguments, backend)
+    _contract(_ensure_graph(client, project, arguments.graph), arguments.verb)
+    _print(client.post(f"/verbs/{quote(arguments.verb, safe='')}", {"project": project, "graph": arguments.graph}))
+    return EXIT_OK
+
+
+def go(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    project = _project(arguments, backend)
+    verbs = client.get("/verbs", project=project)["verbs"]
+    words, verb, target = arguments.words, "go", {}
+    if arguments.review:
+        words = ["review", arguments.review, *words]
+    repo = _repository(arguments, backend)
+    if words and words[0] in verbs and words[0] != "go":
+        candidate = words[1] if len(words) > 1 else ""
+        inferred = not candidate
+        if inferred and not arguments.repo and (checkout := repository.current()):
+            candidate = checkout.branch
+        try:
+            target = client.post("/targets/resolve", {"repository": repo, "target": candidate,
+                                "local": arguments.local, "verb": words[0]})
+        except RequestFailed as error:
+            # Multiword prose beginning with a verb stays an implementation instruction.
+            # A sole missing target is a useful typo error; explicit PR syntax is never prose.
+            explicit = candidate.startswith(("https://", "#")) or "#" in candidate or "/" in candidate
+            if error.status != 404 or len(words) == 2 or explicit:
+                raise
+        else:
+            verb, words = words[0], words[2:] if not inferred else []
+    if verb == "go" and not words:
+        raise _UsageError("give an instruction or a verb with an inferable target")
+    if not target:
+        target = client.post("/targets/resolve", {"repository": repo, "target": "", "local": arguments.local, "verb": "go"})
+    arguments.graph = verbs[verb]
+    graph = _ensure_graph(client, project, arguments.graph)
+    _contract(graph, verb)
+    declared = set(graph.get("inputs", []))
+    if arguments.spec:
+        arguments.input.append("spec=true")
+    if arguments.graph == starters.DEFAULT:
+        if verb == "review":
+            arguments.input.append("review_only=true")
+            if target.get("pr_url"):
+                arguments.input.append("publish_review=true")
+        elif verb == "fix":
+            arguments.input.append("fix_only=true")
+    supplied = _inputs(arguments.input)
+    for name in ("pr_url", "ref", "review_threads"):
+        if name in target and name in declared and name not in supplied:
+            arguments.input.append(f"{name}={target[name]}")
+    if verb != "go" and not any(name in declared and target.get(name) for name in ("pr_url", "ref")):
+        raise _UsageError("the target does not provide an input accepted by this graph (pr_url or ref)")
+    arguments.repo = target["repo"]
+    arguments.instruction = " ".join(words) or f"{verb.capitalize()} this change"
+    arguments.verb, arguments.target = verb, target
+    arguments.pretty = not arguments.json
+    return graph_run(arguments)
+
+
+def _submit_run(client: Client, request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return client.post("/runs", request, idempotent=True)
+    except RequestFailed as refused:
+        unloaded = refused.status == 503 and "is not loaded" in str(refused)
+        if request["graph"] not in starters.NAMES or not (refused.status == 404 or unloaded):
+            raise
+        client.post("/graphs", {"project": request["project"], "format": "python",
+                                "source": starters.source(request["graph"])})
+        return client.post("/runs", request, idempotent=True)
+
+
 def graph_run(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     key = arguments.idempotency_key or f"cli-{uuid.uuid4()}"
     inputs = _inputs(arguments.input)
+    graph = arguments.graph
+    if arguments.command != "go" and graph in starters.ALIASES:
+        print(f"engine: {graph} is deprecated; use engine go instead (alias kept for one release)", file=sys.stderr)
+        graph, defaults = starters.ALIASES[graph]
+        inputs = {**defaults, **inputs}
+        _ensure_graph(client, _project(arguments, backend), graph)
+    if graph in starters.NAMES:
+        if arguments.branch:
+            inputs["ref"] = arguments.branch
+        if arguments.agent or inputs.get("agent"):
+            agent = arguments.agent or inputs["agent"]
+            inputs.pop("agent", None)
+            inputs.update(implementation_runner=agent, review_runner=agent)
+    if getattr(arguments, "local", False):
+        inputs["mode"] = "disconnected"
     for name in ("branch", "agent"):
-        if getattr(arguments, name):
+        if getattr(arguments, name) and graph not in starters.NAMES:
             inputs[name] = getattr(arguments, name)
     request = {
         "project": _project(arguments, backend),
-        "graph": arguments.graph,
+        "graph": graph,
         "instruction": arguments.instruction or _default_instruction(arguments),
         "inputs": inputs,
         "repository": _repository(arguments, backend),
         "idempotencyKey": key,
     }
-    try:
-        run = client.post("/runs", request, idempotent=True)
-    except RequestFailed as refused:
-        if refused.status != 404 or arguments.graph not in starters.NAMES:
-            raise
-        # A built-in graph this project has not run yet: register it, then run it.
-        client.post("/graphs", {"project": request["project"], "format": "yaml",
-                                "source": starters.source(arguments.graph)})
-        run = client.post("/runs", request, idempotent=True)
+    run = _submit_run(client, request)
+    if arguments.command == "go" and (context := run.get("forgeContext")):
+        target = arguments.target.get("pr_url") or arguments.target.get("ref") or request["repository"]
+        if arguments.target.get("pr_url"):
+            parts = urlsplit(arguments.target["pr_url"]).path.strip("/").split("/")
+            if len(parts) == 4 and parts[2] == "pull":
+                target = f"{parts[0]}/{parts[1]}#{parts[3]}"
+        effect = ("will post review comments" if arguments.verb == "review" else
+                  "will push fixes and reply to review threads" if arguments.verb == "fix" else "will open a pull request")
+        if arguments.verb == "review" and not arguments.target.get("pr_url"):
+            effect = "will keep findings in run results"
+        if context["mode"] == "disconnected":
+            effect = "will keep results and commits local"
+        print(live.safe_text(f"{graph} · {context['mode']} · {target} · {effect}"),
+              file=sys.stderr if arguments.json else sys.stdout, flush=True)
+    if not (arguments.wait or arguments.json or arguments.no_watch) and sys.stdout.isatty() and sys.stdin.isatty():
+        return _watch_run(client, run["runId"], backend)
+    if arguments.json:
+        arguments.pretty = False
     if arguments.wait:
         if not arguments.pretty:
             print(json.dumps({"runId": run["runId"], "status": run["status"]}), file=sys.stderr)
         else:
             print(f"started {run['runId']} ({run['graph']} v{run['version']}); waiting...", file=sys.stderr)
         run = _wait_for_run(client, run["runId"], arguments.timeout)
+    if arguments.command == "go" and not arguments.json:
+        for line in live.summary(run):
+            print(line)
+        return EXIT_FAILED if _run_failed(run) else EXIT_OK
     return _show_run(run, backend, arguments.pretty)
 
 
@@ -392,10 +551,11 @@ def runs_list(arguments: argparse.Namespace) -> int:
     runs = client.get(
         "/runs", project=project, graph=arguments.graph or None, loop=arguments.loop or None,
         status=arguments.status or None, limit=str(arguments.limit),
+        requester=arguments.requester or None, origin=arguments.origin or None,
     )["runs"]
     if not arguments.json:
         _table(runs, [
-            ("RUN ID", "runId"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}"), ("STATUS", "status"),
+            ("RUN ID", "runId"), ("NAME", "name"), ("GRAPH", lambda r: f"{r['graph']} v{r['version']}" if r["version"] is not None else r["graph"]), ("STATUS", "status"),
             ("LOOP", "loop"), ("STARTED", "startedAt"), ("SPEND", _run_spend),
         ])
     else:
@@ -405,7 +565,29 @@ def runs_list(arguments: argparse.Namespace) -> int:
 
 def run_get(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
-    return _show_run(client.get(f"/runs/{quote(arguments.run_id)}"), backend, arguments.pretty)
+    run = client.get(f"/runs/{quote(arguments.run_id)}")
+    if arguments.pretty:
+        print(live.safe_text(f"UI: {backend.url.rstrip('/')}/runs/{run['runId']}"))
+        for approval in run.get("pendingApprovals") or []:
+            command = approval.get("command") or approval.get("reason") or ""
+            print(live.safe_text(f"approval {approval['approvalId']} at {approval['node']}: {command}"))
+    return _show_run(run, backend, arguments.pretty)
+
+
+def run_watch(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    return _watch_run(client, arguments.run_id, backend)
+
+
+def _watch_run(client: Client, run_id: str, backend: Backend) -> int:
+    run, outcome = live.Watch(client, run_id).follow()
+    if outcome == "detached":
+        command = shlex.join(["engine", "run", "watch", run_id, "--backend", backend.name])
+        print(live.safe_text(f"Detached. Reattach with: {command}"))
+        return EXIT_OK
+    for line in live.summary(run):
+        print(line)
+    return EXIT_FAILED if outcome == "cancelled" or _run_failed(run) else EXIT_OK
 
 
 def run_wait(arguments: argparse.Namespace) -> int:
@@ -677,11 +859,17 @@ def _wait_for_steering(client: Client, execution_id: str, steering_id: str, time
         time.sleep(WAIT_INTERVAL_SECONDS)
 
 
+def _run_failed(run: dict[str, Any]) -> bool:
+    return run["status"] == "failed"
+
+
 def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
     auth = (run.get("failure") or {}).get("authRequired")
     if auth and backend.name != backends.LOCAL:
         auth["command"] = f"{auth['command']} --backend {backend.name}"
     if pretty:
+        if context := run.get("forgeContext"):
+            print(context["summary"])
         print(f"{run['runId']}  {run['graph']} v{run['version']}  {run['status']}")
         if run.get("nodes"):
             _table(run["nodes"], _NODE_COLUMNS)
@@ -701,7 +889,7 @@ def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
         if auth:
             print(f"engine: {auth['runner'] or 'a runner'} is not signed in; run `{auth['command']}`",
                   file=sys.stderr)
-    return EXIT_FAILED if run["status"] == "failed" else EXIT_OK
+    return EXIT_FAILED if _run_failed(run) else EXIT_OK
 
 
 def _health(backend: Backend) -> str:
@@ -816,6 +1004,9 @@ _STEERING_COLUMNS: list[tuple[str, Any]] = [
 ]
 
 _HANDLERS = {
+    ("verbs", None): verbs_list,
+    ("verb", "set"): verb_set,
+    ("go", None): go,
     ("onboard", None): onboard_repository,
     ("backend", "add"): backend_add,
     ("backend", "list"): backend_list,
@@ -829,6 +1020,7 @@ _HANDLERS = {
     ("graphs", "list"): graphs_list,
     ("run", "get"): run_get,
     ("run", "wait"): run_wait,
+    ("run", "watch"): run_watch,
     ("runs", "list"): runs_list,
     ("loop", "spec"): loop_spec,
     ("loop", "add"): loop_add,

@@ -101,6 +101,9 @@ class GraphWorkflow:
     with and no state to read -- so the id is retired here rather than dropped.
     """
 
+    description: str = ""
+    """A short explanation shown in the graph registry."""
+
     def compiled(self, checkpointer: Any) -> LangGraphDefinition:
         """This graph, compiled against the checkpointer a deployment owns."""
         return LangGraphDefinition(
@@ -118,6 +121,7 @@ def graph_workflow(
     *,
     id: str,
     name: str,
+    description: str = "",
     names: Mapping[str, str] | None = None,
     inputs: Sequence[WorkflowInput] = (),
     previous_ids: Sequence[str] = (),
@@ -130,6 +134,7 @@ def graph_workflow(
     *,
     id: str,
     name: str,
+    description: str = "",
     names: Mapping[str, str] | None = None,
     inputs: Sequence[WorkflowInput] = (),
     previous_ids: Sequence[str] = (),
@@ -141,6 +146,7 @@ def graph_workflow(
     *,
     id: str,
     name: str,
+    description: str = "",
     names: Mapping[str, str] | None = None,
     inputs: Sequence[WorkflowInput] = (),
     previous_ids: Sequence[str] = (),
@@ -178,6 +184,7 @@ def graph_workflow(
                 build(),
                 id=id,
                 name=name,
+                description=description,
                 names=names,
                 inputs=inputs,
                 previous_ids=previous_ids,
@@ -188,6 +195,7 @@ def graph_workflow(
         builder,
         id=id,
         name=name,
+        description=description,
         names=names,
         inputs=inputs,
         previous_ids=previous_ids,
@@ -199,6 +207,7 @@ def _workflow(
     *,
     id: str,
     name: str,
+    description: str = "",
     names: Mapping[str, str] | None,
     inputs: Sequence[WorkflowInput],
     previous_ids: Sequence[str],
@@ -220,6 +229,7 @@ def _workflow(
     return GraphWorkflow(
         graph_id=GraphId(id.strip()),
         name=name.strip(),
+        description=description,
         builder=builder,
         names=dict(names or {}),
         inputs=tuple(inputs),

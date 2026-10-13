@@ -937,6 +937,36 @@ def test_local_config_works_without_root_config(tmp_path):
     assert loaded.workflows_directory == (tmp_path / "workflows").resolve()
     assert loaded.config.approvals.bash.allow == ("uv run pytest",)
 
+
+def test_onboarding_directory_resolves_against_config_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = tmp_path / "deploy" / "engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[onboarding]\ndirectory = "../checkouts"\n')
+    loaded = load_engine_config(config, environ={}, cwd=tmp_path)
+    assert loaded.config.onboarding.directory == "../checkouts"
+    assert loaded.onboarding_directory == (tmp_path / "checkouts").resolve()
+
+
+def test_onboarding_directory_default_is_home_code(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = tmp_path / "engine.toml"
+    config.write_text("")
+    loaded = load_engine_config(config, environ={}, cwd=tmp_path)
+    assert loaded.config.onboarding.directory == ""
+    assert loaded.onboarding_directory == (tmp_path / "home" / "code").resolve()
+
+
+@pytest.mark.parametrize("value", ["   "])
+def test_onboarding_directory_blank_is_rejected(value):
+    with pytest.raises(EngineConfigError, match="must not be blank"):
+        parse_engine_config({"onboarding": {"directory": value}})
+
+
+def test_onboarding_directory_must_be_a_string():
+    with pytest.raises(EngineConfigError, match="must be a string"):
+        parse_engine_config({"onboarding": {"directory": 42}})
+
 def test_review_resolution_configuration():
     assert parse_engine_config({}).github.resolve_addressed_threads is True
     assert parse_engine_config({"github": {"resolve_addressed_threads": False}}).github.resolve_addressed_threads is False

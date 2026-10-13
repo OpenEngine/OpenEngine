@@ -20,6 +20,8 @@ The vocabulary, kept the same in every response:
 
 from __future__ import annotations
 
+from engine.graph_runtime.metadata import RunMetadata, run_name
+
 import asyncio
 import hashlib
 import json
@@ -287,7 +289,7 @@ class GraphService:
         self.runtime.register(self._session_workflow.compiled(self.runtime.checkpointer))
         for version in self.store.versions():
             try:
-                self._register(version)
+                await self._register(version)
             except Exception:
                 log.exception("registered graph version %s could not be loaded", version.version_id)
         at = self._now_iso()
@@ -438,6 +440,7 @@ class GraphService:
             raise ServiceError(f"format must be one of {', '.join(FORMATS)}")
         if not source.strip():
             raise ServiceError("the graph source is empty")
+        definition: dict[str, Any]
         if format == "yaml":
             spec = _parse_yaml(source, runners=self.runners())
             graph_name, definition, digest = spec.name, {"format": "yaml", **spec.json()}, spec.digest
@@ -451,20 +454,25 @@ class GraphService:
         async with self._lock:
             at = self._now_iso()
             version_id = f"gv-{uuid.uuid4().hex[:12]}"
+            workflow = None
             if format == "python":
                 # Loaded once to learn its name and to refuse it early if it is broken.
-                workflow = self._python_workflow(version_id, source, graph_name)
+                workflow = await asyncio.to_thread(self._python_workflow, version_id, source, graph_name)
                 graph_name = graph_name or str(workflow.graph_id)
                 if not _NAME.match(graph_name):
                     raise ServiceError(f"{graph_name!r} is not a usable graph name; pass --name")
                 definition["workflowId"] = str(workflow.graph_id)
                 definition["title"] = workflow.name
+                definition["description"] = workflow.description
+                definition["inputs"] = [item.name for item in workflow.inputs]
                 digest = hashlib.sha256(f"{graph_name}\n{source}".encode()).hexdigest()
             existing = self.store.graphs_named(graph_name, project)
             if existing:
                 graph = existing[0]
                 latest = self.store.version(graph.latest_version_id)
                 if latest is not None and latest.digest == digest:
+                    if latest.version_id not in self._loaded:
+                        await self._register(latest, name=graph_name, workflow=workflow)
                     self._forget_source(version_id)
                     return self._graph_json(graph, latest, definition=True), False
                 number = max(version.number for version in self.store.versions(graph.graph_id)) + 1
@@ -477,7 +485,7 @@ class GraphService:
             # Compiled before anything is written: a graph LangGraph refuses is
             # a validation error, and leaves no version behind.
             try:
-                self._register(version, name=graph_name)
+                await self._register(version, name=graph_name, workflow=workflow)
             except GraphError:
                 self._forget_source(version_id)
                 raise
@@ -608,23 +616,28 @@ class GraphService:
         overrides = record.runner_overrides if record else {}
         values = snapshot.values or {}
         results = _results(topology, values)
+        run_inputs = values.get("inputs")
+        run_inputs = run_inputs if isinstance(run_inputs, Mapping) else {}
         events = self.runtime.store.events_since(RunId(run_id))
         usage = usage_rollup(events)
         activity = _latest_activity(events)
+        selected = _selected_runners(events)
         failure: dict[str, Any] | None = None
         if snapshot.status is RunStatus.FAILED:
             failed = next((row for row in reversed(executions) if row.status == "failed"), None)
             node_id = failed.node_id if failed else ""
             failure = {"error": snapshot.error, "node": node_id or None}
-            runner = _runner_of(node_id, values, overrides, topology)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
+            runner = _runner_of(node_id, values, overrides, topology, selected)  # pyright: ignore[reportAssignmentType]  # Baseline: see docs/pyright.md
             if auth := auth_required(snapshot.error, runner):  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 failure["authRequired"] = auth
 
         def runner(node_id: str) -> str:
-            return _runner_of(node_id, values, overrides, topology)
+            return _runner_of(node_id, values, overrides, topology, selected)
 
         return {
+            "forgeContext": dict(snapshot.forge_context),
             "runId": run_id,
+            "name": run_name(record.metadata if record else RunMetadata(), dict(values), RunId(run_id)),
             "graphId": graph.graph_id if graph else None,
             "versionId": str(snapshot.graph_id),
             "graph": graph.name if graph else str(snapshot.graph_id),
@@ -652,6 +665,8 @@ class GraphService:
                 for item in snapshot.pending_approvals
             ],
             "results": results,
+            "prUrl": values.get("pr_url") or run_inputs.get("pr_url"),
+            "branch": values.get("branch"),
             "output": _output(executions, results) if snapshot.status is RunStatus.COMPLETED else None,
             "failure": failure,
             "usage": usage.total.json(),
@@ -668,9 +683,11 @@ class GraphService:
         graph: str = "",
         loop: str = "",
         status: str = "",
+        requester: str = "",
+        origin: str = "",
         limit: int = DEFAULT_RUN_LIMIT,
     ) -> list[dict[str, Any]]:
-        """The runs this service started, newest first: a summary of each, not its nodes."""
+        """All graph runs, newest first, with optional registration metadata."""
         if status and status not in {item.value for item in RunStatus}:
             raise ServiceError(
                 f"unknown status {status!r}; one of {', '.join(item.value for item in RunStatus)}"
@@ -681,6 +698,7 @@ class GraphService:
             project=_project(project) if project else None,
             graph_id=self.resolve(project, graph)[0].graph_id if graph else None,
             loop_id=self.resolve_loop(project, loop).loop_id if loop else None,
+            requester=requester or None, origin=origin or None,
         )
         runs: list[dict[str, Any]] = []
         for row in rows:
@@ -692,14 +710,16 @@ class GraphService:
                 snapshot = None
             if snapshot is None or (status and snapshot.status.value != status):
                 continue
-            version = self.store.version(row.version_id)
+            version = self.store.version(row.version_id) if row.version_id else None
             graph_row = self.store.graph(version.graph_id) if version else None
             loop_row = self.store.loop(row.loop_id) if row.loop_id else None
+            record = await self.runtime.store.run(RunId(row.run_id))
             runs.append({
                 "runId": row.run_id,
+                "name": run_name(record.metadata if record else RunMetadata(), dict(snapshot.values or {}), RunId(row.run_id)),
                 "graphId": graph_row.graph_id if graph_row else None,
                 "versionId": row.version_id,
-                "graph": graph_row.name if graph_row else row.version_id,
+                "graph": graph_row.name if graph_row else str(snapshot.graph_id),
                 "project": graph_row.project if graph_row else None,
                 "version": version.number if version else None,
                 "status": snapshot.status.value,
@@ -738,9 +758,9 @@ class GraphService:
 
     async def get_node(self, execution_id: str) -> dict[str, Any]:
         row = self._execution(execution_id)
-        topology, values, overrides = await self._run_context(row.run_id)
+        topology, values, overrides, selected = await self._run_context(row.run_id)
         return {
-            **_execution_json(row, topology, lambda node: _runner_of(node, values, overrides, topology)),
+            **_execution_json(row, topology, lambda node: _runner_of(node, values, overrides, topology, selected)),
             "steering": [_steering_json(item) for item in self.store.steering(execution_id)],
         }
 
@@ -772,7 +792,7 @@ class GraphService:
                     f"{row.status}; only a running attempt can be steered",
                     status=row.status,
                 )
-            topology, _, _ = await self._run_context(row.run_id)
+            topology, _, _, _ = await self._run_context(row.run_id, include_selected=False)
             node = topology.node(row.node_id) if topology else None  # type: ignore[arg-type]
             if node is None or node.kind != "agent":
                 raise Conflict(f"node {row.node_id!r} is not an agent session, so it cannot be steered")
@@ -1136,8 +1156,8 @@ class GraphService:
         if row is None:
             return
         if error and error != CANCELLED:
-            topology, values, overrides = await self._run_context(run_id)
-            if auth := auth_required(error, _runner_of(node_id, values, overrides, topology)):
+            topology, values, overrides, selected = await self._run_context(run_id)
+            if auth := auth_required(error, _runner_of(node_id, values, overrides, topology, selected)):
                 await self._pause(loop_id, _auth_reason(auth))
                 return
         if row.state == "active" and (reached := self._limit_reached(row, await self.accounting(row))):
@@ -1164,42 +1184,40 @@ class GraphService:
 
     # --- helpers ------------------------------------------------------------
 
-    def _register(self, version: VersionRow, *, name: str = "") -> GraphWorkflow:
-        """Load a stored version and offer it on the runtime under its version id."""
-        if version.format == "python":
-            graph = self.store.graph(version.graph_id)
-            loaded = Loaded(
-                self._python_workflow(
-                    version.version_id, version.source,
-                    name or (graph.name if graph else ""),
+    async def _register(
+        self, version: VersionRow, *, name: str = "", workflow: GraphWorkflow | None = None,
+    ) -> GraphWorkflow:
+        """Import and compile off-thread; publish runtime state on the event loop."""
+        graph = self.store.graph(version.graph_id)
+        name = name or (graph.name if graph else "")
+
+        def load():
+            if version.format == "python":
+                original = workflow or self._python_workflow(
+                    version.version_id, version.source, name,
                     version.manifest.get("workflowId", ""),
-                    number=version.number,
-                ),
-                None,
-            )
-        else:
-            spec = _parse_yaml(version.source, runners=None)
-            loaded = Loaded(
-                compile_graph(
-                    spec,
-                    version_id=version.version_id,
-                    number=version.number,
-                    workspace_provider=self._workspace_provider,
-                    registry=self._registry,
-                    session_config=self._session_config,
-                    model_tiers=self._model_tiers,
-                    agent_models=self._added_agents.models,
-                    default_base_ref=self._default_base_ref,
-                ),
-                spec,
-            )
-        definition = loaded.workflow.compiled(self.runtime.checkpointer)
+                )
+                loaded = Loaded(replace(
+                    original, graph_id=GraphId(version.version_id),
+                    name=f"{name or original.graph_id} v{version.number}", previous_ids=(),
+                ), None)
+            else:
+                spec = _parse_yaml(version.source, runners=None)
+                loaded = Loaded(compile_graph(
+                    spec, version_id=version.version_id, number=version.number,
+                    workspace_provider=self._workspace_provider, registry=self._registry,
+                    session_config=self._session_config, model_tiers=self._model_tiers,
+                    agent_models=self._added_agents.models, default_base_ref=self._default_base_ref,
+                ), spec)
+            return loaded, loaded.workflow.compiled(self.runtime.checkpointer)
+
+        loaded, definition = await asyncio.to_thread(load)
         self.runtime.register(definition)
         self._loaded[version.version_id] = loaded
         return loaded.workflow
 
     def _python_workflow(
-        self, version_id: str, source: str, name: str, workflow_id: str = "", *, number: int = 0,
+        self, version_id: str, source: str, name: str, workflow_id: str = "",
     ) -> GraphWorkflow:
         """Import an uploaded Python graph, as a workflow directory's file would be."""
         self._sources.mkdir(parents=True, exist_ok=True)
@@ -1219,13 +1237,7 @@ class GraphService:
                 ids = ", ".join(str(item.graph_id) for item in candidates)
                 raise GraphError([Problem("workflow", f"exports several graphs ({ids}); pass --name to choose one")])
             chosen = candidates
-        workflow = chosen[0]
-        return replace(
-            workflow,
-            graph_id=GraphId(version_id),
-            name=f"{name or workflow.graph_id} v{number}" if number else workflow.name,
-            previous_ids=(),
-        )
+        return chosen[0]
 
     def _forget_source(self, version_id: str) -> None:
         (self._sources / f"{version_id.replace('-', '_')}.py").unlink(missing_ok=True)
@@ -1260,7 +1272,10 @@ class GraphService:
         instruction = (instruction or "").strip()
         if not instruction:
             raise ServiceError("an instruction is required")
-        given = {key: "" if value is None else str(value) for key, value in (inputs or {}).items()}
+        given = {key: ("" if value is None else str(value).lower() if isinstance(value, bool) else str(value))
+                 for key, value in (inputs or {}).items()}
+        if any(item.name == "instruction" for item in loaded.workflow.inputs):
+            given.setdefault("instruction", instruction)
         try:
             resolved = resolve_inputs(tuple(loaded.workflow.inputs), given)
         except ValueError as error:
@@ -1313,8 +1328,8 @@ class GraphService:
         return repository
 
     async def _run_context(
-        self, run_id: str,
-    ) -> tuple[GraphTopology | None, Mapping[str, Any], Mapping[Any, str]]:
+        self, run_id: str, *, include_selected: bool = True,
+    ) -> tuple[GraphTopology | None, Mapping[str, Any], Mapping[Any, str], Mapping[str, str]]:
         snapshot = await self.runtime.snapshot(RunId(run_id))
         if snapshot is None:
             raise NotFound(f"no run {run_id}")
@@ -1323,6 +1338,8 @@ class GraphService:
             self.runtime.topology(snapshot.graph_id),
             snapshot.values or {},
             record.runner_overrides if record else {},
+            _selected_runners(self.runtime.store.events_since(RunId(run_id), kind=EventKind.RUNNER_SELECTED))
+            if include_selected else {},
         )
 
     def _execution(self, execution_id: str) -> ExecutionRow:
@@ -1330,6 +1347,29 @@ class GraphService:
         if row is None:
             raise NotFound(f"no node execution {execution_id}")
         return row
+
+    def _contract_inputs(self, version: VersionRow | None) -> list[str]:
+        if version is None:
+            return []
+        if version.format == "python":
+            loaded = self._loaded.get(version.version_id)
+            return [item.name for item in loaded.workflow.inputs] if loaded else version.manifest.get("inputs", [])
+        raw = yaml.safe_load(version.source)
+        return list(raw.get("inputs", {})) if isinstance(raw, dict) else []
+
+    def verbs(self, project: str | None) -> dict[str, str]:
+        return self.store.verbs(_project(project))
+
+    def bind_verb(self, project: str | None, verb: str, graph: str) -> dict[str, str]:
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", verb):
+            raise ServiceError("a verb must be lowercase letters, digits and hyphens")
+        _, version = self.resolve(project, graph)
+        declared = self._contract_inputs(version)
+        valid = "instruction" in declared if verb == "go" else bool({"pr_url", "ref"}.intersection(declared))
+        if not valid:
+            required = "instruction" if verb == "go" else "pr_url or ref"
+            raise ServiceError(f"graph {graph!r} cannot bind {verb!r}: it must declare {required}")
+        return self.store.bind_verb(_project(project), verb, graph)
 
     def _graph_json(
         self,
@@ -1346,6 +1386,7 @@ class GraphService:
             "name": graph.name,
             "format": version.format if version else None,
             "description": manifest.get("description", ""),
+            "inputs": self._contract_inputs(version),
             "versionId": version.version_id if version else None,
             "version": version.number if version else None,
             "latestVersionId": graph.latest_version_id,
@@ -1407,6 +1448,8 @@ def _latest_activity(events: Sequence[RuntimeEvent]) -> dict[str, dict[str, str]
             entry["activity"] = ""
         elif event.kind is EventKind.TOOL_CALL:
             entry["activity"] = str(event.payload.get("name", ""))
+        elif event.kind is EventKind.THOUGHT:
+            entry["activity"] = "thinking"
         elif event.kind is EventKind.APPROVAL_REQUESTED and not event.payload.get("autoApproved"):
             entry["activity"] = f"waiting for approval: {event.payload.get('reason', '')}".strip()
     return latest
@@ -1414,10 +1457,16 @@ def _latest_activity(events: Sequence[RuntimeEvent]) -> dict[str, dict[str, str]
 
 def _runner_of(
     node_id: str, values: Mapping[str, Any], overrides: Mapping[Any, str], topology: GraphTopology | None,
+    selected: Mapping[str, str] | None = None,
 ) -> str:
     """The runner a node's latest execution used, else the one it would use."""
     if not node_id:
         return ""
+    # Announced as each execution starts, so it is right while the node runs
+    # and when it fails before finishing -- the state below is written only
+    # once a node completes.
+    if announced := (selected or {}).get(node_id):
+        return announced
     used = values.get(f"_runner.{node_id}")
     if isinstance(used, str) and used:
         return used
@@ -1425,6 +1474,15 @@ def _runner_of(
         return overrides[node_id]
     node = topology.node(node_id) if topology else None  # type: ignore[arg-type]
     return node.runner if node else ""
+
+
+def _selected_runners(events: Sequence[RuntimeEvent]) -> dict[str, str]:
+    """Each node's runner, as its latest execution announced it."""
+    return {
+        str(event.node_id): str(event.payload.get("runner"))
+        for event in events
+        if event.kind is EventKind.RUNNER_SELECTED and event.node_id and event.payload.get("runner")
+    }
 
 
 def _execution_json(

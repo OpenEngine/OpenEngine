@@ -48,6 +48,20 @@ def create_app(service: GraphService) -> Starlette:
             "execution": "langgraph-acp",
         })
 
+    async def verbs(request: Request) -> JSONResponse:
+        return JSONResponse({"verbs": service.verbs(request.query_params.get("project"))})
+
+    async def bind_verb(request: Request) -> JSONResponse:
+        body = await _body(request)
+        return JSONResponse({"verbs": service.bind_verb(_text(body, "project") or None,
+            request.path_params["verb"], _text(body, "graph"))})
+
+    async def resolve_target(request: Request) -> JSONResponse:
+        from engine.graph_service.targets import resolve_target as resolve
+        body = await _body(request)
+        return JSONResponse(await resolve(service, _text(body, "repository"), _text(body, "target"),
+            local=body.get("local") is True, verb=_text(body, "verb")))
+
     async def list_graphs(request: Request) -> JSONResponse:
         return JSONResponse({"graphs": service.list_graphs(request.query_params.get("project"))})
 
@@ -73,6 +87,8 @@ def create_app(service: GraphService) -> Starlette:
             graph=query.get("graph", ""),
             loop=query.get("loop", ""),
             status=query.get("status", ""),
+            requester=query.get("requester", ""),
+            origin=query.get("origin", ""),
             limit=_count(query.get("limit"), "limit", DEFAULT_RUN_LIMIT),
         )})
 
@@ -199,6 +215,9 @@ def create_app(service: GraphService) -> Starlette:
             Route("/sessions", _guard(start_session), methods=["POST"]),
             Route("/sessions/{session_id}", _guard(get_session)),
             Route("/sessions/{session_id}/end", _guard(end_session), methods=["POST"]),
+            Route("/verbs", _guard(verbs)),
+            Route("/verbs/{verb}", _guard(bind_verb), methods=["POST"]),
+            Route("/targets/resolve", _guard(resolve_target), methods=["POST"]),
             Route("/graphs", _guard(list_graphs)),
             Route("/graphs", _guard(add_graph), methods=["POST"]),
             Route("/graphs/{ref:path}", _guard(get_graph)),

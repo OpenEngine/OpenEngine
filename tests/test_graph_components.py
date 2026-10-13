@@ -488,7 +488,7 @@ def test_a_workspace_node_checks_out_where_the_next_node_works(
 
     snapshot, events = asyncio.run(scenario())
 
-    assert provider.provisioned == [(REPOSITORY, "origin/main")]
+    assert provider.provisioned == [(REPOSITORY, "HEAD")]
     assert provider.co_authors == ["Ada <ada@example.test>"]
     assert snapshot.values[CHECKOUT].startswith("/checkouts/ws-")
     assert snapshot.values["workspaceRef"].startswith("engine/ws-")
@@ -502,7 +502,7 @@ def test_a_workspace_node_checks_out_where_the_next_node_works(
     assert [event.payload["name"] for event in calls] == ["provision_workspace"]
     assert calls[0].payload["arguments"] == {
         "repository": REPOSITORY,
-        "baseRef": "origin/main",
+        "baseRef": "HEAD",
     }
 
 
@@ -700,7 +700,7 @@ def triaged(tmp_path: Path, answer) -> Any:
             return asked, await runtime.snapshot(run.run_id)
 
     asked, finished = asyncio.run(scenario())
-    assert provider.provisioned == [(".", "origin/feature")]
+    assert provider.provisioned == [(".", "refs/remotes/origin/feature")]
     assert asked.kind is ApprovalKind.USER_INPUT
     assert asked.tool_name == TRIAGE_TOOL
     # Finishing without a fix is a finished review, not a refused run.

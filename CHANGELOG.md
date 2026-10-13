@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.7.0](https://github.com/OpenEngine/OpenEngine/compare/v1.6.0...v1.7.0) (2026-10-13)
+
+
+### Features
+
+* **cli:** add engine agent codex and engine agent opencode sessions ([#722](https://github.com/OpenEngine/OpenEngine/issues/722)) ([2391191](https://github.com/OpenEngine/OpenEngine/commit/239119100a44914470f77ecf6035ec6f9c1727a2))
+* **cli:** add engine go and collapse the starter graphs into one default graph ([#845](https://github.com/OpenEngine/OpenEngine/issues/845)) ([a5503e4](https://github.com/OpenEngine/OpenEngine/commit/a5503e4f55c1745bfb96e6121e3b14c3df39a2e9))
+* **cli:** follow runs live in the terminal and answer approvals inline ([#836](https://github.com/OpenEngine/OpenEngine/issues/836)) ([c628ef5](https://github.com/OpenEngine/OpenEngine/commit/c628ef5fbb9b8502d1f9c549a925964424fa9c64))
+* give every graph run a forge context and infer connected or disconnected mode ([#841](https://github.com/OpenEngine/OpenEngine/issues/841)) ([b0091fd](https://github.com/OpenEngine/OpenEngine/commit/b0091fd1496806fd17d73f81b197877ec680f473))
+* **graph-service:** show a loop's latest run output ([#785](https://github.com/OpenEngine/OpenEngine/issues/785)) ([a7a3895](https://github.com/OpenEngine/OpenEngine/commit/a7a38955bde21340222d6f4fad4953b02c47d203))
+* onboard GitHub repositories through CLI, web and MCP ([#799](https://github.com/OpenEngine/OpenEngine/issues/799)) ([2647f0a](https://github.com/OpenEngine/OpenEngine/commit/2647f0a90416809ddbfe53f99400b5e46907363e))
+* **onboarding:** make the default checkout directory configurable ([#843](https://github.com/OpenEngine/OpenEngine/issues/843)) ([d3e3caf](https://github.com/OpenEngine/OpenEngine/commit/d3e3caf1a0f8ece5d5b3bb5b371623e52e195ac4))
+* show local-model progress and runner for agent nodes ([#842](https://github.com/OpenEngine/OpenEngine/issues/842)) ([1dd7a4a](https://github.com/OpenEngine/OpenEngine/commit/1dd7a4a1db2a4426dfe4f6a54944f4f11718b056))
+* **web:** offer agents added with engine agent add as workflow runners ([#806](https://github.com/OpenEngine/OpenEngine/issues/806)) ([ba26862](https://github.com/OpenEngine/OpenEngine/commit/ba2686213703f672d7f3ccf8db1a379f8242f68b))
+
+
+### Bug Fixes
+
+* **web:** forward owned pull requests through source control router ([#804](https://github.com/OpenEngine/OpenEngine/issues/804)) ([00d432d](https://github.com/OpenEngine/OpenEngine/commit/00d432d1df03f0af472b06008c07cb646fdcb69a))
+
+
+### Performance Improvements
+
+* **web:** build offered graphs once per dependency dispatch pass ([#809](https://github.com/OpenEngine/OpenEngine/issues/809)) ([2d26858](https://github.com/OpenEngine/OpenEngine/commit/2d26858f6ef1fa9bcce74ca10cfee45e77da9bd7))
+
+
+### Documentation
+
+* **site:** publish the graphs and loops post on the blog ([#794](https://github.com/OpenEngine/OpenEngine/issues/794)) ([8d71fb2](https://github.com/OpenEngine/OpenEngine/commit/8d71fb212a57f8308c1a566d2ed15791455fa0b4))
+
 ## [1.6.0](https://github.com/OpenEngine/OpenEngine/compare/v1.5.0...v1.6.0) (2026-10-09)
 
 

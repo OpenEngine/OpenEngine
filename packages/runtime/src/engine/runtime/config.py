@@ -55,13 +55,25 @@ class WorkflowsConfig:
     directory: str = ""
 
 
-#: What `engine agent claude` serves when `[sessions] tools` says nothing: an implementation node's tools.
+@dataclass(frozen=True, slots=True)
+class OnboardingConfig:
+    """Where `engine onboard` clones a repository when no path is given.
+
+    `directory`, when set, replaces the daemon home's `code` subdirectory, so
+    a deployment that keeps checkouts elsewhere need not pass `--path` on every
+    call. An explicit checkout path and an existing checkout still win.
+    """
+
+    directory: str = ""
+
+
+#: What `engine agent claude|codex|opencode` serves when `[sessions] tools` says nothing: an implementation node's tools.
 DEFAULT_SESSION_TOOLS: tuple[str, ...] = ("git_subcommand", "open_pull_request")
 
 
 @dataclass(frozen=True, slots=True)
 class SessionsConfig:
-    """`[sessions]`: what an interactive `engine agent claude` session is given."""
+    """`[sessions]`: what an interactive `engine agent claude|codex|opencode` session is given."""
 
     tools: tuple[str, ...] = DEFAULT_SESSION_TOOLS
     """The repository tools its agent reaches through Engine, as an implementation node's `tools`."""
@@ -228,6 +240,7 @@ class EngineConfig:
     sandbox: SandboxConfig = SandboxConfig()
     graphs: GraphsConfig = GraphsConfig()
     sessions: SessionsConfig = SessionsConfig()
+    onboarding: OnboardingConfig = OnboardingConfig()
     model_tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     """`[runners.<runner>.models]`: tier name to model, per runner.
 
@@ -260,26 +273,44 @@ class LoadedEngineConfig:
     explicit: bool = False
 
     @property
+    def _base_directory(self) -> Path:
+        return self.path.parent if self.path is not None else Path.cwd()
+
+    @property
     def claude_config_dir(self) -> Path | None:
         configured = self.config.claude.config_dir
         if not configured:
             return None
-        base = self.path.parent if self.path is not None else Path.cwd()
-        return _relative_to(Path(configured).expanduser(), base).resolve()
+        return _relative_to(Path(configured).expanduser(), self._base_directory).resolve()
 
     @property
     def workflows_directory(self) -> Path | None:
         configured = self.config.workflows.directory
         if not configured:
             return None
-        base = self.path.parent if self.path is not None else Path.cwd()
-        return _relative_to(Path(configured), base).resolve()
+        return _relative_to(Path(configured), self._base_directory).resolve()
 
     @property
     def orchestrator_database(self) -> Path:
         """Resolve the Temporal database beside the selected configuration."""
-        base = self.path.parent if self.path is not None else Path.cwd()
-        return _relative_to(Path(self.config.orchestrator.database), base).resolve()
+        return _relative_to(
+            Path(self.config.orchestrator.database), self._base_directory
+        ).resolve()
+
+    @property
+    def onboarding_directory(self) -> Path:
+        """Parent directory new checkouts are cloned into when no path is given.
+
+        `[onboarding] directory`, when set, resolves against the configuration
+        file's directory (like `state.directory`), else the working directory;
+        empty falls back to `~/code`, the historical default.
+        """
+        configured = self.config.onboarding.directory
+        if not configured:
+            return (Path.home() / "code").resolve()
+        return _relative_to(
+            Path(configured).expanduser(), self._base_directory
+        ).resolve()
 
 
 def load_engine_config(
@@ -361,6 +392,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "github_login_redirect_uri",
             "github_token",
             "graphs",
+            "onboarding",
             "orchestrator",
             "public_url",
             "repo_modes",
@@ -532,11 +564,15 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
 
     workflows = _table(document.get("workflows", {}), "workflows")
     _reject_unknown(workflows, {"directory"}, "workflows")
-    workflow_directory = workflows.get("directory", "")
-    if not isinstance(workflow_directory, str):
-        raise EngineConfigError("workflows.directory must be a string")
-    if workflow_directory and not workflow_directory.strip():
-        raise EngineConfigError("workflows.directory must not be blank")
+    workflow_directory = _optional_nonblank_string(
+        workflows.get("directory", ""), "workflows.directory"
+    )
+
+    onboarding = _table(document.get("onboarding", {}), "onboarding")
+    _reject_unknown(onboarding, {"directory"}, "onboarding")
+    onboarding_directory = _optional_nonblank_string(
+        onboarding.get("directory", ""), "onboarding.directory"
+    )
 
     orchestrator = _table(document.get("orchestrator", {}), "orchestrator")
     _reject_unknown(
@@ -647,6 +683,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             database=orchestrator_database,
             health_check_interval=float(health_check_interval),
         ),
+        onboarding=OnboardingConfig(directory=onboarding_directory),
     )
 
 

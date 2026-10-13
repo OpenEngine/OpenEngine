@@ -62,7 +62,8 @@ async function verifyPersistedNavigation({
 
   await seededRunCard.click();
   await expect(page.getByRole("heading", { name: SEEDED_RUN })).toBeVisible();
-  await expect(page.locator(".detail-title .chip")).toHaveText("succeeded");
+  // The retired workflow has no runtime snapshot to establish success.
+  await expect(page.locator(".detail-title .chip")).toHaveText("failed");
   await expect(page.getByText("Preserve browser navigation and durable conversation history.")).toBeVisible();
   await expect(page.getByText(/no longer has/)).toBeVisible();
   await shot(page, testInfo, "2 persisted WorkOrder with retired workflow");
@@ -134,7 +135,7 @@ async function verifyPersistedNavigation({
             arguments: {
               outcome: "success",
               summary: "Started from the populated SQLite database.",
-              outputs: { pr_url: pullRequest },
+              outputs: { pr_url: pullRequest, branch: "agent/fresh-workflow" },
             },
           },
         ],

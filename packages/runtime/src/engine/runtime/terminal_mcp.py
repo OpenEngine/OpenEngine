@@ -43,6 +43,7 @@ from engine.runtime.change_requests import (
     change_request,
     remote_project,
 )
+from engine.runtime.git_core import GitSourceControlError, guard_push
 from engine.runtime.push_policy import push_spec
 from engine.runtime.step_results import (
     InvalidStepResultError,
@@ -131,8 +132,8 @@ READ_ONLY_REPOSITORY_TOOLS: frozenset[str] = frozenset(
 
 #: The repository tools that work in the step's own checkout and nothing else,
 #: which is all a disconnected run is served. `git_subcommand` is here though a
-#: subcommand could push: without a pull request or a forge credential in play
-#: a push has nowhere it is expected to go, and a local commit needs it.
+#: local commits need it. The broker rejects network subcommands in a
+#: disconnected run before requesting approval.
 LOCAL_REPOSITORY_TOOLS: frozenset[str] = frozenset({"git_subcommand"})
 
 #: What `open_pull_request` proposes against when the agent names no base.
@@ -242,6 +243,7 @@ class TerminalMcpBroker:
         self._connections: set[asyncio.Task[None]] = set()
         self._result: asyncio.Future[TerminalEvent] | None = None
         self._clarifications: asyncio.Queue[None] | None = None
+        self.disconnected = False
         self._source_control: SourceControl | None = None
         self._repository_tools: tuple[str, ...] = ()
         self._workspace_id: WorkspaceId | None = None
@@ -996,6 +998,8 @@ class TerminalMcpBroker:
         that the profile holds `git_subcommand`.
         """
 
+        if self.disconnected and not _local_git_operation(arguments):
+            return {"ok": False, "error": "this run is disconnected; network git operations are disabled"}
         if self._git_approval is None:
             return {
                 "ok": False,
@@ -1388,6 +1392,48 @@ def _push_target(arguments: Sequence[str]) -> tuple[str, dict[str, str]] | None:
             continue
         destinations[destination.removeprefix("refs/heads/")] = source
     return positional[0], destinations
+
+
+# Unknown commands (including aliases and extensions) are not local operations.
+_LOCAL_GIT_COMMANDS = frozenset({
+    "add", "apply", "blame", "branch", "cat-file", "check-ignore",
+    "check-ref-format", "checkout", "cherry-pick", "clean", "commit", "describe",
+    "diff", "diff-index", "diff-tree", "for-each-ref", "log", "ls-files",
+    "ls-tree", "merge", "merge-base", "mv", "rebase", "reflog", "reset",
+    "restore", "rev-list", "rev-parse", "revert", "rm", "show", "show-ref",
+    "stash", "status", "switch", "tag", "worktree",
+})
+
+
+def _local_git_operation(arguments: Sequence[str]) -> bool:
+    """Allow local work before approval, including only offline remote queries."""
+    try:
+        guard_push(arguments)
+    except (GitSourceControlError, ValueError):
+        return False
+    command = _git_subcommand(arguments)
+    if command is None:
+        return False
+    options = arguments[arguments.index(command) + 1:]
+    if command == "remote":
+        # remote show/update/prune and add -f can contact a server.
+        return not options or options[0] == "get-url" or (
+            len(options) == 1 and options[0] in {"-v", "--verbose"}
+        )
+    if command == "archive":
+        # Git accepts abbreviated long options as well as --remote=<url>.
+        return not any(
+            arg.startswith("--") and "--remote".startswith(arg.partition("=")[0])
+            for arg in options
+        )
+    if command not in _LOCAL_GIT_COMMANDS:
+        return False
+    # Leave explicit submodule recursion to a connected run, including
+    # abbreviated spellings of the option.
+    return not any(
+        arg.startswith("--") and "--recurse-submodules".startswith(arg.partition("=")[0])
+        for arg in options if arg != "--"
+    )
 
 
 def _git_subcommand(arguments: Sequence[str]) -> str | None:

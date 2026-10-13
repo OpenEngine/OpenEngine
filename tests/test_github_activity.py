@@ -393,7 +393,7 @@ def test_comment_panel_uses_runs_repository_before_a_pr_is_opened(
         repository_projects={"web": "other/web"},
     )
     with client(app) as browser:
-        browser.portal.call(session.state_store.save, RunState(
+        browser.portal.call(app.state.run_reader.save, RunState(
             run_id=RunId("existing"), task_id=TaskId("task"),
             workflow_id=WorkflowId("workflow"), repository=repository,
         ))

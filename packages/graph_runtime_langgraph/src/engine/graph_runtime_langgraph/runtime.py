@@ -41,12 +41,14 @@ approval handoff -- see `engine.graph_runtime_langgraph.acp`.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from engine.graph_runtime.metadata import RunMetadata
+
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -177,6 +179,10 @@ class LangGraphRuntime:
         self._entries: dict[NodeId, int] = {}
         self._source_control = source_control
         self.workorder_creator: WorkorderCreator | None = None
+        self.repository_mode: Callable[[str], Awaitable[str | None]] | None = None
+
+    def bind_repository_mode(self, resolve: Callable[[str], Awaitable[str | None]]) -> None:
+        self.repository_mode = resolve
 
     def bind_workorder_creator(self, create: WorkorderCreator) -> None:
         """Bind the host that starts workorders and records their provenance."""
@@ -219,12 +225,35 @@ class LangGraphRuntime:
         if definition is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
         run_id = run_id or RunId(f"run-{uuid4().hex[:12]}")
-        if await self._store.run(run_id) is not None:
+        existing = await self._store.run(run_id)
+        if existing is not None and not existing.metadata.scheduled:
             raise ValueError(f"run already exists: {run_id}")
+        if existing is not None and existing.graph_id != graph_id:
+            raise ValueError(f"scheduled run belongs to another graph: {run_id}")
+        from engine.graph_runtime_langgraph.forge import resolve_forge_context
+
+        supplied = values.get("inputs")
+        inputs = dict(supplied) if isinstance(supplied, Mapping) else {}
+        configured = None
+        if self.repository_mode is not None:
+            configured = await self.repository_mode(str(values.get("repository") or ""))
+            if configured == "disconnected":
+                inputs["mode"] = configured
+        context = await resolve_forge_context(self.source_control, {**values, "inputs": inputs})
+        if configured == "disconnected":
+            context["reason"] = "repository configured for local execution"
+        values = {**values, "inputs": {**inputs, "mode": context["mode"]}}
         await self._store.remember_run(RunRecord(
             run_id, graph_id,
+            forge_context=context,
             runner_overrides=definition.initial_runner_overrides(values),
         ))
+        now = datetime.now(UTC).isoformat()
+        metadata = existing.metadata if existing else RunMetadata(
+            prompt=str(values.get("task") or ""), repository=str(values.get("repository") or ""),
+            inputs={str(key): str(value) for key, value in inputs.items()}, created_at=now,
+        )
+        await self._store.save_metadata(run_id, graph_id, replace(metadata, scheduled=False, started_at=now))
         live = _Live(run_id, graph_id)
         self._live[run_id] = live
         await self.publish(run_id, EventKind.RUN_STARTED, {"values": dict(values)})
@@ -241,7 +270,11 @@ class LangGraphRuntime:
 
     async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
         record = await self._store.run(run_id)
-        return None if record is None else await self._snapshot(run_id)
+        if record is None:
+            return None
+        if record.metadata.scheduled:
+            return RunSnapshot(run_id=run_id, graph_id=record.graph_id, status=RunStatus.SCHEDULED)
+        return await self._snapshot(run_id)
 
     async def history(self, run_id: RunId) -> tuple[Checkpoint, ...]:
         definition = await self._definition_for(run_id)
@@ -1151,6 +1184,7 @@ class LangGraphRuntime:
             error=record.error,
             auto_approve_nodes=record.auto_approve_nodes,
             runner_overrides=record.runner_overrides,
+            forge_context=record.forge_context,
         )
 
 

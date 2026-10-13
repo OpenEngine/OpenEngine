@@ -484,3 +484,102 @@ def test_issue_references_survive_commit_amend_snapshot_and_reattach(
     assert f"Refs {reference}" in _git(root, "log", "-1", "--format=%B")
     _git(root, *_IDENTITY, "commit", "--allow-empty", "-m", "feat: follow up")
     assert _git(root, "log", "-1", "--format=%B").count(f"Refs {reference}") == 1
+
+
+@pytest.mark.parametrize("ref", ["refs/pull/9/head", "refs/merge-requests/7/head"])
+def test_review_ref_fetches_forge_ref_without_treating_it_as_a_branch(monkeypatch, ref):
+    from engine.adapters.workspace_provider import git_worktree
+    commands = []
+
+    async def git(repository, *args):
+        commands.append(args)
+        return "review-sha" if args[0] == "rev-parse" else ""
+
+    monkeypatch.setattr(git_worktree, "_git", git)
+    assert asyncio.run(git_worktree._resolve_base("/repo", f"origin/{ref}")) == "review-sha"
+    fetch = next(args for args in commands if args[0] == "fetch")
+    assert fetch[-1].startswith(f"+{ref}:refs/engine/provisioning/")
+    assert commands[-1][:2] == ("update-ref", "-d")
+
+
+def test_fix_borrows_clean_branch_without_deleting_checkout(tmp_path, git_repo):
+    repository = git_repo(commit=True, branch='topic')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+
+    async def scenario():
+        workspace = await provider.provision_branch(str(repository), 'topic', borrow_existing=True)
+        assert Path(workspace.root_path) == repository
+        assert await provider.root_path(workspace.workspace_id) == str(repository)
+        assert (await provider.state(workspace.workspace_id)).ref == 'topic'
+        attached = await provider.attach(workspace.workspace_id, str(repository), 'topic')
+        assert attached.root_path == str(repository)
+        await provider.detach(workspace.workspace_id)
+        assert (repository / '.git').exists()
+        await provider.dispose(workspace.workspace_id)
+        assert _git(repository, 'branch', '--show-current') == 'topic'
+    asyncio.run(scenario())
+
+
+def test_fix_unoccupied_branch_keeps_its_commits_after_cleanup(tmp_path, git_repo):
+    repository = git_repo(commit=True)
+    _git(repository, 'branch', 'topic')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+
+    async def scenario():
+        workspace = await provider.provision_branch(str(repository), 'topic')
+        path = Path(workspace.root_path)
+        assert _git(path, 'branch', '--show-current') == 'topic'
+        _git(path, *_IDENTITY, 'commit', '--allow-empty', '-m', 'fix: address review')
+        sha = _git(path, 'rev-parse', 'HEAD')
+        await provider.dispose(workspace.workspace_id)
+        assert _git(repository, 'rev-parse', 'topic') == sha
+    asyncio.run(scenario())
+
+
+def test_fix_refuses_dirty_borrowed_checkout(tmp_path, git_repo):
+    repository = git_repo(commit=True, branch='topic')
+    (repository / 'README.md').write_text('uncommitted\n')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    with pytest.raises(GitWorktreeError, match='commit or stash'):
+        asyncio.run(provider.provision_branch(str(repository), 'topic', borrow_existing=True))
+
+
+@pytest.mark.parametrize('lifecycle', ['detach', 'dispose'])
+def test_repository_marker_cannot_redirect_workspace(tmp_path, git_repo, lifecycle):
+    repository = git_repo(commit=True)
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    async def scenario():
+        workspace = await provider.provision(str(repository), 'HEAD')
+        path = Path(workspace.root_path)
+        (path / '.engine-existing-checkout').write_text(str(repository))
+        assert await provider.root_path(workspace.workspace_id) == str(path)
+        assert (await provider.state(workspace.workspace_id)).root_path == str(path)
+        assert (await provider.attach(workspace.workspace_id, str(repository), 'HEAD')).root_path == str(path)
+        await getattr(provider, lifecycle)(workspace.workspace_id)
+        assert not path.exists()
+        assert (repository / '.git').exists()
+        if lifecycle == 'detach':
+            assert _git(repository, 'show', f'{workspace.ref}:.engine-existing-checkout') == str(repository)
+    asyncio.run(scenario())
+
+
+def test_borrowed_metadata_validates_checkout_branch(tmp_path, git_repo):
+    repository = git_repo(commit=True, branch='topic')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    async def scenario():
+        workspace = await provider.provision_branch(str(repository), 'topic', borrow_existing=True)
+        _git(repository, 'checkout', '-b', 'other')
+        with pytest.raises(GitWorktreeError, match='invalid borrowed checkout metadata'):
+            await provider.root_path(workspace.workspace_id)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('dirty', [False, True])
+def test_fix_rejects_existing_checkout_without_opt_in(tmp_path, git_repo, dirty):
+    repository = git_repo(commit=True, branch='topic')
+    if dirty:
+        (repository / 'README.md').write_text('local edits')
+    provider = GitWorktreeWorkspaceProvider(tmp_path / 'workspaces')
+    with pytest.raises(GitWorktreeError, match='explicitly opt in'):
+        asyncio.run(provider.provision_branch(str(repository), 'topic'))
+    assert _git(repository, 'branch', '--show-current') == 'topic'

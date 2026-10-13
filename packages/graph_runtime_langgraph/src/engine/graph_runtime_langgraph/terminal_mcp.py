@@ -117,6 +117,7 @@ class TerminalMcpServer:
                 getattr(source_control, REPOSITORY_TOOL_METHODS.get(name, ""), None)
             )
         )
+        broker.disconnected = forge_mode(state.get("inputs")) is ForgeMode.DISCONNECTED
         broker.enable_repository_tools(
             source_control,
             served,

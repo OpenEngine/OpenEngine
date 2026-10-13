@@ -13,6 +13,7 @@ letting callers pass a path is what keeps the engine from ever holding one.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import re
@@ -267,6 +268,8 @@ class GitHubSourceControl:
         self, pr_url: str, username: str, *, user_id: int | None = None
     ) -> bool:
         """Check effective access, including team and organization grants."""
+        if change_request(pr_url) is None:
+            pr_url = pr_url.rstrip("/") + "/pull/1"
         owner, repo, _ = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
         response = await self._api(
             "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
@@ -556,6 +559,53 @@ class GitHubSourceControl:
         if data["resolveReviewThread"]["thread"]["isResolved"] is not True:
             raise GitHubSourceControlError("GitHub did not resolve the review thread")
         return True
+
+    async def inspect_target(self, project: str, *, number: int = 0, branch: str = "", include_threads: bool = False) -> dict[str, object]:
+        """Read repository/target metadata before a CLI run provisions a workspace."""
+        owner, repo = _parse_repo_coords(f"https://github.com/{project}")
+        root = f"/repos/{owner}/{repo}"
+        try:
+            metadata = _object(await self._api("GET", root))
+        except GitHubSourceControlError:
+            # Public repositories remain usable without a host credential.
+            anonymous = GitHubSourceControl("", transport=GitHubOAuthTransport(""))
+            if isinstance(self._transport, GitHubOAuthTransport) and not self._transport._token:
+                raise
+            return await anonymous.inspect_target(project, number=number, branch=branch, include_threads=include_threads)
+        result: dict[str, object] = {"private": metadata.get("private", False)}
+        pull: dict = {}
+        try:
+            if number:
+                pull = _object(await self._api("GET", f"{root}/pulls/{number}"))
+            elif branch:
+                pulls = await self._paginated_objects(f"{root}/pulls", {"state": "open", "head": f"{owner}:{branch}"})
+                if pulls:
+                    pull = pulls[0]
+                else:
+                    await self._api("GET", f"{root}/branches/{quote(branch, safe='')}")
+                result["exists"] = True
+        except GitHubSourceControlError as error:
+            if '404' not in str(error):
+                raise
+            return {**result, 'exists': False}
+        if pull:
+            url = _string(pull, "html_url")
+            head_repo = _object(_object(pull.get("head") or {}).get("repo") or {}).get("full_name", "")
+            result["head_repository"] = head_repo
+            result.update(pr_url=url, branch=_nested_string(pull, "head", "ref"), exists=True,
+                          checkout_ref=f"origin/refs/pull/{pull['number']}/head")
+            if include_threads:
+                try:
+                    threads = await self._review_threads(url)
+                except GitHubSourceControlError:
+                    # Disconnected callers can supply cached threads explicitly.
+                    return result
+                comments = await self._paginated_objects(f"{root}/pulls/{pull['number']}/comments")
+                unresolved = {thread.comment_id: thread for thread in threads if not thread.is_resolved}
+                result["review_threads"] = json.dumps([{**comment, "thread_id": unresolved[comment["id"]].thread_id}
+                    for comment in comments if comment.get("id") in unresolved
+                    and comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}])
+        return result
 
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int
@@ -958,6 +1008,7 @@ def _discussion(value: dict) -> Discussion:
     line = value.get("line")
     return Discussion(
         comment_id=value.get("id"),
+        author_association=_string(value, "author_association"),
         author=_nested_string(value, "user", "login"),
         body=_string(value, "body"),
         url=_string(value, "html_url"),

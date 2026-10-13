@@ -554,6 +554,10 @@ select:disabled { cursor: default; }
 .message-assistant > :last-child { margin-bottom: 0; }
 .message-error { margin: 14px 0 0 !important; }
 
+.message-reasoning { margin: 0 0 8px; color: var(--muted); }
+.message-reasoning summary { cursor: pointer; color: var(--faint); font-size: .9em; }
+.message-reasoning p { white-space: pre-wrap; margin: 6px 0 0; font-size: .9em; }
+
 .tool {
   margin: 0 0 8px;
   background: var(--fill);
