@@ -1,10 +1,10 @@
 # Onboarding a repository
 
-Run `engine onboard https://github.com/owner/repo` and choose connected or
-disconnected mode. Use `--mode connected` (or `disconnected`) to skip the prompt,
-and `--path /absolute/checkout` to choose a destination instead of the default
-checkout directory. With no URL, `engine onboard` registers the current GitHub
-checkout with a local daemon.
+Run `engine repo add .` or `engine repo add /path/to/repo` to register an
+existing GitHub or GitLab checkout. Run `engine repo add <github-or-gitlab-url>`
+to clone and register a remote repository, preserving its HTTPS or SSH transport.
+Use `--path /absolute/checkout` to select the clone destination. Connected mode
+is the default; use `--mode disconnected` for local-only work.
 
 By default a pathless onboarding clones into `~/code/repo`. Set
 `[onboarding] directory` in `engine.toml` to change that parent directory, for
@@ -20,9 +20,9 @@ MCP clients can call `onboard_repository(repository, path?, mode?)`, then poll
 `repository_onboarding_status(job_id)` using the returned `id`. All three surfaces
 use the same daemon job and display its progress and actionable failures.
 
-The daemon account needs git, working GitHub SSH access (`ssh -T git@github.com`),
-and a signed-in agent (`engine agent signin claude`, `codex`, or `opencode`).
-Preflight failures leave the checkout and configuration untouched. Onboarding
+The daemon account needs git and a signed-in agent (`engine agent signin claude`, `codex`, or `opencode`).
+Cloning uses the daemon account’s existing credentials for the supplied URL.
+Existing checkouts do not require remote access. Preflight failures leave the checkout and configuration untouched. Onboarding
 never changes credentials. Existing checkouts of the same remote are reused.
 Repeating successful onboarding reports that the repository is already onboarded.
 

@@ -1415,7 +1415,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             return
         opened.push_async_callback(service.aclose)
         surface.service = service
-        surface.service_app = create_graph_service_app(service)
+        surface.service_app = create_graph_service_app(service, repository_trust=onboarding.repository_trust,
+                                                       auto_approve=approval_policy.auto_approve,
+                                                       trust_request_allowed=request_security.is_local_request)
 
     async def graph_service_surface(scope: Scope, receive: Receive, send: Send) -> None:
         """Pass `/api/v1` to the registered-graph service, for operators only.
@@ -1806,6 +1808,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             {
                 "name": name,
                 "path": str(Path(path).expanduser().resolve()),
+                "trusted": configured.trust_decisions.get(name),
                 **({"mode": mode} if (mode := configured.repo_modes.get(name)) else {}),
             }
             for name, path in configured.repos.items()

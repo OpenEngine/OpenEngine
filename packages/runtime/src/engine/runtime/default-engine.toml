@@ -25,6 +25,9 @@ provider = "slack"
 # The Claude Code login agents use (CLAUDE_CONFIG_DIR). Defaults to ~/.claude.
 # config_dir = "~/repo/work/.claude-work"
 
+# Keep global approvals manual; engine repo trust opts individual repositories in.
+# [trusted_repos] maps [repos] names to true (auto-approve) or false (manual).
+# A saved false decision suppresses the first-run trust prompt.
 [approvals]
 auto_approve = false
 allow = ["read"]
@@ -37,7 +40,7 @@ directory = "workflows"
 [sandbox]
 backend = "process"
 
-# Where `engine onboard` clones a repository when no path is given, instead of
+# Where `engine repo add` clones a repository when no path is given, instead of
 # ~/code. Expand ~ and resolve relative to this file. Omit to keep ~/code.
 # [onboarding]
 # directory = "~/code/work"

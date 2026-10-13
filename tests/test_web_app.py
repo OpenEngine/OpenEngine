@@ -145,8 +145,8 @@ def test_repository_choices_reach_the_web_config(
             return (await client.get("/api/config")).json()
 
     assert asyncio.run(ask())["repositories"] == [
-        {"name": "OpenEngine/OpenEngine", "path": str(tmp_path / "code/OpenEngine")},
-        {"name": "n8n", "path": str(tmp_path / "code/n8n")},
+        {"name": "OpenEngine/OpenEngine", "path": str(tmp_path / "code/OpenEngine"), "trusted": None},
+        {"name": "n8n", "path": str(tmp_path / "code/n8n"), "trusted": None},
     ]
 
 
@@ -2833,8 +2833,8 @@ def test_a_disconnected_repository_runs_every_workorder_disconnected(
             async with async_client(app, base_url="http://localhost") as client:
                 config = (await client.get("/api/config")).json()
                 assert config["repositories"] == [
-                    {"name": "acme/offline", "path": str(offline), "mode": "disconnected"},
-                    {"name": "acme/online", "path": str(online)},
+                    {"name": "acme/offline", "path": str(offline), "mode": "disconnected", "trusted": None},
+                    {"name": "acme/online", "path": str(online), "trusted": None},
                 ]
                 modes = {}
                 for path in (offline, online):
@@ -2859,12 +2859,13 @@ def test_a_trusted_repository_auto_approves_its_workorders_only(
     trusted, other = tmp_path / "trusted", tmp_path / "other"
     registry = RepositoryRegistry(projects={})
     app, runtime = _graph_app(WebStores(), graph, repos=registry, workflow_app=workflow_app)
-    registry.add("acme/trusted", str(trusted), trusted=True)
+    registry.add("acme/trusted", str(trusted))
     registry.add("acme/other", str(other))
 
     async def scenario():
         async with app.router.lifespan_context(app):
             async with async_client(app, base_url="http://localhost") as client:
+                registry.trust("acme/trusted", True)
                 approved = {}
                 for path in (trusted, other):
                     response = await client.post("/api/runs", json={
@@ -2874,6 +2875,12 @@ def test_a_trusted_repository_auto_approves_its_workorders_only(
                     snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
                     approved[path.name] = snapshot.auto_approve_nodes
                 assert approved == {"trusted": (NodeId("work"),), "other": ()}
+                registry.trust("acme/trusted", False)
+                response = await client.post("/api/runs", json={
+                    "workflowId": "trust", "repository": str(trusted), "prompt": "Task",
+                })
+                snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
+                assert snapshot.auto_approve_nodes == ()
 
     asyncio.run(scenario())
 

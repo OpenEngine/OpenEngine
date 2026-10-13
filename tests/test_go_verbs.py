@@ -166,6 +166,7 @@ def test_go_review_uses_callers_branch_on_remote_backend(monkeypatch, tmp_path):
     monkeypatch.delenv('ENGINE_SERVICE_TOKEN', raising=False)
     backends.add('mini', 'http://mini:4364')
     monkeypatch.setattr(repository, 'current', lambda: repository.Repository(tmp_path, 'o/r', 'caller-topic', False))
+    monkeypatch.setattr('engine.cli.commands._check_trust', lambda *args: None)
     recorded = serve_go(monkeypatch, RUN, graph=starters.DEFAULT, target={'ref': 'origin/caller-topic'})
     assert main(['go', 'review', '--backend', 'mini']) == 0
     assert recorded.requests[1]['body']['target'] == 'caller-topic'

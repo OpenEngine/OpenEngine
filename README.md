@@ -236,7 +236,7 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
 To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
-Onboard a GitHub project with `engine onboard https://github.com/owner/repo`.
+Add a local checkout with `engine repo add .`, or clone a GitHub/GitLab project with `engine repo add https://github.com/owner/repo`.
 It checks prerequisites, clones the repository, saves configuration, and makes
 it available immediately without restarting. The web UI's **Add repository**
 action and MCP's `onboard_repository` tool provide the same onboarding.

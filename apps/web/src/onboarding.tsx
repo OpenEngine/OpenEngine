@@ -16,6 +16,7 @@ export function AddRepository({ onComplete }: {
   const [url, setUrl] = useState("");
   const [mode, setMode] = useState("connected");
   const [job, setJob] = useState<OnboardingState | null>(null);
+  const [trusted, setTrusted] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const active = submitting || !!job && !["complete", "failed"].includes(job.status);
@@ -48,7 +49,7 @@ export function AddRepository({ onComplete }: {
     setError("");
     try {
       setJob(await api<OnboardingState>("/api/repositories/onboard", {
-        method: "POST", body: JSON.stringify({ repository: url, mode }),
+        method: "POST", body: JSON.stringify({ repository: url, mode, trusted }),
       }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not start onboarding");
@@ -74,6 +75,7 @@ export function AddRepository({ onComplete }: {
       {problem.message}. Fix: {problem.fix}
       </p>)}
       {error && <p className="notice" role="alert">{error}</p>}
+      <label><input type="checkbox" checked={trusted} disabled={active} onChange={(event) => setTrusted(event.target.checked)} />Trust this repository: agents may edit files and run commands without asking</label>
       <div className="form-actions">
         <button className="btn btn-primary" type="submit" disabled={active}>{active ? "Adding repository…" : "Add repository"}</button>
       </div>
