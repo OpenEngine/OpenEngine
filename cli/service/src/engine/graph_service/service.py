@@ -56,7 +56,7 @@ from langgraph_acp import ACPAgentRegistry
 from engine.graph_runtime import GraphId
 from engine.graph_runtime.inputs import RUNNER_POLICIES, resolve_inputs
 from engine.graph_runtime.topology import GraphTopology
-from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig
+from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig, PullRequestsConfig
 from engine.runtime.workflows import WorkflowLoadError, load_workflow_file
 
 from engine.graph_service.compile import compile_graph
@@ -228,6 +228,7 @@ class GraphService:
         added_agents: AddedAgents | None = None,
         session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
         approval_policy: ApprovalConfig | None = None,
+        pull_requests: PullRequestsConfig = PullRequestsConfig(),
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
     ) -> None:
@@ -239,6 +240,7 @@ class GraphService:
         self._registry = registry
         self._start = start or self._start_directly
         self._session_config = session_config
+        self._pull_requests = pull_requests
         self._default_repository = default_repository
         self._repositories = (
             repositories if isinstance(repositories, RepositoryRegistry)
@@ -1290,6 +1292,8 @@ class GraphService:
                 "no repository: run from inside one, pass --repo, set repository in the graph, "
                 "or configure a default on the backend"
             )
+        if 'auto_approve_green' in resolved and not resolved['auto_approve_green']:
+            resolved['auto_approve_green'] = self._pull_requests.default_for(repository, self._repositories.snapshot.repos)
         return StartRequest(instruction, repository, resolved)
 
     def _check_runner_inputs(self, spec: GraphSpec, inputs: Mapping[str, str]) -> None:

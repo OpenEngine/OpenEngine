@@ -147,6 +147,22 @@ class CommunicationsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PullRequestsConfig:
+    """Defaults for review graph inputs, independent of tool approval policy."""
+
+    auto_approve_green: bool = False
+    repos: Mapping[str, bool] = field(default_factory=dict)
+
+    def default_for(self, repository: str, repos: Mapping[str, str]) -> str:
+        name = repository
+        if name not in repos:
+            checkout = Path(repository).expanduser().resolve()
+            name = next((name for name, path in repos.items()
+                         if checkout == Path(path).expanduser().resolve()), repository)
+        return str(self.repos.get(name, self.auto_approve_green)).lower()
+
+
+@dataclass(frozen=True, slots=True)
 class GitHubConfig:
     """Which repositories on GitHub this deployment answers events from.
 
@@ -157,6 +173,7 @@ class GitHubConfig:
     two out of the handler's source.
     """
 
+    review_request_workflow: str = "review"
     resolve_addressed_threads: bool = True
     repository: str = ""
     """`owner/name` of the repository whose webhooks are accepted, or empty.
@@ -230,6 +247,7 @@ class EngineConfig:
     server: ServerConfig = ServerConfig()
     state: StateConfig = StateConfig()
     github: GitHubConfig = GitHubConfig()
+    pull_requests: PullRequestsConfig = field(default_factory=PullRequestsConfig)
     access: AccessConfig = AccessConfig()
     communications: CommunicationsConfig = CommunicationsConfig()
     work_orders: WorkOrdersConfig = WorkOrdersConfig()
@@ -395,6 +413,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "onboarding",
             "orchestrator",
             "public_url",
+            "pull_requests",
             "repo_modes",
             "repos",
             "runners",
@@ -434,7 +453,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "repositories", "host_aliases", "resolve_addressed_threads"}, "github")
+    _reject_unknown(github, {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow"}, "github")
     resolve_addressed_threads = github.get("resolve_addressed_threads", True)
     if not isinstance(resolve_addressed_threads, bool):
         raise EngineConfigError("github.resolve_addressed_threads must be a boolean")
@@ -599,6 +618,18 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
         for name, path in _table(document.get("repos", {}), "repos").items()
     }
+    pull_requests = _table(document.get("pull_requests", {}), "pull_requests")
+    _reject_unknown(pull_requests, {"auto_approve_green", "repos"}, "pull_requests")
+    auto_approve_green = pull_requests.get("auto_approve_green", False)
+    if not isinstance(auto_approve_green, bool):
+        raise EngineConfigError("pull_requests.auto_approve_green must be a boolean")
+    review_repos = _table(pull_requests.get("repos", {}), "pull_requests.repos")
+    _reject_unknown(review_repos, set(repos), "pull_requests.repos")
+    review_overrides: dict[str, bool] = {}
+    for name, value in review_repos.items():
+        if not isinstance(value, bool):
+            raise EngineConfigError("pull_requests.repos values must be booleans")
+        review_overrides[name] = value
     repo_names = {name.lower() for name in repos}
     for repository in (github_repository, *github_repositories):
         if repository and repository.lower() not in repo_names:
@@ -627,6 +658,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         sandbox=SandboxConfig(backend=sandbox_backend, image=sandbox_image.strip()),
         attribution=attribution,
         repos=repos,
+        pull_requests=PullRequestsConfig(auto_approve_green, review_overrides),
         repo_modes=repo_modes,
         trusted_repos=frozenset(trusted_repos),
         default_branch=default_branch,
@@ -642,6 +674,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         server=ServerConfig(host=server_host, port=server_port),
         state=state_config,
         github=GitHubConfig(
+            review_request_workflow=_nonblank_string(github.get("review_request_workflow", "review"), "github.review_request_workflow"),
             repository=github_repository,
             repositories=github_repositories,
             resolve_addressed_threads=resolve_addressed_threads,
@@ -830,6 +863,7 @@ __all__ = [
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
+    "PullRequestsConfig",
     "GraphsConfig",
     "SessionsConfig",
     "DEFAULT_SESSION_TOOLS",

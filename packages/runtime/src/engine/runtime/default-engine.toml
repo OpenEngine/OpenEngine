@@ -41,3 +41,15 @@ backend = "process"
 # ~/code. Expand ~ and resolve relative to this file. Omit to keep ~/code.
 # [onboarding]
 # directory = "~/code/work"
+
+# Review-request webhooks start this graph (also used by `engine go review`).
+[github]
+review_request_workflow = "review"
+
+# Defaults resolved when a review run starts; explicit run inputs win.
+[pull_requests]
+auto_approve_green = false
+
+# Optional overrides keyed by names already declared under [repos].
+# [pull_requests.repos]
+# "owner/name" = true

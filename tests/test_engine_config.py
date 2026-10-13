@@ -972,3 +972,32 @@ def test_review_resolution_configuration():
     assert parse_engine_config({"github": {"resolve_addressed_threads": False}}).github.resolve_addressed_threads is False
     with pytest.raises(EngineConfigError, match="must be a boolean"):
         parse_engine_config({"github": {"resolve_addressed_threads": "false"}})
+
+
+def test_review_config_defaults_and_repository_overrides(tmp_path):
+    defaults = parse_engine_config({})
+    assert defaults.github.review_request_workflow == 'review'
+    assert defaults.pull_requests.auto_approve_green is False
+    config = parse_engine_config({
+        'repos': {'api': str(tmp_path)},
+        'pull_requests': {'auto_approve_green': True, 'repos': {'api': False}},
+        'github': {'review_request_workflow': 'custom-review'},
+    })
+    assert config.github.review_request_workflow == 'custom-review'
+    assert config.pull_requests.default_for('api', config.repos) == 'false'
+    assert config.pull_requests.default_for(str(tmp_path), config.repos) == 'false'
+    assert config.pull_requests.default_for('another/repo', config.repos) == 'true'
+
+
+@pytest.mark.parametrize('document', [
+    {'pull_requests': {'auto_approve_green': 'true'}},
+    {'pull_requests': {'unknown': True}},
+    {'pull_requests': {'repos': {'missing': True}}},
+    {'repos': {'api': '.'}, 'pull_requests': {'repos': {'api': 1}}},
+    {'github': {'review_request_workflow': ''}},
+    {'github': {'review_request_workflow': False}},
+    {'github': {'review_workflow': 'review'}},
+])
+def test_invalid_review_configuration(document):
+    with pytest.raises(EngineConfigError):
+        parse_engine_config(document)

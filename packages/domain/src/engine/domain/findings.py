@@ -10,11 +10,6 @@ A finding reads the same whether the reranker posts it or a person does from
 
 from __future__ import annotations
 
-from collections.abc import Container, Mapping
-
-from engine.domain.forge import MODE_INPUT, ForgeMode
-from engine.domain.states import STATE_INPUT, WorkState
-
 #: The tool name a triage question is raised under, so a client can tell the
 #: choice of findings to fix from a verdict or an agent's permission request.
 TRIAGE_TOOL = "findings_triage"
@@ -25,36 +20,6 @@ TRIAGE_TOOL = "findings_triage"
 REVIEW_REF_INPUT = "ref"
 REVIEW_PR_INPUT = "pr_url"
 REVIEW_BRANCH_INPUT = "branch"
-#: Set when whoever asked for the review reads it on the pull request rather
-#: than at triage: Engine requested as a reviewer on GitHub. Everything that
-#: behaves differently asks `publishes_review` rather than reading it itself.
-REVIEW_PUBLISH_INPUT = "publish_review"
-
-
-def publishes_review(inputs: object) -> bool:
-    """Whether a run's inputs post its review to the pull request."""
-    return isinstance(inputs, Mapping) and inputs.get(REVIEW_PUBLISH_INPUT) == "true"
-
-
-def review_inputs(
-    declared: Container[str], *, ref: str, pr_url: str, branch: str, publish: bool = False,
-) -> dict[str, str]:
-    """The creation inputs of a run started in review, limited to those `declared`.
-
-    Connected only with a pull request branch: without one there is nothing
-    to push a fix to or wait on CI for. `publish` posts the review to that pull
-    request instead of stopping at triage.
-    """
-    inputs = {
-        STATE_INPUT: str(WorkState.REVIEW),
-        REVIEW_REF_INPUT: ref,
-        REVIEW_PR_INPUT: pr_url,
-        REVIEW_BRANCH_INPUT: branch,
-        MODE_INPUT: str(ForgeMode.CONNECTED if pr_url and branch else ForgeMode.DISCONNECTED),
-    }
-    if publish:
-        inputs[REVIEW_PUBLISH_INPUT] = "true"
-    return {name: value for name, value in inputs.items() if name in declared}
 
 
 def finding_comment(tagline: str, description: str, *, agent: str = "", facet: str = "") -> str:
@@ -69,10 +34,7 @@ def finding_comment(tagline: str, description: str, *, agent: str = "", facet: s
 __all__ = [
     "REVIEW_BRANCH_INPUT",
     "REVIEW_PR_INPUT",
-    "REVIEW_PUBLISH_INPUT",
     "REVIEW_REF_INPUT",
     "TRIAGE_TOOL",
     "finding_comment",
-    "publishes_review",
-    "review_inputs",
 ]

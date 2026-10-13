@@ -1529,20 +1529,24 @@ def _review_catalog():
     builder.add_edge(START, "work")
     builder.add_edge("work", END)
     return WorkflowCatalog.from_graphs((graph_workflow(
-        builder, id="implementation-review-v1", name="Implementation review",
+        builder, id="custom-review", name="PR review",
         inputs=(
-            mode_input(), state_input(WorkState.PLANNING, WorkState.REVIEW),
+            mode_input(),
             WorkflowInput("ref", "Ref"), WorkflowInput("pr_url", "Pull request"),
-            WorkflowInput("branch", "Branch"), WorkflowInput("publish_review", "Publish"),
+            WorkflowInput("branch", "Branch"), WorkflowInput("publish", "Publish"),
+            WorkflowInput("auto_approve_green", "Approve Green"),
         ),
     ),))
 
 
 @pytest.mark.parametrize("may_write", [True, False])
+@pytest.mark.parametrize("global_value,override,expected", [(False, None, "false"), (True, None, "true"), (False, True, "true"), (True, False, "false")])
 def test_requesting_a_review_from_engine_starts_an_engine_review(
-    tmp_path, may_write, caplog, *, github_app, git_repo, client
+    tmp_path, may_write, global_value, override, expected, caplog, *, github_app, git_repo, client
 ):
     from test_github_ingress import _review_requested, _signed as github_signed
+
+    from engine.runtime.config import PullRequestsConfig
 
     caplog.set_level(logging.INFO, logger="engine.apps.web.api")
     # Nothing is working on the pull request yet.
@@ -1553,6 +1557,8 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(
         _review_catalog(),
         provider=FakeACPProvider(create=True),
         github_webhook_secret=SIGNING_SECRET,
+        review_request_workflow="custom-review",
+        pull_requests=PullRequestsConfig(global_value, {} if override is None else {"acme/api": override}),
         graph_runtime=opened,
         repos={
             "acme/api": (
@@ -1579,14 +1585,15 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(
                 in caplog.messages
             return
         runtime.start.assert_awaited_once()
+        assert runtime.start.await_args.args[0] == "custom-review"
         inputs = runtime.start.await_args.args[1]
         assert inputs["repository"] == checkout
         assert "https://github.com/acme/api/pull/12" in inputs["task"]
         assert inputs["inputs"] == {
-            "mode": "connected", "state": "Review", "ref": "origin/feature",
+            "mode": "connected", "ref": "origin/feature",
             "pr_url": "https://github.com/acme/api/pull/12", "branch": "feature",
             # Whoever asked reads the review on the pull request, not at triage.
-            "publish_review": "true",
+            "publish": "true", "auto_approve_green": expected,
         }
         # Claimed, so the review may comment on the pull request it was given.
         record = runtime.store.claim_pull_request.await_args.args[0]
@@ -1607,6 +1614,7 @@ def test_a_review_request_leaves_a_pull_request_to_its_running_work_order(
         _review_catalog(),
         provider=FakeACPProvider(create=True),
         github_webhook_secret=SIGNING_SECRET,
+        review_request_workflow="custom-review",
         graph_runtime=opened,
         repos={
             "acme/api": str(

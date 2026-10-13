@@ -365,6 +365,8 @@ def compose_app(
         communications_channel=loaded.config.communications.channel,
         public_url=loaded.config.public_url,
         work_orders=loaded.config.work_orders,
+        review_request_workflow=loaded.config.github.review_request_workflow,
+        pull_requests=loaded.config.pull_requests,
         repos=registry,
         config_path=loaded.path if loaded.explicit else None,
         onboarding_directory=loaded.onboarding_directory,
