@@ -14,48 +14,50 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ```
 ## Getting started
 
-On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
-logged in on this machine, run:
-
-```bash
-curl -LsSf https://openengine.cc/install.sh | sh
-```
-
-Or install through npm, or try it without a global npm install:
+Install the CLI, then run it from inside any git repository:
 
 ```bash
 npm i -g @openengine.cc/engine
-engine go
-# Or:
-npx @openengine.cc/engine go
+cd your-repo
+engine go "add a dark mode toggle to the settings page"
 ```
-
-The npm launcher installs its matching release on first run into the same
-persistent data directory as the curl installer, outside the npx cache.
-The unscoped `openengine` package on npm is an unrelated project.
-
-On Windows, use Windows Subsystem for Linux (WSL). If needed, run
-`wsl --install` in an administrator PowerShell, restart when prompted, and
-complete the Linux distribution's first-run setup. Install Git and Node.js
-20.19+ and log in to Codex or Claude inside WSL, then run from PowerShell:
-
-```powershell
-wsl sh -c "curl -LsSf https://openengine.cc/install.sh | sh"
+Or try it without installing:
 ```
+npx @openengine.cc/engine go "add a dark mode toggle to the settings page"
+```
+`engine go` runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. It follows the run live in your terminal. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
 
-Run subsequent `engine` commands inside WSL.
+Stuck, or just want to say hello? Join us on [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
-The curl installer installs the `engine` command in `~/.local/bin` and starts OpenEngine at
-[http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to open it
-in a browser and rerun the installer to upgrade.
+## Basics
 
-OpenEngine reaches Codex and Claude over ACP, through the pinned `@agentclientprotocol/codex-acp` and `@agentclientprotocol/claude-agent-acp` adapters it launches with `npx`. They use your local Codex and Claude logins, so it can utilize your subscription limits instead of being provided an API key. OpenCode for local inference is offered, too!
+### Graphs
 
-Trouble getting running? Want to say hello? Join our [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
+A graph is a workflow of agent and code steps. Use the built-in ones, or write your own (YAML or Python) to automate the tedious parts of your development process.
+```
+engine graphs                                   # list available graphs
+engine go review <pr-url>                       # review an existing pull request
+engine go fix <pr-url>                          # address its unresolved review comments
+engine graph add my-graph.yaml                  # register your own graph
+engine graph run my-graph "add my widget"       # run any graph with an instruction
+```
+### Steering
 
+Runs are steerable while they work. Watch one, then redirect a node mid-flight:
+```
+engine run watch <run-id>
+engine node steer <execution-id> "use the existing date helper instead"
+```
+### Loops
+
+Loops run a graph on a schedule: QA sweeps, pentesting, dependency upkeep, or anything else you'd want done every day. Each loop has limits, so it can't run away with your budget.
+```
+engine loop add qa-sweep --every 1d --max-spend 20 --max-prs 5
+engine loops                                    # status, spend and PRs per loop
+```
 ### From source
 
-Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
+To do work on OpenEngine. Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
 
 First, clone the repo:
 ```bash
@@ -242,20 +244,3 @@ it available immediately without restarting. The web UI's **Add repository**
 action and MCP's `onboard_repository` tool provide the same onboarding.
 See [repository onboarding](docs/repository-onboarding.md) for options and the
 manual configuration reference.
-
-## What is it.
-
-We are building OpenEngine, a system for automating the SDLC and SOP. The key differentiator of OpenEngine is that it is a system for configuring token flow rates and planning according to a timeline.
-
-OpenEngine is fundamentally this: A planning agent which projects the timeline and relative issue + milestone sizes based on the user's stated goals. Then, it automates the distribution and production of the code required to reach those milestones according to the token flow rates set by the engine operator. 
-
-The key concepts are:
-- A "Project". An end-to-end product that the operator is working on. Timelines and milestones are associated with this.
-- A "Milestone". Some measurable outcome that you want to reach using code. Must come with acceptance criteria.
-- A "WorkOrder". WorkOrders belong to a project+milestone. They are the tasks necessary to complete a milestone.
-
-Fundamentally your project foreman schedules work, and dispatches work according to your budgets. You can use your subscription budgets, because OpenEngine drives Codex and Claude over ACP with your local logins. 
-
-![sdlc](docs/images/oe_sdlc.png)
-
-Remote clients can [create and immediately execute work orders through MCP](docs/remote-mcp.md), hosted on a Mac mini behind Tailscale Funnel.
