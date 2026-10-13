@@ -3,7 +3,7 @@ import { screenshot } from "@test2doc/playwright/screenshots"
 import { test, expect } from "../fixtures/terminal.ts"
 import { gettingStartedCategory } from "./docCategories"
 
-test.use({ terminalSession: { cols: 100, rows: 38 } })
+test.use({ terminalSession: { cols: 100, rows: 46 } })
 
 test.describe(gettingStartedCategory, () => {
   test.describe(
@@ -22,7 +22,7 @@ You'll see a list of commands, each with a short note on what it does.`,
             const { output } = await terminal.run("engine --help")
             expect(output).toMatch(/^usage: engine/m)
             await screenshot(testInfo, await terminal.row(/^\s+graph\s+register, inspect and run graphs$/), {
-              annotation: { text: "A command, and what it does" },
+              annotation: { text: "A command, and what it does", position: "right" },
             })
           },
         )
@@ -38,7 +38,7 @@ You'll see the things you can do with graphs.`,
           async () => {
             const { output } = await terminal.run("engine graph --help")
             expect(output).toMatch(/^usage: engine graph/m)
-            await screenshot(testInfo, await terminal.rows(/^\s+spec\s/, /^\s+run\s/), {
+            await screenshot(testInfo, await terminal.rows(/^\s+spec\s/, /^\s+list\s/), {
               annotation: { text: "Things you can do with graphs" },
               clip: await terminal.usedArea(),
             })

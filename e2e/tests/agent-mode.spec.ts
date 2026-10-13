@@ -34,7 +34,7 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     await terminal.run(`engine graph add ${graph}`)
     await terminal.run('engine graph run hello "Say hello" --wait', { timeout: 280_000 })
     // State, never wording: the same assertion holds for a scripted agent and a real one.
-    expect((await terminal.run("engine runs list")).output).toMatch(/^run-\w+\s+hello v1\s+completed\s/m)
+    expect((await terminal.run("engine runs list")).output).toMatch(/^run-\w+\s.*\shello v1\s+completed\s/m)
   })
 
   test("the stub says what its script says", async ({ engine, terminal }) => {
