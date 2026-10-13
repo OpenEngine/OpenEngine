@@ -51,9 +51,14 @@ started — a daemon that is up already serves it.
 - A **loop** creates recurring runs of one pinned version.
 - A **node execution ID** identifies one attempt at one node within a run.
 
+The bare `engine` menu shows primary commands; `engine --help` or `engine --all`
+shows every command, including hidden aliases. Each plural list command is an
+alias for its singular `list` operation: `engine backend list`, `engine backends`,
+and `engine backends list` are equivalent.
+
 Backend commands use the selected backend. List commands (`engine graphs`,
 `runs`, `loops`, `nodes`, `agents`, `backends`, `connections`) print a table;
-add `--json` for JSON. Other commands print JSON unless `--pretty` is given, except the live run view on a TTY. `engine graph spec` and
+add `--json` for JSON. Other commands print readable lines, or the live run view on a TTY; add `--json` for JSON. `engine graph spec` and
 `engine loop spec` print the current specifications as Markdown locally, without
 a running daemon. Their specifications and the site reference are generated from
 the parser’s field definitions, expression rules, and accompanying prose; the
@@ -89,7 +94,7 @@ repositories.
 ```bash
 engine graph add ./graph.yaml
 engine graphs list
-engine graph get fix-flaky-test --pretty        # or fix-flaky-test@2, g-..., gv-...
+engine graph get fix-flaky-test        # or fix-flaky-test@2, g-..., gv-...
 ```
 
 ```yaml
@@ -147,7 +152,7 @@ still works for one release.
 ```bash
 engine graph run fix-flaky-test "tests/test_slack.py flakes on CI" --wait
 engine go review feat/my_feat -i adversarial=true
-engine run get run-0123abcd --pretty
+engine run get run-0123abcd
 engine runs
 engine runs --graph fix-flaky-test --status failed
 ```
@@ -160,7 +165,7 @@ exits non-zero, while detaching exits 0.
 
 Use `--no-watch` to return immediately on a TTY, or `--json` for JSON output.
 Non-TTY invocations return immediately as before. `--wait` always polls without
-interaction and exits non-zero if the run failed. `engine run get RUN_ID --pretty`
+interaction and exits non-zero if the run failed. `engine run get RUN_ID`
 lists pending approval IDs, nodes and commands, plus the run's UI URL. Each submission carries an idempotency key
 (`--idempotency-key` to choose it), and the client retries a dropped
 connection with the same key, so a retry never starts a second run. A run
@@ -169,15 +174,16 @@ opened, and failure details. An agent without credentials fails with
 `engine agent signin <agent>`; on a remote backend that command says what
 to run on that host.
 
-One built-in graph, `implementation-review-rerank`, serves every default verb.
-It is based on `workflows/implementation_review_graph.py` and runs implementation,
+The default verbs each have their own built-in graph: `go` uses
+`implementation-review-rerank`, `review` uses `review`, and `fix` uses `fix`.
+The implementation graph is based on `workflows/implementation_review_graph.py` and runs implementation,
 CI, parallel review facets, reranking, one fix-and-review pass, and human review.
 
-| Command | Inputs | Behavior |
+| Command | Graph | Behavior |
 | --- | --- | --- |
-| `engine go "add a feature" --spec` | `spec=true` | Write a specification before implementation. |
-| `engine go review '#839'` | `review_only=true`, `publish_review=true` | Review an existing change; `-i adversarial=true` adds refutation. |
-| `engine go fix '#839'` | `fix_only=true` | Address unresolved review threads, check CI, and reply to addressed threads. |
+| `engine go "add a feature" --spec` | `implementation-review-rerank` | Write a specification before implementation. |
+| `engine go review '#839'` | `review` | Review an existing change; `-i adversarial=true` adds refutation. |
+| `engine go fix '#839'` | `fix` | Address unresolved review threads, check CI, and reply to addressed threads. |
 
 Connected runs publish to the forge; disconnected runs keep findings in run
 results and commits locally. Fixes remain on the target branch. Fixing fork PRs is rejected before checkout
@@ -201,15 +207,15 @@ when `the` is not a branch. A sole invalid target reports
 `no such branch or PR; to give an instruction, quote it`.
 
 Use `engine verbs` to inspect project bindings and
-`engine verb set review my-review` to replace one. All three default bindings point to
-`implementation-review-rerank`. A replacement must declare `instruction` for
+`engine verb set review my-review` to replace one. The default bindings are `go → implementation-review-rerank`,
+`review → review`, and `fix → fix`. A replacement must declare `instruction` for
 `go`, or `pr_url` or `ref` for target verbs; the API and CLI reject incompatible
 bindings. These contracts describe inputs, never internal graph stages.
 
-For one release, `engine graph run` accepts deprecated aliases for the default
-graph: `review` sets `review_only=true`, `adversarial-review` also sets
-`adversarial=true`, `implement-review` uses the defaults, and
-`spec-implement-review` sets `spec=true`. The old `--branch` and `--agent` flags remain supported there.
+For one release, the old starter names remain supported: `review` runs the new
+`review` graph, and `adversarial-review` runs it with `adversarial=true`.
+`implement-review` runs `implementation-review-rerank`, and
+`spec-implement-review` runs it with `spec=true`. The old `--branch` and `--agent` flags remain supported there.
 
 
 `engine runs` lists runs newest first, whether submitted or started by a loop,
@@ -254,7 +260,7 @@ engine loop resume fix-flaky-test --max-spend 40
 ```bash
 engine nodes list --run run-0123abcd
 engine node steer 1a0055fa-... "Use the existing retry helper instead" --wait
-engine node get 1a0055fa-... --pretty
+engine node get 1a0055fa-...
 ```
 
 Steering addresses one node attempt and is kept in order, once per

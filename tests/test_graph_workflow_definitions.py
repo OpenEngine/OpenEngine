@@ -171,7 +171,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
     codex = next(one for one in topologies if str(one.graph_id) == GRAPHS[0])
 
     fix_nodes = {"threads", "fix-implementation", "fix-ci", "reply"}
-    assert fix_nodes <= {str(node.node_id) for node in codex.nodes}
+    assert not fix_nodes & {str(node.node_id) for node in codex.nodes}
     nodes = [node for node in codex.nodes if str(node.node_id) not in fix_nodes]
     assert [str(node.node_id) for node in nodes] == [
         "workspace",
@@ -337,7 +337,7 @@ def test_every_agent_node_works_in_the_run_s_own_checkout() -> None:
         if getattr(node, "graph_node_kind", "") == "agent"
     ]
 
-    assert len(agents) == 13
+    assert len(agents) == 11
     assert all(node.cwd is module.checkout for node in agents)
     # And something upstream of them actually provisions one.
     assert nodes["workspace"].graph_node_kind == "workspace"
@@ -804,8 +804,8 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     assert [
         [item["name"] for item in one["inputs"]] for one in offered
     ] == [[
-        "instruction", "fix_only", "review_threads",
-        "implementation_runner", "review_runner", "spec", "review_only", "adversarial",
+        "instruction",
+        "implementation_runner", "review_runner", "spec", "adversarial",
         "mode", "state", "ref", "pr_url", "branch",
         "publish_review",
     ]]
@@ -847,8 +847,8 @@ def test_stage_runners_configure_models_and_mcp_identity(
     module = definition_module()
     graph = module.graph_for("codex")
     assert [item.name for item in graph.inputs] == [
-        "instruction", "fix_only", "review_threads",
-        "implementation_runner", "review_runner", "spec", "review_only", "adversarial",
+        "instruction",
+        "implementation_runner", "review_runner", "spec", "adversarial",
         "mode", "state", "ref", "pr_url", "branch",
         "publish_review",
     ]
@@ -1089,7 +1089,7 @@ def test_default_graph_optional_steps_and_bounded_fix(spec, adversarial, review_
         node.runnable = stub(name)
     asyncio.run(builder.compile().ainvoke({"task": "docs", "inputs": {
         "spec": str(spec).lower(), "adversarial": str(adversarial).lower(),
-        "review_only": str(review_only).lower(),
+        "state": "Review" if review_only else "Planning",
     }}))
     assert (module.SPEC in visited) == (spec and not review_only)
     assert (module.REFUTE in visited) == adversarial
@@ -1101,7 +1101,7 @@ def test_default_graph_optional_steps_and_bounded_fix(spec, adversarial, review_
         assert visited.index(module.SPEC) < visited.index(module.IMPLEMENTATION)
 
 
-@pytest.mark.parametrize("inputs", [{"review_only": "true"}, {"ref": "feature"}, {"pr_url": "https://github.com/o/r/pull/1"}])
+@pytest.mark.parametrize("inputs", [{"state": "Review"}, {"ref": "feature"}, {"pr_url": "https://github.com/o/r/pull/1"}])
 def test_review_inputs_skip_implementation(inputs):
     module = definition_module()
     assert isinstance(module._after_workspace({"inputs": inputs}), list)
@@ -1116,8 +1116,8 @@ def test_spec_is_given_to_implementation_and_review():
 
 
 @pytest.mark.parametrize("inputs,expected", [
-    ({"review_only": "true"}, "HEAD"),
-    ({"review_only": "true", "branch": "topic"}, "topic"),
+    ({"state": "Review"}, "HEAD"),
+    ({"state": "Review", "branch": "topic"}, "topic"),
     ({"pr_url": "https://github.com/owner/repo/pull/9"}, "origin/refs/pull/9/head"),
     ({"pr_url": "https://gitlab.com/group/repo/-/merge_requests/7"}, "origin/refs/merge-requests/7/head"),
     ({"pr_url": "https://github.com/owner/repo/pull/9", "ref": "cached-sha"}, "cached-sha"),

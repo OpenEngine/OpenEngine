@@ -28,15 +28,16 @@ mode on either backend. `--wait` polls without interaction; `--json` emits JSON
 with the mode banner on stderr. Non-TTY calls return immediately unless `--wait`
 is given. Reattach with `engine run watch RUN_ID`.
 
-One built-in graph, `implementation-review-rerank`, serves every default verb.
-It is based on `workflows/implementation_review_graph.py` and runs implementation,
+The default verbs each have their own built-in graph: `go` uses
+`implementation-review-rerank`, `review` uses `review`, and `fix` uses `fix`.
+The implementation graph is based on `workflows/implementation_review_graph.py` and runs implementation,
 CI, parallel review facets, reranking, one fix-and-review pass, and human review.
 
-| Command | Inputs | Behavior |
+| Command | Graph | Behavior |
 | --- | --- | --- |
-| `engine go "add a feature" --spec` | `spec=true` | Write a specification before implementation. |
-| `engine go review '#839'` | `review_only=true`, `publish_review=true` | Review an existing change; `-i adversarial=true` adds refutation. |
-| `engine go fix '#839'` | `fix_only=true` | Address unresolved review threads, check CI, and reply to addressed threads. |
+| `engine go "add a feature" --spec` | `implementation-review-rerank` | Write a specification before implementation. |
+| `engine go review '#839'` | `review` | Review an existing change; `-i adversarial=true` adds refutation. |
+| `engine go fix '#839'` | `fix` | Address unresolved review threads, check CI, and reply to addressed threads. |
 
 Connected runs publish to the forge; disconnected runs keep findings in run
 results and commits locally. Fixes remain on the target branch. Fixing fork PRs is rejected before checkout
@@ -60,15 +61,15 @@ when `the` is not a branch. A sole invalid target reports
 `no such branch or PR; to give an instruction, quote it`.
 
 Use `engine verbs` to inspect project bindings and
-`engine verb set review my-review` to replace one. All three default bindings point to
-`implementation-review-rerank`. A replacement must declare `instruction` for
+`engine verb set review my-review` to replace one. The default bindings are `go → implementation-review-rerank`,
+`review → review`, and `fix → fix`. A replacement must declare `instruction` for
 `go`, or `pr_url` or `ref` for target verbs; the API and CLI reject incompatible
 bindings. These contracts describe inputs, never internal graph stages.
 
-For one release, `engine graph run` accepts deprecated aliases for the default
-graph: `review` sets `review_only=true`, `adversarial-review` also sets
-`adversarial=true`, `implement-review` uses the defaults, and
-`spec-implement-review` sets `spec=true`. The old `--branch` and `--agent` flags remain supported there.
+For one release, the old starter names remain supported: `review` runs the new
+`review` graph, and `adversarial-review` runs it with `adversarial=true`.
+`implement-review` runs `implementation-review-rerank`, and
+`spec-implement-review` runs it with `spec=true`. The old `--branch` and `--agent` flags remain supported there.
 
 ## Register your own graph
 
@@ -79,7 +80,7 @@ or Python files kept in your repository:
 engine graph add ./graph.yaml
 engine graph add workflows/implementation_review_graph.py
 engine graphs list
-engine graph get implementation-review-rerank --pretty
+engine graph get implementation-review-rerank
 engine graph run my-graph "Retry webhook deliveries with backoff" --wait
 ```
 
@@ -160,7 +161,7 @@ Python runs on the backend with the daemon's privileges, so only operators can r
 ## While it runs
 
 ```bash
-engine nodes list --run RUN_ID --pretty
+engine nodes list --run RUN_ID
 engine node steer EXECUTION_ID "Use the existing retry helper instead" --wait
 ```
 

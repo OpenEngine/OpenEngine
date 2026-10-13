@@ -1,0 +1,16 @@
+{
+  "name": "@openengine.cc/engine",
+  "version": "1.7.0",
+  "description": "Install and run OpenEngine",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenEngine/OpenEngine.git",
+    "directory": "npm/engine"
+  },
+  "bin": { "engine": "bin/engine.js" },
+  "engines": { "node": ">=18" },
+  "publishConfig": { "access": "public" },
+  "files": ["bin/engine.js", "install.sh", "LICENSE"],
+  "scripts": { "prepack": "node scripts/prepack.js" }
+}

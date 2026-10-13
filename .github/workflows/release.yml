@@ -96,6 +96,22 @@ jobs:
         with:
           name: release-bundle
           path: ${{ runner.temp }}/release
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Test npm bootstrapper
+        run: python3 -m unittest tests.test_npm_bootstrapper
+      - name: Install packed npm launcher and matching release
+        env:
+          OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
+        run: |
+          set -eu
+          cd npm/engine
+          npm pack --pack-destination "$RUNNER_TEMP"
+          npm install --global --prefix "$RUNNER_TEMP/npm-global" "$RUNNER_TEMP"/openengine.cc-engine-*.tgz
+          "$RUNNER_TEMP/npm-global/bin/engine" --help
+          "$RUNNER_TEMP/npm-global/bin/engine" daemon setup
+          "$RUNNER_TEMP/npm-global/bin/engine" daemon stop
       - name: Install and start OpenEngine
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
@@ -155,6 +171,30 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag }}
         run: gh release upload "$RELEASE_TAG" dist/openengine-*.tar.gz dist/release-manifest.json scripts/install.sh --clobber
+
+  publish-npm:
+    needs: [release-please, upload-release, install]
+    if: github.event_name == 'push' && needs.release-please.outputs.created == 'true' && vars.NPM_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # Name this environment in npm's trusted publisher and restrict its deployment
+    # branches to main (Settings > Environments > npm) before enabling publishing.
+    # Pin actions to commit SHAs because this job runs with id-token: write.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - name: Publish @openengine.cc/engine with trusted publishing
+        working-directory: npm/engine
+        run: npm publish --provenance --access public
 
   # Built without the PyPI credential: the build backend is third-party code, so
   # it is hash-locked and runs in a job that cannot request the OIDC token. The

@@ -3,6 +3,7 @@
 import asyncio
 import socket
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,6 +16,49 @@ def _unused_port() -> int:
         return listener.getsockname()[1]
 
 
+async def _start_service(service: TemporalService) -> None:
+    # The SDK downloads its dev server on first use. Retry a transient 503
+    # from that endpoint without hiding server startup or recovery failures.
+    for attempt in range(3):
+        try:
+            await service.start()
+        except RuntimeError as error:
+            if (
+                "failed to download ephemeral server executable" not in str(error)
+                or "503 Service Unavailable" not in str(error)
+                or attempt == 2
+            ):
+                raise
+            await asyncio.sleep(2 ** attempt)
+        else:
+            return
+
+
+@pytest.mark.parametrize("failure", ["download", "startup", "persistent"])
+def test_start_service_retries_only_transient_download_failure(monkeypatch, failure):
+    download_error = RuntimeError(
+        "Failed starting Temporal dev server: failed to download ephemeral server "
+        "executable: HTTP status server error (503 Service Unavailable)"
+    )
+    error = RuntimeError("server startup failed") if failure == "startup" else download_error
+    service = TemporalService()
+    start = AsyncMock(side_effect=[error, None] if failure == "download" else error)
+    monkeypatch.setattr(service, "start", start)
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    if failure == "download":
+        asyncio.run(_start_service(service))
+        assert start.await_count == 2
+        sleep.assert_awaited_once_with(1)
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            asyncio.run(_start_service(service))
+        assert raised.value is error
+        assert start.await_count == (3 if failure == "persistent" else 1)
+        assert sleep.await_count == (2 if failure == "persistent" else 0)
+
+
 @pytest.mark.integration
 def test_sqlite_temporal_boots_is_accessible_and_recovers(tmp_path: Path) -> None:
     async def exercise_service() -> None:
@@ -24,7 +68,7 @@ def test_sqlite_temporal_boots_is_accessible_and_recovers(tmp_path: Path) -> Non
             database=database,
             health_check_interval=0.1,
         )
-        await service.start()
+        await _start_service(service)
         try:
             assert await service.is_healthy()
             assert database.exists()

@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from engine.apps.cli import daemon
 from engine.cli import backends
+from engine.cli.commands import add_list_alias
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -47,12 +48,15 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
 
 def add_parsers(commands: argparse._SubParsersAction) -> None:
     add_parser(commands)
-    listing = commands.add_parser("connections", help="show source control and Slack connections")
+    connection = commands.add_parser("connection", help="list source control and Slack connections")
+    actions = connection.add_subparsers(dest="action", required=True)
+    listing = actions.add_parser("list", help="show source control and Slack connections")
     listing.add_argument("--server", metavar="URL", help="override the selected backend's URL")
     listing.add_argument("--backend", metavar="NAME", help="the backend to ask (default: the selected one)")
     listing.add_argument("--origin", default="https://gitlab.com", help="the GitLab instance to report")
     listing.add_argument("--json", action="store_true", help="JSON instead of a table")
     listing.add_argument("--pretty", action="store_true", help=argparse.SUPPRESS)
+    add_list_alias(commands, "connection", listing)
     removing = commands.add_parser("disconnect", help="disconnect shared source control or Slack")
     removing.add_argument("provider", choices=DISCONNECTABLE)
     removing.add_argument("--server", metavar="URL", help="override the selected backend's URL")

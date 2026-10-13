@@ -185,6 +185,83 @@ def test_the_sketch_compiles_to_langgraph(tmp_path) -> None:
             ("reranker", "implementer"), ("reranker", "__end__")} <= edges
 
 
+def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
+    from pathlib import Path
+
+    from engine.graph_service.expressions import parse
+
+    source = Path(__file__).parents[1] / "docs/examples/graphs/tdd-guide.yaml"
+    spec = graph(source.read_text())
+    assert [node.id for node in spec.nodes] == [
+        "pick", "tdd", "implement", "publish", "ci", "reviewers", "reproduce", "reranker", "impact", "human_review",
+    ]
+    # A run can build on an unmerged branch instead of main, and publishes against it.
+    assert (spec.base_ref, spec.ref_input) == ("origin/main", "base")
+    assert {
+        ("tdd", "implement", False),
+        ("implement", "publish", False),
+        ("publish", "ci", False),
+        ("reviewers", "reproduce", False),
+        ("reproduce", "reranker", False),
+        ("impact", "human_review", False),
+    } <= set(spec.edges())
+    # The house review panel, with how the guides read as a sixth angle.
+    assert spec.node("reviewers").keys == tuple(
+        f"reviewers-{facet}" for facet in ("security", "bugs", "performance", "conciseness", "dryness", "guide")
+    )
+    # Who writes the tests, who implements and who reviews are each the run's
+    # choice, so a run can use one runner throughout or a different one for each.
+    assert [(node.id, node.runner.kind, node.runner.value) for node in spec.nodes if node.kind == "agent"] == [
+        ("pick", "input", "runner"),
+        ("tdd", "same", "pick"),
+        ("implement", "input", "implementer"),
+        ("publish", "same", "implement"),
+        ("reviewers", "input", "reviewer"),
+        ("reproduce", "input", "reviewer"),
+        ("reranker", "same", "implement"),
+        ("impact", "input", "reviewer"),
+    ]
+    # Only publish opens the pull request; CI and the review find it by the URL it reports.
+    assert [node.id for node in spec.nodes if "open_pull_request" in node.tools] == ["publish"]
+    assert [output.name for output in spec.node("publish").outputs] == ["pr_url"]
+    # The reranker's findings and the impact rating are posted on the pull
+    # request, and the implementer answers the threads it acts on.
+    assert [node.id for node in spec.nodes if "add_comment" in node.tools] == ["implement", "reranker", "impact"]
+    # A comment on the pull request re-enters the run at the implementer.
+    assert [node.id for node in spec.nodes if node.always_open] == ["implement"]
+
+    # complete_step accepts only the required outputs, and only as text, so
+    # every output a step can finish with must be one (see the runtime's
+    # step-result validation); findings travel as a JSON string.
+    for node in spec.nodes:
+        for output in node.outputs:
+            assert output.required and output.type in ("string", "findings"), (node.id, output.name)
+
+    routes = {rule.sources[0]: rule.routes for rule in spec.flow if rule.routes}
+
+    def after(step: str, outputs: dict, visits: dict | None = None) -> str:
+        names = {"outputs": outputs, "visits": visits or {}, "inputs": {}, "instruction": "", "item": None}
+        return next(route.targets[0] for route in routes[step] if not route.when or parse(route.when).evaluate(names))
+
+    assert after("pick", {"pick": {"found": "no"}}) == "end"
+    assert after("pick", {"pick": {"found": "yes"}}) == "tdd"
+    finding = {"tagline": "x", "description": "y", "agent": "claude", "facet": "bugs"}
+    assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 1}) == "implement"
+    assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 3}) == "impact"
+    assert after("reranker", {"reranker": {"findings": []}}, {"implement": 1}) == "impact"
+    assert after("ci", {"ci": {"passed": False}}, {"implement": 1}) == "implement"
+    # The panel reviews once CI is done; a person has the last word after
+    # impact analysis, and can send the change back with a note.
+    assert after("ci", {"ci": {"passed": False}}, {"implement": 4}) == "reviewers"
+    assert after("ci", {"ci": {"passed": True}}, {"implement": 1}) == "reviewers"
+    approved = {"decision": "approved", "note": ""}
+    assert after("human_review", {"human_review": approved}, {"human_review": 1}) == "end"
+    sent_back = {"decision": "rejected", "note": "Name the flag --check, not --verify."}
+    assert after("human_review", {"human_review": sent_back}, {"human_review": 1}) == "implement"
+    assert after("human_review", {"human_review": sent_back}, {"human_review": 3}) == "end"
+    assert after("human_review", {"human_review": {"decision": "rejected", "note": ""}}, {"human_review": 1}) == "end"
+
+
 @pytest.mark.parametrize(("field", "value", "path"), [
     ("inputs", [], "inputs"),
     ("inputs", {"tone": "bad"}, "inputs.tone"),

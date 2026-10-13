@@ -3,7 +3,7 @@
 [Release Please](https://github.com/googleapis/release-please) opens a version and
 changelog PR from Conventional Commits on `main`. All Python distributions share
 one version, tracked in `.release-please-manifest.json`; the config's extra files
-keep the workspace packages, standalone `langgraph-acp`, and both uv lockfiles
+keep the workspace packages, standalone `langgraph-acp`, the npm package `@openengine.cc/engine`, and both uv lockfiles
 in sync. Add new
 Python distributions to that config when adding them to the workspace.
 
@@ -62,6 +62,38 @@ never touches the config or state. The release workflow runs it on clean Ubuntu
 and macOS runners against the bundle it just built (`OPENENGINE_RELEASE_URL`
 names that directory), checks `/api/health`, and then runs `engine daemon setup`,
 `status`, and `stop`.
+
+## npm package
+
+`npm i -g @openengine.cc/engine` installs the `engine` launcher;
+`npx @openengine.cc/engine go` tries it without a global npm install.
+The unscoped `openengine` package on npm is an unrelated project.
+The launcher supports Node 18+ on macOS and Linux (the application and its
+adapters may require a newer Node version; see the README prerequisites).
+On first run it calls the bundled installer with its own package version and
+`--no-start`, then runs that version's executable with your arguments.
+Python lives under the usual XDG data prefix, never in the npx cache, so daemon
+paths survive cache eviction. `npx @openengine.cc/engine@X.Y.Z go` pins X.Y.Z
+regardless of the `current` symlink. Configuration follows the installer's shim.
+
+Run `npm pack` in `npm/engine` to build the package. Its prepack script copies
+`scripts/install.sh` and the repository license; there is only one installer
+source. Release Please updates `npm/engine/package.json` with the release version.
+The release workflow tests the packed launcher and installs it globally on
+Ubuntu and macOS against the built release using `OPENENGINE_RELEASE_URL=file://…`.
+
+After the GitHub archive and manifest are uploaded and installer checks pass,
+`release.yml` runs `npm publish --provenance --access public` with GitHub OIDC
+(`id-token: write`), using Node 24 and npm 11 rather than a stored npm token.
+Publishing is explicitly gated by the repository variable
+`NPM_PUBLISH_ENABLED == 'true'`. Before enabling it, a maintainer must create the
+`npm` GitHub environment (Settings > Environments > npm) and restrict its deployment
+branches to `main` only. Configure the trusted publisher for `@openengine.cc/engine`
+on npmjs.com with repository `OpenEngine/OpenEngine`, workflow `release.yml`, and
+environment `npm`. Both settings are required so another branch's copy of the
+workflow cannot mint a publishing credential. These manual prerequisites must
+be completed before the first publish. Actions in the npm publish job are pinned
+to full commit SHAs because the job can request an OIDC token.
 
 ## Background service
 

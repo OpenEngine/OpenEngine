@@ -21,6 +21,19 @@ logged in on this machine, run:
 curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
+Or install through npm, or try it without a global npm install:
+
+```bash
+npm i -g @openengine.cc/engine
+engine go
+# Or:
+npx @openengine.cc/engine go
+```
+
+The npm launcher installs its matching release on first run into the same
+persistent data directory as the curl installer, outside the npx cache.
+The unscoped `openengine` package on npm is an unrelated project.
+
 On Windows, use Windows Subsystem for Linux (WSL). If needed, run
 `wsl --install` in an administrator PowerShell, restart when prompted, and
 complete the Linux distribution's first-run setup. Install Git and Node.js
@@ -32,7 +45,7 @@ wsl sh -c "curl -LsSf https://openengine.cc/install.sh | sh"
 
 Run subsequent `engine` commands inside WSL.
 
-This installs the `engine` command in `~/.local/bin` and starts OpenEngine at
+The curl installer installs the `engine` command in `~/.local/bin` and starts OpenEngine at
 [http://127.0.0.1:4364](http://127.0.0.1:4364). Run `engine daemon` to open it
 in a browser and rerun the installer to upgrade.
 
