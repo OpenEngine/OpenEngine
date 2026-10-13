@@ -199,11 +199,19 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
 
     source = Path(__file__).parents[1] / "docs/examples/graphs/tdd-guide.yaml"
     spec = graph(source.read_text())
-    assert [node.id for node in spec.nodes] == ["pick", "tdd", "implement", "guide_review", "publish", "ci"]
+    assert [node.id for node in spec.nodes] == ["pick", "tdd", "implement", "reviewers", "reranker", "impact", "publish", "ci"]
     # A run can build on an unmerged branch instead of main, and publishes against it.
     assert (spec.base_ref, spec.ref_input) == ("origin/main", "base")
-    assert {("tdd", "implement", False), ("implement", "guide_review", False), ("publish", "ci", False)} <= set(
-        spec.edges(),
+    assert {
+        ("tdd", "implement", False),
+        ("implement", "reviewers", False),
+        ("reviewers", "reranker", False),
+        ("impact", "publish", False),
+        ("publish", "ci", False),
+    } <= set(spec.edges())
+    # The house review panel, with how the guides read as a sixth angle.
+    assert spec.node("reviewers").keys == tuple(
+        f"reviewers-{facet}" for facet in ("security", "bugs", "performance", "conciseness", "dryness", "guide")
     )
     # Who writes the tests, who implements and who reviews are each the run's
     # choice, so a run can use one runner throughout or a different one for each.
@@ -211,7 +219,9 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
         ("pick", "input", "runner"),
         ("tdd", "same", "pick"),
         ("implement", "input", "implementer"),
-        ("guide_review", "input", "reviewer"),
+        ("reviewers", "input", "reviewer"),
+        ("reranker", "same", "implement"),
+        ("impact", "input", "reviewer"),
         ("publish", "same", "implement"),
     ]
     # Only the last step publishes; nothing before it can open a pull request.
@@ -234,9 +244,10 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
 
     assert after("pick", {"pick": {"found": "no"}}) == "end"
     assert after("pick", {"pick": {"found": "yes"}}) == "tdd"
-    assert after("guide_review", {"guide_review": {"verdict": "revise"}}, {"implement": 1}) == "implement"
-    assert after("guide_review", {"guide_review": {"verdict": "revise"}}, {"implement": 3}) == "publish"
-    assert after("guide_review", {"guide_review": {"verdict": "pass"}}, {"implement": 1}) == "publish"
+    finding = {"tagline": "x", "description": "y", "agent": "claude", "facet": "bugs"}
+    assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 1}) == "implement"
+    assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 3}) == "impact"
+    assert after("reranker", {"reranker": {"findings": []}}, {"implement": 1}) == "impact"
     assert after("ci", {"ci": {"passed": False}}, {"implement": 1}) == "implement"
     assert after("ci", {"ci": {"passed": False}}, {"implement": 4}) == "end"
     assert after("ci", {"ci": {"passed": True}}, {"implement": 1}) == "end"
