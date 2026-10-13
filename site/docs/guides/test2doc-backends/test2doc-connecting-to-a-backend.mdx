@@ -11,7 +11,7 @@ slug: /guides/backends/connecting-to-a-backend
 A backend is a named engine daemon the CLI sends its commands to. `local`, the daemon on your own machine, is there from the start and selected. To add another you need its URL and the `ENGINE_SERVICE_TOKEN` it was started with. Keep the token in an environment variable rather than in commands: `export MAC_MINI_TOKEN=<the token>`.
 Run `engine backend add` with a name for the daemon, its URL, and, with `--token-env`, the variable holding its token: `engine backend add mac-mini http://<its host>:4364 --token-env MAC_MINI_TOKEN --pretty`. (`--pretty` prints a line to read rather than JSON for a script; both daemons in this guide run on `127.0.0.1`.)
 ![screenshot](./test2doc-5c33d56258ed.png)
-Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each one is up.
+Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each one is up. The URLs are your own: `local` is usually `http://127.0.0.1:4364`, but both daemons in this guide run on one machine, each on a port of its own.
 ![screenshot](./test2doc-570a14996db8.png)
 Run `engine backend use mac-mini --pretty` to send every command after it to that daemon. `engine backends list` now marks `mac-mini` with `*`.
 ![screenshot](./test2doc-d226ea1129ad.png)
