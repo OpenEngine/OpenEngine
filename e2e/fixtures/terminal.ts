@@ -22,6 +22,9 @@ function pattern(text: Text): Pattern {
   return typeof text === "string" ? text : { source: text.source, flags: text.flags }
 }
 
+/** Room below a row for test2doc's label: its arrow's 24px margin, a 14px line and 4px padding each side, and some to spare. */
+const LABEL_ROOM = 48
+
 export class Terminal {
   readonly page: Page
   /** The prompt count when Enter was last pressed: the command it submitted is done at the next one. */
@@ -71,9 +74,14 @@ export class Terminal {
    * The terminal down to the last row in use, as a screenshot `clip`, so a
    * short output isn't followed by a screen of empty rows:
    * `screenshot(testInfo, locator, { clip: await terminal.usedArea() })`.
+   *
+   * An annotation's label goes below its row when the row is above the middle
+   * of the page, which for a short output is past the last row in use; with
+   * `labelBelow`, the area keeps room for it.
    */
-  usedArea(): Promise<{ x: number; y: number; width: number; height: number }> {
-    return this.page.evaluate(() => window.__term!.usedArea())
+  async usedArea({ labelBelow = false } = {}): Promise<{ x: number; y: number; width: number; height: number }> {
+    const area = await this.page.evaluate(() => window.__term!.usedArea())
+    return labelBelow ? { ...area, height: area.height + LABEL_ROOM } : area
   }
 
   /** The whole buffer as text, wrapped lines joined. */

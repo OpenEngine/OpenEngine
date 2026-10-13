@@ -80,7 +80,7 @@ or Python files kept in your repository:
 engine graph add ./graph.yaml
 engine graph add workflows/implementation_review_graph.py
 engine graphs list
-engine graph get implementation-review-rerank --pretty
+engine graph get implementation-review-rerank
 engine graph run my-graph "Retry webhook deliveries with backoff" --wait
 ```
 
@@ -161,7 +161,7 @@ Python runs on the backend with the daemon's privileges, so only operators can r
 ## While it runs
 
 ```bash
-engine nodes list --run RUN_ID --pretty
+engine nodes list --run RUN_ID
 engine node steer EXECUTION_ID "Use the existing retry helper instead" --wait
 ```
 

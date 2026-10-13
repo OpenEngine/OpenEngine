@@ -13,3 +13,13 @@ export const gettingStartedCategory = withDocCategory("Getting Started", {
     description: "What OpenEngine is, what you need, and how to find your way around the engine command.",
   },
 })
+
+export const anotherComputerCategory = withDocCategory("Other Computers", {
+  label: "Other Computers",
+  position: 2,
+  link: {
+    type: "generated-index",
+    slug: "/guides/other-computers",
+    description: "Use OpenEngine on more than one computer, such as this one and a Mac mini.",
+  },
+})

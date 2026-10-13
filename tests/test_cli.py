@@ -60,7 +60,7 @@ def test_explicit_help_includes_hidden_commands(option, capsys):
     ("loop", ["--project", "example", "--json"]),
     ("node", ["--run", "run-1", "--json"]),
     ("agent", ["--backend", "local", "--json"]),
-    ("verb", ["--project", "example"]),
+    ("verb", ["--project", "example", "--json"]),
     ("connection", ["--origin", "https://gitlab.example.com", "--json"]),
 ])
 def test_plural_aliases_parse_and_dispatch_like_singular_list(singular, extra, monkeypatch):

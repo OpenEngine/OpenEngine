@@ -15,11 +15,16 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
+import http from "node:http"
+import type { Duplex } from "node:stream"
+import tls from "node:tls"
+import type { AddressInfo } from "node:net"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { engineBin } from "../support/engine.ts"
+import type { TestInfo } from "@playwright/test"
 import { test as terminalTest } from "./terminal.ts"
 
 export { expect } from "./terminal.ts"
@@ -150,7 +155,8 @@ function fixtureRepository(root: string) {
 export async function startEngine({
   keepRoot = () => false,
   agentMode = resolveAgentMode(),
-}: { keepRoot?: () => boolean; agentMode?: AgentMode } = {}): Promise<Engine> {
+  token = randomBytes(24).toString("hex"),
+}: { keepRoot?: () => boolean; agentMode?: AgentMode; token?: string } = {}): Promise<Engine> {
   const root = mkdtempSync(path.join(os.tmpdir(), "openengine-e2e-"))
   const repository = fixtureRepository(root)
   const scriptPath = path.join(root, "agent-script.json")
@@ -161,7 +167,6 @@ export async function startEngine({
   const githubConfig = path.join(root, "gh")
   mkdirSync(githubConfig)
   writeFileSync(config, "# The e2e daemon's configuration: built-in defaults unless a spec says otherwise.\n")
-  const token = randomBytes(24).toString("hex")
 
   const passed = agentMode === "real" ? [...INHERITED, ...AGENT_LOGINS] : INHERITED
   const inherited = Object.fromEntries(passed.flatMap((name) => (process.env[name] ? [[name, process.env[name]!]] : [])))
@@ -243,25 +248,151 @@ async function terminate(daemon: ChildProcess) {
   clearTimeout(killed)
 }
 
-export const test = terminalTest.extend<{ engine: Engine }>({
-  engine: async ({}, use, testInfo) => {
-    const failed = () => testInfo.status !== testInfo.expectedStatus
-    const engine = await startEngine({ keepRoot: failed })
-    testInfo.annotations.push({ type: "agents", description: engine.agentMode })
-    if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
+/** A second daemon standing in for another computer, and the address terminal sessions reach it at. */
+export type AnotherComputer = Engine & { address: string }
+
+/**
+ * A certificate for `host`, signed by itself, and where it is saved: a client
+ * that trusts that file trusts `host` over HTTPS.
+ */
+function selfSignedCertificate(host: string) {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "engine-e2e-tls-"))
+  const [cert, key] = [path.join(directory, "cert.pem"), path.join(directory, "key.pem")]
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", `/CN=${host}`,
+    "-addext", `subjectAltName=DNS:${host}`, "-addext", "basicConstraints=critical,CA:FALSE",
+    "-addext", "keyUsage=critical,digitalSignature,keyEncipherment", "-addext", "extendedKeyUsage=serverAuth",
+    "-keyout", key, "-out", cert,
+  ], { stdio: "ignore" })
+  return { file: cert, cert: readFileSync(cert), key: readFileSync(key), remove: () => rmSync(directory, { recursive: true, force: true }) }
+}
+
+/**
+ * An HTTP proxy that answers for `address` (host:port) by forwarding to
+ * `target`, and refuses every other host. Terminal sessions use it through
+ * `https_proxy`, so a guide types an address such as `https://mac-mini.local:4364`
+ * rather than a port the OS picked. It answers HTTPS itself, with a certificate
+ * for `address` saved at `certificate`, so the sessions must trust that file.
+ */
+async function startProxy(address: string, target: string) {
+  const forward = (request: http.IncomingMessage, response: http.ServerResponse, url: URL) => {
+    const forwarded = http.request(
+      new URL(url.pathname + url.search, target),
+      { method: request.method, headers: { ...request.headers, host: new URL(target).host } },
+      (answer) => {
+        response.writeHead(answer.statusCode ?? 502, answer.headers)
+        answer.on("error", () => response.destroy())
+        answer.pipe(response)
+      },
+    )
+    // Once the answer has started, a failure can only cut it short.
+    forwarded.on("error", () => (response.headersSent ? response.destroy() : response.writeHead(502).end()))
+    request.pipe(forwarded)
+  }
+  const server = http.createServer((request, response) => {
+    let url: URL
     try {
-      await use(engine)
-    } finally {
-      await engine.stop()
-      if (failed()) {
-        // What the daemon said usually explains the failure; its directory holds the databases.
-        await testInfo.attach("engine daemon", { body: engine.log(), contentType: "text/plain" })
-        console.log(`[engine] kept the failed test's daemon directory: ${engine.root}`)
-      }
+      url = new URL(request.url ?? "")
+    } catch {
+      response.writeHead(400).end()
+      return
     }
+    if (url.host !== address) {
+      response.writeHead(502).end(`no computer at ${url.host}`)
+      return
+    }
+    forward(request, response, url)
+  })
+  // HTTPS arrives as CONNECT: answer the TLS inside the tunnel as `address` would.
+  const certificate = selfSignedCertificate(address.split(":")[0]!)
+  const secure = http.createServer((request, response) => forward(request, response, new URL(request.url ?? "/", `https://${address}`)))
+  const context = tls.createSecureContext({ cert: certificate.cert, key: certificate.key })
+  server.on("connect", (request: http.IncomingMessage, socket: Duplex) => {
+    if (request.url !== address) {
+      socket.end(`HTTP/1.1 502 Bad Gateway\r\n\r\nno computer at ${request.url}`)
+      return
+    }
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n")
+    const tunnel = new tls.TLSSocket(socket, { isServer: true, secureContext: context })
+    tunnel.on("error", () => socket.destroy())
+    secure.emit("connection", tunnel)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    certificate: certificate.file,
+    close: () => new Promise<void>((resolve) => {
+      server.closeAllConnections()
+      secure.closeAllConnections()
+      server.close(() => resolve())
+    }).finally(certificate.remove),
+  }
+}
+
+/**
+ * Start a daemon for one test and stop it afterwards. If the test failed, its
+ * directory is kept and what it printed is attached to the report as `name`.
+ */
+async function useDaemon(
+  testInfo: TestInfo,
+  name: string,
+  options: { agentMode?: AgentMode; token?: string },
+  use: (engine: Engine) => Promise<void>,
+) {
+  const failed = () => testInfo.status !== testInfo.expectedStatus
+  const engine = await startEngine({ keepRoot: failed, ...options })
+  try {
+    await use(engine)
+  } finally {
+    await engine.stop()
+    if (failed()) {
+      // What the daemon said usually explains the failure; its directory holds the databases.
+      await testInfo.attach(name, { body: engine.log(), contentType: "text/plain" })
+      console.log(`[engine] kept the failed test's ${name} directory: ${engine.root}`)
+    }
+  }
+}
+
+export const test = terminalTest.extend<{
+  engine: Engine
+  anotherComputerAt: string | undefined
+  anotherComputer: AnotherComputer | undefined
+}>({
+  engine: async ({}, use, testInfo) => {
+    await useDaemon(testInfo, "engine daemon", {}, async (engine) => {
+      testInfo.annotations.push({ type: "agents", description: engine.agentMode })
+      if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
+      await use(engine)
+    })
   },
-  terminalEnv: async ({ engine }, use) => {
-    await use(engine.env)
+  /** Where another computer answers, such as `mac-mini.local:4364`; set it with `test.use` to get `anotherComputer`. */
+  anotherComputerAt: [undefined, { option: true }],
+  // A daemon of its own sharing the first one's token: one person's two
+  // computers, so a guide needn't cover tokens. Not added as a backend; that
+  // is the guide's to do.
+  anotherComputer: async ({ engine, anotherComputerAt }, use, testInfo) => {
+    if (!anotherComputerAt) {
+      await use(undefined)
+      return
+    }
+    const options = { agentMode: engine.agentMode, token: engine.env.ENGINE_SERVICE_TOKEN }
+    await useDaemon(testInfo, "another computer's daemon", options, (other) => use({ ...other, address: anotherComputerAt }))
+  },
+  terminalEnv: async ({ engine, anotherComputer }, use) => {
+    if (!anotherComputer) {
+      await use(engine.env)
+      return
+    }
+    const proxy = await startProxy(anotherComputer.address, anotherComputer.url)
+    try {
+      // Only the other computer goes through the proxy; this one is reached directly.
+      await use({
+        ...engine.env, http_proxy: proxy.url, https_proxy: proxy.url, no_proxy: "127.0.0.1,localhost",
+        SSL_CERT_FILE: proxy.certificate,
+      })
+    } finally {
+      await proxy.close()
+    }
   },
   // The CLI sends a run "the repository you are in": start sessions in the
   // fixture repository, as a reader of a guide would be in their own project.

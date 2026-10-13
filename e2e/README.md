@@ -61,8 +61,9 @@ harness itself are tagged `@skip-docs`.
 `npm run doc` and commit what changed under `site/docs/guides/` along with the
 spec, so a reviewer reads the page itself in the pull request. The output is
 byte-for-byte the same on every run, so only real changes show up in a diff.
-The terminal page helps: it draws engine IDs (`g-…`, `run-…`), UUIDs and
-timestamps as stand-ins that are the same on every run, and keeps the real
+The terminal page helps: it draws engine IDs (`g-…`, `run-…`), UUIDs,
+timestamps and ports on this computer's loopback address (`127.0.0.1:…`,
+`localhost:…`) as stand-ins that are the same on every run, and keeps the real
 values in the buffer, where `terminal.text()` and every assertion read them.
-Anything else that changes from run to run, such as a random port or a path
-on your machine, keep off screen.
+Anything else that changes from run to run, such as a path on your machine,
+keep off screen.
