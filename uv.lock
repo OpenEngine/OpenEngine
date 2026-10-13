@@ -614,7 +614,7 @@ requires-dist = [{ name = "engine-ports", editable = "packages/ports" }]
 
 [[package]]
 name = "engine-adapter-sandbox-smolvm"
-version = "1.6.0"
+version = "1.7.0"
 source = { editable = "packages/adapters/sandbox/smolvm" }
 dependencies = [
     { name = "engine-ports" },
