@@ -675,3 +675,15 @@ def test_router_forwards_owned_pull_requests(tmp_path, selected, owned):
         if name != selected:
             unused.run_git.assert_not_awaited()
             unused.request_review.assert_not_awaited()
+
+
+@pytest.mark.parametrize("project,provider", [("acme/api", "github-oauth"), ("gitlab.com/acme/api", "gitlab-oauth")])
+def test_approval_router_preserves_reviewed_commit(tmp_path, project, provider):
+    cli, oauth, gitlab = AsyncMock(), AsyncMock(), AsyncMock()
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set(provider)
+    router = RoutingSourceControl(preferences, cli, oauth, gitlab)
+    source = oauth if provider == "github-oauth" else gitlab
+    source.approve_change_request.return_value = True
+    assert asyncio.run(router.approve_change_request(project, 42, "Green", commit_sha="reviewed")) is True
+    source.approve_change_request.assert_awaited_once_with(project, 42, "Green", commit_sha="reviewed")

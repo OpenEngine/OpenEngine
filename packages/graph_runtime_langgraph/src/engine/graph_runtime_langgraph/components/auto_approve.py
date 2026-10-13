@@ -1,4 +1,5 @@
 """Optional forge approval after impact analysis, independent of human acceptance."""
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 import logging
@@ -13,6 +14,29 @@ from .ci_check import _PASSING, _TERMINAL
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CaptureReviewedCommit:
+    """Pin each review pass to the checkout, never to a later forge head."""
+
+    graph_node_show_in_sidebar: bool = False
+    graph_node_name: str = "Record reviewed commit"
+    graph_node_kind: str = "tool"
+    graph_node_group: str = WorkState.REVIEW
+
+    async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
+        sha = ""
+        workspace = state.get("workspace")
+        if workspace:
+            process = await asyncio.create_subprocess_exec(
+                "git", "-C", str(workspace), "rev-parse", "--verify", "HEAD",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await process.communicate()
+            if process.returncode == 0:
+                sha = stdout.decode().strip()
+        return {"reviewed_sha": sha}
 
 
 @dataclass(frozen=True)
@@ -63,17 +87,24 @@ class AutoApprove:
         workspace = state.get("workspaceId")
         if source is None or not workspace:
             return await result("source control or workspace unavailable")
+        reviewed_sha = state.get("reviewed_sha")
+        if not isinstance(reviewed_sha, str) or not reviewed_sha:
+            return await result("reviewed commit unavailable")
         try:
             # Verify the workspace addresses this PR before checking its CI.
             change = await source.view_change_request(WorkspaceId(str(workspace)), target.number)
             if change_request(change.url) != target or change.state.lower() not in {"open", "opened"}:
                 return await result("pull request is not open in the run's repository")
+            if change.head_sha != reviewed_sha:
+                return await result("pull request head changed since review")
             if any(comment.thread_id and comment.is_resolved is False for comment in change.comments):
                 return await result("unresolved review threads")
             # Review-only runs have no preceding CICheck; always read current CI.
             status = await source.list_pipeline_status(
                 WorkspaceId(str(workspace)), change_request_number=target.number,
             )
+            if status.ref != reviewed_sha:
+                return await result("CI commit does not match reviewed commit")
             jobs = (*status.checks, *status.pipelines, *(status.required_checks or ()))
             if (status.required_checks is None and not jobs) or any(
                 job.status.lower() not in _TERMINAL
@@ -85,7 +116,7 @@ class AutoApprove:
                 "Approved automatically because impact analysis rated this change Green.\n\n"
                 + rationale.strip()
             )
-            if not await source.approve_change_request(target.project, target.number, body):
+            if not await source.approve_change_request(target.project, target.number, body, commit_sha=reviewed_sha):
                 return await result("cannot approve own pull request")
         except Exception as error:
             logger.exception("Could not auto-approve %s", url)

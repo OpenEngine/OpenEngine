@@ -26,7 +26,7 @@ from engine.graph_runtime_langgraph.components.forge import (
 from engine.ports import WorkspaceProvider
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.runtime.change_requests import change_request
-from engine.graph_runtime_langgraph.components.auto_approve import AutoApprove
+from engine.graph_runtime_langgraph.components.auto_approve import AutoApprove, CaptureReviewedCommit
 
 
 def enabled(state: Mapping[str, Any], key: str) -> bool:
@@ -273,7 +273,9 @@ def review(components: Components) -> GraphWorkflow:
     b.add_node('reranker', c.rank())
     b.add_node('impact', c.impact())
     b.add_edge(START, 'workspace')
-    b.add_conditional_edges('workspace', _fanout, list(c.reviews()))
+    b.add_node('record-reviewed-commit', CaptureReviewedCommit())
+    b.add_edge('workspace', 'record-reviewed-commit')
+    b.add_conditional_edges('record-reviewed-commit', _fanout, list(c.reviews()))
     # A join node avoids racing the conditional fan-in when facets finish separately.
     b.add_node('collected', lambda s: {})
     b.add_edge(list(c.reviews()), 'collected')

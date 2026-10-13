@@ -15,7 +15,7 @@ from test_graph_workflow_definitions import definition_module, nodes_of
 
 PR = "https://github.com/owner/repo/pull/42"
 STATE = {"repository": "owner/repo", "workspaceId": "ws", "pr_url": PR,
-         "impact_level": "Green", "impact_rationale": "Only fixes a typo.", "review": []}
+         "reviewed_sha": "sha", "impact_level": "Green", "impact_rationale": "Only fixes a typo.", "review": []}
 
 
 @pytest.fixture(params=["default", "component"])
@@ -25,10 +25,14 @@ def node(request):
         builder = module.pipeline("codex")
         assert (module.IMPACT_ANALYSIS, "auto-approve") in builder.edges
         assert "auto-approve" in builder.branches
+        assert module._after_workspace({"inputs": {"ref": "feature"}}) == "record-reviewed-commit"
+        assert module._after_ci({"ci_check": {"passed": True}}) == "record-reviewed-commit"
         assert module._after_impact_analysis(STATE) == module.HUMAN_REVIEW
     else:
         c = Components("codex", module.AGENTS, module.GitWorktreeWorkspaceProvider("/tmp/unused-auto-approve"))
         builder = review(c).builder
+        assert ("workspace", "record-reviewed-commit") in builder.edges
+        assert "record-reviewed-commit" in builder.branches
         assert ("impact", "auto-approve") in builder.edges
         assert ("auto-approve", "__end__") in builder.edges
     return nodes_of(builder)["auto-approve"]
@@ -62,6 +66,7 @@ def test_rating_and_daemon_setting(node, execution, level, enabled, approved):
         source.approve_change_request.assert_awaited_once_with(
             "owner/repo", 42,
             "Approved automatically because impact analysis rated this change Green.\n\nOnly fixes a typo.",
+            commit_sha="sha",
         )
         assert execution.emit.call_args.args[0] is EventKind.PULL_REQUEST_AUTO_APPROVED
     else:
@@ -174,3 +179,29 @@ def test_unresolved_forge_threads_block(node, execution):
     result = asyncio.run(node(STATE))["auto_approve"]
     assert result["reason"] == "unresolved review threads"
     source.approve_change_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("head,ci,reviewed,reason", [
+    ("new", "new", "sha", "pull request head changed since review"),
+    ("sha", "new", "sha", "CI commit does not match reviewed commit"),
+    ("sha", "sha", "", "reviewed commit unavailable"),
+])
+def test_approval_is_pinned_to_reviewed_commit(node, execution, head, ci, reviewed, reason):
+    source = execution.runtime.source_control
+    source.view_change_request.return_value = replace(source.view_change_request.return_value, head_sha=head)
+    source.list_pipeline_status.return_value = replace(source.list_pipeline_status.return_value, ref=ci)
+    result = asyncio.run(node({**STATE, "reviewed_sha": reviewed}))["auto_approve"]
+    assert result["reason"] == reason
+    source.approve_change_request.assert_not_awaited()
+
+
+def test_capture_local_commit_before_review(monkeypatch):
+    from engine.graph_runtime_langgraph.components.auto_approve import CaptureReviewedCommit
+
+    process = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(b"local-sha\n", b"")))
+    spawn = AsyncMock(return_value=process)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    assert asyncio.run(CaptureReviewedCommit()({"workspace": "/checkout"})) == {"reviewed_sha": "local-sha"}
+    assert spawn.call_args.args == ("git", "-C", "/checkout", "rev-parse", "--verify", "HEAD")
+    process.returncode = 1
+    assert asyncio.run(CaptureReviewedCommit()({"workspace": "/checkout"})) == {"reviewed_sha": ""}

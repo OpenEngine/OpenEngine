@@ -93,7 +93,8 @@ def test_workflow_retries_same_pr_then_fans_out_to_review():
     assert PR in prompt and "tests failed" in prompt
     assert "same PR branch" in prompt and "Do not open another" in prompt
     passed = {**failed, "ci_check": {"passed": True}}
-    assert [send.node for send in module._after_ci(passed)] == [
+    assert module._after_ci(passed) == "record-reviewed-commit"
+    assert [send.node for send in module._fan_out_reviews(passed)] == [
         f"review-{facet.id}" for facet in module.REVIEW_FACETS
     ]
 

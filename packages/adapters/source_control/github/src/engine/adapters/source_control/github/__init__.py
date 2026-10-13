@@ -283,7 +283,7 @@ class GitHubSourceControl:
         user = response.get("user")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
         return isinstance(user, dict) and type(user.get("id")) is int and user["id"] == user_id
 
-    async def approve_change_request(self, project: str, number: int, body: str) -> bool:
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> bool:
         owner, repo, _ = _pull_request_parts(
             pull_request_url(project, number), self._hosts | {self._transport.host}
         )
@@ -295,7 +295,7 @@ class GitHubSourceControl:
             raise GitHubSourceControlError("GitHub returned no pull request author")
         if author.casefold() == login.casefold():
             return False
-        await self._api("POST", f"{root}/reviews", json={"event": "APPROVE", "body": body})
+        await self._api("POST", f"{root}/reviews", json={"event": "APPROVE", "body": body, "commit_id": commit_sha})
         return True
 
     async def authenticated_login(self, repository_url: str) -> str:

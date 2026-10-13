@@ -33,7 +33,7 @@ tools and skip CI themselves, and the prompts are filled from the shared
 
 import json
 
-from engine.graph_runtime_langgraph.components.auto_approve import AutoApprove
+from engine.graph_runtime_langgraph.components.auto_approve import AutoApprove, CaptureReviewedCommit
 
 from engine.graph_runtime_langgraph.components.change_prompts import (
     IMPLEMENTATION_PROMPT, FACET_REVIEW_PROMPT, RERANKER_PROMPT,
@@ -354,7 +354,7 @@ def _implementation_prompt(state: Mapping[str, Any]) -> str:
 
 def _after_workspace(state: dict[str, Any]) -> str | list[Send]:
     if _reviewing(state):
-        return _fan_out_reviews(state)
+        return "record-reviewed-commit"
     return SPEC if _enabled(state, "spec") else NAMING
 
 
@@ -378,7 +378,7 @@ def _after_triage(state: dict[str, Any]) -> str:
 def _after_ci(state: dict[str, Any]) -> str | list[Send]:
     if not state["ci_check"]["passed"]:
         return IMPLEMENTATION
-    return _fan_out_reviews(state)
+    return "record-reviewed-commit"
 
 
 def _fan_out_reviews(state: dict[str, Any]) -> list[Send]:
@@ -617,10 +617,15 @@ def pipeline(
 
     # ---- edges --------------------------------------------------------------
 
+    builder.add_node("record-reviewed-commit", CaptureReviewedCommit())
+    builder.add_conditional_edges(
+        "record-reviewed-commit", _fan_out_reviews,
+        [_review_node_name(f.id) for f in REVIEW_FACETS],
+    )
     builder.add_edge(START, WORKSPACE)
     builder.add_conditional_edges(
         WORKSPACE, _after_workspace,
-        [SPEC, NAMING, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
+        [SPEC, NAMING, "record-reviewed-commit"],
     )
     builder.add_edge(SPEC, NAMING)
     builder.add_edge(NAMING, IMPLEMENTATION)
@@ -628,7 +633,7 @@ def pipeline(
     builder.add_edge(IMPLEMENTATION, CI_CHECK)
     builder.add_conditional_edges(
         CI_CHECK, _after_ci,
-        [IMPLEMENTATION, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
+        [IMPLEMENTATION, "record-reviewed-commit"],
     )
 
     # Fan-in: every facet converges on the reranker.

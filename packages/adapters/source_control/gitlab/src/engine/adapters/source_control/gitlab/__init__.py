@@ -92,7 +92,7 @@ class GitLabSourceControl:
             for member in members
         )
 
-    async def approve_change_request(self, project: str, number: int, body: str) -> bool:
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> bool:
         origin = self._origin_source() if callable(self._origin_source) else self._origin_source
         host, separator, path = project.partition("/")
         if (host != urlparse(origin).netloc.lower() or not separator
@@ -106,8 +106,8 @@ class GitLabSourceControl:
         if author.casefold() == (await self.authenticated_login(origin)).casefold():
             return False
         # The approval endpoint has no review-body field.
+        await self._api("POST", f"{root}/approve", json={"sha": commit_sha})
         await self._api("POST", f"{root}/notes", json={"body": body})
-        await self._api("POST", f"{root}/approve")
         return True
 
     async def authenticated_login(self, repository_url: str) -> str:

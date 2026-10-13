@@ -212,8 +212,8 @@ class SourceControl(Protocol):
         """
         ...
 
-    async def approve_change_request(self, project: str, number: int, body: str) -> bool:
-        """Submit approval; return False if the authenticated account authored it.
+    async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> bool:
+        """Submit approval for commit_sha; return False if the authenticated account authored it.
 
         GitLab records the rationale as a separate merge request note.
         """

@@ -190,6 +190,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "auto-approve",
         "human-review",
         "triage",
+        "record-reviewed-commit",
     ]
     assert [node.name for node in nodes] == [
         "Workspace",
@@ -208,6 +209,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Auto-approve",
         "Human review",
         "Triage",
+        "Record reviewed commit",
     ]
     # Every node belongs to one of the shared WorkOrder states.
     assert [node.group for node in nodes] == [
@@ -216,6 +218,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Planning",
         "Implementation",
         "Implementation",
+        "Review",
         "Review",
         "Review",
         "Review",
@@ -258,6 +261,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "tool",
         "human",
         "human",
+        "tool",
     ]
     # The implementation, review facets, and reranker are conversations a
     # person reads and can talk to. The checkout, naming turn, and verdict
@@ -277,6 +281,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         True,
         True,
         True,
+        False,
         False,
         False,
     ]
@@ -1109,7 +1114,7 @@ def test_default_graph_optional_steps_and_bounded_fix(spec, adversarial, review_
 @pytest.mark.parametrize("inputs", [{"state": "Review"}, {"ref": "feature"}, {"pr_url": "https://github.com/o/r/pull/1"}])
 def test_review_inputs_skip_implementation(inputs):
     module = definition_module()
-    assert isinstance(module._after_workspace({"inputs": inputs}), list)
+    assert module._after_workspace({"inputs": inputs}) == "record-reviewed-commit"
 
 
 def test_spec_is_given_to_implementation_and_review():
