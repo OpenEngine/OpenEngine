@@ -194,7 +194,7 @@ def test_builtin_disconnected_bindings_expose_no_forge_tools(tmp_path, monkeypat
         served.append((tuple(names), self._step.required_outputs))
     monkeypatch.setattr(TerminalMcpBroker, 'enable_repository_tools', enable)
     execution = SimpleNamespace(run_id=RunId('run'), execution_id='one', node_id='node',
-        runtime=SimpleNamespace(source_control=SimpleNamespace(), store=SimpleNamespace(), workorder_creator=None))
+        runtime=SimpleNamespace(public_url="", source_control=SimpleNamespace(), store=SimpleNamespace(), workorder_creator=None))
     async def scenario():
         for spec in workflow.builder.nodes.values():
             for binding in getattr(unwrapped(spec.runnable), 'mcp_server_bindings', ()):

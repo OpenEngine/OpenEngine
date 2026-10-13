@@ -165,7 +165,7 @@ def test_review_tool_rejects_then_accepts_corrected_findings(
     async def scenario():
         execution = SimpleNamespace(
             run_id=RunId("run"), execution_id=node_name,
-            runtime=SimpleNamespace(source_control=object(), workorder_creator=None),
+            runtime=SimpleNamespace(public_url="", source_control=object(), workorder_creator=None),
         )
         async with binding({"workspaceId": "workspace"}, execution, None):
             broker, = brokers

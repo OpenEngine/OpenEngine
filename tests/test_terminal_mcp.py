@@ -10,6 +10,7 @@ import pytest
 
 from engine.ports.source_control import ChangeRequest, CommentResult
 from engine.runtime.change_requests import change_request, remote_project
+from engine.runtime.notifications import work_order_url
 
 from engine.domain import (
     AgentId,
@@ -441,7 +442,7 @@ class RecordingRepository:
             stderr="" if not self._exit_code else "fatal: no",
         )
 
-    async def request_review(self, workspace_id, branch, base_ref, title, body) -> str:
+    async def request_review(self, workspace_id, branch, base_ref, title, body, **options) -> str:
         self.reviews.append((workspace_id, branch, base_ref, title, body))
         return "https://github.com/acme/api/pull/7"
 
@@ -767,7 +768,7 @@ def test_a_pull_request_url_reaches_the_model_through_the_bridge() -> None:
                 "agent/greeting",
                 DEFAULT_BASE_REF,
                 "feat: greet",
-                "Body.",
+                "Body.\n\n---\nOpenEngine work order: run-1",
             )
         ]
         assert config.args.count("--repository-tool") == 1
@@ -1881,3 +1882,82 @@ def test_disconnected_local_git_still_requires_approval(arguments):
     assert "not approved" in result["error"]
     approval.assert_awaited_once()
     assert source.git_calls == []
+
+
+@pytest.mark.parametrize("issue_linked", [False, True])
+@pytest.mark.parametrize("public_url", ["https://engine.example/deployment/", ""])
+@pytest.mark.parametrize("body_kind", [
+    "text", "empty", "url", "plain_footer", "linked_footer", "other_run",
+])
+def test_pull_request_work_order_footer(public_url, body_kind, issue_linked):
+    async def scenario():
+        run_id = RunId("run-xxxx")
+        url = work_order_url(public_url, run_id)
+        absolute_url = "https://engine.example/deployment/runs/run-xxxx"
+        assert url == (absolute_url if public_url else None)
+        plain = "OpenEngine work order: run-xxxx"
+        linked = f"OpenEngine work order: [run-xxxx]({absolute_url})"
+        body = {
+            "text": "Agent description.  \n",
+            "empty": "",
+            "url": f"See {absolute_url}",
+            "plain_footer": f"Description\n\n---\n{plain}",
+            "linked_footer": f"Description\n\n---\n{linked}",
+            "other_run": "OpenEngine work order: run-xxxx-other",
+        }[body_kind]
+        source = RecordingRepository()
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+        broker = TerminalMcpBroker(
+            run_id=run_id, agent_run_id=AgentRunId("agent"), step=STEP,
+            registry=TerminalResultRegistry(), work_order_url=url,
+        )
+        broker.enable_repository_tools(
+            source, ("open_pull_request",), WorkspaceId("ws"), approval,
+        )
+        args = {"branch": "agent/change", "title": "feat: change", "body": body}
+        if issue_linked:
+            broker.enable_issue({"repository": "acme/api", "number": 7})
+            args["issue_resolution"] = "refs"
+        result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
+        assert result["ok"] is True
+        expected = linked if url else plain
+        if body_kind in {"plain_footer", "linked_footer"} or (body_kind == "url" and url):
+            expected = body
+        elif body:
+            expected = f"{body}\n\n---\n{expected}"
+        assert source.reviews[0][-1] == expected
+        assert args["body"] == body
+        if issue_linked:
+            assert "work order footer is appended automatically" in approval.await_args.args[0].reason
+
+    asyncio.run(scenario())
+
+
+def test_work_order_url_reaches_graph_broker_from_config(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from engine.apps.web.composition import Settings, build_graph_runtime
+    from engine.runtime.config import EngineConfig
+    from engine.graph_runtime_langgraph import terminal_mcp
+
+    captured = []
+
+    def capture_broker(**kwargs):
+        captured.append(kwargs)
+        return TerminalMcpBroker(**kwargs)
+
+    monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture_broker)
+
+    async def scenario():
+        settings = Settings(
+            graph_state_directory=tmp_path / "graph",
+            engine_config=EngineConfig(public_url="https://engine.example/"),
+        )
+        async with build_graph_runtime(settings, (), RecordingRepository()) as runtime:
+            execution = SimpleNamespace(
+                runtime=runtime, run_id=RunId("run-xxxx"), execution_id="exec",
+            )
+            server = terminal_mcp.TerminalMcpServer(step_id="step", agent_id="agent")
+            async with server({"workspaceId": "ws"}, execution, _approve_git):
+                assert captured[0]["work_order_url"] == "https://engine.example/runs/run-xxxx"
+
+    asyncio.run(scenario())

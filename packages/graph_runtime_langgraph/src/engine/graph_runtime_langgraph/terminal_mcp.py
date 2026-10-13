@@ -12,6 +12,7 @@ from engine.domain import (
 )
 from engine.domain.ids import WorkspaceId
 from engine.ports import ApprovalHandler, SourceControl
+from engine.runtime.notifications import work_order_url
 from engine.runtime.terminal_mcp import (
     LOCAL_REPOSITORY_TOOLS,
     REPOSITORY_TOOL_METHODS,
@@ -95,6 +96,7 @@ class TerminalMcpServer:
             )
         broker = TerminalMcpBroker(
             run_id=execution.run_id,
+            work_order_url=work_order_url(execution.runtime.public_url, execution.run_id),
             agent_run_id=AgentRunId(
                 f"{execution.run_id}:{execution.execution_id}"
             ),
