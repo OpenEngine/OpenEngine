@@ -169,7 +169,7 @@ OpenEngine shows \`local\` with the star: your commands go to this computer agai
         )
 
         await step(
-          "Next, write and run your first graph with OpenEngine: see [Graphs](../../graphs.md).",
+          "Next, write and save your first graph: see [Save Your First Graph](../test2doc-graphs/test2doc-save-your-first-graph.mdx).",
         )
       })
     },
