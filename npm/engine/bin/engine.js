@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-const { spawn, spawnSync } = require('node:child_process');
-const { existsSync, openSync, readSync, closeSync, statSync, unlinkSync, writeFileSync } = require('node:fs');
+const { spawn } = require('node:child_process');
+const { existsSync, openSync, readSync, closeSync, statSync, unlinkSync } = require('node:fs');
 const { join } = require('node:path');
 const { version } = require('../package.json');
 
@@ -50,16 +50,6 @@ function removeCurlShim(path) {
   }
 }
 
-function healthy(executable, env) {
-  const result = spawnSync(executable, ['daemon', 'status', '--json'], {
-    env, encoding: 'utf8', timeout: 10000,
-  });
-  try {
-    const status = JSON.parse(result.stdout);
-    return result.status === 0 && status.health === 'ready' && status.version === version;
-  } catch { return false; }
-}
-
 async function main() {
   if (process.platform === 'win32') {
     throw new Error('Use @openengine.cc/engine inside WSL: wsl sh -c "curl -LsSf https://openengine.cc/install.sh | sh"');
@@ -75,21 +65,7 @@ async function main() {
     if (code !== 0) return code;
   }
   const executable = join(target, 'venv/bin/engine');
-  // Unlike .installed, this stays absent after deferred or failed setup so the
-  // next ordinary command retries. Each upgrade gets its own marker.
-  const ready = join(target, '.npm-daemon-ready');
   const args = process.argv.slice(2);
-  if (args[0] !== 'daemon' && env.OPENENGINE_NO_START !== '1' && !existsSync(ready)) {
-    if (!healthy(executable, env)) {
-      const code = await run(executable, ['daemon', 'setup'], env);
-      if (code !== 0) {
-        console.error('engine: daemon setup failed; inspect logs with `engine daemon logs -n 20`');
-        await run(executable, ['daemon', 'logs', '-n', '20'], env);
-        return code;
-      }
-    }
-    writeFileSync(ready, '');
-  }
   return run(executable, args, env);
 }
 

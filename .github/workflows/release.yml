@@ -138,7 +138,7 @@ jobs:
         with:
           name: release-bundle-upgrade
           path: ${{ runner.temp }}/release-upgrade
-      - name: Test packed npm installation and service
+      - name: Test packed npm installation
         if: matrix.scenario != 'curl'
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
