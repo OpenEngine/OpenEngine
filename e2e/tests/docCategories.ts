@@ -10,6 +10,6 @@ export const gettingStartedCategory = withDocCategory("Getting Started", {
   link: {
     type: "generated-index",
     slug: "/guides/getting-started",
-    description: "What these guides cover and how to follow along.",
+    description: "What OpenEngine is, what you need, and how to find your way around the engine command.",
   },
 })

@@ -77,7 +77,10 @@ implementation:
       `uv sync --all-packages` and `npm ci --prefix e2e`. Read `e2e/README.md`
       before writing a spec under `e2e/`: specs check what happened, not what an
       agent said; example graphs stay tiny; and anything that needs precise
-      timing is scripted with `engine.script(...)`.
+      timing is scripted with `engine.script(...)`. A guide spec's titles and
+      steps are a user guide for someone new to OpenEngine and not deeply
+      technical: write them by `e2e/WRITING.md`, one task per guide, in plain
+      words, with its glossary's explanations.
 
       ${outputs.pick.brief}
 
@@ -140,15 +143,18 @@ review:
           name: Guides
           focus: |
             Whether the user-facing guides this change adds or changes read well
-            and are current. If it touches `e2e/tests`, read every page it adds or
-            changes under `site/docs/guides/`, each screenshot included, as
-            someone new to the `engine` CLI, and flag anything that sounds like a
-            test rather than instructions ("verify", "assert", "expect", fixture
-            or helper names), leaks setup that belongs in a `[nodoc]` step, skips
-            a step a reader needs or explains one they don't, has an annotation on
-            the wrong row or an unreadable, cropped or mid-spinner screenshot,
-            shows machine-specific paths, user names, tokens or ports, or has a
-            title or description that doesn't say what the reader will do. Then
+            for their reader and are current. If it touches `e2e/tests`, read
+            `e2e/WRITING.md`, then every page the change adds or changes under
+            `site/docs/guides/`, each screenshot included, as that reader:
+            someone new to OpenEngine and not deeply technical. Flag anything
+            that breaks WRITING.md: a page that isn't one task in the reader's
+            words or doesn't say why before how; jargon, or an OpenEngine word
+            left unexplained or explained differently from its glossary; a
+            command with no screenshot or a label that doesn't say what it means;
+            anything that sounds like a test or leaks setup that belongs in a
+            `[nodoc]` step. Also flag an annotation on the wrong row, an
+            unreadable, cropped or mid-spinner screenshot, and machine-specific
+            paths, user names, tokens or ports. Then
             run `npm run doc` in `e2e/`: if `git status --porcelain site/docs/guides`
             isn't empty the committed guides are stale, which is a finding, and
             put the directory back with `git restore --source=HEAD -- site/docs/guides`

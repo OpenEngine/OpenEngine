@@ -48,6 +48,9 @@ So that a spec passes in both modes:
 
 ## Writing a guide
 
+Guides are written for someone new to OpenEngine who isn't deeply
+technical; `WRITING.md` says how, with a glossary every page uses.
+
 A spec under `tests/` whose describe blocks use `withDocCategory` and
 `withDocMeta` becomes a page. Every `test.step` title is a sentence the reader
 follows ("Run `engine graphs list`."). Setup and cleanup go in `[nodoc]`
