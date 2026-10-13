@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.8.0](https://github.com/OpenEngine/OpenEngine/compare/v1.7.0...v1.8.0) (2026-10-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **e2e:** scripts that parse these commands' JSON must add --json.
+
+### Features
+
+* **cli:** add repository trust prompts and repo add ([#884](https://github.com/OpenEngine/OpenEngine/issues/884)) ([cf6b0c0](https://github.com/OpenEngine/OpenEngine/commit/cf6b0c01aedeac5494f3bfcad253e35ccb0204e2))
+* dedicated review graph with Green auto-approval ([#887](https://github.com/OpenEngine/OpenEngine/issues/887)) ([084f5bf](https://github.com/OpenEngine/OpenEngine/commit/084f5bfcb864ed20c1e9057b2dec2a8352a794fe))
+* **e2e:** drive the engine CLI through a real terminal and publish the tests as guides ([#847](https://github.com/OpenEngine/OpenEngine/issues/847)) ([470b5d4](https://github.com/OpenEngine/OpenEngine/commit/470b5d49a5e3b7f1139aa92c7797a7734ca699d5))
+* **graph:** post tdd-guide's review on the pull request and let PR comments steer it ([#891](https://github.com/OpenEngine/OpenEngine/issues/891)) ([74162cb](https://github.com/OpenEngine/OpenEngine/commit/74162cb0dea56a8b8cf6d94f4b1883abe30deef1))
+* link work orders in pull request descriptions ([#885](https://github.com/OpenEngine/OpenEngine/issues/885)) ([159acb3](https://github.com/OpenEngine/OpenEngine/commit/159acb39b598c4180bab1a5f30bed09a8bad58ce))
+* **release:** publish OpenEngine to npm as [@openengine](https://github.com/openengine).cc/engine ([#874](https://github.com/OpenEngine/OpenEngine/issues/874)) ([cebfa78](https://github.com/OpenEngine/OpenEngine/commit/cebfa789898e5c43b5253dde559324b19dafd056))
+* **sandbox:** Implements the SmolVM sandbox backend for [#673](https://github.com/OpenEngine/OpenEngine/issues/673)  ([#719](https://github.com/OpenEngine/OpenEngine/issues/719)) ([cfee977](https://github.com/OpenEngine/OpenEngine/commit/cfee97716aa0e079ba15d0123387c7ef74327354))
+
+
+### Bug Fixes
+
+* **cli:** unify list aliases and command help ([#869](https://github.com/OpenEngine/OpenEngine/issues/869)) ([68b130a](https://github.com/OpenEngine/OpenEngine/commit/68b130a817d31e87417c814ae1bf11654feea071))
+* provide clearer errors on mcp calls ([#883](https://github.com/OpenEngine/OpenEngine/issues/883)) ([b303aa3](https://github.com/OpenEngine/OpenEngine/commit/b303aa3910a8424a8dc52cecad4af2960606afc6))
+
 ## [1.7.0](https://github.com/OpenEngine/OpenEngine/compare/v1.6.0...v1.7.0) (2026-10-13)
 
 
