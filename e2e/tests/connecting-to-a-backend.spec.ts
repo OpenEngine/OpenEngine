@@ -87,7 +87,7 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each one is up.",
+          "Run `engine backends list --check` to see every backend, which one is selected (`*`), and whether each one is up. (In this guide both daemons run on the same machine, so both URLs point at `127.0.0.1`; yours shows the other machine's host and port 4364.)",
           async () => {
             const { output } = await terminal.run("engine backends list --check")
             expect(output).toMatch(/^\*\s+local\s.*\bup\b/m)
@@ -122,29 +122,36 @@ test.describe(backendsCategory, () => {
         })
 
         await test.step(
-          "Commands now go to `mac-mini`. Run `engine graph add hello.yaml` to register a graph file from your project there.",
+          "Commands now go to `mac-mini`. Register any graph file from your project there with `engine graph add`; here it is `hello.yaml`, a graph named `hello`. Add `--pretty` for a line of text rather than JSON.",
           async () => {
             await terminal.run("engine graph add hello.yaml --pretty")
+            await screenshot(testInfo, await terminal.row(/^registered hello v1\b/), {
+              annotation: { text: "Registered on mac-mini" },
+            })
           },
         )
 
         await test.step("[nodoc] The graph is on mac-mini, not on local", async () => {
           expect(await graphNames(terminal, "mac-mini")).toContain("hello")
           expect(await graphNames(terminal, "local")).not.toContain("hello")
+        })
+
+        await test.step("[nodoc] Clear the screen", async () => {
           await terminal.run("clear")
         })
 
         await test.step(
-          "To reach a different backend for one command only, add `--backend NAME` to it. `engine graphs list --backend local` lists the graphs on `local`, and leaves `mac-mini` selected.",
+          "To reach a different backend for one command only, add `--backend NAME` to it. `engine graphs list --backend local` lists the graphs on `local`, which has no `hello`. A plain `engine graphs list` right after it still goes to `mac-mini`, which stays selected.",
           async () => {
-            await terminal.run("engine graphs list --backend local")
+            const local = await terminal.run("engine graphs list --backend local")
+            expect(local.output).not.toMatch(/^hello\s/m)
             expect(backendsFile(engine).current).toBe("mac-mini")
+            expect((await terminal.run("engine graphs list")).output).toMatch(/^hello\s/m)
+            await screenshot(testInfo, await terminal.row(/^hello\s/), {
+              annotation: { text: "Without --backend: mac-mini again" },
+            })
           },
         )
-
-        await test.step("[nodoc] A plain command still goes to mac-mini", async () => {
-          expect((await terminal.run("engine graphs list")).output).toMatch(/^hello\s/m)
-        })
       })
     },
   )
