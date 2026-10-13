@@ -347,6 +347,7 @@ async def sqlite_runtime(
     directory: str | Path,
     *,
     source_control: SourceControl | None = None,
+    auto_approve_green: Callable[[str], bool] | None = None,
     allow_empty: bool = False,
 ) -> AsyncIterator[LangGraphRuntime]:
     """Every workflow, compiled against durable files, closed on the way out.
@@ -380,6 +381,7 @@ async def sqlite_runtime(
             *definitions,
             store=store,
             source_control=source_control,
+            auto_approve_green=auto_approve_green,
             checkpointer=saver,
         )
         try:

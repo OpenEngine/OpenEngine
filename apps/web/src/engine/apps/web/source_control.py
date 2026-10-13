@@ -231,6 +231,12 @@ class RoutingSourceControl:
             call = lambda source: source.can_write_repository(pr_url, username, user_id=user_id)
         return await self._call(call, pr_url=pr_url)
 
+    async def approve_change_request(self, project: str, number: int, body: str) -> bool:
+        return await self._call(
+            lambda source: source.approve_change_request(project, number, body),
+            pr_url=f"https://github.com/{project}" if project.count("/") == 1 else f"https://{project}",
+        )
+
     async def authenticated_login(self, repository_url: str) -> str:
         return await self._call(
             lambda source: source.authenticated_login(repository_url),

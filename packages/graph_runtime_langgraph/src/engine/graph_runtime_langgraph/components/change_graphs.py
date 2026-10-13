@@ -26,6 +26,7 @@ from engine.graph_runtime_langgraph.components.forge import (
 from engine.ports import WorkspaceProvider
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.runtime.change_requests import change_request
+from engine.graph_runtime_langgraph.components.auto_approve import AutoApprove
 
 
 def enabled(state: Mapping[str, Any], key: str) -> bool:
@@ -279,7 +280,9 @@ def review(components: Components) -> GraphWorkflow:
     b.add_conditional_edges('collected', lambda s: 'refute' if enabled(s, 'adversarial') else 'reranker', ['refute', 'reranker'])
     b.add_edge('refute', 'reranker')
     b.add_edge('reranker', 'impact')
-    b.add_edge('impact', END)
+    b.add_node('auto-approve', AutoApprove())
+    b.add_edge('impact', 'auto-approve')
+    b.add_edge('auto-approve', END)
     return _workflow(b, 'review', c.runner, WorkflowInput('ref', 'Branch'), WorkflowInput('pr_url', 'Pull request'),
                      WorkflowInput('adversarial', 'Refute findings', default='false', choices=('false', 'true')))
 

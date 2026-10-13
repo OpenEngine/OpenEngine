@@ -92,6 +92,24 @@ class GitLabSourceControl:
             for member in members
         )
 
+    async def approve_change_request(self, project: str, number: int, body: str) -> bool:
+        origin = self._origin_source() if callable(self._origin_source) else self._origin_source
+        host, separator, path = project.partition("/")
+        if (host != urlparse(origin).netloc.lower() or not separator
+                or not all(names_a_project_step(step) for step in path.split("/"))):
+            raise ValueError("project must be on the configured GitLab origin")
+        root = f"/projects/{quote(path, safe='')}/merge_requests/{number}"
+        mr = await self._api("GET", root)
+        author = self._nested(mr, "author", "username")
+        if not author:
+            raise GitLabSourceControlError("GitLab returned no merge request author")
+        if author.casefold() == (await self.authenticated_login(origin)).casefold():
+            return False
+        # The approval endpoint has no review-body field.
+        await self._api("POST", f"{root}/notes", json={"body": body})
+        await self._api("POST", f"{root}/approve")
+        return True
+
     async def authenticated_login(self, repository_url: str) -> str:
         username = self._str(await self._api("GET", "/user"), "username")
         if not username: raise GitLabSourceControlError("GitLab returned no authenticated username")

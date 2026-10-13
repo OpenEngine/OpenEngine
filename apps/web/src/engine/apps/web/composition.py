@@ -387,7 +387,24 @@ def build_graph_runtime(
         settings.graph_state_directory,
         source_control=source_control,
         allow_empty=True,
+        auto_approve_green=pull_request_approval_policy(settings),
     )
+
+
+def pull_request_approval_policy(settings: Settings) -> Callable[[str], bool]:
+    """Resolve daemon policy against the run's repository name or checkout path."""
+    config = settings.engine_config
+    paths = {str(Path(path).expanduser().resolve()): name for name, path in config.repos.items()}
+
+    def enabled(repository: str) -> bool:
+        name = repository if repository in config.repos else paths.get(
+            str(Path(repository).expanduser().resolve()), repository,
+        )
+        return config.repo_modes.get(name) != "disconnected" and config.pull_requests.repos.get(
+            name, config.pull_requests.auto_approve_green,
+        )
+
+    return enabled
 
 
 def build_graph_service(

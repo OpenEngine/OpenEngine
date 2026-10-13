@@ -251,6 +251,9 @@ class RecordingSourceControl:
     async def can_write_repository(self, pr_url: str, username: str, *, user_id: int | None = None) -> bool:
         return True
 
+    async def approve_change_request(self, project: str, number: int, body: str) -> bool:
+        raise AssertionError("not called")
+
     async def authenticated_login(self, repository_url: str) -> str:
         return "OpenEngineBot"
 

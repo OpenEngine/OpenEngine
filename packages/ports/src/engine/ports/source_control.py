@@ -212,6 +212,13 @@ class SourceControl(Protocol):
         """
         ...
 
+    async def approve_change_request(self, project: str, number: int, body: str) -> bool:
+        """Submit approval; return False if the authenticated account authored it.
+
+        GitLab records the rationale as a separate merge request note.
+        """
+        ...
+
     async def authenticated_login(self, repository_url: str) -> str:
         """The account name these credentials act as on this repository's forge."""
         ...

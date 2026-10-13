@@ -37,6 +37,8 @@ class EventKind(Enum):
     this module is written in.
     """
 
+    PULL_REQUEST_AUTO_APPROVED = "pull_request.auto_approved"
+    PULL_REQUEST_APPROVAL_SKIPPED = "pull_request.approval_skipped"
     RUN_STARTED = "run.started"
     CHECKPOINT = "checkpoint"
     """A superstep boundary was saved: `checkpointId`, `parentId`, `nextNodes`.

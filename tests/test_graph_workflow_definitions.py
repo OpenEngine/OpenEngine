@@ -187,6 +187,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "refute",
         "reranker",
         "impact-analysis",
+        "auto-approve",
         "human-review",
         "triage",
     ]
@@ -204,6 +205,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Refute findings",
         "Reranker",
         "Impact analysis",
+        "Auto-approve",
         "Human review",
         "Triage",
     ]
@@ -214,6 +216,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Planning",
         "Implementation",
         "Implementation",
+        "Review",
         "Review",
         "Review",
         "Review",
@@ -252,6 +255,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "agent",
         "agent",
         "agent",
+        "tool",
         "human",
         "human",
     ]
@@ -264,6 +268,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         False,
         True,
         False,
+        True,
         True,
         True,
         True,
@@ -478,7 +483,7 @@ def test_review_feedback_returns_to_implementation_at_most_once(
         assert visited.count(f"review-{facet.id}") == rounds
     assert visited.count(module.WORKSPACE) == 1
     assert visited.count(module.IMPACT_ANALYSIS) == 1
-    final_stages = [module.IMPACT_ANALYSIS]
+    final_stages = [module.IMPACT_ANALYSIS, "auto-approve"]
     if verification_enabled:
         final_stages.append(module.VERIFICATION)
     final_stages.append(module.HUMAN_REVIEW)
@@ -678,7 +683,7 @@ def test_a_review_requested_on_the_forge_posts_its_findings_and_impact(
     }))
 
     assert visited.count(module.RERANKER) == 1
-    assert visited[-1] == module.IMPACT_ANALYSIS
+    assert visited[-2:] == [module.IMPACT_ANALYSIS, "auto-approve"]
     for skipped in (
         module.TRIAGE, module.IMPLEMENTATION, module.HUMAN_REVIEW, module.VERIFICATION,
     ):

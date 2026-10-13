@@ -218,6 +218,12 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PullRequestsConfig:
+    auto_approve_green: bool = False
+    repos: Mapping[str, bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     """All configuration understood by this version of Engine."""
 
@@ -234,6 +240,7 @@ class EngineConfig:
     communications: CommunicationsConfig = CommunicationsConfig()
     work_orders: WorkOrdersConfig = WorkOrdersConfig()
     approvals: ApprovalConfig = ApprovalConfig()
+    pull_requests: PullRequestsConfig = field(default_factory=PullRequestsConfig)
     workflows: WorkflowsConfig = WorkflowsConfig()
     orchestrator: OrchestratorConfig = OrchestratorConfig()
     claude: ClaudeConfig = ClaudeConfig()
@@ -383,6 +390,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "access",
             "attribution",
             "approvals",
+            "pull_requests",
             "claude",
             "communications",
             "default_branch",
@@ -614,6 +622,19 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                 f"repo_modes.{name} must be one of: {', '.join(REPO_MODES)}"
             )
         repo_modes[name] = mode
+    pull_requests = _table(document.get("pull_requests", {}), "pull_requests")
+    _reject_unknown(pull_requests, {"auto_approve_green", "repos"}, "pull_requests")
+    green = pull_requests.get("auto_approve_green", False)
+    if not isinstance(green, bool):
+        raise EngineConfigError("pull_requests.auto_approve_green must be a boolean")
+    green_repos = _table(pull_requests.get("repos", {}), "pull_requests.repos")
+    green_overrides: dict[str, bool] = {}
+    for name, value in green_repos.items():
+        if name not in repos:
+            raise EngineConfigError(f"pull_requests.repos.{name} names no repository under [repos]")
+        if not isinstance(value, bool):
+            raise EngineConfigError(f"pull_requests.repos.{name} must be a boolean")
+        green_overrides[name] = value
     trusted_repos = set()
     for name, trusted in _table(document.get("trusted_repos", {}), "trusted_repos").items():
         if name not in repos:
@@ -628,6 +649,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         attribution=attribution,
         repos=repos,
         repo_modes=repo_modes,
+        pull_requests=PullRequestsConfig(green, green_overrides),
         trusted_repos=frozenset(trusted_repos),
         default_branch=default_branch,
         github_client_id=github_client_id,

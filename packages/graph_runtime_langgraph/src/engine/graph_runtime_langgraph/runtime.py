@@ -151,6 +151,7 @@ class LangGraphRuntime:
         *graphs: LangGraphDefinition,
         store: GraphRuntimeStore | None = None,
         source_control: SourceControl | None = None,
+        auto_approve_green: Callable[[str], bool] | None = None,
         checkpointer: Any | None = None,
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
@@ -178,6 +179,7 @@ class LangGraphRuntime:
         self._live: dict[RunId, _Live] = {}
         self._entries: dict[NodeId, int] = {}
         self._source_control = source_control
+        self.auto_approve_green = auto_approve_green
         self.workorder_creator: WorkorderCreator | None = None
         self.repository_mode: Callable[[str], Awaitable[str | None]] | None = None
 

@@ -33,6 +33,8 @@ tools and skip CI themselves, and the prompts are filled from the shared
 
 import json
 
+from engine.graph_runtime_langgraph.components.auto_approve import AutoApprove
+
 from engine.graph_runtime_langgraph.components.change_prompts import (
     IMPLEMENTATION_PROMPT, FACET_REVIEW_PROMPT, RERANKER_PROMPT,
     IMPACT_ANALYSIS_PROMPT, KEEP_FINDINGS,
@@ -608,6 +610,8 @@ def pipeline(
             session_config=session_config,
         ),
     )
+    builder.add_node("auto-approve", AutoApprove())
+    builder.add_edge(IMPACT_ANALYSIS, "auto-approve")
     builder.add_node(HUMAN_REVIEW, HumanReviewNode())
     builder.add_node(TRIAGE, TriageNode(findings_key=REVIEW, output_key=FIX))
 
@@ -643,13 +647,13 @@ def pipeline(
     if verification is not None:
         builder.add_node(VERIFICATION, verification)
         builder.add_conditional_edges(
-            IMPACT_ANALYSIS, _after_impact_analysis,
+            "auto-approve", _after_impact_analysis,
             {HUMAN_REVIEW: VERIFICATION, END: END},
         )
         builder.add_edge(VERIFICATION, HUMAN_REVIEW)
     else:
         builder.add_conditional_edges(
-            IMPACT_ANALYSIS, _after_impact_analysis, [HUMAN_REVIEW, END],
+            "auto-approve", _after_impact_analysis, [HUMAN_REVIEW, END],
         )
     builder.add_edge(HUMAN_REVIEW, END)
     return builder
