@@ -151,7 +151,8 @@ class RunReader:
 
     async def backfill(self, states: Sequence[RunState]) -> None:
         if self.store is None:
-            raise RuntimeError("graph run store is unavailable")
+            message = "graph run store is unavailable"
+            raise RuntimeError(message)
         # Legacy rows arrive oldest first. A historical fallback preserves that
         # order even when existing graph rows were inserted in another order.
         await self.store.import_metadata([

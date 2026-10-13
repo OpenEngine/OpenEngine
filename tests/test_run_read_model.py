@@ -124,7 +124,8 @@ def test_bulk_metadata_import_is_atomic_and_uses_one_transaction(tmp_path) -> No
 
         async def failing_save(run_id, graph_id, metadata, **kwargs):
             if run_id == "10":
-                raise RuntimeError("interrupted import")
+                message = "interrupted import"
+                raise RuntimeError(message)
             await original(run_id, graph_id, metadata, **kwargs)
 
         with patch.object(store, "save_metadata", side_effect=failing_save):
