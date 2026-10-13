@@ -209,6 +209,12 @@ class RepositoryOnboarding:
         directory = self.onboarding_directory if self.onboarding_directory is not None else Path.home() / "code"
         return (directory / name.split("/")[-1]).expanduser().resolve()
 
+    def _reserved_repositories(self) -> dict[str, str]:
+        return {**self.registry.snapshot.repos, **{
+            job["repository"]: job["path"] for job in self.jobs.values()
+            if job["status"] != "failed"
+        }}
+
     def start(self, reference: str, path: str | None, mode: str | None = None, trusted: bool | None = None) -> dict:
         local_only = False
         local = Path(reference).expanduser()
@@ -221,11 +227,7 @@ class RepositoryOnboarding:
                 raise OnboardingError("path", "--path is only for cloning", "Omit --path when adding an existing checkout")
             path = str(checkout)
             reference = path
-            configured = {**self.registry.snapshot.repos, **{
-                job["repository"]: job["path"] for job in self.jobs.values()
-                if job["status"] != "failed"
-            }}
-            name, project = local_repository(checkout, configured)
+            name, project = local_repository(checkout, self._reserved_repositories())
             local_only = project is None
             if local_only and mode == "connected":
                 raise OnboardingError("mode", "Connected mode requires a GitHub/GitLab origin",
@@ -307,7 +309,7 @@ class RepositoryOnboarding:
             if root.returncode:
                 raise OnboardingError("repository", "Repository is not a configured name or local checkout", "Use a checkout path or onboard owner/repo first")
             checkout = str(Path(root.stdout.strip()).resolve())
-            name, _ = local_repository(Path(checkout), self.registry.snapshot.repos)
+            name, _ = local_repository(Path(checkout), self._reserved_repositories())
             validate_checkout(name, Path(checkout))
         if trusted is not None:
             _, project = local_repository(Path(checkout), self.registry.snapshot.repos)

@@ -534,6 +534,44 @@ def test_local_only_onboarding_and_trust(tmp_path, monkeypatch, origin, trust_fi
     assert saved["repo_modes"] == {"demo": "disconnected"}
 
 
+def test_trust_reserves_active_onboarding_names(tmp_path, monkeypatch):
+    first, second = tmp_path / 'one/demo', tmp_path / 'two/demo'
+    for checkout in (first, second):
+        checkout.mkdir(parents=True)
+    monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(
+        args, 0 if 'rev-parse' in args else 2,
+        args[2] if 'rev-parse' in args else '', '',
+    ))
+    monkeypatch.setattr(onboard, 'preflight', lambda: ([], 'codex'))
+    monkeypatch.setattr(RepositoryRegistry, '_project', lambda self, path: None)
+    config = tmp_path / 'engine.toml'
+    registry = RepositoryRegistry(projects={})
+    service = onboard.RepositoryOnboarding(registry, config, AsyncMock())
+
+    async def run():
+        job = service.start(str(first), None)
+        try:
+            assert job['repository'] == 'demo'
+            assert service.jobs[job['id']]['status'] == 'queued'
+            assert not config.exists()
+            assert service.repository_trust(str(first))['name'] == 'demo'
+            preview = service.repository_trust(str(second))
+            assert preview['name'].startswith('demo-')
+            trusted = service.repository_trust(str(second), True)
+            assert trusted == {**preview, 'trusted': True}
+        finally:
+            await service.close()
+        assert service.jobs[job['id']]['status'] == 'complete'
+        return trusted['name']
+
+    second_name = asyncio.run(run())
+    saved = tomllib.loads(config.read_text())
+    assert saved['repos'] == registry.snapshot.repos == {'demo': str(first), second_name: str(second)}
+    assert saved['repo_modes'] == {'demo': 'disconnected', second_name: 'disconnected'}
+    assert saved['trusted_repos'] == {second_name: True}
+    assert registry.lookup(str(second)) == (second_name, True)
+
+
 def test_local_names_are_sanitized_stable_and_disambiguated(tmp_path, monkeypatch):
     monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(args, 2, '', ''))
     first, second = tmp_path / 'one/My demo!', tmp_path / 'two/My demo!'
