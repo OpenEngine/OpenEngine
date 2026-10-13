@@ -65,7 +65,7 @@ test.describe(graphsCategory, () => {
 
 The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. You write it once in a small text file and save it to OpenEngine, so you can find it and use it again whenever you need that piece of work done, instead of explaining it from scratch each time.
 
-This guide shows how to write a graph, save it, find it again, and what happens when you change it. Running a graph comes in the next guide.`,
+This guide shows how to write a graph, save it, find it again, and what happens when you change it. You'll use \`engine\`, the command you type in a terminal to use OpenEngine. Running a graph comes in the next guide.`,
         )
 
         await step(
@@ -112,11 +112,11 @@ Keep the spaces at the start of each line as they are: they show which lines bel
         )
 
         await step(
-          `Save the graph to OpenEngine. Type \`engine graph add describe-project.yaml\` and press Enter.
+          `Save the graph to OpenEngine. Open a terminal in your project's folder, the one containing \`describe-project.yaml\`. Keep using that folder for the commands below. Type \`engine graph add describe-project.yaml\` and press Enter.
 
 The screen says *registered*, OpenEngine's word for saved, then the graph's name and \`v1\`: this is its first version. The labels in brackets are how OpenEngine tells graphs and their versions apart; you can leave them alone.
 
-If you see *cannot reach backend*, OpenEngine isn't running on this computer: start it and try again. If OpenEngine finds a mistake in the file, it lists what's wrong and where in the file; fix it and run the command again.`,
+If you see *cannot reach backend*, the command can't reach OpenEngine's background program. A **backend** is a computer where that program runs: this one, or another one such as a Mac mini. If you're using this computer, follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then try saving again. If OpenEngine finds a mistake in the file, it lists what's wrong and where in the file; fix it and run the command again.`,
           async () => {
             await terminal.run("engine graph add describe-project.yaml")
             expect(await versions(engine, "describe-project")).toEqual([1])
