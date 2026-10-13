@@ -13,7 +13,6 @@ from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 import tomlkit
-import yaml
 from filelock import FileLock
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -155,19 +154,8 @@ def persist_repository(path: Path, name: str, checkout: str, mode: str) -> None:
 async def register_starters(service: GraphService | None, project: str, runner: str) -> None:
     if service is None:
         raise OnboardingError("graphs", "The graph service is unavailable", "Check daemon health and graph configuration, then retry")
-    registered = {graph["name"] for graph in service.list_graphs(project)}
     for name in starters.NAMES:
-        if name in registered:
-            continue
-        definition = yaml.safe_load(starters.source(name))
-        for input_name, spec in definition.get("inputs", {}).items():
-            if input_name in {"ref", "branch"}:
-                spec["default"] = "HEAD"
-            if spec.get("default") in {"claude", "codex", "least-utilized"}:
-                spec["default"] = runner
-                if "choices" in spec and runner not in spec["choices"]:
-                    spec["choices"].append(runner)
-        await service.add_graph(project, source=yaml.safe_dump(definition, sort_keys=False))
+        await service.add_graph(project, source=starters.source(name, runner=runner), format="python")
 
 
 class RepositoryOnboarding:

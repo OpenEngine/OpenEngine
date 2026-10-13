@@ -65,6 +65,7 @@ class Discussion:
     comment_id: int | None = None
     thread_id: str | None = None
     is_resolved: bool | None = None
+    author_association: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
-import yaml
 
 from engine.apps.web import onboarding as onboard
 from engine.runtime.repositories import RepositoryRegistry
@@ -132,24 +131,15 @@ def test_wrong_checkout_is_never_replaced(tmp_path, monkeypatch):
         onboard.validate_checkout('owner/repo', tmp_path)
 
 
-def test_registers_all_starters_for_the_signed_in_agent():
+def test_registers_the_default_graph_for_the_signed_in_agent():
     service = Mock()
-    service.list_graphs.return_value = []
     service.add_graph = AsyncMock()
     asyncio.run(onboard.register_starters(service, 'owner/repo', 'opencode'))
-    assert service.add_graph.await_count == 4
-    for call in service.add_graph.call_args_list:
-        assert call.args == ('owner/repo',)
-        definition = yaml.safe_load(call.kwargs['source'])
-        original = yaml.safe_load(onboard.starters.source(definition['name']))
-        for name, spec in definition['inputs'].items():
-            before = original['inputs'][name]
-            if before.get('default') in {'claude', 'codex', 'least-utilized'}:
-                assert spec['default'] == 'opencode'
-                if 'choices' in before:
-                    assert spec['choices'] == [*before['choices'], 'opencode']
-                else:
-                    assert 'choices' not in spec
+    assert service.add_graph.await_count == 1
+    for name in onboard.starters.NAMES:
+        service.add_graph.assert_any_await(
+            'owner/repo', source=onboard.starters.source(name, runner='opencode'), format='python',
+        )
 
 
 @pytest.mark.parametrize("origin", [None, "http://localhost", "http://127.0.0.1"])
@@ -272,7 +262,7 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
                     await asyncio.sleep(.01)
                 assert state['status'] == 'complete', state
                 config = (await client.get('/api/config')).json()
-                assert len(config['workflows']) == 4
+                assert len(config['workflows']) == 1
                 graphs = (await client.get('/api/v1/graphs', params={'project': 'owner/repo'})).json()['graphs']
                 assert {graph['name'] for graph in graphs} == set(onboard.starters.NAMES)
                 assert config['repositories'] == [{'name': 'owner/repo', 'path': str(target)}]

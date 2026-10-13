@@ -135,7 +135,7 @@ async function verifyPersistedNavigation({
             arguments: {
               outcome: "success",
               summary: "Started from the populated SQLite database.",
-              outputs: { pr_url: pullRequest },
+              outputs: { pr_url: pullRequest, branch: "agent/fresh-workflow" },
             },
           },
         ],

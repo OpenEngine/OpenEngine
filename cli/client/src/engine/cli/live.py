@@ -17,6 +17,8 @@ view back up. A question an agent stops on is asked here, inline.
 
 from __future__ import annotations
 
+import shlex
+
 import os
 import re
 import shutil
@@ -325,6 +327,15 @@ def summary(run: dict[str, Any]) -> list[str]:
     cost = (run.get("usage") or {}).get("costUsd")
     if cost is not None:
         lines.append(f"Usage: ${cost:.2f}" + ("" if run["usage"].get("complete", True) else " (some costs unknown)"))
+    if run.get("prUrl"):
+        lines.append(f"Pull request: {run['prUrl']}")
+    elif (run.get("forgeContext") or {}).get("mode") == "disconnected" and run.get("branch"):
+        branch = run["branch"]
+        lines.append(f"Local branch: {branch}")
+        if workspace.get("path"):
+            lines.append("To publish: " + shlex.join([
+                "git", "-C", workspace["path"], "push", "-u", "origin", branch,
+            ]))
     return [safe_text(line, multiline=True) for line in lines]
 
 

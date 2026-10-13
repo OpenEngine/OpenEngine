@@ -268,6 +268,17 @@ class RoutingSourceControl:
     async def resolve_review_thread(self, pr_url: str, thread_id: str) -> bool:
         return await self._call(lambda source: source.resolve_review_thread(pr_url, thread_id), pr_url=pr_url)
 
+    async def inspect_target(self, project: str, *, number: int = 0, branch: str = "", include_threads: bool = False) -> dict[str, object]:
+        async def inspect(source: SourceControl) -> dict[str, object]:
+            return await getattr(source, "inspect_target")(project, number=number, branch=branch, include_threads=include_threads)
+        try:
+            return await self._call(inspect, pr_url=f"https://github.com/{project}")
+        except (RuntimeError, OSError):
+            from engine.adapters.source_control.github import GitHubSourceControl
+            # Metadata for public repositories is readable without a connection.
+            return await GitHubSourceControl("").inspect_target(
+                project, number=number, branch=branch, include_threads=include_threads)
+
     async def view_change_request(
         self, workspace_id: WorkspaceId, number: int
     ) -> ChangeRequest:

@@ -99,7 +99,7 @@ const ASKING_SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "Added the requested files.",
-            outputs: { pr_url: PULL_REQUEST },
+            outputs: { pr_url: PULL_REQUEST, branch: "agent/greeting" },
           },
         },
       ],
@@ -167,7 +167,7 @@ const SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: IMPLEMENTED,
-            outputs: { pr_url: PULL_REQUEST },
+            outputs: { pr_url: PULL_REQUEST, branch: "agent/greeting" },
           },
         },
       ],
@@ -194,7 +194,7 @@ const STEERING_SCRIPT: Script = {
           arguments: {
             outcome: "success",
             summary: "Applied the human guidance.",
-            outputs: { pr_url: PULL_REQUEST },
+            outputs: { pr_url: PULL_REQUEST, branch: "agent/greeting" },
           },
         },
       ],
@@ -299,8 +299,14 @@ test("a graph workflow accepts independent stage runners", async ({
   const run = await graphRun(page, runUrl);
   expect(run.values.inputs).toEqual({
     mode: "connected",
+    instruction: "",
+    fix_only: "false",
+    review_threads: "",
     implementation_runner: "claude",
     review_runner: "codex",
+    spec: "false",
+    review_only: "false",
+    adversarial: "false",
     state: "Planning",
     ref: "",
     pr_url: "",
@@ -379,8 +385,11 @@ test("the WorkOrder page shows a graph run's stages", async ({ page, engine }) =
   // Nodes sharing a work state appear as one stage.
   await expect(page.locator(".stages .stage")).toHaveText([
     "Workspace",
-    "Planning",
+    "threads",
+    "implementation",
     "Implementation",
+    "reply",
+    "Planning",
     "Review",
   ]);
 });
@@ -396,23 +405,30 @@ test("the rail offers a graph WorkOrder's conversations by node", async ({
 
   // The nodes a person can read, from the moment the run exists: the
   // checkout and the human verdict are stages rather than conversations.
-  // The lone implementation conversation stands on its own; the review
-  // conversations start in a collapsed group.
+  // The fix-only nodes, specification and implementation stand on their own;
+  // the review conversations start in a collapsed group.
   const conversations = page.getByLabel(/^Conversations for /);
-  await expect(conversations.getByRole("link")).toHaveText(["Implementation"]);
+  await expect(conversations.getByRole("link")).toHaveText([
+    "threads", "implementation", "reply", "Specification", "Implementation",
+  ]);
   await conversations.getByText("Review", { exact: true }).click();
   await expect(conversations.getByRole("link")).toHaveText([
+    "threads",
+    "implementation",
+    "reply",
+    "Specification",
     "Implementation",
     "Review (Security)",
     "Review (Bugs & task adherence)",
     "Review (Performance)",
     "Review (Conciseness)",
     "Review (DRYness & code duplication)",
+    "Refute findings",
     "Reranker",
     "Impact analysis",
   ]);
 
-  await conversations.getByRole("link", { name: "Implementation" }).click();
+  await conversations.getByRole("link", { name: "Implementation", exact: true }).click();
 
   await expect(page).toHaveURL(/\/conversations\/graph--implementation$/);
   await expect(page.locator(".rail-sub a[aria-current='page']")).toHaveText(
@@ -569,11 +585,17 @@ test("a graph run waiting on a person says so, and can be answered", async ({
   const stages = page.locator(".stages .stage");
   await expect(stages).toHaveText([
     "Workspace",
-    "Planning",
+    "threads",
+    "implementation",
     "Implementation",
+    "reply",
+    "Planning",
     "Review",
   ]);
-  for (const index of [0, 1, 2, 3])
+  // The fix-only path was not taken by this implementation run.
+  for (const index of [0, 3, 5, 6])
     await expect(stages.nth(index)).toHaveAttribute("data-status", "completed");
+  for (const index of [1, 2, 4])
+    await expect(stages.nth(index)).toHaveAttribute("data-status", "skipped");
   await expect(page.locator(".callout-action")).toHaveCount(0);
 });
