@@ -224,10 +224,12 @@ class TerminalMcpBroker:
         agent_run_id: AgentRunId,
         step: StepSpec | None,
         registry: TerminalResultRegistry,
+        work_order_url: str | None = None,
         deliver: TerminalDelivery | None = None,
         validate_completion: Callable[[StepCompleted], None] | None = None,
     ) -> None:
         self._run_id = run_id
+        self._work_order_url = work_order_url
         self._agent_run_id = agent_run_id
         self._step = step
         self._registry = registry
@@ -722,6 +724,7 @@ class TerminalMcpBroker:
             return _repository_result(result)
 
         branch, base_ref, title, body = _review_arguments(arguments)
+        body = _work_order_footer(body, self._run_id, self._work_order_url)
         options = {}
         if self._issue:
             resolution = arguments.get("issue_resolution")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
@@ -969,7 +972,9 @@ class TerminalMcpBroker:
                 "creating the PR. Existing commits and credit trailers are preserved; "
                 "repository hooks and signing helpers are disabled for the metadata "
                 "commit. Git transport and credential helpers still run on the host. "
-                "The branch and issue resolution are supplied in the arguments."
+                "The branch and issue resolution are supplied in the arguments. "
+                "A work order footer is appended automatically, linking to the run "
+                "when a public URL is configured or showing its ID otherwise."
             )
         request = ApprovalRequest(
             approval_id=f"terminal:{self._agent_run_id}:{request_id}",
@@ -1208,7 +1213,9 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "Open a pull request for a branch already pushed to the remote, "
             "and return its URL. Push the branch with git_subcommand first. Issue "
             "trailers are normalized through an empty metadata commit and normal "
-            "push when needed; an existing PR is not required."
+            "push when needed; an existing PR is not required. A work order link "
+            "(or plain run ID without a public URL) is appended automatically; "
+            "do not add your own footer."
         ),
         "inputSchema": {
             "type": "object",
@@ -1462,6 +1469,21 @@ def _git_arguments(arguments: object) -> tuple[str, ...]:
     if not all(isinstance(argument, str) for argument in given):
         raise ValueError("every element of arguments must be a string")
     return tuple(given)
+
+
+def _work_order_footer(body: str, run_id: RunId, url: str | None) -> str:
+    if url and url in body:
+        return body
+    footer = f"OpenEngine work order: {run_id}"
+    linked_footer = rf"OpenEngine work order: \[{re.escape(run_id)}\]\([^\n]*\)"
+    if any(
+        line.strip() == footer or re.fullmatch(linked_footer, line.strip())
+        for line in body.splitlines()
+    ):
+        return body
+    if url:
+        footer = f"OpenEngine work order: [{run_id}]({url})"
+    return f"{body}\n\n---\n{footer}" if body else footer
 
 
 def _review_arguments(arguments: object) -> tuple[str, str, str, str]:

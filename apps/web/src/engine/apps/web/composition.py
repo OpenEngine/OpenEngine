@@ -387,6 +387,7 @@ def build_graph_runtime(
         settings.graph_state_directory,
         source_control=source_control,
         allow_empty=True,
+        public_url=settings.engine_config.public_url,
     )
 
 

@@ -719,7 +719,7 @@ def test_a_disconnected_run_is_served_no_forge_tools(monkeypatch) -> None:
     execution = SimpleNamespace(
         run_id=RunId("run"), execution_id="one", node_id="node",
         runtime=SimpleNamespace(
-            source_control=source_control, store=SimpleNamespace(),
+            public_url="", source_control=source_control, store=SimpleNamespace(),
             workorder_creator=None,
         ),
     )
@@ -1000,7 +1000,7 @@ def test_impact_analysis_rejects_then_accepts_corrected_assessment(
         execution = SimpleNamespace(
             run_id=RunId("run"), execution_id="impact", node_id=module.IMPACT_ANALYSIS,
             runtime=SimpleNamespace(
-                source_control=source_control, store=store,
+                public_url="", source_control=source_control, store=store,
             ),
         )
         async with binding({"workspaceId": "workspace"}, execution, None):

@@ -21,10 +21,16 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
-from engine.domain import RunOrigin, RunState
+from engine.domain import RunId, RunOrigin, RunState
 from engine.ports import Communications, Message, MessageLink
 
 logger = logging.getLogger(__name__)
+
+
+def work_order_url(public_url: str, run_id: RunId) -> str | None:
+    """Return an absolute work order URL when the deployment has a public URL."""
+    public_url = public_url.rstrip("/")
+    return f"{public_url}/runs/{run_id}" if public_url else None
 
 
 class RunNotifier:
@@ -36,9 +42,8 @@ class RunNotifier:
 
     def work_order_link(self, state: RunState) -> MessageLink | None:
         """Where a person goes to watch this run, if this deployment has a URL."""
-        if not self._public_url:
-            return None
-        return MessageLink("View work order", f"{self._public_url}/runs/{state.run_id}")
+        url = work_order_url(self._public_url, state.run_id)
+        return MessageLink("View work order", url) if url else None
 
     async def announce(
         self,

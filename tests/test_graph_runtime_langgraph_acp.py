@@ -635,7 +635,7 @@ def test_run_bound_tools_cross_acp_and_mcp_processes_and_rebind_on_resume(
             "agent/graph-tools",
             "main",
             "feat: add graph tools",
-            "Test body.",
+            f"Test body.\n\n---\nOpenEngine work order: {run_id}",
         )
     ]
     assert source_control.git_calls == []
@@ -2253,6 +2253,7 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 
     class Runtime:
         def __init__(self, store: Any) -> None:
+            self.public_url = ""
             self.store = store
             self.source_control = CommentingSourceControl()
 
@@ -2334,6 +2335,7 @@ def test_a_ci_fix_step_reports_only_the_pull_request_its_run_opened(
 
     class Runtime:
         def __init__(self, store: Any) -> None:
+            self.public_url = ""
             self.store = store
             self.source_control = RecordingSourceControl()
 
@@ -2454,6 +2456,7 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
 
     class Runtime:
         def __init__(self, store: Any) -> None:
+            self.public_url = ""
             self.store = store
             self.source_control = ShellOpenedSourceControl()
 
@@ -2706,7 +2709,9 @@ def test_graph_workorder_creation_uses_bound_parent() -> None:
 
     async def scenario():
         execution = SimpleNamespace(
-            runtime=SimpleNamespace(source_control=object(), workorder_creator=create),
+            runtime=SimpleNamespace(
+                source_control=object(), workorder_creator=create, public_url="",
+            ),
             run_id=RunId("parent"), execution_id="execution",
         )
         server = TerminalMcpServer(

@@ -348,6 +348,7 @@ async def sqlite_runtime(
     *,
     source_control: SourceControl | None = None,
     allow_empty: bool = False,
+    public_url: str = "",
 ) -> AsyncIterator[LangGraphRuntime]:
     """Every workflow, compiled against durable files, closed on the way out.
 
@@ -381,6 +382,7 @@ async def sqlite_runtime(
             store=store,
             source_control=source_control,
             checkpointer=saver,
+            public_url=public_url,
         )
         try:
             yield runtime
