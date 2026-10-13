@@ -50,7 +50,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
-from engine.apps.web.pull_request_claims import claim_started_pull_request
+from engine.apps.web.pull_request_claims import claim_started_pull_request, validate_started_pull_request
 from engine.apps.web.request_security import RequestSecurity, TrustedDaemonHostMiddleware
 from engine.apps.web.loop_runs import (
     Loop,
@@ -1987,6 +1987,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
+        validate_started_pull_request(inputs, run_project(repository))
         if requester is None and scheduled is not None:
             requester = scheduled.requester
         if 'auto_approve_green' in inputs and not inputs['auto_approve_green']:
@@ -2087,8 +2088,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                        if origin and origin.issue_number else {}),
                 },
                 run_id=reserved.run_id,
+                before_launch=lambda run_id: claim_started_pull_request(runtime, run_id, inputs),
             )
-            await claim_started_pull_request(runtime, snapshot.run_id, inputs)
             # Register before saving the row: earlier events already wait for
             # the row, and later ones must wait for the concierge reply too.
             if defer_notifications and origin is not None:
@@ -2214,14 +2215,17 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 inputs = resolve_inputs(surface.declared_inputs(graph), state.inputs)
             except ValueError as error:
                 return _error(str(error), 400)
-            state = await start_graph_run(
-                surface.runtime, graph, inputs=inputs, prompt=state.prompt,
-                repository=repository,
-                scheduled=state, origin=state.origin,
-                # The proposer stays the requester; whoever clicks Start only
-                # names a row that recorded nobody.
-                requester=state.requester or _web_requester(request),
-            )
+            try:
+                state = await start_graph_run(
+                    surface.runtime, graph, inputs=inputs, prompt=state.prompt,
+                    repository=repository,
+                    scheduled=state, origin=state.origin,
+                    # The proposer stays the requester; whoever clicks Start only
+                    # names a row that recorded nobody.
+                    requester=state.requester or _web_requester(request),
+                )
+            except ServiceError as error:
+                return _error(str(error), error.status)
             run = await run_reader.get(state.run_id)
             assert run is not None
             return JSONResponse(_run_json(run))

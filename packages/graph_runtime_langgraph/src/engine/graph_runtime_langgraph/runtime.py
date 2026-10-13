@@ -221,7 +221,8 @@ class LangGraphRuntime:
         return definition.topology if definition is not None else None
 
     async def start(
-        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None
+        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None,
+        before_launch: Callable[[RunId], Awaitable[None]] | None = None,
     ) -> RunSnapshot:
         definition = self._definitions.get(graph_id)
         if definition is None:
@@ -267,6 +268,8 @@ class LangGraphRuntime:
         )
         opening = await self._position(definition, config)
         await self._announce(live, opening)
+        if before_launch is not None:
+            await before_launch(run_id)
         self._launch(live, definition, config)
         return await self._snapshot(run_id)
 

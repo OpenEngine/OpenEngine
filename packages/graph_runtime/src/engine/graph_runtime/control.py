@@ -31,7 +31,7 @@ should retry -- and a `None` cannot say which it was.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
@@ -247,11 +247,14 @@ class GraphRuntime(Protocol):
         ...
 
     async def start(
-        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None
+        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None,
+        before_launch: Callable[[RunId], Awaitable[None]] | None = None,
     ) -> RunSnapshot:
         """Begin a run of `graph_id` with `values` as its initial state.
 
         `run_id` preserves the identity of an already scheduled workorder.
+        `before_launch` runs after initialization, before any node can execute.
+        A failing hook prevents launch; it must cancel the initialized run.
         Raises `ValueError` if that id has already been started.
         Raises `UnknownGraphError` for a graph that is not registered.
         """

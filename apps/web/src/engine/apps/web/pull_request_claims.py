@@ -14,6 +14,20 @@ from engine.runtime.change_requests import change_request
 log = logging.getLogger(__name__)
 
 
+def validate_started_pull_request(inputs: Mapping[str, str], repository: str | None) -> None:
+    """Bind a fix/review target to the repository authorized by the caller."""
+    url = inputs.get("pr_url", "")
+    if not url or not any(inputs.get(mode) == "true" for mode in ("fix_only", "review_only")):
+        return
+    target = change_request(url)
+    if target is None:
+        message = "pr_url must name a pull request"
+        raise ServiceError(message)
+    if repository is None or target.project != repository.lower():
+        message = "pr_url must belong to the run's repository"
+        raise ServiceError(message)
+
+
 async def claim_started_pull_request(
     runtime: GraphRuntime, run_id: RunId, inputs: Mapping[str, str],
 ) -> None:

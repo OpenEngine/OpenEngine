@@ -98,3 +98,59 @@ def test_unrelated_starts_do_not_claim(inputs, github_app, client):
         })
         assert response.status_code == 201, response.text
         runtime.store.claim_pull_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mode", ["fix_only", "review_only"])
+@pytest.mark.parametrize("url", [
+    "https://github.com/other/private/pull/855",
+    "https://other.example/acme/api/pull/855",
+    "not-a-pull-request",
+])
+def test_target_must_belong_to_authorized_repository(mode, url, github_app, client):
+    runtime, opened = _graph_runtime(pr_number=855, repository="other/private",
+                                     status=RunStatus.COMPLETED)
+    app, _, _ = github_app(RecordingCommunications(), WorkOrdersConfig(), _catalog(),
+                          graph_runtime=opened)
+    with client(app) as browser:
+        response = browser.post("/api/runs", json={
+            "workflowId": "implementation-review-v1", "repository": "acme/api", "prompt": "Fix it",
+            "inputs": {mode: "true", "pr_url": url},
+        })
+        assert response.status_code == 400, response.text
+        runtime.start.assert_not_awaited()
+        runtime.store.claim_pull_request.assert_not_awaited()
+        assert browser.portal.call(runtime.store.run_for_pull_request, "other/private", 855) == "existing"
+
+
+@pytest.mark.parametrize("failure", ["active", "race", "write", "repository"])
+def test_scheduled_start_reports_claim_errors(failure, github_app, client):
+    from engine.graph_runtime import GraphId
+    from engine.graph_runtime.metadata import RunMetadata
+
+    runtime, opened = _graph_runtime(pr_number=855 if failure == "active" else 99)
+    if failure in ("race", "write"):
+        runtime.store.claim_pull_request = AsyncMock(
+            return_value=RunId("run-winner"),
+            side_effect=OSError("database unavailable") if failure == "write" else None,
+        )
+    app, _, _ = github_app(RecordingCommunications(), WorkOrdersConfig(), _catalog(),
+                          graph_runtime=opened)
+    with client(app) as browser:
+        browser.portal.call(runtime.store.save_metadata, RunId("run-scheduled"),
+                            GraphId("implementation-review-v1"), RunMetadata(
+                                scheduled=True, repository="acme/api", prompt="Fix it",
+                                inputs={"fix_only": "true", "pr_url":
+                                        "https://github.com/other/private/pull/855" if failure == "repository"
+                                        else "https://github.com/acme/api/pull/855"},
+                            ))
+        response = browser.post("/api/runs/run-scheduled/start")
+        assert response.status_code == {"active": 409, "race": 409, "write": 503,
+                                        "repository": 400}[failure], response.text
+        if failure in ("active", "race"):
+            holder = "existing" if failure == "active" else "run-winner"
+            assert f"PR #855 is held by {holder}" in response.text
+        if failure == "repository":
+            runtime.start.assert_not_awaited()
+            runtime.store.claim_pull_request.assert_not_awaited()
+        else:
+            runtime.cancel.assert_awaited_once_with(RunId("run-scheduled"))
