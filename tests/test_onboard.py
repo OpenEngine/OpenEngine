@@ -131,14 +131,14 @@ def test_wrong_checkout_is_never_replaced(tmp_path, monkeypatch):
         onboard.validate_checkout('owner/repo', tmp_path)
 
 
-def test_registers_the_default_graph_for_the_signed_in_agent():
+def test_registers_the_default_graph_with_runner_policies():
     service = Mock()
     service.add_graph = AsyncMock()
     asyncio.run(onboard.register_starters(service, 'owner/repo', 'opencode'))
     assert service.add_graph.await_count == 1
     for name in onboard.starters.NAMES:
         service.add_graph.assert_any_await(
-            'owner/repo', source=onboard.starters.source(name, runner='opencode'), format='python',
+            'owner/repo', source=onboard.starters.source(name), format='python',
         )
 
 
@@ -388,3 +388,33 @@ def test_trusted_hosts_can_onboard(tmp_path, monkeypatch, base_url, public_url):
             assert response.status_code == 202
     asyncio.run(run())
     start.assert_called_once()
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "opencode"])
+def test_runner_must_be_installed(kind, monkeypatch):
+    monkeypatch.setattr(onboard.shutil, "which", lambda _: None)
+    assert not onboard.agent_available(kind, url="http://localhost:1234")
+
+
+@pytest.mark.parametrize("result", [
+    subprocess.CompletedProcess([], 1, "", "not signed in"),
+    subprocess.CompletedProcess([], 0, '{"loggedIn": false}', ""),
+    subprocess.CompletedProcess([], 0, 'invalid json', ""),
+])
+def test_claude_must_be_signed_in(result, monkeypatch):
+    monkeypatch.setattr(onboard.shutil, "which", lambda name: name)
+    monkeypatch.setattr(onboard, "_run", lambda _: result)
+    assert not onboard.agent_available("claude")
+
+
+def test_opencode_checks_the_added_agents_provider(tmp_path, monkeypatch):
+    monkeypatch.setattr(onboard.shutil, "which", lambda name: name)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    auth = tmp_path / "opencode/auth.json"
+    auth.parent.mkdir()
+    auth.write_text('{"qwen": {"type": "oauth", "refresh": "test"}}')
+    assert onboard.agent_available("opencode", model="qwen/coder")
+    assert not onboard.agent_available("opencode", model="other/coder")
+    auth.unlink()
+    assert not onboard.agent_available("opencode")
+    assert onboard.agent_available("opencode", url="http://localhost:1234")

@@ -76,11 +76,37 @@ def test_added_runners_leave_a_free_text_runner_input_accepting_any_runner():
     }
 
 
-def test_added_runners_join_no_policy_pool():
+def test_added_runners_join_the_available_policy_pool():
     turns: dict[str, int] = {}
     inputs = {"implementation_runner": LEAST_UTILIZED, "review_runner": ROUND_ROBIN}
     picked = [
-        tuple(choose_runners(DECLARED, inputs, usage=dict, turns=turns).values())
+        tuple(choose_runners(
+            offer_runners(DECLARED, ("qwen",), inputs), inputs,
+            usage=dict, turns=turns, available=("claude", "qwen"),
+        ).values())
         for _ in range(3)
     ]
-    assert picked == [("codex", "codex"), ("claude", "claude"), ("codex", "codex")]
+    assert picked == [("claude", "claude"), ("qwen", "qwen"), ("claude", "claude")]
+
+
+
+def test_only_available_runner_is_used_for_both_stages():
+    inputs = {item.name: ROUND_ROBIN for item in DECLARED}
+    chosen = choose_runners(DECLARED, inputs, usage=dict, turns={}, available=("claude",))
+    assert set(chosen.values()) == {"claude"}
+
+
+def test_no_available_runner_refuses_with_signin_hint():
+    import pytest
+
+    for policy in (ROUND_ROBIN, LEAST_UTILIZED):
+        with pytest.raises(ValueError, match="engine agent signin"):
+            choose_runners(DECLARED, {"implementation_runner": policy},
+                           usage=dict, turns={}, available=())
+
+
+def test_unavailable_runner_cannot_win_by_utilization():
+    chosen = choose_runners(DECLARED, {"implementation_runner": LEAST_UTILIZED},
+                            usage=lambda: {"codex": 0, "claude": 90}, turns={},
+                            available=("claude",))
+    assert chosen["implementation_runner"] == "claude"

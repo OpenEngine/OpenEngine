@@ -84,7 +84,7 @@ def offer_runners(
     """`declarations`, with each of the runner `inputs` also offering `runners`.
 
     `runners` are listed after an input's own runners and before its policies.
-    They join no policy's pool: `choose_runners` is given the declarations as written.
+    The backend can pass the expanded declarations to `choose_runners`.
     An input with no choices is free text, which already accepts any runner, so
     it is left as declared rather than narrowed to `runners`.
     """
@@ -105,6 +105,7 @@ def choose_runners(
     *,
     usage: Callable[[], Mapping[str, float]],
     turns: MutableMapping[str, int],
+    available: Collection[str] | None = None,
 ) -> dict[str, str]:
     """Replace runner policies with the runner each one picks for this run.
 
@@ -114,13 +115,22 @@ def choose_runners(
     reading for any of the input's runners there is nothing to compare, so the
     choice rotates as round-robin would rather than always landing on the
     first. `turns` is the round-robin position per input, advanced in place.
+    When supplied, `available` restricts each pool to runners the backend has
+    checked; an empty pool refuses submission with a sign-in hint.
     """
     chosen = dict(inputs)
     for item in declarations:
         policy = inputs.get(item.name)
         runners = [choice for choice in item.choices if choice not in RUNNER_POLICIES]
-        if policy not in RUNNER_POLICIES or not runners:
+        if policy not in RUNNER_POLICIES:
             continue
+        if available is not None:
+            runners = [runner for runner in runners if runner in available]
+        if not runners:
+            raise ValueError(
+                f"no installed and signed-in runner for {item.name!r}; "
+                "install a runner and run `engine agent signin <agent>` on the backend"
+            )
         used = usage() if policy == LEAST_UTILIZED else {}
         if any(runner in used for runner in runners):
             chosen[item.name] = min(runners, key=lambda runner: used.get(runner, 100.0))

@@ -131,7 +131,7 @@ from engine.domain import (
     review_inputs,
 )
 from engine.graph_runtime.inputs import (
-    LEAST_UTILIZED, WorkflowInput, choose_runners, offer_runners, resolve_inputs,
+    LEAST_UTILIZED, RUNNER_POLICIES, WorkflowInput, choose_runners, offer_runners, resolve_inputs,
 )
 from engine.graph_runtime import (
     EventKind,
@@ -1385,13 +1385,18 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         async def start(workflow: GraphWorkflow, request: StartRequest) -> RunId:
             # The WorkOrder path, so a CLI run is listed, approved under this
             # deployment's policy and reported like any other.
-            state = await start_graph_run(
-                runtime,
-                workflow,
-                inputs=dict(request.inputs),
-                prompt=request.instruction,
-                repository=request.repository,
-            )
+            try:
+                state = await start_graph_run(
+                    runtime,
+                    workflow,
+                    inputs=dict(request.inputs),
+                    prompt=request.instruction,
+                    repository=request.repository,
+                )
+            except ValueError as error:
+                from engine.graph_service import ServiceError
+
+                raise ServiceError(str(error)) from error
             return state.run_id
 
         try:
@@ -1913,6 +1918,26 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         # Preserve the configured input for scheduled WorkOrder views as well.
         if (mode := await repository_mode(repository)) is not None:
             inputs = {**inputs, MODE_INPUT: str(mode)}
+        declarations = surface.declared_inputs(graph)
+        available = None
+        if any(value in RUNNER_POLICIES for value in inputs.values()):
+            from engine.apps.web.onboarding import agent_available
+
+            agents = surface.service.agents_json() if surface.service is not None else [
+                {"name": name, "kind": name, "model": "", "url": ""}
+                for name in dict.fromkeys(
+                    choice for item in declarations for choice in item.choices
+                    if choice not in RUNNER_POLICIES
+                )
+            ]
+            ready = await asyncio.gather(*(
+                asyncio.to_thread(agent_available, agent["kind"], model=agent["model"], url=agent["url"])
+                for agent in agents
+            ))
+            available = tuple(agent["name"] for agent, usable in zip(agents, ready) if usable)
+            # Validate before saving even a dependent run, without advancing rotation.
+            choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
+
         async def runner_usage() -> dict[str, float]:
             # Scraped here rather than trusting the cache, which otherwise only
             # fills when someone opens the Utilization page, but at most hourly.
@@ -1958,9 +1983,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             # Policies resolve at start, not at scheduling, so a dependent
             # WorkOrder is placed by utilization when it actually runs.
             inputs = choose_runners(
-                getattr(graph, "inputs", ()), inputs,
+                declarations, inputs,
                 usage=lambda: usage,
-                turns=round_robin_turns,
+                turns=round_robin_turns, available=available,
             )
             # Taken before start(), which may already run nodes.
             started_at = datetime.now(UTC)
