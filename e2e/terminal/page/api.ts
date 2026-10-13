@@ -32,8 +32,12 @@ export type TerminalTestApi = {
    * element's `data-text` holds the text it covers.
    */
   markRows(from: number, to: number): string
-  /** The page area from the top of the frame to the last visible row with text or the cursor, plus the frame's bottom padding. */
-  usedArea(): { x: number; y: number; width: number; height: number }
+  /**
+   * The page area from the top of the frame to the last visible row with text
+   * or the cursor, plus `rowsBelow` more rows (as far as the screen goes) and
+   * the frame's bottom padding.
+   */
+  usedArea(rowsBelow?: number): { x: number; y: number; width: number; height: number }
 }
 
 declare global {

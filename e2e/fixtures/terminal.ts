@@ -71,9 +71,11 @@ export class Terminal {
    * The terminal down to the last row in use, as a screenshot `clip`, so a
    * short output isn't followed by a screen of empty rows:
    * `screenshot(testInfo, locator, { clip: await terminal.usedArea() })`.
+   * `rowsBelow` keeps that many empty rows after the output, room for a
+   * label under the last rows.
    */
-  usedArea(): Promise<{ x: number; y: number; width: number; height: number }> {
-    return this.page.evaluate(() => window.__term!.usedArea())
+  usedArea({ rowsBelow = 0 } = {}): Promise<{ x: number; y: number; width: number; height: number }> {
+    return this.page.evaluate((rows) => window.__term!.usedArea(rows), rowsBelow)
   }
 
   /** The whole buffer as text, wrapped lines joined. */

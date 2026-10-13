@@ -114,7 +114,7 @@ const api: TerminalTestApi = {
     }
     return -1
   },
-  usedArea() {
+  usedArea(rowsBelow = 0) {
     let last = terminal.buffer.active.cursorY
     for (let row = terminal.rows - 1; row > last; row--) {
       if (visibleRow(row).trim()) {
@@ -122,6 +122,7 @@ const api: TerminalTestApi = {
         break
       }
     }
+    last = Math.min(last + rowsBelow, terminal.rows - 1)
     const frame = document.getElementById("terminal")!
     const box = frame.getBoundingClientRect()
     const bottom = frame.querySelectorAll(".xterm-rows > div")[last]!.getBoundingClientRect().bottom

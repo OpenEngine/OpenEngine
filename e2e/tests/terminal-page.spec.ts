@@ -110,6 +110,17 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(id).not.toBe("g-0123456789ab")
   })
 
+  test("shows a local port as the same stand-in on every run", async ({ page }) => {
+    await openTerminal(page)
+    await page.locator("#terminal").click()
+    await page.keyboard.type('echo "port http://127.0.0.1:59741 http://127.0.0.1:61002 mac-mini.local:4364"')
+    await page.keyboard.press("Enter")
+    await expect.poll(() => bufferText(page)).toMatch(/^port http:\/\/127\.0\.0\.1:59741 /m)
+    const row = page.locator(".xterm-rows > div").filter({ hasText: /^port / }).last()
+    await expect(row).toHaveText(/^port http:\/\/127\.0\.0\.1:(\d{5}) http:\/\/127\.0\.0\.1:\1 mac-mini\.local:4364\s*$/)
+    await expect(row).not.toContainText("59741")
+  })
+
   test("says so when the server refuses the session", async ({ page }) => {
     await page.goto("/?token=wrong")
     await page.waitForFunction(() => window.__term?.error !== undefined)

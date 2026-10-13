@@ -65,6 +65,13 @@ test.describe("terminal fixture", { tag: ["@skip-docs"] }, () => {
     expect(area.height).toBeLessThan(row.y + row.height * 2 + 30)
   })
 
+  test("keeps room below the rows in use when asked", async ({ terminal }) => {
+    await terminal.run("echo one")
+    const area = await terminal.usedArea()
+    const row = (await (await terminal.row(/^one$/)).boundingBox())!
+    expect((await terminal.usedArea({ rowsBelow: 2 })).height).toBeCloseTo(area.height + row.height * 2, 0)
+  })
+
   test("locates the text on one row, hugging it rather than the whole line", async ({ terminal }) => {
     await terminal.run("echo needle")
     const row = await terminal.row(/^needle$/)

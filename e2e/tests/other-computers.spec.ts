@@ -50,7 +50,7 @@ OpenEngine remembers the Mac mini under the name \`mac-mini\`, and shows what it
             expect(chosen(engine)).toEqual({ current: "local", names: ["local", "mac-mini"] })
             await screenshot(testInfo, await terminal.row(/"name": "mac-mini"/), {
               annotation: { text: "The Mac mini is saved as mac-mini" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ rowsBelow: 2 }),
             })
           },
         )
@@ -71,7 +71,7 @@ If you see *down* beside the Mac mini instead, check that it's switched on, that
             expect(output).toMatch(new RegExp(`^\\s+mac-mini\\s+http://${MAC_MINI.replace(/\./g, "\\.")}\\s.*\\bup\\b`, "m"))
             await screenshot(testInfo, await terminal.row(/^\s+mac-mini\s.*\bup\b/), {
               annotation: { text: "The Mac mini is reachable" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ rowsBelow: 2 }),
             })
           },
         )
@@ -89,7 +89,7 @@ OpenEngine shows the computer you switched to.`,
             expect(chosen(engine).current).toBe("mac-mini")
             await screenshot(testInfo, await terminal.row(/"name": "mac-mini".*"current": true/), {
               annotation: { text: "Commands now go to the Mac mini" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ rowsBelow: 2 }),
             })
           },
         )
@@ -107,7 +107,7 @@ You'll see the Mac mini's graphs. It has none yet, so the list is empty, even th
             expect(output).not.toMatch(/^hello\s/m)
             await screenshot(testInfo, terminal.screen(), {
               annotation: { text: "The Mac mini has no graphs yet" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ rowsBelow: 2 }),
             })
           },
         )
@@ -126,7 +126,7 @@ You'll see this computer's graphs. Your other commands still go to the Mac mini.
             expect(chosen(engine).current).toBe("mac-mini")
             await screenshot(testInfo, await terminal.row(/^hello\s/), {
               annotation: { text: "A graph on this computer" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ rowsBelow: 2 }),
             })
           },
         )
@@ -148,7 +148,7 @@ You'll see this computer's graphs. Your other commands still go to the Mac mini.
             expect(chosen(engine).current).toBe("local")
             await screenshot(testInfo, await terminal.row(/"name": "local".*"current": true/), {
               annotation: { text: "Commands go to this computer again" },
-              clip: await terminal.usedArea(),
+              clip: await terminal.usedArea({ rowsBelow: 2 }),
             })
           },
         )
