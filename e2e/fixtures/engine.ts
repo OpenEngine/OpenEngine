@@ -22,6 +22,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { engineBin } from "../support/engine.ts"
+import type { TestInfo } from "@playwright/test"
 import { test as terminalTest } from "./terminal.ts"
 
 export { expect } from "./terminal.ts"
@@ -272,10 +273,12 @@ async function startProxy(address: string, target: string) {
       { method: request.method, headers: { ...request.headers, host: new URL(target).host } },
       (answer) => {
         response.writeHead(answer.statusCode ?? 502, answer.headers)
+        answer.on("error", () => response.destroy())
         answer.pipe(response)
       },
     )
-    forwarded.on("error", () => response.writeHead(502).end())
+    // Once the answer has started, a failure can only cut it short.
+    forwarded.on("error", () => (response.headersSent ? response.destroy() : response.writeHead(502).end()))
     request.pipe(forwarded)
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -285,26 +288,41 @@ async function startProxy(address: string, target: string) {
   }
 }
 
+/**
+ * Start a daemon for one test and stop it afterwards. If the test failed, its
+ * directory is kept and what it printed is attached to the report as `name`.
+ */
+async function useDaemon(
+  testInfo: TestInfo,
+  name: string,
+  options: { agentMode?: AgentMode; token?: string },
+  use: (engine: Engine) => Promise<void>,
+) {
+  const failed = () => testInfo.status !== testInfo.expectedStatus
+  const engine = await startEngine({ keepRoot: failed, ...options })
+  try {
+    await use(engine)
+  } finally {
+    await engine.stop()
+    if (failed()) {
+      // What the daemon said usually explains the failure; its directory holds the databases.
+      await testInfo.attach(name, { body: engine.log(), contentType: "text/plain" })
+      console.log(`[engine] kept the failed test's ${name} directory: ${engine.root}`)
+    }
+  }
+}
+
 export const test = terminalTest.extend<{
   engine: Engine
   anotherComputerAt: string | undefined
   anotherComputer: AnotherComputer | undefined
 }>({
   engine: async ({}, use, testInfo) => {
-    const failed = () => testInfo.status !== testInfo.expectedStatus
-    const engine = await startEngine({ keepRoot: failed })
-    testInfo.annotations.push({ type: "agents", description: engine.agentMode })
-    if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
-    try {
+    await useDaemon(testInfo, "engine daemon", {}, async (engine) => {
+      testInfo.annotations.push({ type: "agents", description: engine.agentMode })
+      if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
       await use(engine)
-    } finally {
-      await engine.stop()
-      if (failed()) {
-        // What the daemon said usually explains the failure; its directory holds the databases.
-        await testInfo.attach("engine daemon", { body: engine.log(), contentType: "text/plain" })
-        console.log(`[engine] kept the failed test's daemon directory: ${engine.root}`)
-      }
-    }
+    })
   },
   /** Where another computer answers, such as `mac-mini.local:4364`; set it with `test.use` to get `anotherComputer`. */
   anotherComputerAt: [undefined, { option: true }],
@@ -316,14 +334,8 @@ export const test = terminalTest.extend<{
       await use(undefined)
       return
     }
-    const failed = () => testInfo.status !== testInfo.expectedStatus
-    const other = await startEngine({ keepRoot: failed, agentMode: engine.agentMode, token: engine.env.ENGINE_SERVICE_TOKEN })
-    try {
-      await use({ ...other, address: anotherComputerAt })
-    } finally {
-      await other.stop()
-      if (failed()) await testInfo.attach("another computer's daemon", { body: other.log(), contentType: "text/plain" })
-    }
+    const options = { agentMode: engine.agentMode, token: engine.env.ENGINE_SERVICE_TOKEN }
+    await useDaemon(testInfo, "another computer's daemon", options, (other) => use({ ...other, address: anotherComputerAt }))
   },
   terminalEnv: async ({ engine, anotherComputer }, use) => {
     if (!anotherComputer) {
