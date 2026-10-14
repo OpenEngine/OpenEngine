@@ -963,12 +963,68 @@ engine daemon doctor [-h] [--json]
 Show or select the local sandbox backend.
 
 ```text
-engine vm [-h] [--image IMAGE] [--config CONFIG] [--json] [{process,smolvm}]
+engine vm [-h] [--image IMAGE] [--config CONFIG] [--json] {list,use,process,smolvm} ...
 ```
 
 | Argument | Meaning |
 | --- | --- |
-| `backend` | process is the default; one of `process`, `smolvm` |
+| `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
+| `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
+| `--json` | print the configured backend as JSON |
+
+### `engine vm list`
+
+List sandbox backends; * marks the configured backend.
+
+```text
+engine vm list [-h] [--image IMAGE] [--config CONFIG] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
+| `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
+| `--json` | print the configured backend as JSON |
+
+### `engine vm use`
+
+Select the sandbox backend (process is the default).
+
+```text
+engine vm use [-h] [--image IMAGE] [--config CONFIG] [--json] {process,smolvm}
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `backend` | one of `process`, `smolvm` |
+| `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
+| `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
+| `--json` | print the configured backend as JSON |
+
+### `engine vm process`
+
+Shorthand for vm use process.
+
+```text
+engine vm process [-h] [--image IMAGE] [--config CONFIG] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
+| `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
+| `--json` | print the configured backend as JSON |
+
+### `engine vm smolvm`
+
+Shorthand for vm use smolvm.
+
+```text
+engine vm smolvm [-h] [--image IMAGE] [--config CONFIG] [--json]
+```
+
+| Argument | Meaning |
+| --- | --- |
 | `--image IMAGE` | local SmolVM guest archive; reuse the configured image when omitted |
 | `--config CONFIG` | configuration file (default: ENGINE_CONFIG or installed configuration) |
 | `--json` | print the configured backend as JSON |
