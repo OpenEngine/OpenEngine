@@ -54,6 +54,37 @@ class NpmBootstrapperTests(unittest.TestCase):
     def run_engine(self, *args):
         return subprocess.run(self.command + list(args), env=self.env, capture_output=True, text=True, timeout=20)
 
+    def test_global_install_cleans_only_stale_installer_shim(self):
+        shim = self.home / '.local/bin/engine'
+        shim.parent.mkdir(parents=True)
+        prefix = self.home / 'npm-global'
+        for content, removed in [
+            ('#!/bin/sh\n# Written by the OpenEngine installer\n', True),
+            ('#!/bin/sh\necho unrelated\n', False),
+        ]:
+            shim.write_text(content)
+            result = subprocess.run(
+                ['npm', 'install', '-g', '--prefix', str(prefix), str(self.archive)],
+                env={**self.env, 'npm_config_cache': str(self.home / 'cache')},
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(shim.exists(), not removed)
+            if not removed:
+                self.assertEqual(shim.read_text(), content)
+
+    def test_local_install_hook_leaves_shim_alone(self):
+        shim = self.home / '.local/bin/engine'
+        shim.parent.mkdir(parents=True)
+        shim.write_text('# Written by the OpenEngine installer\n')
+        result = subprocess.run(
+            ['node', str(self.package / 'scripts/cleanup-shim.js')],
+            env={**self.env, 'npm_config_global': 'false'},
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(shim.exists())
+
     def test_package_version_and_installer_parity(self):
         self.assertEqual(self.version, json.loads((ROOT / '.release-please-manifest.json').read_text())['.'])
         self.assertEqual((self.package / 'install.sh').read_bytes(), (ROOT / 'scripts/install.sh').read_bytes())

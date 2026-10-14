@@ -2,8 +2,9 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
-const { existsSync, openSync, readSync, closeSync, statSync, unlinkSync } = require('node:fs');
+const { existsSync } = require('node:fs');
 const { join } = require('node:path');
+const removeCurlShim = require('../scripts/cleanup-shim.js');
 const { version } = require('../package.json');
 
 // Keep a supervising process on Node 18, forwarding signals and preserving the
@@ -27,27 +28,6 @@ function run(command, args, env) {
       else resolve(code);
     });
   });
-}
-
-// Only remove an installer-owned launcher, never the running npm executable.
-function removeCurlShim(path) {
-  let fd;
-  try {
-    const candidate = statSync(path);
-    const running = statSync(__filename);
-    if (!candidate.isFile() || (candidate.dev === running.dev && candidate.ino === running.ino)) return;
-    fd = openSync(path, 'r');
-    const buffer = Buffer.alloc(1024);
-    const length = readSync(fd, buffer, 0, buffer.length, 0);
-    if (!buffer.toString('utf8', 0, length).split('\n').slice(0, 5)
-      .some(line => line.startsWith('# Written by the OpenEngine installer'))) return;
-    unlinkSync(path);
-    console.error('engine: replaced the curl-installer launcher');
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.error(`engine: could not remove old launcher ${path}: ${error.message}`);
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
 }
 
 function healthy(executable, env) {

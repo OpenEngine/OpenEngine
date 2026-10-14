@@ -20,9 +20,11 @@
   "files": [
     "bin/engine.js",
     "install.sh",
-    "LICENSE"
+    "LICENSE",
+    "scripts/cleanup-shim.js"
   ],
   "scripts": {
-    "prepack": "node scripts/prepack.js"
+    "prepack": "node scripts/prepack.js",
+    "postinstall": "node scripts/cleanup-shim.js"
   }
 }
