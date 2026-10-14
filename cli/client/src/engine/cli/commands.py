@@ -916,7 +916,7 @@ def _wait_for_steering(client: Client, execution_id: str, steering_id: str, time
 
 
 def _run_failed(run: dict[str, Any]) -> bool:
-    return run["status"] == "failed"
+    return run["status"] in {"failed", "cancelled"}
 
 
 def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:

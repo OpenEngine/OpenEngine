@@ -448,7 +448,7 @@ def test_graph_run_live_selection(monkeypatch, capsys, stdin_tty, stdout_tty, fl
         assert "run-1  pair v1" in output
 
 
-@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0)])
+@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 1), ("interrupted", 0), ("stopped", 0)])
 def test_watch_finished_run(monkeypatch, capsys, status, code):
     serve(monkeypatch, {**RUN, "status": status, "terminal": True})
     assert main(["run", "watch", "run-1"]) == code
@@ -479,7 +479,7 @@ def test_pretty_run_lists_approvals_and_ui(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("status,code", [
-    ("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0),
+    ("completed", 0), ("failed", 1), ("cancelled", 1), ("interrupted", 0), ("stopped", 0),
 ])
 @pytest.mark.parametrize("args", [["run", "get", "run-1"], ["run", "wait", "run-1"],
                                   ["graph", "run", "pair", "--wait"]])
