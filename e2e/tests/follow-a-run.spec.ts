@@ -193,7 +193,7 @@ The first time you run a graph in a folder, OpenEngine asks whether to trust it.
 - *Graph* lists every step in order, with the same marks, and *Now* says which step is running and which agent is doing it.
 - At the bottom, after ┃, is what the agent is saying and doing right now.
 
-If you see *cannot reach backend*, OpenEngine's background program isn't running. A **backend** is a computer where that program runs: this one, or another one such as a Mac mini. Follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then start the graph again.`,
+If you see *cannot reach backend*, OpenEngine's background program isn't running. A **backend** is a computer where that program runs: this one, or a remote machine. Follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then start the graph again.`,
           async () => {
             await terminal.waitForText(/^\s+Graph\s+/m)
             if (engine.agentMode === "stub") await terminal.waitForText(/┃ ⚙ cat README\.md/)

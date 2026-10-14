@@ -46,7 +46,7 @@ Now watch. The screen redraws itself as the run goes on:
 - *Graph* lists every step in order, with the same marks, and *Now* says which step is running and which agent is doing it.
 - At the bottom, after ┃, is what the agent is saying and doing right now.
 
-If you see *cannot reach backend*, OpenEngine's background program isn't running. A **backend** is a computer where that program runs: this one, or another one such as a Mac mini. Follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then start the graph again.
+If you see *cannot reach backend*, OpenEngine's background program isn't running. A **backend** is a computer where that program runs: this one, or a remote machine. Follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then start the graph again.
 
 ![screenshot](./test2doc-ccee15b0c696.png)
 
@@ -116,13 +116,13 @@ Type `y` and press Enter, and the run goes on to the end.
 
 If you started the wrong graph, or no longer need what it's doing, you can stop it. Start the graph with `engine graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
 
-![screenshot](./test2doc-3659052ab5d1.png)
+![screenshot](./test2doc-11b298d05737.png)
 
 While it's running, press Ctrl-C. When the screen asks what you want, type `c` and press Enter.
 
 OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run ID and *cancelled*.
 
-![screenshot](./test2doc-996dca9dcf98.png)
+![screenshot](./test2doc-df2858fbfb02.png)
 
 Type `engine runs list` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.
 
