@@ -16,7 +16,7 @@ name: describe-project
 plan:
   read:
     agent: claude
-    prompt: Read README.md and reply with one sentence saying what this project is. Don't run commands or change files.
+    prompt: Read README.md and reply with one sentence saying what this project is. You may use ls to list files and cat to read them. Don't change files.
 implementation:
   suggest:
     agent: claude
@@ -357,7 +357,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
               steps: [
                 { type: "say", text: "Reading the README to see what this project is." },
                 // Busy until the run is cancelled.
-                { type: "run", command: "cat README.md && sleep 600", approval: false },
+                { type: "run", command: "cat README.md && exec sleep 600", approval: false },
               ],
             },
             suggest,
@@ -378,7 +378,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
         await step(
           `While it's running, press Ctrl-C. When the screen asks what you want, type \`c\` and press Enter.
 
-OpenEngine stops the agent and ends the run. The top line and the step that was running show *cancelled*, with ■ instead of a mark, and the steps that never started stay ○.`,
+OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run's name and *cancelled*.`,
           async () => {
             await terminal.press("Control+C")
             await terminal.waitForText(INTERRUPTED)

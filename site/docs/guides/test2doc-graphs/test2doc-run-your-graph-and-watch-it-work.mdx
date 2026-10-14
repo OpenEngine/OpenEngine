@@ -23,7 +23,7 @@ name: describe-project
 plan:
   read:
     agent: claude
-    prompt: Read README.md and reply with one sentence saying what this project is. Don't run commands or change files.
+    prompt: Read README.md and reply with one sentence saying what this project is. You may use ls to list files and cat to read them. Don't change files.
 implementation:
   suggest:
     agent: claude
@@ -116,13 +116,13 @@ Type `y` and press Enter, and the run goes on to the end.
 
 If you started the wrong graph, or no longer need what it's doing, you can stop it. Start the graph with `engine graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
 
-![screenshot](./test2doc-15af46e358d1.png)
+![screenshot](./test2doc-a7ca28ee1ea9.png)
 
 While it's running, press Ctrl-C. When the screen asks what you want, type `c` and press Enter.
 
-OpenEngine stops the agent and ends the run. The top line and the step that was running show *cancelled*, with ■ instead of a mark, and the steps that never started stay ○.
+OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run's name and *cancelled*.
 
-![screenshot](./test2doc-67ab23b3d6d5.png)
+![screenshot](./test2doc-b1e811ee696a.png)
 
 Type `engine runs list` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.
 
