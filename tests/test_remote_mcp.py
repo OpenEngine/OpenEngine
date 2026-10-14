@@ -47,7 +47,7 @@ def test_discovery_and_creation(dependency):
             "create_workorder", "onboard_repository", "repository_onboarding_status", "workorder_status", "node_status", "steer_workorder", "node_steer",
             "create_loop", "loop_status",
         ]
-        assert set(tools[0]["inputSchema"]["properties"]) == {"prompt", "depends_on_run_id"}
+        assert set(tools[0]["inputSchema"]["properties"]) == {"prompt", "depends_on_run_id", "pr_url"}
         assert tools[0]["inputSchema"]["required"] == ["prompt"]
         assert tools[0]["annotations"]["idempotentHint"] is False
         result = rpc(client, "tools/call", {
@@ -956,3 +956,66 @@ def test_oidc_callers_cannot_access_onboarding(oidc, name, arguments):
             "params": {"name": name, "arguments": arguments},
         })
         assert response.json()["result"]["isError"]
+
+
+@pytest.mark.parametrize("target", ["#911", "https://github.com/acme/api/pull/911", "acme/api#911"])
+def test_create_review_workorder_resolves_target(target):
+    requests = []
+
+    def upstream(request):
+        requests.append(request)
+        if request.url.path == "/graph/api/targets/resolve":
+            assert json.loads(request.content) == {
+                "repository": SETTINGS.repository, "target": target, "verb": "review",
+                "restrict_repository": True,
+            }
+            return httpx.Response(200, json={
+                "repo": "acme/api", "pr_url": "https://github.com/acme/api/pull/911",
+                "ref": "refs/pull/911/head", "mode": "connected",
+            })
+        assert request.url.path == "/api/runs"
+        assert json.loads(request.content) == {
+            "repository": SETTINGS.repository, "workflowId": SETTINGS.workflow,
+            "prompt": "Review this change", "dependsOnRunId": "run-first",
+            "inputs": {"pr_url": "https://github.com/acme/api/pull/911", "ref": "refs/pull/911/head"},
+        }
+        return httpx.Response(201, json={"runId": "run-review"})
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "create_workorder", "arguments": {
+                "prompt": "Review this change", "pr_url": target, "depends_on_run_id": "run-first",
+            },
+        }).json()["result"]
+        assert result["structuredContent"] == {"run_id": "run-review"}
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize("target", ["", "   ", 123, "#999", "branch"])
+def test_invalid_review_target_does_not_create_run(target):
+    def upstream(request):
+        assert request.url.path == "/graph/api/targets/resolve"
+        if target == "branch":
+            return httpx.Response(200, json={"repo": "acme/api", "ref": "origin/branch"})
+        return httpx.Response(404, json={"error": "no such branch or PR"})
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "create_workorder", "arguments": {"prompt": "Review", "pr_url": target},
+        }).json()["result"]
+        assert result["isError"]
+
+
+@pytest.mark.parametrize("target", ["other/repo#911", "https://github.com/other/repo/pull/911"])
+def test_foreign_review_target_does_not_create_run(target):
+    def upstream(request):
+        assert request.url.path == "/graph/api/targets/resolve"
+        assert json.loads(request.content)["restrict_repository"] is True
+        return httpx.Response(400, json={"error": "PR target is outside the configured repository"})
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "create_workorder", "arguments": {"prompt": "Review", "pr_url": target},
+        }).json()["result"]
+        assert result["isError"]
+        assert "outside the configured repository" in result["content"][0]["text"]

@@ -921,6 +921,7 @@ def test_impact_analysis_rejects_then_accepts_corrected_assessment(
             return_value=CommentResult(123, f"{pr_url}#issuecomment-123"),
         ))
         store = SimpleNamespace(
+            run=AsyncMock(return_value=None),
             pull_requests=AsyncMock(return_value=(("acme/api", 42),)),
             remember_comment=AsyncMock(),
         )

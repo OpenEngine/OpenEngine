@@ -1,7 +1,11 @@
 # Manage work orders through remote MCP
 
 `engine-mcp-server` exposes Streamable HTTP tools at `/mcp`. Create work with:
-`create_workorder(prompt: string, depends_on_run_id?: string) -> {"run_id": "..."}`.
+`create_workorder(prompt: string, depends_on_run_id?: string, pr_url?: string) -> {"run_id": "..."}`.
+Pass `pr_url` as a PR URL, `#number`, or `owner/repo#number` to resolve a review
+target and supply `pr_url` and `ref` inputs to the configured workflow. The workflow
+must declare those inputs. The target grants top-level and inline comments only;
+it does not grant push ownership or permission to report the PR as newly opened.
 It calls OE's `POST /api/runs`. Without a dependency, the graph workflow starts
 before returning. To chain work orders, pass a previous call's `run_id` as
 `depends_on_run_id`; the new work order waits until that prerequisite succeeds.

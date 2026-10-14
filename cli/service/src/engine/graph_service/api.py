@@ -88,7 +88,8 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
         from engine.graph_service.targets import resolve_target as resolve
         body = await _body(request)
         return JSONResponse(await resolve(service, _text(body, "repository"), _text(body, "target"),
-            local=body.get("local") is True, verb=_text(body, "verb")))
+            local=body.get("local") is True, verb=_text(body, "verb"),
+            restrict_repository=body.get("restrict_repository") is True))
 
     async def list_graphs(request: Request) -> JSONResponse:
         return JSONResponse({"graphs": service.list_graphs(request.query_params.get("project"))})

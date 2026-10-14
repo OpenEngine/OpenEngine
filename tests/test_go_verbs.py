@@ -392,3 +392,45 @@ def test_review_and_fix_prompts_keep_focus_and_publish_by_mode(mode):
     assert ('resolve=true' in reply.prompt(state)) == (mode == 'connected')
     assert 'Fix the migration' in reply.prompt(state)
     assert 'open_pull_request' not in c.implementation(fixing=True).mcp_server_bindings[0].repository_tools
+
+
+@pytest.mark.parametrize('repository', ['Acme/Api', 'alias', 'checkout'])
+@pytest.mark.parametrize('target', ['#911', 'acme/api#911', 'https://github.com/acme/api/pull/911'])
+def test_restricted_target_accepts_canonical_repository(monkeypatch, tmp_path, repository, target):
+    configured = str(tmp_path) if repository == 'checkout' else repository
+    inspect = AsyncMock(return_value={'pr_url': 'https://github.com/ACME/API/pull/911'})
+    service = SimpleNamespace(
+        resolve_repository=lambda value: str(tmp_path) if value == 'alias' else value,
+        runtime=SimpleNamespace(source_control=SimpleNamespace(inspect_target=inspect)))
+    monkeypatch.setattr(targets, '_git', AsyncMock(return_value='git@github.com:Acme/Api.git'))
+    monkeypatch.setattr(targets, 'resolve_forge_context', AsyncMock(return_value={'mode': 'connected'}))
+    result = asyncio.run(targets.resolve_target(service, configured, target, restrict_repository=True))
+    assert result['pr_url'] == 'https://github.com/ACME/API/pull/911'
+
+
+@pytest.mark.parametrize('target', ['other/repo#911', 'https://github.com/other/repo/pull/911'])
+def test_restricted_target_rejects_foreign_repository_before_inspection(monkeypatch, target):
+    inspect = AsyncMock()
+    service = SimpleNamespace(resolve_repository=lambda value: value,
+        runtime=SimpleNamespace(source_control=SimpleNamespace(inspect_target=inspect)))
+    with pytest.raises(ServiceError, match=targets.OUTSIDE_REPOSITORY):
+        asyncio.run(targets.resolve_target(service, 'acme/api', target, restrict_repository=True))
+    inspect.assert_not_awaited()
+
+
+@pytest.mark.parametrize('remote', ['git@gitlab.com:acme/api.git', ''])
+def test_restricted_target_fails_closed_for_different_host_or_unknown_remote(monkeypatch, tmp_path, remote):
+    service = SimpleNamespace(resolve_repository=lambda value: value)
+    monkeypatch.setattr(targets, '_git', AsyncMock(return_value=remote))
+    with pytest.raises(ServiceError, match=targets.OUTSIDE_REPOSITORY):
+        asyncio.run(targets.resolve_target(service, str(tmp_path),
+            'https://github.com/acme/api/pull/911', restrict_repository=True))
+
+
+def test_restricted_target_checks_resolved_pr_repository(monkeypatch):
+    inspect = AsyncMock(return_value={'pr_url': 'https://github.com/other/repo/pull/911'})
+    service = SimpleNamespace(resolve_repository=lambda value: value,
+        runtime=SimpleNamespace(source_control=SimpleNamespace(inspect_target=inspect)))
+    monkeypatch.setattr(targets, 'resolve_forge_context', AsyncMock(return_value={'mode': 'connected'}))
+    with pytest.raises(ServiceError, match=targets.OUTSIDE_REPOSITORY):
+        asyncio.run(targets.resolve_target(service, 'acme/api', '#911', restrict_repository=True))

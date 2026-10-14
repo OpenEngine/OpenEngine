@@ -152,6 +152,11 @@ class TerminalMcpServer:
             broker.enable_pull_request_claims(claim_reported)
         if "add_comment" in served:
             store = execution.runtime.store
+            # Read submission metadata, not a PR discovered in mutable graph state.
+            run = await store.run(execution.run_id)
+            target = (run.metadata.inputs or {}).get("pr_url") if run else None
+            if target:
+                broker.enable_pull_request_comments(target)
 
             async def record(posted: PostedComment) -> None:
                 await store.remember_comment(

@@ -255,6 +255,7 @@ class TerminalMcpBroker:
         self._comment_recorder: CommentRecorder | None = None
         self._pull_request_recorder: PullRequestRecorder | None = None
         self._pull_request_lookup: PullRequestLookup | None = None
+        self._comment_targets: set[ChangeRequest] = set()
         self._pull_request_claimer: PullRequestClaimer | None = None
         self._opened: set[ChangeRequest] = set()
         self._pushed: set[_PushedBranch] = set()
@@ -310,6 +311,13 @@ class TerminalMcpBroker:
         read, only what this step opened is accepted.
         """
         self._pull_request_lookup = lookup
+
+    def enable_pull_request_comments(self, url: str) -> None:
+        """Grant comments on an explicit run input, without granting ownership."""
+        target = change_request(url)
+        if target is None:
+            raise ValueError("comment target must be a pull request URL")
+        self._comment_targets.add(target)
 
     def enable_pull_request_claims(self, claim: PullRequestClaimer) -> None:
         """Record a reported `pr_url` the forge shows is this step's work.
@@ -592,7 +600,8 @@ class TerminalMcpBroker:
         assert self._source_control is not None
         if name == "add_comment":
             pr_url, comment, file, line, in_reply_to_id = _comment_arguments(arguments)
-            foreign = await self._foreign_pull_request(pr_url)
+            foreign = (None if change_request(pr_url) in self._comment_targets
+                       else await self._foreign_pull_request(pr_url))
             if foreign is not None:
                 return {"ok": False, "error": foreign}
             options = {}
