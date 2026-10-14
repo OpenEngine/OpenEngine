@@ -15,6 +15,7 @@ NO_REPOSITORY = 'no repository: run in a checkout or pass --repo or a full PR UR
 CONNECT = 'cannot read this repository while disconnected; run engine connect github'
 FORK_FIX = 'cannot fix a fork PR or a PR with an unavailable head repository; check out the fork and fix it there'
 PRIVATE = 'private repository requires a forge connection; run engine connect github'
+OUTSIDE_REPOSITORY = 'PR target is outside the configured repository'
 
 if TYPE_CHECKING:
     from engine.graph_service.service import GraphService
@@ -33,8 +34,19 @@ async def _git(path: str, *args: str) -> str:
 
 
 async def resolve_target(service: GraphService, repository: str, target: str, *,
-                         local: bool = False, verb: str = 'review') -> dict[str, Any]:
+                         local: bool = False, verb: str = 'review', restrict_repository: bool = False) -> dict[str, Any]:
     """One resolver for URLs, qualified/unqualified numbers, branches and inference."""
+    allowed_project = ''
+    if restrict_repository:
+        configured_path = service.resolve_repository(repository)
+        remote = (await _git(configured_path, 'remote', 'get-url', 'origin')
+                  if configured_path and Path(configured_path).is_dir() else repository)
+        allowed_project = remote_project(remote) or (
+            remote.lower().removesuffix('.git')
+            if re.fullmatch(r'[\w.-]+/[\w.-]+', remote) else ''
+        )
+        if not allowed_project:
+            raise ServiceError(OUTSIDE_REPOSITORY)
     number = 0
     parsed = change_request(target)
     shorthand = re.fullmatch(r'(?:(\w[\w.-]*/[\w.-]+))?#([1-9][0-9]*)', target)
@@ -48,6 +60,8 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
     checkout = Path(path).is_dir() if path else False
     project = remote_project(await _git(path, 'remote', 'get-url', 'origin')) if checkout else remote_project(repository)
     project = project or (repository if re.fullmatch(r'[^/]+/[^/]+', repository) else '')
+    if restrict_repository and project.lower() != allowed_project:
+        raise ServiceError(OUTSIDE_REPOSITORY)
     if not repository:
         raise ServiceError(NO_REPOSITORY)
     if not target and not number and verb != 'go' and checkout:
@@ -66,6 +80,10 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
             raise NotFound(NO_TARGET) from error
         if disconnected and details.get('private'):
             raise ServiceError(PRIVATE)
+    if restrict_repository and details.get('pr_url'):
+        resolved_pr = change_request(details['pr_url'])
+        if resolved_pr is None or resolved_pr.project != allowed_project:
+            raise ServiceError(OUTSIDE_REPOSITORY)
     if verb == 'fix' and details.get('pr_url') and str(details.get('head_repository', '')).casefold() != project.casefold():
         raise ServiceError(FORK_FIX)
     exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))

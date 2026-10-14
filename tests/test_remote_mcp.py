@@ -967,6 +967,7 @@ def test_create_review_workorder_resolves_target(target):
         if request.url.path == "/graph/api/targets/resolve":
             assert json.loads(request.content) == {
                 "repository": SETTINGS.repository, "target": target, "verb": "review",
+                "restrict_repository": True,
             }
             return httpx.Response(200, json={
                 "repo": "acme/api", "pr_url": "https://github.com/acme/api/pull/911",
@@ -1003,3 +1004,18 @@ def test_invalid_review_target_does_not_create_run(target):
             "name": "create_workorder", "arguments": {"prompt": "Review", "pr_url": target},
         }).json()["result"]
         assert result["isError"]
+
+
+@pytest.mark.parametrize("target", ["other/repo#911", "https://github.com/other/repo/pull/911"])
+def test_foreign_review_target_does_not_create_run(target):
+    def upstream(request):
+        assert request.url.path == "/graph/api/targets/resolve"
+        assert json.loads(request.content)["restrict_repository"] is True
+        return httpx.Response(400, json={"error": "PR target is outside the configured repository"})
+
+    with TestClient(create_app(SETTINGS, transport=httpx.MockTransport(upstream))) as client:
+        result = rpc(client, "tools/call", {
+            "name": "create_workorder", "arguments": {"prompt": "Review", "pr_url": target},
+        }).json()["result"]
+        assert result["isError"]
+        assert "outside the configured repository" in result["content"][0]["text"]

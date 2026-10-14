@@ -200,7 +200,7 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
         if pr_url is not None:
             target = await request_engine("POST", "/graph/api/targets/resolve", {
                 "repository": settings.repository, "target": text(pr_url, "pr_url"),
-                "verb": "review",
+                "verb": "review", "restrict_repository": True,
             })
             if not target.get("pr_url"):
                 raise ToolError("pr_url must resolve to a pull request")
