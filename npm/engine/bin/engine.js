@@ -38,7 +38,7 @@ async function main() {
   const prefix = join(env.XDG_DATA_HOME || join(env.HOME, '.local/share'), 'openengine');
   const target = join(prefix, 'versions', version);
   if (!existsSync(join(target, '.installed'))) {
-    const code = await run('sh', [join(__dirname, '../install.sh'), '--version', version, '--no-start'], env);
+    const code = await run('sh', [join(__dirname, '../install.sh'), '--version', version, '--no-start', '--no-shim'], env);
     if (code !== 0) return code;
   }
   return run(join(target, 'venv/bin/engine'), process.argv.slice(2), {
