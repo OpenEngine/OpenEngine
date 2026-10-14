@@ -39,7 +39,7 @@ from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
 from engine.graph_runtime_langgraph.workflows import RUNS
-from engine.graph_service.service import resolve_graph
+from engine.graph_service.service import ServiceError, resolve_graph
 from engine.graph_service.store import GraphServiceStore
 from engine.apps.web.source_control import SourceControlPreferences, gh_cli_status
 from engine.runtime import (
@@ -133,7 +133,10 @@ def check_work_order_workflow(settings: Settings, catalog: WorkflowCatalog | Non
         return
     webhook = settings.github_webhook
     projects = (webhook.webhook_repositories if webhook is not None else ()) or ("",)
-    missing = _unregistered_for(Path(settings.graph_state_directory) / RUNS, name, projects)
+    try:
+        missing = _unregistered_for(Path(settings.graph_state_directory) / RUNS, name, projects)
+    except ServiceError as error:
+        raise EngineConfigError(f"work_orders.workflow is {name!r}: {error}") from error
     if not missing:
         return
     raise EngineConfigError(

@@ -1012,6 +1012,8 @@ def test_invalid_review_configuration(document):
     ("sandbox", "tdd-guide", False),
     # ...unless the deployment names it outright.
     ("sandbox", "g-1", True),
+    # A refusal other than "no such graph" is reported as itself.
+    ("default", "tdd-guide@latest", False),
 ])
 def test_web_check_reports_a_work_order_workflow_that_names_nothing(
     tmp_path, monkeypatch, capsys, project, workflow, accepted,

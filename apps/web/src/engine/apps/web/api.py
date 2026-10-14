@@ -146,7 +146,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
-from engine.graph_service import GraphService, NotFound, ServiceError, StartRequest, StartRun
+from engine.graph_service import GraphService, NotFound, StartRequest, StartRun
 from engine.graph_service.service import DEFAULT_PROJECT
 from engine.graph_service.store import GraphRow, VersionRow
 from engine.graph_service import create_app as create_graph_service_app
@@ -1050,21 +1050,21 @@ def work_order_graph(
     puts a graph when no project is named; never in some other project, whose
     graphs were not written for this repository. A graph or version id names
     one graph wherever it is, so it is how a deployment deliberately reaches
-    further. `None` when nothing in those projects matches.
+    further. `None` when nothing in those projects matches; any other refusal,
+    such as a name two graphs in one project share, is raised as it is, so
+    whoever configured the name is told what to change.
     """
     for scope in dict.fromkeys(scope for scope in (project, DEFAULT_PROJECT) if scope):
         try:
             _, version = resolve(scope, name)
         except NotFound:
             continue
-        except ServiceError:
-            return None
         return version
     return None
 
 
 def _started_inputs(
-    graph: GraphWorkflow, prompt: str, given: Mapping[str, str] | None,
+    declarations: tuple[WorkflowInput, ...], prompt: str, given: Mapping[str, str] | None,
     *, issue: int, registered: bool,
 ) -> dict[str, str]:
     """A work order's inputs, with what it was started from filled in for a registered graph.
@@ -1075,12 +1075,12 @@ def _started_inputs(
     workflow from `[workflows] directory` gets what it always got.
     """
     values = dict(given or {})
-    declared = {item.name for item in getattr(graph, "inputs", ())} if registered else set()
+    declared = {item.name for item in declarations} if registered else set()
     if "instruction" in declared:
         values.setdefault("instruction", prompt)
     if issue and "issue" in declared:
         values.setdefault("issue", str(issue))
-    return resolve_inputs(getattr(graph, "inputs", ()), values)
+    return resolve_inputs(declarations, values)
 
 
 class GithubProvenance(Protocol):
@@ -4282,7 +4282,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         *, issue: int = 0,
     ) -> dict[str, str]:
         return _started_inputs(
-            graph, prompt, given, issue=issue, registered=str(graph.graph_id) not in graph_workflows,
+            surface.declared_inputs(graph), prompt, given,
+            issue=issue, registered=str(graph.graph_id) not in graph_workflows,
         )
 
     # --- runner utilization ---------------------------------------------------

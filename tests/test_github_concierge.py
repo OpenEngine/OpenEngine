@@ -2203,3 +2203,18 @@ def test_assignments_from_multiple_repositories_use_their_configured_checkouts(
     assert source.can_write_repository.await_args_list == [
         call(f"https://github.com/{repo}/pull/7", "maintainer") for repo in repos
     ]
+
+
+def test_an_ambiguous_work_order_graph_name_is_reported_as_ambiguous():
+    """A name two graphs share is refused as such, not passed off as no graph at all."""
+    from engine.apps.web.api import work_order_graph
+    from engine.graph_service import NotFound
+    from engine.graph_service.service import Conflict
+
+    def resolve(project, name):
+        if project == "acme/api":
+            raise NotFound("no graph named 'tdd-guide'")
+        raise Conflict("graph name 'tdd-guide' is ambiguous; name a project or use a graph id")
+
+    with pytest.raises(Conflict, match="ambiguous"):
+        work_order_graph(resolve, "acme/api", "tdd-guide")
