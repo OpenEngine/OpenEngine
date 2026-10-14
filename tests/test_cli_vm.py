@@ -135,3 +135,51 @@ def test_missing_config_is_reported_without_creating_it(config):
     config.unlink()
     assert cli.main(['vm', 'process']) == 1
     assert not config.exists()
+
+
+@pytest.mark.parametrize('backend', ['process', 'smolvm'])
+def test_vm_list_marks_only_the_configured_backend(config, backend, capsys, monkeypatch):
+    config.write_text(f'[sandbox]\nbackend = "{backend}"\n')
+    original = config.read_bytes()
+    monkeypatch.setattr(vm, 'detect_support', lambda **_: pytest.fail('listing must not probe or boot VMs'))
+    assert cli.main(['vm', 'list']) == 0
+    output = capsys.readouterr().out
+    assert 'NAME' in output and 'DESCRIPTION' in output
+    selected = [line.split() for line in output.splitlines() if line.startswith('*')]
+    assert len(selected) == 1 and selected[0][1] == backend
+    assert 'process' in output and 'smolvm' in output
+    assert config.read_bytes() == original
+
+
+@pytest.mark.parametrize('before', [True, False])
+def test_vm_list_json_and_config_options_work_before_or_after_list(config, before, capsys):
+    flags = ['--config', str(config), '--json']
+    arguments = ['vm', *flags, 'list'] if before else ['vm', 'list', *flags]
+    assert cli.main(arguments) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['current'] == 'process'
+    assert [(row['name'], row['current']) for row in result['backends']] == [('process', True), ('smolvm', False)]
+
+
+@pytest.mark.parametrize('before', [True, False])
+def test_vm_use_switches_backend_and_list_reflects_it(config, tmp_path, monkeypatch, capsys, before):
+    image = tmp_path / 'guest.tar'
+    image.write_bytes(b'image')
+    monkeypatch.setattr(vm, 'detect_support', lambda **_: SmolvmSupport(True, 'supported'))
+    flags = ['--config', str(config), '--json', '--image', str(image)]
+    args = ['vm', *flags, 'use', 'smolvm'] if before else ['vm', 'use', 'smolvm', *flags]
+    assert cli.main(args) == 0
+    assert json.loads(capsys.readouterr().out)['backend'] == 'smolvm'
+    assert cli.main(['vm', 'list', '--json']) == 0
+    assert json.loads(capsys.readouterr().out)['current'] == 'smolvm'
+    assert cli.main(['vm', 'use', 'process', '--json']) == 0
+    assert json.loads(capsys.readouterr().out)['backend'] == 'process'
+
+
+def test_vm_use_requires_backend_and_list_rejects_image(config):
+    with pytest.raises(SystemExit) as error:
+        cli.main(['vm', 'use'])
+    assert error.value.code == 2
+    original = config.read_bytes()
+    assert cli.main(['vm', 'list', '--image', 'unused.tar']) == 1
+    assert config.read_bytes() == original

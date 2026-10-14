@@ -61,10 +61,14 @@ the default process backend and an error when the VM backend is selected.
 Select the local sandbox backend with the CLI:
 
 ```sh
-engine vm                         # Show the configured backend (process by default)
-engine vm process                 # Use local subprocesses
-engine vm smolvm --image /absolute/path/to/openengine-sandbox.tar
+engine vm list                    # List backends; * marks the configured one
+engine vm use process             # Use local subprocesses (default)
+engine vm use smolvm --image /absolute/path/to/openengine-sandbox.tar
 ```
+
+`engine vm` still shows the configured backend, and `engine vm process` /
+`engine vm smolvm` remain selection shorthands. In `engine vm list`, `*` marks the
+configured selection, which a running service loads after restart.
 
 `engine vm` uses `ENGINE_CONFIG` or the installed user's configuration. Add
 `--config /path/to/engine.toml` to select another file and `--json` for structured

@@ -20,10 +20,28 @@ from engine.runtime.config import EngineConfigError, load_engine_config, parse_e
 
 def add_parser(commands: argparse._SubParsersAction) -> None:
     command = commands.add_parser("vm", help="show or select the local sandbox backend")
-    command.add_argument("backend", nargs="?", choices=("process", "smolvm"), help="process is the default")
-    command.add_argument("--image", help="local SmolVM guest archive; reuse the configured image when omitted")
-    command.add_argument("--config", type=Path, help="configuration file (default: ENGINE_CONFIG or installed configuration)")
-    command.add_argument("--json", action="store_true", help="print the configured backend as JSON")
+    command.set_defaults(vm_action="show", backend=None)
+    _options(command)
+    actions = command.add_subparsers(dest="vm_action")
+    listing = actions.add_parser("list", help="list sandbox backends; * marks the configured backend")
+    _options(listing, inherited=True)
+    use = actions.add_parser("use", help="select the sandbox backend (process is the default)")
+    use.add_argument("backend", choices=("process", "smolvm"))
+    _options(use, inherited=True)
+    for backend in ("process", "smolvm"):
+        shorthand = actions.add_parser(backend, help=f"shorthand for vm use {backend}")
+        shorthand.set_defaults(backend=backend)
+        _options(shorthand, inherited=True)
+
+
+def _options(parser: argparse.ArgumentParser, *, inherited: bool = False) -> None:
+    # Leaf parsers preserve options supplied before the subcommand.
+    default = argparse.SUPPRESS if inherited else None
+    parser.add_argument("--image", default=default, help="local SmolVM guest archive; reuse the configured image when omitted")
+    parser.add_argument("--config", type=Path, default=default,
+                        help="configuration file (default: ENGINE_CONFIG or installed configuration)")
+    parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS if inherited else False,
+                        help="print the configured backend as JSON")
 
 
 def _save(path: Path, original: str, updated: str) -> None:
@@ -51,7 +69,7 @@ def _refuse(message: str) -> None:
 
 def _select(arguments: argparse.Namespace) -> dict:
     if arguments.image is not None and arguments.backend != "smolvm":
-        _refuse("--image requires engine vm smolvm")
+        _refuse("--image requires engine vm use smolvm (or engine vm smolvm)")
     path = (arguments.config or daemon.config_path()).expanduser().resolve()
     if not path.is_file():
         _refuse(f"{path} does not exist; run the installer or select an existing file with --config")
@@ -96,7 +114,16 @@ def main(arguments: argparse.Namespace) -> int:
     except (EngineConfigError, OSError, ValueError, TOMLKitError) as error:
         print(f"engine vm: {error}", file=sys.stderr)
         return 1
-    if arguments.json:
+    if arguments.vm_action == "list":
+        rows = [{"name": name, "current": name == result['backend'], "description": description}
+                for name, description in (("process", "Local subprocesses (default)"), ("smolvm", "SmolVM virtual machines"))]
+        if arguments.json:
+            print(json.dumps({"current": result['backend'], "backends": rows, "config": result['config']}))
+        else:
+            print("   NAME     DESCRIPTION")
+            for row in rows:
+                print(f"{'*' if row['current'] else ' '}  {row['name']:<7}  {row['description']}")
+    elif arguments.json:
         print(json.dumps(result))
     else:
         print(f"Sandbox backend: {result['backend']}\nConfig: {result['config']}")
