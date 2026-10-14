@@ -78,11 +78,11 @@ class InstallerTests(unittest.TestCase):
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn('engine is installed with npm; upgrade with `npm i -g @openengine.cc/engine`', refused.stderr)
             self.assertTrue(shim.is_symlink())
-            # --no-shim alone still supports service setup using the actual executable.
+            # --no-shim alone still supports service startup using the actual executable.
             shim.unlink()
             started = subprocess.run(command + ['--no-shim'], env=environment, capture_output=True, text=True)
             self.assertEqual(started.returncode, 0, started.stderr)
-            self.assertIn('setup', started.stdout)
+            self.assertIn('daemon\nstart\n--upgrade', started.stdout)
             self.assertFalse(shim.exists())
             shim.write_text('unrelated executable')
             refused = subprocess.run(command + ['--no-start'], env=environment, capture_output=True, text=True)

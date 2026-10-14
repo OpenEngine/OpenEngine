@@ -683,5 +683,5 @@ def test_unreachable_backend_start_guidance(monkeypatch, url, local):
     serve(monkeypatch, URLError('connection refused'))
     with pytest.raises(http.RequestFailed) as failure:
         http.Client(backends.Backend('test', url)).post('/runs', {})
-    assert ('start it with `engine daemon setup`' in str(failure.value)) is local
+    assert ('start it with `engine daemon start`' in str(failure.value)) is local
     assert ('reachable from here?' in str(failure.value)) is not local

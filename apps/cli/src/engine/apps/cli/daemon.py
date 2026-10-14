@@ -722,10 +722,20 @@ def wait_for(url: str, wanted: set[str], timeout: float, backend: Backend | None
         time.sleep(0.2)
 
 
-def start_service() -> tuple[str, dict[str, Any] | None, str]:
+def start_service(*, upgrade: bool = False) -> tuple[str, dict[str, Any] | None, str]:
     """Start the one per-user instance if it is not already serving."""
     with instance_lock():
         backend, spec = current()
+        if upgrade:
+            installed = build_spec()
+            if installed.program != spec.program or installed.config != spec.config:
+                backend.stop()
+                wait_for(spec.url, {"down", "foreign"}, STOP_TIMEOUT_SECONDS)
+                # Keep explicitly configured persistence; never select a service
+                # manager for an unregistered installation.
+                backend.install(installed)
+                spec = installed
+                write_record(Record(backend.name, spec))
         state, body = health(spec.url)
         if state == "foreign":
             raise RuntimeError(f"another program is using {spec.url}; free port {spec.port} or change [server] port in {spec.config}")
@@ -742,6 +752,7 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
                 detail = _healing_notice(check) if check.healed else NODE_HELP
                 print(f"engine daemon: {detail}" if check.healed else f"engine daemon: warning: {problem}; {detail}", file=sys.stderr)
             rotate_log(Path(spec.log))
+            write_record(Record(backend.name, spec))
             backend.start(spec)
         state, body = wait_for(spec.url, {"ready", "foreign"}, START_TIMEOUT_SECONDS, backend)
         if state != "ready":
@@ -825,9 +836,9 @@ def command_setup(arguments: argparse.Namespace) -> int:
     return result
 
 
-def command_start(_arguments: argparse.Namespace) -> int:
+def command_start(arguments: argparse.Namespace) -> int:
     try:
-        _state, body, url = start_service()
+        _state, body, url = start_service(upgrade=True) if getattr(arguments, "upgrade", False) else start_service()
     except (OSError, RuntimeError, ValueError) as error:
         return _fail(error)
     print(f"OpenEngine {(body or {}).get('version', 'unknown')} is running at {url}")
@@ -1030,7 +1041,8 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     setup = actions.add_parser("setup", help="register the service to run at login, then start it")
     # Setup never opens a browser; the flag stays accepted for older installers.
     setup.add_argument("--no-browser", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
-    actions.add_parser("start", help="start the service if it is not running")
+    start = actions.add_parser("start", help="start the service without registering persistence")
+    start.add_argument("--upgrade", action="store_true", help="move a recorded service to this installed runtime")
     actions.add_parser("stop", help="stop the service gracefully")
     status = actions.add_parser("status", help="show version, health and URL")
     status.add_argument("--json", action="store_true")

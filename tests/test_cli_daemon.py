@@ -562,7 +562,7 @@ def test_start_heals_node(home, monkeypatch, capsys, healable, recorded):
         assert record.spec.environment()['PATH'].split(':')[:2] == ['/real/bin', '/shims']
         detail = 'degraded: using /real/bin/node'
     else:
-        assert record == (daemon.Record('process', spec) if recorded else None)
+        assert record == daemon.Record('process', spec)
         assert events == [('start', spec)]
         detail = f'warning: /shims/node is missing; {daemon.NODE_HELP}'
     output = capsys.readouterr().err.splitlines()
@@ -809,3 +809,23 @@ def test_healed_shared_directory_does_not_shadow_recorded_git(home, directory):
     path = _spec(home, tools=tools).environment()["PATH"]
     assert path.split(os.pathsep)[:4] == ["/usr/bin", "/agents/bin", directory, "/mise/shims"]
     assert daemon.shutil.which("git", path=path) == "/usr/bin/git"
+
+
+def test_automatic_start_and_upgrade_do_not_register_persistence(home, monkeypatch):
+    spec = _spec(home)
+    monkeypatch.setattr(daemon, "build_spec", lambda **_kwargs: spec)
+    monkeypatch.setattr(daemon, "available_backend",
+                        lambda: pytest.fail("automatic startup must not select a service manager"))
+    monkeypatch.setattr(daemon, "health", lambda _url: ("down", None))
+    monkeypatch.setattr(daemon, "wait_for", lambda *_args: ("ready", {}))
+    events = []
+    monkeypatch.setattr(daemon.ProcessBackend, "start", lambda _self, value: events.append(value.program))
+    monkeypatch.setattr(daemon.ProcessBackend, "stop", lambda _self: events.append("stop"))
+    assert cli.main(["daemon", "start", "--upgrade"]) == 0
+    assert daemon.read_record() == daemon.Record("process", spec)
+    spec = _spec(home, program="/opt/openengine/new/venv/bin/engine-web")
+    assert cli.main(["daemon", "start", "--upgrade"]) == 0
+    assert events == ["/opt/openengine/venv/bin/engine-web", "stop", spec.program]
+    assert daemon.read_record() == daemon.Record("process", spec)
+    assert not daemon.launch_agent_path().exists()
+    assert not daemon.systemd_unit_path().exists()

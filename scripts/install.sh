@@ -238,11 +238,9 @@ if [ "$shim" = 1 ]; then
 fi
 
 if [ "$start" = 1 ]; then
-  # Registers a LaunchAgent (macOS) or systemd user unit (Linux), or runs a
-  # detached process where neither is usable, then waits for /api/health. Run
-  # again after an upgrade, it moves the service onto the new version.
+  # Start without registering persistence. Explicit daemon setup opts into login startup.
   export ENGINE_CONFIG=${ENGINE_CONFIG:-$config}
-  if ! "$target/venv/bin/engine" daemon setup; then
+  if ! "$target/venv/bin/engine" daemon start --upgrade; then
     "$target/venv/bin/engine" daemon logs -n 20 >&2 || true
     die "OpenEngine did not start; see $state_dir/logs"
   fi

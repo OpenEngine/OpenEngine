@@ -22,7 +22,9 @@ cd your-repo
 engine go "add a dark mode toggle to the settings page"
 ```
 Install and upgrade with `npm i -g @openengine.cc/engine`. The first command
-automatically configures and starts the local service, including after an upgrade.
+automatically starts the local daemon, including after an upgrade, without registering
+a login or boot service. To explicitly enable persistence, run `engine daemon setup`.
+Set `OPENENGINE_NO_START=1` to skip automatic startup; the curl installer also accepts `--no-start`.
 Coming from the curl installer, use
 `npm i -g --force @openengine.cc/engine` once to replace its launcher.
 

@@ -105,7 +105,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.HOME + '/calls', JSON.stringify([process.env.ENGINE_CONFIG, args]) + '\n');
 if (args[1] === 'status') {
   console.log(JSON.stringify({health: process.env.HEALTH_STATE || 'ready', version: process.env.HEALTH_VERSION}));
-} else if (args[1] === 'setup') process.exit(Number(process.env.SETUP_EXIT || 0));
+} else if (args[1] === 'start') process.exit(Number(process.env.START_EXIT || 0));
 """)
         marker = self.target / '.npm-daemon-ready'
         self.env['ENGINE_CONFIG'] = '/custom/config.toml'
@@ -121,18 +121,18 @@ if (args[1] === 'status') {
         self.assertEqual(len(calls.read_text().splitlines()), 1)
         calls.unlink()
         self.env['HEALTH_VERSION'] = '0.0.1'
-        self.env['SETUP_EXIT'] = '17'
+        self.env['START_EXIT'] = '17'
         failed = self.run_engine('--help')
         self.assertEqual(failed.returncode, 17)
         self.assertIn('engine daemon logs -n 20', failed.stderr)
         self.assertFalse(marker.exists())
         records = [json.loads(line)[1] for line in calls.read_text().splitlines()]
-        self.assertEqual(records, [['daemon', 'status', '--json'], ['daemon', 'setup'], ['daemon', 'logs', '-n', '20']])
-        self.env['SETUP_EXIT'] = '0'
+        self.assertEqual(records, [['daemon', 'status', '--json'], ['daemon', 'start', '--upgrade'], ['daemon', 'logs', '-n', '20']])
+        self.env['START_EXIT'] = '0'
         calls.unlink()
         self.assertEqual(self.run_engine('--version').returncode, 0)
         records = [json.loads(line) for line in calls.read_text().splitlines()]
-        self.assertEqual([r[1] for r in records], [['daemon', 'status', '--json'], ['daemon', 'setup'], ['--version']])
+        self.assertEqual([r[1] for r in records], [['daemon', 'status', '--json'], ['daemon', 'start', '--upgrade'], ['--version']])
         self.assertTrue(all(r[0] == '/custom/config.toml' for r in records))
         calls.unlink()
         self.env['HEALTH_VERSION'] = self.version
@@ -143,7 +143,7 @@ if (args[1] === 'status') {
         self.env['HEALTH_STATE'] = 'down'
         self.assertEqual(self.run_engine('go', 'review').returncode, 0)
         records = [json.loads(line)[1] for line in calls.read_text().splitlines()]
-        self.assertEqual(records, [['daemon', 'status', '--json'], ['daemon', 'setup'], ['go', 'review']])
+        self.assertEqual(records, [['daemon', 'status', '--json'], ['daemon', 'start', '--upgrade'], ['go', 'review']])
 
     def test_only_installer_shims_are_removed(self):
         self.install_fake('')

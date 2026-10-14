@@ -907,11 +907,15 @@ engine daemon setup [-h]
 
 ### `engine daemon start`
 
-Start the service if it is not running.
+Start the service without registering persistence.
 
 ```text
-engine daemon start [-h]
+engine daemon start [-h] [--upgrade]
 ```
+
+| Argument | Meaning |
+| --- | --- |
+| `--upgrade` | move a recorded service to this installed runtime |
 
 ### `engine daemon stop`
 

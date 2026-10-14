@@ -27,8 +27,10 @@ assert_npm_link() {
   node -e 'const fs = require("fs"); const path = require("path"); if (fs.realpathSync(process.argv[1]) !== fs.realpathSync(path.join(process.argv[2], "lib/node_modules/@openengine.cc/engine/bin/engine.js"))) process.exit(1)' "$npm_prefix/bin/engine" "$npm_prefix"
 }
 assert_ready() {
+  test ! -e "$HOME/Library/LaunchAgents/sh.openengine.engine.plist"
+  test ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/openengine.service"
   engine daemon status --json > "$RUNNER_TEMP/daemon-status.json"
-  node -e 'const status = require(process.argv[1]); if (status.health !== "ready" || status.version !== process.argv[2]) throw Error(JSON.stringify(status))' "$RUNNER_TEMP/daemon-status.json" "$1"
+  node -e 'const status = require(process.argv[1]); if (status.backend !== "process" || status.health !== "ready" || status.version !== process.argv[2]) throw Error(JSON.stringify(status))' "$RUNNER_TEMP/daemon-status.json" "$1"
 }
 assert_npm_link
 engine --help

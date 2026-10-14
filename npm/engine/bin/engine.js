@@ -78,9 +78,9 @@ async function main() {
   const args = process.argv.slice(2);
   if (args[0] !== 'daemon' && env.OPENENGINE_NO_START !== '1') {
     if (!healthy(executable, env)) {
-      const code = await run(executable, ['daemon', 'setup'], env);
+      const code = await run(executable, ['daemon', 'start', '--upgrade'], env);
       if (code !== 0) {
-        console.error('engine: daemon setup failed; inspect logs with `engine daemon logs -n 20`');
+        console.error('engine: daemon start failed; inspect logs with `engine daemon logs -n 20`');
         await run(executable, ['daemon', 'logs', '-n', '20'], env);
         return code;
       }
