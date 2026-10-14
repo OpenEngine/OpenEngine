@@ -1,4 +1,4 @@
-import { realpathSync, writeFileSync } from "node:fs"
+import { readFileSync, realpathSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { test, expect, resolveAgentMode } from "../fixtures/engine.ts"
 
@@ -32,6 +32,7 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     const graph = path.join(engine.root, "hello.yaml")
     writeFileSync(graph, HELLO)
     await terminal.run(`engine graph add ${graph}`)
+    await terminal.run("engine repo untrust")
     await terminal.run('engine graph run hello "Say hello" --wait', { timeout: 280_000 })
     // State, never wording: the same assertion holds for a scripted agent and a real one.
     expect((await terminal.run("engine runs list")).output).toMatch(/^run-\w+\s.*\shello v1\s+completed\s/m)
@@ -43,6 +44,7 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     const graph = path.join(engine.root, "hello.yaml")
     writeFileSync(graph, HELLO)
     await terminal.run(`engine graph add ${graph}`)
+    await terminal.run("engine repo untrust")
     const { output } = await terminal.run('engine graph run hello "Say hello" --wait')
     expect(output).toContain("Scripted greeting 4c1e.")
   })
@@ -53,10 +55,12 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     const graph = path.join(engine.root, "hello.yaml")
     writeFileSync(graph, HELLO)
     await terminal.run(`engine graph add ${graph}`)
+    await terminal.run("engine repo untrust")
     await terminal.run('engine graph run hello "Say hello" --wait', { timeout: 280_000 })
     const run = JSON.parse((await terminal.run("engine runs list --json")).output).runs[0]
     const { output } = await terminal.run(`engine run get ${run.runId} --json`)
-    expect(output).toContain(`Checking ${repository} out`)
+    const workspace = JSON.parse(output).workspace.path
+    expect(readFileSync(path.join(workspace, ".git"), "utf8")).toContain(`${repository}/.git/worktrees/`)
   })
 
   test("checks out a repository with an origin, so runs need no --repo", async ({ engine }) => {

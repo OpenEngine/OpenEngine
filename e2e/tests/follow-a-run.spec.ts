@@ -134,7 +134,7 @@ test.describe(graphsCategory, () => {
         })
 
         await step(
-          `OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order.
+          `The \`engine\` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order.
 
 In [Save Your First Graph](./save-your-first-graph) you saved a graph. Now you'll use it. Each time a graph is carried out, from its first step to its last, is called a **run**. While a run goes on, your terminal shows which step it's on and what the agent is saying, so you can see the work happen instead of waiting in the dark. You can also answer an agent that stops to ask you something, walk away and come back, or stop a run you no longer want.`,
         )
@@ -158,7 +158,7 @@ ${GRAPH}\`\`\`
         await step(
           `Start the graph. Type \`engine graph run describe-project\` and press Enter.
 
-The first time you run a graph in a folder, OpenEngine asks whether to trust it. Trusting a folder lets agents change files and run commands there without asking you first. Type \`n\` and press Enter: the agents will check with you before they run a command. You can change your mind later with \`engine repo trust\`.`,
+The first time you run a graph in a folder, OpenEngine asks whether to trust it. Trusting a folder lets agents change files and run commands there without asking you first. Type \`n\` and press Enter: the agents will check with you before they run a command. You can change that choice later.`,
           async () => {
             await terminal.type("engine graph run describe-project")
             await terminal.press("Enter")
@@ -288,6 +288,7 @@ Start the graph with \`engine graph run describe-project\`, and answer \`n\` if 
             await start(terminal)
             await terminal.waitForText(ALLOW)
             runId = (await onlyRun(engine)).runId
+            await show(terminal, engine, testInfo, await terminal.row(/^\s+Graph\s+/), "Your graph is running")
           },
         )
 
@@ -305,7 +306,7 @@ The screen stops and asks what you want: *d* to detach, which closes this screen
         await step(
           `Type \`d\` and press Enter.
 
-The screen says *Detached* and gives you the command to come back with, which includes the run's name. Copy it somewhere, or find the name later with \`engine runs list\`. The run is still going, waiting for the answer to its question.`,
+The screen says *Detached* and gives you the command to come back with, which includes the run's name. \`local\` means the backend on this computer; it's there from the start. Copy it somewhere, or find the name later with \`engine runs list\`. The run is still going, waiting for the answer to its question.`,
           async () => {
             await terminal.type("d")
             await terminal.press("Enter")
@@ -342,7 +343,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
             await terminal.press("Enter")
             expect(await terminal.waitForPrompt({ timeout: 60_000 })).toBe(0)
             expect((await run(engine, runId)).status).toBe("completed")
-            await show(terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "The run finished while you were away and back")
+            await show(terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "Your run finished after you came back")
           },
         )
       })
@@ -370,6 +371,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
             await start(terminal)
             await terminal.waitForText(/┃ ⚙ cat README\.md/)
             runId = (await onlyRun(engine)).runId
+            await show(terminal, engine, testInfo, await terminal.row(/^\s+Graph\s+/), "Your graph is running")
           },
         )
 
