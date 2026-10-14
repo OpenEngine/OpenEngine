@@ -629,7 +629,7 @@ class GraphService:
         activity = _latest_activity(events)
         selected = _selected_runners(events)
         failure: dict[str, Any] | None = None
-        if snapshot.status is RunStatus.FAILED:
+        if snapshot.status is RunStatus.FAILED and snapshot.error != CANCELLED:
             failed = next((row for row in reversed(executions) if row.status == "failed"), None)
             node_id = failed.node_id if failed else ""
             failure = {"error": snapshot.error, "node": node_id or None}
@@ -649,7 +649,7 @@ class GraphService:
             "graph": graph.name if graph else str(snapshot.graph_id),
             "project": graph.project if graph else None,
             "version": version.number if version else None,
-            "status": snapshot.status.value,
+            "status": "cancelled" if snapshot.error == CANCELLED else snapshot.status.value,
             "terminal": snapshot.status in TERMINAL_RUN_STATUSES,
             "loopId": self.store.loop_for_run(run_id),
             "format": version.format if version else None,
@@ -694,9 +694,9 @@ class GraphService:
         limit: int = DEFAULT_RUN_LIMIT,
     ) -> list[dict[str, Any]]:
         """All graph runs, newest first, with optional registration metadata."""
-        if status and status not in {item.value for item in RunStatus}:
+        if status and status not in {item.value for item in RunStatus} | {"cancelled"}:
             raise ServiceError(
-                f"unknown status {status!r}; one of {', '.join(item.value for item in RunStatus)}"
+                f"unknown status {status!r}; one of {', '.join(item.value for item in RunStatus)}, cancelled"
             )
         if limit < 1:
             raise ServiceError("limit must be at least 1")
@@ -714,7 +714,7 @@ class GraphService:
                 snapshot = await self.runtime.snapshot(RunId(row.run_id))
             except (UnknownRunError, UnknownGraphError):
                 snapshot = None
-            if snapshot is None or (status and snapshot.status.value != status):
+            if snapshot is None or (status and ("cancelled" if snapshot.error == CANCELLED else snapshot.status.value) != status):
                 continue
             version = self.store.version(row.version_id) if row.version_id else None
             graph_row = self.store.graph(version.graph_id) if version else None
@@ -728,7 +728,7 @@ class GraphService:
                 "graph": graph_row.name if graph_row else str(snapshot.graph_id),
                 "project": graph_row.project if graph_row else None,
                 "version": version.number if version else None,
-                "status": snapshot.status.value,
+                "status": "cancelled" if snapshot.error == CANCELLED else snapshot.status.value,
                 "terminal": snapshot.status in TERMINAL_RUN_STATUSES,
                 "loopId": row.loop_id,
                 "loop": loop_row.name if loop_row else None,

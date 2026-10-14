@@ -151,3 +151,12 @@ def test_terminal_escapes_content_but_preserves_owned_styles():
     terminal.color = True
     assert terminal._line([(UNTRUSTED, live._BOLD)], 500) == live._BOLD + ESCAPED + live._RESET
     assert terminal._line([("\x1b[2K", "")], 4) == r"\x1b"
+
+
+def test_summary_points_to_workspace_details_without_printing_machine_paths():
+    run = run_state("completed")
+    run["workspace"] = {"path": "/private/tmp/engine-workspaces/ws-example", "ref": "engine/ws-example"}
+    output = "\n".join(live.summary(run))
+    assert "Workspace details: engine run get run-1" in output
+    assert run["workspace"]["path"] not in output
+    assert run["workspace"]["ref"] not in output

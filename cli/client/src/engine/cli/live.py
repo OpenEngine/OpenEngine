@@ -33,7 +33,8 @@ from urllib.parse import quote
 from engine.cli.http import Client
 
 POLL_SECONDS = 1.0
-FRAME_SECONDS = 0.15
+# Leave a readable, settled frame between updates.
+FRAME_SECONDS = 1.0
 MESSAGE_LINES = 8
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 STAGE_LABELS = {"plan": "Plan", "implement": "Implement", "review": "Review"}
@@ -323,7 +324,7 @@ def summary(run: dict[str, Any]) -> list[str]:
             lines += ["", f"── {node_id} " + "─" * 20, str(result).strip()]
     workspace = run.get("workspace") or {}
     if workspace.get("path"):
-        lines += ["", f"Changes are in {workspace['path']}" + (f" (branch {workspace['ref']})" if workspace.get("ref") else "")]
+        lines += ["", f"Workspace details: engine run get {shlex.quote(run['runId'])}"]
     cost = (run.get("usage") or {}).get("costUsd")
     if cost is not None:
         lines.append(f"Usage: ${cost:.2f}" + ("" if run["usage"].get("complete", True) else " (some costs unknown)"))
