@@ -2234,12 +2234,14 @@ def test_retry_after_follow_up_failure_preserves_context_on_new_runner(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("review_target", [False, True])
 def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
-    tmp_path: Path,
+    tmp_path: Path, review_target: bool,
 ) -> None:
     """The binding, end to end: MCP call -> forge -> the store the run keeps."""
 
-    from engine.graph_runtime_langgraph.store import PullRequestRecord
+    from engine.graph_runtime.metadata import RunMetadata
+    from engine.graph_runtime_langgraph.store import PullRequestRecord, RunRecord
     from engine.ports import CommentResult
     from engine.runtime.terminal_mcp import _mcp_response
 
@@ -2272,11 +2274,19 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
 
     async def scenario() -> tuple[Any, ...]:
         store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
-        await store.remember_pull_request(PullRequestRecord(
-            repository="acme/api", number=42, run_id=RunId("run-1"),
-            opened_at="2026-09-10T17:00:00+00:00",
-            url="https://github.com/acme/api/pull/42",
-        ))
+        if review_target:
+            await store.remember_run(RunRecord(
+                RunId("run-1"), GRAPH,
+                metadata=RunMetadata(inputs={"pr_url": "https://github.com/acme/api/pull/42"}),
+            ))
+            store.close()
+            store = SqliteGraphRuntimeStore(tmp_path / "runtime.db")
+        else:
+            await store.remember_pull_request(PullRequestRecord(
+                repository="acme/api", number=42, run_id=RunId("run-1"),
+                opened_at="2026-09-10T17:00:00+00:00",
+                url="https://github.com/acme/api/pull/42",
+            ))
         server = TerminalMcpServer(
             step_id="reranker",
             agent_id=AGENT,
@@ -2284,7 +2294,8 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
             repository_tools=("add_comment",),
         )
         async with server(
-            {"workspaceId": "ws-graph-run"}, Execution(store), refuse  # type: ignore[arg-type]
+            {"workspaceId": "ws-graph-run", "inputs": {"pr_url": "https://github.com/acme/api/pull/99"},
+             "pr_url": "https://github.com/acme/api/pull/99"}, Execution(store), refuse  # type: ignore[arg-type]
         ) as bound:
             arguments = list(bound.config["args"])
             answer = await _mcp_response(
@@ -2305,10 +2316,24 @@ def test_a_comment_a_graph_node_posts_is_written_to_the_runtime_store(
                 },
                 repository_tools=("add_comment",),
             )
+            refused = await _mcp_response(
+                arguments[arguments.index("--host") + 1],
+                int(arguments[arguments.index("--port") + 1]),
+                arguments[arguments.index("--token") + 1],
+                {"jsonrpc": "2.0", "id": "foreign", "method": "tools/call", "params": {
+                    "name": "add_comment", "arguments": {
+                        "pr_url": "https://github.com/acme/api/pull/99", "comment": "Wrong PR",
+                    },
+                }},
+                repository_tools=("add_comment",),
+            )
+            assert refused["result"]["isError"] is True
         assert json.loads(answer["result"]["content"][0]["text"]) == {
             "id": 123,
             "url": "https://github.com/acme/api/pull/42#c123",
         }
+        if review_target:
+            assert await store.pull_requests(RunId("run-1")) == ()
         found = await store.comments(RunId("run-1"))
         store.close()
         return found

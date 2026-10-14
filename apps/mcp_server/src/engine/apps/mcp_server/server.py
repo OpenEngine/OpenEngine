@@ -181,14 +181,15 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
     @mcp.tool(annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True,
     ))
-    async def create_workorder(prompt: str, depends_on_run_id: str | None = None) -> dict[str, str]:
+    async def create_workorder(prompt: str, depends_on_run_id: str | None = None, pr_url: str | None = None) -> dict[str, str]:
         """Create an OE work order in the configured repository.
 
         Optionally set depends_on_run_id to wait for that work order to succeed.
         Otherwise execution starts immediately. Returns the new run ID without
         waiting for completion. Each call creates new work.
+        Set pr_url to a PR URL or #number to review it and allow comments on it.
         """
-        payload = {
+        payload: dict[str, object] = {
             "prompt": text(prompt, "prompt"), "repository": settings.repository,
             "workflowId": settings.workflow,
         }
@@ -196,6 +197,14 @@ def create_app(settings: Settings, *, transport: httpx.AsyncBaseTransport | None
             if not depends_on_run_id.strip():
                 raise ToolError("depends_on_run_id must not be blank")
             payload["dependsOnRunId"] = depends_on_run_id.strip()
+        if pr_url is not None:
+            target = await request_engine("POST", "/graph/api/targets/resolve", {
+                "repository": settings.repository, "target": text(pr_url, "pr_url"),
+                "verb": "review",
+            })
+            if not target.get("pr_url"):
+                raise ToolError("pr_url must resolve to a pull request")
+            payload["inputs"] = {key: target[key] for key in ("pr_url", "ref") if key in target}
         # Never retry this POST: a lost response can still mean work was started.
         async with httpx.AsyncClient(
             base_url=settings.engine_url, transport=transport, timeout=60,

@@ -1961,3 +1961,31 @@ def test_work_order_url_reaches_graph_broker_from_config(tmp_path, monkeypatch):
                 assert captured[0]["work_order_url"] == "https://engine.example/runs/run-xxxx"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("location", [{}, {"file": "app.py", "line": 12}])
+@pytest.mark.parametrize("requested, allowed", [
+    ("https://github.com/ACME/api/pull/911/files", True),
+    ("https://github.com/acme/api/pull/912", False),
+    ("https://github.com/other/api/pull/911", False),
+    ("https://gitlab.com/acme/api/-/merge_requests/911", False),
+])
+def test_review_target_grants_only_comments(location, requested, allowed):
+    async def scenario():
+        source = OwningSourceControl()
+        broker = await _owning_broker(source, opened=False, recorded=[])
+        broker.enable_pull_request_comments("https://github.com/acme/api/pull/911")
+        result = await broker._submit(_direct_request(
+            broker, "comment", "add_comment",
+            {"pr_url": requested, "comment": "Finding", **location},
+        ))
+        assert result["ok"] is allowed
+        assert source.posted == ([requested] if allowed else [])
+        assert await broker._owned_force_push_prs() == ()
+        result = await broker._submit(_direct_request(
+            broker, "complete", "complete_step",
+            {"outcome": "success", "summary": "Reviewed", "outputs": {"pr_url": requested}},
+        ))
+        assert result["ok"] is False
+
+    asyncio.run(scenario())
