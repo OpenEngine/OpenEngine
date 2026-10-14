@@ -71,10 +71,29 @@ async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, high
   // The page is the same on every run: no path on this computer, such as where a run's work is, may show.
   await expect(terminal.screen()).not.toContainText(path.basename(engine.root))
   await expect(terminal.screen()).not.toContainText("/engine-workspaces/")
-  await screenshot(testInfo, highlight, {
-    annotation: { text: label },
-    clip: await terminal.usedArea({ labelBelow: true }),
-  })
+  const area = await terminal.usedArea()
+  // Anchor the label beneath all output, independently of the highlighted rows.
+  const anchor = terminal.page.locator("#guide-label-anchor")
+  await terminal.page.evaluate(({ x, y, width, height }) => {
+    const element = document.createElement("div")
+    element.id = "guide-label-anchor"
+    Object.assign(element.style, {
+      position: "fixed", left: `${x}px`, top: `${y + height}px`,
+      width: `${width}px`, height: "1px", pointerEvents: "none",
+    })
+    document.body.append(element)
+  }, area)
+  try {
+    await screenshot(testInfo, [
+      { target: highlight },
+      { target: anchor, options: { annotation: {
+        text: label, position: "below", showArrow: false,
+        highlightStrokeStyle: "transparent", highlightFillStyle: "transparent",
+      } } },
+    ], { clip: await terminal.usedArea({ labelBelow: true }) })
+  } finally {
+    await anchor.evaluate((element) => element.remove())
+  }
 }
 
 /**
@@ -125,7 +144,8 @@ test.describe(graphsCategory, () => {
               steps: [
                 { type: "say", text: "Reading the README to see what this project is." },
                 // Long enough to show the run part way through, short enough not to keep anyone waiting.
-                { type: "run", command: "cat README.md && sleep 4", approval: false },
+                { type: "run", command: "cat README.md", approval: false },
+                { type: "wait", seconds: 4 },
                 { type: "say", text: "This is an example project; its README is one heading." },
               ],
             },
@@ -168,7 +188,7 @@ The first time you run a graph in a folder, OpenEngine asks whether to trust it.
         await step(
           `Now watch. The screen redraws itself as the run goes on:
 
-- The top line is the graph's name and version, the run's name, how it's going, and how long it has taken.
+- The top line is the graph's name and version, the run ID, how it's going, and how long it has taken.
 - The next line is the stages. A spinning mark is the stage in progress, ✓ is one that's done, and ○ is one still to come. – means this graph has nothing in that stage.
 - *Graph* lists every step in order, with the same marks, and *Now* says which step is running and which agent is doing it.
 - At the bottom, after ┃, is what the agent is saying and doing right now.
@@ -306,7 +326,7 @@ The screen stops and asks what you want: *d* to detach, which closes this screen
         await step(
           `Type \`d\` and press Enter.
 
-The screen says *Detached* and gives you the command to come back with, which includes the run's name. \`local\` means the backend on this computer; it's there from the start. Copy it somewhere, or find the name later with \`engine runs list\`. The run is still going, waiting for the answer to its question.`,
+The screen says *Detached* and gives you the command to come back with, which includes the run ID. \`local\` means the backend on this computer; it's there from the start. Copy it somewhere, or find the ID later in the **RUN ID** column of \`engine runs list\`. The run is still going, waiting for the answer to its question.`,
           async () => {
             await terminal.type("d")
             await terminal.press("Enter")
@@ -323,7 +343,7 @@ The screen says *Detached* and gives you the command to come back with, which in
         await test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
 
         await step(
-          `To come back, type the command it gave you, \`engine run watch\` followed by the run's name, and press Enter.
+          `To come back, type the command it gave you, \`engine run watch\` followed by the run ID, and press Enter.
 
 The same screen comes back, showing where the run is now. Since the agent is still waiting, its question is asked again.`,
           async () => {
@@ -357,7 +377,8 @@ The same screen comes back, showing where the run is now. Since the agent is sti
               steps: [
                 { type: "say", text: "Reading the README to see what this project is." },
                 // Busy until the run is cancelled.
-                { type: "run", command: "cat README.md && exec sleep 600", approval: false },
+                { type: "run", command: "cat README.md", approval: false },
+                { type: "wait", seconds: 600 },
               ],
             },
             suggest,
@@ -378,7 +399,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
         await step(
           `While it's running, press Ctrl-C. When the screen asks what you want, type \`c\` and press Enter.
 
-OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run's name and *cancelled*.`,
+OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run ID and *cancelled*.`,
           async () => {
             await terminal.press("Control+C")
             await terminal.waitForText(INTERRUPTED)

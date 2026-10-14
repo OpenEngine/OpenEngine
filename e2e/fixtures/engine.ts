@@ -73,6 +73,8 @@ export type AgentScript = {
     when?: string
     steps: (
       | { type: "say"; text: string }
+      /** Pause silently while remaining responsive to cancellation. */
+      | { type: "wait"; seconds: number }
       /** Asks before running unless `approval` is false, as a real agent does in a folder that isn't trusted. */
       | { type: "run"; command: string; approval?: boolean }
       | { type: "tool"; name: string; arguments: Record<string, unknown> }
