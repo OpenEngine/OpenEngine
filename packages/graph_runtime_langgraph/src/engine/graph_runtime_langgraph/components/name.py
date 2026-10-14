@@ -51,6 +51,8 @@ class NameNode(ACPNode):
     graph_node_description: str = "Gives the WorkOrder a concise display name."
     graph_node_show_in_sidebar: bool = False
     graph_node_group: str = WorkState.PLANNING
+    refuses_permissions: bool = True
+    """Naming reads untrusted issue text, so it is never allowed to act on it."""
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         try:

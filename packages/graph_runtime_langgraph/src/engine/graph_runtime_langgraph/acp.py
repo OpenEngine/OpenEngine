@@ -247,6 +247,10 @@ class _Turn:
         tool_call_id: str,
     ) -> ApprovalDecision:
         """Ask once, leaving enough behind to reconnect after process loss."""
+        if self.node.refuses_permissions:
+            # Nobody is asked and nothing is auto-approved: a node that may
+            # not act refuses here, whatever its prompt talked it into.
+            return ApprovalDecision.CANCEL
         self.approval_requested = True
         # Whatever the agent said on its way to asking, published before
         # anything about the question is. See `narrating`.
@@ -515,6 +519,13 @@ class ACPNode:
     Sending that again would be a second, independent task: the agent would
     start over from the words it began with, having discarded everything it had
     worked out since. All it needs to know is that the question was answered.
+    """
+    refuses_permissions: bool = False
+    """Refuse every permission request without asking anyone.
+
+    For a turn that only reads, such as naming: its tool calls that need
+    permission are declined outright, so neither a person nor a run's
+    auto-approval can let it change anything.
     """
     graph_node_name: str = ""
     """What to call this node on screen. The node's own id when empty."""

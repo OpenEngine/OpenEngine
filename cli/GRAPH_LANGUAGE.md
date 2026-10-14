@@ -133,9 +133,10 @@ must be reachable and able to reach `end`.
 after the checkout that gives each run a concise name from its instruction,
 as the Python graphs do. Without it a run is named after its submission. The
 turn runs on the agent's `cheapest` tier unless `model` names another tier or
-model: `haiku` for `claude`, `gpt-5.6-luna` for `codex` (set either with
+model: `haiku` for `claude`, `gpt-5.6-terra` for `codex` (set either with
 `[runners.NAME.models] cheapest = ...` in `engine.toml`), and an added agent's
-own model. A failed naming turn leaves the fallback name and does not fail the
+own model. The turn refuses every permission request, so it can read but
+not act, even on an auto-approved run. A failed naming turn leaves the fallback name and does not fail the
 run. `naming` is a reserved step name in a graph that sets it.
 
 **Expressions** in `${...}` and `when:` are deliberately small: names

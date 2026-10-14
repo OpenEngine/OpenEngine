@@ -228,11 +228,13 @@ def test_naming_adds_a_hidden_name_node_between_the_checkout_and_the_first_step(
     # A NameNode: it writes the run's `name`, stays out of the sidebar and cannot fail the run.
     assert isinstance(node, GraphNameNode)
     assert node.output_key == "name" and node.graph_node_show_in_sidebar is False
+    # It reads issue text anyone can write, so it may not act on any of it.
+    assert node.refuses_permissions is True
 
 
 @pytest.mark.parametrize(("naming", "options", "runner", "model"), [
     ("{agent: claude}", {}, "claude", "haiku"),
-    ("{agent: codex}", {}, "codex", "gpt-5.6-luna"),
+    ("{agent: codex}", {}, "codex", "gpt-5.6-terra"),
     # An added agent names on its own model.
     ("{agent: qwen}", {"agent_models": {"qwen": "engine/qwen3"}}, "qwen", "engine/qwen3"),
     ("{agent: claude, model: sonnet}", {}, "claude", "sonnet"),
@@ -262,7 +264,7 @@ def test_naming_follows_the_runner_input_a_run_chooses(monkeypatch) -> None:
     monkeypatch.setattr(NameNode, "__call__", named)
     assert asyncio.run(node({"inputs": {"runner": "codex"}})) == {"name": "Fix it"}
     chosen = seen[0]._for_runner(seen[0].agent)
-    assert chosen.agent == "codex" and chosen.session_config == {"model": "gpt-5.6-luna"}
+    assert chosen.agent == "codex" and chosen.session_config == {"model": "gpt-5.6-terra"}
 
 
 @pytest.mark.parametrize(("naming", "path"), [

@@ -63,7 +63,7 @@ from engine.graph_service.language import (
 #: backend says nothing. `cheapest` is what a graph's naming turn uses.
 DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
     "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
-    "codex": {"cheapest": "gpt-5.6-luna", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
+    "codex": {"cheapest": "gpt-5.6-terra", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
 }
 NAMING_TIER = "cheapest"
 
@@ -303,6 +303,7 @@ class _GraphRunner:
     tiers: Mapping[str, Mapping[str, str]]
     agent_models: Mapping[str, str]
     runners: tuple[str, ...]
+    session_config: Mapping[str, object] | None
 
     def resolve_runner(self, state: Mapping[str, object]) -> str:
         rule = self.rule
@@ -322,6 +323,13 @@ class _GraphRunner:
         if rule.kind == "same":
             return other or (pool[0] if pool else self.agent)
         return next((runner for runner in pool if runner != other), self.agent)
+
+    def configured_session(self, state: Mapping[str, object], runner: str) -> Mapping[str, object] | None:
+        """The node's session config, with the model it uses on `runner`."""
+        config = dict(self.session_config or {})
+        if model := self.model_for(state, runner):
+            config["model"] = model
+        return config or None
 
     def model_for(self, state: Mapping[str, object], runner: str) -> str:
         fallback = self.agent_models.get(runner, "")
@@ -353,13 +361,10 @@ class GraphAgentNode(_GraphRunner, ACPNode):
         record = await execution.runtime.store.run(execution.run_id)
         override = record.runner_overrides.get(execution.node_id) if record else None
         runner = override or self.resolve_runner(state)
-        config = dict(self.session_config or {})
-        if model := self.model_for(state, runner):
-            config["model"] = model
         node = replace(
             self,
             agent=runner,
-            session_config=config or None,
+            session_config=self.configured_session(state, runner),
             mcp_server_bindings=tuple(
                 replace(binding, agent_id=runner) if isinstance(binding, TerminalMcpServer) else binding
                 for binding in self.mcp_server_bindings
@@ -418,10 +423,7 @@ class GraphNameNode(_GraphRunner, NameNode):
         return await NameNode.__call__(node, state)
 
     def _for_runner(self, runner: str) -> ACPNode:
-        config = dict(self.session_config or {})
-        if model := self.model_for({}, runner):
-            config["model"] = model
-        return replace(self, agent=runner, session_config=config or None)
+        return replace(self, agent=runner, session_config=self.configured_session({}, runner))
 
 
 @dataclass(frozen=True, slots=True)
