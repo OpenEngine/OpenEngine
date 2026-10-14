@@ -1001,3 +1001,36 @@ def test_review_config_defaults_and_repository_overrides(tmp_path):
 def test_invalid_review_configuration(document):
     with pytest.raises(EngineConfigError):
         parse_engine_config(document)
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_web_check_reports_a_work_order_workflow_that_names_nothing(
+    tmp_path, monkeypatch, capsys, registered,
+):
+    """`work_orders.workflow` names a workflow or a graph registered with `engine graph add`.
+
+    One that names neither is refused at startup, with the name, rather than
+    when the first assignment or mention cannot start anything.
+    """
+    from engine.graph_runtime_langgraph.workflows import RUNS
+    from engine.graph_service.store import GraphRow, GraphServiceStore
+
+    path = tmp_path / "engine.toml"
+    path.write_text('[work_orders]\nworkflow = "tdd-guide"\n')
+    graph_state = tmp_path / "graph-state"
+    graph_state.mkdir()
+    monkeypatch.setenv("ENGINE_GRAPH_STATE_DIRECTORY", str(graph_state))
+    if registered:
+        store = GraphServiceStore(graph_state / RUNS)
+        store.insert_graph(GraphRow("g-1", "default", "tdd-guide", "gv-1", "now", "now"))
+        store.close()
+    seen = []
+    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+
+    assert web_main.main(["--check", "--config", str(path)]) == (0 if registered else 2)
+
+    if registered:
+        assert len(seen) == 1
+    else:
+        assert not seen
+        assert "work_orders.workflow is 'tdd-guide'" in capsys.readouterr().err

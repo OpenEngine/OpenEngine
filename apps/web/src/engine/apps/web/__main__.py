@@ -13,8 +13,10 @@ import asyncio
 import ipaddress
 import logging
 import os
+import sqlite3
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import closing
 from pathlib import Path
 
 import uvicorn
@@ -37,6 +39,7 @@ from engine.apps.web.repositories import ensure_repository_checkouts
 from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
+from engine.graph_runtime_langgraph.workflows import RUNS
 from engine.apps.web.source_control import SourceControlPreferences, gh_cli_status
 from engine.runtime import (
     EngineConfigError,
@@ -114,6 +117,42 @@ def report_wiring(settings: Settings) -> None:
                 print(f"  github {repository}: {status}")
         asyncio.run(check_repository_access())
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
+
+
+def check_work_order_workflow(settings: Settings, catalog: WorkflowCatalog | None) -> None:
+    """Refuse a `work_orders.workflow` that names neither a workflow nor a registered graph.
+
+    Checked when the server starts rather than when the first assignment or
+    mention arrives, because by then the only place left to say so is a log.
+    """
+    name = settings.engine_config.work_orders.workflow.strip()
+    if not name:
+        return
+    if catalog is not None and any(str(graph.graph_id) == name for graph in catalog.graphs):
+        return
+    if _registered_graph(Path(settings.graph_state_directory) / RUNS, name):
+        return
+    raise EngineConfigError(
+        f"work_orders.workflow is {name!r}, which is neither a workflow in [workflows] directory "
+        "nor a graph registered with `engine graph add`"
+    )
+
+
+def _registered_graph(database: Path, reference: str) -> bool:
+    """Whether the graph service's file holds a graph `reference` names, read without changing it."""
+    if not database.is_file():
+        return False
+    name = reference.partition("@")[0]
+    try:
+        with closing(sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)) as connection:
+            return connection.execute(
+                "SELECT 1 FROM cli_graphs WHERE name = ? OR graph_id = ? "
+                "UNION SELECT 1 FROM cli_graph_versions WHERE version_id = ?",
+                (name, reference, reference),
+            ).fetchone() is not None
+    except sqlite3.Error:
+        # No registry tables yet: nothing has been registered.
+        return False
 
 
 def _port(loaded: LoadedEngineConfig) -> int:
@@ -416,6 +455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         loaded, workflow_catalog = read_configuration(args.config)
         settings = _settings(loaded)
+        check_work_order_workflow(settings, workflow_catalog)
         if args.check:
             _require_login_off_loopback(settings, _github_login_config(loaded))
             _service_token_reader(loaded)

@@ -146,7 +146,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
-from engine.graph_service import GraphService, NotFound, StartRequest, StartRun
+from engine.graph_service import GraphService, NotFound, ServiceError, StartRequest, StartRun
 from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph.components.human_review import (
@@ -1026,6 +1026,44 @@ class _GraphSurface:
                 return offered.get(version.version_id)
         return offered.get(reference)
 
+    def registered_workflow(self, project: str, name: str) -> GraphWorkflow | None:
+        """The graph `engine graph add` registered as `name`, in `project` or else anywhere.
+
+        `None` when nothing is registered by that name, or when it is only
+        found in several other projects and none of them is `project`.
+        """
+        if self.service is None:
+            return None
+        for scope in (project, None) if project else (None,):
+            try:
+                _, version = self.service.resolve(scope, name)
+            except NotFound:
+                continue
+            except ServiceError:
+                return None
+            return self.workflows({}).get(version.version_id)
+        return None
+
+
+
+def _started_inputs(
+    graph: GraphWorkflow, prompt: str, given: Mapping[str, str] | None,
+    *, issue: int, registered: bool,
+) -> dict[str, str]:
+    """A work order's inputs, with what it was started from filled in for a registered graph.
+
+    A graph registered with `engine graph add` takes its task as an
+    `instruction` input, as `engine graph run` gives it one, and may work an
+    `issue` by number; each is filled in only where the graph declares it. A
+    workflow from `[workflows] directory` gets what it always got.
+    """
+    values = dict(given or {})
+    declared = {item.name for item in getattr(graph, "inputs", ())} if registered else set()
+    if "instruction" in declared:
+        values.setdefault("instruction", prompt)
+    if issue and "issue" in declared:
+        values.setdefault("issue", str(issue))
+    return resolve_inputs(getattr(graph, "inputs", ()), values)
 
 
 class GithubProvenance(Protocol):
@@ -2087,7 +2125,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         assert surface.runtime is not None
         state = await start_graph_run(
             surface.runtime, graph,
-            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            inputs=_work_order_inputs(graph, prompt),
             prompt=prompt, repository=parent.repository,
             parent_run_id=parent.run_id,
             depends_on_run_id=depends_on_run_id, requester=parent.requester,
@@ -2144,8 +2182,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 return _error("workorder is already started", 409)
             if not await dependency_ready(state):
                 return _error("prerequisite workorder is not complete", 409)
-            workflow_id = state.workflow_id or WorkflowId(work_orders.workflow)
-            graph = offered_graphs().get(str(workflow_id)) if workflow_id else _mentioned_workflow()
+            graph = offered_graphs().get(str(state.workflow_id)) if state.workflow_id else _mentioned_workflow()
             if graph is None:
                 return _error("configure work_orders.workflow before starting this workorder", 400)
             repository = state.repository or work_orders.repository
@@ -2777,7 +2814,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         assert surface.runtime is not None
         state = await start_graph_run(
             surface.runtime, graph,
-            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            inputs=_work_order_inputs(graph, prompt),
             prompt=prompt, repository=loop.repository, requester=loop.requester,
         )
         return str(state.run_id)
@@ -3314,7 +3351,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         assert surface.runtime is not None
         state = await start_graph_run(
             surface.runtime, graph,
-            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
+            inputs=_work_order_inputs(graph, prompt),
             prompt=prompt, repository=repository,
             origin=origin, defer_notifications=True,
             requester=origin.requester or None,
@@ -3606,7 +3643,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         is cancelled before the failure is raised, so the redelivery that
         follows starts one run rather than adding one.
         """
-        graph = graph or _mentioned_workflow()
+        named = graph is not None
+        graph = graph or _mentioned_workflow(repository)
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
         if store is None:
@@ -3617,7 +3655,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         assert runtime is not None  # only reached with a runtime in hand
         state = await start_graph_run(
             runtime, graph,
-            inputs=resolve_inputs(getattr(graph, "inputs", ()), inputs or {}),
+            inputs=(resolve_inputs(getattr(graph, "inputs", ()), inputs or {}) if named
+                    else _work_order_inputs(graph, prompt, inputs)),
             prompt=prompt, repository=await github_checkout(repository),
             requester=requester,
         )
@@ -3793,20 +3832,21 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if found is None:
             return
         repository = found.project
-        graph = _mentioned_workflow()
+        graph = _mentioned_workflow(repository)
         if graph is None:
             raise RuntimeError("no workflow is configured under `work_orders.workflow`")
         if surface.runtime is None:
             raise RuntimeError("could not start a work order: graph runtime unavailable")
+        prompt = (f"Implement issue #{assignment.number}: {assignment.title}\n\n"
+                  f"{assignment.body}\n\nIssue: {assignment.url}\n"
+                  "Issue references are added to commits automatically. When opening "
+                  "the pull request, declare issue_resolution as resolves for complete "
+                  "work or refs for partial work.")
         # Progress is reported back to the issue, mentioning whoever assigned it.
         await start_graph_run(
             surface.runtime, graph,
-            inputs=resolve_inputs(getattr(graph, "inputs", ()), {}),
-            prompt=(f"Implement issue #{assignment.number}: {assignment.title}\n\n"
-                    f"{assignment.body}\n\nIssue: {assignment.url}\n"
-                    "Issue references are added to commits automatically. When opening "
-                    "the pull request, declare issue_resolution as resolves for complete "
-                    "work or refs for partial work."),
+            inputs=_work_order_inputs(graph, prompt, issue=assignment.number),
+            prompt=prompt,
             repository=await github_checkout(repository),
             origin=RunOrigin(
                 channel=f"{GITHUB_CHANNEL_PREFIX}{repository}",
@@ -4203,17 +4243,31 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             ),
         ))
 
-    def _mentioned_workflow() -> GraphWorkflow | None:
+    def _mentioned_workflow(project: str = "") -> GraphWorkflow | None:
         """Which workflow a mention runs: the configured one, or the only one.
 
         Answered from the graphs actually on offer rather than from the
         catalog, because a mention that resolved to a workflow this process
-        could not start would be accepted and then go nowhere.
+        could not start would be accepted and then go nowhere. A configured
+        name is a Python workflow first, so a deployment that already named
+        one keeps it, and otherwise a graph registered with `engine graph add`,
+        looked up in `project` -- the repository the work is for -- and then
+        in any project.
         """
         offered = offered_graphs()
         if work_orders.workflow:
-            return offered.get(work_orders.workflow)
+            return offered.get(work_orders.workflow) or surface.registered_workflow(
+                project, work_orders.workflow,
+            )
         return next(iter(offered.values())) if len(offered) == 1 else None
+
+    def _work_order_inputs(
+        graph: GraphWorkflow, prompt: str, given: Mapping[str, str] | None = None,
+        *, issue: int = 0,
+    ) -> dict[str, str]:
+        return _started_inputs(
+            graph, prompt, given, issue=issue, registered=str(graph.graph_id) not in graph_workflows,
+        )
 
     # --- runner utilization ---------------------------------------------------
 
