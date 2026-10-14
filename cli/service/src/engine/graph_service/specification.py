@@ -77,6 +77,12 @@ def graph_spec(_arguments: object = None) -> int:
 
     @EXPRESSIONS@
 
+    `naming: {agent: RUNNER}` gives each run a concise name. After the
+    checkout, a hidden turn reads the instruction and the repository and names
+    the run; if it fails, the run keeps its fallback name and carries on.
+    `agent` is a runner or `${inputs.NAME}`. `model` defaults to the runner's
+    `cheapest` tier (`haiku` for claude); an added agent uses its own model.
+
     `loop` accepts @LOOP_FIELDS@, defaults for `engine loop add`.
     See `engine loop spec` for cadence, limits and lifecycle.
 

@@ -37,7 +37,7 @@ def graph_spec(_arguments: object = None) -> int:
 
     | Declaration | Fields |
     | --- | --- |
-    | graph | `apiVersion`, `description`, `flow`, `implementation`, `inputs`, `kind`, `loop`, `name`, `plan`, `repository`, `review` |
+    | graph | `apiVersion`, `description`, `flow`, `implementation`, `inputs`, `kind`, `loop`, `name`, `naming`, `plan`, `repository`, `review` |
     | input | `choices`, `default`, `description`, `required` |
     | checkout | `base_ref`, `description`, `name`, `ref` |
     | human step | `description`, `human`, `name` |
@@ -49,6 +49,7 @@ def graph_spec(_arguments: object = None) -> int:
     | flow | `from`, `route`, `to` |
     | route | `to`, `when` |
     | loop | `every`, `instruction` |
+    | naming | `agent`, `model` |
 
     Scalar field constraints:
 
@@ -59,6 +60,7 @@ def graph_spec(_arguments: object = None) -> int:
     | graph | kind | Definition kind. | default: `'Graph'`; choices: `'Graph'` |
     | graph | name | Project-scoped graph name. | required; type: str; pattern: `^[a-z0-9][a-z0-9._-]{0,62}$` |
     | input | required | Whether the value is required. | default: `False`; type: bool |
+    | naming | model | Model for the naming turn: a tier, a model, or ${inputs...}; empty means the agent's cheapest tier. | default: `''`; type: str |
     | agent step | prompt | What the agent is asked to do. | required; type: str; nonblank |
     | agent step | model | Model tier, model name, or expression template. | default: `''`; type: str |
     | agent step | steering | Allow steering while the agent runs. | default: `None`; choices: `None`, `'always-open'` |
@@ -111,6 +113,12 @@ def graph_spec(_arguments: object = None) -> int:
     Subscript: `outputs.STEP.items[0]`.
     List: `[1, 2]`.
     Express "not in" as `(!(item in inputs.items))`; Python's `not` keyword is rejected. Expressions cannot execute Python. Undeclared inputs and unavailable outputs are reported at registration.
+
+    `naming: {agent: RUNNER}` gives each run a concise name. After the
+    checkout, a hidden turn reads the instruction and the repository and names
+    the run; if it fails, the run keeps its fallback name and carries on.
+    `agent` is a runner or `${inputs.NAME}`. `model` defaults to the runner's
+    `cheapest` tier (`haiku` for claude); an added agent uses its own model.
 
     `loop` accepts `every`, `instruction`, defaults for `engine loop add`.
     See `engine loop spec` for cadence, limits and lifecycle.

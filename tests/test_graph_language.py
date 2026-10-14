@@ -183,6 +183,117 @@ def test_the_sketch_compiles_to_langgraph(tmp_path) -> None:
     edges = {(edge.source, edge.target) for edge in drawn.edges}
     assert {("__start__", "workspace"), ("workspace", "spec"), ("ci_check", "reviewers-bugs"),
             ("reranker", "implementer"), ("reranker", "__end__")} <= edges
+    # Without `naming:` a run keeps its fallback name: no naming turn is compiled.
+    assert "naming" not in drawn.nodes
+
+
+NAMED = """
+apiVersion: openengine.cc/v1
+kind: Graph
+name: named
+inputs:
+  runner: {default: claude, choices: [claude, codex, qwen]}
+naming: NAMING
+implementation:
+  work:
+    agent: ${inputs.runner}
+    prompt: Do ${instruction}
+"""
+
+
+def _compiled_naming(naming: str, **options):
+    import sys
+
+    from langgraph_acp import ACPAgentRegistry, StdioACPProvider
+
+    from engine.graph_service.compile import compile_graph
+
+    registry = ACPAgentRegistry([
+        StdioACPProvider(name=name, command=(sys.executable, "-c", "")) for name in ("claude", "codex", "qwen")
+    ])
+    spec = parse_graph(yaml.safe_load(NAMED.replace("NAMING", naming)), runners=("claude", "codex", "qwen"))
+    return compile_graph(
+        spec, version_id="gv-named", number=1, workspace_provider=object(), registry=registry, **options,
+    ).builder
+
+
+def test_naming_adds_a_hidden_name_node_between_the_checkout_and_the_first_step() -> None:
+    from engine.graph_service.compile import GraphNameNode
+
+    builder = _compiled_naming("{agent: \"${inputs.runner}\"}")
+    edges = {(edge.source, edge.target) for edge in builder.compile().get_graph().edges}
+    assert {("__start__", "workspace"), ("workspace", "naming"), ("naming", "work")} <= edges
+    assert ("workspace", "work") not in edges
+    node = builder.nodes["naming"].runnable.afunc
+    # A NameNode: it writes the run's `name`, stays out of the sidebar and cannot fail the run.
+    assert isinstance(node, GraphNameNode)
+    assert node.output_key == "name" and node.graph_node_show_in_sidebar is False
+
+
+@pytest.mark.parametrize(("naming", "options", "runner", "model"), [
+    ("{agent: claude}", {}, "claude", "haiku"),
+    ("{agent: codex}", {}, "codex", "gpt-5.6-luna"),
+    # An added agent names on its own model.
+    ("{agent: qwen}", {"agent_models": {"qwen": "engine/qwen3"}}, "qwen", "engine/qwen3"),
+    ("{agent: claude, model: sonnet}", {}, "claude", "sonnet"),
+    ("{agent: claude, model: default}", {}, "claude", "sonnet"),
+    # A backend's tiers replace the defaults it names and keep the rest.
+    ("{agent: claude}", {"model_tiers": {"claude": {"default": "opus"}}}, "claude", "haiku"),
+    ("{agent: claude}", {"model_tiers": {"claude": {"cheapest": "claude-haiku-9"}}}, "claude", "claude-haiku-9"),
+])
+def test_naming_runs_on_the_cheapest_model_unless_told_otherwise(naming, options, runner, model) -> None:
+    node = _compiled_naming(naming, **options).nodes["naming"].runnable.afunc
+    chosen = node._for_runner(runner)
+    assert chosen.agent == runner and chosen.session_config == {"model": model}
+
+
+def test_naming_follows_the_runner_input_a_run_chooses(monkeypatch) -> None:
+    import asyncio
+
+    from engine.graph_runtime_langgraph.components import NameNode
+
+    node = _compiled_naming("{agent: \"${inputs.runner}\"}").nodes["naming"].runnable.afunc
+    seen = []
+
+    async def named(self, state):
+        seen.append(self)
+        return {"name": "Fix it"}
+
+    monkeypatch.setattr(NameNode, "__call__", named)
+    assert asyncio.run(node({"inputs": {"runner": "codex"}})) == {"name": "Fix it"}
+    chosen = seen[0]._for_runner(seen[0].agent)
+    assert chosen.agent == "codex" and chosen.session_config == {"model": "gpt-5.6-luna"}
+
+
+@pytest.mark.parametrize(("naming", "path"), [
+    ("claude", "naming"),
+    ({}, "naming.agent"),
+    ({"agent": {"same": "work"}}, "naming.agent"),
+    ({"agent": "${inputs.missing}"}, "naming.agent"),
+    ({"agent": "absent"}, "naming.agent"),
+    ({"agent": "claude", "model": 12}, "naming.model"),
+    ({"agent": "claude", "model": "${outputs.work}"}, "naming.model"),
+    ({"agent": "claude", "prompt": "name it"}, "naming.prompt"),
+])
+def test_invalid_naming_reports_its_location(naming, path) -> None:
+    raw = {
+        "apiVersion": "openengine.cc/v1", "name": "validation", "naming": naming,
+        "implementation": {"work": {"agent": "claude", "prompt": "go"}},
+    }
+    with pytest.raises(GraphError) as raised:
+        parse_graph(raw, runners=("claude",))
+    assert path in {problem.path for problem in raised.value.problems}
+
+
+def test_naming_reserves_its_step_name() -> None:
+    raw = {
+        "apiVersion": "openengine.cc/v1", "name": "validation", "naming": {"agent": "claude"},
+        "implementation": {"naming": {"agent": "claude", "prompt": "go"}},
+    }
+    with pytest.raises(GraphError, match="'naming' is used twice"):
+        parse_graph(raw)
+    del raw["naming"]
+    assert parse_graph(raw).naming is None
 
 
 def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
@@ -197,6 +308,9 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     ]
     # A run can build on an unmerged branch instead of main, and publishes against it.
     assert (spec.base_ref, spec.ref_input) == ("origin/main", "base")
+    # Runs are named by the issue picker's runner, on its cheapest model.
+    assert spec.naming is not None and (spec.naming.runner.kind, spec.naming.runner.value, spec.naming.model) == (
+        "input", "runner", "")
     assert {
         ("tdd", "implement", False),
         ("implement", "publish", False),

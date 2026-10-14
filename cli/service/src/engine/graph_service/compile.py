@@ -1,6 +1,6 @@
 """A `GraphSpec`, compiled to a LangGraph `StateGraph` of the engine's components.
 
-    checkout (WorkspaceNode) -> entry nodes -> ... -> END
+    checkout (WorkspaceNode) -> [naming (NameNode)] -> entry nodes -> ... -> END
 
     agent   ACPNode, one langgraph-acp session per execution; with `tools` or
             `outputs`, a TerminalMcpServer the agent finishes through
@@ -41,7 +41,7 @@ from engine.graph_runtime_langgraph import (
     graph_workflow,
 )
 from engine.graph_runtime_langgraph.acp import TerminalEvent
-from engine.graph_runtime_langgraph.components import ACPNode, CICheck, TriageNode, checkout
+from engine.graph_runtime_langgraph.components import ACPNode, CICheck, NameNode, TriageNode, checkout
 from engine.graph_runtime_langgraph.components.findings import parse_findings
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
@@ -50,6 +50,7 @@ from langgraph_acp import ACPAgentRegistry
 from engine.graph_service.expressions import parse, template
 from engine.graph_service.language import (
     END as FLOW_END,
+    NAMING_NODE,
     STAGE_GROUPS,
     GraphSpec,
     NodeSpec,
@@ -58,11 +59,13 @@ from engine.graph_service.language import (
     RunnerRule,
 )
 
-#: What `model: default` and `model: elevated` mean when a backend says nothing.
+#: What `model: default`, `model: elevated` and `model: cheapest` mean when a
+#: backend says nothing. `cheapest` is what a graph's naming turn uses.
 DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
-    "claude": {"default": "sonnet", "elevated": "opus"},
-    "codex": {"default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
+    "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
+    "codex": {"cheapest": "gpt-5.6-luna", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
 }
+NAMING_TIER = "cheapest"
 
 Groups = Mapping[str, tuple[tuple[str, ...], bool]]
 """Node id -> (the LangGraph node keys it compiled to, whether it is parallel)."""
@@ -106,7 +109,10 @@ def compile_graph(
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
-    tiers = {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}
+    tiers = {
+        runner: {**DEFAULT_MODEL_TIERS.get(runner, {}), **models}
+        for runner, models in {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}.items()
+    }
     runners = tuple(registry.names)
     builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(
@@ -118,6 +124,19 @@ def compile_graph(
             ref_input=spec.ref_input,
         ),
     )
+    if spec.naming:
+        builder.add_node(NAMING_NODE, GraphNameNode(
+            agent=_default_runner(spec.naming.runner, runners),
+            registry=registry,
+            cwd=checkout,
+            session_config=session_config,
+            rule=spec.naming.runner,
+            model_template=spec.naming.model or NAMING_TIER,
+            groups=groups,
+            tiers=tiers,
+            agent_models={} if agent_models is None else agent_models,
+            runners=runners,
+        ))
     for node in spec.nodes:
         for key, branch in zip(node.keys, node.parallel or (None,)):
             builder.add_node(key, _node(
@@ -132,9 +151,13 @@ def compile_graph(
         return list(groups[name][0])
 
     builder.add_edge(START, spec.checkout)
+    first = spec.checkout
+    if spec.naming:
+        builder.add_edge(spec.checkout, NAMING_NODE)
+        first = NAMING_NODE
     for entry in spec.entries:
         for key in keys_of(entry):
-            builder.add_edge(spec.checkout, key)
+            builder.add_edge(first, key)
     joined: set[str] = set()
     for rule in spec.flow:
         if rule.sources == ("start",):
@@ -268,8 +291,49 @@ def _default_runner(rule: RunnerRule, runners: Sequence[str]) -> str:
     return runners[0] if runners else "claude"
 
 
+class _GraphRunner:
+    """How a graph's agent node picks its runner and model when it runs."""
+
+    __slots__ = ()
+    agent: str
+    rule: RunnerRule
+    model_template: str
+    item: Mapping[str, Any] | None
+    groups: Groups
+    tiers: Mapping[str, Mapping[str, str]]
+    agent_models: Mapping[str, str]
+    runners: tuple[str, ...]
+
+    def resolve_runner(self, state: Mapping[str, object]) -> str:
+        rule = self.rule
+        pool = rule.choices or self.runners
+        if rule.kind == "literal":
+            return rule.value
+        if rule.kind == "input":
+            inputs = state.get("inputs")
+            chosen = inputs.get(rule.value) if isinstance(inputs, Mapping) else None
+            if isinstance(chosen, str) and chosen and chosen not in RUNNER_POLICIES:
+                return chosen
+            return self.agent
+        other = next(
+            (str(state[runner_key(key)]) for key in self.groups[rule.value][0] if state.get(runner_key(key))),
+            None,
+        )
+        if rule.kind == "same":
+            return other or (pool[0] if pool else self.agent)
+        return next((runner for runner in pool if runner != other), self.agent)
+
+    def model_for(self, state: Mapping[str, object], runner: str) -> str:
+        fallback = self.agent_models.get(runner, "")
+        if not self.model_template:
+            return fallback
+        chosen = template(self.model_template).render(environment(state, self.groups, self.item)).strip()
+        named = {tier for tiers in self.tiers.values() for tier in tiers}
+        return self.tiers.get(runner, {}).get(chosen, fallback if chosen in named else chosen)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
-class GraphAgentNode(ACPNode):
+class GraphAgentNode(_GraphRunner, ACPNode):
     """An agent node whose runner, model and output shape come from the graph."""
 
     state_key: str
@@ -308,33 +372,6 @@ class GraphAgentNode(ACPNode):
             runner_key(self.state_key): runner,
         }
 
-    def resolve_runner(self, state: Mapping[str, object]) -> str:
-        rule = self.rule
-        pool = rule.choices or self.runners
-        if rule.kind == "literal":
-            return rule.value
-        if rule.kind == "input":
-            inputs = state.get("inputs")
-            chosen = inputs.get(rule.value) if isinstance(inputs, Mapping) else None
-            if isinstance(chosen, str) and chosen and chosen not in RUNNER_POLICIES:
-                return chosen
-            return self.agent
-        other = next(
-            (str(state[runner_key(key)]) for key in self.groups[rule.value][0] if state.get(runner_key(key))),
-            None,
-        )
-        if rule.kind == "same":
-            return other or (pool[0] if pool else self.agent)
-        return next((runner for runner in pool if runner != other), self.agent)
-
-    def model_for(self, state: Mapping[str, object], runner: str) -> str:
-        fallback = self.agent_models.get(runner, "")
-        if not self.model_template:
-            return fallback
-        chosen = template(self.model_template).render(environment(state, self.groups, self.item)).strip()
-        named = {tier for tiers in self.tiers.values() for tier in tiers}
-        return self.tiers.get(runner, {}).get(chosen, fallback if chosen in named else chosen)
-
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         base = ACPNode._terminal_update(self, event)
         value: dict[str, object] = {"summary": base.pop(self.state_key, ""), "runner": self.agent}
@@ -355,6 +392,36 @@ class GraphAgentNode(ACPNode):
             # Where CICheck and the forge tools look for the change.
             update["pr_url"] = base["pr_url"]
         return update
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GraphNameNode(_GraphRunner, NameNode):
+    """The graph's `naming:` turn: the runner it names, on that runner's cheapest model by default.
+
+    Like any `NameNode` it is hidden from the sidebar, and a failure leaves the
+    run its fallback name.
+    """
+
+    rule: RunnerRule
+    model_template: str = NAMING_TIER
+    item: Mapping[str, Any] | None = None
+    groups: Groups = field(default_factory=dict)
+    tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    agent_models: Mapping[str, str] = field(default_factory=dict)
+    runners: tuple[str, ...] = ()
+
+    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+        # The model is rendered now, while the run's inputs are at hand; the
+        # runner it applies to is settled later, after any override.
+        model = template(self.model_template).render(environment(state, self.groups)).strip()
+        node = replace(self, agent=self.resolve_runner(state), model_template=model)
+        return await NameNode.__call__(node, state)
+
+    def _for_runner(self, runner: str) -> ACPNode:
+        config = dict(self.session_config or {})
+        if model := self.model_for({}, runner):
+            config["model"] = model
+        return replace(self, agent=runner, session_config=config or None)
 
 
 @dataclass(frozen=True, slots=True)

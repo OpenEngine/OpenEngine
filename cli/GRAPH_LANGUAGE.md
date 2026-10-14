@@ -129,6 +129,15 @@ leaves the written order at that point, so it goes only where `flow` says
 allowed only through a `route`, so a loop always has a way out. Every step
 must be reachable and able to reach `end`.
 
+**Naming.** `naming: {agent: ${inputs.runner}}` adds a hidden `NameNode`
+after the checkout that gives each run a concise name from its instruction,
+as the Python graphs do. Without it a run is named after its submission. The
+turn runs on the agent's `cheapest` tier unless `model` names another tier or
+model: `haiku` for `claude`, `gpt-5.6-luna` for `codex` (set either with
+`[runners.NAME.models] cheapest = ...` in `engine.toml`), and an added agent's
+own model. A failed naming turn leaves the fallback name and does not fail the
+run. `naming` is a reserved step name in a graph that sets it.
+
 **Expressions** in `${...}` and `when:` are deliberately small: names
 (`instruction`, `repository`, `inputs.X`, `outputs.NODE[.FIELD]`,
 `visits.NODE`), literals, comparisons, `&& || !`, and `size`/`json`. They are
