@@ -25,6 +25,7 @@ Or try it without installing:
 ```
 npx @openengine.cc/engine go "add a dark mode toggle to the settings page"
 ```
+If you installed earlier with the curl installer, npm will refuse to overwrite its `~/.local/bin/engine` launcher. Run `npm i -g --force @openengine.cc/engine` once to replace it.
 `engine go` runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. It follows the run live in your terminal. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
 
 Stuck, or just want to say hello? Join us on [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).

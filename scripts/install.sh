@@ -22,11 +22,12 @@ usage() {
   cat <<EOF
 Install OpenEngine for the current user.
 
-Usage: install.sh [--version X.Y.Z] [--prefix DIR] [--no-start]
+Usage: install.sh [--version X.Y.Z] [--prefix DIR] [--no-start] [--no-shim]
 
   --version X.Y.Z  install this release instead of the latest
   --prefix DIR     install under DIR (default: \$XDG_DATA_HOME/openengine)
   --no-start       do not start OpenEngine after installing
+  --no-shim        do not write the engine launcher (npm provides its own)
 EOF
 }
 
@@ -37,6 +38,7 @@ die() { printf 'openengine: error: %s\n' "$*" >&2; exit 1; }
 version=""
 prefix=""
 start=1
+shim=1
 while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; version=$2; shift ;;
@@ -44,6 +46,7 @@ while [ $# -gt 0 ]; do
     --prefix) [ $# -ge 2 ] || die "--prefix needs a value"; prefix=$2; shift ;;
     --prefix=*) prefix=${1#*=} ;;
     --no-start) start=0 ;;
+    --no-shim) shim=0 ;;
     --no-browser) ;; # accepted for older instructions; the installer never opens a browser
     -h | --help) usage; exit 0 ;;
     *) usage >&2; die "unknown option: $1" ;;
@@ -182,7 +185,6 @@ ln -sfn "versions/$release" "$prefix/current"
 
 # The shim: single-quoted paths, with any quote in them closed and escaped.
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-mkdir -p "$bin_dir"
 # `engine` is the terminal client; `engine daemon` manages the web service.
 write_shim() {
   if [ -e "$1" ] && ! grep -q '^# Written by the OpenEngine installer' "$1"; then
@@ -198,7 +200,10 @@ EOF
   chmod 755 "$work/shim"
   mv -f "$work/shim" "$1"
 }
-write_shim "$engine_shim" engine
+if [ "$shim" = 1 ]; then
+  mkdir -p "$bin_dir"
+  write_shim "$engine_shim" engine
+fi
 
 # The state directory holds conversations, graph state and logs: owner-only,
 # including one an earlier run or a source checkout created world-readable.
@@ -224,18 +229,28 @@ else
   say "wrote $config"
 fi
 
-say "installed OpenEngine $release: $engine_shim"
-case ":$PATH:" in
-  *":$bin_dir:"*) ;;
-  *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine" ;;
-esac
+if [ "$shim" = 1 ]; then
+  say "installed OpenEngine $release: $engine_shim"
+  case ":$PATH:" in
+    *":$bin_dir:"*) ;;
+    *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine" ;;
+  esac
+else
+  say "installed OpenEngine $release: $target"
+fi
 
 if [ "$start" = 1 ]; then
   # Registers a LaunchAgent (macOS) or systemd user unit (Linux), or runs a
   # detached process where neither is usable, then waits for /api/health. Run
   # again after an upgrade, it moves the service onto the new version.
-  if ! "$engine_shim" daemon setup; then
-    "$engine_shim" daemon logs -n 20 >&2 || true
+  launcher=$engine_shim
+  if [ "$shim" = 0 ]; then
+    launcher=$target/venv/bin/engine
+    ENGINE_CONFIG=${ENGINE_CONFIG:-$config}
+    export ENGINE_CONFIG
+  fi
+  if ! "$launcher" daemon setup; then
+    "$launcher" daemon logs -n 20 >&2 || true
     die "OpenEngine did not start; see $state_dir/logs"
   fi
 fi
