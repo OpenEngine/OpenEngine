@@ -692,25 +692,28 @@ STATE_EXIT_CODES: dict[DaemonState, int] = {
 }
 
 
-def derive_state(status: int | None, raw: bytes | None) -> DaemonState:
+def _parse_health(raw: bytes | None) -> dict[str, Any] | None:
+    """The health response body as a JSON object, or None when it is absent or not one."""
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def derive_state(status: int | None, body: dict[str, Any] | None) -> DaemonState:
     """The health state a probe yields: `status` is the HTTP code, or None when
-    the URL could not be reached, and `raw` is the response body as received.
+    the URL could not be reached, and `body` is the response parsed by `_parse_health`.
 
     A 503 with a non-OpenEngine (or non-JSON) body is another program on the port,
     so `foreign`; an HTTP error is otherwise `foreign`, not a starting OpenEngine.
     """
     if status is None:
         return DaemonState.DOWN
-    body: dict[str, Any] | None = None
-    if raw is not None:
-        try:
-            parsed = json.loads(raw)
-        except (OSError, ValueError):
-            parsed = None
-        if isinstance(parsed, dict):
-            body = parsed
     if status == 503:
-        if isinstance(body, dict) and body.get("service") == "openengine":
+        if body is not None and body.get("service") == "openengine":
             return DaemonState.STARTING
         return DaemonState.FOREIGN
     if status != 200:
@@ -722,16 +725,6 @@ def derive_state(status: int | None, raw: bytes | None) -> DaemonState:
     if body.get("ready") is not True:
         return DaemonState.STARTING
     return DaemonState.READY
-
-
-def _health_body(raw: bytes | None) -> dict[str, Any] | None:
-    if raw is None:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except (OSError, ValueError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
 
 
 def _detail_for(state: DaemonState, body: dict[str, Any] | None, url: str, error: Exception | None, status: int | None) -> str:
@@ -757,16 +750,16 @@ def check_health(url: str, timeout: float = 2.0) -> tuple[DaemonState, dict[str,
     try:
         with urlopen(Request(f"{url}/api/health", headers={"Accept": "application/json"}), timeout=timeout) as response:
             raw = response.read()
-        state = derive_state(response.status, raw)
-        body = _health_body(raw)
+        body = _parse_health(raw)
+        state = derive_state(response.status, body)
         return state, body, _detail_for(state, body, url, None, response.status)
     except HTTPError as error:
         try:
             raw = error.read()
         except (OSError, ValueError):
             raw = None
-        body = _health_body(raw)
-        state = derive_state(error.code, raw)
+        body = _parse_health(raw)
+        state = derive_state(error.code, body)
         return state, body, _detail_for(state, body, url, error, error.code)
     except (URLError, TimeoutError, OSError) as error:
         return DaemonState.DOWN, None, _detail_for(DaemonState.DOWN, None, url, error, None)

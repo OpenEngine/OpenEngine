@@ -35,8 +35,8 @@ def test_daemon_state_is_a_str_enum_of_the_five_states():
     assert daemon.DaemonState.DOWN == "down"
 
 
-# `derive_state(status, raw)` is pure: `status` is the HTTP status code, or None when
-# the URL could not be reached, and `raw` is the response body as received.
+# `derive_state(status, body)` is pure: `status` is the HTTP status code, or None when
+# the URL could not be reached, and `body` is the response as `_parse_health` reads it.
 PROBES = [
     pytest.param(200, _openengine(), "READY", id="ready"),
     pytest.param(200, _openengine(ready=False), "STARTING", id="not-ready-flag"),
@@ -57,7 +57,7 @@ PROBES = [
 
 @pytest.mark.parametrize("status, raw, expected", PROBES)
 def test_derive_state_maps_every_probe_outcome(status, raw, expected):
-    state = daemon.derive_state(status, raw)
+    state = daemon.derive_state(status, daemon._parse_health(raw))
 
     assert state is daemon.DaemonState[expected]
 
