@@ -147,6 +147,8 @@ from engine.graph_runtime import (
 )
 from engine.graph_runtime import create_app as create_graph_app
 from engine.graph_service import GraphService, NotFound, ServiceError, StartRequest, StartRun
+from engine.graph_service.service import DEFAULT_PROJECT
+from engine.graph_service.store import GraphRow, VersionRow
 from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph.components.human_review import (
@@ -1027,23 +1029,38 @@ class _GraphSurface:
         return offered.get(reference)
 
     def registered_workflow(self, project: str, name: str) -> GraphWorkflow | None:
-        """The graph `engine graph add` registered as `name`, in `project` or else anywhere.
+        """The graph `engine graph add` registered as `name`, for work in `project`.
 
-        `None` when nothing is registered by that name, or when it is only
-        found in several other projects and none of them is `project`.
+        See `work_order_graph` for where the name is looked up. `None` when
+        nothing is registered there by that name.
         """
         if self.service is None:
             return None
-        for scope in (project, None) if project else (None,):
-            try:
-                _, version = self.service.resolve(scope, name)
-            except NotFound:
-                continue
-            except ServiceError:
-                return None
-            return self.workflows({}).get(version.version_id)
-        return None
+        version = work_order_graph(self.service.resolve, project, name)
+        return self.workflows({}).get(version.version_id) if version is not None else None
 
+
+def work_order_graph(
+    resolve: Callable[[str, str], tuple[GraphRow, VersionRow]], project: str, name: str,
+) -> VersionRow | None:
+    """The registered graph version `work_orders.workflow` names for work in `project`.
+
+    A name is looked up in `project` -- the repository the work is for -- and
+    then in the deployment's own default project, where `engine graph add`
+    puts a graph when no project is named; never in some other project, whose
+    graphs were not written for this repository. A graph or version id names
+    one graph wherever it is, so it is how a deployment deliberately reaches
+    further. `None` when nothing in those projects matches.
+    """
+    for scope in dict.fromkeys(scope for scope in (project, DEFAULT_PROJECT) if scope):
+        try:
+            _, version = resolve(scope, name)
+        except NotFound:
+            continue
+        except ServiceError:
+            return None
+        return version
+    return None
 
 
 def _started_inputs(
@@ -4250,9 +4267,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         catalog, because a mention that resolved to a workflow this process
         could not start would be accepted and then go nowhere. A configured
         name is a Python workflow first, so a deployment that already named
-        one keeps it, and otherwise a graph registered with `engine graph add`,
-        looked up in `project` -- the repository the work is for -- and then
-        in any project.
+        one keeps it, and otherwise a graph registered with `engine graph add`
+        for work in `project`, the repository the work is for.
         """
         offered = offered_graphs()
         if work_orders.workflow:

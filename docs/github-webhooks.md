@@ -57,10 +57,12 @@ kind of workflow may be named, and the name is resolved in this order:
 1. A Python workflow from `[workflows] directory`, by its id. A deployment that
    already names one keeps it, even when a graph of the same name is also
    registered.
-2. A graph registered with `engine graph add`, by name (or `name@N`, or a graph
-   or version id): first in the project named after the repository the work is
-   for, such as `acme/api`, then in any project. A name registered in several
-   other projects, and not in the repository's own, matches nothing.
+2. A graph registered with `engine graph add`, by name (or `name@N`): first in
+   the project named after the repository the work is for, such as `acme/api`,
+   then in the `default` project, where `engine graph add` puts a graph when no
+   project is named. A graph registered only in some other project is not used
+   for this repository; name it by its graph or version id (`g-...`, `gv-...`)
+   to run it anyway.
 
 ```toml
 [work_orders]
@@ -75,8 +77,9 @@ request leaves `issue` at its default, since a pull request is not an issue to
 work. A graph that declares neither input still runs with the task. A Python
 workflow gets the task and its own defaults, as before.
 
-A name that matches neither kind stops `engine-web` and `engine-web --check` at
-startup with a configuration error naming it. Without `work_orders.workflow`,
+A name that matches neither kind, for any repository in `[github]
+repositories`, stops `engine-web` and `engine-web --check` at startup with a
+configuration error naming it and the repositories it does not resolve for. Without `work_orders.workflow`,
 the sole workflow on offer is used, registered graphs included.
 
 The slug format is validated at startup. Deliveries from other repositories are

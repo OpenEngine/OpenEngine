@@ -526,44 +526,8 @@ class GraphService:
         return self._graph_json(graph, version, definition=True, versions=True)
 
     def resolve(self, project: str | None, reference: str) -> tuple[GraphRow, VersionRow]:
-        """A graph id, a version id, a name, or `name@N`, within the project.
-
-        A name with no project is looked up everywhere, and refused rather than
-        guessed when two projects use it.
-        """
-        reference = reference.strip()
-        if not reference:
-            raise ServiceError("name a graph")
-        if reference.startswith("gv-"):
-            version = self.store.version(reference)
-            graph = self.store.graph(version.graph_id) if version else None
-            if version is None or graph is None:
-                raise NotFound(f"no graph version {reference}")
-            return graph, version
-        if reference.startswith("g-"):
-            graph = self.store.graph(reference)
-            if graph is None:
-                raise NotFound(f"no graph {reference}")
-            return graph, self._version(graph.latest_version_id)
-        name, _, number = reference.partition("@")
-        matches = self.store.graphs_named(name, _project(project) if project else None)
-        if not matches:
-            where = f" in project {_project(project)!r}" if project else ""
-            raise NotFound(f"no graph named {name!r}{where}")
-        if len(matches) > 1:
-            raise Conflict(
-                f"graph name {name!r} is ambiguous; name a project or use a graph id",
-                candidates=[{"graphId": graph.graph_id, "project": graph.project} for graph in matches],
-            )
-        graph = matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
-        if not number:
-            return graph, self._version(graph.latest_version_id)
-        if not number.isdigit():
-            raise ServiceError(f"{reference!r}: a version is a number, as in {name}@2")
-        version = self.store.version_numbered(graph.graph_id, int(number))
-        if version is None:
-            raise NotFound(f"graph {name!r} has no version {number}")
-        return graph, version
+        """A graph id, a version id, a name, or `name@N`, within the project; see `resolve_graph`."""
+        return resolve_graph(self.store, project, reference)
 
     # --- runs ---------------------------------------------------------------
 
@@ -1682,6 +1646,58 @@ def _following(due: datetime, interval: int, now: datetime) -> datetime:
     return due + step * (missed + 1)
 
 
+def resolve_graph(
+    store: GraphServiceStore, project: str | None, reference: str,
+) -> tuple[GraphRow, VersionRow]:
+    """A graph id, a version id, a name, or `name@N`, within the project.
+
+    A name with no project is looked up everywhere, and refused rather than
+    guessed when two projects use it. Only `store` is read, so this answers
+    as well before the daemon's runtime is open as after.
+    """
+    reference = reference.strip()
+    if not reference:
+        raise ServiceError("name a graph")
+    if reference.startswith("gv-"):
+        version = store.version(reference)
+        graph = store.graph(version.graph_id) if version else None
+        if version is None or graph is None:
+            raise NotFound(f"no graph version {reference}")
+        return graph, version
+    if reference.startswith("g-"):
+        graph = store.graph(reference)
+        if graph is None:
+            raise NotFound(f"no graph {reference}")
+        return graph, _latest_version(store, graph)
+    name, _, number = reference.partition("@")
+    matches = store.graphs_named(name, _project(project) if project else None)
+    if not matches:
+        where = f" in project {_project(project)!r}" if project else ""
+        raise NotFound(f"no graph named {name!r}{where}")
+    if len(matches) > 1:
+        raise Conflict(
+            f"graph name {name!r} is ambiguous; name a project or use a graph id",
+            candidates=[{"graphId": graph.graph_id, "project": graph.project} for graph in matches],
+        )
+    graph = matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
+    if not number:
+        return graph, _latest_version(store, graph)
+    if not number.isdigit():
+        raise ServiceError(f"{reference!r}: a version is a number, as in {name}@2")
+    version = store.version_numbered(graph.graph_id, int(number))
+    if version is None:
+        raise NotFound(f"graph {name!r} has no version {number}")
+    return graph, version
+
+
+
+def _latest_version(store: GraphServiceStore, graph: GraphRow) -> VersionRow:
+    version = store.version(graph.latest_version_id)
+    if version is None:
+        raise NotFound(f"no graph version {graph.latest_version_id}")
+    return version
+
+
 def _project(project: str | None) -> str:
     return (project or DEFAULT_PROJECT).strip() or DEFAULT_PROJECT
 
@@ -1705,5 +1721,6 @@ __all__ = [
     "Unavailable",
     "auth_required",
     "opencode_config",
+    "resolve_graph",
     "session_model",
 ]

@@ -13,17 +13,16 @@ import asyncio
 import ipaddress
 import logging
 import os
-import sqlite3
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing
+from functools import partial
 from pathlib import Path
 
 import uvicorn
 from dotenv import dotenv_values
 from starlette.applications import Starlette
 
-from engine.apps.web.api import create_app
+from engine.apps.web.api import create_app, work_order_graph
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
@@ -40,6 +39,8 @@ from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
 from engine.graph_runtime_langgraph.workflows import RUNS
+from engine.graph_service.service import resolve_graph
+from engine.graph_service.store import GraphServiceStore
 from engine.apps.web.source_control import SourceControlPreferences, gh_cli_status
 from engine.runtime import (
     EngineConfigError,
@@ -130,29 +131,32 @@ def check_work_order_workflow(settings: Settings, catalog: WorkflowCatalog | Non
         return
     if catalog is not None and any(str(graph.graph_id) == name for graph in catalog.graphs):
         return
-    if _registered_graph(Path(settings.graph_state_directory) / RUNS, name):
+    webhook = settings.github_webhook
+    projects = (webhook.webhook_repositories if webhook is not None else ()) or ("",)
+    missing = _unregistered_for(Path(settings.graph_state_directory) / RUNS, name, projects)
+    if not missing:
         return
     raise EngineConfigError(
         f"work_orders.workflow is {name!r}, which is neither a workflow in [workflows] directory "
         "nor a graph registered with `engine graph add`"
+        + (f" for {', '.join(missing)}" if any(missing) else "")
     )
 
 
-def _registered_graph(database: Path, reference: str) -> bool:
-    """Whether the graph service's file holds a graph `reference` names, read without changing it."""
+def _unregistered_for(database: Path, name: str, projects: Sequence[str]) -> list[str]:
+    """Which of `projects` a work order could not start the registered graph `name` for.
+
+    Resolved by the rule the webhook routes use, from the graph service's own
+    file; nothing is registered until that file exists.
+    """
     if not database.is_file():
-        return False
-    name = reference.partition("@")[0]
+        return list(projects)
+    store = GraphServiceStore(database)
     try:
-        with closing(sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)) as connection:
-            return connection.execute(
-                "SELECT 1 FROM cli_graphs WHERE name = ? OR graph_id = ? "
-                "UNION SELECT 1 FROM cli_graph_versions WHERE version_id = ?",
-                (name, reference, reference),
-            ).fetchone() is not None
-    except sqlite3.Error:
-        # No registry tables yet: nothing has been registered.
-        return False
+        resolve = partial(resolve_graph, store)
+        return [project for project in projects if work_order_graph(resolve, project, name) is None]
+    finally:
+        store.close()
 
 
 def _port(loaded: LoadedEngineConfig) -> int:
