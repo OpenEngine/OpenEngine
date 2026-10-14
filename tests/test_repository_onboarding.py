@@ -187,3 +187,22 @@ def test_onboarding_persists_to_machine_config_unless_explicit(tmp_path, monkeyp
     assert 'owner/repo' in expected.read_text()
     if selected != expected:
         assert selected.read_text() == original
+
+
+def test_startup_local_only_repository(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config-home'))
+    config = tmp_path / 'engine.toml'
+    target = tmp_path / 'demo'
+    target.mkdir()
+    config.write_text(f'[repos]\ndemo = "{target}"\n[repo_modes]\ndemo = "disconnected"\n')
+
+    def no_origin(args, **kwargs):
+        assert 'clone' not in args
+        raise subprocess.CalledProcessError(2, args)
+
+    monkeypatch.setattr(repositories.subprocess, 'run', no_origin)
+    loaded, _ = web_main.read_configuration(config)
+    assert loaded.config.repos == {'demo': str(target)}
+    assert web_main._repository_projects(loaded) == {}
+    assert web_main._login_repositories(loaded, {}) == ()

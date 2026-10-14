@@ -325,3 +325,18 @@ def test_gitlab_mode_inference_fails_closed_when_access_probe_fails():
     ))
     assert context["mode"] == "disconnected"
     assert context["reason"] == "forge access could not be verified"
+
+
+def test_local_checkout_without_forge_runs_disconnected(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from engine.graph_runtime_langgraph.forge import resolve_forge_context
+
+    process = SimpleNamespace(communicate=AsyncMock(return_value=(b'', b'')))
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', AsyncMock(return_value=process))
+    source = SimpleNamespace(authenticated_login=AsyncMock(), can_write_repository=AsyncMock())
+    context = asyncio.run(resolve_forge_context(source, {'repository': str(tmp_path)}))
+    assert context['mode'] == 'disconnected'
+    assert context['reason'] == 'repository has no forge remote'
+    source.authenticated_login.assert_not_called()

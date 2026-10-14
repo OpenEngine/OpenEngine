@@ -7,7 +7,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import RLock
@@ -45,6 +45,35 @@ def repository_name(reference: str) -> str:
         if all(part not in {".", ".."} for part in name.split("/")) and (host == "gitlab.com" or name.count("/") == 1):
             return name if host == "github.com" else f"{host}/{name}"
     raise OnboardingError("repository", "Invalid GitHub/GitLab repository reference", "Use https://github.com/owner/repo or https://gitlab.com/group/repo")
+
+
+def local_repository(checkout: Path, repos: Mapping[str, str]) -> tuple[str, str | None]:
+    """Name a checkout by its forge origin or a stable, slash-free local alias."""
+    checkout = checkout.expanduser().resolve()
+    origin = _run(["git", "-C", str(checkout), "remote", "get-url", "origin"])
+    if origin.returncode == 0 and re.match(r"(?:https://|ssh://git@|git@)(?:github\.com|gitlab\.com)[/:]", origin.stdout.strip()):
+        try:
+            project = repository_name(origin.stdout.strip())
+        except OnboardingError:
+            pass
+        else:
+            return project, project
+    for name, path in repos.items():
+        if Path(path).expanduser().resolve() == checkout:
+            return name, None
+    # Config accepts nonblank strings; use a portable TOML bare key without
+    # slashes so local aliases cannot overlap owner/repo forge identities.
+    name = re.sub(r"[^A-Za-z0-9_-]+", "-", checkout.name).strip("-") or "repo"
+    if name in repos:
+        raise repository_name_collision(name, str(checkout), repos[name])
+    return name, None
+
+
+def repository_name_collision(name: str, checkout: str, existing: str) -> OnboardingError:
+    fix = "Create a unique alias for this checkout in [repos] in engine.toml, or rename the local checkout directory and retry"
+    return OnboardingError(
+        "config", f"Repository name {name!r} for {checkout} conflicts with {existing}. {fix}", fix,
+    )
 
 
 def machine_config_path() -> Path:
@@ -112,8 +141,8 @@ def validate_checkout(name: str, path: Path) -> None:
     try:
         root = _run(["git", "-C", str(path), "rev-parse", "--show-toplevel"])
         origin = _run(["git", "-C", str(path), "remote", "get-url", "origin"])
-        if root.returncode == origin.returncode == 0 and Path(root.stdout.strip()).resolve() == path.resolve():
-            if repository_name(origin.stdout.strip()).lower() == name.lower():
+        if root.returncode == 0 and Path(root.stdout.strip()).resolve() == path.resolve():
+            if "/" not in name or (origin.returncode == 0 and repository_name(origin.stdout.strip()).lower() == name.lower()):
                 return
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
@@ -125,7 +154,7 @@ def _updated_config(path: Path, name: str, checkout: str, mode: str, trusted: bo
     document = tomlkit.parse(original)
     repos = document.setdefault("repos", tomlkit.table())
     if name in repos and Path(str(repos[name])).expanduser().resolve() != Path(checkout).expanduser().resolve():
-        raise OnboardingError("config", f"{name} is already configured at another path", "Use its configured path or edit the existing repository entry")
+        raise repository_name_collision(name, checkout, str(repos[name]))
     if name not in repos:
         repos[name] = checkout
         if mode == "disconnected":
@@ -182,19 +211,33 @@ class RepositoryOnboarding:
         directory = self.onboarding_directory if self.onboarding_directory is not None else Path.home() / "code"
         return (directory / name.split("/")[-1]).expanduser().resolve()
 
-    def start(self, reference: str, path: str | None, mode: str, trusted: bool | None = None) -> dict:
+    def _reserved_repositories(self) -> dict[str, str]:
+        return {**self.registry.snapshot.repos, **{
+            job["repository"]: job["path"] for job in self.jobs.values()
+            if job["status"] != "failed"
+        }}
+
+    def start(self, reference: str, path: str | None, mode: str | None = None, trusted: bool | None = None) -> dict:
+        local_only = False
         local = Path(reference).expanduser()
         if local.exists() or reference.startswith((".", "/", "~")):
             root = _run(["git", "-C", str(local), "rev-parse", "--show-toplevel"])
             if root.returncode:
-                raise OnboardingError("repository", "Not a local checkout", "Choose an existing checkout with an origin")
+                raise OnboardingError("repository", "Not a local checkout", "Choose an existing git checkout")
             checkout = Path(root.stdout.strip()).resolve()
             if path and Path(path).expanduser().resolve() != checkout:
                 raise OnboardingError("path", "--path is only for cloning", "Omit --path when adding an existing checkout")
             path = str(checkout)
-            origin = _run(["git", "-C", path, "remote", "get-url", "origin"])
-            reference = origin.stdout.strip() if origin.returncode == 0 else ""
-        name = repository_name(reference)
+            reference = path
+            name, project = local_repository(checkout, self._reserved_repositories())
+            local_only = project is None
+            if local_only and mode == "connected":
+                raise OnboardingError("mode", "Connected mode requires a GitHub/GitLab origin",
+                                      "Add a GitHub/GitLab origin, or use disconnected mode")
+        else:
+            name = repository_name(reference)
+        if mode is None:
+            mode = "disconnected" if local_only else "connected"
         if mode not in {"connected", "disconnected"}:
             raise OnboardingError("mode", "Invalid mode", "Choose connected or disconnected")
         for job in self.jobs.values():
@@ -208,7 +251,8 @@ class RepositoryOnboarding:
             if previous["repository"] == name and previous["status"] == "complete" and previous["path"] == str(checkout) and checkout.is_dir() and trusted is None:
                 return {**previous, "message": "Already onboarded"}
         job = {"id": uuid4().hex, "repository": name, "path": str(checkout), "mode": mode, "trusted": trusted,
-               "clone_url": reference if ":" in reference else f"git@github.com:{name}.git",
+               "local_only": local_only,
+               "clone_url": reference if ":" in reference or Path(reference).is_absolute() else f"git@github.com:{name}.git",
                "status": "queued", "message": "Waiting to onboard", "problems": []}
         self.jobs[job["id"]] = job
         task = asyncio.create_task(self._onboard(job))
@@ -231,7 +275,8 @@ class RepositoryOnboarding:
                 mode = tomlkit.parse(configured).get("repo_modes", {}).get(name, "connected")
                 job["mode"] = mode
                 job.update(status="cloning", message=f"Preparing checkout of {name}")
-                await asyncio.to_thread(ensure_repository_checkouts, {name: str(path)}, clone_urls={name: job["clone_url"]})
+                if not job["local_only"]:
+                    await asyncio.to_thread(ensure_repository_checkouts, {name: str(path)}, clone_urls={name: job["clone_url"]})
                 await asyncio.to_thread(validate_checkout, name, path)
                 job.update(status="registering", message="Registering starter graphs")
                 await self.register_starters(name, agent or "claude")
@@ -266,11 +311,11 @@ class RepositoryOnboarding:
             if root.returncode:
                 raise OnboardingError("repository", "Repository is not a configured name or local checkout", "Use a checkout path or onboard owner/repo first")
             checkout = str(Path(root.stdout.strip()).resolve())
-            origin = _run(["git", "-C", checkout, "remote", "get-url", "origin"])
-            name = repository_name(origin.stdout.strip())
+            name, _ = local_repository(Path(checkout), self._reserved_repositories())
             validate_checkout(name, Path(checkout))
         if trusted is not None:
-            self._persist(name, checkout, "connected", trusted)
+            _, project = local_repository(Path(checkout), self.registry.snapshot.repos)
+            self._persist(name, checkout, "connected" if project else "disconnected", trusted)
             decision = trusted
         return {"repository": checkout, "name": name, "trusted": decision}
 
@@ -279,8 +324,8 @@ class RepositoryOnboarding:
             raise OnboardingError("repository", "Invalid repository", "Provide a checkout path or GitHub/GitLab URL")
         if body.get("path") is not None and (not isinstance(body["path"], str) or not body["path"].strip()):
             raise OnboardingError("path", "Invalid checkout path", "Provide a non-empty path on the daemon machine")
-        mode = body.get("mode", "connected")
-        if not isinstance(mode, str):
+        mode = body.get("mode")
+        if mode is not None and not isinstance(mode, str):
             raise OnboardingError("mode", "Invalid mode", "Choose connected or disconnected")
         trusted = body.get("trusted")
         if trusted is not None and not isinstance(trusted, bool):

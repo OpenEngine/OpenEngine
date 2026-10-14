@@ -108,3 +108,27 @@ def test_origin_resolution_does_not_block_readers_or_adds(monkeypatch, tmp_path,
         ("acme/other",) if other_name == "slow" else ("acme/other", "acme/slow")
     )
     assert len(snapshot.repos) == (1 if other_name == "slow" else 2)
+
+
+@pytest.mark.parametrize('origin', ['', 'https://bitbucket.org/team/demo.git', '/srv/demo.git'])
+def test_local_only_registry(monkeypatch, tmp_path, origin):
+    import subprocess
+    from engine.runtime import repositories
+
+    def run(args, **kwargs):
+        if 'remote' in args:
+            if not origin:
+                raise subprocess.CalledProcessError(2, args)
+            return subprocess.CompletedProcess(args, 0, origin)
+        return subprocess.CompletedProcess(args, 0, str(tmp_path / '.git'))
+
+    monkeypatch.setattr(repositories.subprocess, 'run', run)
+    registry = RepositoryRegistry(projects={})
+    registry.add('demo', str(tmp_path), 'disconnected')
+    assert registry.lookup(str(tmp_path / 'subdir')) == ('demo', None)
+    registry.trust('demo', True)
+    assert registry.lookup(str(tmp_path)) == ('demo', True)
+    assert registry.snapshot.projects == {}
+    assert registry.snapshot.run_projects == {}
+    assert registry.snapshot.login_repositories == ()
+    assert registry.snapshot.disconnected == registry.snapshot.trusted == frozenset({tmp_path})

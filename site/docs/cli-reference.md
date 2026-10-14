@@ -202,7 +202,7 @@ engine repo add [-h] [--json] [--backend NAME]
 | `--trust, --no-trust, --trusted, --no-trusted` | remember whether agents may run without approval here |
 | `repository` | existing checkout path or GitHub/GitLab URL (default: .) |
 | `--path PATH` | clone destination on the daemon machine (default: [onboarding] directory, else ~/code/repo) |
-| `--mode MODE` | repository workflow mode (default: connected) |
+| `--mode MODE` | repository workflow mode (default: connected with a forge origin, otherwise disconnected) |
 
 ### `engine repo trust`
 

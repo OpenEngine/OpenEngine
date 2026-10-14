@@ -17,17 +17,21 @@ def _unused_port() -> int:
 
 
 async def _start_service(service: TemporalService) -> None:
-    # The SDK downloads its dev server on first use. Retry a transient 503
-    # from that endpoint without hiding server startup or recovery failures.
+    # The SDK downloads its dev server on first use. Retry transient 503s and
+    # incomplete archives without hiding server startup or recovery failures.
     for attempt in range(3):
         try:
             await service.start()
         except RuntimeError as error:
-            if (
-                "failed to download ephemeral server executable" not in str(error)
-                or "503 Service Unavailable" not in str(error)
-                or attempt == 2
-            ):
+            message = str(error)
+            retryable = (
+                "failed to download ephemeral server executable" in message
+                and "503 Service Unavailable" in message
+            ) or (
+                "invalid ephemeral server download: could not extract tar archive entry"
+                in message
+            )
+            if not retryable or attempt == 2:
                 raise
             await asyncio.sleep(2 ** attempt)
         else:
@@ -35,11 +39,15 @@ async def _start_service(service: TemporalService) -> None:
 
 
 @pytest.mark.parametrize("failure", ["download", "startup", "persistent"])
-def test_start_service_retries_only_transient_download_failure(monkeypatch, failure):
-    download_error = RuntimeError(
-        "Failed starting Temporal dev server: failed to download ephemeral server "
-        "executable: HTTP status server error (503 Service Unavailable)"
-    )
+@pytest.mark.parametrize("download_message", [
+    "failed to download ephemeral server executable: "
+    "HTTP status server error (503 Service Unavailable)",
+    "invalid ephemeral server download: could not extract tar archive entry",
+])
+def test_start_service_retries_only_transient_download_failure(
+    monkeypatch, failure, download_message
+):
+    download_error = RuntimeError(f"Failed starting Temporal dev server: {download_message}")
     error = RuntimeError("server startup failed") if failure == "startup" else download_error
     service = TemporalService()
     start = AsyncMock(side_effect=[error, None] if failure == "download" else error)

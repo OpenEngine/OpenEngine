@@ -126,7 +126,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     onboard.add_argument("--trust", "--trusted", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
     onboard.add_argument("url", nargs="?", default=".", metavar="repository", help="existing checkout path or GitHub/GitLab URL (default: .)")
     onboard.add_argument("--path", help="clone destination on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
-    onboard.add_argument("--mode", choices=("connected", "disconnected"), default="connected", help="repository workflow mode (default: connected)")
+    onboard.add_argument("--mode", choices=("connected", "disconnected"), default=None, help="repository workflow mode (default: connected with a forge origin, otherwise disconnected)")
 
     for name in ("trust", "untrust"):
         setting = repo_actions.add_parser(name, parents=[common],
@@ -280,9 +280,9 @@ def onboard_repository(arguments: argparse.Namespace) -> int:
         local = Path(reference).expanduser()
         if local.exists() or reference.startswith((".", "/", "~")):
             root = repository._git(str(local.resolve()), "rev-parse", "--show-toplevel")
-            reference = repository._git(root, "remote", "get-url", "origin") if root else ""
-            if not reference:
-                raise _UsageError("Choose an existing checkout with an origin, or pass a GitHub/GitLab URL")
+            if not root:
+                raise _UsageError("Choose an existing git checkout, or pass a GitHub/GitLab URL")
+            reference = root
             if path and Path(path).expanduser().resolve() != Path(root).resolve():
                 raise _UsageError("--path is a clone destination; omit it when adding an existing checkout")
             path = root

@@ -14,7 +14,7 @@ export function AddRepository({ onComplete }: {
   onComplete: (config: EngineConfig, path: string) => void;
 }) {
   const [url, setUrl] = useState("");
-  const [mode, setMode] = useState("connected");
+  const [mode, setMode] = useState("");
   const [job, setJob] = useState<OnboardingState | null>(null);
   const [trusted, setTrusted] = useState(false);
   const [error, setError] = useState("");
@@ -49,7 +49,7 @@ export function AddRepository({ onComplete }: {
     setError("");
     try {
       setJob(await api<OnboardingState>("/api/repositories/onboard", {
-        method: "POST", body: JSON.stringify({ repository: url, mode, trusted }),
+        method: "POST", body: JSON.stringify({ repository: url, mode: mode || undefined, trusted }),
       }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not start onboarding");
@@ -63,13 +63,14 @@ export function AddRepository({ onComplete }: {
       <p className="lede">Connect a repository to start creating WorkOrders.</p>
     </header>
     <form className="form" onSubmit={submit}>
-      <label><span>GitHub URL</span><input required value={url} disabled={active}
+      <label><span>Repository URL or local path</span><input required value={url} disabled={active}
         placeholder="https://github.com/owner/repo" onChange={(event) => setUrl(event.target.value)} /></label>
       <label><span>Mode</span><select value={mode} disabled={active} onChange={(event) => setMode(event.target.value)}>
+        <option value="">Automatic</option>
         <option value="connected">Connected</option>
         <option value="disconnected">Disconnected</option>
       </select></label>
-      <p className="form-note">Connected work can push branches and open pull requests. Disconnected work stays local.</p>
+      <p className="form-note">Connected work can push branches and open pull requests. Disconnected work stays local. Automatic selects disconnected for checkouts without a GitHub/GitLab origin.</p>
       {job && <p className="notice" role="status">{job.message}</p>}
       {job?.problems.map((problem) => <p className="notice" role="alert" key={problem.code}>
       {problem.message}. Fix: {problem.fix}
