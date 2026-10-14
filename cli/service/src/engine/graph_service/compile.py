@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from engine.domain import ForgeMode, StepCompleted, forge_mode
 from engine.graph_runtime.inputs import RUNNER_POLICIES, WorkflowInput
@@ -291,19 +291,24 @@ def _default_runner(rule: RunnerRule, runners: Sequence[str]) -> str:
     return runners[0] if runners else "claude"
 
 
+@dataclass(frozen=True, kw_only=True)
 class _GraphRunner:
     """How a graph's agent node picks its runner and model when it runs."""
 
+    # No slots of its own, so it can sit beside the slotted ACPNode; each node
+    # that mixes it in slots these fields itself.
     __slots__ = ()
-    agent: str
+    if TYPE_CHECKING:
+        agent: str
+        session_config: Mapping[str, object] | None
     rule: RunnerRule
-    model_template: str
-    item: Mapping[str, Any] | None
-    groups: Groups
-    tiers: Mapping[str, Mapping[str, str]]
-    agent_models: Mapping[str, str]
-    runners: tuple[str, ...]
-    session_config: Mapping[str, object] | None
+    model_template: str = ""
+    item: Mapping[str, Any] | None = None
+    groups: Groups = field(default_factory=dict)
+    tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    agent_models: Mapping[str, str] = field(default_factory=dict)
+    """An added agent's own model, for a node that names none or a tier it has no entry for."""
+    runners: tuple[str, ...] = ()
 
     def resolve_runner(self, state: Mapping[str, object]) -> str:
         rule = self.rule
@@ -345,16 +350,8 @@ class GraphAgentNode(_GraphRunner, ACPNode):
     """An agent node whose runner, model and output shape come from the graph."""
 
     state_key: str
-    rule: RunnerRule
-    model_template: str = ""
     outputs: tuple[OutputSpec, ...] = ()
-    item: Mapping[str, Any] | None = None
     facet_id: str = ""
-    groups: Groups = field(default_factory=dict)
-    tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
-    agent_models: Mapping[str, str] = field(default_factory=dict)
-    """An added agent's own model, for a node that names none or a tier it has no entry for."""
-    runners: tuple[str, ...] = ()
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
@@ -407,13 +404,7 @@ class GraphNameNode(_GraphRunner, NameNode):
     run its fallback name.
     """
 
-    rule: RunnerRule
     model_template: str = NAMING_TIER
-    item: Mapping[str, Any] | None = None
-    groups: Groups = field(default_factory=dict)
-    tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
-    agent_models: Mapping[str, str] = field(default_factory=dict)
-    runners: tuple[str, ...] = ()
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         # The model is rendered now, while the run's inputs are at hand; the

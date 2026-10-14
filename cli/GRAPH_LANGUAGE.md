@@ -135,9 +135,11 @@ as the Python graphs do. Without it a run is named after its submission. The
 turn runs on the agent's `cheapest` tier unless `model` names another tier or
 model: `haiku` for `claude`, `gpt-5.6-terra` for `codex` (set either with
 `[runners.NAME.models] cheapest = ...` in `engine.toml`), and an added agent's
-own model. The turn refuses every permission request, so it can read but
-not act, even on an auto-approved run. A failed naming turn leaves the fallback name and does not fail the
-run. `naming` is a reserved step name in a graph that sets it.
+own model. The turn refuses every permission request, even on an
+auto-approved run. That stops anything the agent has to ask for, but not what
+its own sandbox already allows: Codex can still write inside the run's checkout
+without asking. A failed naming turn leaves the fallback name and does not fail
+the run. `naming` is a reserved step name in a graph that sets it.
 
 **Expressions** in `${...}` and `when:` are deliberately small: names
 (`instruction`, `repository`, `inputs.X`, `outputs.NODE[.FIELD]`,
