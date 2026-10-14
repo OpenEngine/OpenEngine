@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -64,14 +63,17 @@ def local_repository(checkout: Path, repos: Mapping[str, str]) -> tuple[str, str
             return name, None
     # Config accepts nonblank strings; use a portable TOML bare key without
     # slashes so local aliases cannot overlap owner/repo forge identities.
-    base = re.sub(r"[^A-Za-z0-9_-]+", "-", checkout.name).strip("-") or "repo"
-    name = base
-    suffix = hashlib.sha256(str(checkout).encode()).hexdigest()[:8]
-    index = 0
-    while name in repos and Path(repos[name]).expanduser().resolve() != checkout:
-        name = f"{base}-{suffix}" + (f"-{index}" if index else "")
-        index += 1
+    name = re.sub(r"[^A-Za-z0-9_-]+", "-", checkout.name).strip("-") or "repo"
+    if name in repos:
+        raise repository_name_collision(name, str(checkout), repos[name])
     return name, None
+
+
+def repository_name_collision(name: str, checkout: str, existing: str) -> OnboardingError:
+    fix = "Create a unique alias for this checkout in [repos] in engine.toml, or rename the local checkout directory and retry"
+    return OnboardingError(
+        "config", f"Repository name {name!r} for {checkout} conflicts with {existing}. {fix}", fix,
+    )
 
 
 def machine_config_path() -> Path:
@@ -152,7 +154,7 @@ def _updated_config(path: Path, name: str, checkout: str, mode: str, trusted: bo
     document = tomlkit.parse(original)
     repos = document.setdefault("repos", tomlkit.table())
     if name in repos and Path(str(repos[name])).expanduser().resolve() != Path(checkout).expanduser().resolve():
-        raise OnboardingError("config", f"{name} is already configured at another path", "Use its configured path or edit the existing repository entry")
+        raise repository_name_collision(name, checkout, str(repos[name]))
     if name not in repos:
         repos[name] = checkout
         if mode == "disconnected":

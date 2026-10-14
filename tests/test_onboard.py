@@ -555,33 +555,42 @@ def test_trust_reserves_active_onboarding_names(tmp_path, monkeypatch):
             assert service.jobs[job['id']]['status'] == 'queued'
             assert not config.exists()
             assert service.repository_trust(str(first))['name'] == 'demo'
-            preview = service.repository_trust(str(second))
-            assert preview['name'].startswith('demo-')
-            trusted = service.repository_trust(str(second), True)
-            assert trusted == {**preview, 'trusted': True}
+            for action in (
+                lambda: service.repository_trust(str(second)),
+                lambda: service.repository_trust(str(second), True),
+                lambda: service.start(str(second), None),
+            ):
+                with pytest.raises(onboard.OnboardingError, match="conflicts with") as error:
+                    action()
+                assert str(first) in str(error.value)
+                assert str(second) in str(error.value)
+                assert "alias" in error.value.problem["fix"]
+                assert "rename" in error.value.problem["fix"]
+            assert not config.exists()
         finally:
             await service.close()
         assert service.jobs[job['id']]['status'] == 'complete'
-        return trusted['name']
 
-    second_name = asyncio.run(run())
+    asyncio.run(run())
     saved = tomllib.loads(config.read_text())
-    assert saved['repos'] == registry.snapshot.repos == {'demo': str(first), second_name: str(second)}
-    assert saved['repo_modes'] == {'demo': 'disconnected', second_name: 'disconnected'}
-    assert saved['trusted_repos'] == {second_name: True}
-    assert registry.lookup(str(second)) == (second_name, True)
+    assert saved['repos'] == registry.snapshot.repos == {'demo': str(first)}
+    assert saved['repo_modes'] == {'demo': 'disconnected'}
+    assert 'trusted_repos' not in saved
+    with pytest.raises(onboard.OnboardingError, match="conflicts with"):
+        service.repository_trust(str(second), True)
 
 
-def test_local_names_are_sanitized_stable_and_disambiguated(tmp_path, monkeypatch):
+def test_local_names_are_sanitized_and_collisions_require_an_alias(tmp_path, monkeypatch):
     monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(args, 2, '', ''))
     first, second = tmp_path / 'one/My demo!', tmp_path / 'two/My demo!'
     name, project = onboard.local_repository(first, {})
     assert (name, project) == ('My-demo', None)
     repos = {name: str(first)}
-    other, project = onboard.local_repository(second, repos)
-    assert other.startswith('My-demo-') and '/' not in other and project is None
-    repos[other] = str(second)
-    assert onboard.local_repository(second, repos) == (other, None)
+    with pytest.raises(onboard.OnboardingError, match="conflicts with"):
+        onboard.local_repository(second, repos)
+    repos['my-alias'] = str(second)
+    assert onboard.local_repository(second, repos) == ('my-alias', None)
+    assert onboard.local_repository(second.with_name('renamed'), repos) == ('renamed', None)
     assert onboard.local_repository(first, repos) == (name, None)
     assert onboard.local_repository(tmp_path / '!!!', {}) == ('repo', None)
     onboard.parse_engine_config({'repos': repos})
@@ -594,3 +603,43 @@ def test_local_names_are_sanitized_stable_and_disambiguated(tmp_path, monkeypatc
 def test_local_forge_names_are_preserved(tmp_path, monkeypatch, origin, expected):
     monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(args, 0, origin, ''))
     assert onboard.local_repository(tmp_path, {}) == (expected, expected)
+
+
+def test_persist_rejects_name_collision_with_actionable_error(tmp_path):
+    config = tmp_path / 'engine.toml'
+    first, second = tmp_path / 'one/demo', tmp_path / 'two/demo'
+    onboard.persist_repository(config, 'demo', str(first), 'disconnected', True)
+    original = config.read_text()
+    # A stale allocation from a concurrent request must also surface the error.
+    with pytest.raises(onboard.OnboardingError, match="conflicts with") as error:
+        onboard.persist_repository(config, 'demo', str(second), 'disconnected', False)
+    assert "alias" in error.value.problem["fix"]
+    assert "rename" in error.value.problem["fix"]
+    assert config.read_text() == original
+
+
+@pytest.mark.parametrize('method', ['GET', 'POST'])
+def test_trust_api_surfaces_collision_and_recovery(tmp_path, monkeypatch, method):
+    from engine.graph_service.api import create_app
+
+    first, second = tmp_path / 'one/demo', tmp_path / 'two/demo'
+    monkeypatch.setattr(onboard, '_run', lambda args: subprocess.CompletedProcess(
+        args, 0 if 'rev-parse' in args else 2,
+        args[2] if 'rev-parse' in args else '', '',
+    ))
+    registry = RepositoryRegistry({'demo': str(first)}, projects={})
+    onboarding = onboard.RepositoryOnboarding(registry, tmp_path / 'engine.toml', AsyncMock())
+    app = create_app(Mock(), repository_trust=onboarding.repository_trust)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
+            response = await client.request(method, '/repositories/trust',
+                params={'repository': str(second)}, json={'repository': str(second), 'trusted': True})
+            assert response.status_code == 400
+            message = response.json()['error']
+            assert "conflicts with" in message
+            assert str(first) in message and str(second) in message
+            assert "alias" in message and "rename" in message
+
+    asyncio.run(run())
+    assert not onboarding.config_path.exists()
