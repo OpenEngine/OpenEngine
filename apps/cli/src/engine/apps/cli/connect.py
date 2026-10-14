@@ -8,6 +8,7 @@ import sys
 import time
 import webbrowser
 from dataclasses import replace
+from enum import StrEnum
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
@@ -17,8 +18,13 @@ from engine.apps.cli import daemon
 from engine.cli import backends
 from engine.cli.commands import add_list_alias
 
-EXIT_OK = 0
-EXIT_FAILED = 1
+class DaemonState(StrEnum):
+    """The state of the OpenEngine daemon."""
+    DOWN = "down"
+    FOREIGN = "foreign"
+    INCOMPATIBLE = "incompatible"
+    READY = "ready"
+    STARTING = "starting"
 PROVIDERS = ("gh", "github", "gitlab", "slack")
 #: What `engine disconnect` can undo; `gh` is the host's own login (`gh auth logout`).
 DISCONNECTABLE = ("github", "gitlab", "slack")
@@ -74,10 +80,10 @@ def selected_backend(arguments: argparse.Namespace) -> backends.Backend:
 def ensure_ready(backend: backends.Backend) -> None:
     """Fail unless the service answers, starting the registered local daemon if it is down."""
     state, _body, detail = daemon.check_health(backend.url)
-    if state == "down" and backend.is_local and daemon.read_record() is not None:
+    if state == DaemonState.DOWN and backend.is_local and daemon.read_record() is not None:
         daemon.start_service()
         state, _body, detail = daemon.check_health(backend.url)
-    if state != "ready":
+    if state != DaemonState.READY:
         raise RuntimeError(detail)
 
 

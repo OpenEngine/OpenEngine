@@ -28,6 +28,7 @@ import tomllib
 import webbrowser
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
@@ -50,8 +51,13 @@ START_TIMEOUT_SECONDS = 60.0
 # The service appends to one log; keep one previous copy past this size.
 LOG_ROTATE_BYTES = 10 * 1024 * 1024
 STOP_TIMEOUT_SECONDS = 30.0
-EXIT_OK = 0
-EXIT_FAILED = 1
+EXIT_CODES = {
+    DaemonState.DOWN: 0,
+    DaemonState.FOREIGN: 0,
+    DaemonState.INCOMPATIBLE: 2,
+    DaemonState.READY: 0,
+    DaemonState.STARTING: 1,
+}
 
 
 def _xdg(variable: str, default: str) -> Path:
@@ -671,12 +677,17 @@ def instance_lock() -> Iterator[None]:
 API_VERSION = 1
 
 
-def check_health(url: str, timeout: float = 2.0) -> tuple[str, dict[str, Any] | None, str]:
-    """Read the `/api/health` envelope; the one parser `engine` and `engine daemon` share.
+class DaemonState(StrEnum):
+    """The state of the OpenEngine daemon."""
+    DOWN = "down"
+    FOREIGN = "foreign"
+    INCOMPATIBLE = "incompatible"
+    READY = "ready"
+    STARTING = "starting"
 
-    The state is `ready`, `starting`, `incompatible` (an OpenEngine with another
-    API version), `foreign` (another program holds the port) or `down`.
-    """
+
+def derive_state(url: str, timeout: float = 2.0) -> DaemonState:
+    """Derive the daemon state from a health probe outcome."""
     try:
         with urlopen(Request(f"{url}/api/health", headers={"Accept": "application/json"}), timeout=timeout) as response:
             body = json.loads(response.read())
@@ -687,30 +698,57 @@ def check_health(url: str, timeout: float = 2.0) -> tuple[str, dict[str, Any] | 
             except (OSError, ValueError):
                 body = None
             if isinstance(body, dict) and body.get("service") == "openengine":
-                return "starting", body, "OpenEngine is starting or not ready"
-        return "foreign", None, f"server returned HTTP {error.code}"
+                return DaemonState.STARTING
+        return DaemonState.FOREIGN
     except (URLError, TimeoutError, OSError) as error:
-        return "down", None, f"cannot reach {url}: {error.reason if isinstance(error, URLError) else error}"
+        return DaemonState.DOWN
     except ValueError:
-        return "foreign", None, "health endpoint did not return JSON"
+        return DaemonState.FOREIGN
     if not isinstance(body, dict) or body.get("service") != "openengine":
-        return "foreign", body if isinstance(body, dict) else None, "endpoint is not an OpenEngine service"
+        return DaemonState.FOREIGN
     if body.get("api_version") != API_VERSION:
-        return "incompatible", body, f"unsupported API compatibility version: {body.get('api_version')!r}"
+        return DaemonState.INCOMPATIBLE
     if body.get("ready") is not True:
-        return "starting", body, "OpenEngine is not ready"
-    return "ready", body, f"OpenEngine {body.get('version', 'unknown')} is ready"
+        return DaemonState.STARTING
+    return DaemonState.READY
 
 
-def health(url: str, timeout: float = 2.0) -> tuple[str, dict[str, Any] | None]:
+def check_health(url: str, timeout: float = 2.0) -> tuple[DaemonState, dict[str, Any] | None, str]:
+    """Read the `/api/health` envelope; the one parser `engine` and `engine daemon` share.
+
+    The state is `ready`, `starting`, `incompatible` (an OpenEngine with another
+    API version), `foreign` (another program holds the port) or `down`.
+    """
+    state = derive_state(url, timeout)
+    # Extract detail messages for each state
+    if state == DaemonState.DOWN:
+        return state, None, f"cannot reach {url}"
+    elif state == DaemonState.FOREIGN:
+        return state, None, "endpoint is not an OpenEngine service"
+    elif state == DaemonState.INCOMPATIBLE:
+        return state, None, "unsupported API compatibility version"
+    elif state == DaemonState.STARTING:
+        return state, None, "OpenEngine is starting or not ready"
+    elif state == DaemonState.READY:
+        return state, None, "OpenEngine is ready"
+    # This shouldn't happen, but just in case
+    return state, None, f"unknown state: {state}"
+
+
+def health(url: str, timeout: float = 2.0) -> tuple[DaemonState, dict[str, Any] | None]:
     """`ready`, `starting`, `foreign` or `down`; any OpenEngine on the port is ours to manage."""
-    state, body, _detail = check_health(url, timeout)
-    if state == "incompatible":
-        state = "ready" if body and body.get("ready") is True else "starting"
+    state, body = derive_state(url, timeout), None
+    if state == DaemonState.INCOMPATIBLE:
+        try:
+            with urlopen(Request(f"{url}/api/health", headers={"Accept": "application/json"}), timeout=timeout) as response:
+                body = json.loads(response.read())
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+            pass
+        state = DaemonState.READY if body and body.get("ready") is True else DaemonState.STARTING
     return state, body
 
 
-def wait_for(url: str, wanted: set[str], timeout: float, backend: Backend | None = None) -> tuple[str, dict[str, Any] | None]:
+def wait_for(url: str, wanted: set[DaemonState], timeout: float, backend: Backend | None = None) -> tuple[DaemonState, dict[str, Any] | None]:
     """Poll health until a wanted state, or until a detached process has exited."""
     deadline = time.monotonic() + timeout
     while True:
@@ -722,14 +760,14 @@ def wait_for(url: str, wanted: set[str], timeout: float, backend: Backend | None
         time.sleep(0.2)
 
 
-def start_service() -> tuple[str, dict[str, Any] | None, str]:
+def start_service() -> tuple[DaemonState, dict[str, Any] | None, str]:
     """Start the one per-user instance if it is not already serving."""
     with instance_lock():
         backend, spec = current()
         state, body = health(spec.url)
-        if state == "foreign":
+        if state == DaemonState.FOREIGN:
             raise RuntimeError(f"another program is using {spec.url}; free port {spec.port} or change [server] port in {spec.config}")
-        if state == "down":
+        if state == DaemonState.DOWN:
             check = _check_node(spec.tools)
             tools, problem = check.tools, check.problem
             if tools != spec.tools:
@@ -743,20 +781,20 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
                 print(f"engine daemon: {detail}" if check.healed else f"engine daemon: warning: {problem}; {detail}", file=sys.stderr)
             rotate_log(Path(spec.log))
             backend.start(spec)
-        state, body = wait_for(spec.url, {"ready", "foreign"}, START_TIMEOUT_SECONDS, backend)
-        if state != "ready":
+        state, body = wait_for(spec.url, {DaemonState.READY, DaemonState.FOREIGN}, START_TIMEOUT_SECONDS, backend)
+        if state != DaemonState.READY:
             raise RuntimeError(f"OpenEngine did not become ready at {spec.url}; see {spec.log}")
         return state, body, spec.url
 
 
-def stop_service() -> str:
+def stop_service() -> DaemonState:
     with instance_lock():
         backend, spec = current()
         backend.stop()
-        state, _body = wait_for(spec.url, {"down", "foreign"}, STOP_TIMEOUT_SECONDS)
-        if state in {"ready", "starting"}:
+        state, _body = wait_for(spec.url, {DaemonState.DOWN, DaemonState.FOREIGN}, STOP_TIMEOUT_SECONDS)
+        if state in {DaemonState.READY, DaemonState.STARTING}:
             raise RuntimeError(f"OpenEngine is still answering at {spec.url}; it may not be managed by engine daemon")
-        return spec.url
+        return state
 
 
 def open_browser(url: str) -> None:
@@ -789,7 +827,7 @@ def command_setup(arguments: argparse.Namespace) -> int:
             if previous is not None and previous.backend in BACKENDS:
                 # Rerunning setup after an upgrade moves the service onto it.
                 BACKENDS[previous.backend]().stop()
-                wait_for(previous.spec.url, {"down", "foreign"}, STOP_TIMEOUT_SECONDS)
+                wait_for(previous.spec.url, {DaemonState.DOWN, DaemonState.FOREIGN}, STOP_TIMEOUT_SECONDS)
             backend = available_backend()
             backend.install(spec)
             state, _body = health(spec.url)
@@ -847,7 +885,8 @@ def command_status(arguments: argparse.Namespace) -> int:
     try:
         backend, spec = current()
     except (OSError, RuntimeError, ValueError) as error:
-        return _fail(error)
+        print(f"engine daemon: {error}", file=sys.stderr)
+        return EXIT_FAILED
     state, body = health(spec.url)
     report = {
         "url": spec.url,
@@ -864,7 +903,7 @@ def command_status(arguments: argparse.Namespace) -> int:
     else:
         for name in ("url", "health", "version", "engine", "backend", "running", "config", "log"):
             print(f"{name}: {report[name] if report[name] is not None else 'unknown'}")
-    return EXIT_OK if state == "ready" else EXIT_FAILED
+    return EXIT_CODES[state]
 
 
 def tail(file: BinaryIO, count: int, block: int = 64 * 1024) -> list[bytes]:
@@ -911,9 +950,9 @@ class Finding:
 def _port_finding(port: int) -> Finding:
     url = service_url(port)
     state, body = health(url)
-    if state in {"ready", "starting"}:
+    if state in {DaemonState.READY, DaemonState.STARTING}:
         return Finding("port", "ok", f"{url} is served by OpenEngine {(body or {}).get('version', '')}".rstrip())
-    if state == "foreign":
+    if state == DaemonState.FOREIGN:
         return Finding("port", "error", f"{url} is served by another program")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
