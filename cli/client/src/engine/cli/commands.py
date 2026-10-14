@@ -549,7 +549,7 @@ def graph_run(arguments: argparse.Namespace) -> int:
             print(f"started {run['runId']} ({run['graph']} v{run['version']}); waiting...", file=sys.stderr)
         run = _wait_for_run(client, run["runId"], arguments.timeout)
     if arguments.command == "go" and not arguments.json:
-        for line in live.summary(run):
+        for line in live.summary(run, backend.name):
             print(line)
         return EXIT_FAILED if _run_failed(run) else EXIT_OK
     return _show_run(run, backend, arguments.pretty)
@@ -595,7 +595,7 @@ def _watch_run(client: Client, run_id: str, backend: Backend) -> int:
         command = shlex.join(["engine", "run", "watch", run_id, "--backend", backend.name])
         print(live.safe_text(f"Detached. Reattach with: {command}"))
         return EXIT_OK
-    for line in live.summary(run):
+    for line in live.summary(run, backend.name):
         print(line)
     return EXIT_FAILED if outcome == "cancelled" or _run_failed(run) else EXIT_OK
 

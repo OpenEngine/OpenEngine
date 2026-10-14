@@ -310,7 +310,7 @@ class Watch:
         return "detached"
 
 
-def summary(run: dict[str, Any]) -> list[str]:
+def summary(run: dict[str, Any], backend: str) -> list[str]:
     """What is worth reading once a run has ended: its final output and where the work is."""
     lines: list[str] = [f"{run['runId']} · {run['status'].replace('_', ' ')}"]
     if run.get("failure"):
@@ -324,7 +324,8 @@ def summary(run: dict[str, Any]) -> list[str]:
             lines += ["", f"── {node_id} " + "─" * 20, str(result).strip()]
     workspace = run.get("workspace") or {}
     if workspace.get("path"):
-        lines += ["", f"Workspace details: engine run get {shlex.quote(run['runId'])}"]
+        command = shlex.join(["engine", "run", "get", run["runId"], "--backend", backend])
+        lines += ["", f"Workspace details: {command}"]
     cost = (run.get("usage") or {}).get("costUsd")
     if cost is not None:
         lines.append(f"Usage: ${cost:.2f}" + ("" if run["usage"].get("complete", True) else " (some costs unknown)"))

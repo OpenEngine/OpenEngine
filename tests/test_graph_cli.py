@@ -672,3 +672,19 @@ def test_repo_add_gitlab_url(monkeypatch):
     assert main(['repo', 'add', 'https://gitlab.com/group/repo.git']) == 0
     assert backend.requests[0]['body']['repository'] == 'https://gitlab.com/group/repo.git'
     assert backend.requests[0]['body']['path'] is None
+
+
+@pytest.mark.parametrize("outcome", ["finished", "cancelled"])
+def test_workspace_hint_preserves_explicit_backend(monkeypatch, capsys, outcome):
+    import shlex
+    from engine.cli import live
+
+    backends.add("remote-machine", "http://remote:4364")
+    run = {**RUN, "workspace": {"path": "/tmp/workspace"}}
+    monkeypatch.setattr(live.Watch, "follow", lambda self: (run, outcome))
+    main(["run", "watch", "run-1", "--backend", "remote-machine"])
+    hint = next(line for line in capsys.readouterr().out.splitlines()
+                if line.startswith("Workspace details: "))
+    assert shlex.split(hint.removeprefix("Workspace details: ")) == [
+        "engine", "run", "get", "run-1", "--backend", "remote-machine",
+    ]
