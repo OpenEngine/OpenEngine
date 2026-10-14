@@ -35,7 +35,7 @@ const QUESTION = /^read asks to .*ls/
 const ALLOW = /Allow\? \[y\/n\]/
 const INTERRUPTED = /\[d\]etach and leave it running, \[c\]ancel the run, or keep \[w\]atching\?/
 
-type Run = { runId: string; status: string; pendingApprovals?: { approvalId: string }[] }
+type Run = { runId: string; status: string; terminal?: boolean; pendingApprovals?: { approvalId: string }[] }
 
 /** What the backend has for its runs, asked of it directly rather than through the CLI. */
 async function runs(engine: Engine): Promise<Run[]> {
@@ -144,7 +144,7 @@ test.describe(graphsCategory, () => {
               steps: [
                 { type: "say", text: "Reading the README to see what this project is." },
                 // Long enough to show the run part way through, short enough not to keep anyone waiting.
-                { type: "run", command: "cat README.md", approval: false },
+                { type: "run", command: "cat README.md" },
                 { type: "wait", seconds: 4 },
                 { type: "say", text: "This is an example project; its README is one heading." },
               ],
@@ -185,6 +185,27 @@ The first time you run a graph in a folder, OpenEngine asks whether to trust it.
           },
         )
 
+        const answered = new Set<string>()
+        const answerQuestions = async (state: Run) => {
+          for (const approval of state.pendingApprovals ?? []) {
+            if (answered.has(approval.approvalId)) continue
+            await terminal.waitForText(ALLOW)
+            await show(terminal, engine, testInfo, await terminal.row(ALLOW), "Read the question before allowing the command")
+            await terminal.type("y")
+            await terminal.press("Enter")
+            answered.add(approval.approvalId)
+          }
+        }
+
+        await step(
+          "If an agent asks to run a command, read the question. Type y and press Enter to allow it. Here the agent reads README.md, the file that describes your project.",
+          async () => {
+            const active = await onlyRun(engine)
+            if (engine.agentMode === "stub") await terminal.waitForText(ALLOW)
+            await answerQuestions(await run(engine, active.runId))
+          },
+        )
+
         await step(
           `Now watch. The screen redraws itself as the run goes on:
 
@@ -198,7 +219,8 @@ If you see *cannot reach backend*, OpenEngine's background program isn't running
             await terminal.waitForText(/^\s+Graph\s+/m)
             if (engine.agentMode === "stub") await terminal.waitForText(/┃ ⚙ cat README\.md/)
             const running = await onlyRun(engine)
-            expect(["running", "pending"]).toContain((await run(engine, running.runId)).status)
+            await answerQuestions(await run(engine, running.runId))
+            await expect.poll(async () => (await run(engine, running.runId)).status).toBe("running")
             await show(terminal, engine, testInfo, await terminal.rows(STAGES, /^\s+Graph\s+/), "The plan stage is in progress; its step, read, is running")
             // The screen settled part way through the run, not only once it had ended.
             expect((await run(engine, running.runId)).status).toBe("running")
@@ -209,9 +231,17 @@ If you see *cannot reach backend*, OpenEngine's background program isn't running
         await step(
           `Keep watching until the run ends. When the last step is done, every mark turns to ✓, the top line says *completed*, and below it you'll see what the last step's agent replied.
 
-The run ends on its own; you don't need to press anything.`,
+If an agent asks to run a command, read the question. To allow it, type \`y\` and press Enter. Answer any further questions the same way when you want to allow the requested action. Once the work is done, the run ends on its own.`,
           async () => {
-            const exitCode = await terminal.waitForPrompt({ timeout: engine.agentMode === "real" ? 280_000 : 60_000 })
+            const active = await onlyRun(engine)
+            await expect.poll(async () => {
+              const state = await run(engine, active.runId)
+              await answerQuestions(state)
+              return state.terminal
+            }, { timeout: engine.agentMode === "real" ? 280_000 : 60_000,
+                 message: "answering command approvals until the run ends" }).toBe(true)
+            if (engine.agentMode === "stub") expect(answered.size).toBe(1)
+            const exitCode = await terminal.waitForPrompt({ timeout: 60_000 })
             expect(exitCode).toBe(0)
             const { runId } = await onlyRun(engine)
             expect((await run(engine, runId)).status).toBe("completed")
@@ -377,7 +407,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
               steps: [
                 { type: "say", text: "Reading the README to see what this project is." },
                 // Busy until the run is cancelled.
-                { type: "run", command: "cat README.md", approval: false },
+                { type: "run", command: "cat README.md" },
                 { type: "wait", seconds: 600 },
               ],
             },
@@ -390,6 +420,16 @@ The same screen comes back, showing where the run is now. Since the agent is sti
           `If you started the wrong graph, or no longer need what it's doing, you can stop it. Start the graph with \`engine graph run describe-project\`, and answer \`n\` if you're asked whether to trust the folder.`,
           async () => {
             await start(terminal)
+            await terminal.waitForText(ALLOW)
+            await show(terminal, engine, testInfo, await terminal.row(ALLOW), "The agent asks before reading the file")
+          },
+        )
+
+        await step(
+          "Read the question. Type y and press Enter to let the agent read README.md before you stop its work.",
+          async () => {
+            await terminal.type("y")
+            await terminal.press("Enter")
             await terminal.waitForText(/┃ ⚙ cat README\.md/)
             runId = (await onlyRun(engine)).runId
             await show(terminal, engine, testInfo, await terminal.row(/^\s+Graph\s+/), "Your graph is running")
