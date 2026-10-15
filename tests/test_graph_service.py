@@ -835,6 +835,34 @@ def test_an_opencode_agent_on_a_model_server_gets_its_own_provider() -> None:
         }},
     }
     assert opencode_config(AgentRow("o", "opencode", "", "", "", "")) == {}
+    limited = AgentRow("qwen", "opencode", "qwen-agent:latest", "http://127.0.0.1:11434/v1", "", "", 65536, 8192)
+    assert opencode_config(limited)["provider"]["engine"]["models"] == {
+        "qwen-agent:latest": {"name": "qwen-agent:latest", "limit": {"context": 65536, "output": 8192}},
+    }
+
+
+def test_an_agent_on_a_model_server_keeps_its_context_limit(tmp_path: Path) -> None:
+    from engine.graph_service.service import opencode_config
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            url = "http://127.0.0.1:11434/v1"
+            added = await service.add_agent("opencode", name="qwen", model="q", url=url, context_limit=65536)
+            assert (added["contextLimit"], added["outputLimit"]) == (65536, None)
+            row = service.store.agent("qwen")
+            assert row is not None and opencode_config(row)["provider"]["engine"]["models"]["q"]["limit"] == {
+                "context": 65536, "output": 0,
+            }
+            plain = await service.add_agent("opencode", name="plain", model="q", url=url)
+            assert plain["contextLimit"] is None
+            for limits in ({"context_limit": "big"}, {"context_limit": -1}, {"output_limit": 8192},
+                           {"context_limit": 4096, "output_limit": 8192}):
+                with pytest.raises(ServiceError):
+                    await service.add_agent("opencode", name="bad", model="q", url=url, **limits)
+            with pytest.raises(ServiceError):
+                await service.add_agent("claude", name="bad", context_limit=65536)
+
+    asyncio.run(scenario())
 
 
 def test_an_added_agents_model_applies_when_a_node_names_none_or_an_unknown_tier() -> None:
