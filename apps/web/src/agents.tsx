@@ -11,6 +11,8 @@
 
 import { useEffect, useState } from "react";
 
+import { api } from "./api";
+
 type EndpointHealth = {
   responding: boolean;
   modelLoaded: boolean | null;
@@ -34,17 +36,16 @@ export type ApiAgent = {
 
 const AGENTS_PATH = "/api/v1/agents";
 
+/** How often the list re-reads the readings. The engine re-probes on its own
+ *  cadence, so this tracks one poll behind it closely enough that a model that
+ *  loads or an endpoint that goes down shows up next, rather than on a reload. */
+const AGENTS_REFRESH_MS = 30_000;
+
 /** Read the agents the engine offers. The list fetches its own copy: the rail
  *  that draws it would otherwise have to thread the probe's cadence through a
  *  prop, and the engine's list is the one source of the readings. */
 async function listAgents(): Promise<ApiAgent[]> {
-  const response = await fetch(AGENTS_PATH, {
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()).agents;
+  return (await api<{ agents: ApiAgent[] }>(AGENTS_PATH)).agents;
 }
 
 /** What a probe found, read on its own: the endpoint and the model, each on its
@@ -87,13 +88,20 @@ export function AgentList() {
 
   useEffect(() => {
     let current = true;
-    void listAgents()
-      .then((listed) => {
-        if (current) setAgents(listed);
-      })
-      .catch(() => {});
+    const read = () => {
+      void listAgents()
+        .then((listed) => {
+          if (current) setAgents(listed);
+        })
+        .catch(() => {});
+    };
+    read();
+    // The engine re-probes on its own cadence, so re-read close behind it: a
+    // model that loads or an endpoint that goes down shows next, not on a reload.
+    const handle = setInterval(read, AGENTS_REFRESH_MS);
     return () => {
       current = false;
+      clearInterval(handle);
     };
   }, []);
 

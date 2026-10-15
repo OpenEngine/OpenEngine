@@ -24,6 +24,7 @@ from engine.graph_runtime.metadata import RunMetadata, run_name
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -102,6 +103,28 @@ _CREDENTIAL_PARAMETER = re.compile(r"(key|token|secret|password|signature|sig|au
 
 #: The provider an opencode agent with a url reaches its endpoint through.
 OPENCODE_URL_PROVIDER = "engine"
+
+#: A model endpoint is reached on the daemon's own network, on the daemon's own
+#: clock, and what it read is served back to whoever added the agent, so the
+#: poller can become a reachability oracle for whatever an address on the
+#: daemon's network answers. The cloud's link-local instance-metadata address is
+#: the worst such read -- a client that may add an agent would otherwise get the
+#: daemon to ask the metadata service for them and report the answer back -- so it
+#: is refused outright, before a byte goes over the wire. Loopback is not refused:
+#: a local model server a client runs lives on 127.0.0.1, and the poller must
+#: reach it.
+_BLOCKED_ENDPOINT_HOSTS = (ipaddress.ip_network("169.254.169.254/32"),)
+
+#: A probe reads a model list, not a body: cap how many of a response's bytes it
+#: will pull off the wire, so an endpoint that streams without end cannot be read
+#: into memory by the poller. A model list is small, so a small cap is enough; it
+#: is well under the bound a body-less flood must not cross.
+PROBE_BODY_LIMIT = 1024 * 1024
+
+#: One endpoint may not hold the pass -- and so every other agent's reading -- for
+#: as long as it likes. A single probe stops at this wall-clock budget, so one slow
+#: or endless endpoint bounds the whole in-series poll rather than stalling it.
+PROBE_DEADLINE_SECONDS = 5.0
 
 AgentFactory = Callable[[AgentRow], Any]
 """Builds the ACP provider an added agent runs as: one registered under `row.name`."""
@@ -362,17 +385,39 @@ class GraphService:
         way an OpenAI-compatible server does (`/v1/models`). The reading is kept
         in memory and served with the agent, so a client sees whether the
         endpoint is up and whether the agent's model is loaded. An agent with no
-        `url` is never probed and carries no reading.
+        `url` is never probed and carries no reading, and one whose address is
+        blocked reaches no endpoint at all.
+
+        Each probe stops at its own wall-clock budget, so one endpoint that hangs
+        or streams without end stops at that budget and the next agent is still
+        probed: a slow or endless endpoint bounds its own reading, not the pass,
+        so it cannot hold every other agent's health.
         """
         for row in self.store.agents():
-            if not row.url:
+            if not row.url or _endpoint_address_blocked(row.url):
                 continue
             try:
-                self._health[row.name] = await self._probe(row)
+                health = await asyncio.wait_for(
+                    self._probe(row, PROBE_DEADLINE_SECONDS), PROBE_DEADLINE_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                self._health.pop(row.name, None)
+                continue
             except Exception:
                 log.exception("endpoint probe for agent %s failed", row.name)
+                continue
+            # Store the reading only for the row still live: a probe may have held
+            # while the agent was replaced or removed, in which case the live row
+            # is gone or new, and the old reading would otherwise be served for it.
+            # The probed row is the live one when its `updated_at` still matches the
+            # row the store holds now.
+            current = self.store.agent(row.name)
+            if current is not None and current.updated_at == row.updated_at:
+                self._health[row.name] = health
+            else:
+                self._health.pop(row.name, None)
 
-    async def _probe(self, row: AgentRow) -> EndpointHealth:
+    async def _probe(self, row: AgentRow, timeout: float) -> EndpointHealth:
         """Whether `row`'s endpoint is up and whether its model is loaded.
 
         Ollama's `/api/ps` is asked first, and when it would not serve a model
@@ -380,61 +425,81 @@ class GraphService:
         OpenAI-compatible `/v1/models` is asked instead, on the same origin.
         A 2xx Ollama model list is authoritative, an empty list read as "nothing
         is loaded". Reaching either endpoint, even a 401, is the endpoint
-        responding; only a connection-level failure reads as not responding.
+        responding; only a connection-level failure reads as not responding, and
+        in that case the OpenAI fallback is not asked, so a dead endpoint is not
+        reached twice.
         """
         async with httpx.AsyncClient(
             transport=self._endpoint_transport or httpx.AsyncHTTPTransport(),
         ) as client:
-            ollama = await self._ollama_probe(client, row)
+            ollama = await self._ollama_probe(client, row, timeout)
             if ollama is not None:
                 return ollama
-            return await self._openai_probe(client, row)
+            return await self._openai_probe(client, row, timeout)
 
-    async def _ollama_probe(self, client: httpx.AsyncClient, row: AgentRow) -> EndpointHealth | None:
+    async def _read_json(self, response: httpx.Response) -> Any:
+        """The JSON a probe read off `response`, off the wire and capped.
+
+        The body is streamed and stopped at `PROBE_BODY_LIMIT`, so an endpoint
+        that would stream without end -- a slow drip or a flood -- is read only
+        up to the cap and closed, not buffered whole. `None` is returned when the
+        body overran the cap or was not JSON; a model list is small, so a cap
+        that stops a flood never stops a real one.
+        """
+        body: bytearray = bytearray()
+        async for chunk in response.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > PROBE_BODY_LIMIT:
+                return None
+        try:
+            return json.loads(bytes(body) or b"")
+        except json.JSONDecodeError:
+            return None
+
+    async def _ollama_probe(
+        self, client: httpx.AsyncClient, row: AgentRow, timeout: float,
+    ) -> EndpointHealth | None:
         """Ollama's `/api/ps` reading, or `None` to defer to the OpenAI fallback.
 
-        `None` is returned when the endpoint is not Ollama: a connection error, a
-        404 or 5xx, or a 2xx whose body is not a model list. A 2xx model list is
-        taken as authoritative, with an empty list read as the model not loaded.
+        `None` is returned when the endpoint did not serve a model list: a 404 or
+        5xx, a 2xx whose body was not a model list, or a body that overran the
+        cap. A connection error or timeout is the endpoint not answering, which is
+        taken as the final answer -- `False` responding -- so the OpenAI fallback
+        does not reach the same dead host a second time.
         """
         origin = _endpoint_origin(row.url)
         try:
-            response = await client.get(f"{origin}/api/ps")
-        except httpx.HTTPError:
-            return None
-        if not response.is_success:
-            return None
-        try:
-            body = response.json()
-        except json.JSONDecodeError:
-            return None
-        models = body.get("models") if isinstance(body, dict) else None
-        if not isinstance(models, list):
-            return None
-        return EndpointHealth(True, row.model in _model_keys_of(models))
+            async with client.stream("GET", f"{origin}/api/ps", timeout=timeout) as response:
+                parsed = await self._read_json(response)
+                if response.is_success and parsed is not None:
+                    models = parsed.get("models") if isinstance(parsed, dict) else None
+                    if isinstance(models, list):
+                        return EndpointHealth(True, row.model in _model_keys_of(models))
+        except httpx.TransportError:
+            return EndpointHealth(False, None)
+        return None
 
-    async def _openai_probe(self, client: httpx.AsyncClient, row: AgentRow) -> EndpointHealth:
+    async def _openai_probe(
+        self, client: httpx.AsyncClient, row: AgentRow, timeout: float,
+    ) -> EndpointHealth:
         """The OpenAI-compatible fallback: a 2xx `/v1/models` is up and its `data` reads the model.
 
-        A 2xx whose body has no readable `data` list reads the model as unknown
-        (`None`); a list without the agent's model reads it as not loaded
-        (`False`). Any HTTP response -- even a 401 -- is the endpoint
-        responding; a connection error reads as not responding.
+        A 2xx whose body has no readable `data` list -- or overran the cap --
+        reads the model as unknown (`None`); a list without the agent's model
+        reads it as not loaded (`False`). Any HTTP response -- even a 401 -- is
+        the endpoint responding; a connection error reads as not responding.
         """
         try:
-            response = await client.get(f"{row.url}/models")
-        except httpx.HTTPError:
+            async with client.stream("GET", _endpoint_url(row.url) + "/models", timeout=timeout) as response:
+                model_loaded: bool | None = None
+                if response.is_success:
+                    parsed = await self._read_json(response)
+                    if isinstance(parsed, dict):
+                        data = parsed.get("data")
+                        if isinstance(data, list):
+                            model_loaded = row.model in _model_keys_of(data)
+        except httpx.TransportError:
             return EndpointHealth(False, None)
-        model_loaded: bool | None = None
-        if response.is_success:
-            try:
-                body = response.json()
-            except json.JSONDecodeError:
-                model_loaded = None
-            else:
-                data = body.get("data") if isinstance(body, dict) else None
-                if isinstance(data, list):
-                    model_loaded = row.model in _model_keys_of(data)
         return EndpointHealth(True, model_loaded)
 
     async def _endpoint_poll(self) -> None:
@@ -494,6 +559,10 @@ class GraphService:
                 raise Conflict(f"an agent named {name} already exists; pass replace to change it", agent=name)
             at = self._now_iso()
             row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at)
+            # A replaced agent's old endpoint reading is for the old row: drop it so
+            # a url-less or re-homed agent does not serve the reading of the one it
+            # replaced until the poller has probed it itself.
+            self._health.pop(name, None)
             self._offer_agent(row)
             self.store.upsert_agent(row)
         return self.agent_json(name, row)
@@ -505,6 +574,11 @@ class GraphService:
             row = self.store.agent(name)
             if row is None:
                 raise NotFound(f"no agent named {name!r}", agent=name)
+            # Drop the reading now: a probe in flight may still finish and would
+            # otherwise write the entry back after the agent was gone. The poller
+            # guards against that itself: it stores a reading only for the row it
+            # probed, so a probe that finishes for a removed row writes nothing.
+            self._health.pop(name, None)
             self.store.delete_agent(name)
             self._registry.unregister(name)
             self._added_agents.withdraw(name)
@@ -1730,6 +1804,38 @@ def _endpoint_origin(url: str) -> str:
     """
     parts = urlsplit(url)
     return f"{parts.scheme}://{parts.netloc}"
+
+
+def _endpoint_url(url: str) -> str:
+    """The agent's `/v1` endpoint with a trailing slash stripped.
+
+    An agent added with `--url http://host:8000/v1/` would otherwise have its
+    fallback probe reach `http://host:8000/v1//models`, which many servers 404,
+    so the model reads as unknown even when it is listed.
+    """
+    return url.rstrip("/")
+
+
+def _endpoint_address_blocked(url: str) -> bool:
+    """Whether the address a url names is one the poller must not reach.
+
+    The poller asks an address a client names for itself, on the daemon's own
+    network and clock, and serves whether it answered -- so a client that may add
+    an agent could otherwise make the daemon a reachability oracle for whatever
+    the daemon can reach. The cloud's link-local instance-metadata address is the
+    worst such target; it is the one a client would never run its own model server
+    on, so it is refused outright, while loopback -- where a local server lives --
+    is left to be probed. A url whose host is not an address (a name) is not
+    blocked here: the daemon resolves it as the client would.
+    """
+    host = urlsplit(url).hostname
+    if not host:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(address in blocked for blocked in _BLOCKED_ENDPOINT_HOSTS)
 
 
 def _model_keys(model: Any) -> tuple[str, ...]:
