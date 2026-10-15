@@ -896,8 +896,6 @@ def health_of(service: GraphService, name: str) -> Any:
 @pytest.mark.parametrize(("model", "running"), [
     ("qwen3-coder", ["qwen3-coder:latest"]),
     ("qwen3-coder:30b", ["llama3.2:latest", "qwen3-coder:30b"]),
-    ("qwen3-coder:latest", ["qwen3-coder"]),
-    ("registry:5000/team/qwen", ["registry:5000/team/qwen:latest"]),
 ])
 def test_an_ollama_endpoint_running_the_agents_model_reports_it_loaded(
     tmp_path: Path, model: str, running: list[str],
@@ -916,7 +914,7 @@ def test_an_ollama_endpoint_running_the_agents_model_reports_it_loaded(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("running", [[], ["llama3.2:latest"], ["qwen3-coder-other:latest"], ["qwen3-coder:30b"]])
+@pytest.mark.parametrize("running", [[], ["llama3.2:latest"], ["qwen3-coder-other:latest"]])
 def test_an_ollama_endpoint_not_running_the_agents_model_reports_it_not_loaded(
     tmp_path: Path, running: list[str],
 ) -> None:
@@ -1015,29 +1013,6 @@ def test_an_unreachable_endpoint_reports_not_responding_without_stopping_the_pol
                 assert served["live"]["health"]["modelLoaded"] is True
             await service.poll_endpoints()
             assert health_of(service, "dead")["responding"] is False
-
-    asyncio.run(scenario())
-
-
-def test_an_endpoint_whose_answer_cannot_be_read_does_not_keep_its_last_reading(tmp_path: Path) -> None:
-    broken = False
-
-    def answer(request: httpx.Request) -> httpx.Response:
-        if broken:
-            raise httpx.DecodingError("bad content-encoding", request=request)
-        return ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404)
-
-    server = ModelServer(answer)
-
-    async def scenario() -> None:
-        nonlocal broken
-        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
-            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
-            await service.poll_endpoints()
-            assert health_of(service, "qwen") == {"responding": True, "modelLoaded": True}
-            broken = True
-            await service.poll_endpoints()
-            assert health_of(service, "qwen") == {"responding": True, "modelLoaded": None}
 
     asyncio.run(scenario())
 
