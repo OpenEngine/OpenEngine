@@ -1,0 +1,212 @@
+' Two independently renderable diagrams: current and proposed architecture.
+' Proposed symbols and file locations below are design recommendations.
+
+@startuml 674-acp-current
+title ACP execution today — host agent, separate sandbox capability
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam defaultFontSize 13
+skinparam ArrowFontSize 11
+
+package "Engine / graph runtime" {
+  component "Graph service composition\napps/web/.../composition.py" as composition
+  component "Runtime ACPNode\ngraph_runtime_langgraph/acp.py" as node
+  database "Graph runtime store\nACPContinuation + approval" as store
+}
+
+package "langgraph-acp — standalone library" {
+  component "resume_continuation()\ncontinuation.py" as resume
+  component "ACPAgentRegistry\nagent.py" as registry
+  component "Reusable provider configuration\nCodex / Claude / OpenCode / Stdio\nconnect() — no invocation context" as provider
+  component "connect_over_stdio()\n_stdio.py" as launch
+  component "StdioACPClient + JSONRPCPeer\nprotocol, events, diagnostics, cleanup" as client
+}
+
+node "Host process execution" {
+  component "asyncio subprocess\nACP adapter + agent" as agent
+}
+
+package "Engine sandbox capability — separate execution path" {
+  component "Capabilities.sandbox\nSandbox.create(SandboxSpec)" as port
+  component "ProcessSandbox" as process
+  component "SmolvmSandbox" as smolvm
+}
+
+composition --> registry : registers host providers
+node --> store : save / read continuation
+node --> registry : fresh: resolve(agent)
+node --> resume : recovery: stored continuation\n+ cwd + MCP + session config
+resume --> registry : resolve(continuation.agent)
+registry --> provider : returns shared configuration
+node --> provider : fresh: connect()
+resume --> provider : recovery: connect()
+provider --> launch : command, env, launch cwd, handlers
+launch --> agent : create_subprocess_exec()
+launch --> client : construct + initialize
+client <--> agent : ACP JSON-RPC over stdin / stdout\nstderr drained separately
+node --> client : session/new or session/load\nthen prompt / events / close
+port --> process
+port --> smolvm
+
+note right of provider
+  Providers hold configuration, not connection state.
+  They receive no run, node, workspace or sandbox spec.
+  Session cwd is supplied after connection launch.
+end note
+
+note right of launch
+  CURRENT ENVIRONMENT
+  env=None inherits the full host environment.
+  Explicit env overlays the full host environment.
+end note
+
+note bottom of port
+  No ACP provider calls this port today.
+  Selecting smolvm does not move graph agents into VMs.
+  ProcessSandbox also inherits the full host environment.
+  SmolVM already filters its host control environment;
+  guest exec receives explicit env / spec secrets.
+end note
+
+legend bottom
+  Solid arrows = existing calls or data flow.
+  This view follows the runtime ACPNode; the minimal library ACPNode
+  also resolves a provider and calls connect() without context.
+endlegend
+@enduml
+
+@startuml 674-acp-proposed
+title Proposed ACP execution — invocation context + sandbox stdio transport
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam defaultFontSize 13
+skinparam ArrowFontSize 11
+skinparam componentBackgroundColor<<added>> #E2F3E6
+skinparam componentBackgroundColor<<changed>> #FFF0CC
+
+package "Engine / graph runtime" {
+  component "Graph composition / runtime wiring\nconfigured Sandbox backend\nincluding added agents + runner overrides" as composition <<changed>>
+  component "Runtime ACPNode\ngraph_runtime_langgraph/acp.py\nresolve context once per invocation" as node <<changed>>
+  component "Engine connection context\nrun / node / execution identifiers\nresolved workspace + SandboxSpec" as context <<added>>
+  database "Graph runtime store\nACPContinuation + approval" as store
+}
+
+package "langgraph-acp — no Engine imports" {
+  component "ACPConnectContext\nproposed: context.py\nEngine-neutral base context" as base <<added>>
+  component "ACPAgentRegistry\nresolves reusable provider" as registry
+  component "resume_continuation(..., context=...)\ncontinuation.py" as resume <<changed>>
+  component "ACPAgentProvider.connect(*, context=None)\nagent.py + all built-in providers" as hook <<changed>>
+  component "Shared ACP connection factory\nstreams + lifecycle operations\nextracted from _stdio.py" as factory <<added>>
+  component "Shared ACP client + JSONRPCPeer\ninitialize / sessions / events / permissions\nbackend-independent cleanup contract" as client <<changed>>
+  component "Local stdio provider / launcher\nfiltered host env + explicit configuration\nsubprocess lifecycle implementation" as local <<changed>>
+}
+
+package "Engine ACP adapter — proposed provider location" {
+  component "SandboxACPProvider\nimplements ACPAgentProvider\nimmutable reusable configuration" as provider <<added>>
+}
+
+package "Engine sandbox port / adapters" {
+  component "Sandbox.create(spec)\nSandboxInstance.exec(argv, cwd, env)\ncopy_in / copy_out / destroy" as port
+  component "Sandbox connection lifecycle\nowns sandbox context\nclose or setup failure => destroy" as lifetime <<added>>
+  component "ProcessSandbox\nexplicit host env allowlist\n+ command env + spec secrets" as process <<changed>>
+  component "SmolvmSandbox\nverify clean guest environment\nACP-compatible stream size" as smolvm <<changed>>
+}
+
+node "SmolVM guest — disposable workspace" {
+  folder "/workspace\ncopied from resolved host workspace" as workspace
+  component "Installed ACP adapter + agent\ncodex-acp OR claude-agent-acp\nalready pinned in guest image" as guest
+}
+
+composition --> node : configure selected backend and registry
+node --> store : save / read continuation
+node --> context : build once
+context ..|> base : extends
+node --> resume : recovery: continuation + same context
+resume --> registry : resolve stored agent
+registry --> hook : provider contract
+node --> hook : fresh: connect(context=context)
+hook --> provider : sandbox provider selected\ncontext forwarded on fresh AND resume
+hook --> local : local provider selected
+provider --> port : create(context.sandbox_spec)\nexec(guest command, relative cwd, explicit env)
+provider --> lifetime : owns until client.close()
+lifetime --> port : exit context / destroy()
+port --> process : process backend
+port --> smolvm : VM backend
+smolvm --> guest : exec installed adapter\nno runtime npm install
+provider --> factory : sandbox streams + lifecycle
+local --> factory : subprocess streams + lifecycle
+factory --> client : construct + initialize
+client <--> guest : ACP JSON-RPC over sandbox exec stdio\nstderr drained separately
+guest --> workspace : reads / writes guest files
+
+note right of context
+  ADD in graph runtime / Engine adapter:
+  typed SandboxSpec extension and per-node resolver.
+  Do not store invocation state on shared providers.
+  Do not serialize secrets into continuations or events.
+end note
+
+note right of hook
+  CHANGE in langgraph-acp:
+  propagate context through fresh and resume paths,
+  built-in providers and minimal library ACPNode.
+  Direct connect() calls still work with context=None.
+  Custom providers must adopt the new signature.
+end note
+
+note right of provider
+  ADD at the Engine adapter boundary:
+  composition injects the selected Sandbox backend
+  and explicit guest command configuration.
+  map host workspace to sandbox workspace.
+  exec cwd is workspace-relative;
+  ACP new/load cwd is the guest absolute path.
+  Apply translation on both new and loaded sessions.
+  Client close / handshake failure exits owned sandbox.
+  Preserve permission and elicitation handlers.
+end note
+
+note right of factory
+  EXTRACT from _stdio.py:
+  protocol handling must not require subprocess-only
+  returncode / terminate / kill methods.
+  Sandbox cleanup must stop the guest, not just its CLI.
+  Preserve the existing 8 MiB ACP message budget.
+end note
+
+note bottom of process
+  ENVIRONMENT POLICY — all launch paths
+  Inherit only named approved variables.
+  Explicit configuration is a deliberate grant.
+  SandboxSpec.secrets wins over conflicting command env.
+  Guest PATH / HOME / temp paths use guest values.
+  Verify the entire effective agent environment,
+  including image/runtime defaults, in tests.
+end note
+
+note bottom of workspace
+  RECOVERY / INTEGRATION BOUNDARIES
+  Disposable VM deletion also deletes agent session state.
+  Passing context alone does not make session/load durable.
+  Define persistence before claiming restart recovery;
+  unavailable state must fail explicitly, never start fresh silently.
+  Result export remains explicit copy_out, without automatic host merge.
+  Host MCP reachability needs validation or the planned bridge (#678).
+  Credential lifecycle remains follow-up #676; acceptance uses explicit test secrets.
+end note
+
+legend bottom
+  |= Color |= Meaning |
+  | <#E2F3E6> Green | Proposed addition |
+  | <#FFF0CC> Amber | Existing component to change |
+  | White | Existing component / capability to reuse |
+  Dashed triangle arrows = implements / extends; solid arrows = call / data flow.
+  Proposed names and locations are planning decisions, not implemented code.
+  Acceptance: real Codex AND Claude nodes complete inside SmolVM;
+  tests assert the full environment key set and cleanup on failure / cancellation.
+endlegend
+@enduml

@@ -66,6 +66,7 @@ from engine.graph_runtime_langgraph.store import (
     SqliteGraphRuntimeStore,
 )
 from engine.graph_runtime_langgraph.terminal_mcp import TerminalMcpServer
+from engine.graph_runtime_langgraph.sandbox import SandboxACPProvider, SandboxConnectContext
 from engine.graph_runtime.inputs import WorkflowInput
 from engine.graph_runtime_langgraph.workflows import (
     ADDED_AGENTS,
@@ -105,6 +106,8 @@ __all__ = [
     "PullRequestRecord",
     "RunRecord",
     "SqliteGraphRuntimeStore",
+    "SandboxACPProvider",
+    "SandboxConnectContext",
     "State",
     "TerminalMcpServer",
     "WithAddedAgents",

@@ -13,6 +13,13 @@ MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 10_000
 
+# Guest defaults, never host values. Explicit exec env and spec secrets extend
+# this list by name. Keep the helper standalone: it is copied into the image.
+GUEST_ENV_ALLOWLIST = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE",
+    "TMPDIR", "TMP", "TEMP", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+})
+
 
 def require_patched_python() -> None:
     version = sys.version_info[:3]
@@ -159,6 +166,18 @@ def unpack(archive: Path, destination: Path, export: bool = False) -> None:
 def _dispatch(operation: str, arguments: list[str]) -> None:
     if operation == "init":
         WORKSPACE.mkdir(parents=True, exist_ok=True)
+    elif operation == "cwd":
+        directory = workspace_path(arguments[0])
+        if not directory.is_dir():
+            message = "sandbox working directory does not exist"
+            raise FileNotFoundError(message)
+        print(json.dumps(str(directory)))
+    elif operation == "exec":
+        cwd, keys, *command = arguments
+        allowed = GUEST_ENV_ALLOWLIST | set(json.loads(keys))
+        environment = {key: value for key, value in os.environ.items() if key in allowed}
+        os.chdir(workspace_path(cwd))
+        os.execvpe(command[0], command, environment)
     elif operation == "check":
         cwd, executable = arguments
         directory = workspace_path(cwd)

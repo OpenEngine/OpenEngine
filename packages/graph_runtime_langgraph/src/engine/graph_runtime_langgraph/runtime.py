@@ -53,7 +53,7 @@ from typing import Any
 from uuid import uuid4
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
-from engine.ports import SourceControl, WorkspaceState
+from engine.ports import Sandbox, SourceControl, WorkspaceState
 from engine.runtime.terminal_mcp import WorkorderCreator
 from langgraph.checkpoint.base import create_checkpoint
 
@@ -153,9 +153,11 @@ class LangGraphRuntime:
         source_control: SourceControl | None = None,
         checkpointer: Any | None = None,
         public_url: str = "",
+        sandbox: Sandbox | None = None,
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
         self.public_url = public_url
+        self.sandbox = sandbox
         self.checkpointer = checkpointer
         """What a graph added after construction is compiled against.
 

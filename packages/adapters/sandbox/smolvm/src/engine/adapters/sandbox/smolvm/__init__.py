@@ -16,6 +16,7 @@ import tempfile
 import uuid
 
 from engine.ports import SandboxSpec
+from engine.ports.sandbox import SANDBOX_STREAM_LIMIT
 
 from . import _guest
 from .support import SmolvmSupport, detect_support
@@ -154,6 +155,7 @@ class SmolvmInstance:
             self.executable, *arguments, env=environment or self._environment,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, start_new_session=True,
+            limit=SANDBOX_STREAM_LIMIT,
         ))
         process, cancelled = await _settle(task)
         self._processes.add(process)
@@ -220,6 +222,11 @@ class SmolvmInstance:
             raise SmolvmError(message)
         return stdout
 
+    async def working_directory(self, path: str = ".") -> str:
+        async with self._lock:
+            self._alive()
+            return json.loads(await self._helper("cwd", _relative(path)))
+
     async def exec(self, argv: Sequence[str], *, cwd: str = ".", env: Mapping[str, str] | None = None) -> SmolvmProcess:
         async with self._lock:
             self._alive()
@@ -228,7 +235,12 @@ class SmolvmInstance:
                 message = "sandbox command must not be empty"
                 raise ValueError(message)
             checked = json.loads(await self._helper("check", directory, argv[0], env=env))
-            args, environment = self._exec_arguments([checked["executable"], *argv[1:]], env)
+            # Pass names, not secret values, to the guest environment scrubber.
+            keys = sorted(set(env or {}) | set(self.spec.secrets))
+            args, environment = self._exec_arguments([
+                GUEST_PYTHON, HELPER, "exec", directory, json.dumps(keys),
+                checked["executable"], *argv[1:],
+            ], env)
             args[2:2] = ["--workdir", checked["cwd"]]
             return SmolvmProcess(await self._spawn(args, environment), self)
 

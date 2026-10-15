@@ -215,3 +215,39 @@ def test_smolvm_copy_out_requires_safe_staging(sandbox_backend, tmp_path, comman
         assert not (checkout / ".git/config").exists()
         assert (staging / "result.txt").read_text() == "safe output"
     asyncio.run(asyncio.wait_for(run(), 120))
+
+
+def test_exec_environment_is_explicit(sandbox_backend, command, monkeypatch):
+    import json
+    from engine.ports.sandbox import HOST_ENV_ALLOWLIST
+
+    monkeypatch.setenv("UNSELECTED_HOST_VARIABLE", "must-not-be-inherited")
+    monkeypatch.setenv("GITHUB_TOKEN", "unselected-host-key")
+
+    async def run():
+        async with sandbox_backend.create(SandboxSpec(secrets={"SELECTED_KEY": "selected"})) as sandbox:
+            process = await sandbox.exec(command(
+                "import json, os; print(json.dumps(dict(os.environ)))"
+            ), env={"EXPLICIT_SETTING": "yes", "SELECTED_KEY": "overridden"})
+            environment = json.loads(await process.stdout.read())
+            assert await process.wait() == 0
+            assert set(environment) <= HOST_ENV_ALLOWLIST | {"EXPLICIT_SETTING", "SELECTED_KEY"}
+            assert environment["SELECTED_KEY"] == "selected"
+            assert environment["EXPLICIT_SETTING"] == "yes"
+
+    asyncio.run(run())
+
+
+def test_protocol_working_directory_is_sandbox_local(sandbox_backend, command):
+    async def run():
+        async with sandbox_backend.create(SandboxSpec()) as sandbox:
+            cwd = await sandbox.working_directory()
+            process = await sandbox.exec(command("import os; print(os.getcwd())"))
+            assert (await process.stdout.read()).decode().strip() == cwd
+            assert await process.wait() == 0
+            with pytest.raises(ValueError, match="workspace"):
+                await sandbox.working_directory("../escape")
+            with pytest.raises(FileNotFoundError):
+                await sandbox.working_directory("missing")
+
+    asyncio.run(run())

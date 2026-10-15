@@ -3,7 +3,7 @@
 `engine.ports.Sandbox` provisions a disposable execution environment. Its
 `create(SandboxSpec(...))` method is an async context manager: entry creates the
 workspace, and exit destroys it even on exceptions or cancellation. The returned
-`SandboxInstance` exposes `exec`, `copy_in`, `copy_out`, and idempotent `destroy`.
+`SandboxInstance` exposes `exec`, `working_directory`, `copy_in`, `copy_out`, and idempotent `destroy`.
 Do not use an instance after destruction.
 
 ```python
@@ -48,7 +48,7 @@ remaining descendants in their process group before releasing cleanup tracking.
 backend = "process"
 ```
 
-`process` is the default. It uses host executables, inherits the host environment,
+`process` is the default. It uses host executables, inherits only allowlisted environment variables,
 and has the host's filesystem and network access. It is **not a security
 boundary**. It rejects image selection and egress restrictions, including an
 empty allowlist. `None` means unrestricted egress. Labels are metadata only.
@@ -83,13 +83,89 @@ Switching back to `process` keeps the image setting for later reuse and requires
 no SmolVM installation. Failed checks leave configuration unchanged.
 
 Restart running services after changing the backend (`engine daemon restart` for
-the managed local service). The command selects the sandbox capability; it does
-not move existing agent or LangGraph node execution into VMs. That routing is
-follow-up work in #674. Local subprocesses remain the default.
+the managed local service). The graph runtime routes ACP nodes through the
+selected SmolVM backend. Existing connections are not moved. Local subprocesses
+remain the default when the process backend is selected.
 
-This port is available through `Capabilities.sandbox` in the application
-composition roots. Existing node and agent execution paths retain their current
-host behavior; routing those paths through this port is follow-up work.
+This port is also available through `Capabilities.sandbox` in application
+composition roots. The separate legacy `AgentRunner` execution path retains its
+host behavior; the VM routing described here applies to graph runtime ACP nodes.
+
+## ACP agent nodes
+
+The graph runtime passes a `SandboxConnectContext` on each connection, including
+the run, node and execution identifiers, resolved workspace and per-node
+`SandboxSpec`. Providers are reusable configuration; they do not retain an
+invocation's workspace or connection. The continuation path receives the same
+context fields. Context and credentials are not serialized into continuations.
+
+`SandboxACPProvider`, exported by `engine.graph_runtime_langgraph`, launches ACP
+over `SandboxInstance.exec` binary streams. The runtime adapts the built-in
+Codex and Claude default commands to the image-installed `codex-acp` and
+`claude-agent-acp`. Custom commands must be valid guest commands. The bundled
+image does not include OpenCode; its default launcher is refused instead of
+installing packages at runtime or falling back to the host.
+
+For an explicitly configured node:
+
+```python
+from pathlib import Path
+from engine.adapters.sandbox.smolvm import SmolvmSandbox
+from engine.graph_runtime_langgraph import ACPNode, SandboxACPProvider, agent_registry
+from engine.ports import SandboxSpec
+
+agents = agent_registry([
+    SandboxACPProvider(
+        name="codex",
+        command=("codex-acp",),
+        backend=SmolvmSandbox(image="/absolute/path/openengine-sandbox.tar"),
+    ),
+])
+node = ACPNode(
+    agent="codex", registry=agents, cwd=str(Path("checkout").resolve()),
+    prompt="Read the repository and summarize its structure.",
+    sandbox_spec=SandboxSpec(secrets={
+        "OPENAI_API_KEY": explicitly_supplied_test_key,
+        "DEFAULT_AUTH_REQUEST": '{"methodId":"api-key"}',
+    }),
+)
+```
+
+`sandbox_spec` also accepts a callable of graph state, resolved once per
+invocation. Do not put credentials into graph state; obtain them from a trusted
+deployment credential source. Claude's test credential is `ANTHROPIC_API_KEY`.
+Model login provisioning remains #676.
+
+The connection owns a disposable sandbox context. ACP `session/new` receives
+the sandbox's absolute working directory, never the host checkout path. Client
+close, failed initialization, cancellation and timeouts release the sandbox.
+Workspace changes are disposable: retain selected results with explicit exports,
+not an automatic merge into the host checkout. Workspace handoff between graph
+nodes remains separate integration work.
+
+This provider rejects `session/load` in a new disposable sandbox because the
+previous agent's session files are not persisted. It never replaces a missing
+session with a fresh conversation. Live permissions and steering can continue
+on the existing connection; durable VM session recovery is not implemented.
+Host stdio MCP bindings are refused before agent launch until the guest bridge
+in #678 is available. Consequently the full implementation/review workflow,
+which uses those bindings, is not yet supported end-to-end inside VMs.
+
+### Agent environments
+
+Local ACP launches and the process sandbox inherit only named variables in
+their published environment allowlists: executable lookup, home/user, locale,
+temporary directories, XDG locations and required platform variables. API keys,
+forge tokens, proxy settings, `SSH_AUTH_SOCK` and arbitrary agent-specific
+variables are not inherited. Explicit provider configuration extends this set;
+`SandboxSpec.secrets` overrides conflicting values. All sandbox provider env
+values use the secret injection path so credentials never become plaintext
+SmolVM CLI arguments.
+
+Guest execution filters image/runtime defaults to its own allowlist plus
+explicit command/spec variables. Guest defaults supply guest paths; the host's
+PATH or HOME is never copied into the VM implicitly. The host SmolVM control
+process keeps its separate minimal environment, including SmolVM library paths.
 
 `tests/test_sandbox_contract.py` is the reusable contract suite. Add another
 backend factory to its fixture parameters to run the same tests against it.
@@ -167,8 +243,8 @@ reported as successful cleanup. Startup orphan sweeping is follow-up #679.
 
 For now, `egress_allowlist=None` uses unrestricted networking; any explicit
 allowlist is rejected until #677 adds enforcement. Model login provisioning and
-the terminal broker bridge remain #676/#678. Selecting this backend does not
-route existing agents into VMs yet (#674), or change the default (#681).
+the terminal broker bridge remain #676/#678. The process backend remains the
+default (#681).
 
 ## Real hardware contract checks
 
@@ -186,3 +262,19 @@ Set `OE_SMOLVM_EXECUTABLE` to the wrapper's absolute path when it is not on PATH
 Failed prerequisite checks or boot failures are test failures once opted in,
 rather than skipped tests. Real tests need permission to use the hypervisor,
 write SmolVM's state directories and access the registry if using a remote image.
+
+
+Real ACP agent acceptance tests are separate from the hardware contract:
+
+```sh
+OE_SMOLVM_TEST_IMAGE=/absolute/path/openengine-sandbox.tar \
+  uv run --all-packages pytest tests/test_smolvm_acp_compatibility.py -m compatibility -v
+```
+
+Supply `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` explicitly in the test process's
+managed environment. The tests inject only the selected provider's credential
+into each guest and record environment variable names, never credential values.
+Once an image is supplied, missing credentials, failed prerequisites, boot errors
+and provider errors fail the tests. Without an image the tests skip; ordinary
+PR tests exercise real stdio with a deterministic ACP peer through the process
+backend and SmolVM CLI fake.

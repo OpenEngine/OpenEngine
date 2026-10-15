@@ -39,6 +39,7 @@ from dataclasses import dataclass
 
 from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
+from langgraph_acp.context import ACPConnectContext
 from langgraph_acp.elicitation import ACPElicitationHandler
 from langgraph_acp.permissions import ACPPermissionHandler
 
@@ -67,7 +68,7 @@ class CodexACPProvider:
     command: Sequence[str] = CODEX_ACP_COMMAND
     """The ACP adapter to launch. Override to use a locally installed one."""
     env: Mapping[str, str] | None = None
-    """Overlaid on this process's environment, never replacing it."""
+    """Explicit values overlaid on allowlisted host environment variables."""
     cwd: str | os.PathLike[str] | None = None
     """Where to launch the adapter. Not the workspace a session is given."""
     permissions: ACPPermissionHandler | None = None
@@ -78,7 +79,7 @@ class CodexACPProvider:
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
 
-    async def connect(self) -> ACPClient:
+    async def connect(self, *, context: ACPConnectContext | None = None) -> ACPClient:
         return await StdioACPProvider(
             name=self.name,
             command=self.command,
@@ -86,7 +87,7 @@ class CodexACPProvider:
             cwd=self.cwd,
             permissions=self.permissions,
             elicitations=self.elicitations,
-        ).connect()
+        ).connect(context=context)
 
 
 __all__ = ["CODEX_ACP_COMMAND", "CodexACPProvider"]

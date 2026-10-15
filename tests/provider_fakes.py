@@ -726,7 +726,7 @@ class FakeACPProvider:
         self.review = review
         self.calls = calls
 
-    async def connect(self):
+    async def connect(self, *, context=None):
         provider = self
         class Client:
             closed = False

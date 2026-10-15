@@ -125,7 +125,7 @@ class ScriptedProvider:
         self.prompts: list[str] = []
         self.results: list[list[dict]] = []
 
-    async def connect(self):
+    async def connect(self, *, context=None):
         provider = self
 
         class Client:

@@ -388,6 +388,10 @@ def build_graph_runtime(
         source_control=source_control,
         allow_empty=True,
         public_url=settings.engine_config.public_url,
+        sandbox=(
+            SmolvmSandbox(image=settings.engine_config.sandbox.image or None)
+            if settings.engine_config.sandbox.backend == "smolvm" else None
+        ),
     )
 
 

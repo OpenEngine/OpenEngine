@@ -78,9 +78,11 @@ from engine.domain import (
     RunFailed,
     StepCompleted,
 )
-from engine.ports import ApprovalHandler, ApprovalRequest
+from engine.ports import ApprovalHandler, ApprovalRequest, SandboxSpec
+from engine.graph_runtime_langgraph.sandbox import SandboxACPProvider, SandboxConnectContext, sandbox_provider
 from langgraph_acp import (
     ACPAgentRegistry,
+    ACPConnectionError,
     ACPContinuation,
     ACPEventType,
     ACPPermissionOutcome,
@@ -558,6 +560,8 @@ class ACPNode:
     therefore starts replacement servers while reconnecting the conversation
     the agent already owns.
     """
+    sandbox_spec: SandboxSpec | Callable[[Mapping[str, object]], SandboxSpec] | None = None
+    """Per-invocation image, timeout and explicit credentials; never checkpointed."""
     session_config: Mapping[str, object] | None = None
     """Provider settings sent with ``session/new`` and ``session/load``.
 
@@ -644,6 +648,7 @@ class ACPNode:
             client, session = await self._open(
                 stored if resuming else None, cwd, tuple(mcp_servers),
                 self.session_config,
+                self.sandbox_spec(state) if callable(self.sandbox_spec) else self.sandbox_spec,
             )
             turn = _Turn(self, execution, key, session.session_id)
             if resuming is not None:
@@ -796,6 +801,7 @@ class ACPNode:
         cwd: str,
         mcp_servers: tuple[Mapping[str, Any], ...],
         session_config: Mapping[str, object] | None = None,
+        sandbox_spec: SandboxSpec | None = None,
     ) -> tuple[Any, ACPSession]:
         """Reach the conversation: the stored one when resuming, else a new one.
 
@@ -803,16 +809,32 @@ class ACPNode:
         id means and how a connection reloads one is that package's to know; all
         this node does is keep the record and hand it back.
         """
+        execution = current_execution()
+        context = SandboxConnectContext(
+            workspace=cwd, run_id=str(execution.run_id), node_id=str(execution.node_id),
+            execution_id=str(execution.execution_id), sandbox_spec=sandbox_spec or SandboxSpec(),
+        )
+        registry = self.registry or default_registry()
+        selected = registry.resolve(stored.agent if stored is not None else self.agent)
+        if execution.runtime.sandbox is not None:
+            selected = sandbox_provider(selected, execution.runtime.sandbox)
+        if isinstance(selected, SandboxACPProvider):
+            if any("command" in server for server in mcp_servers):
+                raise ACPConnectionError(
+                    "host stdio MCP bindings require the sandbox MCP bridge (#678)",
+                    agent=selected.name, operation="connect",
+                )
+        registry = ACPAgentRegistry([selected])
         if stored is not None:
             return await resume_continuation(
                 stored,
-                registry=self.registry,
+                registry=registry,
+                context=context,
                 cwd=cwd,
                 mcp_servers=mcp_servers,
                 session_config=session_config,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             )
-        provider = (self.registry or default_registry()).resolve(self.agent)
-        client = await provider.connect()
+        client = await selected.connect(context=context)
         try:
             return client, await client.new_session(
                 cwd=cwd, mcp_servers=mcp_servers,

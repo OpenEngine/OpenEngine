@@ -14,6 +14,23 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
+# Bound a newline-delimited message without imposing asyncio's 64 KiB default.
+SANDBOX_STREAM_LIMIT = 8 * 1024 * 1024
+HOST_ENV_ALLOWLIST = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE",
+    "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "SystemRoot", "WINDIR",
+    "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "__CF_USER_TEXT_ENCODING", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+})
+
+
+def command_environment(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Allowlisted host defaults plus explicitly granted command variables."""
+    import os
+
+    return {**{key: value for key, value in os.environ.items() if key in HOST_ENV_ALLOWLIST}, **(env or {})}
+
+
 @dataclass(frozen=True, slots=True)
 class SandboxSpec:
     image: str | None = None
@@ -52,6 +69,10 @@ class SandboxProcess(Protocol):
 
 @runtime_checkable
 class SandboxInstance(Protocol):
+    async def working_directory(self, path: str = ".") -> str:
+        """Resolve a workspace-relative path for a guest protocol such as ACP."""
+        ...
+
     async def exec(
         self, argv: Sequence[str], *, cwd: str = ".", env: Mapping[str, str] | None = None
     ) -> SandboxProcess:

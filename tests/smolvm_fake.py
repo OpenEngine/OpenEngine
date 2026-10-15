@@ -55,7 +55,7 @@ elif action == "cp":
 elif action == "exec":
     machine = option("--name")
     command = args[args.index("--") + 1:]
-    environment = {"PATH": os.environ["PATH"]}
+    environment = {"PATH": os.environ["PATH"], "UNAPPROVED_IMAGE_DEFAULT": "must-be-filtered"}
     for index, flag in enumerate(args):
         if flag in {"--env", "--secret-env"}:
             key, value = args[index + 1].split("=", 1)

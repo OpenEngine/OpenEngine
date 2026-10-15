@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
+from langgraph_acp.context import ACPConnectContext
 from langgraph_acp.elicitation import ACPElicitationHandler
 from langgraph_acp.permissions import ACPPermissionHandler
 
@@ -58,7 +59,7 @@ class OpenCodeACPProvider:
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
 
-    async def connect(self) -> ACPClient:
+    async def connect(self, *, context: ACPConnectContext | None = None) -> ACPClient:
         return await StdioACPProvider(
             name=self.name,
             command=self.command,
@@ -66,7 +67,7 @@ class OpenCodeACPProvider:
             cwd=self.cwd,
             permissions=self.permissions,
             elicitations=self.elicitations,
-        ).connect()
+        ).connect(context=context)
 
 
 __all__ = ["OPENCODE_ACP_COMMAND", "OpenCodeACPProvider"]

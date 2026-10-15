@@ -1,6 +1,6 @@
 """Host execution with disposable workspace copies, not a security boundary.
 
-Commands inherit the host environment, filesystem access and network access.
+Commands have host filesystem and network access, with allowlisted environment.
 Images and egress restrictions are rejected rather than silently ignored.
 """
 
@@ -14,7 +14,7 @@ import signal
 import stat
 import tempfile
 
-from engine.ports.sandbox import SandboxSpec
+from engine.ports.sandbox import SANDBOX_STREAM_LIMIT, SandboxSpec, command_environment
 
 
 def _kill(process: asyncio.subprocess.Process) -> None:
@@ -90,6 +90,13 @@ class ProcessSandboxInstance:
             raise ValueError("sandbox path must stay within its workspace")
         return resolved
 
+    async def working_directory(self, path: str = ".") -> str:
+        directory = self._path(path)
+        if not directory.is_dir():
+            message = "sandbox working directory does not exist"
+            raise FileNotFoundError(message)
+        return str(directory)
+
     async def exec(
         self, argv: Sequence[str], *, cwd: str = ".", env: Mapping[str, str] | None = None
     ) -> ProcessExecution:
@@ -97,9 +104,10 @@ class ProcessSandboxInstance:
             directory = self._path(cwd)
             spawning = asyncio.create_task(asyncio.create_subprocess_exec(
                 *argv, cwd=directory,
-                env={**os.environ, **(env or {}), **self._spec.secrets},
+                env={**command_environment(env), **self._spec.secrets},
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, start_new_session=os.name == "posix",
+                limit=SANDBOX_STREAM_LIMIT,
             ))
             cancelled = False
             while not spawning.done():

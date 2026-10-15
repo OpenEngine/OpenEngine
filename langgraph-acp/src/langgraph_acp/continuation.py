@@ -48,6 +48,7 @@ from langgraph_acp._json import (
 )
 from langgraph_acp.agent import ACPAgentRegistry, default_registry
 from langgraph_acp.client import ACPClient
+from langgraph_acp.context import ACPConnectContext
 from langgraph_acp.session import ACPSession
 
 
@@ -104,6 +105,7 @@ async def resume_continuation(
     continuation: ACPContinuation,
     *,
     registry: ACPAgentRegistry | None = None,
+    context: ACPConnectContext | None = None,
     cwd: str | os.PathLike[str] | None = None,
     mcp_servers: Sequence[Mapping[str, JSONValue]] = (),
     session_config: Mapping[str, JSONValue] | None = None,
@@ -120,7 +122,7 @@ async def resume_continuation(
     start over learns it without a half-open connection to clean up.
     """
     provider = (registry or default_registry()).resolve(continuation.agent)
-    client = await provider.connect()
+    client = await provider.connect(context=context)
     try:
         session = await client.resume_session(
             continuation.session_id,

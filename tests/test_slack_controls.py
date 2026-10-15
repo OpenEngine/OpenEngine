@@ -18,7 +18,7 @@ class ControlProvider(FakeACPProvider):
         super().__init__()
         self.tool, self.arguments = tool, arguments
 
-    async def connect(self):
+    async def connect(self, *, context=None):
         client = await super().connect()
         original = client.prompt
 

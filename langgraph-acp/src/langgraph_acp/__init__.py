@@ -51,6 +51,9 @@ from langgraph_acp.agent import (
 from langgraph_acp.client import PROTOCOL_VERSION, ACPCapabilities, ACPClient
 from langgraph_acp.config import ACPConfig, ACPRequirements, UnsupportedOption
 from langgraph_acp.continuation import ACPContinuation, resume_continuation
+from langgraph_acp.context import ACPConnectContext
+from langgraph_acp.environment import HOST_ENV_ALLOWLIST, agent_environment
+from langgraph_acp.transport import ACPTransport, connect_over_transport
 from langgraph_acp.elicitation import (
     ACPElicitationHandler,
     ACPElicitationRequest,
@@ -95,6 +98,7 @@ __all__ = [
     "ACPCapabilities",
     "ACPClient",
     "ACPConfig",
+    "ACPConnectContext",
     "ACPConnectionError",
     "ACPContinuation",
     "ACPElicitationHandler",
@@ -116,6 +120,7 @@ __all__ = [
     "ACPSessionSpec",
     "ACPSessionStore",
     "ACPSessionStrategy",
+    "ACPTransport",
     "ACPUsage",
     "ACPWorkspace",
     "CANCELLED",
@@ -124,6 +129,7 @@ __all__ = [
     "ClaudeACPProvider",
     "CodexACPProvider",
     "EVENT_NAMESPACE",
+    "HOST_ENV_ALLOWLIST",
     "InMemoryACPSessionStore",
     "JSONObject",
     "JSONValue",
@@ -132,7 +138,9 @@ __all__ = [
     "PROTOCOL_VERSION",
     "StdioACPProvider",
     "UnsupportedOption",
+    "agent_environment",
     "allow_mcp_tools",
+    "connect_over_transport",
     "default_registry",
     "deny_permission",
     "resume_continuation",
