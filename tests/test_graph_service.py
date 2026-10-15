@@ -1505,3 +1505,34 @@ def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp
             assert (await service.run_json("reserved"))["status"] == "scheduled"
 
     asyncio.run(scenario())
+
+
+def test_the_poller_stops_reading_an_endpoint_that_answers_with_an_endless_body(tmp_path: Path) -> None:
+    """A hostile model server must not be able to push an unbounded body into the daemon on every pass."""
+    chunk = b" " * 65536
+    total = 64 * 1024 * 1024
+    served = {"bytes": 0}
+
+    async def endless(prefix: bytes) -> AsyncIterator[bytes]:
+        served["bytes"] += len(prefix)
+        yield prefix
+        while served["bytes"] < total:
+            served["bytes"] += len(chunk)
+            yield chunk
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        prefix = b'{"models": [' if request.url.path == "/api/ps" else b'{"data": ['
+        return httpx.Response(200, headers={"content-type": "application/json"}, content=endless(prefix))
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            assert served["bytes"] <= 4 * 1024 * 1024, (
+                f"the poller read {served['bytes']} bytes from one endpoint pass without a size cap"
+            )
+            assert health_of(service, "qwen") is not None
+
+    asyncio.run(scenario())
