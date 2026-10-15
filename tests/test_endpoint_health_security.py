@@ -185,3 +185,88 @@ def test_the_poller_does_not_probe_the_metadata_service_by_another_spelling(tmp_
             assert await served_health(service, "imds") is None
 
     asyncio.run(scenario())
+
+
+def resolves_to_metadata(host: str) -> bool:
+    import socket
+
+    return any(info[4][0] == "169.254.169.254" for info in socket.getaddrinfo(host, 80, type=socket.SOCK_STREAM))
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "2852039166",  # 169.254.169.254 as one decimal number
+        "0xa9fea9fe",  # ... as one hex number
+        "169.254.43518",  # ... with its last two octets folded together
+    ],
+)
+def test_the_poller_does_not_probe_a_numeric_spelling_of_the_metadata_address(tmp_path: Path, host: str) -> None:
+    """The system resolver reads each of these as 169.254.169.254, so the daemon would connect to the
+    metadata service: refusing only what `ipaddress` parses lets a client reach it by another number."""
+    assert resolves_to_metadata(host), f"{host} does not resolve to the metadata address on this machine"
+    probed: list[str] = []
+
+    def metadata_service(request: httpx.Request) -> httpx.Response:
+        probed.append(str(request.url))
+        return httpx.Response(200, json={"models": []})
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(metadata_service)) as service:
+            await add_agent(service, "imds", f"http://{host}/latest")
+            await service.poll_endpoints()
+            assert probed == [], f"the poller requested the metadata service on its own: {probed}"
+            assert await served_health(service, "imds") is None
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_does_not_probe_a_name_that_resolves_to_the_metadata_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client that controls a DNS name (or uses a wildcard service like nip.io) can point it at
+    169.254.169.254; the block reads only the url's text, so the daemon still probes the metadata service."""
+    import socket
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def attacker_dns(host: Any, *args: Any, **kwargs: Any) -> Any:
+        if host == "imds.attacker.example":
+            host = "169.254.169.254"
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", attacker_dns)
+    assert resolves_to_metadata("imds.attacker.example")
+    probed: list[str] = []
+
+    def metadata_service(request: httpx.Request) -> httpx.Response:
+        probed.append(str(request.url))
+        return httpx.Response(200, json={"models": []})
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(metadata_service)) as service:
+            await add_agent(service, "imds", "http://imds.attacker.example/latest")
+            await service.poll_endpoints()
+            assert probed == [], f"the poller requested the metadata service on its own: {probed}"
+            assert await served_health(service, "imds") is None
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_does_not_probe_the_gcp_metadata_name_written_fully_qualified(tmp_path: Path) -> None:
+    """`metadata.google.internal.` is the same name as `metadata.google.internal` to any resolver,
+    so the trailing dot must not slip past the hostname block."""
+    probed: list[str] = []
+
+    def metadata_service(request: httpx.Request) -> httpx.Response:
+        probed.append(str(request.url))
+        return httpx.Response(200, json={"models": []})
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(metadata_service)) as service:
+            await add_agent(service, "gcp", "http://metadata.google.internal./computeMetadata/v1")
+            await service.poll_endpoints()
+            assert probed == [], f"the poller requested the metadata service on its own: {probed}"
+            assert await served_health(service, "gcp") is None
+
+    asyncio.run(scenario())
