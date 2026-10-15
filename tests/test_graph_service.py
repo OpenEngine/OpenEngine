@@ -912,7 +912,7 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
 # --- through the daemon -------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", [None, "fix_only", "review_only"])
+@pytest.mark.parametrize("mode", [None, "fix", "review"])
 def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
     tmp_path: Path, mode: str | None, *, workflow_app
 ) -> None:
@@ -949,16 +949,27 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
                 async with app.router.lifespan_context(app):
-                    source = yaml.safe_load(PAIR)
-                    source["inputs"].update({name: {"default": ""} for name in (
-                        "pr_url", "fix_only", "review_only", "publish_review",
-                    )})
-                    added = await client.post("/api/v1/graphs", json={"source": yaml.safe_dump(source)})
+                    if mode:
+                        from engine.cli import starters
+                        # Keep the shipped graph identity and input declarations;
+                        # replace agent execution with one deterministic node.
+                        source = starters.source(mode) + """
+from dataclasses import replace
+from langgraph.graph import StateGraph, START, END
+from engine.graph_runtime_langgraph import State
+builder = StateGraph(State)
+builder.add_node("work", lambda state: {})
+builder.add_edge(START, "work")
+builder.add_edge("work", END)
+workflow = replace(workflow, builder=builder)
+"""
+                        added = await client.post("/api/v1/graphs", json={"source": source, "format": "python"})
+                    else:
+                        added = await client.post("/api/v1/graphs", json={"source": PAIR})
                     assert added.status_code == 201, added.text
                     run = await client.post("/api/v1/runs", json={
-                        "graph": "pair", "instruction": "it", "idempotencyKey": "k",
-                        "inputs": {mode: "true", "pr_url": "https://github.com/example/repo/pull/855",
-                                   "publish_review": "true"} if mode else {},
+                        "graph": mode or "pair", "instruction": "it", "idempotencyKey": "k",
+                        "inputs": {"pr_url": "https://github.com/example/repo/pull/855"} if mode else {},
                     })
                     assert run.status_code == 201, run.text
                     run_id = run.json()["runId"]
@@ -971,7 +982,8 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
                             break
                         await asyncio.sleep(0.05)
                     assert body["status"] == "completed", body
-                    assert body["results"]["review"] == "echo: review echo: do it (plain)"
+                    if not mode:
+                        assert body["results"]["review"] == "echo: review echo: do it (plain)"
                     listed = (await client.get("/api/runs")).json()["runs"]
                     assert [item["runId"] for item in listed] == [run_id]
                     assert listed[0]["phase"] == "succeeded"

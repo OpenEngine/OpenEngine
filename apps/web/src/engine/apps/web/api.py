@@ -1987,7 +1987,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
-        validate_started_pull_request(inputs, run_project(repository))
+        source_id = (surface.service.source_workflow_id(str(graph.graph_id))
+                     if surface.service is not None else str(graph.graph_id))
+        validate_started_pull_request(source_id, inputs, run_project(repository))
         if requester is None and scheduled is not None:
             requester = scheduled.requester
         if 'auto_approve_green' in inputs and not inputs['auto_approve_green']:
@@ -2088,7 +2090,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                        if origin and origin.issue_number else {}),
                 },
                 run_id=reserved.run_id,
-                before_launch=lambda run_id: claim_started_pull_request(runtime, run_id, inputs),
+                before_launch=lambda run_id: claim_started_pull_request(runtime, run_id, source_id, inputs),
             )
             # Register before saving the row: earlier events already wait for
             # the row, and later ones must wait for the concierge reply too.

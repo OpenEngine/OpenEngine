@@ -513,6 +513,13 @@ class GraphService:
         loaded = self._loaded.get(version_id)
         return loaded.workflow if loaded is not None else None
 
+    def source_workflow_id(self, graph_id: str) -> str:
+        """Return a registered version's source identity, or an unregistered ID."""
+        version = self.store.version(graph_id)
+        if version is None:
+            return graph_id
+        return str(version.manifest.get("workflowId", version.manifest.get("name", graph_id)))
+
     def workflows(self) -> tuple[GraphWorkflow, ...]:
         """The latest usable graph definitions, for the WorkOrder form."""
         return tuple(
