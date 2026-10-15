@@ -1614,3 +1614,33 @@ def test_a_poll_pass_started_before_an_agent_was_re_added_does_not_bring_back_th
 
     asyncio.run(scenario())
 
+
+def test_the_poller_does_not_send_probes_through_a_proxy_from_the_daemons_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxied: list[bytes] = []
+
+    async def proxy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        head = await reader.readuntil(b"\r\n\r\n")
+        proxied.append(head.split(b"\r\n", 1)[0])
+        body = json.dumps({"models": [{"name": "qwen3-coder:latest"}]}).encode()
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n" % len(body) + body)
+        await writer.drain()
+        writer.close()
+
+    async def scenario() -> None:
+        server = await asyncio.start_server(proxy, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{port}")
+        try:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu.invalid:11434/v1")
+                await service.poll_endpoints()
+                assert proxied == [], f"the probe went through the environment's proxy: {proxied}"
+        finally:
+            server.close()
+
+    asyncio.run(scenario())
