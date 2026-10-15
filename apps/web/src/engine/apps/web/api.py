@@ -1037,7 +1037,9 @@ class _GraphSurface:
         if self.service is None:
             return None
         version = work_order_graph(self.service.resolve, project, name)
-        return self.workflows({}).get(version.version_id) if version is not None else None
+        if version is None or self.runtime is None:
+            return None
+        return self.service.version_workflow(version.version_id)
 
 
 def work_order_graph(

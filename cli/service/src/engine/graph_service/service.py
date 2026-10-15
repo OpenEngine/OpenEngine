@@ -508,6 +508,11 @@ class GraphService:
                 self.store.insert_version(version)
             return self._graph_json(graph, version, definition=True), True
 
+    def version_workflow(self, version_id: str) -> GraphWorkflow | None:
+        """The loaded workflow of one registered version, latest or not; `None` if it did not load."""
+        loaded = self._loaded.get(version_id)
+        return loaded.workflow if loaded is not None else None
+
     def workflows(self) -> tuple[GraphWorkflow, ...]:
         """The latest usable graph definitions, for the WorkOrder form."""
         return tuple(
@@ -1377,10 +1382,7 @@ class GraphService:
         return body
 
     def _version(self, version_id: str) -> VersionRow:
-        version = self.store.version(version_id)
-        if version is None:
-            raise NotFound(f"no graph version {version_id}")
-        return version
+        return _version(self.store, version_id)
 
     def _now_iso(self) -> str:
         return now_iso(self._clock())
@@ -1668,7 +1670,7 @@ def resolve_graph(
         graph = store.graph(reference)
         if graph is None:
             raise NotFound(f"no graph {reference}")
-        return graph, _latest_version(store, graph)
+        return graph, _version(store, graph.latest_version_id)
     name, _, number = reference.partition("@")
     matches = store.graphs_named(name, _project(project) if project else None)
     if not matches:
@@ -1681,7 +1683,7 @@ def resolve_graph(
         )
     graph = matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
     if not number:
-        return graph, _latest_version(store, graph)
+        return graph, _version(store, graph.latest_version_id)
     if not number.isdigit():
         raise ServiceError(f"{reference!r}: a version is a number, as in {name}@2")
     version = store.version_numbered(graph.graph_id, int(number))
@@ -1691,10 +1693,10 @@ def resolve_graph(
 
 
 
-def _latest_version(store: GraphServiceStore, graph: GraphRow) -> VersionRow:
-    version = store.version(graph.latest_version_id)
+def _version(store: GraphServiceStore, version_id: str) -> VersionRow:
+    version = store.version(version_id)
     if version is None:
-        raise NotFound(f"no graph version {graph.latest_version_id}")
+        raise NotFound(f"no graph version {version_id}")
     return version
 
 

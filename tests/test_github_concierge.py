@@ -1539,6 +1539,9 @@ class _RegisteredGraphs:
     def workflows(self):
         return (self.workflow,)
 
+    def version_workflow(self, version_id):
+        return self.workflow if version_id == str(self.workflow.graph_id) else None
+
     def resolve(self, project, name):
         from types import SimpleNamespace
         from engine.graph_service import NotFound
