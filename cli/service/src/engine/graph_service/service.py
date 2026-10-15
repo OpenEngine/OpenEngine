@@ -110,10 +110,17 @@ OPENCODE_URL_PROVIDER = "engine"
 #: daemon's network answers. The cloud's link-local instance-metadata address is
 #: the worst such read -- a client that may add an agent would otherwise get the
 #: daemon to ask the metadata service for them and report the answer back -- so it
-#: is refused outright, before a byte goes over the wire. Loopback is not refused:
-#: a local model server a client runs lives on 127.0.0.1, and the poller must
+#: is refused outright, before a byte goes over the wire. The whole link-local
+#: block covers the AWS address (169.254.169.254) and the ECS one
+#: (169.254.170.2); a named endpoint (metadata.google.internal) and the cloud's
+#: own IPv6 form (fd00:ec2::254) are refused too. Loopback is not refused: a
+#: local model server a client runs lives on 127.0.0.1, and the poller must
 #: reach it.
-_BLOCKED_ENDPOINT_HOSTS = (ipaddress.ip_network("169.254.169.254/32"),)
+_BLOCKED_ENDPOINT_NETWORKS = (
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fd00:ec2::254/128"),
+)
+_BLOCKED_ENDPOINT_HOSTNAMES = frozenset({"metadata.google.internal"})
 
 #: A probe reads a model list, not a body: cap how many of a response's bytes it
 #: will pull off the wire, so an endpoint that streams without end cannot be read
@@ -1822,20 +1829,27 @@ def _endpoint_address_blocked(url: str) -> bool:
     The poller asks an address a client names for itself, on the daemon's own
     network and clock, and serves whether it answered -- so a client that may add
     an agent could otherwise make the daemon a reachability oracle for whatever
-    the daemon can reach. The cloud's link-local instance-metadata address is the
-    worst such target; it is the one a client would never run its own model server
-    on, so it is refused outright, while loopback -- where a local server lives --
-    is left to be probed. A url whose host is not an address (a name) is not
-    blocked here: the daemon resolves it as the client would.
+    the daemon can reach. The cloud's link-local block, every spelling a client
+    could reach it in, is the worst such target: its IPv4 address
+    (169.254.169.254 and 169.254.170.2), the same address written as
+    hostnames (a trailing dot, or an IPv4-mapped form), the cloud's own IPv6
+    metadata form, and a metadata name such as metadata.google.internal. Each is
+    refused outright, before a byte goes over the wire, so a client gets no
+    reachability reading of an internal address. Loopback -- where a local model
+    server lives -- is not refused and is left to be probed.
     """
     host = urlsplit(url).hostname
     if not host:
         return True
+    if host in _BLOCKED_ENDPOINT_HOSTNAMES:
+        return True
     try:
-        address = ipaddress.ip_address(host)
+        address = ipaddress.ip_address(host.rstrip(".").lower())
     except ValueError:
         return False
-    return any(address in blocked for blocked in _BLOCKED_ENDPOINT_HOSTS)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(address in network for network in _BLOCKED_ENDPOINT_NETWORKS)
 
 
 def _model_keys(model: Any) -> tuple[str, ...]:
