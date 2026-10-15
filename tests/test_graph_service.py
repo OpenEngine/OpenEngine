@@ -1583,3 +1583,34 @@ def test_one_endpoint_that_drips_its_answer_cannot_hold_every_agents_health_host
 
     asyncio.run(scenario())
 
+
+def test_a_poll_pass_started_before_an_agent_was_re_added_does_not_bring_back_the_old_endpoints_reading(
+    tmp_path: Path,
+) -> None:
+    old_probed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "old":
+            old_probed.set()
+            await release.wait()
+            return ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404)
+        raise httpx.ConnectError("connection refused")
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(handle)) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://old:11434/v1")
+            poll = asyncio.create_task(service.poll_endpoints())
+            await asyncio.wait_for(old_probed.wait(), 5)
+            await service.add_agent(
+                "opencode", name="qwen", model="qwen3-coder", url="http://new:11434/v1", overwrite=True,
+            )
+            release.set()
+            await poll
+            health = health_of(service, "qwen")
+            assert health != {"responding": True, "modelLoaded": True}, (
+                "the re-added agent shows the old endpoint's reading from a pass that started before the change"
+            )
+
+    asyncio.run(scenario())
+
