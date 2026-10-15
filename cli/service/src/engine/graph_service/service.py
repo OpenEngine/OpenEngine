@@ -28,6 +28,7 @@ import ipaddress
 import json
 import logging
 import re
+import socket
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -280,7 +281,7 @@ class GraphService:
         pull_requests: PullRequestsConfig = PullRequestsConfig(),
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
-        endpoint_transport: httpx.BaseTransport | None = None,
+        endpoint_transport: httpx.AsyncBaseTransport | None = None,
         endpoint_poll_seconds: float = 30.0,
     ) -> None:
         if runtime.checkpointer is None:
@@ -401,8 +402,9 @@ class GraphService:
         so it cannot hold every other agent's health.
         """
         for row in self.store.agents():
-            if not row.url or _endpoint_address_blocked(row.url):
+            if not row.url or await _endpoint_refused(row.url):
                 continue
+            health: EndpointHealth | None
             try:
                 health = await asyncio.wait_for(
                     self._probe(row, PROBE_DEADLINE_SECONDS), PROBE_DEADLINE_SECONDS,
@@ -410,27 +412,34 @@ class GraphService:
             except asyncio.TimeoutError:
                 # The endpoint held for the whole budget -- a blackholed host or a
                 # slow-drip body. That is the endpoint not answering, not an absence
-                # of a reading, so record "not responding" for the live row: the
-                # reachability the issue is after, not a url-less agent.
-                current = self.store.agent(row.name)
-                if current is not None and current.updated_at == row.updated_at:
-                    self._health[row.name] = EndpointHealth(False, None)
-                else:
-                    self._health.pop(row.name, None)
-                continue
+                # of a reading, so record "not responding": the reachability the
+                # issue is after, not a url-less agent.
+                health = EndpointHealth(False, None)
+            except httpx.HTTPError:
+                # The endpoint answered, but in a way neither probe could read -- a
+                # bad content-encoding, say. It is up; its model is unknown. The
+                # last reading must not stand, or a broken endpoint keeps showing
+                # whatever it showed before it broke.
+                health = EndpointHealth(True, None)
             except Exception:
                 log.exception("endpoint probe for agent %s failed", row.name)
-                continue
-            # Store the reading only for the row still live: a probe may have held
-            # while the agent was replaced or removed, in which case the live row
-            # is gone or new, and the old reading would otherwise be served for it.
-            # The probed row is the live one when its `updated_at` still matches the
-            # row the store holds now.
-            current = self.store.agent(row.name)
-            if current is not None and current.updated_at == row.updated_at:
-                self._health[row.name] = health
-            else:
-                self._health.pop(row.name, None)
+                health = None
+            self._record_health(row, health)
+
+    def _record_health(self, row: AgentRow, health: EndpointHealth | None) -> None:
+        """Keep `health` as `row`'s reading, or drop the reading when it is `None`.
+
+        The reading is stored only for the row still live: a probe may have held
+        while the agent was replaced or removed, in which case the live row is
+        gone or new, and the old reading would otherwise be served for it. The
+        probed row is the live one when its `updated_at` still matches the row
+        the store holds now.
+        """
+        current = self.store.agent(row.name)
+        if health is not None and current is not None and current.updated_at == row.updated_at:
+            self._health[row.name] = health
+        else:
+            self._health.pop(row.name, None)
 
     async def _probe(self, row: AgentRow, timeout: float) -> EndpointHealth:
         """Whether `row`'s endpoint is up and whether its model is loaded.
@@ -445,7 +454,7 @@ class GraphService:
         reached twice.
         """
         async with httpx.AsyncClient(
-            transport=self._endpoint_transport or httpx.AsyncHTTPTransport(),
+            transport=self._endpoint_transport or _PinnedTransport(),
         ) as client:
             ollama = await self._ollama_probe(client, row, timeout)
             if ollama is not None:
@@ -489,7 +498,7 @@ class GraphService:
                 if response.is_success and parsed is not None:
                     models = parsed.get("models") if isinstance(parsed, dict) else None
                     if isinstance(models, list):
-                        return EndpointHealth(True, row.model in _model_keys_of(models))
+                        return EndpointHealth(True, _model_name(row.model) in _model_keys_of(models))
         except httpx.TransportError:
             return EndpointHealth(False, None)
         return None
@@ -512,7 +521,7 @@ class GraphService:
                     if isinstance(parsed, dict):
                         data = parsed.get("data")
                         if isinstance(data, list):
-                            model_loaded = row.model in _model_keys_of(data)
+                            model_loaded = _model_name(row.model) in _model_keys_of(data)
         except httpx.TransportError:
             return EndpointHealth(False, None)
         return EndpointHealth(True, model_loaded)
@@ -1846,42 +1855,110 @@ def _endpoint_address_blocked(url: str) -> bool:
     reachability reading of an internal address. Loopback -- where a local model
     server lives -- is not refused and is left to be probed.
     """
-    host = urlsplit(url).hostname
+    host = _endpoint_host(url)
     if not host:
         return True
     if host in _BLOCKED_ENDPOINT_HOSTNAMES:
         return True
     try:
-        address = ipaddress.ip_address(host.rstrip(".").lower())
+        address = ipaddress.ip_address(host)
     except ValueError:
         return False
+    return _address_blocked(address)
+
+
+def _endpoint_host(url: str) -> str:
+    """The host a url names, the way a resolver reads it: lowercased, without a trailing dot."""
+    return (urlsplit(url).hostname or "").rstrip(".").lower()
+
+
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+def _address_blocked(address: IPAddress) -> bool:
+    """Whether `address`, read through an IPv4-mapped form, falls in a blocked network."""
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
     return any(address in network for network in _BLOCKED_ENDPOINT_NETWORKS)
 
 
-def _model_keys(model: Any) -> tuple[str, ...]:
-    """The names a listed model answers for, so an agent's model can be matched.
+async def _resolve(host: str, port: int) -> list[IPAddress]:
+    """Every address the system resolver gives `host`, which is what a connect would reach."""
+    infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return [ipaddress.ip_address(info[4][0]) for info in infos]
 
-    Ollama tags its running models (`qwen3-coder:latest`), which an agent added
-    with a bare model name (`qwen3-coder`) must still be read as loaded, so a
-    model is matched by its full name and the name with its tag stripped.
+
+async def _endpoint_refused(url: str) -> bool:
+    """Whether the poller must not probe `url`, by its text or by what its host resolves to.
+
+    The text alone is not enough: the resolver reads `2852039166`, `0xa9fea9fe`
+    and any name a client controls as 169.254.169.254. So the host is resolved
+    too, and any blocked address among its answers refuses it. A host that does
+    not resolve reaches nothing, and is left to the probe, whose transport
+    resolves it again at connect time and refuses it there.
     """
-    name = model if isinstance(model, str) else (
-        model.get("model") or model.get("name") or model.get("id") or ""
-    )
-    if isinstance(name, str) and ":" in name:
-        base, _sep, _tag = name.partition(":")
-        return (name, base)
-    return (name,)
+    if _endpoint_address_blocked(url):
+        return True
+    parts = urlsplit(url)
+    try:
+        addresses = await asyncio.wait_for(
+            _resolve(_endpoint_host(url), parts.port or (443 if parts.scheme == "https" else 80)),
+            PROBE_DEADLINE_SECONDS,
+        )
+    except (OSError, ValueError, asyncio.TimeoutError):
+        return False
+    return any(_address_blocked(address) for address in addresses)
 
 
-def _model_keys_of(models: object | list[Any]) -> frozenset[str]:
-    """Every name any of `models` answers for, for matching an agent's model against."""
+class _PinnedTransport(httpx.AsyncBaseTransport):
+    """The poller's transport: it connects only to an address it has just checked.
+
+    Checking a name and then letting the connection resolve it again leaves room
+    for the name to change between the two (DNS rebinding). So each request's host
+    is resolved here, refused when any answer is blocked, and the connection is
+    made to the checked address itself -- the `Host` header and TLS server name
+    still carry the name, so the endpoint and its certificate see what the agent
+    was added with.
+    """
+
+    def __init__(self) -> None:
+        self._inner = httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host, url = request.url.host, request.url
+        try:
+            addresses = await _resolve(host, url.port or (443 if url.scheme == "https" else 80))
+        except (OSError, ValueError) as error:
+            raise httpx.ConnectError(f"could not resolve {host}", request=request) from error
+        if not addresses or any(_address_blocked(address) for address in addresses):
+            raise httpx.ConnectError(f"{host} is not an address the poller may reach", request=request)
+        request.url = url.copy_with(host=str(addresses[0]))
+        if url.scheme == "https":
+            request.extensions = {**request.extensions, "sni_hostname": host}
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def _model_name(name: str) -> str:
+    """A model name as Ollama resolves it, so `qwen3` and `qwen3:latest` compare equal.
+
+    Only the implicit `:latest` tag is dropped: `qwen3` is not `qwen3:30b`, and a
+    registry name with a port (`host:5000/m`) keeps its colon.
+    """
+    return name.removesuffix(":latest")
+
+
+def _model_keys_of(models: list[Any]) -> frozenset[str]:
+    """The name each of `models` answers to, for matching an agent's model against."""
     keys: set[str] = set()
-    for model in models or []:
-        if isinstance(model, (dict, str)):
-            keys.update(k for k in _model_keys(model) if k)
+    for model in models:
+        name = model if isinstance(model, str) else (
+            model.get("model") or model.get("name") or model.get("id") if isinstance(model, dict) else None
+        )
+        if isinstance(name, str) and name:
+            keys.add(_model_name(name))
     return frozenset(keys)
 
 

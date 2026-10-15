@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 from engine.graph_service import GraphService, create_app
+from engine.graph_service import service as service_module
 
 from test_graph_service import graph_service
 
@@ -268,5 +269,50 @@ def test_the_poller_does_not_probe_the_gcp_metadata_name_written_fully_qualified
             await service.poll_endpoints()
             assert probed == [], f"the poller requested the metadata service on its own: {probed}"
             assert await served_health(service, "gcp") is None
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_connects_to_the_address_it_checked_and_refuses_a_rebound_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name that resolves to an allowed address when checked and to the metadata address when
+    connected (DNS rebinding) must not reach the metadata service: the poller's own transport
+    resolves, checks, and connects to the address it checked, with the name kept in `Host`."""
+    import socket
+
+    real_getaddrinfo = socket.getaddrinfo
+    rebound = False
+
+    def rebinding_dns(host: Any, *args: Any, **kwargs: Any) -> Any:
+        if host == "model.attacker.example":
+            host = "169.254.169.254" if rebound else "127.0.0.1"
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_dns)
+
+    async def scenario() -> None:
+        nonlocal rebound
+        server = LoopbackServer(ollama_running_qwen)
+        async with server.running(), graph_service(tmp_path) as service:
+            await add_agent(service, "pinned", f"http://model.attacker.example:{server.port}/v1")
+            await service.poll_endpoints()
+            [(target, headers)] = server.requests
+            assert (target, headers["host"]) == ("/api/ps", f"model.attacker.example:{server.port}")
+            assert await served_health(service, "pinned") == {"responding": True, "modelLoaded": True}
+
+            # Rebound after the poll's own check: the transport resolves again and refuses.
+            real_refused = service_module._endpoint_refused
+
+            async def checked_before_rebinding(url: str) -> bool:
+                nonlocal rebound
+                refused = await real_refused(url)
+                rebound = True
+                return refused
+
+            monkeypatch.setattr(service_module, "_endpoint_refused", checked_before_rebinding)
+            await service.poll_endpoints()
+            assert len(server.requests) == 1, "the poller reached the endpoint after its name was rebound"
+            assert await served_health(service, "pinned") == {"responding": False, "modelLoaded": None}
 
     asyncio.run(scenario())
