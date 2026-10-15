@@ -255,7 +255,7 @@ export function Sidebar({
   initialSection?: RailSection;
   activeRunId?: string;
   activeConversationUrl?: string;
-  activeView?: "runs" | "new" | "new-loop" | "utilization";
+  activeView?: "runs" | "new" | "new-loop" | "utilization" | "agents";
   /** The loop whose page is on screen. */
   activeLoopId?: string;
   /** Remove a run from the list. */
@@ -413,6 +413,7 @@ export function Sidebar({
         <RailFoot
           onSettings={() => setSettingsOpen(true)}
           utilizationActive={activeView === "utilization"}
+          agentsActive={activeView === "agents"}
         />
       )}
     </aside>

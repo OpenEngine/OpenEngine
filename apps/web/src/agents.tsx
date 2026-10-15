@@ -69,17 +69,26 @@ export function AgentList() {
 
   useEffect(() => {
     let cancelled = false;
-    api<{ agents: AgentRow[] }>("/api/v1/agents")
-      .then((body) => {
-        if (cancelled) return;
-        setAgents(body.agents);
-        setError("");
-      })
-      .catch((reason: Error) => {
-        if (!cancelled) setError(reason.message);
-      });
+    // The list keeps whatever it printed while a refresh is in flight, so a
+    // row moves only once the server has actually re-answered.
+    const load = () => {
+      api<{ agents: AgentRow[] }>("/api/v1/agents")
+        .then((body) => {
+          if (cancelled) return;
+          setAgents(body.agents);
+          setError("");
+        })
+        .catch((reason: Error) => {
+          if (!cancelled) setError(reason.message);
+        });
+    };
+    load();
+    // The poller re-reads every endpoint on its 30-second beat, so the list
+    // reads on the same beat: a printed reading is at most one beat old.
+    const timer = setInterval(load, 30_000);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, []);
 
@@ -93,5 +102,21 @@ export function AgentList() {
         <AgentEntry agent={agent} key={agent.name} />
       ))}
     </ul>
+  );
+}
+
+/** The page the rail's agents link opens: the list and each endpoint's last reading. */
+export function AgentsPage() {
+  return (
+    <main className="panel-scroll">
+      <header className="hero">
+        <p className="eyebrow">OpenEngine / Agents</p>
+        <h1>Agents</h1>
+        <p className="lede">
+          Every registered agent, and the last reading of each URL agent's model endpoint.
+        </p>
+      </header>
+      <AgentList />
+    </main>
   );
 }

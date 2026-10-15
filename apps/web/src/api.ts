@@ -696,6 +696,8 @@ export function getRunGithubComments(
 
 export const UTILIZATION_URL = "/utilization";
 
+export const AGENTS_URL = "/agents";
+
 /** One limit a provider meters a subscription against.
  *
  *  `usedPercent` is the provider's own figure. `resetsAt` is an instant, or
