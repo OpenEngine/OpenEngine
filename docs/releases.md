@@ -68,7 +68,7 @@ names that directory), checks `/api/health`, and then runs `engine daemon setup`
 `npm i -g @openengine.cc/engine` installs the `engine` launcher;
 `npx @openengine.cc/engine go` tries it without a global npm install.
 The unscoped `openengine` package on npm is an unrelated project.
-The launcher supports Node 18+ on macOS and Linux (the application and its
+The launcher supports Node 18+ on macOS, Linux and Windows (the application and its
 adapters may require a newer Node version; see the README prerequisites).
 On first run it calls the bundled installer with its own package version and
 `--no-start`, then runs that version's executable with your arguments.
@@ -76,11 +76,29 @@ Python lives under the usual XDG data prefix, never in the npx cache, so daemon
 paths survive cache eviction. `npx @openengine.cc/engine@X.Y.Z go` pins X.Y.Z
 regardless of the `current` symlink. Configuration follows the installer's shim.
 
+### Windows
+
+On Windows the launcher needs no WSL: `npm i -g @openengine.cc/engine`, then
+`engine daemon setup`. In place of `install.sh` it runs `bin/install.js`, a Node
+port that downloads with Node's `fetch` (https:// only; `file://` for
+`OPENENGINE_RELEASE_URL`), checks SHA-256 hashes, and unpacks with Windows'
+own `tar.exe`. It pins the same uv and Python versions as `install.sh` (the
+npm tests check that), using uv's `x86_64-pc-windows-msvc` or
+`aarch64-pc-windows-msvc` zip. Releases go under `%LOCALAPPDATA%\openengine`,
+with `current` a text file naming the active version rather than a symlink;
+the config is `%APPDATA%\openengine\engine.toml` and state is
+`%LOCALAPPDATA%\openengine\state`. `XDG_*` variables override these when set.
+The seeded config names the installed version's own `workflows` directory.
+`engine daemon setup` runs the service as a detached process, which stops at
+logout; there is no login service on Windows yet.
+
 Run `npm pack` in `npm/engine` to build the package. Its prepack script copies
 `scripts/install.sh` and the repository license; there is only one installer
 source. Release Please updates `npm/engine/package.json` with the release version.
 The release workflow tests the packed launcher and installs it globally on
-Ubuntu and macOS against the built release using `OPENENGINE_RELEASE_URL=file://…`.
+Ubuntu, macOS and Windows against the built release using
+`OPENENGINE_RELEASE_URL=file://…`; on Windows it then checks `/api/health` and
+runs `engine daemon status` and `stop`.
 
 After the GitHub archive and manifest are uploaded and installer checks pass,
 `release.yml` runs `npm publish --provenance --access public` with GitHub OIDC

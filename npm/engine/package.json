@@ -19,6 +19,7 @@
   },
   "files": [
     "bin/engine.js",
+    "bin/install.js",
     "install.sh",
     "LICENSE"
   ],

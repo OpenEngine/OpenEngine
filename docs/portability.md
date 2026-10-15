@@ -9,8 +9,10 @@ product without creating a second way to build OpenEngine.
 
 The first portable release supports macOS on Apple silicon and Intel, plus
 glibc-based Linux on x86-64. Linux on ARM64 follows once it has a native CI
-runner. Windows users can use the Linux package under WSL; a native Windows
-package is outside the first release.
+runner. On Windows, OpenEngine installs natively through npm only
+(`npm i -g @openengine.cc/engine`; no curl or PowerShell installer), and its
+service is a detached process with no login service yet, so it stops at logout.
+Running agents on Windows is not supported yet.
 
 The two supported installation paths are:
 
@@ -78,7 +80,7 @@ The release matrix begins with:
 | Linux x86-64, glibc | oldest supported glibc image | yes |
 | Linux ARM64, glibc | native ARM64 runner | after CI is available |
 | Linux musl | none | no |
-| Windows | WSL uses Linux artifact | native package deferred |
+| Windows x86-64 | native runner, npm install | npm only; no login service |
 
 The build configuration records the minimum macOS and glibc versions. CI tests
 those minimums, not only the newest hosted images.
@@ -195,8 +197,8 @@ bits as the shell installer.
 - Add startup migration and rollback tests for persisted state.
 - Establish support windows and a release-retention policy.
 - Add Linux ARM64 when a native build and minimum-platform test are available.
-- Evaluate a native Windows package from usage feedback rather than making WSL
-  support block the initial release.
+- On Windows, add a Task Scheduler login service and run agents natively
+  (process sandbox, OAuth lock and ACP file handling are POSIX-only today).
 
 ## Release criteria
 

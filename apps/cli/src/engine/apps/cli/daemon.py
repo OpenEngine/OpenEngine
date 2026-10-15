@@ -2,8 +2,8 @@
 
 `engine daemon setup` records where node, npx, git and the agent CLIs live,
 then registers a per-user LaunchAgent on macOS or a systemd user unit on
-Linux. Where neither can be used, the service is a detached process tracked by
-a pidfile. Either way the service is `engine-web` alone, bound to loopback,
+Linux. Where neither can be used, Windows included, the service is a detached
+process tracked by a pidfile. Either way the service is `engine-web` alone, bound to loopback,
 with `ENGINE_CONFIG` set and a PATH built only from the recorded tool
 directories, so it never depends on the interactive shell that ran setup.
 Temporal is not used: `engine-orchestrator` is never started.
@@ -47,6 +47,14 @@ TOOLS = ("git", "node", "npx", "claude", "codex")
 # workspaces; an agent CLI is optional, because the UI opens without one.
 REQUIRED_TOOLS = ("git", "node", "npx")
 SYSTEM_PATH = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+# Windows programs fail without these: Python and Node need SYSTEMROOT for
+# sockets, and the per-user folders locate state, caches and credentials.
+WINDOWS_ENVIRONMENT = (
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "COMMONPROGRAMFILES", "USERNAME", "USERDOMAIN",
+    "COMPUTERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+)
 START_TIMEOUT_SECONDS = 60.0
 # The service appends to one log; keep one previous copy past this size.
 LOG_ROTATE_BYTES = 10 * 1024 * 1024
@@ -55,19 +63,32 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 
 
-def _xdg(variable: str, default: str) -> Path:
+def _xdg_set(variable: str) -> bool:
     value = os.environ.get(variable)
-    return Path(value) if value and Path(value).is_absolute() else Path.home() / default
+    return bool(value and Path(value).is_absolute())
+
+
+def _xdg(variable: str, default: str) -> Path:
+    return Path(os.environ[variable]) if _xdg_set(variable) else Path.home() / default
+
+
+def _windows_folder(variable: str, default: str) -> Path:
+    """%APPDATA% or %LOCALAPPDATA%, where the npm installer puts OpenEngine on Windows."""
+    return Path(os.environ.get(variable) or Path.home() / default)
 
 
 def config_path() -> Path:
     """The configuration the installer writes, unless ENGINE_CONFIG names another."""
     if value := os.environ.get("ENGINE_CONFIG"):
         return Path(value).expanduser().absolute()
+    if sys.platform == "win32" and not _xdg_set("XDG_CONFIG_HOME"):
+        return _windows_folder("APPDATA", "AppData/Roaming") / "openengine" / "engine.toml"
     return _xdg("XDG_CONFIG_HOME", ".config") / "openengine" / "engine.toml"
 
 
 def state_directory() -> Path:
+    if sys.platform == "win32" and not _xdg_set("XDG_STATE_HOME"):
+        return _windows_folder("LOCALAPPDATA", "AppData/Local") / "openengine" / "state"
     return _xdg("XDG_STATE_HOME", ".local/state") / "openengine"
 
 
@@ -120,7 +141,7 @@ def service_url(port: int) -> str:
 
 def engine_web_executable() -> Path:
     """`engine-web` beside this interpreter, so the service runs this install."""
-    sibling = Path(sys.executable).parent / "engine-web"
+    sibling = Path(sys.executable).parent / ("engine-web.exe" if sys.platform == "win32" else "engine-web")
     if sibling.is_file():
         return sibling
     found = shutil.which("engine-web")
@@ -275,6 +296,14 @@ def _healing_notice(check: NodeCheck, *, verbose: bool = False) -> str:
     return notice
 
 
+def _system_path() -> tuple[str, ...]:
+    if sys.platform == "win32":
+        root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+        return (os.path.join(root, "System32"), root, os.path.join(root, "System32", "Wbem"),
+                os.path.join(root, "System32", "WindowsPowerShell", "v1.0"))
+    return SYSTEM_PATH
+
+
 def _path_tools() -> dict[str, str]:
     return {name: str(Path(found).absolute()) for name in TOOLS if (found := shutil.which(name))}
 
@@ -320,9 +349,12 @@ class ServiceSpec:
             directory = str(Path(tool).parent)
             if directory not in directories:
                 directories.append(directory)
-        directories += [path for path in SYSTEM_PATH if path not in directories]
+        directories += [path for path in _system_path() if path not in directories]
         user = getpass.getuser()
-        return {
+        environment = {}
+        if sys.platform == "win32":
+            environment = {name: value for name in WINDOWS_ENVIRONMENT if (value := os.environ.get(name))}
+        return environment | {
             "ENGINE_CONFIG": self.config,
             "ENGINE_HOST": HOST,
             "HOME": str(Path.home()),
@@ -500,9 +532,97 @@ class SystemdBackend(Backend):
         return _run(["systemctl", "--user", "is-active", "--quiet", SYSTEMD_UNIT]).returncode == 0
 
 
+# Windows process access rights and status, for the process backend.
+PROCESS_TERMINATE = 0x0001
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+STILL_ACTIVE = 259
+# Sends CTRL_BREAK_EVENT to engine-web's process group. Only a process on the
+# same console can, so this runs in a helper that attaches to that console
+# rather than detaching the CLI from its own.
+CTRL_BREAK_HELPER = """
+import ctypes, sys
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+pid = int(sys.argv[1])
+kernel32.FreeConsole()
+sys.exit(0 if kernel32.AttachConsole(pid) and kernel32.GenerateConsoleCtrlEvent(1, pid) else 1)
+"""
+
+
+@contextmanager
+def _windows_process(pid: int, access: int) -> Iterator[Any]:
+    """An open handle to `pid` and kernel32, or a None handle when it cannot be opened."""
+    assert sys.platform == "win32"
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+    kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel32.OpenProcess(access, False, pid)
+    try:
+        yield kernel32, handle
+    finally:
+        if handle:
+            kernel32.CloseHandle(handle)
+
+
+def _windows_alive(pid: int) -> bool:
+    """os.kill(pid, 0) would terminate the process on Windows; ask for its exit code."""
+    assert sys.platform == "win32"
+    import ctypes
+    from ctypes import wintypes
+
+    with _windows_process(pid, PROCESS_QUERY_LIMITED_INFORMATION) as (kernel32, handle):
+        if not handle:
+            # Access denied still means a process holds the number.
+            return ctypes.get_last_error() == 5
+        code = wintypes.DWORD()
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == STILL_ACTIVE
+
+
+def _windows_image(pid: int) -> str | None:
+    assert sys.platform == "win32"
+    import ctypes
+    from ctypes import wintypes
+
+    with _windows_process(pid, PROCESS_QUERY_LIMITED_INFORMATION) as (kernel32, handle):
+        if not handle:
+            return None
+        size = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return None
+        return buffer.value
+
+
+def _windows_terminate(pid: int) -> None:
+    assert sys.platform == "win32"
+    with _windows_process(pid, PROCESS_TERMINATE) as (kernel32, handle):
+        if handle:
+            kernel32.TerminateProcess(handle, 1)
+
+
+def _windows_interrupt(pid: int) -> None:
+    """CTRL_BREAK_EVENT, which uvicorn handles as a graceful shutdown."""
+    assert sys.platform == "win32"
+    try:
+        subprocess.run([sys.executable, "-c", CTRL_BREAK_HELPER, str(pid)],
+                       creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True,
+                       check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def process_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _windows_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -513,6 +633,9 @@ def process_alive(pid: int) -> bool:
 
 
 def _command_line(pid: int) -> str | None:
+    if sys.platform == "win32":
+        image = _windows_image(pid)
+        return os.path.normcase(image) if image else None
     try:
         return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
     except OSError:
@@ -524,6 +647,8 @@ def _command_line(pid: int) -> str | None:
 def runs_program(pid: int, program: str) -> bool:
     """Whether `pid` is still `program`, and not a process that reused its number."""
     command = _command_line(pid)
+    if sys.platform == "win32":
+        program = os.path.normcase(program)
     return command is not None and program in command
 
 
@@ -551,11 +676,18 @@ class ProcessBackend(Backend):
             return
         with _owner_only():
             log = open(spec.log, "ab")
+        if sys.platform == "win32":
+            # Its own process group, so CTRL_BREAK_EVENT reaches only engine-web,
+            # on a hidden console of its own rather than the one running setup.
+            # DETACHED_PROCESS would leave it no console to receive the break.
+            detach: dict[str, Any] = {
+                "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
+        else:
+            detach = {"start_new_session": True}
         try:
             process = subprocess.Popen(
                 [spec.program], env=spec.environment(), cwd=str(Path(spec.config).parent),
-                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                start_new_session=True,
+                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **detach,
             )
         finally:
             log.close()
@@ -565,13 +697,19 @@ class ProcessBackend(Backend):
         pid = self.pid()
         if pid is None:
             return
-        os.kill(pid, signal.SIGTERM)
+        if sys.platform == "win32":
+            _windows_interrupt(pid)
+        else:
+            os.kill(pid, signal.SIGTERM)
         deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
         while process_alive(pid) and time.monotonic() < deadline:
             _reap(pid)
             time.sleep(0.1)
         if process_alive(pid):
-            os.kill(pid, signal.SIGKILL)
+            if sys.platform == "win32":
+                _windows_terminate(pid)
+            else:
+                os.kill(pid, signal.SIGKILL)
         pidfile_path().unlink(missing_ok=True)
 
     def running(self) -> bool:
@@ -580,6 +718,9 @@ class ProcessBackend(Backend):
 
 def _reap(pid: int) -> None:
     """Collect our own child so it stops counting as alive once it exits."""
+    if sys.platform == "win32":
+        # An exited process reports its exit code whether or not it was waited for.
+        return
     try:
         os.waitpid(pid, os.WNOHANG)
     except ChildProcessError:
@@ -658,15 +799,32 @@ def prepare_directories() -> None:
 @contextmanager
 def instance_lock() -> Iterator[None]:
     """One start or stop at a time for this user."""
-    import fcntl
-
     prepare_directories()
     with open(state_directory() / "daemon.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+        if sys.platform == "win32":
+            import msvcrt
+
+            # The first byte; LK_LOCK gives up after ten seconds, so retry.
+            lock.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 API_VERSION = 1
@@ -878,6 +1036,9 @@ def command_setup(arguments: argparse.Namespace) -> int:
     except (OSError, RuntimeError, ValueError) as error:
         return _fail(error)
     print(f"Registered OpenEngine with {backend.name}; logs go to {spec.log}")
+    if isinstance(backend, ProcessBackend):
+        print("  no login service here: OpenEngine stops when you log out; "
+              "run engine daemon start after logging in")
     for name in TOOLS:
         print(f"  {name}: {spec.tools.get(name, 'not found')}")
     # Unlike `engine daemon open`, first boot leaves the browser alone.

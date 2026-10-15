@@ -76,14 +76,15 @@ jobs:
           if-no-files-found: error
 
   # The one-line installer on a clean runner of each supported OS, installing
-  # the bundle this run built instead of a published release.
+  # the bundle this run built instead of a published release. Windows installs
+  # through npm alone, with no WSL.
   install:
     needs: [release-please, bundle]
     if: ${{ always() && !cancelled() && needs.bundle.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -100,8 +101,40 @@ jobs:
         with:
           node-version: "24"
       - name: Test npm bootstrapper
+        if: runner.os != 'Windows'
         run: python3 -m unittest tests.test_npm_bootstrapper
+      - name: Test npm bootstrapper (Windows)
+        if: runner.os == 'Windows'
+        run: python -m unittest tests.test_npm_bootstrapper
+      # npm i -g, then the service's setup, health, status and a graceful stop
+      # that leaves nothing answering.
+      - name: Install with npm, start, check health and stop (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Check([string] $what) { if ($LASTEXITCODE -ne 0) { engine daemon logs -n 200; throw "$what exited with $LASTEXITCODE" } }
+          function Health {
+            try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:4364/api/health).StatusCode } catch { 0 }
+          }
+          $env:OPENENGINE_RELEASE_URL = ([System.Uri] (Join-Path $env:RUNNER_TEMP 'release')).AbsoluteUri
+          Push-Location npm/engine
+          npm pack --pack-destination $env:RUNNER_TEMP; Check 'npm pack'
+          Pop-Location
+          $package = (Get-ChildItem (Join-Path $env:RUNNER_TEMP 'openengine.cc-engine-*.tgz')).FullName
+          npm install --global $package; Check 'npm install'
+          engine --help; Check 'engine --help'
+          engine daemon setup; Check 'engine daemon setup'
+          if ((Health) -ne 200) { engine daemon logs -n 200; throw '/api/health did not return 200' }
+          engine daemon status; Check 'engine daemon status'
+          engine daemon doctor
+          engine daemon stop; Check 'engine daemon stop'
+          engine daemon status
+          if ($LASTEXITCODE -eq 0) { throw 'engine daemon status succeeded after stop' }
+          if ((Health) -ne 0) { throw 'OpenEngine still answers after stop' }
+          $global:LASTEXITCODE = 0
       - name: Install packed npm launcher and matching release
+        if: runner.os != 'Windows'
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
         run: |
@@ -113,10 +146,12 @@ jobs:
           "$RUNNER_TEMP/npm-global/bin/engine" daemon setup
           "$RUNNER_TEMP/npm-global/bin/engine" daemon stop
       - name: Install and start OpenEngine
+        if: runner.os != 'Windows'
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
         run: sh scripts/install.sh
       - name: engine is on PATH and healthy
+        if: runner.os != 'Windows'
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
@@ -127,6 +162,7 @@ jobs:
       # Setup again (as an upgrade would), then the background service's
       # status and a graceful stop that leaves nothing answering.
       - name: engine daemon setup, status and stop
+        if: runner.os != 'Windows'
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
@@ -137,6 +173,7 @@ jobs:
           if engine daemon status; then exit 1; fi
           if curl --silent --output /dev/null http://127.0.0.1:4364/api/health; then exit 1; fi
       - name: Running it again keeps the config
+        if: runner.os != 'Windows'
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
         run: |
