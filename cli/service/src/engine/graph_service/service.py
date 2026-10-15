@@ -1761,7 +1761,7 @@ def _ollama_model_loaded(model: str, running: Sequence[str]) -> bool:
     for entry in running:
         if model == entry:
             return True
-        if not tagged and entry.split(":", 1)[0] == base:
+        if not tagged and entry == f"{base}:latest":
             return True
     return False
 
