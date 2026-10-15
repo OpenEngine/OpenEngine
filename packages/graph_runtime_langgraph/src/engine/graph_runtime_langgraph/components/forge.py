@@ -134,8 +134,7 @@ PUBLISH_FINDINGS = ByMode(
 PUBLISH_SUMMARY = ByMode(
     connected=(
         "Before completing, use add_comment to post one general comment on pull "
-        "request {pr_url} with your results. Include your rationale and "
-        "evidence, testing gaps, and required human actions. Then "
+        "request {pr_url} whose body is your summary, unchanged. Then "
     ),
     disconnected=(
         "This run is disconnected from the forge: do not post comments. Your "
