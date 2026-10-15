@@ -73,7 +73,10 @@ export type AgentScript = {
     when?: string
     steps: (
       | { type: "say"; text: string }
-      | { type: "run"; command: string }
+      /** Pause silently while remaining responsive to cancellation. */
+      | { type: "wait"; seconds: number }
+      /** Asks before running unless `approval` is false, as a real agent does in a folder that isn't trusted. */
+      | { type: "run"; command: string; approval?: boolean }
       | { type: "tool"; name: string; arguments: Record<string, unknown> }
     )[]
   }[]
@@ -137,12 +140,19 @@ function engineWebBin() {
 }
 
 /** A repository with one commit and a bare origin, so a run can base its worktree on origin/main. */
-function fixtureRepository(root: string) {
+function fixtureRepository(root: string, requireCommandApproval: boolean) {
   const repository = path.join(root, "repository")
   const origin = path.join(root, "origin.git")
   const git = (...args: string[]) => execFileSync("git", args, { stdio: "pipe" })
   git("init", "--initial-branch=main", repository)
   writeFileSync(path.join(repository, "README.md"), "# Example project\n")
+  if (requireCommandApproval) {
+    // Keep command approvals observable even when the developer's Claude settings allow Bash.
+    mkdirSync(path.join(repository, ".claude"))
+    writeFileSync(path.join(repository, ".claude", "settings.json"), JSON.stringify({
+      permissions: { defaultMode: "default", ask: ["Bash"] },
+    }))
+  }
   git("-C", repository, "add", "--all")
   git("-C", repository, "-c", "user.email=engine@localhost", "-c", "user.name=engine", "commit", "--no-verify", "-m", "Initial commit")
   git("init", "--bare", "--initial-branch=main", origin)
@@ -155,10 +165,11 @@ function fixtureRepository(root: string) {
 export async function startEngine({
   keepRoot = () => false,
   agentMode = resolveAgentMode(),
+  requireCommandApproval = false,
   token = randomBytes(24).toString("hex"),
-}: { keepRoot?: () => boolean; agentMode?: AgentMode; token?: string } = {}): Promise<Engine> {
+}: { keepRoot?: () => boolean; agentMode?: AgentMode; token?: string; requireCommandApproval?: boolean } = {}): Promise<Engine> {
   const root = mkdtempSync(path.join(os.tmpdir(), "openengine-e2e-"))
-  const repository = fixtureRepository(root)
+  const repository = fixtureRepository(root, agentMode === "real" && requireCommandApproval)
   const scriptPath = path.join(root, "agent-script.json")
   const script = (value: AgentScript) => writeFileSync(scriptPath, JSON.stringify(value, null, 2))
   script({ scenarios: [{ steps: [{ type: "say", text: "Done." }] }] })
@@ -336,7 +347,7 @@ async function startProxy(address: string, target: string) {
 async function useDaemon(
   testInfo: TestInfo,
   name: string,
-  options: { agentMode?: AgentMode; token?: string },
+  options: { agentMode?: AgentMode; token?: string; requireCommandApproval?: boolean },
   use: (engine: Engine) => Promise<void>,
 ) {
   const failed = () => testInfo.status !== testInfo.expectedStatus
@@ -355,11 +366,13 @@ async function useDaemon(
 
 export const test = terminalTest.extend<{
   engine: Engine
+  requireCommandApproval: boolean
   anotherComputerAt: string | undefined
   anotherComputer: AnotherComputer | undefined
 }>({
-  engine: async ({}, use, testInfo) => {
-    await useDaemon(testInfo, "engine daemon", {}, async (engine) => {
+  requireCommandApproval: [false, { option: true }],
+  engine: async ({ requireCommandApproval }, use, testInfo) => {
+    await useDaemon(testInfo, "engine daemon", { requireCommandApproval }, async (engine) => {
       testInfo.annotations.push({ type: "agents", description: engine.agentMode })
       if (engine.agentMode === "real") console.log(`[engine] ${testInfo.title}: running real agents (E2E_AGENT=stub to script them)`)
       await use(engine)

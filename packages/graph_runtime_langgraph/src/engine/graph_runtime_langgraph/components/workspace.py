@@ -86,7 +86,7 @@ class WorkspaceNode:
             base_ref = requested or "HEAD"
             if base_ref.startswith("origin/"):
                 base_ref = "refs/remotes/" + base_ref
-        await execution.say(f"Checking {repository} out at {base_ref}.")
+        await execution.say(f"Preparing a working copy at {base_ref}.")
         workspace = await self.provider.provision(
             repository, base_ref, co_author=str(state.get(CO_AUTHOR) or ""),
             **({"issue": state["issue"]} if state.get("issue") else {}),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md

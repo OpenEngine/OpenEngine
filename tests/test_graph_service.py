@@ -583,7 +583,7 @@ def test_a_loop_shows_the_output_of_its_latest_completed_run(tmp_path: Path) -> 
             second = (await service.loop_json(loop["loopId"]))["activeRunId"]
             assert second != first
             stopped = await settled(service, second)
-            assert stopped["status"] == "failed" and stopped["output"] is None
+            assert stopped["status"] == "cancelled" and stopped["output"] is None
 
             latest = (await service.loop_json(loop["loopId"]))["latestOutput"]
             assert latest == {"runId": first, **run["output"]}
@@ -603,10 +603,14 @@ def test_reaching_max_spend_stops_the_run_and_survives_a_restart(tmp_path: Path)
             await service.tick()
             run_id = (await service.loop_json(loop["loopId"]))["activeRunId"]
             run = await settled(service, run_id)
-            assert run["status"] == "failed"  # cancelled once the cap was reached
+            assert run["status"] == "cancelled"  # cancelled once the cap was reached
+            assert run["failure"] is None
+            assert [row["runId"] for row in await service.list_runs("default", status="cancelled")] == [run_id]
+            assert await service.list_runs("default", status="failed") == []
             assert "review" not in run["results"]
         async with graph_service(tmp_path, clock=clock) as service:
             loop = await service.loop_json(loop["loopId"])
+            assert (await service.run_json(run_id))["status"] == "cancelled"
             assert loop["state"] == "paused" and loop["pauseReason"].startswith("max-spend reached")
             assert loop["spend"]["usd"] == pytest.approx(0.5)
             clock.advance(hours=2)
