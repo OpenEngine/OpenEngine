@@ -341,7 +341,9 @@ class GraphService:
             return {
                 "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
-                "health": self._endpoint_health.get(name),
+                # Only an endpoint agent has a health; a row without a url has
+                # nothing the poller could have read, so nothing to serve.
+                "health": self._endpoint_health.get(name) if row.url else None,
             }
         if name in self._builtin_agents:
             return {"name": name, "kind": name, "model": "", "url": "", "builtin": True, "health": None}
@@ -379,6 +381,9 @@ class GraphService:
             row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at)
             self._offer_agent(row)
             self.store.upsert_agent(row)
+            # A re-added name may point at a new endpoint; the reading the
+            # poller took of the old one is not a reading of this one.
+            self._endpoint_health.pop(name, None)
         return self.agent_json(name, row)
 
     async def remove_agent(self, name: str) -> dict[str, Any]:
@@ -391,6 +396,7 @@ class GraphService:
             self.store.delete_agent(name)
             self._registry.unregister(name)
             self._added_agents.withdraw(name)
+            self._endpoint_health.pop(name, None)
         return {**self.agent_json(name, row), "removed": True}
 
     def _offer_agent(self, row: AgentRow) -> None:
@@ -1114,23 +1120,33 @@ class GraphService:
                 log.exception("the endpoint poller failed a pass")
             await asyncio.sleep(self._endpoint_poll_seconds)
 
+    # A probe reads the endpoint's model listing, nothing else: an endpoint that
+    # answers a listing with a body bigger than this is not being read at all,
+    # and is read as if it had not answered.
+    _probe_body_cap = 1024 * 1024
+
     async def poll_endpoints(self) -> None:
         """Record how every added agent's endpoint is responding and which model it loads."""
         rows = [row for row in self.store.agents() if row.url]
         if not rows:
             return
-        client = httpx.AsyncClient(transport=self._endpoint_transport)
-        healths: dict[str, dict[str, Any]] = {}
+        # Every probe runs at once, under its own timeout, so that a dead
+        # endpoint cannot hold the rest of the pollers hostage.
+        client = httpx.AsyncClient(
+            transport=self._endpoint_transport, timeout=httpx.Timeout(5.0)
+        )
+
+        async def probe(row: AgentRow) -> tuple[str, dict[str, Any]]:
+            try:
+                return row.name, await self._probe_endpoint(client, row.url, row.model)
+            except Exception:  # one endpoint must never stop the rest
+                log.exception("could not probe %s's endpoint", row.name)
+                return row.name, {"responding": False, "modelLoaded": None}
+
         try:
-            for row in rows:
-                try:
-                    healths[row.name] = await self._probe_endpoint(client, row.url, row.model)
-                except Exception:
-                    log.exception("could not probe %s's endpoint", row.name)
-                    healths[row.name] = {"responding": False, "modelLoaded": None}
+            self._endpoint_health = dict(await asyncio.gather(*(probe(row) for row in rows)))
         finally:
             await client.aclose()
-        self._endpoint_health = healths
 
     async def _probe_endpoint(
         self, client: httpx.AsyncClient, url: str, model: str
@@ -1138,47 +1154,53 @@ class GraphService:
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         try:
-            ps = await client.get(f"{origin}/api/ps")
+            status, body = await self._read_capped(client, f"{origin}/api/ps")
         except httpx.TransportError:
             return {"responding": False, "modelLoaded": None}
-        loaded = self._loaded_from_ollama(ps, model)
+        loaded = self._model_in_listing(status, body, model, "models", "name")
         if loaded is not None:
             return {"responding": True, "modelLoaded": loaded}
         try:
-            models = await client.get(f"{url.rstrip('/')}/models")
+            status, body = await self._read_capped(client, f"{url.rstrip('/')}/models")
         except httpx.TransportError:
             return {"responding": True, "modelLoaded": None}
-        return {"responding": True, "modelLoaded": self._loaded_from_openai(models, model)}
+        return {"responding": True, "modelLoaded": self._model_in_listing(status, body, model, "data", "id")}
+
+    async def _read_capped(self, client: httpx.AsyncClient, url: str) -> tuple[int, bytes]:
+        """GET `url`, reading no more than `_probe_body_cap` bytes of its body.
+
+        A body the server declared to be bigger than the cap is not read at all.
+        """
+        async with client.stream("GET", url) as response:
+            declared = response.headers.get("content-length")
+            if declared is not None and declared.isdigit() and int(declared) > self._probe_body_cap:
+                return response.status_code, b""
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                chunks.append(chunk)
+                size += len(chunk)
+                if size >= self._probe_body_cap:
+                    break
+            return response.status_code, b"".join(chunks)[: self._probe_body_cap]
 
     @staticmethod
-    def _loaded_from_ollama(response: httpx.Response, model: str) -> bool | None:
-        """Whether `model` is loaded per an Ollama `ps`; None when it is not an Ollama endpoint."""
-        if response.status_code // 100 != 2:
+    def _model_in_listing(
+        status: int, body: bytes, model: str, list_key: str, name_key: str
+    ) -> bool | None:
+        """Whether `model` is in a model listing of the given shape; None when the
+        answer is not a readable listing, which is a different thing from a no."""
+        if status // 100 != 2:
             return None
         try:
-            body = response.json()
+            payload = json.loads(body)
         except ValueError:
             return None
-        models = body.get("models") if isinstance(body, dict) else None
-        if not isinstance(models, list):
+        listed = payload.get(list_key) if isinstance(payload, dict) else None
+        if not isinstance(listed, list):
             return None
-        listed = [item["name"] for item in models if isinstance(item, dict) and item.get("name")]
-        return model_loaded(model, listed)
-
-    @staticmethod
-    def _loaded_from_openai(response: httpx.Response, model: str) -> bool | None:
-        """Whether `model` is served per an OpenAI `models` list; None when it is not a readable list."""
-        if response.status_code // 100 != 2:
-            return None
-        try:
-            body = response.json()
-        except ValueError:
-            return None
-        data = body.get("data") if isinstance(body, dict) else None
-        if not isinstance(data, list):
-            return None
-        listed = [item["id"] for item in data if isinstance(item, dict) and item.get("id")]
-        return model_loaded(model, listed)
+        named = [item[name_key] for item in listed if isinstance(item, dict) and item.get(name_key)]
+        return model_loaded(model, named)
 
     def _limit_reached(self, row: LoopRow, accounting: Accounting) -> str:
         if row.max_prs is not None and accounting.pull_requests >= row.max_prs:
@@ -1687,11 +1709,23 @@ def session_model(row: AgentRow) -> str:
 
 
 def model_loaded(model: str, listed: Sequence[str]) -> bool:
-    """Whether `model` is among `listed`, matching on the base name before any `:tag`."""
-    base = model.partition(":")[0].strip()
-    if not base:
+    """Whether `model` is among `listed`.
+
+    An exact name match always counts. A requested name without a tag also
+    matches whatever tag of that base name the server runs, because an
+    untagged request rides the default tag; a requested tag is specific, and
+    only that exact tag answers it.
+    """
+    wanted = model.strip()
+    if not wanted:
         return False
-    return any(name.partition(":")[0].strip() == base for name in listed)
+    for name in listed:
+        name = name.strip()
+        if name == wanted:
+            return True
+        if ":" not in wanted and name.partition(":")[0].strip() == wanted:
+            return True
+    return False
 
 
 def opencode_config(row: AgentRow) -> dict[str, Any]:
