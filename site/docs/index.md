@@ -38,8 +38,8 @@ and rerun the installer to upgrade.
 
 On the first interactive `engine go` or `engine graph run` in a checkout, Engine
 asks whether agents may edit files and run commands without asking. Both yes and
-no are remembered in the daemon's machine config under `[trusted_repos]`, using
-a name from `[repos]`. Subfolders and other worktrees share that decision.
+no are remembered as `trusted = true` or `trusted = false` in the daemon's
+`[repos."owner/name"]` table. Subfolders and other worktrees share that decision.
 
 Use `engine repo trust [path]` or `engine repo untrust [path]` to change it later.
 Run commands also accept `--trust` and `--no-trust`. Non-interactive and `--json`

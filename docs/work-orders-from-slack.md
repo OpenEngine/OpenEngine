@@ -36,8 +36,11 @@ the local checkout, which the tools do not fetch or update.
 ```toml
 public_url = "https://engine.example"
 
+[repos.local]
+path = "."
+default = true
+
 [work_orders]
-repository = "."                        # local checkout path; defaults to "."
 workflow = "implementation-review-rerank"  # optional if exactly one is installed
 slack_operators = ["U01234567"]          # may control work started by others
 ```

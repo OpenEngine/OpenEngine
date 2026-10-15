@@ -179,10 +179,9 @@ Reinstalling preserves an existing configuration, so your settings may differ.
 To change these grants, edit `[approvals]` in
 `~/.config/openengine/engine.toml`: adjust `allow` and the shell rules, or set
 `auto_approve = true` to automatically accept ordinary tool permission requests.
-Explicit shell ask and deny rules still apply. `[trusted_repos]` can
-auto-approve WorkOrders for selected repository
-names already declared in `[repos]`, by setting a name to `true` (for example,
-`"owner/repo" = true`); it is not a shell-command allow list.
+Explicit shell ask and deny rules still apply. Set `trusted = true` in
+`[repos."owner/repo"]` to auto-approve WorkOrders for that repository; this
+is not a shell-command allow list.
 For details, consult the
 [approval configuration reference](https://github.com/OpenEngine/OpenEngine/blob/main/packages/runtime/src/engine/runtime/config.py)
 and [rule precedence](https://github.com/OpenEngine/OpenEngine/blob/main/packages/runtime/src/engine/runtime/approval_policy.py).

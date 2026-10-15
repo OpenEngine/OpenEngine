@@ -132,3 +132,15 @@ def test_local_only_registry(monkeypatch, tmp_path, origin):
     assert registry.snapshot.run_projects == {}
     assert registry.snapshot.login_repositories == ()
     assert registry.snapshot.disconnected == registry.snapshot.trusted == frozenset({tmp_path})
+
+
+def test_registry_validates_nested_settings_without_deprecations(caplog):
+    registry = RepositoryRegistry({'local': '/local'}, {'local': 'disconnected'},
+                                  {'local': False}, projects={})
+    registry.add('second', '/second', 'disconnected', trusted=True)
+    registry.trust('local', True)
+    assert registry.snapshot.trusted_repos == {'local', 'second'}
+    assert registry.snapshot.repo_modes == {'local': 'disconnected', 'second': 'disconnected'}
+    assert 'deprecated' not in caplog.text
+    with pytest.raises(EngineConfigError):
+        registry.trust('missing', True)

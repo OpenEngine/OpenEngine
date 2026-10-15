@@ -4,7 +4,9 @@ default_branch = "main"
 # A deployment's public_url and GitHub login settings belong in its own config
 # outside this checkout, loaded through ENGINE_CONFIG. See docs/github-login.md.
 
-# Deployment repositories and webhook allowlists belong in the machine config:
+# Deployment [repos."owner/name"] tables belong in the machine config:
+# path is required; slug keys accept webhooks unless webhooks = false.
+# Set trusted, mode, auto_approve_green, and default in the same table.
 # ~/.config/openengine/engine.toml (or $XDG_CONFIG_HOME/openengine/engine.toml).
 # See docs/github-webhooks.md. This checkout does not enable repository hooks.
 [github]
@@ -33,8 +35,11 @@ channel = "C0BUZP7GR0V"
 # What pinging the bot starts. A mention is a sentence, so the answers the web
 # form collects alongside the prompt come from here instead. See
 # docs/work-orders-from-slack.md for the Slack app side of it.
+[repos.local]
+path = "."
+default = true
+
 [work_orders]
-repository = "."
 workflow = "implementation-review-rerank"
 
 [orchestrator]

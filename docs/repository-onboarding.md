@@ -64,11 +64,11 @@ workflow definitions and other deployment settings.
 For an existing checkout from any hosting provider:
 
 ```toml
-[repos]
-"my-project" = "/absolute/path/to/my-project"
+[repos.my-project]
+path = "/absolute/path/to/my-project"
 ```
 
-The left side is the name shown in OpenEngine; the right side is the directory
+The table key is the name shown in OpenEngine; `path` is the directory
 containing your project's files on the host running OpenEngine. Add one entry
 per repository.
 
@@ -76,8 +76,8 @@ To let OpenEngine clone a GitHub repository when its checkout is missing, use
 its full GitHub name instead:
 
 ```toml
-[repos]
-"your-account/your-project" = "~/code/your-project"
+[repos."your-account/your-project"]
+path = "~/code/your-project"
 ```
 
 Replace `your-account` with the GitHub user or organization and `your-project`
@@ -109,7 +109,7 @@ against the server's working directory.
 1. Verify that the account running OpenEngine can access the checkout.
    For automatic cloning, also verify GitHub SSH read access.
    Check write access separately if WorkOrders must push branches and open PRs.
-2. Add `"owner/repo" = "/local/checkout/path"` under `[repos]` in
+2. Add `[repos."owner/repo"]` with `path = "/local/checkout/path"` in
    `.engine/config.toml`. Use the full GitHub name to enable automatic cloning of a missing path.
 3. Read that repository's `AGENTS.md` and CI workflows. Add only the necessary
    commands to `[approvals.bash].allow`; avoid broad wildcard grants.

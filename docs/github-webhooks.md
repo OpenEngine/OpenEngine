@@ -30,26 +30,43 @@ it points to the checkout. Restart the service after configuration changes.
 In the machine file, name the repositories whose deliveries it accepts:
 
 ```toml
-[github]
-repositories = ["owner/name", "other/project"]
+[repos."owner/name"]
+path = "~/code/name"
+default = true # default checkout for chat-started work
 
-[repos]
-"owner/name" = "~/code/name"
-"other/project" = "~/code/project"
+[repos."other/project"]
+path = "~/code/project"
+trusted = true
+
+[repos."private/local"]
+path = "~/code/local"
+mode = "disconnected"
+auto_approve_green = false # overrides [pull_requests].auto_approve_green
+webhooks = false
 ```
 
-The single-repository form, `repository = "owner/name"`, remains supported;
-when both forms are present their repositories are combined. Names are
-case-insensitive and duplicates are accepted only once. Every configured slug
-must have a matching key and nonblank checkout path in `[repos]`; missing
-mappings fail startup with the repository name. Those paths select the checkout
-for work started by assignments, PR mentions, and review requests.
+Every repository with an `owner/name` key accepts webhooks by default. Set
+`webhooks = false` to opt out. Local names such as `[repos.n8n]` never accept
+webhooks. Names are case-insensitive. Each table requires `path`; optional keys
+are `mode`, `trusted`, `auto_approve_green`, `webhooks`, and `default`. Unknown
+keys fail startup. At most one repository may set `default = true`.
+Those paths select the checkout for work started by assignments, PR mentions,
+and review requests.
+
+For one release, legacy string paths and the `[repo_modes]`, `[trusted_repos]`,
+`[pull_requests.repos]`, `github.repository`, `github.repositories`, and
+`work_orders.repository` settings still load. The side settings log deprecation
+warnings and will be removed in the next release. Conflicting legacy and new
+settings fail startup. The old GitHub list no longer excludes other configured
+repositories: use `webhooks = false` to exclude them. A legacy work-order default
+matches by repository name or resolved checkout path; an unmatched path retains
+its previous behavior. Plain string paths remain accepted silently.
 
 All repositories use the same `work_orders.workflow` default (or the sole
 available workflow) and the same webhook secret. Configure that secret on each
 repository's webhook, pointing them all at the same endpoint.
 
-The slug format is validated at startup. Deliveries from other repositories are
+Deliveries from other repositories are
 acknowledged and ignored, even when signed with the same secret. Repository
 names are compared without regard to case. Without a configured repository,
 actionable comment deliveries receive 503 until setup is complete.

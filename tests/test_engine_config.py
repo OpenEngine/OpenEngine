@@ -211,12 +211,12 @@ def test_selection_is_explicit_then_environment_then_working_directory(
         ({"repo_modes": {"api": "disconnected"}}, "repo_modes.api names no repository"),
         (
             {"repos": {"api": "/api"}, "repo_modes": {"api": "offline"}},
-            "repo_modes.api must be one of: connected, disconnected",
+            "repos.api.mode must be one of: connected, disconnected",
         ),
         ({"trusted_repos": {"api": True}}, "trusted_repos.api names no repository"),
         (
             {"repos": {"api": "/api"}, "trusted_repos": {"api": "yes"}},
-            "trusted_repos.api must be a boolean",
+            "repos.api.trusted must be a boolean",
         ),
         ({"show_projects": False}, "unknown key in configuration: show_projects"),
         ({"approvals": {"automatic": True}}, "unknown key in approvals: automatic"),
@@ -1001,3 +1001,98 @@ def test_review_config_defaults_and_repository_overrides(tmp_path):
 def test_invalid_review_configuration(document):
     with pytest.raises(EngineConfigError):
         parse_engine_config(document)
+
+
+def test_nested_repository_settings_and_opt_out_webhooks():
+    config = parse_engine_config({
+        'repos': {
+            'OpenEngine/OpenEngine': {'path': '~/code/OpenEngine', 'default': True},
+            'OpenEngine/langchain-s1': {'path': '/langchain', 'trusted': True},
+            'owner/private': {'path': '/private', 'mode': 'disconnected',
+                              'trusted': False, 'auto_approve_green': False, 'webhooks': False},
+            'n8n': {'path': '/n8n', 'webhooks': True},
+        },
+        'pull_requests': {'auto_approve_green': True},
+    })
+    assert config.github.webhook_repositories == ('openengine/openengine', 'openengine/langchain-s1')
+    assert config.work_orders.repository == '~/code/OpenEngine'
+    assert config.repo_modes == {'owner/private': 'disconnected'}
+    assert config.repository_trust == {'OpenEngine/langchain-s1': True, 'owner/private': False}
+    assert config.trusted_repos == {'OpenEngine/langchain-s1'}
+    assert config.pull_requests.repos == {'owner/private': False}
+    assert config.pull_requests.default_for('owner/private', config.repos) == 'false'
+    assert config.repo_configs['n8n'].webhooks is False
+    assert config.repo_configs['OpenEngine/OpenEngine'].trusted is None
+
+
+@pytest.mark.parametrize('entry', [
+    {}, {'path': ''}, {'path': 1}, {'path': '.', 'unknown': True},
+    {'path': '.', 'mode': 'offline'}, {'path': '.', 'mode': None},
+    *({'path': '.', key: 1} for key in ('trusted', 'auto_approve_green', 'webhooks', 'default')),
+])
+def test_invalid_nested_repository_settings(entry):
+    with pytest.raises(EngineConfigError, match='repos'):
+        parse_engine_config({'repos': {'owner/repo': entry}})
+
+
+def test_multiple_default_repositories_rejected():
+    with pytest.raises(EngineConfigError, match='at most one'):
+        parse_engine_config({'repos': {
+            'one': {'path': '/one', 'default': True},
+            'two': {'path': '/two', 'default': True},
+        }})
+
+
+@pytest.mark.parametrize('legacy, key, value, warning', [
+    ({'repo_modes': {'owner/repo': 'disconnected'}}, 'mode', 'disconnected', 'repo_modes'),
+    ({'trusted_repos': {'owner/repo': True}}, 'trusted', True, 'trusted_repos'),
+    ({'pull_requests': {'repos': {'owner/repo': False}}}, 'auto_approve_green', False, 'pull_requests.repos'),
+    ({'github': {'repository': 'Owner/Repo'}}, 'webhooks', True, 'github.repository'),
+    ({'github': {'repositories': ['owner/repo']}}, 'webhooks', True, 'github.repositories'),
+    ({'work_orders': {'repository': 'owner/repo'}}, 'default', True, 'work_orders.repository'),
+])
+def test_legacy_repository_settings_warn_merge_and_reject_conflicts(caplog, legacy, key, value, warning):
+    config = parse_engine_config({'repos': {'owner/repo': '/repo'}, **legacy})
+    assert getattr(config.repo_configs['owner/repo'], key) == value
+    assert warning in caplog.text
+    assert '[repos."owner/name"]' in caplog.text
+    assert 'deprecated' in caplog.text
+    # Identical explicit values can coexist during migration.
+    parse_engine_config({'repos': {'owner/repo': {'path': '/repo', key: value}}, **legacy})
+    different = 'connected' if key == 'mode' else not value
+    with pytest.raises(EngineConfigError, match='conflicts'):
+        parse_engine_config({'repos': {'owner/repo': {'path': '/repo', key: different}}, **legacy})
+
+
+@pytest.mark.parametrize('repository', ['.', 'repo', '~/checkout'])
+def test_legacy_default_matches_name_or_resolved_path(tmp_path, monkeypatch, repository):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('HOME', str(tmp_path))
+    path = str(tmp_path / 'checkout') if repository == '~/checkout' else str(tmp_path)
+    config = parse_engine_config({'repos': {'repo': {'path': path}},
+                                  'work_orders': {'repository': repository}})
+    assert config.repo_configs['repo'].default is True
+    assert config.work_orders.repository == path
+
+
+def test_unmatched_legacy_default_preserved_and_conflicting_default_rejected():
+    document = {'repos': {'repo': {'path': '/repo'}}, 'work_orders': {'repository': '/other'}}
+    assert parse_engine_config(document).work_orders.repository == '/other'
+    document['repos']['repo']['default'] = True
+    with pytest.raises(EngineConfigError, match='conflicts'):
+        parse_engine_config(document)
+    document['repos']['other'] = {'path': '/other'}
+    with pytest.raises(EngineConfigError, match='conflicts'):
+        parse_engine_config(document)
+
+
+def test_legacy_github_allowlist_does_not_exclude_other_repositories():
+    config = parse_engine_config({'repos': {'one/repo': '.', 'two/repo': '/two'},
+                                  'github': {'repository': 'one/repo'}})
+    assert config.github.webhook_repositories == ('one/repo', 'two/repo')
+
+
+def test_legacy_merge_cannot_hide_invalid_new_boolean():
+    with pytest.raises(EngineConfigError):
+        parse_engine_config({'repos': {'repo': {'path': '.', 'trusted': 1}},
+                             'trusted_repos': {'repo': True}})

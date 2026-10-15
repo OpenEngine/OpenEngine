@@ -14,6 +14,7 @@ from threading import RLock
 from uuid import uuid4
 
 import tomlkit
+from tomlkit.items import InlineTable
 from filelock import FileLock
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -153,14 +154,35 @@ def _updated_config(path: Path, name: str, checkout: str, mode: str, trusted: bo
     original = path.read_text(encoding="utf-8") if path.exists() else ""
     document = tomlkit.parse(original)
     repos = document.setdefault("repos", tomlkit.table())
-    if name in repos and Path(str(repos[name])).expanduser().resolve() != Path(checkout).expanduser().resolve():
-        raise repository_name_collision(name, checkout, str(repos[name]))
-    if name not in repos:
-        repos[name] = checkout
+    if isinstance(repos, InlineTable):
+        expanded = tomlkit.table()
+        for key, value in repos.items():
+            expanded[key] = value
+        expanded.comment(repos.trivia.comment)
+        document["repos"] = repos = expanded
+    if name in repos:
+        existing = repos[name]
+        existing_path = existing["path"] if isinstance(existing, dict) else str(existing)
+        if Path(existing_path).expanduser().resolve() != Path(checkout).expanduser().resolve():
+            raise repository_name_collision(name, checkout, existing_path)
+        if isinstance(existing, str):
+            # Migrate only the entry being updated, preserving unrelated legacy entries.
+            entry = tomlkit.table()
+            entry["path"] = existing
+            for section, key in (("repo_modes", "mode"), ("trusted_repos", "trusted")):
+                if name in document.get(section, {}):
+                    entry[key] = document[section].pop(name)
+            repos[name] = entry
+    else:
+        entry = tomlkit.table()
+        entry["path"] = checkout
         if mode == "disconnected":
-            document.setdefault("repo_modes", tomlkit.table())[name] = mode
+            entry["mode"] = mode
+        repos[name] = entry
     if trusted is not None:
-        document.setdefault("trusted_repos", tomlkit.table())[name] = trusted
+        repos[name]["trusted"] = trusted
+        if name in document.get("trusted_repos", {}):
+            del document["trusted_repos"][name]
     parse_engine_config(document.unwrap())
     return original, tomlkit.dumps(document)
 
@@ -272,7 +294,7 @@ class RepositoryOnboarding:
                     return
                 await asyncio.to_thread(validate_checkout, name, path)
                 _, configured = await asyncio.to_thread(_updated_config, self.config_path, name, str(path), mode, job.get("trusted"))
-                mode = tomlkit.parse(configured).get("repo_modes", {}).get(name, "connected")
+                mode = parse_engine_config(tomlkit.parse(configured).unwrap()).repo_modes.get(name, "connected")
                 job["mode"] = mode
                 job.update(status="cloning", message=f"Preparing checkout of {name}")
                 if not job["local_only"]:
