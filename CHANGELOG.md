@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.1](https://github.com/OpenEngine/OpenEngine/compare/v1.9.0...v1.9.1) (2026-10-15)
+
+
+### Miscellaneous Chores
+
+* release 1.9.1 ([#925](https://github.com/OpenEngine/OpenEngine/issues/925)) ([141943f](https://github.com/OpenEngine/OpenEngine/commit/141943f231e39536053360fb784b8131f6b03499))
+
 ## [1.9.0](https://github.com/OpenEngine/OpenEngine/compare/v1.8.0...v1.9.0) (2026-10-14)
 
 
