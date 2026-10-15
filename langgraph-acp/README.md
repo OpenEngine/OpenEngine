@@ -118,6 +118,11 @@ is no longer supported. `HOST_ENV_ALLOWLIST` and `agent_environment()` are publi
 so applications can inspect the policy; custom providers remain responsible for
 their own launch environments.
 
+The host Claude provider also forwards the named `CLAUDE_CONFIG_DIR` setting to
+preserve the application's selected login directory. Explicit provider env wins
+over that path; other `CLAUDE_*` variables are not inherited. Sandbox providers
+use only explicit guest configuration and do not copy this host path into VMs.
+
 ## Development
 
 A standalone distribution, deliberately outside the `uv` workspace at the root

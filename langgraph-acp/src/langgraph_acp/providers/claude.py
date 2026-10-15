@@ -36,10 +36,17 @@ class ClaudeACPProvider:
         object.__setattr__(self, "command", launch_command(self.command))
 
     async def connect(self, *, context: ACPConnectContext | None = None) -> ACPClient:
+        # The host application selects its Claude login directory at startup.
+        # Preserve that named configuration path, not arbitrary host variables.
+        # Sandbox providers use explicit env/spec values and never take this path.
+        environment = {
+            **{key: os.environ[key] for key in ("CLAUDE_CONFIG_DIR",) if key in os.environ},
+            **(self.env or {}),
+        }
         return await StdioACPProvider(
             name=self.name,
             command=self.command,
-            env=self.env,
+            env=environment,
             cwd=self.cwd,
             permissions=self.permissions,
             elicitations=self.elicitations,

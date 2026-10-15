@@ -425,10 +425,32 @@ def test_command_output_flood_is_bounded_and_process_reaped(monkeypatch, stream)
     )
 
     async def run():
+        # Hold the detached retirement waiter after process exit. Cleanup must
+        # remove a fully reaped command without relying on callback scheduling.
+        release = asyncio.Event()
+        waiters = []
+        create_task = asyncio.create_task
+
+        def delayed_retirement(coroutine, *args, **kwargs):
+            if getattr(coroutine, "cr_code", None) is asyncio.subprocess.Process.wait.__code__:
+                async def wait():
+                    status = await coroutine
+                    await release.wait()
+                    return status
+                task = create_task(wait(), *args, **kwargs)
+                waiters.append(task)
+                return task
+            return create_task(coroutine, *args, **kwargs)
+
+        monkeypatch.setattr(adapter.asyncio, "create_task", delayed_retirement)
         instance = adapter.SmolvmInstance(sys.executable, "fixture", SandboxSpec())
-        with pytest.raises(SmolvmError, match="output exceeds byte budget"):
-            await asyncio.wait_for(instance._command(["-c", f"import os, time; {writes}; time.sleep(60)"]), 5)
-        assert not instance._processes
+        try:
+            with pytest.raises(SmolvmError, match="output exceeds byte budget"):
+                await asyncio.wait_for(instance._command(["-c", f"import os, time; {writes}; time.sleep(60)"]), 5)
+            assert not instance._processes
+        finally:
+            release.set()
+            await asyncio.gather(*waiters)
     asyncio.run(run())
 
 

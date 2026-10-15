@@ -10,9 +10,10 @@ a browser against a real server wired to it, with a script naming exactly what
 the agent says and does on the way through, and the graph-runtime tests run
 workflow nodes against it.
 
-The script is JSON, read from `ENGINE_FAKE_SCRIPT` on every invocation, so a
-test can change what the agent will do next without restarting the server it is
-talking to:
+The script is JSON, read from `ENGINE_FAKE_SCRIPT` on every invocation. A shim
+installed with `script=...` supplies that path explicitly, so it also works
+when the ACP launcher filters the parent's environment. A test can change what
+the agent will do next without restarting the server it is talking to:
 
     {"title": "Adding a greeting",
      "scenarios": [{"when": "greeting",
@@ -96,7 +97,7 @@ MCP_TIMEOUT_SECONDS = 30.0
 # --- installing one ---------------------------------------------------------
 
 
-def install(provider: str, directory: Path) -> str:
+def install(provider: str, directory: Path, *, script: Path | None = None) -> str:
     """Write an executable named `provider` into `directory`, and name its path.
 
     A shim rather than a generated program: the fake is this module, which is
@@ -106,9 +107,10 @@ def install(provider: str, directory: Path) -> str:
     """
 
     path = directory / provider
+    environment = f"{SCRIPT_ENVIRONMENT_VARIABLE}={shlex.quote(str(script))} " if script is not None else ""
     path.write_text(
         "#!/bin/sh\n"
-        f"exec {shlex.quote(sys.executable)} "
+        f"{environment}exec {shlex.quote(sys.executable)} "
         f"{shlex.quote(str(Path(__file__).resolve()))} {provider} \"$@\"\n",
         encoding="utf-8",
     )
@@ -387,10 +389,10 @@ def _acp_invalid_params(message_id: object, reason: str) -> None:
     )
 
 
-def fake_acp(directory: Path) -> str:
+def fake_acp(directory: Path, *, script: Path | None = None) -> str:
     """An ACP agent, for chat's runners and the graph runtime's `ACPNode`."""
 
-    return install("acp", directory)
+    return install("acp", directory, script=script)
 
 
 def _acp(arguments: Sequence[str]) -> int:

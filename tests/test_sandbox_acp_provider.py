@@ -74,6 +74,7 @@ def test_agent_node_runs_inside_sandbox(backend, workspace, provider_type, monke
     monkeypatch.setenv("GITHUB_TOKEN", "unselected-forge-key")
     monkeypatch.setenv("OPENAI_API_KEY", "unselected-model-key")
     monkeypatch.setenv("SSH_AUTH_SOCK", "/host/ssh-agent")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/host/claude-account")
     agent = provider_type(command=(sys.executable, "agent.py", "--large"), env={"EXPLICIT_SETTING": "yes"})
     resolved = []
 

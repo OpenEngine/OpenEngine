@@ -57,7 +57,7 @@ from engine.runtime import (  # noqa: E402
 from engine.adapters.source_control.github import GitHubSourceControl  # noqa: E402
 from engine.graph_runtime_langgraph import forge  # noqa: E402
 from graph_workflow_fakes import scripted_catalog  # noqa: E402
-from provider_fakes import fake_acp  # noqa: E402
+from provider_fakes import SCRIPT_ENVIRONMENT_VARIABLE, fake_acp  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -99,12 +99,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    script_path = os.environ.get(SCRIPT_ENVIRONMENT_VARIABLE)
+    script = Path(script_path) if script_path else None
     settings = Settings(
         host="127.0.0.1",
         port=args.port,
-        codex_acp_command=(fake_acp(binaries),),
-        claude_acp_command=(fake_acp(binaries),),
-        opencode_acp_command=(fake_acp(binaries),),
+        codex_acp_command=(fake_acp(binaries, script=script),),
+        claude_acp_command=(fake_acp(binaries, script=script),),
+        opencode_acp_command=(fake_acp(binaries, script=script),),
         codex_working_directory=args.repository,
         claude_working_directory=args.repository,
         opencode_working_directory=args.repository,
@@ -117,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     capabilities = build_capabilities(settings)
     runners = build_runners(settings)
     read_only_runners = build_read_only_runners(settings)
-    catalog = scripted_catalog(settings.workspace_root, binaries)
+    catalog = scripted_catalog(settings.workspace_root, binaries, script=script)
     app = create_app(
         build_session(
             capabilities, runners, args.repository, read_only_runners=read_only_runners

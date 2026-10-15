@@ -194,6 +194,9 @@ class SmolvmInstance:
             async def finish():
                 await asyncio.gather(*readers, return_exceptions=True)
                 await _discard_process_output(process)
+                # The detached waiter's done callback may run later. Once this
+                # command is drained and reaped, retire it before returning.
+                self._processes.discard(process)
             await _settle(asyncio.create_task(finish()))
         if check and process.returncode:
             detail = self._redact(stderr.decode(errors="replace").strip())
@@ -328,6 +331,7 @@ class SmolvmInstance:
             await _settle(asyncio.create_task(drain_output()))
             await _settle(asyncio.create_task(process.wait()))
             await _settle(errors)
+            self._processes.discard(process)
 
     def _begin_destroy(self):
         if self._cleanup is None:

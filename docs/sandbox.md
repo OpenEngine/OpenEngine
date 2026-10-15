@@ -162,6 +162,10 @@ variables are not inherited. Explicit provider configuration extends this set;
 values use the secret injection path so credentials never become plaintext
 SmolVM CLI arguments.
 
+The local Claude provider additionally permits the named `CLAUDE_CONFIG_DIR`
+path selected by the host application. This does not permit other agent settings
+or copy the host account directory into a VM.
+
 Guest execution filters image/runtime defaults to its own allowlist plus
 explicit command/spec variables. Guest defaults supply guest paths; the host's
 PATH or HOME is never copied into the VM implicitly. The host SmolVM control
