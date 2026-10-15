@@ -9,11 +9,11 @@ execution of that graph, managed by a background **daemon**.
 ## 1. Install and first run (disconnected)
 
 On macOS or Linux, install Git, Node.js 20.19+, and a supported coding CLI
-(Codex or Claude). On Windows, use a Linux shell inside WSL for this guide.
-Install OpenEngine:
-
+(Codex or Claude).
 ```sh
-curl -LsSf https://openengine.cc/install.sh | sh
+npm i -g @openengine.cc/engine
+cd your-repo
+engine --version
 ```
 
 The installer puts `engine` in `~/.local/bin` and starts the local daemon at
