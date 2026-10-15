@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+import httpx
 import yaml
 from engine.runtime.repositories import RepositoryRegistry
 from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
@@ -231,6 +232,8 @@ class GraphService:
         pull_requests: PullRequestsConfig = PullRequestsConfig(),
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
+        endpoint_poll_seconds: float = 0.0,
+        endpoint_transport: Any = None,
     ) -> None:
         if runtime.checkpointer is None:
             raise ValueError("graphs can only be registered on a runtime that has a checkpointer")
@@ -267,6 +270,10 @@ class GraphService:
         self._sources = Path(database).parent / "registered-graphs"
         self._loaded: dict[str, Loaded] = {}
         self._lock = asyncio.Lock()
+        self._endpoint_poll_seconds = endpoint_poll_seconds
+        self._endpoint_transport = endpoint_transport
+        self._endpoint_scheduler: asyncio.Task[None] | None = None
+        self._endpoint_health: dict[str, dict[str, Any]] = {}
         self._scheduler: asyncio.Task[None] | None = None
         self._background: set[asyncio.Task[Any]] = set()
 
@@ -303,8 +310,13 @@ class GraphService:
         self.store.abandon_undelivered_steering("the daemon restarted before it was delivered")
         if schedule:
             self._scheduler = asyncio.create_task(self._schedule())
+            if self._endpoint_poll_seconds > 0:
+                self._endpoint_scheduler = asyncio.create_task(self._poll_loop())
 
     async def aclose(self) -> None:
+        if self._endpoint_scheduler is not None:
+            self._endpoint_scheduler.cancel()
+            await asyncio.gather(self._endpoint_scheduler, return_exceptions=True)
         if self._scheduler is not None:
             self._scheduler.cancel()
             await asyncio.gather(self._scheduler, return_exceptions=True)
@@ -330,10 +342,95 @@ class GraphService:
             return {
                 "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
+                "health": self._endpoint_health.get(row.name),
             }
         if name in self._builtin_agents:
-            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+            return {
+                "name": name, "kind": name, "model": "", "url": "", "builtin": True,
+                "health": None,
+            }
         raise NotFound(f"no agent named {name!r}", agent=name)
+
+    async def poll_endpoints(self) -> None:
+        """Re-check every agent that points at a local model server.
+
+        Only agents with a `url` are probed, and one endpoint that is down must
+        not stop the others. The result is kept for `agents_json` to serve as
+        each agent's `health`: does the server answer, and is the model loaded.
+        """
+        async with httpx.AsyncClient(transport=self._endpoint_transport) as client:
+            for row in self.store.agents():
+                if not row.url:
+                    # An agent without an endpoint is never probed, and carries no health.
+                    continue
+                self._endpoint_health[row.name] = await self._probe_endpoint(client, row.url, row.model)
+
+    async def _probe_endpoint(self, client: httpx.AsyncClient, url: str, model: str) -> dict[str, Any]:
+        # The agent's url is OpenAI-compatible, e.g. `.../v1`; the server's own
+        # address is it without the prefix, probed first for Ollama's `/api/ps`
+        # and then, if that is not an Ollama server, for the OpenAI model list.
+        base = _endpoint_base(url)
+        try:
+            running = await self._ollama_models(client, base)
+        except httpx.TransportError:
+            # The server did not answer at all: it is not responding.
+            return {"responding": False, "modelLoaded": None}
+        if running is not None:
+            return {"responding": True, "modelLoaded": _ollama_model_loaded(model, running)}
+        try:
+            loaded = await self._openai_model_loaded(client, base, model)
+        except httpx.TransportError:
+            # It answered `/api/ps` but dropped `/v1/models`; it still responded.
+            return {"responding": True, "modelLoaded": None}
+        return {"responding": True, "modelLoaded": loaded}
+
+    async def _ollama_models(self, client: httpx.AsyncClient, base: str) -> list[str] | None:
+        """The running model names an Ollama server reports, or `None` if it is not one."""
+        response = await client.get(f"{base}/api/ps")
+        if response.status_code != 200:
+            return None
+        try:
+            body = response.json()
+        except Exception:
+            return None
+        models = body.get("models")
+        if not isinstance(models, list):
+            return None
+        running: list[str] = []
+        for entry in models:
+            if isinstance(entry, dict):
+                name = entry.get("model") or entry.get("name")
+                if name:
+                    running.append(name)
+        return running
+
+    @staticmethod
+    async def _openai_model_loaded(client: httpx.AsyncClient, base: str, model: str) -> bool | None:
+        """Whether `model` is in an OpenAI-compatible server's model list.
+
+        A server that answers but withholds the list -- a 401 it is not signed in
+        to, or a body that is not a model list -- cannot be asked the question.
+        """
+        response = await client.get(f"{base}/v1/models")
+        if response.status_code != 200:
+            return None
+        try:
+            body = response.json()
+        except Exception:
+            return None
+        data = body.get("data")
+        if not isinstance(data, list):
+            return None
+        ids = {entry.get("id") for entry in data if isinstance(entry, dict)}
+        return model in ids
+
+    async def _poll_loop(self) -> None:
+        while True:
+            try:
+                await self.poll_endpoints()
+            except Exception:
+                log.exception("the endpoint poller failed a pass")
+            await asyncio.sleep(self._endpoint_poll_seconds)
 
     async def add_agent(
         self, kind: str, *, name: str = "", model: str = "", url: str = "", overwrite: bool = False,
@@ -1590,6 +1687,27 @@ def _carries_credential(url: str) -> bool:
         _CREDENTIAL_PARAMETER.search(re.sub(r"[^a-z]", "", name.lower()))
         for name, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)
     )
+
+
+def _endpoint_base(url: str) -> str:
+    """The model server's address behind an agent's OpenAI-compatible `url`, e.g. `http://gpu:11434/v1` -> `http://gpu:11434`."""
+    return url[:-3] if url.endswith("/v1") else url
+
+
+def _ollama_model_loaded(model: str, running: Sequence[str]) -> bool:
+    """Whether `model` is among an Ollama server's running models.
+
+    Ollama treats `name` and `name:latest` as the same model, so an untagged
+    agent model matches a running `name:latest`; a tagged one must match as given.
+    """
+    base = model.split(":", 1)[0]
+    tagged = ":" in model
+    for entry in running:
+        if model == entry:
+            return True
+        if not tagged and entry.split(":", 1)[0] == base:
+            return True
+    return False
 
 
 def session_model(row: AgentRow) -> str:

@@ -17,6 +17,8 @@ dependencies = [
     "langgraph-acp",
     "pyyaml>=6",
     "starlette>=0.52",
+    # The endpoint health poller probes model servers over HTTP.
+    "httpx>=0.28",
 ]
 
 [build-system]
