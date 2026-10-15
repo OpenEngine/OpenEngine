@@ -1130,6 +1130,36 @@ def test_a_model_server_trickling_its_answer_cannot_stall_the_poller(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_a_model_server_trickling_its_headers_cannot_stall_the_poller(tmp_path: Path) -> None:
+    async def trickle_headers(writer: asyncio.StreamWriter, sent: dict[str, Any]) -> None:
+        writer.write(b"HTTP/1.1 200 OK\r\nX-Pad: ")
+        await writer.drain()
+        while True:
+            # One header byte every second: the status line and headers never
+            # finish, yet the socket is never idle long enough for a read timeout.
+            await asyncio.sleep(1)
+            writer.write(b"a")
+            await writer.drain()
+            sent["bytes"] += 1
+
+    async def scenario() -> None:
+        async with hostile_model_server(trickle_headers) as hostile:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="a-slow", model="qwen3-coder", url=hostile["url"])
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://127.0.0.1:9/v1")
+                try:
+                    await asyncio.wait_for(service.poll_endpoints(), timeout=20)
+                except TimeoutError:
+                    pytest.fail(
+                        "one model server trickling its /api/ps response headers held the poll pass for 20s "
+                        f"({hostile['bytes']} header bytes trickled); no other agent's health was refreshed",
+                    )
+                assert health_of(service, "qwen") is not None
+                assert health_of(service, "a-slow") == {"responding": False, "modelLoaded": None}
+
+    asyncio.run(scenario())
+
+
 def test_a_model_server_cannot_make_the_poller_read_an_unbounded_answer(tmp_path: Path) -> None:
     size = 256 * 1024 * 1024
     chunk = b" " * (1024 * 1024)
