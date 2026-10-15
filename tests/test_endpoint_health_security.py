@@ -155,3 +155,33 @@ def test_a_slow_dripping_endpoint_does_not_stall_the_pass_for_every_other_agent(
             assert (await served_health(service, "b-live"))["modelLoaded"] is True
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[::ffff:169.254.169.254]/latest",  # the IMDS address, IPv4-mapped
+        "http://[fd00:ec2::254]/latest",  # AWS IMDS over IPv6
+        "http://169.254.170.2/v2",  # ECS task metadata
+        "http://169.254.169.254./latest",  # the IMDS address as a fully qualified name
+        "http://metadata.google.internal/computeMetadata/v1",  # GCP metadata by name
+    ],
+)
+def test_the_poller_does_not_probe_the_metadata_service_by_another_spelling(tmp_path: Path, url: str) -> None:
+    """Refusing the literal 169.254.169.254 alone is not a block: a client that adds an agent
+    with another spelling of the metadata address, another metadata endpoint, or a name for one
+    still gets the daemon to probe it every pass and report whether it answered."""
+    probed: list[str] = []
+
+    def metadata_service(request: httpx.Request) -> httpx.Response:
+        probed.append(str(request.url))
+        return httpx.Response(200, json={"models": []})
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(metadata_service)) as service:
+            await add_agent(service, "imds", url)
+            await service.poll_endpoints()
+            assert probed == [], f"the poller requested the metadata service on its own: {probed}"
+            assert await served_health(service, "imds") is None
+
+    asyncio.run(scenario())
