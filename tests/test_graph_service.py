@@ -912,8 +912,10 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
 # --- through the daemon -------------------------------------------------------
 
 
+@pytest.mark.parametrize("mode,customized", [(None, False), ("fix", False), ("review", False),
+                                           ("fix", True), ("review", True)])
 def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
-    tmp_path: Path, *, workflow_app
+    tmp_path: Path, mode: str | None, customized: bool, *, workflow_app
 ) -> None:
     """`engine-web` mounts the service at /api/v1 and starts runs as WorkOrders."""
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -935,12 +937,17 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
                 finally:
                     await runtime.aclose()
 
+            services = []
+
             def factory(runtime: LangGraphRuntime, start: Any) -> GraphService:
-                return GraphService(
+                service = GraphService(
                     runtime, tmp_path / DATABASE,
                     workspace_provider=Checkouts(tmp_path / "checkout"),
                     registry=registry, start=start, default_repository="example/repo",
                 )
+
+                services.append(service)
+                return service
 
             app = workflow_app(
                 InMemoryStateStore(), ConcurrentRunner(), graph_runtime=running(), graph_service=factory,
@@ -948,20 +955,59 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
                 async with app.router.lifespan_context(app):
-                    added = await client.post("/api/v1/graphs", json={"source": PAIR})
+                    if mode:
+                        from engine.cli import starters
+                        # Keep the shipped graph identity and input declarations;
+                        # replace agent execution with one deterministic node.
+                        source = starters.source(mode) + """
+from dataclasses import replace
+from langgraph.graph import StateGraph, START, END
+from engine.graph_runtime_langgraph import State
+builder = StateGraph(State)
+builder.add_node("work", lambda state: {})
+builder.add_edge(START, "work")
+builder.add_edge("work", END)
+workflow = replace(workflow, builder=builder)
+"""
+                        if customized:
+                            source += '\nworkflow = replace(workflow, graph_id="custom-change", name="custom-change")\n'
+                        added = await client.post("/api/v1/graphs", json={"source": source, "format": "python"})
+                    else:
+                        added = await client.post("/api/v1/graphs", json={"source": PAIR})
                     assert added.status_code == 201, added.text
+                    if customized:
+                        service = services[0]
+                        version_id = added.json()["versionId"]
+                        assert not service.claims_pull_request(version_id)
+                        # A binding in another project must not affect this graph.
+                        service.bind_verb("other", mode, version_id)
+                        assert not service.claims_pull_request(version_id)
+                        binding = await client.post(f"/api/v1/verbs/{mode}", json={"graph": "custom-change"})
+                        assert binding.status_code == 200, binding.text
+                        assert service.claims_pull_request(version_id)
+                        invalid = await client.post("/api/v1/runs", json={
+                            "graph": "custom-change", "instruction": "it", "idempotencyKey": "invalid",
+                            "inputs": {"pr_url": "https://github.com/other/repo/pull/855"},
+                        })
+                        assert invalid.status_code == 400, invalid.text
                     run = await client.post("/api/v1/runs", json={
-                        "graph": "pair", "instruction": "it", "idempotencyKey": "k",
+                        "graph": "custom-change" if customized else mode or "pair",
+                        "instruction": "it", "idempotencyKey": "k",
+                        "inputs": {"pr_url": "https://github.com/example/repo/pull/855"} if mode else {},
                     })
                     assert run.status_code == 201, run.text
                     run_id = run.json()["runId"]
+                    assert run.json()["pullRequests"] == (
+                        [{"repository": "example/repo", "number": 855}] if mode else []
+                    )
                     for _ in range(600):
                         body = (await client.get(f"/api/v1/runs/{run_id}")).json()
                         if body["terminal"]:
                             break
                         await asyncio.sleep(0.05)
                     assert body["status"] == "completed", body
-                    assert body["results"]["review"] == "echo: review echo: do it (plain)"
+                    if not mode:
+                        assert body["results"]["review"] == "echo: review echo: do it (plain)"
                     listed = (await client.get("/api/runs")).json()["runs"]
                     assert [item["runId"] for item in listed] == [run_id]
                     assert listed[0]["phase"] == "succeeded"

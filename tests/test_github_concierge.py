@@ -100,11 +100,13 @@ def _graph_runtime(
     runtime.steer = AsyncMock()
     runtime.cancel = AsyncMock()
     runtime.decide = AsyncMock()
-    async def start(graph_id, values, *, run_id=None):
+    async def start(graph_id, values, *, run_id=None, before_launch=None):
         from dataclasses import replace
         runtime.started_run_id = run_id
         record = await metadata_store.run(run_id)
         await metadata_store.save_metadata(run_id, graph_id, replace(record.metadata, scheduled=False))
+        if before_launch is not None:
+            await before_launch(run_id)
         return await snapshot(run_id)
 
     runtime.start = AsyncMock(side_effect=start)
@@ -1545,6 +1547,9 @@ class _RegisteredGraphs:
 
     def version_workflow(self, version_id):
         return self.workflow if version_id == str(self.workflow.graph_id) else None
+
+    def claims_pull_request(self, graph_id):
+        return graph_id in ("fix", "review")
 
     def resolve(self, project, name):
         from types import SimpleNamespace

@@ -513,6 +513,27 @@ class GraphService:
         loaded = self._loaded.get(version_id)
         return loaded.workflow if loaded is not None else None
 
+    def claims_pull_request(self, graph_id: str) -> bool:
+        """Recognize stock graphs and project graphs bound to fix/review."""
+        version = self.store.version(graph_id)
+        if version is None:
+            return graph_id in ("fix", "review")
+        source_id = version.manifest.get("workflowId", version.manifest.get("name"))
+        if source_id in ("fix", "review"):
+            return True
+        graph = self.store.graph(version.graph_id)
+        if graph is None:
+            return False
+        bindings = self.verbs(graph.project)
+        for verb in ("fix", "review"):
+            try:
+                bound, _ = self.resolve(graph.project, bindings[verb])
+            except NotFound:
+                continue
+            if bound.graph_id == graph.graph_id:
+                return True
+        return False
+
     def workflows(self) -> tuple[GraphWorkflow, ...]:
         """The latest usable graph definitions, for the WorkOrder form."""
         return tuple(

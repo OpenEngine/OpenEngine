@@ -50,6 +50,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
+from engine.apps.web.pull_request_claims import claim_started_pull_request, validate_started_pull_request
 from engine.apps.web.request_security import RequestSecurity, TrustedDaemonHostMiddleware
 from engine.apps.web.loop_runs import (
     Loop,
@@ -147,7 +148,7 @@ from engine.graph_runtime import (
 )
 from engine.graph_runtime import create_app as create_graph_app
 from engine.graph_service import GraphService, NotFound, StartRequest, StartRun
-from engine.graph_service.service import DEFAULT_PROJECT
+from engine.graph_service.service import DEFAULT_PROJECT, ServiceError
 from engine.graph_service.store import GraphRow, VersionRow
 from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
@@ -1986,6 +1987,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
+        claim_target = (surface.service.claims_pull_request(str(graph.graph_id))
+                        if surface.service is not None else graph.graph_id in ("fix", "review"))
+        validate_started_pull_request(claim_target, inputs, run_project(repository))
         if requester is None and scheduled is not None:
             requester = scheduled.requester
         if 'auto_approve_green' in inputs and not inputs['auto_approve_green']:
@@ -2086,6 +2090,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                        if origin and origin.issue_number else {}),
                 },
                 run_id=reserved.run_id,
+                before_launch=lambda run_id: claim_started_pull_request(runtime, run_id, claim_target, inputs),
             )
             # Register before saving the row: earlier events already wait for
             # the row, and later ones must wait for the concierge reply too.
@@ -2212,14 +2217,17 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 inputs = resolve_inputs(surface.declared_inputs(graph), state.inputs)
             except ValueError as error:
                 return _error(str(error), 400)
-            state = await start_graph_run(
-                surface.runtime, graph, inputs=inputs, prompt=state.prompt,
-                repository=repository,
-                scheduled=state, origin=state.origin,
-                # The proposer stays the requester; whoever clicks Start only
-                # names a row that recorded nobody.
-                requester=state.requester or _web_requester(request),
-            )
+            try:
+                state = await start_graph_run(
+                    surface.runtime, graph, inputs=inputs, prompt=state.prompt,
+                    repository=repository,
+                    scheduled=state, origin=state.origin,
+                    # The proposer stays the requester; whoever clicks Start only
+                    # names a row that recorded nobody.
+                    requester=state.requester or _web_requester(request),
+                )
+            except ServiceError as error:
+                return _error(str(error), error.status)
             run = await run_reader.get(state.run_id)
             assert run is not None
             return JSONResponse(_run_json(run))
@@ -2263,6 +2271,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             )
         except ValueError as error:
             return _error(str(error), 400)
+        except ServiceError as error:
+            return _error(str(error), error.status)
         run = await run_reader.get(state.run_id)
         assert run is not None
         return JSONResponse(_run_json(run), status_code=201)

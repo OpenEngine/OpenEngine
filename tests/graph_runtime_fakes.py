@@ -35,7 +35,7 @@ others can.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import count
 
@@ -437,7 +437,8 @@ class ScriptedGraphRuntime:
         return graph.topology() if graph is not None else None
 
     async def start(
-        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None
+        self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None,
+        before_launch: Callable[[RunId], Awaitable[None]] | None = None,
     ) -> RunSnapshot:
         graph = self._graphs.get(graph_id)
         if graph is None:
@@ -463,6 +464,8 @@ class ScriptedGraphRuntime:
             (graph.nodes[0].node_id,), parent=None, source="start", counter=self.ids
         )
         await self._emit_checkpoint(run, opening)
+        if before_launch is not None:
+            await before_launch(run_id)
         self._drive(run, opening)
         return self._snapshot(run)
 
