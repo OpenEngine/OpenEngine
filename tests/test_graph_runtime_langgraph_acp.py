@@ -829,7 +829,7 @@ def test_ordinary_turn_is_reprompted_before_the_graph_can_advance(
         [
             text
             for role, text in transcript(events)
-            if role == "user" and "Valid completion states" in text
+            if role == "user" and "The step did not report a valid terminal result." in text
         ]
     ) == 2
 
