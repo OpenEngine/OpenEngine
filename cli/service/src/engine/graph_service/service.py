@@ -103,6 +103,13 @@ _CREDENTIAL_PARAMETER = re.compile(r"(key|token|secret|password|signature|sig|au
 #: The provider an opencode agent with a url reaches its endpoint through.
 OPENCODE_URL_PROVIDER = "engine"
 
+#: A model list is a few KB; a poller that reads more than this has been made to
+#: by a server, so a body past the cap is treated as unreadable rather than trusted.
+_ENDPOINT_MAX_BYTES = 1024 * 1024
+#: One endpoint must never hold a pass of the poller, so every probe is time-bound;
+#: a server that trickle-feeds its answer is up but unanswerable within the time allowed.
+_ENDPOINT_PROBE_SECONDS = 3.0
+
 AgentFactory = Callable[[AgentRow], Any]
 """Builds the ACP provider an added agent runs as: one registered under `row.name`."""
 
@@ -354,44 +361,98 @@ class GraphService:
     async def poll_endpoints(self) -> None:
         """Re-check every agent that points at a local model server.
 
-        Only agents with a `url` are probed, and one endpoint that is down must
-        not stop the others. The result is kept for `agents_json` to serve as
-        each agent's `health`: does the server answer, and is the model loaded.
+        Only agents with a `url` are probed. Probes run together, so one
+        endpoint that is down or slow does not hold back the others; each is
+        time-bound and byte-capped, so a server that stops answering, trickles
+        its answer a byte a second, or offers a huge one cannot stall or starve
+        the pass. The result is kept for `agents_json` to serve as each agent's
+        `health`: does the server answer, and is the model loaded.
         """
-        async with httpx.AsyncClient(transport=self._endpoint_transport) as client:
-            for row in self.store.agents():
-                if not row.url:
-                    # An agent without an endpoint is never probed, and carries no health.
-                    continue
-                self._endpoint_health[row.name] = await self._probe_endpoint(client, row.url, row.model)
+        probes = [
+            self._probe_endpoint(row.name, row.url, row.model)
+            for row in self.store.agents() if row.url
+        ]
+        results = await asyncio.gather(*probes) if probes else []
+        for name, result in zip((row.name for row in self.store.agents() if row.url), results):
+            self._endpoint_health[name] = result
 
-    async def _probe_endpoint(self, client: httpx.AsyncClient, url: str, model: str) -> dict[str, Any]:
+    async def _probe_endpoint(self, name: str, url: str, model: str) -> dict[str, Any]:
         # The agent's url is OpenAI-compatible, e.g. `.../v1`; the server's own
         # address is it without the prefix, probed first for Ollama's `/api/ps`
         # and then, if that is not an Ollama server, for the OpenAI model list.
         base = _endpoint_base(url)
+        transport = self._endpoint_transport
+        client = (
+            httpx.AsyncClient(transport=transport)
+            if transport is not None
+            else httpx.AsyncClient(timeout=httpx.Timeout(_ENDPOINT_PROBE_SECONDS))
+        )
         try:
-            running = await self._ollama_models(client, base)
-        except httpx.TransportError:
-            # The server did not answer at all: it is not responding.
-            return {"responding": False, "modelLoaded": None}
-        if running is not None:
-            return {"responding": True, "modelLoaded": _ollama_model_loaded(model, running)}
+            async with client:
+                try:
+                    running = await self._ollama_models(client, base)
+                except httpx.TransportError:
+                    # The server did not answer at all: it is not responding.
+                    return {"responding": False, "modelLoaded": None}
+                if running is not None:
+                    return {"responding": True, "modelLoaded": _ollama_model_loaded(model, running)}
+                try:
+                    loaded = await self._openai_model_loaded(client, base, model)
+                except httpx.TransportError:
+                    # It answered `/api/ps` but dropped `/v1/models`; it still responded.
+                    return {"responding": True, "modelLoaded": None}
+                return {"responding": True, "modelLoaded": loaded}
+        finally:
+            await client.aclose()
+
+    async def _endpoint_body(self, client: httpx.AsyncClient, url: str) -> dict[str, Any] | None:
+        """The JSON a model endpoint's list returns, or `None` when it cannot be read.
+
+        The body is read in bounded pieces up to a hard byte cap, so a server
+        cannot feed the poller more memory than a model list would need, and the
+        read is held to an overall deadline, so one that trickles its answer a
+        byte a second cannot hold the pass open. A body that is not a JSON
+        object -- an error page, an unrelated answer -- yields `None` so the
+        caller reports the model's state as unknown.
+        """
+        request = client.build_request("GET", url)
+        response = await client.send(request, stream=True)
+        if response.status_code != 200:
+            await response.aclose()
+            return None
+        raw: bytes | None
         try:
-            loaded = await self._openai_model_loaded(client, base, model)
-        except httpx.TransportError:
-            # It answered `/api/ps` but dropped `/v1/models`; it still responded.
-            return {"responding": True, "modelLoaded": None}
-        return {"responding": True, "modelLoaded": loaded}
+            raw = await asyncio.wait_for(self._read_capped(response), _ENDPOINT_PROBE_SECONDS)
+        except asyncio.TimeoutError:
+            raw = None
+        finally:
+            await response.aclose()
+        if raw is None:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    async def _read_capped(response: httpx.Response) -> bytes | None:
+        """Drain a response's body up to `_ENDPOINT_MAX_BYTES`, else give up early.
+
+        Stopping at the cap is what keeps a server that offers a huge body from
+        being read whole into memory; the caller bounds how long this may run.
+        """
+        raw = bytearray()
+        async for chunk in response.aiter_bytes():
+            raw.extend(chunk)
+            if len(raw) > _ENDPOINT_MAX_BYTES:
+                return None
+        return bytes(raw)
 
     async def _ollama_models(self, client: httpx.AsyncClient, base: str) -> list[str] | None:
         """The running model names an Ollama server reports, or `None` if it is not one."""
-        response = await client.get(f"{base}/api/ps")
-        if response.status_code != 200:
-            return None
-        try:
-            body = response.json()
-        except Exception:
+        body = await self._endpoint_body(client, f"{base}/api/ps")
+        if body is None:
             return None
         models = body.get("models")
         if not isinstance(models, list):
@@ -404,19 +465,14 @@ class GraphService:
                     running.append(name)
         return running
 
-    @staticmethod
-    async def _openai_model_loaded(client: httpx.AsyncClient, base: str, model: str) -> bool | None:
+    async def _openai_model_loaded(self, client: httpx.AsyncClient, base: str, model: str) -> bool | None:
         """Whether `model` is in an OpenAI-compatible server's model list.
 
         A server that answers but withholds the list -- a 401 it is not signed in
         to, or a body that is not a model list -- cannot be asked the question.
         """
-        response = await client.get(f"{base}/v1/models")
-        if response.status_code != 200:
-            return None
-        try:
-            body = response.json()
-        except Exception:
+        body = await self._endpoint_body(client, f"{base}/v1/models")
+        if body is None:
             return None
         data = body.get("data")
         if not isinstance(data, list):
