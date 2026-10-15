@@ -121,7 +121,8 @@ class NpmBootstrapperTests(unittest.TestCase):
             self.target = self.home / '.local/share/openengine/versions' / self.version
             config = self.home / '.config/openengine/engine.toml'
         self.install_fake('import os\nprint(os.environ["ENGINE_CONFIG"])\n')
-        for value in (None, ''):
+        # A drive-relative `\data` is not absolute to `engine daemon` either.
+        for value in (None, '', *(['\\data'] if self.windows else [])):
             self.env.pop('XDG_DATA_HOME', None)
             if value is not None:
                 self.env['XDG_DATA_HOME'] = value

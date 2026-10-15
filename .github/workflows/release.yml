@@ -113,7 +113,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          function Check([string] $what) { if ($LASTEXITCODE -ne 0) { engine daemon logs -n 200; throw "$what exited with $LASTEXITCODE" } }
+          function Check([string] $what) { $code = $LASTEXITCODE; if ($code -ne 0) { engine daemon logs -n 200; throw "$what exited with $code" } }
           function Health {
             try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:4364/api/health).StatusCode } catch { 0 }
           }

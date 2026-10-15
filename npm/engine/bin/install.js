@@ -17,7 +17,7 @@
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs');
-const { join } = require('node:path');
+const { isAbsolute, join, sep } = require('node:path');
 const { fileURLToPath } = require('node:url');
 
 const REPOSITORY = 'OpenEngine/OpenEngine';
@@ -34,9 +34,13 @@ const say = message => console.log(`openengine: ${message}`);
 const die = message => { throw new InstallError(message); };
 
 // %LOCALAPPDATA% and %APPDATA% unless XDG_* names an absolute directory, as
-// on the other platforms. `engine daemon` resolves the same state directory.
+// on the other platforms. `engine daemon` resolves the same state directory,
+// so this follows pathlib's rule: on Windows a drive or UNC root, never a bare
+// `\data`. Windows ignores the owner-only modes used here and by the daemon,
+// so an XDG_* override should stay inside the user profile (see docs/releases.md).
 function windowsPaths(env = process.env) {
-  const xdg = name => env[name] && /^([A-Za-z]:)?[\\/]/.test(env[name]) ? env[name] : '';
+  const absolute = value => isAbsolute(value) && (sep === '/' || /^([A-Za-z]:|[\\/]{2})/.test(value));
+  const xdg = name => env[name] && absolute(env[name]) ? env[name] : '';
   const local = env.LOCALAPPDATA || die('LOCALAPPDATA is not set');
   const roaming = env.APPDATA || die('APPDATA is not set');
   return {

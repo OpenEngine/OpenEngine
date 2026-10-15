@@ -88,6 +88,11 @@ npm tests check that), using uv's `x86_64-pc-windows-msvc` or
 with `current` a text file naming the active version rather than a symlink;
 the config is `%APPDATA%\openengine\engine.toml` and state is
 `%LOCALAPPDATA%\openengine\state`. `XDG_*` variables override these when set.
+An override must be absolute with a drive or UNC root (`C:\…`, `\\server\…`),
+and should stay inside your user profile: Windows ignores the owner-only file
+modes OpenEngine sets elsewhere, so the state database, logs and config take the
+ACL of the folder they land in, which outside the profile is often readable by
+every local user.
 The seeded config names the installed version's own `workflows` directory.
 `engine daemon setup` runs the service as a detached process, which stops at
 logout; there is no login service on Windows yet.
