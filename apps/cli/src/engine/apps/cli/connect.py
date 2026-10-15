@@ -74,10 +74,10 @@ def selected_backend(arguments: argparse.Namespace) -> backends.Backend:
 def ensure_ready(backend: backends.Backend) -> None:
     """Fail unless the service answers, starting the registered local daemon if it is down."""
     state, _body, detail = daemon.check_health(backend.url)
-    if state == "down" and backend.is_local and daemon.read_record() is not None:
+    if state == daemon.DaemonState.DOWN and backend.is_local and daemon.read_record() is not None:
         daemon.start_service()
         state, _body, detail = daemon.check_health(backend.url)
-    if state != "ready":
+    if state != daemon.DaemonState.READY:
         raise RuntimeError(detail)
 
 
