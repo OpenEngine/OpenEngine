@@ -912,8 +912,9 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
 # --- through the daemon -------------------------------------------------------
 
 
+@pytest.mark.parametrize("mode", [None, "fix_only", "review_only"])
 def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
-    tmp_path: Path, *, workflow_app
+    tmp_path: Path, mode: str | None, *, workflow_app
 ) -> None:
     """`engine-web` mounts the service at /api/v1 and starts runs as WorkOrders."""
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -948,13 +949,22 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
                 async with app.router.lifespan_context(app):
-                    added = await client.post("/api/v1/graphs", json={"source": PAIR})
+                    source = yaml.safe_load(PAIR)
+                    source["inputs"].update({name: {"default": ""} for name in (
+                        "pr_url", "fix_only", "review_only", "publish_review",
+                    )})
+                    added = await client.post("/api/v1/graphs", json={"source": yaml.safe_dump(source)})
                     assert added.status_code == 201, added.text
                     run = await client.post("/api/v1/runs", json={
                         "graph": "pair", "instruction": "it", "idempotencyKey": "k",
+                        "inputs": {mode: "true", "pr_url": "https://github.com/example/repo/pull/855",
+                                   "publish_review": "true"} if mode else {},
                     })
                     assert run.status_code == 201, run.text
                     run_id = run.json()["runId"]
+                    assert run.json()["pullRequests"] == (
+                        [{"repository": "example/repo", "number": 855}] if mode else []
+                    )
                     for _ in range(600):
                         body = (await client.get(f"/api/v1/runs/{run_id}")).json()
                         if body["terminal"]:

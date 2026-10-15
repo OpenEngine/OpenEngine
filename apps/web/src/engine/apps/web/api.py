@@ -50,6 +50,7 @@ from uuid import uuid4
 
 from engine.apps.web import source_control as source_control_settings
 from engine.apps.web.graph_progress import GraphProgress
+from engine.apps.web.pull_request_claims import claim_started_pull_request
 from engine.apps.web.request_security import RequestSecurity, TrustedDaemonHostMiddleware
 from engine.apps.web.loop_runs import (
     Loop,
@@ -147,7 +148,7 @@ from engine.graph_runtime import (
 )
 from engine.graph_runtime import create_app as create_graph_app
 from engine.graph_service import GraphService, NotFound, StartRequest, StartRun
-from engine.graph_service.service import DEFAULT_PROJECT
+from engine.graph_service.service import DEFAULT_PROJECT, ServiceError
 from engine.graph_service.store import GraphRow, VersionRow
 from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
@@ -2087,6 +2088,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 },
                 run_id=reserved.run_id,
             )
+            await claim_started_pull_request(runtime, snapshot.run_id, inputs)
             # Register before saving the row: earlier events already wait for
             # the row, and later ones must wait for the concierge reply too.
             if defer_notifications and origin is not None:
@@ -2263,6 +2265,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             )
         except ValueError as error:
             return _error(str(error), 400)
+        except ServiceError as error:
+            return _error(str(error), error.status)
         run = await run_reader.get(state.run_id)
         assert run is not None
         return JSONResponse(_run_json(run), status_code=201)
