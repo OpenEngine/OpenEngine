@@ -1075,6 +1075,85 @@ def test_the_poller_probes_url_agents_on_its_own_once_the_service_opens(tmp_path
     asyncio.run(scenario())
 
 
+@asynccontextmanager
+async def hostile_model_server(body: Any) -> AsyncIterator[dict[str, Any]]:
+    """A real model server on loopback that answers every request with `body(writer, sent)`.
+
+    `sent["bytes"]` counts what reached the socket, so a test can say how much
+    of a response the poller let itself be fed before it hung up.
+    """
+    sent: dict[str, Any] = {"bytes": 0}
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            await body(writer, sent)
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    sent["url"] = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1"
+    try:
+        yield sent
+    finally:
+        server.close()
+
+
+def test_a_model_server_trickling_its_answer_cannot_stall_the_poller(tmp_path: Path) -> None:
+    async def trickle(writer: asyncio.StreamWriter, sent: dict[str, Any]) -> None:
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\n\r\n{")
+        await writer.drain()
+        while True:
+            # One byte every second: never idle long enough for httpx's per-read timeout.
+            await asyncio.sleep(1)
+            writer.write(b" ")
+            await writer.drain()
+            sent["bytes"] += 1
+
+    async def scenario() -> None:
+        async with hostile_model_server(trickle) as hostile:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="a-slow", model="qwen3-coder", url=hostile["url"])
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://127.0.0.1:9/v1")
+                try:
+                    await asyncio.wait_for(service.poll_endpoints(), timeout=20)
+                except TimeoutError:
+                    pytest.fail(
+                        "one model server trickling its /api/ps answer held the poll pass for 20s "
+                        f"({hostile['bytes']} bytes trickled); no other agent's health was refreshed",
+                    )
+                # The agent after it in the pass, whose server refuses at once, was still probed.
+                assert health_of(service, "qwen") is not None
+
+    asyncio.run(scenario())
+
+
+def test_a_model_server_cannot_make_the_poller_read_an_unbounded_answer(tmp_path: Path) -> None:
+    size = 256 * 1024 * 1024
+    chunk = b" " * (1024 * 1024)
+
+    async def huge(writer: asyncio.StreamWriter, sent: dict[str, Any]) -> None:
+        writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {size}\r\n\r\n".encode())
+        while sent["bytes"] < size:
+            writer.write(chunk)
+            await writer.drain()
+            sent["bytes"] += len(chunk)
+
+    async def scenario() -> None:
+        async with hostile_model_server(huge) as hostile:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url=hostile["url"])
+                await service.poll_endpoints()
+                # A model list is a few KB; a poller with a byte cap hangs up long before 32 MiB.
+                assert hostile["bytes"] < 32 * 1024 * 1024, (
+                    f"the poller read {hostile['bytes'] // (1024 * 1024)} MiB of one /api/ps answer into memory"
+                )
+
+    asyncio.run(scenario())
+
+
 # --- HTTP ---------------------------------------------------------------------
 
 
