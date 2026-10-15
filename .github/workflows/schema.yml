@@ -1,25 +1,51 @@
-name: schema documentation
+name: architecture documentation
 
 on:
   push:
     paths:
+      - 'packages/**'
+      - 'apps/**'
+      - 'cli/**'
+      - 'langgraph-acp/**'
+      - 'npm/**'
+      - 'site/**'
+      - 'e2e/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'scripts/package_diagram.py'
+      - 'tests/test_package_diagram.py'
+      - 'docs/architecture/packages.*'
+      - 'docs/architecture/architecture.md'
       - 'migrations/**'
       - 'alembic.ini'
       - 'scripts/document_schema.py'
       - 'scripts/schema_diagram.py'
       - 'tests/test_schema_diagram.py'
-      - '.github/scripts/**'
       - 'tests/test_schema_documentation.py'
+      - '.github/scripts/**'
       - '.github/workflows/schema.yml'
   pull_request:
     paths:
+      - 'packages/**'
+      - 'apps/**'
+      - 'cli/**'
+      - 'langgraph-acp/**'
+      - 'npm/**'
+      - 'site/**'
+      - 'e2e/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'scripts/package_diagram.py'
+      - 'tests/test_package_diagram.py'
+      - 'docs/architecture/packages.*'
+      - 'docs/architecture/architecture.md'
       - 'migrations/**'
       - 'alembic.ini'
       - 'scripts/document_schema.py'
       - 'scripts/schema_diagram.py'
       - 'tests/test_schema_diagram.py'
-      - '.github/scripts/**'
       - 'tests/test_schema_documentation.py'
+      - '.github/scripts/**'
       - '.github/workflows/schema.yml'
   workflow_dispatch:
 
@@ -92,6 +118,13 @@ jobs:
         run: >-
           uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
           python scripts/schema_diagram.py --base-root .schema-base
+      - name: Generate latest package architecture
+        run: uv run --no-project python scripts/package_diagram.py
+      - name: Render package PNG
+        run: |
+          if [ "$(cat package-changes.json)" != '[]' ]; then
+            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/packages.mermaid -o docs/architecture/packages.png --size 2400 -s 2
+          fi
       - name: Render schema PNG
         run: |
           if [ "$(cat diagram-changes.json)" != '[]' ]; then
@@ -104,10 +137,19 @@ jobs:
             docs/schema
             docs/architecture/schema.mermaid
             docs/architecture/schema.png
+            docs/architecture/packages.mermaid
+            docs/architecture/packages.png
       # Never execute fork code with a privileged pull_request_target token.
       - name: Commit changed schemas and comment on open PRs
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v8
         with:
           script: |
-            await require('./.github/scripts/dist/publish-schema.js').default({github, context, core});
+            const publish = require('./.github/scripts/dist/publish-schema.js').default;
+            const sha = await publish({github, context, core});
+            // Both diagrams publish serially against the head just committed above.
+            if (sha) {
+              context.sha = sha;
+              if (context.payload.pull_request) context.payload.pull_request.head.sha = sha;
+            }
+            await publish({github, context, core}, 'packages');

@@ -2,16 +2,22 @@ import fs from 'node:fs';
 import {parseManifest} from './schema-manifest.js';
 import type {PublisherOptions, TreeEntry} from './schema-types.js';
 
-export default async function publish({github, context, core}: PublisherOptions) {
-  let files = parseManifest(fs.readFileSync('schema-changes.json', 'utf8'), 'schema');
-  files = files.map(file => `docs/schema/${file}`);
-  if (fs.existsSync('diagram-changes.json')) {
+export default async function publish({github, context, core}: PublisherOptions, kind: 'schema' | 'packages' = 'schema') {
+  const packages = kind === 'packages';
+  let files = packages
+    ? parseManifest(fs.readFileSync('package-changes.json', 'utf8'), 'packages')
+    : parseManifest(fs.readFileSync('schema-changes.json', 'utf8'), 'schema');
+  if (!packages) files = files.map(file => `docs/schema/${file}`);
+  if (!packages && fs.existsSync('diagram-changes.json')) {
     files.push(...parseManifest(fs.readFileSync('diagram-changes.json', 'utf8'), 'diagram'));
   }
   const needsCommit = files.length > 0;
   const {owner, repo} = context.repo;
   // A branch may already have generated documents before its PR is opened.
-  if (!needsCommit && context.payload.action === 'opened' && context.payload.pull_request) {
+  if (packages && !needsCommit) {
+    files = ['docs/architecture/packages.mermaid', 'docs/architecture/packages.png'];
+  }
+  if (!packages && !needsCommit && context.payload.action === 'opened' && context.payload.pull_request) {
     const changed = await github.paginate(github.rest.pulls.listFiles, {
       owner, repo, pull_number: context.payload.pull_request.number, per_page: 100,
     });
@@ -25,7 +31,7 @@ export default async function publish({github, context, core}: PublisherOptions)
   const sha = context.payload.pull_request?.head.sha || context.sha;
   const ref = await github.rest.git.getRef({owner, repo, ref: `heads/${branch}`});
   if (ref.data.object.sha !== sha) {
-    core.notice('Branch advanced; the newer workflow run will publish its schema.');
+    core.notice('Branch advanced; the newer workflow run will publish its documentation.');
     return;
   }
   const contents = files.map(file => ({
@@ -50,7 +56,7 @@ export default async function publish({github, context, core}: PublisherOptions)
       owner, repo, base_tree: parent.data.tree.sha, tree: treeEntries,
     });
     const commit = await github.rest.git.createCommit({
-      owner, repo, message: 'docs: update database schema',
+      owner, repo, message: packages ? 'docs: update package architecture' : 'docs: update database schema',
       tree: tree.data.sha, parents: [sha],
     });
     // Non-fast-forward updates fail if another commit arrived during generation.
@@ -63,6 +69,13 @@ export default async function publish({github, context, core}: PublisherOptions)
     owner, repo, head: `${owner}:${branch}`, state: 'open', per_page: 100,
   });
   for (const pull of pulls) {
+    if (packages) {
+      const url = `https://github.com/${owner}/${repo}/blob/${publishedSha}/docs/architecture/packages`;
+      await github.rest.issues.createComment({owner, repo, issue_number: pull.number,
+        body: `Latest package architecture (arrows point to declared dependencies; dashed = optional).\n\n`
+          + `![Package architecture](${url}.png?raw=true)\n\n[Mermaid source](${url}.mermaid)`});
+      continue;
+    }
     if (fs.existsSync('docs/architecture/schema.png')) {
       const url = `https://github.com/${owner}/${repo}/blob/${publishedSha}/docs/architecture/schema`;
       const body = `Latest schema ERD: green = added, red = removed, amber = changed. `
@@ -83,4 +96,5 @@ export default async function publish({github, context, core}: PublisherOptions)
       await github.rest.issues.createComment({owner, repo, issue_number: pull.number, body});
     }
   }
+  return publishedSha;
 };
