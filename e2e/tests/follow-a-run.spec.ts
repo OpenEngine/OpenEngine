@@ -151,6 +151,7 @@ test.describe(graphsCategory, () => {
                 // Long enough to show the run part way through, short enough not to keep anyone waiting.
                 { type: "run", command: "cat README.md" },
                 { type: "wait", seconds: 4 },
+                { type: "run", command: "cat README.md" },
                 { type: "say", text: "This is an example project; its README is one heading." },
               ],
             },
@@ -194,10 +195,18 @@ The first time you run a graph in a folder, OpenEngine asks whether to trust it.
         const answerQuestions = async (state: Run) => {
           for (const approval of state.pendingApprovals ?? []) {
             if (answered.has(approval.approvalId)) continue
-            await terminal.waitForText(ALLOW)
-            await show(terminal, engine, testInfo, await terminal.row(ALLOW), "Read the question before allowing the command")
+            // Answered prompts remain in scrollback with their echoed response.
+            // Only an unanswered line can represent the next question.
+            const unanswered = /^Allow\? \[y\/n\][ \t]*$/m
+            await terminal.waitForText(unanswered)
+            await show(terminal, engine, testInfo, await terminal.row(unanswered), "Read the question before allowing the command")
+            const answeredPrompts = (await terminal.text()).match(/^Allow\? \[y\/n\] y$/gm)?.length ?? 0
             await terminal.type("y")
             await terminal.press("Enter")
+            // Do not let the next call see this prompt before its answer is echoed.
+            await expect.poll(async () =>
+              (await terminal.text()).match(/^Allow\? \[y\/n\] y$/gm)?.length ?? 0,
+            ).toBeGreaterThan(answeredPrompts)
             answered.add(approval.approvalId)
           }
         }
@@ -246,7 +255,7 @@ If an agent asks to run a command, read the question. To allow it, type \`y\` an
               return state.terminal
             }, { timeout: engine.agentMode === "real" ? 280_000 : 60_000,
                  message: "answering command approvals until the run ends" }).toBe(true)
-            if (engine.agentMode === "stub") expect(answered.size).toBe(1)
+            if (engine.agentMode === "stub") expect(answered.size).toBe(2)
             const exitCode = await terminal.waitForPrompt({ timeout: 60_000 })
             expect(exitCode).toBe(0)
             const { runId } = await onlyRun(engine)
