@@ -1505,3 +1505,142 @@ def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp
             assert (await service.run_json("reserved"))["status"] == "scheduled"
 
     asyncio.run(scenario())
+
+
+def test_the_poller_stops_reading_an_endpoint_that_answers_with_an_endless_body(tmp_path: Path) -> None:
+    """A hostile model server must not be able to push an unbounded body into the daemon on every pass."""
+    chunk = b" " * 65536
+    total = 64 * 1024 * 1024
+    served = {"bytes": 0}
+
+    async def endless(prefix: bytes) -> AsyncIterator[bytes]:
+        served["bytes"] += len(prefix)
+        yield prefix
+        while served["bytes"] < total:
+            served["bytes"] += len(chunk)
+            yield chunk
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        prefix = b'{"models": [' if request.url.path == "/api/ps" else b'{"data": ['
+        return httpx.Response(200, headers={"content-type": "application/json"}, content=endless(prefix))
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            assert served["bytes"] <= 4 * 1024 * 1024, (
+                f"the poller read {served['bytes']} bytes from one endpoint pass without a size cap"
+            )
+            assert health_of(service, "qwen") is not None
+
+    asyncio.run(scenario())
+
+
+def test_one_endpoint_that_drips_its_answer_cannot_hold_every_agents_health_hostage(tmp_path: Path) -> None:
+    """A model server that sends one byte every second never trips a per-read timeout;
+    the pass must still finish, and the other agents must still get their readings."""
+
+    async def drip(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n")
+            await writer.drain()
+            for _ in range(600):
+                writer.write(b"1\r\n \r\n")
+                await writer.drain()
+                await asyncio.sleep(1.0)
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            writer.close()
+
+    async def ollama(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        body = json.dumps({"models": [{"name": "qwen3-coder:latest"}]}).encode()
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n" % len(body) + body)
+        await writer.drain()
+        writer.close()
+
+    async def scenario() -> None:
+        slow = await asyncio.start_server(drip, "127.0.0.1", 0)
+        live = await asyncio.start_server(ollama, "127.0.0.1", 0)
+        slow_port = slow.sockets[0].getsockname()[1]
+        live_port = live.sockets[0].getsockname()[1]
+        try:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="slow", model="qwen3-coder", url=f"http://127.0.0.1:{slow_port}/v1")
+                await service.add_agent("opencode", name="live", model="qwen3-coder", url=f"http://127.0.0.1:{live_port}/v1")
+                try:
+                    await asyncio.wait_for(service.poll_endpoints(), timeout=20.0)
+                except TimeoutError:
+                    pytest.fail("one dripping endpoint kept the whole poll pass running for over 20s")
+                assert health_of(service, "live") == {"responding": True, "modelLoaded": True}
+        finally:
+            slow.close()
+            live.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_poll_pass_started_before_an_agent_was_re_added_does_not_bring_back_the_old_endpoints_reading(
+    tmp_path: Path,
+) -> None:
+    old_probed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "old":
+            old_probed.set()
+            await release.wait()
+            return ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404)
+        raise httpx.ConnectError("connection refused")
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(handle)) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://old:11434/v1")
+            poll = asyncio.create_task(service.poll_endpoints())
+            await asyncio.wait_for(old_probed.wait(), 5)
+            await service.add_agent(
+                "opencode", name="qwen", model="qwen3-coder", url="http://new:11434/v1", overwrite=True,
+            )
+            release.set()
+            await poll
+            health = health_of(service, "qwen")
+            assert health != {"responding": True, "modelLoaded": True}, (
+                "the re-added agent shows the old endpoint's reading from a pass that started before the change"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_does_not_send_probes_through_a_proxy_from_the_daemons_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxied: list[bytes] = []
+
+    async def proxy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        head = await reader.readuntil(b"\r\n\r\n")
+        proxied.append(head.split(b"\r\n", 1)[0])
+        body = json.dumps({"models": [{"name": "qwen3-coder:latest"}]}).encode()
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n" % len(body) + body)
+        await writer.drain()
+        writer.close()
+
+    async def scenario() -> None:
+        server = await asyncio.start_server(proxy, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{port}")
+        try:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu.invalid:11434/v1")
+                await service.poll_endpoints()
+                assert proxied == [], f"the probe went through the environment's proxy: {proxied}"
+        finally:
+            server.close()
+
+    asyncio.run(scenario())

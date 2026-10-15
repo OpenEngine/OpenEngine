@@ -9,6 +9,8 @@ export type Route =
   | { kind: "graph-conversation"; runId: string; nodeId: string }
   /** What every runner's subscription has been spent on, across providers. */
   | { kind: "utilization" }
+  /** The registered agents, and whether each URL agent's model endpoint answers. */
+  | { kind: "agents" }
   | { kind: "new-loop" }
   | { kind: "loop"; loopId: string }
   | { kind: "chat"; threadId?: string; runId?: string };
@@ -19,6 +21,7 @@ export function routeForPath(pathname: string): Route {
   if (path === "/" || path === "/runs") return { kind: "runs" };
   if (path === "/runs/new") return { kind: "new-run" };
   if (path === "/utilization") return { kind: "utilization" };
+  if (path === "/agents") return { kind: "agents" };
   if (path === "/loops/new") return { kind: "new-loop" };
   if (path.startsWith("/loops/"))
     return { kind: "loop", loopId: decodeURIComponent(path.slice("/loops/".length)) };

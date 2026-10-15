@@ -3,7 +3,7 @@
 
 import type { PropsWithChildren, ReactNode } from "react";
 
-import { UTILIZATION_URL } from "./api";
+import { AGENTS_URL, UTILIZATION_URL } from "./api";
 
 /** The openengine V, traced from the mark. Inherits `currentColor` so it can be
  *  laid on the flame tile in the rail and on anything else that needs it. */
@@ -48,13 +48,28 @@ function GraphIcon() {
   );
 }
 
+/** A plugged-in node: a URL agent is a model server the engine points at, and
+ *  the page beside this icon reports whether that server answers. */
+function AgentIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <circle cx="4" cy="4" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <path d="M5.4 5.4 L10.6 10.6 L9.4 11.8 L4.2 6.6 Z" />
+    </svg>
+  );
+}
+
 export function RailFoot({
   onSettings,
   utilizationActive = false,
+  agentsActive = false,
 }: {
   onSettings?: () => void;
   /** Whether the utilization page is the one on screen. */
   utilizationActive?: boolean;
+  /** Whether the agents page is the one on screen. */
+  agentsActive?: boolean;
 }) {
   return (
     <div className="rail-foot">
@@ -73,6 +88,18 @@ export function RailFoot({
         title="Utilization"
       >
         <GraphIcon />
+      </a>
+      {/* Like utilization, this opens a page that only reads: an endpoint's
+          last answer, not a place to act on it. */}
+      <a
+        aria-current={agentsActive ? "page" : undefined}
+        aria-label="Open agents"
+        className="rail-agents"
+        data-active={agentsActive || undefined}
+        href={AGENTS_URL}
+        title="Agents"
+      >
+        <AgentIcon />
       </a>
       {onSettings && (
         <button
