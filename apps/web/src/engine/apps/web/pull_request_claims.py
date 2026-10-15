@@ -14,10 +14,10 @@ from engine.runtime.change_requests import change_request
 log = logging.getLogger(__name__)
 
 
-def validate_started_pull_request(graph_id: str, inputs: Mapping[str, str], repository: str | None) -> None:
+def validate_started_pull_request(claim_target: bool, inputs: Mapping[str, str], repository: str | None) -> None:
     """Bind a fix/review target to the repository authorized by the caller."""
     url = inputs.get("pr_url", "")
-    if not url or graph_id not in ("fix", "review"):
+    if not url or not claim_target:
         return
     target = change_request(url)
     if target is None:
@@ -29,11 +29,11 @@ def validate_started_pull_request(graph_id: str, inputs: Mapping[str, str], repo
 
 
 async def claim_started_pull_request(
-    runtime: GraphRuntime, run_id: RunId, graph_id: str, inputs: Mapping[str, str],
+    runtime: GraphRuntime, run_id: RunId, claim_target: bool, inputs: Mapping[str, str],
 ) -> None:
     """Cancel a new run if its conditional ownership claim cannot be written."""
     url = inputs.get("pr_url", "")
-    if not url or graph_id not in ("fix", "review"):
+    if not url or not claim_target:
         return
     try:
         await _claim(runtime, run_id, url)
