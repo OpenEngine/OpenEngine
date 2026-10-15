@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+import httpx
 import yaml
 from engine.runtime.repositories import RepositoryRegistry
 from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
@@ -186,6 +187,24 @@ class StartRequest:
     inputs: Mapping[str, str]
 
 
+@dataclass(frozen=True)
+class EndpointHealth:
+    """What a probe of an agent's model endpoint most recently found.
+
+    `responding` is whether the endpoint answered at all. `model_loaded` is
+    whether the agent's own model was among what the endpoint offered: `True`
+    when it was, `False` when the endpoint reached a model list and the model
+    was not in it, and `None` when neither probe could say -- the endpoint
+    could not be reached, or answered in a way neither probe could read.
+    """
+
+    responding: bool
+    model_loaded: bool | None
+
+    def json(self) -> dict[str, Any]:
+        return {"responding": self.responding, "modelLoaded": self.model_loaded}
+
+
 StartRun = Callable[[GraphWorkflow, StartRequest], Awaitable[RunId]]
 """How the host starts a run. The daemon passes its own WorkOrder path, so a
 run started here is listed, approved and notified like any other."""
@@ -231,6 +250,8 @@ class GraphService:
         pull_requests: PullRequestsConfig = PullRequestsConfig(),
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
+        endpoint_transport: httpx.BaseTransport | None = None,
+        endpoint_poll_seconds: float = 30.0,
     ) -> None:
         if runtime.checkpointer is None:
             raise ValueError("graphs can only be registered on a runtime that has a checkpointer")
@@ -252,6 +273,14 @@ class GraphService:
         self._model_tiers = model_tiers
         self._allow_python = allow_python
         self._agent_factory = agent_factory
+        #: What reaches an added agent's model endpoint. A mock in tests; the
+        #: real transport otherwise. The poller's reads, not the agent's own.
+        self._endpoint_transport = endpoint_transport
+        self._endpoint_poll_seconds = endpoint_poll_seconds
+        #: The most recent reading of each added agent's endpoint, by agent name.
+        #: Kept in memory: health is a live probe, not a thing the daemon must
+        #: recompute after a restart, so nothing about it needs a column.
+        self._health: dict[str, EndpointHealth] = {}
         #: Added agents and their models, offered to workflow files too when this
         #: process runs any. Compiled graphs hold its `models` dict, not a copy,
         #: so a model changed here reaches graphs registered before the change.
@@ -268,6 +297,7 @@ class GraphService:
         self._loaded: dict[str, Loaded] = {}
         self._lock = asyncio.Lock()
         self._scheduler: asyncio.Task[None] | None = None
+        self._endpoint_scheduler: asyncio.Task[None] | None = None
         self._background: set[asyncio.Task[Any]] = set()
 
     @property
@@ -303,11 +333,15 @@ class GraphService:
         self.store.abandon_undelivered_steering("the daemon restarted before it was delivered")
         if schedule:
             self._scheduler = asyncio.create_task(self._schedule())
+            self._endpoint_scheduler = asyncio.create_task(self._endpoint_poll())
 
     async def aclose(self) -> None:
         if self._scheduler is not None:
             self._scheduler.cancel()
             await asyncio.gather(self._scheduler, return_exceptions=True)
+        if self._endpoint_scheduler is not None:
+            self._endpoint_scheduler.cancel()
+            await asyncio.gather(self._endpoint_scheduler, return_exceptions=True)
         await asyncio.gather(*self._background, return_exceptions=True)
         self.store.close()
 
@@ -318,7 +352,99 @@ class GraphService:
         """The runners `engine agent add` offers, beyond the built-in ones."""
         return self._added_agents.names
 
-    # --- agents -------------------------------------------------------------
+    # --- endpoint health ----------------------------------------------------
+
+    async def poll_endpoints(self) -> None:
+        """Probe every added agent's model endpoint, once.
+
+        An agent with a `url` is asked which models its server holds, first the
+        way Ollama answers (`/api/ps`) and, when that says nothing Ollama, the
+        way an OpenAI-compatible server does (`/v1/models`). The reading is kept
+        in memory and served with the agent, so a client sees whether the
+        endpoint is up and whether the agent's model is loaded. An agent with no
+        `url` is never probed and carries no reading.
+        """
+        for row in self.store.agents():
+            if not row.url:
+                continue
+            try:
+                self._health[row.name] = await self._probe(row)
+            except Exception:
+                log.exception("endpoint probe for agent %s failed", row.name)
+
+    async def _probe(self, row: AgentRow) -> EndpointHealth:
+        """Whether `row`'s endpoint is up and whether its model is loaded.
+
+        Ollama's `/api/ps` is asked first, and when it would not serve a model
+        list -- a 404 or 5xx, or a 2xx that is not a model list -- the
+        OpenAI-compatible `/v1/models` is asked instead, on the same origin.
+        A 2xx Ollama model list is authoritative, an empty list read as "nothing
+        is loaded". Reaching either endpoint, even a 401, is the endpoint
+        responding; only a connection-level failure reads as not responding.
+        """
+        async with httpx.AsyncClient(
+            transport=self._endpoint_transport or httpx.AsyncHTTPTransport(),
+        ) as client:
+            ollama = await self._ollama_probe(client, row)
+            if ollama is not None:
+                return ollama
+            return await self._openai_probe(client, row)
+
+    async def _ollama_probe(self, client: httpx.AsyncClient, row: AgentRow) -> EndpointHealth | None:
+        """Ollama's `/api/ps` reading, or `None` to defer to the OpenAI fallback.
+
+        `None` is returned when the endpoint is not Ollama: a connection error, a
+        404 or 5xx, or a 2xx whose body is not a model list. A 2xx model list is
+        taken as authoritative, with an empty list read as the model not loaded.
+        """
+        origin = _endpoint_origin(row.url)
+        try:
+            response = await client.get(f"{origin}/api/ps")
+        except httpx.HTTPError:
+            return None
+        if not response.is_success:
+            return None
+        try:
+            body = response.json()
+        except json.JSONDecodeError:
+            return None
+        models = body.get("models") if isinstance(body, dict) else None
+        if not isinstance(models, list):
+            return None
+        return EndpointHealth(True, row.model in _model_keys_of(models))
+
+    async def _openai_probe(self, client: httpx.AsyncClient, row: AgentRow) -> EndpointHealth:
+        """The OpenAI-compatible fallback: a 2xx `/v1/models` is up and its `data` reads the model.
+
+        A 2xx whose body has no readable `data` list reads the model as unknown
+        (`None`); a list without the agent's model reads it as not loaded
+        (`False`). Any HTTP response -- even a 401 -- is the endpoint
+        responding; a connection error reads as not responding.
+        """
+        try:
+            response = await client.get(f"{row.url}/models")
+        except httpx.HTTPError:
+            return EndpointHealth(False, None)
+        model_loaded: bool | None = None
+        if response.is_success:
+            try:
+                body = response.json()
+            except json.JSONDecodeError:
+                model_loaded = None
+            else:
+                data = body.get("data") if isinstance(body, dict) else None
+                if isinstance(data, list):
+                    model_loaded = row.model in _model_keys_of(data)
+        return EndpointHealth(True, model_loaded)
+
+    async def _endpoint_poll(self) -> None:
+        """Probe every added agent's endpoint now and on a cadence until closed."""
+        while True:
+            try:
+                await self.poll_endpoints()
+            except Exception:
+                log.exception("the endpoint poller failed a pass")
+            await asyncio.sleep(self._endpoint_poll_seconds)
 
     def agents_json(self) -> list[dict[str, Any]]:
         added = {row.name: row for row in self.store.agents()}
@@ -327,12 +453,15 @@ class GraphService:
     def agent_json(self, name: str, row: AgentRow | None = None) -> dict[str, Any]:
         row = row or self.store.agent(name)
         if row is not None:
-            return {
+            body: dict[str, Any] = {
                 "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
             }
+            health = self._health.get(name)
+            body["health"] = health.json() if health else None
+            return body
         if name in self._builtin_agents:
-            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True, "health": None}
         raise NotFound(f"no agent named {name!r}", agent=name)
 
     async def add_agent(
@@ -1592,6 +1721,42 @@ def _carries_credential(url: str) -> bool:
     )
 
 
+def _endpoint_origin(url: str) -> str:
+    """Scheme and host of a model endpoint, so Ollama's `/api/ps` is asked at the origin.
+
+    Ollama answers `/api/ps` at its own root, not under the `/v1` an OpenAI-style
+    client calls, so the probe strips whatever path the agent keeps for `/v1`
+    requests and asks the origin directly.
+    """
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _model_keys(model: Any) -> tuple[str, ...]:
+    """The names a listed model answers for, so an agent's model can be matched.
+
+    Ollama tags its running models (`qwen3-coder:latest`), which an agent added
+    with a bare model name (`qwen3-coder`) must still be read as loaded, so a
+    model is matched by its full name and the name with its tag stripped.
+    """
+    name = model if isinstance(model, str) else (
+        model.get("model") or model.get("name") or model.get("id") or ""
+    )
+    if isinstance(name, str) and ":" in name:
+        base, _sep, _tag = name.partition(":")
+        return (name, base)
+    return (name,)
+
+
+def _model_keys_of(models: object | list[Any]) -> frozenset[str]:
+    """Every name any of `models` answers for, for matching an agent's model against."""
+    keys: set[str] = set()
+    for model in models or []:
+        if isinstance(model, (dict, str)):
+            keys.update(k for k in _model_keys(model) if k)
+    return frozenset(keys)
+
+
 def session_model(row: AgentRow) -> str:
     """The model an added agent's sessions ask for: on its own endpoint, OpenCode's `provider/model`."""
     return f"{OPENCODE_URL_PROVIDER}/{row.model}" if row.url else row.model
@@ -1696,6 +1861,7 @@ __all__ = [
     "AgentFactory",
     "Conflict",
     "DEFAULT_PROJECT",
+    "EndpointHealth",
     "GraphService",
     "NotFound",
     "SPEND_SCOPE",
