@@ -329,6 +329,7 @@ class GraphService:
         if row is not None:
             return {
                 "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
+                "contextLimit": row.context_limit or None, "outputLimit": row.output_limit or None,
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
             }
         if name in self._builtin_agents:
@@ -336,7 +337,8 @@ class GraphService:
         raise NotFound(f"no agent named {name!r}", agent=name)
 
     async def add_agent(
-        self, kind: str, *, name: str = "", model: str = "", url: str = "", overwrite: bool = False,
+        self, kind: str, *, name: str = "", model: str = "", url: str = "",
+        context_limit: object = None, output_limit: object = None, overwrite: bool = False,
     ) -> dict[str, Any]:
         """Offer a harness under a name graphs can use, with its own model or endpoint."""
         if self._agent_factory is None:
@@ -357,6 +359,14 @@ class GraphService:
         if url and _carries_credential(url):
             # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
             raise ServiceError("url must not carry an api key in its query string")
+        context = _token_limit("context", context_limit)
+        output = _token_limit("output", output_limit)
+        if (context or output) and not url:
+            raise ServiceError("only an agent with a url takes a context or output limit")
+        if output and not context:
+            raise ServiceError("an output limit needs a context limit")
+        if context and output >= context:
+            raise ServiceError("output limit must be less than the context limit", context=context, output=output)
         if name in self._builtin_agents:
             raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
         async with self._lock:
@@ -364,7 +374,7 @@ class GraphService:
             if existing is not None and not overwrite:
                 raise Conflict(f"an agent named {name} already exists; pass replace to change it", agent=name)
             at = self._now_iso()
-            row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at)
+            row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at, context, output)
             self._offer_agent(row)
             self.store.upsert_agent(row)
         return self.agent_json(name, row)
@@ -1594,10 +1604,28 @@ def opencode_config(row: AgentRow) -> dict[str, Any]:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": row.name,
                 "options": {"baseURL": row.url},
-                "models": {row.model: {"name": row.model}},
+                "models": {row.model: _opencode_model(row)},
             },
         }
     return config
+
+
+def _opencode_model(row: AgentRow) -> dict[str, Any]:
+    """The model entry: its limit tells opencode when to compact, so prompts fit the server's window."""
+    model: dict[str, Any] = {"name": row.model}
+    if row.context_limit:
+        # opencode reads a limit as both or neither; 0 output leaves its own default in place.
+        model["limit"] = {"context": row.context_limit, "output": row.output_limit or 0}
+    return model
+
+
+def _token_limit(name: str, value: object) -> int:
+    """A token limit given to `add_agent`: 0 or absent for none, otherwise a positive whole number."""
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ServiceError(f"{name} limit must be a whole number of tokens", **{name: value})
+    return value
 
 
 def _parse_yaml(source: str, *, runners: Sequence[str] | None) -> GraphSpec:

@@ -211,6 +211,8 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
             name=_text(body, "name"),
             model=_text(body, "model"),
             url=_text(body, "url"),
+            context_limit=body.get("contextLimit"),
+            output_limit=body.get("outputLimit"),
             overwrite=overwrite,
         ), status_code=201)
 

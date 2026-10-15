@@ -239,6 +239,11 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--name", default="", help="what graphs call it (default: the kind)")
     adding.add_argument("--model", default="", help="the model it runs when a node names none")
     adding.add_argument("--url", default="", help="an OpenAI-compatible endpoint (opencode only; needs --model)")
+    adding.add_argument(
+        "--context", type=int, metavar="TOKENS",
+        help="the model's context window, so opencode compacts before it (needs --url; match Ollama's num_ctx)",
+    )
+    adding.add_argument("--output", type=int, metavar="TOKENS", help="the most tokens one reply may use (needs --context)")
     adding.add_argument("--replace", action="store_true", help="overwrite an agent with this name")
     for name, help_text in (("get", "one agent"), ("remove", "stop offering an added agent")):
         action = actions.add_parser(name, parents=[common], help=help_text)
@@ -719,7 +724,8 @@ def agent_add(arguments: argparse.Namespace) -> int:
     _backend, client = _connect(arguments)
     agent = client.post("/agents", {
         "kind": arguments.kind, "name": arguments.name, "model": arguments.model,
-        "url": arguments.url, "replace": arguments.replace,
+        "url": arguments.url, "contextLimit": arguments.context, "outputLimit": arguments.output,
+        "replace": arguments.replace,
     })
     _emit(agent, arguments.pretty, _agent_line)
     return EXIT_OK
@@ -988,8 +994,15 @@ def _backend_line(body: dict[str, Any]) -> str:
 
 
 def _agent_line(body: dict[str, Any]) -> str:
-    detail = " ".join(part for part in (body.get("model") or "", body.get("url") or "") if part)
+    detail = " ".join(part for part in (body.get("model") or "", body.get("url") or "", _agent_limit(body)) if part)
     return f"{body['name']}  {body['kind']}{'  ' + detail if detail else ''}{'  (built in)' if body.get('builtin') else ''}"
+
+
+def _agent_limit(body: dict[str, Any]) -> str:
+    """An added agent's token limits, `context` or `context/output`, or blank when it has none."""
+    if not body.get("contextLimit"):
+        return ""
+    return f"{body['contextLimit']}" + (f"/{body['outputLimit']}" if body.get("outputLimit") else "")
 
 
 def _loop_summary(loop: dict[str, Any]) -> str:
@@ -1047,7 +1060,7 @@ def _duration(seconds: int) -> str:
 
 
 _AGENT_COLUMNS: list[tuple[str, Any]] = [
-    ("NAME", "name"), ("KIND", "kind"), ("MODEL", "model"), ("URL", "url"),
+    ("NAME", "name"), ("KIND", "kind"), ("MODEL", "model"), ("URL", "url"), ("LIMIT", _agent_limit),
     ("", lambda row: "built in" if row.get("builtin") else ""),
 ]
 _NODE_COLUMNS: list[tuple[str, Any]] = [

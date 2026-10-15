@@ -261,23 +261,31 @@ def test_an_agent_on_a_model_server_has_nothing_to_sign_in_to(monkeypatch, capsy
 
 
 def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys) -> None:
-    qwen = {"name": "qwen", "kind": "opencode", "model": "qwen3", "url": "http://gpu:8000/v1", "builtin": False}
+    qwen = {
+        "name": "qwen", "kind": "opencode", "model": "qwen3", "url": "http://gpu:8000/v1",
+        "contextLimit": 65536, "outputLimit": None, "builtin": False,
+    }
     backend = serve(
         monkeypatch, qwen,
         {"agents": [{"name": "claude", "kind": "claude", "model": "", "url": "", "builtin": True}, qwen]},
         {**qwen, "removed": True},
     )
-    assert main(["agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1"]) == 0
+    assert main([
+        "agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1",
+        "--context", "65536",
+    ]) == 0
     assert main(["agents"]) == 0
     assert main(["agent", "remove", "qwen"]) == 0
     assert [(r["method"], r["url"].removeprefix("http://127.0.0.1:4364/api/v1")) for r in backend.requests] == [
         ("POST", "/agents"), ("GET", "/agents"), ("DELETE", "/agents/qwen"),
     ]
     assert backend.requests[0]["body"] == {
-        "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://gpu:8000/v1", "replace": False,
+        "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://gpu:8000/v1",
+        "contextLimit": 65536, "outputLimit": None, "replace": False,
     }
     out = capsys.readouterr().out
     assert "built in" in out and "http://gpu:8000/v1" in out and "removed qwen" in out
+    assert "LIMIT" in out and "65536" in out
 
 
 def test_graph_run_sends_the_repository_it_is_run_from(

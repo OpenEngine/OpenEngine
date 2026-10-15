@@ -49,6 +49,8 @@ class AgentRow:
     url: str
     created_at: str
     updated_at: str
+    context_limit: int = 0
+    output_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -179,9 +181,14 @@ class GraphServiceStore:
     def upsert_agent(self, row: AgentRow) -> None:
         """Insert `row`, or replace the agent of that name and keep when it was added."""
         self._connection.execute(
-            "INSERT INTO cli_agents VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET "
-            "kind = excluded.kind, model = excluded.model, url = excluded.url, updated_at = excluded.updated_at",
-            (row.name, row.kind, row.model, row.url, row.created_at, row.updated_at),
+            "INSERT INTO cli_agents (name, kind, model, url, created_at, updated_at, context_limit, output_limit) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET "
+            "kind = excluded.kind, model = excluded.model, url = excluded.url, updated_at = excluded.updated_at, "
+            "context_limit = excluded.context_limit, output_limit = excluded.output_limit",
+            (
+                row.name, row.kind, row.model, row.url, row.created_at, row.updated_at,
+                row.context_limit, row.output_limit,
+            ),
         )
 
     def delete_agent(self, name: str) -> None:
