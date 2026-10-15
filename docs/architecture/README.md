@@ -1,18 +1,34 @@
 # Latest database schema
 
-[schema.mermaid](schema.mermaid) is an ERD of the latest Alembic schema on this
-branch, replayed into empty SQLite databases. It includes every application table
-and column from the state store (`state_`) and graph runtime store (`graph_`).
-The prefixes distinguish tables in separate databases; they are not part of the
-SQL table names. The revision heads are recorded in the chart comments.
+![Latest schema comparison](schema.png)
 
-PK, FK and UK mark declared primary, foreign and unique keys. Multiple PK columns
-form one composite primary key. Multiple UK columns can belong to separate unique
-constraints; consult the [revision SQL](../schema/) for exact constraint groups.
-Column comments show nullability. Solid edges show declared foreign keys; dashed
-edges show selected logical references used by the application, which SQLite does
-not enforce as foreign keys. Logical references are not marked FK on columns.
+The workflow writes [schema.mermaid](schema.mermaid) and [schema.png](schema.png)
+together when the schema comparison changes. It migrates empty SQLite databases
+to all current heads and compares their tables, columns, keys, defaults, indexes
+and constraints with the PR base. Pushes without an open PR use the preceding
+commit; manual runs without a PR compare with the same commit.
 
-The reserved PostgreSQL history has no application tables. LangGraph's separately
-managed checkpoint tables are outside these Alembic histories. This is a current
-schema overview; revision-by-revision SQL remains available in `docs/schema`.
+Green tables are added, red tables are removed, and amber tables changed.
+Column annotations mark ADDED, REMOVED and CHANGED columns. Removed objects are
+comparison-only tombstones, **not** part of the latest schema. Index or constraint
+changes also highlight the owning table; the revision SQL contains their details.
+A PR that changes documentation alone has no highlighted schema objects.
+
+`state_` and `graph_` distinguish separate SQLite databases; these prefixes are
+not part of SQL names. PK, FK and UK mark declared keys. Multiple PK columns form
+one composite primary key; UK columns may belong to separate unique constraints.
+Solid edges show declared foreign keys. Dashed edges are selected logical
+application references; their existence is not enforced by SQLite.
+The reserved PostgreSQL history is empty; LangGraph's separately managed checkpoint
+tables are outside these Alembic histories.
+
+Regenerate with a checkout of the comparison baseline:
+
+```sh
+uv run python scripts/schema_diagram.py --base-root /path/to/base-checkout
+npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/schema.mermaid -o docs/architecture/schema.png -s 2
+```
+
+The workflow renders PNG only when the Mermaid comparison changes or PNG is
+missing, commits both files, and embeds the PNG in a PR comment. Fork PRs receive
+the files as workflow artifacts. Historical SQL remains in `docs/schema`.

@@ -69,3 +69,50 @@ test('publication skips unchanged/stale runs and commits only schema documents',
     fs.rmSync(directory, {recursive: true, force: true});
   }
 });
+
+test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', async () => {
+  const cwd = process.cwd();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-png-test-'));
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  let tree;
+  const comments = [];
+  const github = {
+    rest: {
+      git: {
+        getRef: async () => ({data: {object: {sha: 'source'}}}),
+        getCommit: async () => ({data: {tree: {sha: 'old-tree'}}}),
+        createBlob: async args => {
+          assert.equal(args.encoding, 'base64');
+          assert.deepEqual(Buffer.from(args.content, 'base64'), png);
+          return {data: {sha: 'png-blob'}};
+        },
+        createTree: async args => {tree = args.tree; return {data: {sha: 'tree'}};},
+        createCommit: async () => ({data: {sha: 'commit'}}),
+        updateRef: async () => {},
+      },
+      pulls: {list: 'list'},
+      issues: {createComment: async args => comments.push(args)},
+    },
+    paginate: async () => [{number: 12}],
+  };
+  try {
+    process.chdir(directory);
+    fs.mkdirSync('docs/architecture', {recursive: true});
+    fs.writeFileSync('docs/architecture/schema.png', png);
+    fs.writeFileSync('docs/architecture/schema.mermaid', 'erDiagram\n');
+    fs.writeFileSync('schema-changes.json', '[]');
+    fs.writeFileSync('diagram-changes.json', JSON.stringify([
+      'docs/architecture/schema.mermaid', 'docs/architecture/schema.png',
+    ]));
+    await publish({github, context: {repo: {owner: 'org', repo: 'repo'},
+      payload: {}, ref: 'refs/heads/feature', sha: 'source'}, core: {notice: () => {}}});
+    assert.equal(tree[1].sha, 'png-blob');
+    assert.equal(tree[1].content, undefined);
+    assert.equal(comments.length, 1);
+    assert.match(comments[0].body, /!\[Schema changes\].*schema\.png\?raw=true/);
+    assert.match(comments[0].body, /blob\/commit/);
+  } finally {
+    process.chdir(cwd);
+    fs.rmSync(directory, {recursive: true, force: true});
+  }
+});

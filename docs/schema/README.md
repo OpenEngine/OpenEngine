@@ -7,9 +7,9 @@ schema changes. Alembic's bookkeeping table and SQLite internal objects are omit
 
 The schema documentation workflow runs on migration changes in pushes and PRs.
 It connects to disposable SQLite databases and a PostgreSQL service, replays
-every revision, and commits changed documents to the source branch. It posts
-each changed schema and its diff to open PRs for that branch. Large documents
-are linked when they exceed GitHub's comment limit. Generated commits do not
+every revision, and commits changed documents to the source branch. It also generates the [latest schema ERD](../architecture/README.md) as Mermaid
+and PNG, highlighting changes against the PR base, and embeds the PNG in open PRs
+for that branch. Generated commits do not
 touch the workflow's watched paths, preventing a commit loop.
 
 Fork PRs receive an artifact instead of commits or comments because their token
