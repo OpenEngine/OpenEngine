@@ -1,15 +1,17 @@
-const fs = require('node:fs');
+import fs from 'node:fs';
+import {parseManifest} from './schema-manifest.js';
+import type {PublisherOptions, TreeEntry} from './schema-types.js';
 
-module.exports = async ({github, context, core}) => {
-  let files = JSON.parse(fs.readFileSync('schema-changes.json', 'utf8'));
+export default async function publish({github, context, core}: PublisherOptions) {
+  let files = parseManifest(fs.readFileSync('schema-changes.json', 'utf8'), 'schema');
   files = files.map(file => `docs/schema/${file}`);
   if (fs.existsSync('diagram-changes.json')) {
-    files.push(...JSON.parse(fs.readFileSync('diagram-changes.json', 'utf8')));
+    files.push(...parseManifest(fs.readFileSync('diagram-changes.json', 'utf8'), 'diagram'));
   }
   const needsCommit = files.length > 0;
   const {owner, repo} = context.repo;
   // A branch may already have generated documents before its PR is opened.
-  if (!needsCommit && context.payload.action === 'opened') {
+  if (!needsCommit && context.payload.action === 'opened' && context.payload.pull_request) {
     const changed = await github.paginate(github.rest.pulls.listFiles, {
       owner, repo, pull_number: context.payload.pull_request.number, per_page: 100,
     });
@@ -28,13 +30,13 @@ module.exports = async ({github, context, core}) => {
   }
   const contents = files.map(file => ({
     path: file,
-    mode: '100644', type: 'blob',
+    mode: '100644' as const, type: 'blob' as const,
     content: file.endsWith('.png') ? null : fs.readFileSync(file, 'utf8'),
   }));
   let publishedSha = sha;
   if (needsCommit) {
     const parent = await github.rest.git.getCommit({owner, repo, commit_sha: sha});
-    const treeEntries = [];
+    const treeEntries: TreeEntry[] = [];
     for (const file of contents) {
       if (file.path.endsWith('.png')) {
         const blob = await github.rest.git.createBlob({owner, repo,
@@ -71,6 +73,7 @@ module.exports = async ({github, context, core}) => {
       continue;
     }
     for (const file of contents) {
+      if (file.content === null) continue;
       const url = `https://github.com/${owner}/${repo}/blob/${publishedSha}/${file.path}`;
       const heading = `Schema updated: [${file.path}](${url})\n\n`;
       // Keep each comment under GitHub's size limit, including large schemas.

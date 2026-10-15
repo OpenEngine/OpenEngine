@@ -32,3 +32,9 @@ npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architec
 The workflow renders PNG only when the Mermaid comparison changes or PNG is
 missing, commits both files, and embeds the PNG in a PR comment. Fork PRs receive
 the files as workflow artifacts. Historical SQL remains in `docs/schema`.
+
+The PR publisher and its tests use TypeScript. Run `npm ci --prefix .github/scripts`
+and `npm test --prefix .github/scripts` to compile with strict type checking and
+run the publication tests. The publisher imports generated JSON manifests through
+`parseManifest`, validating the array and allowed paths before reading files or
+calling GitHub. Alembic replay remains in Python.

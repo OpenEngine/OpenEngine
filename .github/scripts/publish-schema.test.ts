@@ -1,33 +1,39 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const {test} = require('node:test');
-const publish = require('./publish-schema.cjs');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {test} from 'node:test';
+import publish from './publish-schema.js';
+import {parseManifest} from './schema-manifest.js';
+import type {GitHub, Context, TreeEntry, Comment, CreateTree, CreateCommit, UpdateRef} from './schema-types.js';
 
 test('publication skips unchanged/stale runs and commits only schema documents', async () => {
   const cwd = process.cwd();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-test-'));
-  const calls = [];
+  const calls: Array<CreateTree | CreateCommit | UpdateRef | Comment> = [];
   let head = 'source';
-  const github = {
+  const github: GitHub = {
     rest: {
       git: {
+        createBlob: async () => {throw new Error('Unexpected binary upload');},
         getRef: async () => ({data: {object: {sha: head}}}),
         getCommit: async () => ({data: {tree: {sha: 'old-tree'}}}),
         createTree: async args => { calls.push(args); return {data: {sha: 'tree'}}; },
         createCommit: async args => { calls.push(args); return {data: {sha: 'commit'}}; },
         updateRef: async args => { calls.push(args); },
       },
-      pulls: {list: 'list', listFiles: 'files'},
+      pulls: {list: async () => [{number: 12}], listFiles: async () => [
+        {filename: 'docs/schema/sqlite/revision.md', status: 'added'},
+        {filename: 'docs/schema/README.md', status: 'added'},
+      ]},
       issues: {createComment: async args => { calls.push(args); }},
     },
-    paginate: async method => method === 'files'
-      ? [{filename: 'docs/schema/sqlite/revision.md', status: 'added'},
-        {filename: 'docs/schema/README.md', status: 'added'}]
-      : [{number: 12}],
+    paginate: async (method, args) => {
+      const response = await method(args);
+      return Array.isArray(response) ? response : response.data;
+    },
   };
-  const context = {repo: {owner: 'org', repo: 'repo'}, payload: {}, ref: 'refs/heads/feature', sha: 'source'};
+  const context: Context = {repo: {owner: 'org', repo: 'repo'}, payload: {}, ref: 'refs/heads/feature', sha: 'source'};
   const core = {notice: () => {}};
   try {
     process.chdir(directory);
@@ -42,19 +48,19 @@ test('publication skips unchanged/stale runs and commits only schema documents',
     assert.equal(calls.length, 0);
     head = 'source';
     await publish({github, context, core});
-    assert.deepEqual(calls[0].tree.map(file => file.path), ['docs/schema/sqlite/revision.md']);
-    assert.equal(calls[0].base_tree, 'old-tree');
-    assert.deepEqual(calls[1].parents, ['source']);
-    assert.equal(calls[2].force, false);
-    assert.equal(calls[2].ref, 'heads/feature');
-    assert.equal(calls[3].issue_number, 12);
-    assert.match(calls[3].body, /```diff\n\+column/);
-    assert.match(calls[3].body, /blob\/commit\/docs\/schema/);
+    assert.deepEqual((calls[0] as CreateTree).tree.map(file => file.path), ['docs/schema/sqlite/revision.md']);
+    assert.equal((calls[0] as CreateTree).base_tree, 'old-tree');
+    assert.deepEqual((calls[1] as CreateCommit).parents, ['source']);
+    assert.equal((calls[2] as UpdateRef).force, false);
+    assert.equal((calls[2] as UpdateRef).ref, 'heads/feature');
+    assert.equal((calls[3] as Comment).issue_number, 12);
+    assert.match((calls[3] as Comment).body, /```diff\n\+column/);
+    assert.match((calls[3] as Comment).body, /blob\/commit\/docs\/schema/);
     calls.length = 0;
     fs.writeFileSync('docs/schema/sqlite/revision.md', 'x'.repeat(60000));
     await publish({github, context, core});
-    assert.ok(calls[3].body.length < 60000);
-    assert.match(calls[3].body, /exceed the comment limit/);
+    assert.ok((calls[3] as Comment).body.length < 60000);
+    assert.match((calls[3] as Comment).body, /exceed the comment limit/);
     calls.length = 0;
     fs.writeFileSync('schema-changes.json', '[]');
     context.payload = {action: 'opened', pull_request: {
@@ -62,8 +68,8 @@ test('publication skips unchanged/stale runs and commits only schema documents',
     }};
     await publish({github, context, core});
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].issue_number, 12);
-    assert.match(calls[0].body, /blob\/source\/docs\/schema/);
+    assert.equal((calls[0] as Comment).issue_number, 12);
+    assert.match((calls[0] as Comment).body, /blob\/source\/docs\/schema/);
   } finally {
     process.chdir(cwd);
     fs.rmSync(directory, {recursive: true, force: true});
@@ -74,9 +80,9 @@ test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', 
   const cwd = process.cwd();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-png-test-'));
   const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  let tree;
-  const comments = [];
-  const github = {
+  let tree: TreeEntry[] = [];
+  const comments: Comment[] = [];
+  const github: GitHub = {
     rest: {
       git: {
         getRef: async () => ({data: {object: {sha: 'source'}}}),
@@ -90,10 +96,13 @@ test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', 
         createCommit: async () => ({data: {sha: 'commit'}}),
         updateRef: async () => {},
       },
-      pulls: {list: 'list'},
+      pulls: {list: async () => [{number: 12}], listFiles: async () => []},
       issues: {createComment: async args => comments.push(args)},
     },
-    paginate: async () => [{number: 12}],
+    paginate: async (method, args) => {
+      const response = await method(args);
+      return Array.isArray(response) ? response : response.data;
+    },
   };
   try {
     process.chdir(directory);
@@ -115,4 +124,16 @@ test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', 
     process.chdir(cwd);
     fs.rmSync(directory, {recursive: true, force: true});
   }
+});
+
+test('manifest parser accepts generated paths and rejects malformed imports', () => {
+  assert.deepEqual(parseManifest('[]', 'schema'), []);
+  assert.deepEqual(parseManifest('["sqlite/rev.md","sqlite/rev.md"]', 'schema'), ['sqlite/rev.md']);
+  assert.deepEqual(parseManifest('["docs/architecture/schema.png"]', 'diagram'),
+    ['docs/architecture/schema.png']);
+  for (const source of ['{', '{}', 'null', '[1]', '["../secret"]',
+    '["sqlite/../../secret.md"]', '["/tmp/schema.md"]']) {
+    assert.throws(() => parseManifest(source, 'schema'), /Invalid schema manifest/);
+  }
+  assert.throws(() => parseManifest('["sqlite/rev.md"]', 'diagram'), /Invalid diagram manifest/);
 });

@@ -8,8 +8,7 @@ on:
       - 'scripts/document_schema.py'
       - 'scripts/schema_diagram.py'
       - 'tests/test_schema_diagram.py'
-      - '.github/scripts/publish-schema.cjs'
-      - '.github/scripts/publish-schema.test.cjs'
+      - '.github/scripts/**'
       - 'tests/test_schema_documentation.py'
       - '.github/workflows/schema.yml'
   pull_request:
@@ -19,8 +18,7 @@ on:
       - 'scripts/document_schema.py'
       - 'scripts/schema_diagram.py'
       - 'tests/test_schema_diagram.py'
-      - '.github/scripts/publish-schema.cjs'
-      - '.github/scripts/publish-schema.test.cjs'
+      - '.github/scripts/**'
       - 'tests/test_schema_documentation.py'
       - '.github/workflows/schema.yml'
   workflow_dispatch:
@@ -80,8 +78,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Test publication
-        run: node --test .github/scripts/publish-schema.test.cjs
+      - name: Install publication tooling
+        run: npm ci --prefix .github/scripts
+      - name: Typecheck and test publication
+        run: npm test --prefix .github/scripts
       - name: Replay and inspect every revision
         run: >-
           uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
@@ -110,4 +110,4 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            await require('./.github/scripts/publish-schema.cjs')({github, context, core});
+            await require('./.github/scripts/dist/publish-schema.js').default({github, context, core});
