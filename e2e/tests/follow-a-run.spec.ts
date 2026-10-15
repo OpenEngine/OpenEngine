@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs"
+import { existsSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Locator, TestInfo } from "@playwright/test"
 import { withDocMeta } from "@test2doc/playwright/DocMeta"
@@ -7,7 +7,7 @@ import { test, expect, type AgentScript, type Engine } from "../fixtures/engine.
 import type { Terminal } from "../fixtures/terminal.ts"
 import { graphsCategory } from "./docCategories"
 
-test.use({ terminalSession: { cols: 120, rows: 40 } })
+test.use({ terminalSession: { cols: 120, rows: 40 }, requireCommandApproval: true })
 
 /** A graph with a step in each of two stages, so the screen has something to move through. */
 const GRAPH = `apiVersion: openengine.cc/v1
@@ -35,7 +35,7 @@ const QUESTION = /^read asks to .*ls/
 const ALLOW = /Allow\? \[y\/n\]/
 const INTERRUPTED = /\[d\]etach and leave it running, \[c\]ancel the run, or keep \[w\]atching\?/
 
-type Run = { runId: string; status: string; terminal?: boolean; pendingApprovals?: { approvalId: string }[] }
+type Run = { runId: string; status: string; terminal?: boolean; workspace?: { path: string }; pendingApprovals?: { approvalId: string }[] }
 
 /** What the backend has for its runs, asked of it directly rather than through the CLI. */
 async function runs(engine: Engine): Promise<Run[]> {
@@ -47,9 +47,14 @@ async function runs(engine: Engine): Promise<Run[]> {
 
 async function run(engine: Engine, runId: string): Promise<Run> {
   const headers = { Authorization: `Bearer ${engine.env.ENGINE_SERVICE_TOKEN}` }
-  const response = await fetch(`${engine.url}/api/v1/runs/${encodeURIComponent(runId)}`, { headers })
-  expect(response.ok).toBe(true)
-  return (await response.json()) as Run
+  // The run list can appear before the runtime has written its first snapshot.
+  let response: Response
+  await expect.poll(async () => {
+    response = await fetch(`${engine.url}/api/v1/runs/${encodeURIComponent(runId)}`, { headers })
+    return response.status
+  }).not.toBe(404)
+  expect(response!.ok).toBe(true)
+  return (await response!.json()) as Run
 }
 
 /** The run this test started: there is only ever one. */
@@ -220,6 +225,7 @@ If you see *cannot reach backend*, OpenEngine's background program isn't running
             if (engine.agentMode === "stub") await terminal.waitForText(/┃ ⚙ cat README\.md/)
             const running = await onlyRun(engine)
             await answerQuestions(await run(engine, running.runId))
+            if (engine.agentMode === "real") return // Real agents can finish or ask again at any point.
             await expect.poll(async () => (await run(engine, running.runId)).status).toBe("running")
             await show(terminal, engine, testInfo, await terminal.rows(STAGES, /^\s+Graph\s+/), "The plan stage is in progress; its step, read, is running")
             // The screen settled part way through the run, not only once it had ended.
@@ -289,7 +295,7 @@ Start the graph again with \`engine graph run describe-project\`, and answer \`n
         await step(
           `When an agent asks, the screen stops redrawing and shows the question: which step is asking, and what it wants to do. Here the \`read\` step asks to run \`ls\`, a command that lists the files in a folder. The question mark in the *Graph* line shows the step waiting for you.
 
-Type \`y\` and press Enter to let it, or \`n\` to say no. Either way the run carries on; if you say no, the agent goes on without running the command.`,
+Type \`y\` and press Enter to let it, or \`n\` to say no. If you say no, the command is not run and this run ends as failed. Start the graph again if you want to try again.`,
           async () => {
             await terminal.waitForText(ALLOW)
             const { runId } = await onlyRun(engine)
@@ -471,3 +477,51 @@ OpenEngine stops the agent and ends the run. Below the last view of its progress
     },
   )
 })
+
+// Exercise interactive controls with a real agent as well as the scripted provider.
+for (const action of ["approve", "decline", "reconnect", "cancel"] as const) {
+  test(`Interactive run: ${action} @skip-docs`, async ({ engine, terminal }) => {
+    test.setTimeout(300_000)
+    const graph = GRAPH.replace(
+      "Read README.md and reply with one sentence saying what this project is. You may use ls to list files and cat to read them. Don't change files.",
+      "Use the Bash tool to run exactly touch approval-check.txt before replying with one sentence saying what this project is. This creates an empty file in this disposable example project. Do not use other tools or commands.",
+    )
+    engine.script({ scenarios: [
+      { when: READ, steps: [{ type: "run", command: "touch approval-check.txt" }, { type: "say", text: "This is an example project." }] },
+      suggest,
+    ] })
+    writeFileSync(path.join(engine.repository, "describe-project.yaml"), graph)
+    await terminal.run("engine graph add describe-project.yaml")
+    await distrust(terminal)
+    await start(terminal)
+    await terminal.waitForText(ALLOW, { timeout: 240_000 })
+    const { runId } = await onlyRun(engine)
+    expect((await run(engine, runId)).pendingApprovals).toHaveLength(1)
+    if (action === "reconnect" || action === "cancel") {
+      await terminal.press("Control+C")
+      await terminal.waitForText(INTERRUPTED)
+      await terminal.type(action === "cancel" ? "c" : "d")
+      await terminal.press("Enter")
+      const code = await terminal.waitForPrompt()
+      if (action === "cancel") {
+        expect(code).toBe(1)
+        expect((await run(engine, runId)).status).toBe("cancelled")
+        return
+      }
+      expect(code).toBe(0)
+      expect((await run(engine, runId)).pendingApprovals).toHaveLength(1)
+      await terminal.run("clear")
+      await terminal.type(`engine run watch ${runId}`)
+      await terminal.press("Enter")
+      await terminal.waitForText(ALLOW)
+    }
+    await terminal.type(action === "decline" ? "n" : "y")
+    await terminal.press("Enter")
+    expect(await terminal.waitForPrompt({ timeout: 240_000 })).toBe(action === "decline" ? 1 : 0)
+    expect((await run(engine, runId)).status).toBe(action === "decline" ? "failed" : "completed")
+    const ended = await run(engine, runId)
+    expect(ended.pendingApprovals ?? []).toHaveLength(0)
+    expect(ended.workspace?.path).toBeTruthy()
+    expect(existsSync(path.join(ended.workspace!.path, "approval-check.txt"))).toBe(action !== "decline")
+  })
+}

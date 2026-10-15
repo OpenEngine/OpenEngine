@@ -52,13 +52,13 @@ Now watch. The screen redraws itself as the run goes on:
 
 If you see *cannot reach backend*, OpenEngine's background program isn't running. A **backend** is a computer where that program runs: this one, or a remote machine. Follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then start the graph again.
 
-![screenshot](./test2doc-23dc656c11ee.png)
+![screenshot](./test2doc-e346e555ab75.png)
 
 Keep watching until the run ends. When the last step is done, every mark turns to ✓, the top line says *completed*, and below it you'll see what the last step's agent replied.
 
 If an agent asks to run a command, read the question. To allow it, type `y` and press Enter. Answer any further questions the same way when you want to allow the requested action. Once the work is done, the run ends on its own.
 
-![screenshot](./test2doc-9149e53acd49.png)
+![screenshot](./test2doc-e0f4ee45c9a7.png)
 
 To see your runs afterwards, type `engine runs list` and press Enter.
 
@@ -76,7 +76,7 @@ Start the graph again with `engine graph run describe-project`, and answer `n` i
 
 When an agent asks, the screen stops redrawing and shows the question: which step is asking, and what it wants to do. Here the `read` step asks to run `ls`, a command that lists the files in a folder. The question mark in the *Graph* line shows the step waiting for you.
 
-Type `y` and press Enter to let it, or `n` to say no. Either way the run carries on; if you say no, the agent goes on without running the command.
+Type `y` and press Enter to let it, or `n` to say no. If you say no, the command is not run and this run ends as failed. Start the graph again if you want to try again.
 
 ![screenshot](./test2doc-aeede9cd2584.png)
 
@@ -124,13 +124,13 @@ If you started the wrong graph, or no longer need what it's doing, you can stop 
 
 Read the question. Type y and press Enter to let the agent read README.md before you stop its work.
 
-![screenshot](./test2doc-649bce448bdd.png)
+![screenshot](./test2doc-9f996d4b3ee2.png)
 
 While it's running, press Ctrl-C. When the screen asks what you want, type `c` and press Enter.
 
 OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run ID and *cancelled*.
 
-![screenshot](./test2doc-4529eb450d4d.png)
+![screenshot](./test2doc-0d034e945939.png)
 
 Type `engine runs list` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.
 
