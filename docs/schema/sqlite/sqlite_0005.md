@@ -16,7 +16,7 @@ Add direct milestone relationships to workflow runs.
 
  CREATE INDEX runs_by_workstream ON run_states (workstream_id);
 
-@@ -94,11 +96,14 @@
+@@ -94,13 +96,16 @@
     event_json TEXT NOT NULL
  );
 
@@ -27,12 +27,16 @@ Add direct milestone relationships to workflow runs.
     run_id TEXT NOT NULL,
     state_json TEXT NOT NULL,
     workstream_id TEXT,
+-   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
+-   UNIQUE (run_id)
 +   milestone_id TEXT,
 +   PRIMARY KEY (sequence),
 +   CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
-    FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
-    UNIQUE (run_id)
++   UNIQUE (run_id),
++   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id)
  );
+
+ CREATE TABLE session_grants (
 ```
 
 ## Schema
@@ -144,8 +148,8 @@ CREATE TABLE "run_states" (
     milestone_id TEXT,
     PRIMARY KEY (sequence),
     CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
-    FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
-    UNIQUE (run_id)
+    UNIQUE (run_id),
+    FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id)
 );
 
 CREATE TABLE session_grants (
