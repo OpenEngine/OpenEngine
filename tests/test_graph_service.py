@@ -311,6 +311,24 @@ def test_a_new_version_does_not_change_a_run_already_pinned(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_a_work_order_can_pin_a_version_that_is_no_longer_the_latest(tmp_path: Path) -> None:
+    """`work_orders.workflow = "solo@1"` starts version 1 after version 2 is added."""
+    from engine.apps.web.api import work_order_graph
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            first, _ = await service.add_graph("default", source=single("solo", "one"))
+            second, _ = await service.add_graph("default", source=single("solo", "two"))
+            for reference, expected in (("solo@1", first), (first["versionId"], first), ("solo", second)):
+                version = work_order_graph(service.resolve, "acme/api", reference)
+                assert version is not None and version.version_id == expected["versionId"]
+                workflow = service.version_workflow(version.version_id)
+                assert workflow is not None and str(workflow.graph_id) == expected["versionId"]
+            assert service.version_workflow("gv-missing") is None
+
+    asyncio.run(scenario())
+
+
 def test_names_resolve_within_a_project_and_ambiguity_is_refused(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
