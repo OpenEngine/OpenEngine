@@ -368,13 +368,11 @@ class GraphService:
         the pass. The result is kept for `agents_json` to serve as each agent's
         `health`: does the server answer, and is the model loaded.
         """
-        probes = [
-            self._probe_endpoint(row.name, row.url, row.model)
-            for row in self.store.agents() if row.url
-        ]
+        probe_rows = [row for row in self.store.agents() if row.url]
+        probes = [self._probe_endpoint(row.name, row.url, row.model) for row in probe_rows]
         results = await asyncio.gather(*probes) if probes else []
-        for name, result in zip((row.name for row in self.store.agents() if row.url), results):
-            self._endpoint_health[name] = result
+        for row, result in zip(probe_rows, results):
+            self._endpoint_health[row.name] = result
 
     async def _probe_endpoint(self, name: str, url: str, model: str) -> dict[str, Any]:
         # The agent's url is OpenAI-compatible, e.g. `.../v1`; the server's own
@@ -387,46 +385,50 @@ class GraphService:
             if transport is not None
             else httpx.AsyncClient(timeout=httpx.Timeout(_ENDPOINT_PROBE_SECONDS))
         )
-        try:
-            async with client:
-                try:
-                    running = await self._ollama_models(client, base)
-                except httpx.TransportError:
-                    # The server did not answer at all: it is not responding.
-                    return {"responding": False, "modelLoaded": None}
-                if running is not None:
-                    return {"responding": True, "modelLoaded": _ollama_model_loaded(model, running)}
-                try:
-                    loaded = await self._openai_model_loaded(client, base, model)
-                except httpx.TransportError:
-                    # It answered `/api/ps` but dropped `/v1/models`; it still responded.
-                    return {"responding": True, "modelLoaded": None}
-                return {"responding": True, "modelLoaded": loaded}
-        finally:
-            await client.aclose()
+        async with client:
+            try:
+                running = await self._ollama_models(client, base)
+            except httpx.TransportError:
+                # The server did not answer at all: it is not responding.
+                return {"responding": False, "modelLoaded": None}
+            except asyncio.TimeoutError:
+                # It trickled its headers or body past the deadline: it is not responding.
+                return {"responding": False, "modelLoaded": None}
+            if running is not None:
+                return {"responding": True, "modelLoaded": _ollama_model_loaded(model, running)}
+            try:
+                loaded = await self._openai_model_loaded(client, base, model)
+            except httpx.TransportError:
+                # It answered `/api/ps` but dropped `/v1/models`; it still responded.
+                return {"responding": True, "modelLoaded": None}
+            except asyncio.TimeoutError:
+                # It answered but held the model list past the deadline; it responded.
+                return {"responding": True, "modelLoaded": None}
+            return {"responding": True, "modelLoaded": loaded}
 
     async def _endpoint_body(self, client: httpx.AsyncClient, url: str) -> dict[str, Any] | None:
         """The JSON a model endpoint's list returns, or `None` when it cannot be read.
 
-        The body is read in bounded pieces up to a hard byte cap, so a server
-        cannot feed the poller more memory than a model list would need, and the
-        read is held to an overall deadline, so one that trickles its answer a
-        byte a second cannot hold the pass open. A body that is not a JSON
-        object -- an error page, an unrelated answer -- yields `None` so the
-        caller reports the model's state as unknown.
+        The request's exchange -- its response headers and body -- is held to one
+        deadline, so a server that trickles its headers a byte a second, or its
+        answer the same way, cannot hold the pass open; the body is read in
+        bounded pieces up to a hard byte cap, so a huge one is not read whole
+        into memory. A body that is not a JSON object -- an error page, an
+        unrelated answer -- yields `None` so the caller reports the model's state
+        as unknown.
         """
         request = client.build_request("GET", url)
-        response = await client.send(request, stream=True)
-        if response.status_code != 200:
-            await response.aclose()
-            return None
-        raw: bytes | None
+        response_box: list[httpx.Response | None] = [None]
         try:
-            raw = await asyncio.wait_for(self._read_capped(response), _ENDPOINT_PROBE_SECONDS)
-        except asyncio.TimeoutError:
-            raw = None
+            # A server that trickles its headers or body past the deadline raises a
+            # TimeoutError here, which the caller treats as the endpoint not answering.
+            raw = await asyncio.wait_for(
+                self._send_and_read_capped(client, request, response_box), _ENDPOINT_PROBE_SECONDS
+            )
         finally:
-            await response.aclose()
+            response = response_box[0]
+            if response is not None:
+                await response.aclose()
         if raw is None:
             return None
         try:
@@ -436,12 +438,21 @@ class GraphService:
         return parsed if isinstance(parsed, dict) else None
 
     @staticmethod
-    async def _read_capped(response: httpx.Response) -> bytes | None:
-        """Drain a response's body up to `_ENDPOINT_MAX_BYTES`, else give up early.
+    async def _send_and_read_capped(
+        client: httpx.AsyncClient, request: httpx.Request, box: list[httpx.Response | None],
+    ) -> bytes | None:
+        """Open and drain a model endpoint's list under one deadline.
 
-        Stopping at the cap is what keeps a server that offers a huge body from
-        being read whole into memory; the caller bounds how long this may run.
+        The exchange -- sending the request through its response headers and then
+        reading the body -- is one coroutine held to a single deadline, so a
+        server that trickles its headers a byte a second, trickling its answer the
+        same way, cannot hold the pass open. The body is read in bounded pieces up
+        to a hard byte cap, so a huge one is not read whole into memory.
         """
+        response = await client.send(request, stream=True)
+        box[0] = response
+        if response.status_code != 200:
+            return None
         raw = bytearray()
         async for chunk in response.aiter_bytes():
             raw.extend(chunk)
