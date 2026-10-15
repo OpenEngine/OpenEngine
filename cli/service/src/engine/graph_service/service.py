@@ -24,6 +24,7 @@ from engine.graph_runtime.metadata import RunMetadata, run_name
 
 import asyncio
 import hashlib
+import httpx
 import json
 import logging
 import re
@@ -231,6 +232,8 @@ class GraphService:
         pull_requests: PullRequestsConfig = PullRequestsConfig(),
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
+        endpoint_transport: httpx.AsyncBaseTransport | None = None,
+        endpoint_poll_seconds: float = 30.0,
     ) -> None:
         if runtime.checkpointer is None:
             raise ValueError("graphs can only be registered on a runtime that has a checkpointer")
@@ -249,6 +252,8 @@ class GraphService:
         self._default_base_ref = default_base_ref
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._tick_seconds = tick_seconds
+        self._endpoint_transport = endpoint_transport
+        self._endpoint_poll_seconds = endpoint_poll_seconds
         self._model_tiers = model_tiers
         self._allow_python = allow_python
         self._agent_factory = agent_factory
@@ -268,6 +273,8 @@ class GraphService:
         self._loaded: dict[str, Loaded] = {}
         self._lock = asyncio.Lock()
         self._scheduler: asyncio.Task[None] | None = None
+        self._endpoint_poller: asyncio.Task[None] | None = None
+        self._endpoint_health: dict[str, dict[str, Any]] = {}
         self._background: set[asyncio.Task[Any]] = set()
 
     @property
@@ -303,11 +310,15 @@ class GraphService:
         self.store.abandon_undelivered_steering("the daemon restarted before it was delivered")
         if schedule:
             self._scheduler = asyncio.create_task(self._schedule())
+            self._endpoint_poller = asyncio.create_task(self._endpoint_schedule())
 
     async def aclose(self) -> None:
         if self._scheduler is not None:
             self._scheduler.cancel()
             await asyncio.gather(self._scheduler, return_exceptions=True)
+        if self._endpoint_poller is not None:
+            self._endpoint_poller.cancel()
+            await asyncio.gather(self._endpoint_poller, return_exceptions=True)
         await asyncio.gather(*self._background, return_exceptions=True)
         self.store.close()
 
@@ -330,9 +341,10 @@ class GraphService:
             return {
                 "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
+                "health": self._endpoint_health.get(name),
             }
         if name in self._builtin_agents:
-            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True, "health": None}
         raise NotFound(f"no agent named {name!r}", agent=name)
 
     async def add_agent(
@@ -1091,6 +1103,83 @@ class GraphService:
                 log.exception("the loop scheduler failed a pass")
             await asyncio.sleep(self._tick_seconds)
 
+    # --- endpoint health ----------------------------------------------------
+
+    async def _endpoint_schedule(self) -> None:
+        """Probe endpoint agents on their own interval, independent of the loop tick."""
+        while True:
+            try:
+                await self.poll_endpoints()
+            except Exception:
+                log.exception("the endpoint poller failed a pass")
+            await asyncio.sleep(self._endpoint_poll_seconds)
+
+    async def poll_endpoints(self) -> None:
+        """Record how every added agent's endpoint is responding and which model it loads."""
+        rows = [row for row in self.store.agents() if row.url]
+        if not rows:
+            return
+        client = httpx.AsyncClient(transport=self._endpoint_transport)
+        healths: dict[str, dict[str, Any]] = {}
+        try:
+            for row in rows:
+                try:
+                    healths[row.name] = await self._probe_endpoint(client, row.url, row.model)
+                except Exception:
+                    log.exception("could not probe %s's endpoint", row.name)
+                    healths[row.name] = {"responding": False, "modelLoaded": None}
+        finally:
+            await client.aclose()
+        self._endpoint_health = healths
+
+    async def _probe_endpoint(
+        self, client: httpx.AsyncClient, url: str, model: str
+    ) -> dict[str, Any]:
+        parts = urlsplit(url)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        try:
+            ps = await client.get(f"{origin}/api/ps")
+        except httpx.TransportError:
+            return {"responding": False, "modelLoaded": None}
+        loaded = self._loaded_from_ollama(ps, model)
+        if loaded is not None:
+            return {"responding": True, "modelLoaded": loaded}
+        try:
+            models = await client.get(f"{url.rstrip('/')}/models")
+        except httpx.TransportError:
+            return {"responding": True, "modelLoaded": None}
+        return {"responding": True, "modelLoaded": self._loaded_from_openai(models, model)}
+
+    @staticmethod
+    def _loaded_from_ollama(response: httpx.Response, model: str) -> bool | None:
+        """Whether `model` is loaded per an Ollama `ps`; None when it is not an Ollama endpoint."""
+        if response.status_code // 100 != 2:
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        models = body.get("models") if isinstance(body, dict) else None
+        if not isinstance(models, list):
+            return None
+        listed = [item["name"] for item in models if isinstance(item, dict) and item.get("name")]
+        return model_loaded(model, listed)
+
+    @staticmethod
+    def _loaded_from_openai(response: httpx.Response, model: str) -> bool | None:
+        """Whether `model` is served per an OpenAI `models` list; None when it is not a readable list."""
+        if response.status_code // 100 != 2:
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            return None
+        listed = [item["id"] for item in data if isinstance(item, dict) and item.get("id")]
+        return model_loaded(model, listed)
+
     def _limit_reached(self, row: LoopRow, accounting: Accounting) -> str:
         if row.max_prs is not None and accounting.pull_requests >= row.max_prs:
             return f"max-prs reached ({accounting.pull_requests} of {row.max_prs} pull requests opened)"
@@ -1597,6 +1686,14 @@ def session_model(row: AgentRow) -> str:
     return f"{OPENCODE_URL_PROVIDER}/{row.model}" if row.url else row.model
 
 
+def model_loaded(model: str, listed: Sequence[str]) -> bool:
+    """Whether `model` is among `listed`, matching on the base name before any `:tag`."""
+    base = model.partition(":")[0].strip()
+    if not base:
+        return False
+    return any(name.partition(":")[0].strip() == base for name in listed)
+
+
 def opencode_config(row: AgentRow) -> dict[str, Any]:
     """The `OPENCODE_CONFIG_CONTENT` an opencode agent runs with: its model, and its endpoint if any."""
     config: dict[str, Any] = {"model": session_model(row)} if row.model else {}
@@ -1704,6 +1801,7 @@ __all__ = [
     "StartRun",
     "Unavailable",
     "auth_required",
+    "model_loaded",
     "opencode_config",
     "session_model",
 ]
