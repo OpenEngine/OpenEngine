@@ -2,7 +2,9 @@
 from copy import deepcopy
 
 from scripts.schema_diagram import diagram, schemas
-from scripts.document_schema import ROOT
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_diagram_tracks_added_removed_and_changed_objects():

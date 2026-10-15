@@ -5,22 +5,20 @@ on:
     paths:
       - 'migrations/**'
       - 'alembic.ini'
-      - 'scripts/document_schema.py'
       - 'scripts/schema_diagram.py'
       - 'tests/test_schema_diagram.py'
       - '.github/scripts/**'
-      - 'tests/test_schema_documentation.py'
       - '.github/workflows/schema.yml'
+      - '.github/workflows/schema-comment.yml'
   pull_request:
     paths:
       - 'migrations/**'
       - 'alembic.ini'
-      - 'scripts/document_schema.py'
       - 'scripts/schema_diagram.py'
       - 'tests/test_schema_diagram.py'
       - '.github/scripts/**'
-      - 'tests/test_schema_documentation.py'
       - '.github/workflows/schema.yml'
+      - '.github/workflows/schema-comment.yml'
   workflow_dispatch:
 
 permissions:
@@ -36,17 +34,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: schema
-          POSTGRES_PASSWORD: schema
-          POSTGRES_DB: schema
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U schema"
-          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,26 +69,22 @@ jobs:
         run: npm ci --prefix .github/scripts
       - name: Typecheck and test publication
         run: npm test --prefix .github/scripts
-      - name: Replay and inspect every revision
-        run: >-
-          uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
-          --with 'psycopg[binary]>=3,<4' python scripts/document_schema.py
-          --postgres-url postgresql+psycopg://schema:schema@localhost:5432/schema
-          --manifest schema-changes.json
       - name: Generate latest schema comparison
         run: >-
           uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
           python scripts/schema_diagram.py --base-root .schema-base
       - name: Render schema PNG
+        id: render
         run: |
           if [ "$(cat diagram-changes.json)" != '[]' ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
             npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/schema.mermaid -o docs/architecture/schema.png -s 2
           fi
       - uses: actions/upload-artifact@v7
+        if: steps.render.outputs.changed == 'true'
         with:
           name: schema-documentation
           path: |
-            docs/schema
             docs/architecture/schema.mermaid
             docs/architecture/schema.png
       # Never execute fork code with a privileged pull_request_target token.

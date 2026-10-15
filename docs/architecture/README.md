@@ -11,7 +11,7 @@ commit; manual runs without a PR compare with the same commit.
 Green tables are added, red tables are removed, and amber tables changed.
 Column annotations mark ADDED, REMOVED and CHANGED columns. Removed objects are
 comparison-only tombstones, **not** part of the latest schema. Index or constraint
-changes also highlight the owning table; the revision SQL contains their details.
+changes also highlight the owning table; the migrations contain their details.
 A PR that changes documentation alone has no highlighted schema objects.
 
 `state_` and `graph_` distinguish separate SQLite databases; these prefixes are
@@ -31,7 +31,10 @@ npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architec
 
 The workflow renders PNG only when the Mermaid comparison changes or PNG is
 missing, commits both files, and embeds the PNG in a PR comment. Fork PRs receive
-the files as workflow artifacts. Historical SQL remains in `docs/schema`.
+a PR comment linking to the changed ERD artifact from a separate, trusted
+`workflow_run` workflow. This workflow must be on the default branch to run.
+It never checks out or executes fork code and cannot commit into the fork.
+Historical schemas remain available through Git history.
 
 The PR publisher and its tests use TypeScript. Run `npm ci --prefix .github/scripts`
 and `npm test --prefix .github/scripts` to compile with strict type checking and

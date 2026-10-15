@@ -1,0 +1,53 @@
+name: fork schema comment
+
+on:
+  workflow_run:
+    workflows: ['schema documentation']
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Only trusted inline code runs with write access. Never download or execute
+      # the fork's artifact, scripts, dependencies, or checkout.
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const {owner, repo} = context.repo;
+            if (!run.head_repository || run.head_repository.full_name === `${owner}/${repo}`) return;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner, repo, run_id: run.id, per_page: 100,
+            });
+            const artifact = artifacts.find(item => item.name === 'schema-documentation' && !item.expired);
+            if (!artifact) return;
+            // Fork workflow runs may have an empty pull_requests array.
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open',
+              head: `${run.head_repository.owner.login}:${run.head_branch}`, per_page: 100,
+            });
+            for (const pull of pulls) {
+              if (pull.head.repo?.full_name !== run.head_repository.full_name
+                  || pull.head.sha !== run.head_sha || pull.head.ref !== run.head_branch) continue;
+              const marker = `<!-- schema-run:${run.id} -->`;
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pull.number, per_page: 100,
+              });
+              if (comments.some(comment => comment.user?.login === 'github-actions[bot]'
+                  && comment.body?.includes(marker))) continue;
+              const url = `https://github.com/${owner}/${repo}/actions/runs/${run.id}/artifacts/${artifact.id}`;
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull.number,
+                body: `${marker}\nLatest schema ERD changed for ${run.head_sha}. `
+                  + `[Download the PNG and Mermaid source](${url}).\n\n`
+                  + 'Green = added, red = removed, amber = changed relative to the PR base. '
+                  + 'Removed objects are comparison-only tombstones. '
+                  + 'The repository token cannot commit generated files to a fork; the artifact contains the update.',
+              });
+            }

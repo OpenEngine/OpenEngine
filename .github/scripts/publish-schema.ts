@@ -3,11 +3,7 @@ import {parseManifest} from './schema-manifest.js';
 import type {PublisherOptions, TreeEntry} from './schema-types.js';
 
 export default async function publish({github, context, core}: PublisherOptions) {
-  let files = parseManifest(fs.readFileSync('schema-changes.json', 'utf8'), 'schema');
-  files = files.map(file => `docs/schema/${file}`);
-  if (fs.existsSync('diagram-changes.json')) {
-    files.push(...parseManifest(fs.readFileSync('diagram-changes.json', 'utf8'), 'diagram'));
-  }
+  let files = parseManifest(fs.readFileSync('diagram-changes.json', 'utf8'));
   const needsCommit = files.length > 0;
   const {owner, repo} = context.repo;
   // A branch may already have generated documents before its PR is opened.
@@ -16,8 +12,7 @@ export default async function publish({github, context, core}: PublisherOptions)
       owner, repo, pull_number: context.payload.pull_request.number, per_page: 100,
     });
     files = changed.filter(file => file.status !== 'removed'
-      && (/^docs\/schema\/[^/]+\/[^/]+\.md$/.test(file.filename)
-        || /^docs\/architecture\/schema\.(mermaid|png)$/.test(file.filename)))
+      && /^docs\/architecture\/schema\.(mermaid|png)$/.test(file.filename))
       .map(file => file.filename);
   }
   if (!files.length) return;
@@ -69,17 +64,6 @@ export default async function publish({github, context, core}: PublisherOptions)
         + `Removed objects are comparison-only tombstones. Comparison uses the PR base `
         + `(or the preceding push when no PR is open).\n\n`
         + `![Schema changes](${url}.png?raw=true)\n\n[Mermaid source](${url}.mermaid)`;
-      await github.rest.issues.createComment({owner, repo, issue_number: pull.number, body});
-      continue;
-    }
-    for (const file of contents) {
-      if (file.content === null) continue;
-      const url = `https://github.com/${owner}/${repo}/blob/${publishedSha}/${file.path}`;
-      const heading = `Schema updated: [${file.path}](${url})\n\n`;
-      // Keep each comment under GitHub's size limit, including large schemas.
-      const body = heading + (file.content.length <= 58000
-        ? file.content
-        : 'The full schema and highlighted changes exceed the comment limit; see the revision document above.');
       await github.rest.issues.createComment({owner, repo, issue_number: pull.number, body});
     }
   }

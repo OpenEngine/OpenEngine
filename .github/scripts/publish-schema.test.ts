@@ -23,8 +23,8 @@ test('publication skips unchanged/stale runs and commits only schema documents',
         updateRef: async args => { calls.push(args); },
       },
       pulls: {list: async () => [{number: 12}], listFiles: async () => [
-        {filename: 'docs/schema/sqlite/revision.md', status: 'added'},
-        {filename: 'docs/schema/README.md', status: 'added'},
+        {filename: 'docs/architecture/schema.mermaid', status: 'added'},
+        {filename: 'docs/architecture/README.md', status: 'added'},
       ]},
       issues: {createComment: async args => { calls.push(args); }},
     },
@@ -37,39 +37,35 @@ test('publication skips unchanged/stale runs and commits only schema documents',
   const core = {notice: () => {}};
   try {
     process.chdir(directory);
-    fs.writeFileSync('schema-changes.json', '[]');
+    fs.writeFileSync('diagram-changes.json', '[]');
     await publish({github, context, core});
     assert.equal(calls.length, 0);
-    fs.mkdirSync('docs/schema/sqlite', {recursive: true});
-    fs.writeFileSync('docs/schema/sqlite/revision.md', '# Schema\n```diff\n+column\n```');
-    fs.writeFileSync('schema-changes.json', '["sqlite/revision.md"]');
+    fs.mkdirSync('docs/architecture', {recursive: true});
+    fs.writeFileSync('docs/architecture/schema.mermaid', 'erDiagram\n');
+    fs.writeFileSync('docs/architecture/schema.png', 'png');
+    fs.writeFileSync('diagram-changes.json', '["docs/architecture/schema.mermaid"]');
     head = 'newer-commit';
     await publish({github, context, core});
     assert.equal(calls.length, 0);
     head = 'source';
     await publish({github, context, core});
-    assert.deepEqual((calls[0] as CreateTree).tree.map(file => file.path), ['docs/schema/sqlite/revision.md']);
+    assert.deepEqual((calls[0] as CreateTree).tree.map(file => file.path), ['docs/architecture/schema.mermaid']);
     assert.equal((calls[0] as CreateTree).base_tree, 'old-tree');
     assert.deepEqual((calls[1] as CreateCommit).parents, ['source']);
     assert.equal((calls[2] as UpdateRef).force, false);
     assert.equal((calls[2] as UpdateRef).ref, 'heads/feature');
     assert.equal((calls[3] as Comment).issue_number, 12);
-    assert.match((calls[3] as Comment).body, /```diff\n\+column/);
-    assert.match((calls[3] as Comment).body, /blob\/commit\/docs\/schema/);
+
+    assert.match((calls[3] as Comment).body, /blob\/commit\/docs\/architecture/);
     calls.length = 0;
-    fs.writeFileSync('docs/schema/sqlite/revision.md', 'x'.repeat(60000));
-    await publish({github, context, core});
-    assert.ok((calls[3] as Comment).body.length < 60000);
-    assert.match((calls[3] as Comment).body, /exceed the comment limit/);
-    calls.length = 0;
-    fs.writeFileSync('schema-changes.json', '[]');
+    fs.writeFileSync('diagram-changes.json', '[]');
     context.payload = {action: 'opened', pull_request: {
       number: 12, head: {ref: 'feature', sha: 'source'},
     }};
     await publish({github, context, core});
     assert.equal(calls.length, 1);
     assert.equal((calls[0] as Comment).issue_number, 12);
-    assert.match((calls[0] as Comment).body, /blob\/source\/docs\/schema/);
+    assert.match((calls[0] as Comment).body, /blob\/source\/docs\/architecture/);
   } finally {
     process.chdir(cwd);
     fs.rmSync(directory, {recursive: true, force: true});
@@ -109,7 +105,7 @@ test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', 
     fs.mkdirSync('docs/architecture', {recursive: true});
     fs.writeFileSync('docs/architecture/schema.png', png);
     fs.writeFileSync('docs/architecture/schema.mermaid', 'erDiagram\n');
-    fs.writeFileSync('schema-changes.json', '[]');
+    fs.writeFileSync('diagram-changes.json', '[]');
     fs.writeFileSync('diagram-changes.json', JSON.stringify([
       'docs/architecture/schema.mermaid', 'docs/architecture/schema.png',
     ]));
@@ -126,14 +122,63 @@ test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', 
   }
 });
 
-test('manifest parser accepts generated paths and rejects malformed imports', () => {
-  assert.deepEqual(parseManifest('[]', 'schema'), []);
-  assert.deepEqual(parseManifest('["sqlite/rev.md","sqlite/rev.md"]', 'schema'), ['sqlite/rev.md']);
-  assert.deepEqual(parseManifest('["docs/architecture/schema.png"]', 'diagram'),
+test('manifest parser accepts only diagram paths and rejects malformed imports', () => {
+  assert.deepEqual(parseManifest('[]'), []);
+  assert.deepEqual(parseManifest('["docs/architecture/schema.png","docs/architecture/schema.png"]'),
     ['docs/architecture/schema.png']);
   for (const source of ['{', '{}', 'null', '[1]', '["../secret"]',
-    '["sqlite/../../secret.md"]', '["/tmp/schema.md"]']) {
-    assert.throws(() => parseManifest(source, 'schema'), /Invalid schema manifest/);
+    '["sqlite/rev.md"]', '["/tmp/schema.md"]']) {
+    assert.throws(() => parseManifest(source), /Invalid diagram manifest/);
   }
-  assert.throws(() => parseManifest('["sqlite/rev.md"]', 'diagram'), /Invalid diagram manifest/);
+});
+
+test('trusted fork commenter handles changed, unchanged, stale and repeated runs', async () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '../../workflows/schema-comment.yml'), 'utf8');
+  const script = workflow.split('          script: |\n')[1]
+    .split('\n').map(line => line.slice(12)).join('\n');
+  const execute = new Function('github', 'context', `return (async () => { ${script} })();`);
+  const comments: Comment[] = [];
+  const run = {id: 42, head_sha: 'source', head_branch: 'feature',
+    head_repository: {full_name: 'contributor/repo', owner: {login: 'contributor'}}};
+  const pull = {number: 12, head: {sha: 'source', ref: 'feature', repo: {full_name: 'contributor/repo'}}};
+  let artifacts = [{name: 'schema-documentation', id: 99, expired: false}];
+  let existing: Array<{user: {login: string}; body: string}> = [];
+  const github = {
+    rest: {
+      actions: {listWorkflowRunArtifacts: async () => artifacts},
+      pulls: {list: async () => [pull]},
+      issues: {
+        listComments: async () => existing,
+        createComment: async (args: Comment) => {comments.push(args);},
+      },
+    },
+    paginate: async (method: () => Promise<unknown>) => method(),
+  };
+  const context = {repo: {owner: 'org', repo: 'repo'}, payload: {workflow_run: run}};
+  await execute(github, context);
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].issue_number, 12);
+  assert.match(comments[0].body, /actions\/runs\/42\/artifacts\/99/);
+  existing = [{user: {login: 'github-actions[bot]'}, body: comments[0].body}];
+  await execute(github, context);
+  assert.equal(comments.length, 1);
+  existing = [];
+  pull.head.sha = 'newer';
+  await execute(github, context);
+  assert.equal(comments.length, 1);
+  pull.head.sha = 'source';
+  pull.head.repo.full_name = 'different/repo';
+  await execute(github, context);
+  assert.equal(comments.length, 1);
+  pull.head.repo.full_name = 'contributor/repo';
+  artifacts[0].expired = true;
+  await execute(github, context);
+  assert.equal(comments.length, 1);
+  artifacts = [];
+  await execute(github, context);
+  assert.equal(comments.length, 1);
+  artifacts = [{name: 'schema-documentation', id: 99, expired: false}];
+  run.head_repository.full_name = 'org/repo';
+  await execute(github, context);
+  assert.equal(comments.length, 1);
 });
