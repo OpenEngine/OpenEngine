@@ -1536,3 +1536,50 @@ def test_the_poller_stops_reading_an_endpoint_that_answers_with_an_endless_body(
             assert health_of(service, "qwen") is not None
 
     asyncio.run(scenario())
+
+
+def test_one_endpoint_that_drips_its_answer_cannot_hold_every_agents_health_hostage(tmp_path: Path) -> None:
+    """A model server that sends one byte every second never trips a per-read timeout;
+    the pass must still finish, and the other agents must still get their readings."""
+
+    async def drip(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n")
+            await writer.drain()
+            for _ in range(600):
+                writer.write(b"1\r\n \r\n")
+                await writer.drain()
+                await asyncio.sleep(1.0)
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            writer.close()
+
+    async def ollama(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        body = json.dumps({"models": [{"name": "qwen3-coder:latest"}]}).encode()
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n" % len(body) + body)
+        await writer.drain()
+        writer.close()
+
+    async def scenario() -> None:
+        slow = await asyncio.start_server(drip, "127.0.0.1", 0)
+        live = await asyncio.start_server(ollama, "127.0.0.1", 0)
+        slow_port = slow.sockets[0].getsockname()[1]
+        live_port = live.sockets[0].getsockname()[1]
+        try:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="slow", model="qwen3-coder", url=f"http://127.0.0.1:{slow_port}/v1")
+                await service.add_agent("opencode", name="live", model="qwen3-coder", url=f"http://127.0.0.1:{live_port}/v1")
+                try:
+                    await asyncio.wait_for(service.poll_endpoints(), timeout=20.0)
+                except TimeoutError:
+                    pytest.fail("one dripping endpoint kept the whole poll pass running for over 20s")
+                assert health_of(service, "live") == {"responding": True, "modelLoaded": True}
+        finally:
+            slow.close()
+            live.close()
+
+    asyncio.run(scenario())
+
