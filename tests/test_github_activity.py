@@ -439,7 +439,10 @@ def test_comment_panel_reports_the_runs_repository_in_a_multi_repo_deployment(
         github_webhook_secret=SIGNING_SECRET,
         github_comment_handler=AsyncMock(),
     )
-    source = MagicMock(can_write_repository=AsyncMock(return_value=True))
+    source = MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot"),
+    )
     object.__setattr__(capabilities, "source_control", source)
     payload = _issue_comment()
     payload["repository"]["full_name"] = "other/web"
