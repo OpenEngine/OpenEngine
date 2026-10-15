@@ -97,7 +97,7 @@ class Clock:
 
 @asynccontextmanager
 async def graph_service(
-    tmp_path: Path, *, clock: Clock | None = None, cost: str = "0.5", **options: Any,
+    tmp_path: Path, *, clock: Clock | None = None, cost: str = "0.5", schedule: bool = False, **options: Any,
 ) -> AsyncIterator[GraphService]:
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -118,7 +118,7 @@ async def graph_service(
             **options,
         )
         runtime.observe(service.observe)
-        await service.open(schedule=False)
+        await service.open(schedule=schedule)
         try:
             yield service
         finally:
@@ -851,6 +851,228 @@ def test_an_added_agents_model_applies_when_a_node_names_none_or_an_unknown_tier
     assert node("default").model_for({}, "qwen") == "engine/qwen3"
     assert node("other-model").model_for({}, "qwen") == "other-model"
     assert node("default").model_for({}, "claude") == "sonnet"
+
+
+# --- local model endpoint health ------------------------------------------------
+
+
+class ModelServer:
+    """Every model endpoint the poller can reach, mocked: no test needs a real Ollama.
+
+    `answer` maps a request to a response, or raises the transport error a dead
+    endpoint would; every request is kept so a test can say what was probed.
+    """
+
+    def __init__(self, answer: Any) -> None:
+        self.requests: list[httpx.Request] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            return answer(request)
+
+        self.transport = httpx.MockTransport(handle)
+
+    def probed(self) -> list[str]:
+        return [str(request.url) for request in self.requests]
+
+
+def ollama_ps(*running: str) -> httpx.Response:
+    return httpx.Response(200, json={"models": [
+        {"name": model, "model": model, "size": 1, "digest": "d", "expires_at": "2026-10-14T12:00:00Z"}
+        for model in running
+    ]})
+
+
+def openai_models(*listed: str) -> httpx.Response:
+    return httpx.Response(200, json={
+        "object": "list", "data": [{"id": model, "object": "model", "owned_by": "server"} for model in listed],
+    })
+
+
+def health_of(service: GraphService, name: str) -> Any:
+    return next(agent for agent in service.agents_json() if agent["name"] == name).get("health")
+
+
+@pytest.mark.parametrize(("model", "running"), [
+    ("qwen3-coder", ["qwen3-coder:latest"]),
+    ("qwen3-coder:30b", ["llama3.2:latest", "qwen3-coder:30b"]),
+])
+def test_an_ollama_endpoint_running_the_agents_model_reports_it_loaded(
+    tmp_path: Path, model: str, running: list[str],
+) -> None:
+    server = ModelServer(lambda request: ollama_ps(*running) if request.url.path == "/api/ps" else httpx.Response(404))
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model=model, url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            health = health_of(service, "qwen")
+            assert health["responding"] is True
+            assert health["modelLoaded"] is True
+            assert server.probed() == ["http://gpu:11434/api/ps"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("running", [[], ["llama3.2:latest"], ["qwen3-coder-other:latest"]])
+def test_an_ollama_endpoint_not_running_the_agents_model_reports_it_not_loaded(
+    tmp_path: Path, running: list[str],
+) -> None:
+    server = ModelServer(lambda request: ollama_ps(*running) if request.url.path == "/api/ps" else httpx.Response(404))
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            health = health_of(service, "qwen")
+            assert health["responding"] is True
+            assert health["modelLoaded"] is False
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("ps", [
+    httpx.Response(404, text="404 page not found"),
+    httpx.Response(500, json={"error": "boom"}),
+    httpx.Response(200, html="<html>not an ollama server</html>"),
+], ids=["missing", "erroring", "not-ollama"])
+def test_an_endpoint_without_ollamas_ps_is_asked_for_its_openai_model_list(tmp_path: Path, ps: httpx.Response) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/ps":
+            return ps
+        if request.url.path == "/v1/models":
+            return openai_models("other-model", "qwen3-coder")
+        return httpx.Response(404)
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:8000/v1")
+            await service.poll_endpoints()
+            health = health_of(service, "qwen")
+            assert health["responding"] is True
+            assert health["modelLoaded"] is True
+            assert server.probed() == ["http://gpu:8000/api/ps", "http://gpu:8000/v1/models"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("models", "loaded"), [
+    (openai_models("qwen3-coder"), True),
+    (openai_models("llama3.2"), False),
+    (httpx.Response(401, json={"error": "unauthorized"}), None),
+    (httpx.Response(200, text="not a model list"), None),
+], ids=["listed", "not-listed", "unauthorized", "unreadable"])
+def test_the_openai_fallback_takes_the_model_from_the_list_or_reports_it_unknown(
+    tmp_path: Path, models: httpx.Response, loaded: bool | None,
+) -> None:
+    server = ModelServer(lambda request: models if request.url.path == "/v1/models" else httpx.Response(404))
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:8000/v1")
+            await service.poll_endpoints()
+            health = health_of(service, "qwen")
+            assert health["responding"] is True
+            assert health["modelLoaded"] is loaded
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", [
+    httpx.ConnectError("connection refused"),
+    httpx.ConnectTimeout("timed out connecting"),
+    httpx.ReadTimeout("timed out reading"),
+], ids=["refused", "connect-timeout", "read-timeout"])
+def test_an_unreachable_endpoint_reports_not_responding_without_stopping_the_poller(
+    tmp_path: Path, failure: httpx.TransportError,
+) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "dead":
+            raise failure
+        return ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404)
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="dead", model="qwen3-coder", url="http://dead:11434/v1")
+            await service.add_agent("opencode", name="live", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            dead = health_of(service, "dead")
+            assert dead["responding"] is False
+            assert dead["modelLoaded"] is None
+            assert health_of(service, "live")["responding"] is True
+            transport = httpx.ASGITransport(app=create_app(service))
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                listed = await client.get("/agents")
+                assert listed.status_code == 200
+                served = {agent["name"]: agent for agent in listed.json()["agents"]}
+                assert served["dead"]["health"]["responding"] is False
+                assert served["live"]["health"]["modelLoaded"] is True
+            await service.poll_endpoints()
+            assert health_of(service, "dead")["responding"] is False
+
+    asyncio.run(scenario())
+
+
+def test_agents_without_a_url_are_never_probed_and_carry_no_health(tmp_path: Path) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"probed {request.url}")
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("claude", name="second", model="opus")
+            await service.add_agent("opencode", name="hosted", model="anthropic/claude-sonnet-4")
+            await service.poll_endpoints()
+            assert server.requests == []
+            for name in ("stub", "second", "hosted"):
+                assert health_of(service, name) is None
+
+    asyncio.run(scenario())
+
+
+def test_the_agents_api_serves_each_agents_endpoint_health(tmp_path: Path) -> None:
+    server = ModelServer(lambda request: ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404))
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            transport = httpx.ASGITransport(app=create_app(service))
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                added = await client.post("/agents", json={
+                    "kind": "opencode", "name": "qwen", "model": "qwen3-coder", "url": "http://gpu:11434/v1",
+                })
+                assert added.status_code == 201
+                await service.poll_endpoints()
+                agents = {agent["name"]: agent for agent in (await client.get("/agents")).json()["agents"]}
+                assert agents["qwen"]["health"]["responding"] is True
+                assert agents["qwen"]["health"]["modelLoaded"] is True
+                assert "health" in agents["stub"] and agents["stub"]["health"] is None
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_probes_url_agents_on_its_own_once_the_service_opens(tmp_path: Path) -> None:
+    server = ModelServer(lambda request: ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404))
+
+    async def scenario() -> None:
+        async with graph_service(
+            tmp_path, schedule=True, endpoint_transport=server.transport, endpoint_poll_seconds=0.05,
+        ) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            for _ in range(100):
+                if health_of(service, "qwen") is not None:
+                    break
+                await asyncio.sleep(0.05)
+            health = health_of(service, "qwen")
+            assert health is not None, "the poller never probed the endpoint"
+            assert health["responding"] is True and health["modelLoaded"] is True
+            assert "http://gpu:11434/api/ps" in server.probed()
+
+    asyncio.run(scenario())
 
 
 # --- HTTP ---------------------------------------------------------------------
