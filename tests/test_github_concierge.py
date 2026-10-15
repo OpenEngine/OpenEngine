@@ -418,7 +418,7 @@ def test_a_stalled_forge_lookup_does_not_stop_the_queue_behind_it(
             github_signed(body), **{"x-github-event": "issue_comment"}))
 
     with client(app) as browser:
-        assert deliver(browser, 1, "this one hangs").status_code == 200
+        assert deliver(browser, 1, "this one hangs").status_code == (503 if stalls == "login" else 200)
         browser.portal.call(app.state.github_ingress.drain)
         assert stalled.is_set()
         # Abandoned rather than answered, and -- like any other failure here --
@@ -824,7 +824,10 @@ def test_a_comment_with_nothing_in_flight_requires_a_mention(
         in_reply_to_id=1 if event == "pull_request_review_comment" else None,
     )
     source_control.can_write_repository.assert_awaited_once_with(pr_url, payload["comment"]["user"]["login"])
-    source_control.authenticated_login.assert_awaited_once_with(f"https://{host}/acme/api")
+    expected_logins = ["https://github.com/acme/api"]
+    if host != "github.com":
+        expected_logins.append(f"https://{host}/acme/api")
+    assert [args.args[0] for args in source_control.authenticated_login.await_args_list] == expected_logins
     assert not communications.posts
 
 
@@ -1032,7 +1035,7 @@ def test_github_never_answers_its_own_reply(identity, *, github_app, client):
     body = json.dumps(payload).encode()
     with client(app) as browser:
         assert browser.post("/api/github/events", content=body, headers=dict(
-            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == (503 if identity == "unavailable" else 200)
         browser.portal.call(app.state.github_ingress.drain)
         # Never answered, and never replied to: no loop can start from here.
         assert not provider.clients
@@ -1044,7 +1047,8 @@ def test_github_never_answers_its_own_reply(identity, *, github_app, client):
         if identity == "unavailable":
             # Failing closed forgets the comment, so it can be redelivered
             # once the forge answers again rather than replying blind.
-            assert app.state.github_ingress.accept("issue_comment", payload)
+            assert browser.post("/api/github/events", content=body, headers=dict(
+                github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 503
             browser.portal.call(app.state.github_ingress.drain)
             assert source_control.authenticated_login.await_count == 2
     assert not communications.posts

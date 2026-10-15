@@ -384,7 +384,9 @@ _Delivery = GithubComment | GithubMerge | GithubAssignment | GithubReviewRequest
 
 def _asks_for_self_login(event: str, payload: Mapping[str, object]) -> bool:
     """Whether a delivery can only be read knowing the account Engine acts as."""
-    return (event, payload.get("action")) in (("issues", "assigned"), (MERGE_EVENT, REVIEW_REQUESTED))
+    return (event in COMMENT_EVENTS and payload.get("action") == "created") or (
+        (event, payload.get("action")) in (("issues", "assigned"), (MERGE_EVENT, REVIEW_REQUESTED))
+    )
 
 
 class GithubIngress:
@@ -522,7 +524,7 @@ class GithubIngress:
         """Whether the delivery is settled -- queued, or deliberately ignored.
 
         False when there is nothing to queue into or nowhere to queue it: a
-        full queue, no handler wired, or an unresolved assignment login. A failed
+        full queue, no handler wired, or an unresolved account login. A failed
         delivery GitHub can redeliver beats a 200 that loses the work.
         """
         repository = payload.get("repository")
