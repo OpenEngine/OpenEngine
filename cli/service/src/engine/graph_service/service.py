@@ -1125,46 +1125,101 @@ class GraphService:
     # and is read as if it had not answered.
     _probe_body_cap = 1024 * 1024
 
+    # How long one listing read may take, headers and body together. A server
+    # that answers one byte at a time never trips the per-read timeout, so
+    # without this deadline one dripping endpoint could hold the whole pass --
+    # and with it every agent's health -- for as long as it likes.
+    _probe_budget = 10.0
+
     async def poll_endpoints(self) -> None:
         """Record how every added agent's endpoint is responding and which model it loads."""
         rows = [row for row in self.store.agents() if row.url]
         if not rows:
             return
-        # Every probe runs at once, under its own timeout, so that a dead
-        # endpoint cannot hold the rest of the pollers hostage.
+        # Agents that share a server share its listings, so each listing is
+        # fetched once per pass and every agent on the server is matched
+        # against it.
+        listings: dict[tuple[str, str], list[AgentRow]] = {}
+        for row in rows:
+            listings.setdefault(self._listing_urls(row.url), []).append(row)
+        # trust_env off: a probe goes to the url the agent was given, and the
+        # daemon's environment must not be able to route it through a proxy.
         client = httpx.AsyncClient(
-            transport=self._endpoint_transport, timeout=httpx.Timeout(5.0)
+            transport=self._endpoint_transport, timeout=httpx.Timeout(5.0), trust_env=False
         )
-
-        async def probe(row: AgentRow) -> tuple[str, dict[str, Any]]:
-            try:
-                return row.name, await self._probe_endpoint(client, row.url, row.model)
-            except Exception:  # one endpoint must never stop the rest
-                log.exception("could not probe %s's endpoint", row.name)
-                return row.name, {"responding": False, "modelLoaded": None}
-
+        probes = (self._probe_listing(client, urls, group) for urls, group in listings.items())
         try:
-            self._endpoint_health = dict(await asyncio.gather(*(probe(row) for row in rows)))
+            readings: dict[str, tuple[str, dict[str, Any]]] = {}
+            for reading in await asyncio.gather(*probes):
+                readings.update(reading)
         finally:
             await client.aclose()
+        async with self._lock:
+            # The pass may have started before an agent was re-added or removed,
+            # so only a reading of the url the agent still has is written back.
+            current = {row.name: row.url for row in self.store.agents()}
+            for name, (probed, reading) in readings.items():
+                if current.get(name) == probed:
+                    self._endpoint_health[name] = reading
 
-    async def _probe_endpoint(
-        self, client: httpx.AsyncClient, url: str, model: str
-    ) -> dict[str, Any]:
-        parts = urlsplit(url)
-        origin = f"{parts.scheme}://{parts.netloc}"
+    @staticmethod
+    def _listing_urls(url: str) -> tuple[str, str]:
+        """Where this url's server says which models it runs: Ollama's `/api/ps`
+        at the server's root -- the `/v1` a chat url carries is not part of that
+        address -- and the OpenAI-style `/models` under the url as given."""
+        trimmed = url.rstrip("/")
+        root = trimmed[: -len("/v1")] if trimmed.endswith("/v1") else trimmed
+        return f"{root}/api/ps", f"{trimmed}/models"
+
+    async def _probe_listing(
+        self, client: httpx.AsyncClient, urls: tuple[str, str], rows: list[AgentRow],
+    ) -> dict[str, tuple[str, dict[str, Any]]]:
+        """One server's share of a pass: its listings fetched once, then every
+        agent on it matched against them."""
         try:
-            status, body = await self._read_capped(client, f"{origin}/api/ps")
-        except httpx.TransportError:
-            return {"responding": False, "modelLoaded": None}
-        loaded = self._model_in_listing(status, body, model, "models", "name")
-        if loaded is not None:
-            return {"responding": True, "modelLoaded": loaded}
+            responding, names = await self._listing_names(client, urls)
+        except Exception:  # one server must never stop the rest of the pass
+            log.exception("could not probe the server at %s", urls[0])
+            return {
+                row.name: (row.url, {"responding": False, "modelLoaded": None}) for row in rows
+            }
+        readings: dict[str, tuple[str, dict[str, Any]]] = {}
+        for row in rows:
+            if names is None:
+                readings[row.name] = (row.url, {"responding": responding, "modelLoaded": None})
+            else:
+                readings[row.name] = (
+                    row.url, {"responding": True, "modelLoaded": model_loaded(row.model, names)}
+                )
+        return readings
+
+    async def _listing_names(
+        self, client: httpx.AsyncClient, urls: tuple[str, str]
+    ) -> tuple[bool, list[str] | None]:
+        """The models the server at `urls` runs, and whether it answered at all.
+
+        `names` is None when the server answered but will not say which of its
+        models are loaded: that is a different thing from it not answering.
+        """
+        ps_url, models_url = urls
         try:
-            status, body = await self._read_capped(client, f"{url.rstrip('/')}/models")
-        except httpx.TransportError:
-            return {"responding": True, "modelLoaded": None}
-        return {"responding": True, "modelLoaded": self._model_in_listing(status, body, model, "data", "id")}
+            status, body = await asyncio.wait_for(
+                self._read_capped(client, ps_url), timeout=self._probe_budget
+            )
+        except (httpx.TransportError, TimeoutError):
+            return False, None
+        names = self._listed_names(status, body, "models", "name")
+        if names is not None:
+            return True, names
+        try:
+            status, body = await asyncio.wait_for(
+                self._read_capped(client, models_url), timeout=self._probe_budget
+            )
+        except (httpx.TransportError, TimeoutError):
+            # It answered the first listing, so it is responding; its
+            # OpenAI-style listing is just unreachable.
+            return True, None
+        return True, self._listed_names(status, body, "data", "id")
 
     async def _read_capped(self, client: httpx.AsyncClient, url: str) -> tuple[int, bytes]:
         """GET `url`, reading no more than `_probe_body_cap` bytes of its body.
@@ -1185,11 +1240,9 @@ class GraphService:
             return response.status_code, b"".join(chunks)[: self._probe_body_cap]
 
     @staticmethod
-    def _model_in_listing(
-        status: int, body: bytes, model: str, list_key: str, name_key: str
-    ) -> bool | None:
-        """Whether `model` is in a model listing of the given shape; None when the
-        answer is not a readable listing, which is a different thing from a no."""
+    def _listed_names(status: int, body: bytes, list_key: str, name_key: str) -> list[str] | None:
+        """The names in a model listing of the given shape; None when the answer
+        is not a readable listing, which is a different thing from an empty one."""
         if status // 100 != 2:
             return None
         try:
@@ -1199,8 +1252,12 @@ class GraphService:
         listed = payload.get(list_key) if isinstance(payload, dict) else None
         if not isinstance(listed, list):
             return None
-        named = [item[name_key] for item in listed if isinstance(item, dict) and item.get(name_key)]
-        return model_loaded(model, named)
+        named = []
+        for item in listed:
+            name = item.get(name_key) if isinstance(item, dict) else None
+            if isinstance(name, str) and name.strip():
+                named.append(name)
+        return named
 
     def _limit_reached(self, row: LoopRow, accounting: Accounting) -> str:
         if row.max_prs is not None and accounting.pull_requests >= row.max_prs:
@@ -1711,19 +1768,17 @@ def session_model(row: AgentRow) -> str:
 def model_loaded(model: str, listed: Sequence[str]) -> bool:
     """Whether `model` is among `listed`.
 
-    An exact name match always counts. A requested name without a tag also
-    matches whatever tag of that base name the server runs, because an
-    untagged request rides the default tag; a requested tag is specific, and
-    only that exact tag answers it.
+    A tagged request is specific, and only that exact tag answers it. A request
+    without a tag rides the server's default tag, so it is answered only by
+    `name:latest`, not by whatever other tag of the name happens to run.
     """
     wanted = model.strip()
     if not wanted:
         return False
+    latest = f"{wanted}:latest" if ":" not in wanted else None
     for name in listed:
         name = name.strip()
-        if name == wanted:
-            return True
-        if ":" not in wanted and name.partition(":")[0].strip() == wanted:
+        if name == wanted or (latest is not None and name == latest):
             return True
     return False
 
