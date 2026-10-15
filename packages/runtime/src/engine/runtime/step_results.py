@@ -26,8 +26,9 @@ class InvalidStepResultError(ValueError):
 
 
 INVALID_COMPLETION_ERROR = (
-    "Valid completion states are from completing, failing, or otherwise "
-    "requesting clarification on a step"
+    "The step did not report a valid terminal result. "
+    "Call `complete_step` with the declared outputs, or call `fail_step` "
+    "if the step cannot be completed."
 )
 
 #: How many times an agent that ended a turn without a valid result is corrected
@@ -63,14 +64,22 @@ def step_result_instructions(step: StepSpec, *, status_updates: bool = False) ->
         if status_updates
         else ""
     )
+    decisions = (
+        "If you need information or a human decision before continuing, use an "
+        "available clarification or escalation tool other than `clarify`. "
+        "`clarify` only finishes answering a person's question; it does not ask one."
+        if status_updates
+        else "Nobody is watching this step. When you hit a decision, make the call "
+        "you think is best, say what you chose and why in your summary, and finish "
+        "with `complete_step`. Don't stop to ask."
+    )
     return (
         "When this step is complete, call the workflow MCP tool `complete_step`. "
         "If you are only answering a human's question and did not change the "
         "implementation, call `clarify` after answering; it leaves workflow run "
         "state unchanged. If the step cannot be completed, call `fail_step`. "
-        "If you need information "
-        "or a human decision before continuing, use an available clarification or "
-        "escalation tool. Do not end the session without making one of those calls."
+        f"{decisions} "
+        "Do not end the session without making one of those calls."
         f"{reporting}\n\n"
         f"The declared outputs for `complete_step` are: {outputs}."
     )
