@@ -205,11 +205,13 @@ def _compiled_naming(naming: str, **options):
     import sys
 
     from langgraph_acp import ACPAgentRegistry, StdioACPProvider
+    from langgraph_acp.providers import ClaudeACPProvider
 
     from engine.graph_service.compile import compile_graph
 
     registry = ACPAgentRegistry([
-        StdioACPProvider(name=name, command=(sys.executable, "-c", "")) for name in ("claude", "codex", "qwen")
+        ClaudeACPProvider(command=(sys.executable, "-c", "")),
+        *(StdioACPProvider(name=name, command=(sys.executable, "-c", "")) for name in ("codex", "qwen")),
     ])
     spec = parse_graph(yaml.safe_load(NAMED.replace("NAMING", naming)), runners=("claude", "codex", "qwen"))
     return compile_graph(
@@ -246,7 +248,24 @@ def test_naming_adds_a_hidden_name_node_between_the_checkout_and_the_first_step(
 def test_naming_runs_on_the_cheapest_model_unless_told_otherwise(naming, options, runner, model) -> None:
     node = _compiled_naming(naming, **options).nodes["naming"].runnable.afunc
     chosen = node._for_runner(runner)
-    assert chosen.agent == runner and chosen.session_config == {"model": model}
+    assert chosen.agent == runner and chosen.session_config["model"] == model
+
+
+def test_naming_on_claude_only_reads_whatever_mode_the_operator_set() -> None:
+    from engine.graph_service.compile import NAMING_TOOLS
+
+    builder = _compiled_naming(
+        "{agent: \"${inputs.runner}\"}",
+        session_config={"claudeCode": {"options": {"outputStyle": "terse"}}},
+    )
+    node = builder.nodes["naming"].runnable.afunc
+    claude = node._for_runner("claude").session_config
+    assert claude["mode"] == "default"
+    assert claude["claudeCode"]["options"] == {
+        "outputStyle": "terse", "allowedTools": list(NAMING_TOOLS), "tools": list(NAMING_TOOLS),
+    }
+    # The pin is Claude's own config; another runner's session is left as it was.
+    assert "mode" not in node._for_runner("codex").session_config
 
 
 def test_naming_follows_the_runner_input_a_run_chooses(monkeypatch) -> None:

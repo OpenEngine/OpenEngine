@@ -136,9 +136,10 @@ turn runs on the agent's `cheapest` tier unless `model` names another tier or
 model: `haiku` for `claude`, `gpt-5.6-terra` for `codex` (set either with
 `[runners.NAME.models] cheapest = ...` in `engine.toml`), and an added agent's
 own model. The turn refuses every permission request, even on an
-auto-approved run. That stops anything the agent has to ask for, but not what
-its own sandbox already allows: Codex can still write inside the run's checkout
-without asking. A failed naming turn leaves the fallback name and does not fail
+auto-approved run. On Claude it also runs in Claude's `default` mode with only
+`Read`, `Glob` and `Grep`, so it cannot act whatever mode the operator's
+Claude settings name. That still leaves what another agent's own sandbox allows:
+Codex can write inside the run's checkout without asking. A failed naming turn leaves the fallback name and does not fail
 the run. `naming` is a reserved step name in a graph that sets it.
 
 **Expressions** in `${...}` and `when:` are deliberately small: names

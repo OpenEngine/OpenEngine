@@ -46,6 +46,7 @@ from engine.graph_runtime_langgraph.components.findings import parse_findings
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry
+from langgraph_acp.providers import ClaudeACPProvider
 
 from engine.graph_service.expressions import parse, template
 from engine.graph_service.language import (
@@ -66,6 +67,9 @@ DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
     "codex": {"cheapest": "gpt-5.6-terra", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
 }
 NAMING_TIER = "cheapest"
+#: The only tools a Claude naming turn has: the ACP adapter's `READ_ONLY_TOOLS`,
+#: which this package may not import.
+NAMING_TOOLS = ("Read", "Glob", "Grep")
 
 Groups = Mapping[str, tuple[tuple[str, ...], bool]]
 """Node id -> (the LangGraph node keys it compiled to, whether it is parallel)."""
@@ -114,6 +118,7 @@ def compile_graph(
         for runner, models in {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}.items()
     }
     runners = tuple(registry.names)
+    models = {} if agent_models is None else agent_models
     builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(
         spec.checkout,
@@ -134,7 +139,7 @@ def compile_graph(
             model_template=spec.naming.model or NAMING_TIER,
             groups=groups,
             tiers=tiers,
-            agent_models={} if agent_models is None else agent_models,
+            agent_models=models,
             runners=runners,
         ))
     for node in spec.nodes:
@@ -142,7 +147,7 @@ def compile_graph(
             builder.add_node(key, _node(
                 node, key, branch.item if branch else None, groups,
                 registry=registry, runners=runners, tiers=tiers, session_config=session_config,
-                agent_models={} if agent_models is None else agent_models,
+                agent_models=models,
             ))
 
     def keys_of(name: str) -> list[str]:
@@ -329,18 +334,26 @@ class _GraphRunner:
             return other or (pool[0] if pool else self.agent)
         return next((runner for runner in pool if runner != other), self.agent)
 
-    def configured_session(self, state: Mapping[str, object], runner: str) -> Mapping[str, object] | None:
+    def configured_session(
+        self, state: Mapping[str, object], runner: str, chosen: str | None = None,
+    ) -> Mapping[str, object] | None:
         """The node's session config, with the model it uses on `runner`."""
         config = dict(self.session_config or {})
-        if model := self.model_for(state, runner):
+        if model := self.model_for(state, runner, chosen):
             config["model"] = model
         return config or None
 
-    def model_for(self, state: Mapping[str, object], runner: str) -> str:
+    def render_model(self, state: Mapping[str, object]) -> str:
+        """The node's `model` with the run's values filled in: a tier or a model name."""
+        return template(self.model_template).render(environment(state, self.groups, self.item)).strip()
+
+    def model_for(self, state: Mapping[str, object], runner: str, chosen: str | None = None) -> str:
+        """The model on `runner`; `chosen` is `render_model`'s result when it was already worked out."""
         fallback = self.agent_models.get(runner, "")
         if not self.model_template:
             return fallback
-        chosen = template(self.model_template).render(environment(state, self.groups, self.item)).strip()
+        if chosen is None:
+            chosen = self.render_model(state)
         named = {tier for tiers in self.tiers.values() for tier in tiers}
         return self.tiers.get(runner, {}).get(chosen, fallback if chosen in named else chosen)
 
@@ -405,16 +418,37 @@ class GraphNameNode(_GraphRunner, NameNode):
     """
 
     model_template: str = NAMING_TIER
+    chosen_model: str | None = None
+    """`model_template` rendered against the run, once `__call__` has the run's values."""
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         # The model is rendered now, while the run's inputs are at hand; the
         # runner it applies to is settled later, after any override.
-        model = template(self.model_template).render(environment(state, self.groups)).strip()
-        node = replace(self, agent=self.resolve_runner(state), model_template=model)
+        node = replace(self, agent=self.resolve_runner(state), chosen_model=self.render_model(state))
         return await NameNode.__call__(node, state)
 
     def _for_runner(self, runner: str) -> ACPNode:
-        return replace(self, agent=runner, session_config=self.configured_session({}, runner))
+        config = self.configured_session({}, runner, self.chosen_model)
+        if self.registry is not None and isinstance(self.registry.resolve(runner), ClaudeACPProvider):
+            config = _read_only_claude(config)
+        return replace(self, agent=runner, session_config=config)
+
+
+def _read_only_claude(config: Mapping[str, object] | None) -> dict[str, object]:
+    """`config` with Claude held to reading: its `default` mode and `NAMING_TOOLS` only.
+
+    Refusing permission requests is not enough on its own. Without a pinned mode
+    Claude starts in the operator's own, and one like `acceptEdits` or `auto`
+    acts without asking; `tools` removes the rest of Claude's built-in tools.
+    """
+    config = dict(config or {})
+    claude = config.get("claudeCode")
+    claude = dict(claude) if isinstance(claude, Mapping) else {}
+    options = claude.get("options")
+    options = dict(options) if isinstance(options, Mapping) else {}
+    options["allowedTools"] = list(NAMING_TOOLS)
+    options["tools"] = list(NAMING_TOOLS)
+    return {**config, "mode": "default", "claudeCode": {**claude, "options": options}}
 
 
 @dataclass(frozen=True, slots=True)
