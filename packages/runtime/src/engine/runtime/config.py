@@ -733,6 +733,8 @@ def _repo_configs(
         name = _nonblank_string(name, "repos name")
         entry: dict[str, object] = {"path": value} if isinstance(value, str) else dict(_table(value, f"repos.{name}"))
         _reject_unknown(entry, {"path", "mode", "trusted", "auto_approve_green", "webhooks", "default"}, f"repos.{name}")
+        if "mode" in entry and entry["mode"] != "disconnected":
+            raise EngineConfigError(f'repos.{name}.mode must be "disconnected"; omit mode for connected repositories')
         entries[name] = entry
 
     def warn(section: str, spelling: str) -> None:

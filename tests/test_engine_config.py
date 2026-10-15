@@ -1028,6 +1028,7 @@ def test_nested_repository_settings_and_opt_out_webhooks():
 @pytest.mark.parametrize('entry', [
     {}, {'path': ''}, {'path': 1}, {'path': '.', 'unknown': True},
     {'path': '.', 'mode': 'offline'}, {'path': '.', 'mode': None},
+    {'path': '.', 'mode': 'connected'},
     *({'path': '.', key: 1} for key in ('trusted', 'auto_approve_green', 'webhooks', 'default')),
 ])
 def test_invalid_nested_repository_settings(entry):
@@ -1060,6 +1061,9 @@ def test_legacy_repository_settings_warn_merge_and_reject_conflicts(caplog, lega
     # Identical explicit values can coexist during migration.
     parse_engine_config({'repos': {'owner/repo': {'path': '/repo', key: value}}, **legacy})
     different = 'connected' if key == 'mode' else not value
+    if key == 'mode':
+        legacy = {'repo_modes': {'owner/repo': different}}
+        different = value
     with pytest.raises(EngineConfigError, match='conflicts'):
         parse_engine_config({'repos': {'owner/repo': {'path': '/repo', key: different}}, **legacy})
 
@@ -1096,3 +1100,19 @@ def test_legacy_merge_cannot_hide_invalid_new_boolean():
     with pytest.raises(EngineConfigError):
         parse_engine_config({'repos': {'repo': {'path': '.', 'trusted': 1}},
                              'trusted_repos': {'repo': True}})
+
+
+def test_connected_mode_requires_omission_in_new_repository_tables():
+    config = parse_engine_config({'repos': {'owner/repo': {'path': '.'}}})
+    assert config.repo_configs['owner/repo'].mode is None
+    assert config.repo_modes == {}
+    with pytest.raises(EngineConfigError, match='omit mode for connected repositories'):
+        parse_engine_config({'repos': {'owner/repo': {'path': '.', 'mode': 'connected'}},
+                             'repo_modes': {'owner/repo': 'connected'}})
+
+
+def test_legacy_connected_repository_mode_remains_supported(caplog):
+    config = parse_engine_config({'repos': {'owner/repo': '.'},
+                                  'repo_modes': {'owner/repo': 'connected'}})
+    assert config.repo_modes == {'owner/repo': 'connected'}
+    assert 'repo_modes is deprecated' in caplog.text
