@@ -408,7 +408,15 @@ class GraphService:
                     self._probe(row, PROBE_DEADLINE_SECONDS), PROBE_DEADLINE_SECONDS,
                 )
             except asyncio.TimeoutError:
-                self._health.pop(row.name, None)
+                # The endpoint held for the whole budget -- a blackholed host or a
+                # slow-drip body. That is the endpoint not answering, not an absence
+                # of a reading, so record "not responding" for the live row: the
+                # reachability the issue is after, not a url-less agent.
+                current = self.store.agent(row.name)
+                if current is not None and current.updated_at == row.updated_at:
+                    self._health[row.name] = EndpointHealth(False, None)
+                else:
+                    self._health.pop(row.name, None)
                 continue
             except Exception:
                 log.exception("endpoint probe for agent %s failed", row.name)
