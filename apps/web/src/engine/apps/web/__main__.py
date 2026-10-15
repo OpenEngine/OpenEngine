@@ -129,7 +129,7 @@ def check_work_order_workflow(settings: Settings, catalog: WorkflowCatalog | Non
     name = settings.engine_config.work_orders.workflow.strip()
     if not name:
         return
-    if catalog is not None and any(str(graph.graph_id) == name for graph in catalog.graphs):
+    if catalog is not None and name in catalog:
         return
     webhook = settings.github_webhook
     projects = (webhook.webhook_repositories if webhook is not None else ()) or ("",)
