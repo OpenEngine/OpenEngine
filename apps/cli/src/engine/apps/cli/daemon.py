@@ -760,7 +760,10 @@ def check_health(url: str, timeout: float = 2.0) -> tuple[DaemonState, dict[str,
             raw = None
         body = _parse_health(raw)
         state = derive_state(error.code, body)
-        return state, body, _detail_for(state, body, url, error, error.code)
+        # Another program's error body is not ours to report: `engine daemon
+        # status` would print its `version` as OpenEngine's.
+        reported = None if state is DaemonState.FOREIGN else body
+        return state, reported, _detail_for(state, body, url, error, error.code)
     except (URLError, TimeoutError, OSError) as error:
         return DaemonState.DOWN, None, _detail_for(DaemonState.DOWN, None, url, error, None)
 

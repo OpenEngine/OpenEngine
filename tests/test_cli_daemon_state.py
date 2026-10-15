@@ -98,6 +98,23 @@ def test_check_health_returns_the_state_for_a_live_endpoint(health_server, statu
     assert detail
 
 
+@pytest.mark.parametrize("status, raw", [
+    pytest.param(500, b'{"version": "7"}', id="http-500-with-a-version"),
+    pytest.param(503, b'{"service": "nginx"}', id="503-from-another-service"),
+    pytest.param(500, _openengine(ready=False), id="http-500"),
+])
+def test_check_health_reports_no_body_for_another_programs_http_error(health_server, status, raw):
+    url, reply = health_server
+    reply.update(status=status, body=raw)
+
+    state, body, detail = daemon.check_health(url)
+
+    # `engine daemon status` prints the body's `version`; a foreign one is not OpenEngine's.
+    assert state is daemon.DaemonState.FOREIGN
+    assert body is None
+    assert detail == f"server returned HTTP {status}"
+
+
 def test_check_health_reports_an_unreachable_url_as_down():
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
