@@ -1548,6 +1548,9 @@ class _RegisteredGraphs:
     def version_workflow(self, version_id):
         return self.workflow if version_id == str(self.workflow.graph_id) else None
 
+    def claims_pull_request(self, graph_id):
+        return graph_id in ("fix", "review")
+
     def resolve(self, project, name):
         from types import SimpleNamespace
         from engine.graph_service import NotFound
