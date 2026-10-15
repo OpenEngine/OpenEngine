@@ -97,9 +97,10 @@ def derive_state(url: str, *, status: int | None = None, payload: bytes | None =
         if isinstance(body, dict) and body.get("service") != "openengine":
             return DaemonState.FOREIGN, body if isinstance(body, dict) else None, "endpoint is not an OpenEngine service"
         
-        # Otherwise treat as a response with a valid JSON body for other error codes
-        # This matches behavior in health function but ensures robust parsing of error bodies
-    
+        # Only a 200 (or the 503 above) is an answer from a running daemon; an
+        # error reply that merely carries an OpenEngine body is not ready.
+        return DaemonState.FOREIGN, None, f"server returned HTTP {status}"
+
     if payload is None:
         return DaemonState.FOREIGN, None, "health endpoint did not return JSON"
     
