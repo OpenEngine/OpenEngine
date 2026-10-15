@@ -1,0 +1,250 @@
+erDiagram
+    %% Latest Alembic schema; state_ = sqlite, graph_ = sqlite_graph.
+    %% PK/FK/UK are database constraints. Composite keys share the same marker.
+    %% Solid edges: declared FK. Dashed edges: logical references, not FK constraints.
+    %% PostgreSQL has no application tables. LangGraph checkpoints are separately managed.
+    direction LR
+    %% sqlite heads: 9668c9dcd56a
+    state_agent_instances {
+        INTEGER sequence PK "not null"
+        TEXT instance_id UK "not null"
+        TEXT agent_id "not null"
+        TEXT conversation_id UK "not null"
+        TEXT task_id "nullable"
+        TEXT workspace_id "nullable"
+        TEXT title "not null"
+        INTEGER archived "not null"
+        TEXT runner "not null"
+        INTEGER auto_approve "not null"
+        TEXT workflow_run_id "nullable"
+        TEXT workflow_step_id "nullable"
+    }
+    state_agent_runs {
+        TEXT agent_run_id PK "not null"
+        TEXT instance_id FK "not null"
+        TEXT status "not null"
+        TEXT summary "not null"
+        TEXT changed_files "not null"
+        TEXT runner "not null"
+    }
+    state_agent_instances ||--o{ state_agent_runs : "instance_id"
+    state_approvals {
+        INTEGER sequence PK "not null"
+        TEXT approval_id UK "not null"
+        TEXT agent_run_id "not null"
+        TEXT instance_id FK "not null"
+        TEXT runner "not null"
+        TEXT kind "not null"
+        TEXT reason "nullable"
+        TEXT command "nullable"
+        TEXT cwd "nullable"
+        TEXT tool_name "nullable"
+        TEXT tool_call_id "nullable"
+        TEXT workspace_id "nullable"
+        TEXT arguments "nullable"
+        TEXT questions "nullable"
+        TEXT answers "nullable"
+        TEXT allowed_decisions "not null"
+        TEXT status "not null"
+        TEXT decision "nullable"
+        TEXT decision_source "nullable"
+        TEXT requested_at "not null"
+        TEXT decided_at "nullable"
+    }
+    state_agent_instances ||--o{ state_approvals : "instance_id"
+    state_legacy_run_metadata {
+        INTEGER sequence PK "not null"
+        TEXT run_id "not null"
+        TEXT state_json "not null"
+        TEXT requester "nullable"
+        TEXT origin_channel "nullable"
+        TEXT origin_thread_id "nullable"
+    }
+    state_messages {
+        INTEGER sequence PK "not null"
+        TEXT instance_id FK "not null"
+        TEXT role "not null"
+        TEXT content "not null"
+        TEXT tool_calls "not null"
+        TEXT tool_call_id "nullable"
+    }
+    state_agent_instances ||--o{ state_messages : "instance_id"
+    state_session_grants {
+        INTEGER sequence PK "not null"
+        TEXT grant_id UK "not null"
+        TEXT instance_id FK "not null"
+        TEXT runner "not null"
+        TEXT approval_kind "not null"
+        TEXT normalized_scope "not null"
+        TEXT workspace_id "nullable"
+        TEXT created_from_approval_id "not null"
+        TEXT created_at "not null"
+        TEXT revoked_at "nullable"
+    }
+    state_agent_instances ||--o{ state_session_grants : "instance_id"
+    %% sqlite_graph heads: a01559975f87
+    graph_approvals {
+        TEXT approval_id PK "not null"
+        TEXT run_id "not null"
+        TEXT record "not null"
+        TEXT status "not null"
+        TEXT decision "nullable"
+        INTEGER ordinal "nullable"
+    }
+    graph_cli_agents {
+        TEXT name PK "not null"
+        TEXT kind "not null"
+        TEXT model "not null"
+        TEXT url "not null"
+        TEXT created_at "not null"
+        TEXT updated_at "not null"
+    }
+    graph_cli_graph_versions {
+        TEXT version_id PK "not null"
+        TEXT graph_id UK "not null"
+        INTEGER number UK "not null"
+        TEXT manifest "not null"
+        TEXT digest "not null"
+        TEXT created_at "not null"
+        TEXT format "not null"
+        TEXT source "not null"
+    }
+    graph_cli_graphs {
+        TEXT graph_id PK "not null"
+        TEXT project UK "not null"
+        TEXT name UK "not null"
+        TEXT latest_version_id "not null"
+        TEXT created_at "not null"
+        TEXT updated_at "not null"
+    }
+    graph_cli_loop_runs {
+        TEXT loop_id PK "not null"
+        TEXT tick PK "not null"
+        TEXT run_id "not null"
+        TEXT started_at "not null"
+    }
+    graph_cli_loops {
+        TEXT loop_id PK "not null"
+        TEXT project UK "not null"
+        TEXT name UK "not null"
+        TEXT graph_id "not null"
+        TEXT version_id "not null"
+        TEXT instruction "not null"
+        TEXT repository "not null"
+        TEXT inputs "not null"
+        INTEGER interval_seconds "not null"
+        INTEGER max_prs "nullable"
+        FLOAT max_spend_usd "nullable"
+        TEXT state "not null"
+        TEXT pause_reason "not null"
+        TEXT next_run_at "not null"
+        TEXT active_run_id "nullable"
+        TEXT created_at "not null"
+        TEXT updated_at "not null"
+    }
+    graph_cli_node_executions {
+        TEXT execution_id PK "not null"
+        TEXT run_id "not null"
+        TEXT node_id "not null"
+        INTEGER attempt "not null"
+        TEXT status "not null"
+        TEXT started_at "not null"
+        TEXT finished_at "nullable"
+        TEXT error "not null"
+    }
+    graph_cli_projects {
+        TEXT name PK "not null"
+        TEXT verbs "not null"
+    }
+    graph_cli_run_submissions {
+        TEXT idempotency_key PK "not null"
+        TEXT request_digest "not null"
+        TEXT run_id "not null"
+        TEXT version_id "not null"
+        TEXT created_at "not null"
+    }
+    graph_cli_steering {
+        INTEGER sequence PK "not null"
+        TEXT steering_id UK "not null"
+        TEXT idempotency_key UK "not null"
+        TEXT run_id "not null"
+        TEXT execution_id "not null"
+        TEXT message "not null"
+        TEXT status "not null"
+        TEXT error "not null"
+        TEXT accepted_at "not null"
+        TEXT delivered_at "nullable"
+        TEXT applied_at "nullable"
+    }
+    graph_events {
+        INTEGER sequence PK "not null"
+        TEXT run_id "not null"
+        TEXT kind "not null"
+        TEXT payload "not null"
+        TEXT node_id "nullable"
+        TEXT execution_id "nullable"
+    }
+    graph_github_comments {
+        INTEGER comment_id PK "not null"
+        TEXT repository PK "not null"
+        TEXT kind PK "not null"
+        INTEGER pr_number "not null"
+        TEXT run_id "not null"
+        TEXT node_id "nullable"
+        TEXT posted_at "not null"
+        TEXT url "nullable"
+    }
+    graph_github_pull_requests {
+        TEXT repository PK "not null"
+        INTEGER number PK "not null"
+        TEXT run_id "not null"
+        TEXT node_id "nullable"
+        TEXT opened_at "not null"
+        TEXT url "nullable"
+    }
+    graph_runs {
+        TEXT run_id PK "not null"
+        TEXT graph_id "not null"
+        TEXT error "not null"
+        INTEGER ordinal "nullable"
+        TEXT auto_approve_nodes "not null"
+        TEXT runner_overrides "not null"
+        TEXT forge_context "not null"
+        TEXT name "nullable"
+        TEXT prompt "nullable"
+        TEXT repository "nullable"
+        TEXT requester "nullable"
+        TEXT origin_channel "nullable"
+        TEXT origin_thread_id "nullable"
+        TEXT parent_run_id "nullable"
+        TEXT depends_on_run_id "nullable"
+        TEXT failure_reason "nullable"
+        TEXT created_at "nullable"
+        TEXT started_at "nullable"
+        TEXT task_id "nullable"
+        JSON inputs "nullable"
+        JSON origin "nullable"
+        BOOLEAN scheduled "nullable"
+    }
+    graph_sessions {
+        TEXT run_id PK "not null"
+        TEXT session_key PK "not null"
+        TEXT continuation "not null"
+    }
+    graph_runs ||..o{ graph_approvals : "run_id (logical)"
+    graph_runs ||..o{ graph_events : "run_id (logical)"
+    graph_runs ||..o{ graph_sessions : "run_id (logical)"
+    graph_runs ||..o{ graph_cli_node_executions : "run_id (logical)"
+    graph_runs ||..o{ graph_cli_run_submissions : "run_id (logical)"
+    graph_runs |o..o{ graph_cli_loop_runs : "run_id (logical)"
+    graph_runs ||..o{ graph_cli_steering : "run_id (logical)"
+    graph_runs ||..o{ graph_github_comments : "run_id (logical)"
+    graph_runs ||..o{ graph_github_pull_requests : "run_id (logical)"
+    graph_runs |o..o{ graph_runs : "parent_run_id (logical)"
+    graph_runs |o..o{ graph_runs : "depends_on_run_id (logical)"
+    graph_cli_graphs ||..o{ graph_cli_graph_versions : "graph_id (logical)"
+    graph_cli_graph_versions ||..o{ graph_cli_run_submissions : "version_id (logical)"
+    graph_cli_graphs ||..o{ graph_cli_loops : "graph_id (logical)"
+    graph_cli_graph_versions ||..o{ graph_cli_loops : "version_id (logical)"
+    graph_cli_loops ||..o{ graph_cli_loop_runs : "loop_id (logical)"
+    graph_cli_node_executions ||..o{ graph_cli_steering : "execution_id (logical)"
