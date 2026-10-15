@@ -9,25 +9,7 @@
 
 import { useEffect, useState } from "react";
 
-import { api } from "./api";
-
-/** What the poller last found out about one endpoint, or `null` for an agent
- *  that has no endpoint to probe. */
-type AgentHealth = {
-  responding: boolean;
-  modelLoaded: boolean | null;
-};
-
-type AgentRow = {
-  name: string;
-  kind: string;
-  model: string;
-  url: string;
-  builtin: boolean;
-  createdAt: string;
-  updatedAt: string;
-  health: AgentHealth | null;
-};
+import { getAgents, type AgentHealth, type AgentRow } from "./api";
 
 /** What the endpoint says about the model, in the reader's words rather than
  *  the wire's. `null` is a server that answers but will not say which of its
@@ -72,10 +54,10 @@ export function AgentList() {
     // The list keeps whatever it printed while a refresh is in flight, so a
     // row moves only once the server has actually re-answered.
     const load = () => {
-      api<{ agents: AgentRow[] }>("/api/v1/agents")
-        .then((body) => {
+      getAgents()
+        .then((agents) => {
           if (cancelled) return;
-          setAgents(body.agents);
+          setAgents(agents);
           setError("");
         })
         .catch((reason: Error) => {

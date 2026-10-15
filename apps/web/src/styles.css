@@ -1312,7 +1312,7 @@ select:disabled { cursor: default; }
 
 /* The coloured things in the rail's foot. Amber rather than flame because
    what they open only reads, which is the distinction the two accents draw. */
-.rail-graph {
+.rail-graph, .rail-agents {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -1322,21 +1322,9 @@ select:disabled { cursor: default; }
   color: var(--amber);
   opacity: .78;
 }
-.rail-graph:hover, .rail-graph[data-active] { opacity: 1; }
-.rail-graph svg { width: 14px; height: 14px; }
-
-.rail-agents {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  color: var(--amber);
-  opacity: .78;
-}
+.rail-graph:hover, .rail-graph[data-active],
 .rail-agents:hover, .rail-agents[data-active] { opacity: 1; }
-.rail-agents svg { width: 14px; height: 14px; }
+.rail-graph svg, .rail-agents svg { width: 14px; height: 14px; }
 
 .settings-panel {
   display: flex;

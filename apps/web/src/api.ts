@@ -698,6 +698,30 @@ export const UTILIZATION_URL = "/utilization";
 
 export const AGENTS_URL = "/agents";
 
+/** What the poller last found out about one endpoint, or `null` for an agent
+ *  that has no endpoint to probe. */
+export type AgentHealth = {
+  responding: boolean;
+  modelLoaded: boolean | null;
+};
+
+/** One registered agent, and the last reading of its model endpoint when it has one. */
+export type AgentRow = {
+  name: string;
+  kind: string;
+  model: string;
+  url: string;
+  builtin: boolean;
+  createdAt: string;
+  updatedAt: string;
+  health: AgentHealth | null;
+};
+
+/** Every registered agent, with each url agent's endpoint health. */
+export function getAgents(signal?: AbortSignal): Promise<AgentRow[]> {
+  return api<{ agents: AgentRow[] }>("/api/v1/agents", { signal }).then((body) => body.agents);
+}
+
 /** One limit a provider meters a subscription against.
  *
  *  `usedPercent` is the provider's own figure. `resetsAt` is an instant, or
