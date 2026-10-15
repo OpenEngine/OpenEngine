@@ -39,6 +39,7 @@ from engine.graph_service.schema import (
 )
 
 WORKSPACE_NODE = "workspace"
+NAMING_NODE = "naming"
 START, END = "start", "end"
 STAGES = ("plan", "implement", "review")
 SECTION_OF = {stage: section for section, stage in SECTIONS.items()}
@@ -168,6 +169,15 @@ class LoopDefaults:
 
 
 @dataclass(frozen=True)
+class NamingSpec:
+    """A naming turn after the checkout: which runner gives the run its name, on which model."""
+
+    runner: RunnerRule
+    model: str = ""
+    """A tier, a model or a template; empty means the runner's `cheapest` tier."""
+
+
+@dataclass(frozen=True)
 class GraphSpec:
     name: str
     description: str
@@ -183,6 +193,7 @@ class GraphSpec:
     api_version: str = API_VERSION
     checkout: str = WORKSPACE_NODE
     """The checkout's node id: the step that has neither agent, human nor ci."""
+    naming: NamingSpec | None = None
 
     def node(self, node_id: str) -> NodeSpec | None:
         return next((node for node in self.nodes if node.id == node_id), None)
@@ -261,9 +272,10 @@ def parse_graph(raw: object, *, runners: Sequence[str] | None = None) -> GraphSp
     checkout, base_ref, ref_input = _checkout(steps, input_names, problem)
     nodes = _nodes([step for step in steps if step[0] != checkout], inputs, runners, problem)
     ids = {node.id for node in nodes}
-    keys = [checkout, *(key for node in nodes for key in node.keys)]
+    naming = _naming(raw.get("naming"), inputs, runners, problem)
+    keys = [checkout, *([NAMING_NODE] if naming else []), *(key for node in nodes for key in node.keys)]
     for key in sorted({key for key in keys if keys.count(key) > 1}):
-        problem(next(node.path for node in nodes if key in node.keys),
+        problem(next((node.path for node in nodes if key in node.keys), "naming"),
                 f"{key!r} is used twice; rename a step")
     flow = _flow(raw.get("flow"), ids, problem)
     flow = (*_written_order([node.id for node in nodes], flow), *flow)
@@ -271,7 +283,7 @@ def parse_graph(raw: object, *, runners: Sequence[str] | None = None) -> GraphSp
     spec = GraphSpec(
         name=name, description=description, instruction=instruction, inputs=inputs,
         base_ref=base_ref, ref_input=ref_input, nodes=nodes, flow=flow, loop=loop,
-        repository=repository, checkout=checkout,
+        repository=repository, checkout=checkout, naming=naming,
     )
     if nodes and not problems:
         _structure(spec, problem)
@@ -739,6 +751,24 @@ def _loop(raw: object, problem: Any) -> LoopDefaults:
     return LoopDefaults(instruction.strip(), interval)
 
 
+def _naming(
+    raw: object, inputs: Sequence[InputSpec], runners: Sequence[str] | None, problem: Any,
+) -> NamingSpec | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        problem("naming", "must be a mapping such as {agent: claude}")
+        return None
+    _known(raw, FIELDS["naming"], "naming.", problem)
+    if isinstance(raw.get("agent"), Mapping):
+        # Nothing has run before naming, so there is no step to be or not be.
+        problem("naming.agent", "must be a runner or ${inputs.NAME}")
+        return None
+    runner = _runner(raw.get("agent"), "naming.agent", "naming", inputs, runners, set(), problem)
+    model = FIELD_RULES["naming"]["model"].read(raw, "model", "naming.model", problem)
+    return NamingSpec(runner, model.strip()) if runner else None
+
+
 # --- whole-graph checks -------------------------------------------------------
 
 
@@ -807,6 +837,10 @@ def _references(spec: GraphSpec, input_names: set[str], problem: Any) -> None:
                     check(expression, f"{where}.{field_name}", node.id, item=parallel)
         if node.choose:
             check(parse(node.choose), f"{where}.human.choose", node.id, item=False)
+    if spec.naming and spec.naming.model:
+        parsed = _template(spec.naming.model, "naming.model", problem)
+        for expression in parsed.expressions if parsed else ():
+            check(expression, "naming.model", "naming", item=False)
     for index, rule in enumerate(spec.flow):
         for route_index, route in enumerate(rule.routes):
             if route.when:
@@ -893,6 +927,8 @@ __all__ = [
     "GraphSpec",
     "InputSpec",
     "LoopDefaults",
+    "NAMING_NODE",
+    "NamingSpec",
     "NodeSpec",
     "OutputSpec",
     "Problem",

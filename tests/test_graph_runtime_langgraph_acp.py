@@ -57,13 +57,15 @@ from engine.ports import (
     WorkItem,
 )
 from engine.graph_runtime_langgraph.acp import (
-    APPROVAL_ID, ACPNode, _replay_history, _replay_prompt,
+    APPROVAL_ID, ACPNode, _replay_history, _replay_prompt, _Turn, _TURNS,
 )
 from engine.graph_runtime.events import EventKind
 from engine.runtime import INVALID_COMPLETION_ERROR
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph_acp import ACPAgentRegistry, StdioACPProvider
+from langgraph_acp import (
+    ACPAgentRegistry, ACPPermissionOption, ACPPermissionRequest, StdioACPProvider,
+)
 
 from acp_stub_agent import ASK_NARRATION, DONE, NARRATED_TOOL, NARRATION
 from graph_runtime_backends import State
@@ -1393,6 +1395,32 @@ def test_steering_sent_during_a_steered_turn_still_reaches_the_agent(
 
 
 # --- approvals, answered by the process that raised them --------------------
+
+
+def test_a_node_that_refuses_permissions_declines_without_asking() -> None:
+    """A read-only turn such as naming is never granted anything.
+
+    Not by a person and not by a run's auto-approval: the request is refused
+    before it becomes an approval at all.
+    """
+
+    class Unasked:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"a refusing node reached its execution: {name}")
+
+    node = ACPNode(agent=AGENT, cwd=".", refuses_permissions=True)
+    _TURNS["refusing"] = _Turn(node, Unasked(), "naming", "refusing")  # type: ignore[arg-type]
+    try:
+        outcome = asyncio.run(answer_permission(ACPPermissionRequest(
+            agent=AGENT,
+            session_id="refusing",
+            tool_call={"title": "edit a file", "toolCallId": "call_1"},
+            options=(ACPPermissionOption("yes", kind="allow_once"),),
+        )))
+    finally:
+        del _TURNS["refusing"]
+
+    assert not outcome.granted
 
 
 def test_an_acp_permission_request_becomes_an_answerable_approval(

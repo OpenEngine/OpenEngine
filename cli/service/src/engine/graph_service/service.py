@@ -1307,7 +1307,8 @@ class GraphService:
         agent this backend lacks still registers and runs with another one.
         """
         available = self.runners()
-        names = {node.runner.value for node in spec.nodes if node.runner is not None and node.runner.kind == "input"}
+        rules = [node.runner for node in spec.nodes] + [spec.naming.runner if spec.naming else None]
+        names = {rule.value for rule in rules if rule is not None and rule.kind == "input"}
         for name in sorted(names):
             chosen = inputs.get(name, "")
             if chosen and chosen not in RUNNER_POLICIES and chosen not in available:

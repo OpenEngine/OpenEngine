@@ -51,6 +51,12 @@ class NameNode(ACPNode):
     graph_node_description: str = "Gives the WorkOrder a concise display name."
     graph_node_show_in_sidebar: bool = False
     graph_node_group: str = WorkState.PLANNING
+    refuses_permissions: bool = True
+    """Naming reads untrusted issue text, so nothing it asks to do is granted.
+
+    This does not reach what an agent's sandbox allows without asking, such as
+    Codex writing inside the checkout.
+    """
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         try:

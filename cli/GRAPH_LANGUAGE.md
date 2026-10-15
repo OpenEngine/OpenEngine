@@ -129,6 +129,19 @@ leaves the written order at that point, so it goes only where `flow` says
 allowed only through a `route`, so a loop always has a way out. Every step
 must be reachable and able to reach `end`.
 
+**Naming.** `naming: {agent: ${inputs.runner}}` adds a hidden `NameNode`
+after the checkout that gives each run a concise name from its instruction,
+as the Python graphs do. Without it a run is named after its submission. The
+turn runs on the agent's `cheapest` tier unless `model` names another tier or
+model: `haiku` for `claude`, `gpt-5.6-terra` for `codex` (set either with
+`[runners.NAME.models] cheapest = ...` in `engine.toml`), and an added agent's
+own model. The turn refuses every permission request, even on an
+auto-approved run. On Claude it also runs in Claude's `default` mode with only
+`Read`, `Glob` and `Grep`, so it cannot act whatever mode the operator's
+Claude settings name. That still leaves what another agent's own sandbox allows:
+Codex can write inside the run's checkout without asking. A failed naming turn leaves the fallback name and does not fail
+the run. `naming` is a reserved step name in a graph that sets it.
+
 **Expressions** in `${...}` and `when:` are deliberately small: names
 (`instruction`, `repository`, `inputs.X`, `outputs.NODE[.FIELD]`,
 `visits.NODE`), literals, comparisons, `&& || !`, and `size`/`json`. They are
