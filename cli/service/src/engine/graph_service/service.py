@@ -1203,21 +1203,26 @@ class GraphService:
         """
         ps_url, models_url = urls
         try:
-            status, body = await asyncio.wait_for(
+            ps = await asyncio.wait_for(
                 self._read_capped(client, ps_url), timeout=self._probe_budget
             )
         except (httpx.TransportError, TimeoutError):
             return False, None
-        names = self._listed_names(status, body, "models", "name")
-        if names is not None:
-            return True, names
+        except httpx.HTTPError:
+            # It answered, but the listing could not be read; the server is
+            # there, so its other listing may still be readable.
+            ps = None
+        if ps is not None:
+            names = self._listed_names(ps[0], ps[1], "models", "name")
+            if names is not None:
+                return True, names
         try:
             status, body = await asyncio.wait_for(
                 self._read_capped(client, models_url), timeout=self._probe_budget
             )
-        except (httpx.TransportError, TimeoutError):
+        except (httpx.HTTPError, TimeoutError):
             # It answered the first listing, so it is responding; its
-            # OpenAI-style listing is just unreachable.
+            # OpenAI-style listing is just unreachable or unreadable.
             return True, None
         return True, self._listed_names(status, body, "data", "id")
 
