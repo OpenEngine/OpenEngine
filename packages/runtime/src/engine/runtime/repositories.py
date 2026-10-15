@@ -52,7 +52,8 @@ class RepositoryRegistry:
                 if name not in entries:
                     message = f"{name} names no repository under [repos]"
                     raise EngineConfigError(message)
-                entries[name][key] = value
+                if key != "mode" or value != "connected":
+                    entries[name][key] = value
         config = parse_engine_config({"repos": entries})
         resolved = dict(projects) if projects is not None else {
             name: project for name, path in {".": ".", **config.repos}.items()
@@ -102,7 +103,7 @@ class RepositoryRegistry:
     def add(self, name: str, path: str, mode: str | None = None, *, trusted: bool | None = None) -> None:
         """Validate like config loading, resolve origin once, then publish atomically."""
         entry: dict[str, object] = {"path": path}
-        if mode is not None:
+        if mode is not None and mode != "connected":
             entry["mode"] = mode
         if trusted is not None:
             entry["trusted"] = trusted

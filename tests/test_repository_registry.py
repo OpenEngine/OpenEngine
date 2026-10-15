@@ -9,6 +9,18 @@ from engine.runtime.config import EngineConfigError
 from engine.runtime.repositories import RepositoryRegistry
 
 
+def test_explicit_connected_mode_uses_default_without_deprecations(monkeypatch, caplog):
+    from engine.domain import ForgeMode
+
+    monkeypatch.setattr(RepositoryRegistry, "_project", lambda self, path: None)
+    registry = RepositoryRegistry({"first": "/first"}, {"first": ForgeMode.CONNECTED}, projects={})
+    registry.add("second", "/second", mode="connected")
+    assert registry.snapshot.repos == {"first": "/first", "second": "/second"}
+    assert registry.snapshot.repo_modes == {}
+    assert registry.snapshot.disconnected == frozenset()
+    assert "deprecated" not in caplog.text
+
+
 def test_concurrent_adds_publish_complete_snapshots(monkeypatch, tmp_path):
     resolve = Mock(side_effect=lambda path: f"acme/{path.rsplit('/', 1)[-1]}")
     monkeypatch.setattr(RepositoryRegistry, "_project", lambda self, path: resolve(path))
