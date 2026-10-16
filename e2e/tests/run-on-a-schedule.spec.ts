@@ -153,14 +153,16 @@ test.describe(graphsCategory, () => {
 Some work is never finished for good: keeping a README up to date, fixing one flaky test at a time, tidying a little more each day. Instead of starting the same graph yourself every few hours, you can set up a **loop**: a graph set to run again and again on a schedule, with limits on how much it may spend. You choose how often it runs, how much money its agents may spend in all, and how many pull requests (proposed changes to your code) it may open. When it reaches a limit, it pauses itself, and you can pause or stop it yourself at any time.`)
           await injectMarkdown(testInfo, `To read everything a loop can do, type \`engine loop spec\` and press Enter.
 
-You'll see a short description of loops: how to set one up, how often it can run, its limits, and how to pause it. You don't need any of it to follow this guide, but it's there whenever you want the details.`)
+You'll see detailed reference material about loops: how to set one up, how often it can run, its limits, and how to pause it. You don't need any of it to follow this guide, but it's there whenever you want the details.`)
           const { output } = await terminal.run("engine loop spec")
           expect(output).toContain("engine loop add GRAPH")
           expect(output).toContain("--max-prs")
           expect(output).toContain("--max-spend")
           // The spec says how to stop a loop for good, not only how to pause it.
           expect(output).toMatch(/`engine loop stop NAME_OR_ID`/)
-          await show(terminal, engine, testInfo, await terminal.row(/`engine loop stop NAME_OR_ID`/), "How to stop a loop for good")
+          // Show the beginning of the reference, including the command the reader typed.
+          await terminal.page.evaluate(() => window.__term!.scrollToTop())
+          await show(terminal, engine, testInfo, await terminal.row(/engine loop spec/), "The detailed reference for scheduled graphs")
         })
 
         await clear(terminal)
@@ -309,13 +311,14 @@ Type \`engine loop stop check-readme\` and press Enter. OpenEngine shows the loo
         })
 
         await step(
-          `Type \`engine loops list\` and press Enter. Your loop is still listed, as *stopped*, so you can look back at what it did. Its last run shows as *cancelled* in \`engine runs list\`.`,
+          `Type \`engine loops list\` and press Enter. Your loop is still listed, as *stopped*, so you can look back at what it did. Its last run shows as *cancelled* in \`engine runs list\`.
+
+Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).`,
           async () => {
             const { output } = await terminal.run("engine loops list")
             const row = /^check-readme\s+check-readme v1\s+stopped\s+1h\s+-\s+-\s/m
             expect(output).toMatch(row)
             await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Your loop is stopped and will start no more runs")
-            await injectMarkdown(testInfo, "Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).")
           },
         )
       })

@@ -107,6 +107,9 @@ const api: TerminalTestApi = {
     }
     return lines.join("\n").trimEnd()
   },
+  scrollToTop() {
+    terminal.scrollToTop()
+  },
   rowIndexOf(pattern) {
     const matches = matcher(pattern)
     for (let row = terminal.rows - 1; row >= 0; row--) {
