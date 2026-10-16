@@ -976,10 +976,23 @@ class GraphService:
     async def pause_loop(self, project: str | None, reference: str, reason: str = "") -> dict[str, Any]:
         row = self.resolve_loop(project, reference)
         async with self._lock:
+            if self.resolve_loop(project, reference).state == "stopped":
+                raise Conflict("cannot pause a stopped loop; create a new loop")
             self.store.update_loop(
                 row.loop_id, state="paused", pause_reason=reason.strip() or "paused by a person",
                 updated_at=self._now_iso(),
             )
+        return await self.loop_json(row.loop_id)
+
+    async def stop_loop(self, project: str | None, reference: str) -> dict[str, Any]:
+        async with self._lock:
+            row = self.resolve_loop(project, reference)
+            self.store.update_loop(
+                row.loop_id, state="stopped", pause_reason="", updated_at=self._now_iso(),
+            )
+        if row.active_run_id:
+            await self.runtime.cancel(RunId(row.active_run_id))
+            self.store.update_loop(row.loop_id, active_run_id=None, updated_at=self._now_iso())
         return await self.loop_json(row.loop_id)
 
     async def resume_loop(
@@ -1000,6 +1013,8 @@ class GraphService:
         if reached := self._limit_reached(candidate, await self.accounting(candidate)):
             raise Conflict(f"cannot resume: {reached}; raise the limit to resume")
         async with self._lock:
+            if self.resolve_loop(project, reference).state == "stopped":
+                raise Conflict("cannot resume a stopped loop; create a new loop")
             self.store.update_loop(
                 row.loop_id, state="active", pause_reason="", max_prs=limits[0],
                 max_spend_usd=limits[1], next_run_at=self._now_iso(), updated_at=self._now_iso(),
@@ -1082,6 +1097,11 @@ class GraphService:
             return
         self.store.set_tick_run(row.loop_id, tick, str(run_id))
         self.store.update_loop(row.loop_id, active_run_id=str(run_id), updated_at=self._now_iso())
+        # Stop may have arrived while starting the run awaited the runtime.
+        fresh = self.store.loop(row.loop_id)
+        if fresh is not None and fresh.state == "stopped":
+            await self.runtime.cancel(run_id)
+            self.store.update_loop(row.loop_id, active_run_id=None, updated_at=self._now_iso())
 
     async def _schedule(self) -> None:
         while True:
@@ -1099,6 +1119,9 @@ class GraphService:
         return ""
 
     async def _pause(self, loop_id: str, reason: str) -> None:
+        row = self.store.loop(loop_id)
+        if row is None or row.state == "stopped":
+            return
         self.store.update_loop(loop_id, state="paused", pause_reason=reason, updated_at=self._now_iso())
         log.info("loop %s paused: %s", loop_id, reason)
 

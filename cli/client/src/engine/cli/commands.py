@@ -203,7 +203,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--repo", default="")
     adding.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
     adding.add_argument("--no-run-now", action="store_true", help="first run after one interval, not now")
-    for name, help_text in (("get", "one loop's state and budget"), ("pause", "stop starting runs"), ("resume", "start runs again")):
+    for name, help_text in (("get", "one loop's state and budget"), ("pause", "stop starting runs"), ("resume", "start runs again"), ("stop", "permanently stop the loop and its active run")):
         action = actions.add_parser(name, parents=[scoped], help=help_text)
         action.add_argument("loop", help="a loop name or id")
         if name == "pause":
@@ -667,6 +667,14 @@ def loop_pause(arguments: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def loop_stop(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    loop = client.post(f"/loops/{quote(arguments.loop)}/stop",
+                       {"project": _project(arguments, backend)})
+    _emit(loop, arguments.pretty, _loop_summary)
+    return EXIT_OK
+
+
 def loop_resume(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     loop = client.post(f"/loops/{quote(arguments.loop)}/resume", {
@@ -1097,6 +1105,7 @@ _HANDLERS = {
     ("loop", "get"): loop_get,
     ("loop", "pause"): loop_pause,
     ("loop", "resume"): loop_resume,
+    ("loop", "stop"): loop_stop,
     ("loop", "list"): loops_list,
     ("node", "list"): nodes_list,
     ("node", "get"): node_get,
