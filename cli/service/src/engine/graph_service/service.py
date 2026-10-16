@@ -991,7 +991,10 @@ class GraphService:
                 row.loop_id, state="stopped", pause_reason="", updated_at=self._now_iso(),
             )
         if row.active_run_id:
-            await self.runtime.cancel(RunId(row.active_run_id))
+            try:
+                await self.runtime.cancel(RunId(row.active_run_id))
+            except (UnknownRunError, UnknownGraphError):
+                pass  # The run is already gone; clear its stale reference below.
             self.store.update_loop(row.loop_id, active_run_id=None, updated_at=self._now_iso())
         return await self.loop_json(row.loop_id)
 

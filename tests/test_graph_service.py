@@ -19,7 +19,7 @@ import httpx
 import pytest
 import yaml
 from engine.domain import RunId, WorkspaceId
-from engine.graph_runtime import GraphId, RunStatus
+from engine.graph_runtime import GraphId, RunStatus, UnknownGraphError, UnknownRunError
 from engine.graph_runtime_langgraph import (
     LangGraphRuntime,
     PullRequestRecord,
@@ -1536,5 +1536,35 @@ def test_stopping_a_loop_is_permanent_even_during_start(tmp_path: Path, stop_dur
             await service.tick()
             assert (await service.loop_json(loop_id))["state"] == "stopped"
             assert len(service.store.loop_runs(loop_id)) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", [UnknownRunError, UnknownGraphError])
+def test_stopping_loop_clears_missing_active_run(tmp_path: Path, monkeypatch, missing) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+            service.store.update_loop(loop_id, active_run_id="run-missing")
+            cancel = AsyncMock(side_effect=missing("already gone"))
+            monkeypatch.setattr(service.runtime, "cancel", cancel)
+
+            stopped = await service.stop_loop("default", loop_id)
+
+            cancel.assert_awaited_once_with(RunId("run-missing"))
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            assert service.store.loop(loop_id).active_run_id is None
+            await service.stop_loop("default", loop_id)
+            cancel.assert_awaited_once()
+            clock.advance(hours=3)
+            await service.tick()
+            assert service.store.loop_runs(loop_id) == ()
 
     asyncio.run(scenario())
