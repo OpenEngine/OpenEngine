@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Locator, TestInfo } from "@playwright/test"
 import { withDocMeta } from "@test2doc/playwright/DocMeta"
+import { injectMarkdown } from "@test2doc/playwright/injectMarkdown"
 import { screenshot } from "@test2doc/playwright/screenshots"
 import { test, expect, type AgentScript, type Engine } from "../fixtures/engine.ts"
 import type { Terminal } from "../fixtures/terminal.ts"
@@ -72,7 +73,7 @@ async function activeRun(engine: Engine): Promise<string> {
 }
 
 /** A step the page shows as a paragraph of its own (see another-computer.spec.ts). */
-function step(text: string, body: () => Promise<void> = async () => {}) {
+function step(text: string, body: () => Promise<void>) {
   return test.step(`\n${text}\n`, body)
 }
 
@@ -146,26 +147,21 @@ test.describe(graphsCategory, () => {
         test.setTimeout(engine.agentMode === "real" ? 300_000 : 120_000)
         engine.script(BUSY)
 
-        await step(
-          `The \`engine\` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
+        await test.step("Read about scheduled graphs", async () => {
+          await injectMarkdown(testInfo, `The \`engine\` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
 
-Some work is never finished for good: keeping a README up to date, fixing one flaky test at a time, tidying a little more each day. Instead of starting the same graph yourself every few hours, you can set up a **loop**: a graph set to run again and again on a schedule, with limits on how much it may spend. You choose how often it runs, how much money its agents may spend in all, and how many pull requests (proposed changes to your code) it may open. When it reaches a limit, it pauses itself, and you can pause or stop it yourself at any time.`,
-        )
+Some work is never finished for good: keeping a README up to date, fixing one flaky test at a time, tidying a little more each day. Instead of starting the same graph yourself every few hours, you can set up a **loop**: a graph set to run again and again on a schedule, with limits on how much it may spend. You choose how often it runs, how much money its agents may spend in all, and how many pull requests (proposed changes to your code) it may open. When it reaches a limit, it pauses itself, and you can pause or stop it yourself at any time.`)
+          await injectMarkdown(testInfo, `To read everything a loop can do, type \`engine loop spec\` and press Enter.
 
-        await step(
-          `To read everything a loop can do, type \`engine loop spec\` and press Enter.
-
-You'll see a short description of loops: how to set one up, how often it can run, its limits, and how to pause it. You don't need any of it to follow this guide, but it's there whenever you want the details.`,
-          async () => {
-            const { output } = await terminal.run("engine loop spec")
-            expect(output).toContain("engine loop add GRAPH")
-            expect(output).toContain("--max-prs")
-            expect(output).toContain("--max-spend")
-            // The spec says how to stop a loop for good, not only how to pause it.
-            expect(output).toMatch(/`engine loop stop NAME_OR_ID`/)
-            await show(terminal, engine, testInfo, await terminal.row(/`engine loop stop NAME_OR_ID`/), "How to stop a loop for good")
-          },
-        )
+You'll see a short description of loops: how to set one up, how often it can run, its limits, and how to pause it. You don't need any of it to follow this guide, but it's there whenever you want the details.`)
+          const { output } = await terminal.run("engine loop spec")
+          expect(output).toContain("engine loop add GRAPH")
+          expect(output).toContain("--max-prs")
+          expect(output).toContain("--max-spend")
+          // The spec says how to stop a loop for good, not only how to pause it.
+          expect(output).toMatch(/`engine loop stop NAME_OR_ID`/)
+          await show(terminal, engine, testInfo, await terminal.row(/`engine loop stop NAME_OR_ID`/), "How to stop a loop for good")
+        })
 
         await clear(terminal)
 
@@ -319,11 +315,8 @@ Type \`engine loop stop check-readme\` and press Enter. OpenEngine shows the loo
             const row = /^check-readme\s+check-readme v1\s+stopped\s+1h\s+-\s+-\s/m
             expect(output).toMatch(row)
             await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Your loop is stopped and will start no more runs")
+            await injectMarkdown(testInfo, "Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).")
           },
-        )
-
-        await step(
-          "Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).",
         )
       })
     },
