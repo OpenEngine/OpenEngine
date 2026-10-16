@@ -21,6 +21,7 @@ import {
   type RunView,
 } from "./api";
 import { AddRepository } from "./onboarding";
+import { Markdown } from "./markdown";
 import { Stat, StatStrip } from "./brand";
 import {
   GITHUB_COMMENTS_ANCHOR,
@@ -716,7 +717,11 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
           </p>
         )}
-        {step.summary && <p className="step-summary">{step.summary}</p>}
+        {step.summary && (
+          <div className="step-summary">
+            <Markdown>{step.summary}</Markdown>
+          </div>
+        )}
         {step.outputs.length > 0 && (
           <dl className="step-outputs">
             {step.outputs.map((output) => (

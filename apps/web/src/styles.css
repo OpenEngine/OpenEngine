@@ -1156,7 +1156,28 @@ select:disabled { cursor: default; }
 }
 .step-body > header { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; justify-content: space-between; }
 .step-body h2 { margin-top: 6px; font-size: 19px; font-weight: 700; letter-spacing: -.02em; }
-.step-summary { margin-top: 14px; color: var(--ink-soft); font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+.step-summary { margin-top: 14px; color: var(--ink-soft); font-size: 15px; line-height: 1.6; }
+/* The Markdown component's own styles, kept here so any container that hosts
+   a rendered source wraps long lines and scrolls code instead of widening. */
+.markdown { overflow-wrap: anywhere; }
+/* :where keeps these zeros at the gap rule's own specificity, and before it,
+   so the gap still applies between blocks. */
+.markdown :where(p, ul, ol, pre, h1, h2, h3, h4, h5, h6) { margin: 0; }
+.markdown > * + * { margin-top: 8px; }
+/* A heading inside a summary is part of the summary: every level reads at
+   body size, so none outgrows the step's own 19px title. */
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { font-size: 15px; font-weight: 700; }
+.markdown ul, .markdown ol { padding-left: 22px; }
+.markdown li + li { margin-top: 4px; }
+.markdown code {
+  padding: 1px 5px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  font: 400 .92em/1.4 var(--mono);
+}
+.markdown pre { padding: 12px 14px; overflow-x: auto; background: var(--paper); border: 1px solid var(--rule); }
+.markdown pre code { padding: 0; background: none; border: 0; font-size: 13px; line-height: 1.5; }
+.markdown a { color: var(--flame-deep); }
 .step-outcome { margin-top: 12px; color: var(--muted); font: 400 13px/1.4 var(--mono); }
 .step-outcome strong { color: var(--ink); }
 .step-outcome[data-changes] { color: var(--flame-deep); }
