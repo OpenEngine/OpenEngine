@@ -1162,8 +1162,11 @@ select:disabled { cursor: default; }
 .markdown { overflow-wrap: anywhere; }
 /* :where keeps these zeros at the gap rule's own specificity, and before it,
    so the gap still applies between blocks. */
-.markdown :where(p, ul, ol, pre) { margin: 0; }
+.markdown :where(p, ul, ol, pre, h1, h2, h3, h4, h5, h6) { margin: 0; }
 .markdown > * + * { margin-top: 8px; }
+/* A heading inside a summary is part of the summary: every level reads at
+   body size, so none outgrows the step's own 19px title. */
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { font-size: 15px; font-weight: 700; }
 .markdown ul, .markdown ol { padding-left: 22px; }
 .markdown li + li { margin-top: 4px; }
 .markdown code {
