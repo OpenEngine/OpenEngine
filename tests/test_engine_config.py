@@ -742,51 +742,85 @@ def test_trusted_repos_name_the_repositories_whose_work_orders_are_auto_approved
     assert config.trusted_repos == frozenset({"api"})
 
 
+# (table, key, LoadedEngineConfig property, exported environment variable)
+CONFIG_DIRECTORIES = [
+    pytest.param("claude", "config_dir", "claude_config_dir", "CLAUDE_CONFIG_DIR", id="claude"),
+    pytest.param("github", "gh_config_dir", "gh_config_dir", "GH_CONFIG_DIR", id="github"),
+]
+
+
+@pytest.mark.parametrize(("table", "key", "attribute", "variable"), CONFIG_DIRECTORIES)
 @pytest.mark.parametrize("value", ["account", "~/account"])
-def test_claude_config_directory_resolves_at_load(tmp_path, monkeypatch, value):
+def test_config_directory_resolves_at_load(
+    tmp_path, monkeypatch, table, key, attribute, variable, value
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     directory = tmp_path / "account"
     directory.mkdir()
     config = tmp_path / "engine.toml"
-    config.write_text(f'[claude]\nconfig_dir = "{value}"\n')
+    config.write_text(f'[{table}]\n{key} = "{value}"\n')
     monkeypatch.chdir(tmp_path.parent)
 
     loaded = load_engine_config(config)
 
-    assert loaded.config.claude.config_dir == value
-    assert loaded.claude_config_dir == directory
-    assert f"claude.config_dir={directory}" in describe_loaded_config(loaded)
+    assert getattr(getattr(loaded.config, table), key) == value
+    assert getattr(loaded, attribute) == directory
+    assert f"{table}.{key}={directory}" in describe_loaded_config(loaded)
 
 
+@pytest.mark.parametrize(("table", "key", "attribute", "variable"), CONFIG_DIRECTORIES)
 @pytest.mark.parametrize("value", ["missing", "file"])
-def test_claude_config_directory_must_exist(tmp_path, value):
+def test_config_directory_must_exist(tmp_path, table, key, attribute, variable, value):
     (tmp_path / "file").write_text("")
     config = tmp_path / "engine.toml"
-    config.write_text(f'[claude]\nconfig_dir = "{value}"\n')
-    with pytest.raises(EngineConfigError, match="claude.config_dir"):
+    config.write_text(f'[{table}]\n{key} = "{value}"\n')
+    with pytest.raises(EngineConfigError, match=f"{table}.{key}"):
         load_engine_config(config)
 
 
-@pytest.mark.parametrize("claude", [
-    {"config_dir": 1}, {"config_dir": ""}, {"config_dir": " "}, {"unknown": "x"},
-])
-def test_claude_directory_settings_are_strict(claude):
+@pytest.mark.parametrize(("table", "key", "attribute", "variable"), CONFIG_DIRECTORIES)
+@pytest.mark.parametrize("value", [1, "", " "])
+def test_config_directory_settings_are_strict(table, key, attribute, variable, value):
     with pytest.raises(EngineConfigError):
-        parse_engine_config({"claude": claude})
+        parse_engine_config({table: {key: value}})
 
 
+def test_claude_settings_reject_unknown_keys():
+    with pytest.raises(EngineConfigError):
+        parse_engine_config({"claude": {"unknown": "x"}})
+
+
+@pytest.mark.parametrize(("table", "key", "attribute", "variable"), CONFIG_DIRECTORIES)
 @pytest.mark.parametrize("inherited", [None, "/existing/account"])
-def test_web_preserves_claude_environment_without_configuration(tmp_path, monkeypatch, inherited):
+def test_web_preserves_login_environment_without_configuration(
+    tmp_path, monkeypatch, table, key, attribute, variable, inherited
+):
     import os
 
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv(variable, raising=False)
     if inherited is not None:
-        monkeypatch.setenv("CLAUDE_CONFIG_DIR", inherited)
+        monkeypatch.setenv(variable, inherited)
     config = tmp_path / "engine.toml"
     config.write_text("")
     loaded, _ = web_main.read_configuration(config)
-    assert loaded.claude_config_dir is None
-    assert os.environ.get("CLAUDE_CONFIG_DIR") == inherited
+    assert getattr(loaded, attribute) is None
+    assert os.environ.get(variable) == inherited
+
+
+def test_web_gh_cli_uses_configured_login(tmp_path, monkeypatch):
+    import os
+
+    from engine.adapters.source_control.github.transports import gh_cli_environment
+
+    directory = tmp_path / "gh-account"
+    directory.mkdir()
+    config = tmp_path / "engine.toml"
+    config.write_text('[github]\ngh_config_dir = "gh-account"\n')
+    monkeypatch.setenv("GH_CONFIG_DIR", "/other/gh")
+    web_main.read_configuration(config)
+    # monkeypatch restores the variable after the test; read_configuration set it.
+    assert os.environ["GH_CONFIG_DIR"] == str(directory)
+    assert gh_cli_environment()["GH_CONFIG_DIR"] == str(directory)
 
 
 def test_web_claude_provider_inherits_configured_login(tmp_path, monkeypatch):

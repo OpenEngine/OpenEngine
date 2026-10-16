@@ -8,6 +8,9 @@ default_branch = "main"
 # ~/.config/openengine/engine.toml (or $XDG_CONFIG_HOME/openengine/engine.toml).
 # See docs/github-webhooks.md. This checkout does not enable repository hooks.
 [github]
+# The gh login source control and agents use (GH_CONFIG_DIR). Defaults to gh's own
+# location: $XDG_CONFIG_HOME/gh when set, otherwise ~/.config/gh.
+# gh_config_dir = "~/.config/gh-work"
 # Set false when reviewers prefer to resolve addressed review threads themselves.
 resolve_addressed_threads = true
 # Explicit aliases of the SAME forge, mapped to its transport authority (host and optional port).

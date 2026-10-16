@@ -188,6 +188,9 @@ class GitHubConfig:
     repositories: tuple[str, ...] = ()
     """Additional repositories whose webhooks are accepted."""
 
+    gh_config_dir: str = ""
+    """`gh` login directory (GH_CONFIG_DIR), or empty to inherit the provider environment."""
+
     @property
     def webhook_repositories(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(
@@ -295,12 +298,18 @@ class LoadedEngineConfig:
     def _base_directory(self) -> Path:
         return self.path.parent if self.path is not None else Path.cwd()
 
-    @property
-    def claude_config_dir(self) -> Path | None:
-        configured = self.config.claude.config_dir
+    def _config_directory(self, configured: str) -> Path | None:
         if not configured:
             return None
         return _relative_to(Path(configured).expanduser(), self._base_directory).resolve()
+
+    @property
+    def claude_config_dir(self) -> Path | None:
+        return self._config_directory(self.config.claude.config_dir)
+
+    @property
+    def gh_config_dir(self) -> Path | None:
+        return self._config_directory(self.config.github.gh_config_dir)
 
     @property
     def workflows_directory(self) -> Path | None:
@@ -388,8 +397,12 @@ def load_engine_config(
         config=parse_engine_config(document), path=path,
         explicit=explicit_path is not None or bool(environment.get(CONFIG_ENVIRONMENT_VARIABLE)),
     )
-    if (directory := loaded.claude_config_dir) is not None and not directory.is_dir():
-        raise EngineConfigError(f"claude.config_dir is not an existing directory: {directory}")
+    for label, directory in (
+        ("claude.config_dir", loaded.claude_config_dir),
+        ("github.gh_config_dir", loaded.gh_config_dir),
+    ):
+        if directory is not None and not directory.is_dir():
+            raise EngineConfigError(f"{label} is not an existing directory: {directory}")
     return loaded
 
 
@@ -454,7 +467,15 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     public_url = _optional_nonblank_string(document.get("public_url", ""), "public_url")
 
     github = _table(document.get("github", {}), "github")
-    _reject_unknown(github, {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow"}, "github")
+    _reject_unknown(
+        github,
+        {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow", "gh_config_dir"},
+        "github",
+    )
+    gh_config_dir = (
+        _nonblank_string(github["gh_config_dir"], "github.gh_config_dir")
+        if "gh_config_dir" in github else ""
+    )
     resolve_addressed_threads = github.get("resolve_addressed_threads", True)
     if not isinstance(resolve_addressed_threads, bool):
         raise EngineConfigError("github.resolve_addressed_threads must be a boolean")
@@ -682,6 +703,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             repository=github_repository,
             repositories=github_repositories,
             resolve_addressed_threads=resolve_addressed_threads,
+            gh_config_dir=gh_config_dir,
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()
@@ -783,7 +805,8 @@ def describe_loaded_config(loaded: LoadedEngineConfig) -> str:
     return (
         f"configuration: {source}; attribution={attribution}; default_branch={default_branch}; "
         f"claude.output_style={output_style}; "
-        f"claude.config_dir={loaded.claude_config_dir or 'provider default'}; approvals enforced "
+        f"claude.config_dir={loaded.claude_config_dir or 'provider default'}; "
+        f"github.gh_config_dir={loaded.gh_config_dir or 'provider default'}; approvals enforced "
         f"(auto_approve={auto_approve}, allow={capabilities}, bash_rules={bash_rules}); "
         f"workflows={workflows}"
     )
