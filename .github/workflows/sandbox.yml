@@ -70,7 +70,7 @@ jobs:
             # Immutable upstream installer from v1.27.1; installs the complete
             # release with libraries, rootfs and disk templates, not just a binary.
             curl --fail --show-error --location --retry 3 \
-              https://raw.githubusercontent.com/smol-machines/smolvm/fd9e3795a77e289d2b26c01abd80b21c90fcb051/scripts/install.sh \
+              https://raw.githubusercontent.com/smol-machines/smolvm/7daa6ecedc8c95e8d8ef0fdfba3f69a1d69e4a5a/scripts/install.sh \
               --output "$RUNNER_TEMP/install-smolvm.sh"
             bash "$RUNNER_TEMP/install-smolvm.sh" --version 1.27.1 --prefix "$prefix" --no-modify-path
           fi
