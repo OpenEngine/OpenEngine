@@ -983,6 +983,14 @@ select:disabled { cursor: default; }
   line-height: 1.02;
   letter-spacing: -.04em;
   overflow-wrap: anywhere;
+  /* A very long name stops at three lines so it cannot push the run's details
+     off screen; the full name stays on the heading's title attribute. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  max-height: calc(3 * 1.02em);
+  overflow: hidden;
 }
 .back-link { color: var(--muted); font: 500 12px/1 var(--mono); letter-spacing: .1em; text-decoration: none; text-transform: uppercase; }
 .back-link:hover { color: var(--flame); }
