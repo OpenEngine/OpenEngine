@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from difflib import unified_diff
 import json
+import re
 from pathlib import Path
 
 from alembic import command
@@ -14,6 +15,67 @@ from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def canonical_sqlite_ddl(sql: str) -> str:
+    """Sort table constraints without changing columns, quoted SQL or the DB.
+
+    Alembic batch recreation reflects constraints into sets. Their emitted order
+    can vary between identical replays, so raw sqlite_schema text is unstable.
+    Split only at the outer table's commas, respecting strings and nested SQL.
+    """
+    if not re.match(r"^CREATE\s+TABLE\b", sql, re.IGNORECASE):
+        return sql
+    opening = None
+    depth = 0
+    quote = None
+    parts = []
+    start = index = 0
+    while index < len(sql):
+        character = sql[index]
+        if quote:
+            if character == quote:
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+        elif sql[index:index + 2] == '--':
+            index = sql.find('\n', index)
+            if index == -1:
+                return sql
+            continue
+        elif sql[index:index + 2] == '/*':
+            end = sql.find('*/', index + 2)
+            if end == -1:
+                return sql
+            index = end + 2
+            continue
+        elif character in "\"'`[":
+            quote = ']' if character == '[' else character
+        elif character == '(':
+            if opening is None:
+                opening = index
+                start = index + 1
+            depth += 1
+        elif character == ')':
+            depth -= 1
+            if depth == 0 and opening is not None:
+                parts.append(sql[start:index])
+                constraints = [i for i, part in enumerate(parts) if re.match(
+                    r"^\s*(?:CONSTRAINT\b|PRIMARY\s+KEY\b|FOREIGN\s+KEY\b|UNIQUE\s*\(|CHECK\s*\()",
+                    part, re.IGNORECASE)]
+                ordered = sorted(parts[i].strip() for i in constraints)
+                for position, replacement in zip(constraints, ordered, strict=True):
+                    original = parts[position]
+                    leading = original[:len(original) - len(original.lstrip())]
+                    trailing = original[len(original.rstrip()):]
+                    parts[position] = leading + replacement + trailing
+                return sql[:opening + 1] + ','.join(parts) + sql[index:]
+        elif character == ',' and depth == 1:
+            parts.append(sql[start:index])
+            start = index + 1
+        index += 1
+    return sql
 
 
 def snapshot(history: Path, revision: str, url: str) -> str:
@@ -35,7 +97,7 @@ def snapshot(history: Path, revision: str, url: str) -> str:
                     )).scalars()
                     schema = "\n\n".join(
                         "\n".join(line.rstrip() for line in sql.rstrip(';').splitlines()) + ";"
-                        for sql in statements
+                        for sql in map(canonical_sqlite_ddl, statements)
                     )
                     return schema + ("\n" if schema else "")
                 metadata = MetaData()

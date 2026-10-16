@@ -49,6 +49,13 @@ export default async function publish({github, context, core}: PublisherOptions)
     const tree = await github.rest.git.createTree({
       owner, repo, base_tree: parent.data.tree.sha, tree: treeEntries,
     });
+    // A manifest can be stale or include files already present at the head.
+    // Never advance the PR for an identical tree: every bot commit requires
+    // fresh workflow approval and resets the checks displayed on the PR.
+    if (tree.data.sha === parent.data.tree.sha) {
+      core.notice('Generated schema already matches the branch; nothing to publish.');
+      return;
+    }
     const commit = await github.rest.git.createCommit({
       owner, repo, message: 'docs: update database schema',
       tree: tree.data.sha, parents: [sha],
