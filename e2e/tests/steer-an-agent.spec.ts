@@ -7,7 +7,7 @@ import { test, expect, type Engine } from "../fixtures/engine.ts"
 import type { Terminal } from "../fixtures/terminal.ts"
 import { graphsCategory } from "./docCategories"
 
-test.use({ terminalSession: { cols: 120, rows: 40 } })
+test.use({ terminalSession: { cols: 200, rows: 40 } })
 
 /** The two-step graph from the last guide, so the reader has nothing new to save. */
 const GRAPH = `apiVersion: openengine.cc/v1
@@ -204,7 +204,7 @@ engine node steer EXECUTION "${NUDGE}"
 
 Put your own step's ID where it says \`EXECUTION\`. OpenEngine takes your message and passes it to the agent as soon as it can. The reply starts with your message's own ID, then *accepted*: OpenEngine has it, and the agent will get it shortly.
 
-If you see *rejected* instead, the step had already finished, so there was nothing left to change. Check its **STATUS** with \`engine node get\`.`,
+If you see *only a running attempt can be steered*, the step is no longer running. Check its **STATUS** with \`engine node get\`; you can only redirect an agent while it is working.`,
           async () => {
             const { output, exitCode } = await terminal.run(`engine node steer ${suggest!.executionId} "${NUDGE}"`)
             expect(exitCode).toBe(0)
@@ -222,17 +222,20 @@ If you see *rejected* instead, the step had already finished, so there was nothi
         await step(
           `To see whether the agent took your message on board, type \`engine node get\` and the step's ID again, and press Enter.
 
-Below the step's row there's now a list of the messages you've sent it. **STATUS** goes from *accepted* to *delivered* when the agent has your message, then to *applied* once the agent has finished acting on it. The agent carries on from where it was: the steps already done stay done.`,
+Below the step's row there's now a list of the messages you've sent it. **STATUS** goes from *accepted* to *delivered* when the agent has your message, then to *applied* once the agent has finished acting on it. The agent carries on from where it was: the steps already done stay done.
+
+If a message says *undelivered*, it never reached the agent: for example, the step finished before receiving it. If it says *rejected*, OpenEngine no longer has a live connection to that agent for this step. Check the step’s **STATUS** before deciding what to do next; these messages did not change the agent’s course.`,
           async () => {
             await expect.poll(async () => (await node(engine, suggest!.executionId)).steering?.[0]?.status,
               { timeout: 30_000, message: "waiting for the agent to act on the message" }).toBe("applied")
             const { output } = await terminal.run(`engine node get ${suggest!.executionId}`)
             const { steeringId } = (await node(engine, suggest!.executionId)).steering![0]!
-            // The message itself runs on past the edge of the screen; the backend has it word for word.
             expect((await node(engine, suggest!.executionId)).steering![0]!.message).toBe(NUDGE)
             const row = new RegExp(`^1\\s+${steeringId}\\s+applied\\s`, "m")
             expect(output).toMatch(row)
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "The agent acted on your message")
+            const messageRow = await terminal.row(new RegExp(row.source))
+            expect(await terminal.textAt(messageRow)).toContain(NUDGE)
+            await show(terminal, engine, testInfo, messageRow, "The agent acted on your message")
           },
         )
 
