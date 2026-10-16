@@ -91,6 +91,7 @@ from engine.apps.web.gitlab_auth import (
     poll_device_flow as poll_gitlab_device_flow,
     start_device_flow as start_gitlab_device_flow,
 )
+from engine.apps.web.oauth_lifecycle import oauth_lifecycle_event, token_fingerprint
 from engine.apps.web.source_control import (
     SourceControlPreferences,
 )
@@ -3051,10 +3052,16 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             return _error("device flow was disconnected or replaced", 409)
         if isinstance(result, DeviceFlowComplete):
             _github_flows.pop(identity)
+            credentials = credentials_from_device_flow(result)
             try:
-                store.set_credentials(credentials_from_device_flow(result))
+                store.set_credentials(credentials)
             except GitHubAuthError as error:
                 return _error(str(error), 500)
+            oauth_lifecycle_event(
+                "github_connected",
+                identity=identity[1],
+                token=token_fingerprint(credentials.access_token),
+            )
             return JSONResponse({"status": "complete"})
         _github_flows[identity] = (flow, result.next_interval, client_id)
         return JSONResponse({"status": "pending", "nextInterval": result.next_interval})
@@ -3065,6 +3072,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         store = _github_store(request)
         _github_flows.pop(store.credential_identity, None)
         store.delete()
+        oauth_lifecycle_event(
+            "github_disconnected", identity=store.credential_identity[1]
+        )
         return Response(status_code=204)
 
     # GitLab credentials are per OAuth issuer, unlike GitHub's single public
@@ -3155,12 +3165,19 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             _gitlab_flows.pop(origin, None)
             return _error(str(error), 502)
         if isinstance(result, GitLabDeviceFlowComplete):
+            credentials = gitlab_credentials_from_device_flow(result)
+            credential_store = GitLabCredentialStore(origin)
             try:
-                GitLabCredentialStore(origin).set_credentials(gitlab_credentials_from_device_flow(result))
+                credential_store.set_credentials(credentials)
             except GitLabAuthError as error:
                 _gitlab_flows.pop(origin, None)
                 return _error(str(error), 500)
             _gitlab_flows.pop(origin, None)
+            oauth_lifecycle_event(
+                "gitlab_connected",
+                identity=credential_store.credential_identity[1],
+                token=token_fingerprint(credentials.access_token),
+            )
             return JSONResponse({"status": "complete"})
         _gitlab_flows[origin] = (flow, result.next_interval)
         return JSONResponse({"status": "pending", "nextInterval": result.next_interval})
@@ -3174,7 +3191,11 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         except GitLabAuthError as error:
             return _error(str(error), 400)
         _gitlab_flows.pop(origin, None)
-        GitLabCredentialStore(origin).delete()
+        credential_store = GitLabCredentialStore(origin)
+        credential_store.delete()
+        oauth_lifecycle_event(
+            "gitlab_disconnected", identity=credential_store.credential_identity[1]
+        )
         return Response(status_code=204)
 
     async def graph_surface(scope: Scope, receive: Receive, send: Send) -> None:

@@ -23,6 +23,7 @@ restart without requiring an external database service.
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
@@ -83,6 +84,7 @@ from engine.apps.web.github_auth import (
 )
 from engine.apps.web.github_webhook import GitHubWebhookConfig
 from engine.apps.web.oauth_credentials import OAuthCredentialStore, StoredCredentials
+from engine.apps.web.oauth_lifecycle import oauth_lifecycle_event, token_fingerprint
 from engine.apps.web.source_control import (
     RoutingSourceControl,
     SourceControlPreferences,
@@ -227,6 +229,7 @@ def build_capabilities(
                 refresh_github_access_token,
                 GitHubRefreshTokenInvalidError,
                 GitHubAuthError,
+                provider="github",
             )
 
     github_oauth = GitHubSourceControl(
@@ -275,6 +278,7 @@ def build_capabilities(
                 ),
                 GitLabRefreshTokenInvalidError,
                 GitLabAuthError,
+                provider="gitlab",
                 on_persist_failed=lambda: _gitlab_refresh_persistence_failed.add(store.origin),
             )
 
@@ -327,6 +331,7 @@ async def _refresh_after_unauthorized(
     invalid_refresh_token: type[Exception],
     auth_error: type[Exception],
     *,
+    provider: str,
     on_persist_failed: Callable[[], None] = lambda: None,
 ) -> bool:
     """Replace `store`'s rejected `failed_token` by refreshing it; whether to retry.
@@ -334,27 +339,75 @@ async def _refresh_after_unauthorized(
     Called with the store's refresh lock held. A token another caller already
     replaced is retried as is; a refresh token the provider refuses is deleted,
     so the next attempt asks to connect again instead of refreshing forever.
+    Every outcome is emitted as one non-secret lifecycle event, so a source
+    control integration that quietly stops working points at the refresh that
+    ended it instead of at the request that failed minutes later.
     """
+    identity = store.credential_identity[1]
     credentials = store.get_credentials()
     if credentials is None or not credentials.refresh_token:
+        oauth_lifecycle_event(
+            f"{provider}_refresh_unavailable",
+            identity=identity,
+            reason="no-refresh-token",
+        )
         return False
     if credentials.access_token != failed_token:
         return True
     identifier = client_id()
     if not identifier:
+        oauth_lifecycle_event(
+            f"{provider}_refresh_unavailable",
+            identity=identity,
+            reason="no-client-id",
+        )
         return False
+    started = time.monotonic()
+    oauth_lifecycle_event(
+        f"{provider}_refresh_started",
+        identity=identity,
+        token=token_fingerprint(failed_token),
+    )
     try:
         refreshed = await refresh(identifier, credentials.refresh_token)
     except invalid_refresh_token:
         store.delete()
+        oauth_lifecycle_event(
+            f"{provider}_refresh_token_invalid",
+            identity=identity,
+            token=token_fingerprint(failed_token),
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
         return False
-    except auth_error:
+    except auth_error as error:
+        oauth_lifecycle_event(
+            f"{provider}_refresh_failed",
+            identity=identity,
+            token=token_fingerprint(failed_token),
+            error=type(error).__name__,
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
         return False
+    elapsed_ms = round((time.monotonic() - started) * 1000, 1)
     try:
         store.set_credentials(refreshed)
-    except auth_error:
+    except auth_error as error:
         on_persist_failed()
+        oauth_lifecycle_event(
+            f"{provider}_refresh_persist_failed",
+            identity=identity,
+            token=token_fingerprint(refreshed.access_token),
+            error=type(error).__name__,
+            elapsed_ms=elapsed_ms,
+        )
         return False
+    oauth_lifecycle_event(
+        f"{provider}_refresh_succeeded",
+        identity=identity,
+        previous_token=token_fingerprint(failed_token),
+        token=token_fingerprint(refreshed.access_token),
+        elapsed_ms=elapsed_ms,
+    )
     return True
 
 
