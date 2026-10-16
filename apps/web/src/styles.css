@@ -1162,6 +1162,8 @@ select:disabled { cursor: default; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 10px; }
 .markdown ul, .markdown ol { margin: 0 0 10px; padding-left: 22px; }
+.markdown ul { list-style: disc; }
+.markdown ol { list-style: decimal; }
 .markdown li { margin: 3px 0; }
 .markdown pre {
   margin: 0 0 10px;
