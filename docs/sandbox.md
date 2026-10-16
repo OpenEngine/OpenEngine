@@ -676,12 +676,24 @@ workflow exists on the default branch, it can also be started through
 1. A GitHub-hosted `ubuntu-24.04-arm` job builds the ARM64 guest from the checked-in
    Dockerfile and npm lock, then uploads the archive as a short-lived artifact.
    This job only builds an image; it does not run Linux KVM tests.
-2. The `[self-hosted, macOS, ARM64]` runner from #662 downloads that archive and
-   installs the full SmolVM 1.27.1 release through its immutable upstream installer.
+2. The `[self-hosted, macOS, ARM64]` runner from #662 reuses its local guest archive
+   when the Dockerfile and npm manifests are unchanged. On a cache miss it downloads
+   the artifact and saves it under
+   `$RUNNER_TOOL_CACHE/openengine-sandbox-images/v1/linux-arm64/<input-hash>/`.
+   If `RUNNER_TOOL_CACHE` is unset, it uses `$HOME/.cache` instead. Downloads are
+   checked as tar archives and published atomically so interrupted copies are not reused.
+   The runner also installs the full SmolVM 1.27.1 release through its immutable upstream installer.
    The installation is cached under `$RUNNER_TOOL_CACHE/openengine-smolvm/1.27.1`.
    Docker is not needed on the Mac, and shell profiles are not modified.
 3. The Mac checks hardware support, then runs the real sandbox suite and the
    complete default workflow with synthetic peers and credentials.
+
+The image cache lives on that Mac's disk; another runner needs its own copy.
+The hosted build still runs on every workflow, but a local cache hit avoids the
+large artifact download. Changing the Dockerfile or either npm manifest selects
+a new cache entry. To refresh packages from mutable base image tags without an
+input change, delete the matching cache directory on the runner before rerunning.
+Old entries can be removed when no sandbox job is using them.
 
 No repository variables are required. Operators can still set
 `SMOLVM_EXECUTABLE` to an absolute wrapper path, or `SMOLVM_TEST_IMAGE` to an

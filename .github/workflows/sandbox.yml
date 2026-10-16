@@ -55,11 +55,46 @@ jobs:
           enable-cache: true
       - name: Install workspace
         run: uv sync --locked --all-packages
-      - uses: actions/download-artifact@v8
+      - name: Check runner-local guest image cache
+        id: guest-cache
         if: vars.SMOLVM_TEST_IMAGE == ''
+        shell: bash
+        env:
+          IMAGE_KEY: ${{ hashFiles('packages/adapters/sandbox/smolvm/guest/Dockerfile', 'packages/adapters/sandbox/smolvm/guest/package*.json') }}
+        run: |
+          set -euo pipefail
+          test -n "$IMAGE_KEY"
+          cache="${RUNNER_TOOL_CACHE:-$HOME/.cache}/openengine-sandbox-images/v1/linux-arm64/$IMAGE_KEY"
+          echo "directory=$cache" >> "$GITHUB_OUTPUT"
+          if [ -s "$cache/openengine-sandbox.tar" ]; then
+            echo 'hit=true' >> "$GITHUB_OUTPUT"
+            echo "Reusing runner-local guest image: $cache"
+            echo "OE_SMOLVM_TEST_IMAGE=$cache/openengine-sandbox.tar" >> "$GITHUB_ENV"
+          else
+            echo 'hit=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v8
+        if: vars.SMOLVM_TEST_IMAGE == '' && steps.guest-cache.outputs.hit != 'true'
         with:
           name: sandbox-guest-arm64
           path: ${{ runner.temp }}/sandbox-image
+      - name: Save guest image on the runner
+        if: vars.SMOLVM_TEST_IMAGE == '' && steps.guest-cache.outputs.hit != 'true'
+        shell: bash
+        env:
+          IMAGE_CACHE: ${{ steps.guest-cache.outputs.directory }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/sandbox-image/openengine-sandbox.tar"
+          test -s "$archive"
+          tar -tf "$archive" > /dev/null
+          mkdir -p "$IMAGE_CACHE"
+          temporary="$(mktemp "$IMAGE_CACHE/.download-XXXXXX")"
+          trap 'rm -f "$temporary"' EXIT
+          cp "$archive" "$temporary"
+          # Publish only complete downloads, including after cancellation.
+          mv -f "$temporary" "$IMAGE_CACHE/openengine-sandbox.tar"
+          echo "OE_SMOLVM_TEST_IMAGE=$IMAGE_CACHE/openengine-sandbox.tar" >> "$GITHUB_ENV"
       - name: Install pinned SmolVM when no runner override is configured
         if: vars.SMOLVM_EXECUTABLE == ''
         shell: bash
