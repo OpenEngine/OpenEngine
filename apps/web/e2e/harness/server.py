@@ -24,6 +24,7 @@ is killed.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import os
 import sys
 from pathlib import Path
@@ -113,7 +114,9 @@ def main(argv: list[str] | None = None) -> int:
         workspace_root=str(state / "workspaces"),
         sqlite_path=str(state / "conversations.sqlite3"),
         graph_state_directory=str(state / "graph-state"),
-        engine_config=loaded.config,
+        # These scripted agents are host executables. Hardware CI exercises
+        # the SmolVM default with image-installed guest peers separately.
+        engine_config=replace(loaded.config, sandbox=replace(loaded.config.sandbox, backend="process")),
         config_path=loaded.path,
     )
     capabilities = build_capabilities(settings)

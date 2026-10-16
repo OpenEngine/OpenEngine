@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -28,7 +29,7 @@ from langgraph_acp import (
 )
 
 
-@pytest.fixture(params=["process", "smolvm-fake"])
+@pytest.fixture(params=["smolvm-fake"])
 def backend(request):
     if request.param == "process":
         return ProcessSandbox()
@@ -45,7 +46,7 @@ def workspace(tmp_path):
     return root
 
 
-async def run_node(node, *, backend=None, timeout=45):
+async def run_node(node, *, backend=None, timeout=45, model_credentials=None):
     builder = StateGraph(dict)
     builder.add_node("agent", node)
     builder.add_edge(START, "agent")
@@ -53,7 +54,7 @@ async def run_node(node, *, backend=None, timeout=45):
     runtime = LangGraphRuntime(LangGraphDefinition(
         graph_id=GraphId("sandbox"), name="Sandbox test",
         graph=builder.compile(checkpointer=InMemorySaver()),
-    ), sandbox=backend)
+    ), sandbox=backend, model_credentials=model_credentials)
     events = EventLog()
     runtime.observe(events.append)
     try:
@@ -70,12 +71,13 @@ async def run_node(node, *, backend=None, timeout=45):
 
 
 @pytest.mark.parametrize("provider_type", [CodexACPProvider, ClaudeACPProvider])
-def test_agent_node_runs_inside_sandbox(backend, workspace, provider_type, monkeypatch):
+def test_agent_node_runs_inside_sandbox(backend, workspace, provider_type, monkeypatch, smolvm_cli):
     monkeypatch.setenv("GITHUB_TOKEN", "unselected-forge-key")
     monkeypatch.setenv("OPENAI_API_KEY", "unselected-model-key")
     monkeypatch.setenv("SSH_AUTH_SOCK", "/host/ssh-agent")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/host/claude-account")
-    agent = provider_type(command=(sys.executable, "agent.py", "--large"), env={"EXPLICIT_SETTING": "yes"})
+    provider_value = "private-provider-value"
+    agent = provider_type(command=(sys.executable, "agent.py", "--large"), env={"EXPLICIT_SETTING": provider_value})
     resolved = []
 
     def spec(state):
@@ -91,11 +93,20 @@ def test_agent_node_runs_inside_sandbox(backend, workspace, provider_type, monke
     assert result["large"] == "x" * 100_000
     assert result["cwd"] != str(workspace)
     assert not Path(result["cwd"]).exists(), "sandbox must be destroyed after the node closes"
-    assert set(result["env"]) <= HOST_ENV_ALLOWLIST | {"EXPLICIT_SETTING", "SELECTED_KEY"}
-    assert result["env"]["EXPLICIT_SETTING"] == "yes"
+    managed = {"GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL",
+        "CODEX_HOME" if provider_type is CodexACPProvider else "CLAUDE_CONFIG_DIR"}
+    assert set(result["env"]) <= HOST_ENV_ALLOWLIST | {"EXPLICIT_SETTING", "SELECTED_KEY"} | managed
+    assert result["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert result["env"]["HOME"] != os.environ.get("HOME")
+    assert result["env"]["EXPLICIT_SETTING"] == provider_value
     assert result["env"]["SELECTED_KEY"] == "test-key"
     assert len(resolved) == 1
     assert (workspace / "input.txt").read_text() == "workspace-marker"
+    _, machines = smolvm_cli
+    commands = (machines / "commands.jsonl").read_text()
+    assert provider_value not in commands
+    assert "--secret-env" in commands
+    assert not list(machines.glob("oe-sandbox-*"))
 
 
 def test_shared_provider_keeps_invocations_separate(backend, workspace, tmp_path):
@@ -249,7 +260,7 @@ def test_runtime_open_passes_the_same_fields_on_fresh_and_resume(workspace, monk
     asyncio.run(run())
     assert len(seen) == 2
     assert seen[0] == seen[1] == SandboxConnectContext(
-        workspace=str(workspace), run_id="run-one", node_id="node-one", execution_id="exec-one", sandbox_spec=spec,
+        workspace=str(workspace), run_id="run-one", node_id="node-one", execution_id="exec-one", session_key="node-one", sandbox_spec=spec,
     )
 
 
@@ -265,7 +276,7 @@ def test_host_stdio_mcp_is_rejected_before_sandbox_launch(workspace, monkeypatch
     ]), cwd=str(workspace))
 
     async def run():
-        with pytest.raises(ACPConnectionError, match="MCP bridge"):
+        with pytest.raises(ACPConnectionError, match="trusted sandbox bridge"):
             await node._open(None, str(workspace), ({"name": "host-tool", "command": "/host/python"},))
 
     asyncio.run(run())
@@ -301,24 +312,45 @@ def test_local_launch_allowlists_match():
     assert HOST_ENV_ALLOWLIST == ACP_ALLOWLIST
 
 
-def test_provider_environment_uses_secret_references(smolvm_cli, workspace):
-    launcher, root = smolvm_cli
-    provider = SandboxACPProvider(
-        name="test", backend=SmolvmSandbox(image="fixture", executable=str(launcher)),
-        command=(sys.executable, "agent.py"), env={"EXPLICIT_KEY": "private-provider-value"},
-    )
-    node = ACPNode(agent="test", registry=ACPAgentRegistry([provider]), cwd=str(workspace), prompt="hello")
-    result = json.loads(asyncio.run(run_node(node)))
-    assert result["env"]["EXPLICIT_KEY"] == "private-provider-value"
-    commands = (root / "commands.jsonl").read_text()
-    assert "private-provider-value" not in commands
-    assert "--secret-env" in commands
-    assert not list(root.glob("oe-sandbox-*"))
-
-
 def test_runtime_selected_backend_replaces_provider_backend():
     original, selected = ProcessSandbox(), ProcessSandbox()
     provider = SandboxACPProvider(name="test", command=("agent",), backend=original)
     adapted = sandbox_provider(provider, selected)
     assert adapted.backend is selected
     assert provider.backend is original
+
+
+@pytest.mark.parametrize('cleanup_cancelled', [False, True])
+def test_failed_connection_keeps_primary_error_through_cancelled_cleanup(tmp_path, cleanup_cancelled):
+    async def exercise():
+        cleaning = asyncio.Event()
+        release = asyncio.Event()
+        primary = LookupError('synthetic-launch-failure')
+        cleanup_error = asyncio.CancelledError() if cleanup_cancelled else RuntimeError('synthetic-cleanup-failure')
+        class BrokenSandbox:
+            async def working_directory(self):
+                return '/workspace'
+            async def exec(self, argv):
+                raise primary
+        class Backend:
+            @asynccontextmanager
+            async def create(self, spec):
+                try:
+                    yield BrokenSandbox()
+                finally:
+                    cleaning.set()
+                    await release.wait()
+                    raise cleanup_error
+        provider = SandboxACPProvider(name='broken', command=('agent',), backend=Backend())
+        connecting = asyncio.create_task(provider.connect(context=ACPConnectContext(workspace=str(tmp_path))))
+        await cleaning.wait()
+        for _ in range(2):
+            connecting.cancel()
+            await asyncio.sleep(0)
+            assert not connecting.done()
+        release.set()
+        with pytest.raises(LookupError) as error:
+            await connecting
+        assert error.value is primary
+        assert any('sandbox cleanup failed' in note for note in primary.__notes__)
+    asyncio.run(exercise())

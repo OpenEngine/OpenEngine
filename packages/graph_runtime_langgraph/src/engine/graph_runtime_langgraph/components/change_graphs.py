@@ -232,6 +232,7 @@ class Components:
             task=state.get('task', ''), implementation=state.get('implementation', ''),
             ci=json.dumps(state.get('ci_check', {})), findings=json.dumps(state.get('review', []))),
             node=ReviewAgent, required=('impact_level', 'impact_rationale'), validate=_impact,
+            workspace_policy='read-only',
             tools=('view_change_request', 'list_pipeline_status', 'get_job_logs') + (() if local else ('add_comment',)))
 
 
@@ -258,7 +259,7 @@ def implement(components: Components) -> GraphWorkflow:
     b.add_node('workspace', c.workspace())
     b.add_node('spec', c.agent('spec', lambda s: 'Read the repository and write a concise specification with scope, '
         'acceptance criteria and tests. Do not edit or publish. Complete with the specification in your summary.\n'
-        + str(s.get('task', ''))))
+        + str(s.get('task', '')), workspace_policy='read-only'))
     b.add_node('naming', NamingNode(agent=c.runner, registry=c.agents, cwd=checkout, session_config=c.config))
     b.add_node('implementation', c.implementation())
     b.add_node('ci-check', CICheck())

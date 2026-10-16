@@ -1,0 +1,66 @@
+name: sandbox
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: sandbox (macOS ARM64)
+    # Matches #662: never execute a fork PR on the persistent runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 45
+    env:
+      UV_PYTHON: "3.12"
+      UV_MANAGED_PYTHON: "true"
+      OE_SMOLVM_TEST_IMAGE: ${{ vars.SMOLVM_TEST_IMAGE }}
+      SMOLVM_WRAPPER: ${{ vars.SMOLVM_EXECUTABLE }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+          enable-cache: true
+      - name: Install workspace
+        run: uv sync --locked --all-packages
+      - name: Require real hardware and a configured guest image
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          executable="${SMOLVM_WRAPPER:-$(command -v smolvm || true)}"
+          test -n "$executable" || { echo '::error::Install the complete SmolVM release on the runner'; exit 1; }
+          test -n "$OE_SMOLVM_TEST_IMAGE" && test -s "$OE_SMOLVM_TEST_IMAGE" || {
+            echo '::error::Set SMOLVM_TEST_IMAGE to the prebuilt guest archive; see docs/sandbox.md'
+            exit 1
+          }
+          export OE_SMOLVM_EXECUTABLE="$executable"
+          uv run python -c 'import os; from engine.adapters.sandbox.smolvm.support import detect_support; support = detect_support(os.environ["OE_SMOLVM_EXECUTABLE"]); print(support.reason); assert support.available'
+          echo "OE_SMOLVM_EXECUTABLE=$executable" >> "$GITHUB_ENV"
+      - name: Run sandbox suite on real VMs
+        run: >-
+          uv run pytest -o addopts='' -m 'not compatibility'
+          tests/test_default_workflow_sandbox.py
+          tests/test_sandbox_contract.py tests/test_sandbox_tasks.py tests/test_smolvm_sandbox.py
+          tests/test_sandbox_acp_provider.py tests/test_node_workspace_copy.py
+          tests/test_model_credentials.py tests/test_credential_rotation.py tests/test_sandbox_egress.py
+          tests/test_sandbox_terminal_bridge.py tests/test_sandbox_lifecycle.py
+          tests/test_sandbox_sessions.py tests/test_graph_sandbox_composition.py
+          --junitxml=sandbox-results.xml -v
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sandbox-macos-arm64
+          path: sandbox-results.xml
+          if-no-files-found: ignore

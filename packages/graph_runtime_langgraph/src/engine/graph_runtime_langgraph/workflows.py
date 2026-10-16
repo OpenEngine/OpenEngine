@@ -36,6 +36,7 @@ from typing import Annotated, Any, overload
 from engine.graph_runtime import GraphCompilationError, GraphId
 from engine.graph_runtime.inputs import WorkflowInput
 from engine.ports import Sandbox, SourceControl
+from engine.runtime.model_credentials import ModelCredentialSource
 from engine.graph_runtime_langgraph.acp import answer_permission
 from engine.graph_runtime_langgraph.graphs import LangGraphDefinition, unwrapped
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
@@ -350,6 +351,7 @@ async def sqlite_runtime(
     allow_empty: bool = False,
     public_url: str = "",
     sandbox: Sandbox | None = None,
+    model_credentials: ModelCredentialSource | None = None,
 ) -> AsyncIterator[LangGraphRuntime]:
     """Every workflow, compiled against durable files, closed on the way out.
 
@@ -385,12 +387,16 @@ async def sqlite_runtime(
             checkpointer=saver,
             public_url=public_url,
             sandbox=sandbox,
+            model_credentials=model_credentials,
         )
         try:
+            await runtime.startup()
             yield runtime
         finally:
-            await runtime.aclose()
-            store.close()
+            try:
+                await runtime.aclose()
+            finally:
+                store.close()
 
 
 __all__ = [

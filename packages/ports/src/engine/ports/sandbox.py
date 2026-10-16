@@ -12,6 +12,10 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from engine.ports.sandbox_home import SandboxHome
+from engine.ports.sandbox_sessions import SandboxSessions
+from engine.ports.sandbox_socket import SandboxSocket
+from engine.ports.sandbox_network import allowed_hosts
 
 
 # Bound a newline-delimited message without imposing asyncio's 64 KiB default.
@@ -39,13 +43,23 @@ class SandboxSpec:
     secrets: Mapping[str, str] = field(default_factory=dict, repr=False)
     """Environment variables injected into every command."""
     egress_allowlist: tuple[str, ...] | None = None
-    """None requests unrestricted egress; an empty tuple denies all egress."""
+    """Exact DNS hostnames. None requests unrestricted egress; () disables networking."""
     timeout: float | None = None
     """Maximum seconds per command, including time before wait() is called."""
     labels: Mapping[str, str] = field(default_factory=dict)
+    sockets: tuple[SandboxSocket, ...] = ()
+    """Explicit host control sockets forwarded over the VM transport, never TCP egress."""
+    home: SandboxHome | None = field(default=None, repr=False)
+    """An isolated tmpfs home outside the workspace; no host home is mounted."""
+
+    sessions: SandboxSessions | None = field(default=None, repr=False)
+    """Selected session directories to restore and checkpoint before destruction."""
 
     def __post_init__(self) -> None:
         import math
+
+        if self.egress_allowlist is not None:
+            object.__setattr__(self, "egress_allowlist", allowed_hosts(self.egress_allowlist))
 
         if self.timeout is not None and (
             not math.isfinite(self.timeout) or self.timeout <= 0
@@ -89,10 +103,21 @@ class SandboxInstance(Protocol):
 
 
 @runtime_checkable
+class SandboxCredentialRefresh(Protocol):
+    """Optional capability for capturing selected credentials before export.
+
+    A sandbox with observed private credentials must implement this capability.
+    A final capture runs after the agent has stopped, before releasing its login.
+    """
+
+    async def refresh_credentials(self, *, final: bool = False) -> None: ...
+
+
+@runtime_checkable
 class Sandbox(Protocol):
     def create(self, spec: SandboxSpec) -> AbstractAsyncContextManager[SandboxInstance]:
         """Create an environment on entry and always destroy it on exit."""
         ...
 
 
-__all__ = ["Sandbox", "SandboxInstance", "SandboxProcess", "SandboxSpec"]
+__all__ = ["Sandbox", "SandboxInstance", "SandboxProcess", "SandboxSpec", "SandboxCredentialRefresh"]

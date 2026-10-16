@@ -110,6 +110,8 @@ jobs:
           npm pack --pack-destination "$RUNNER_TEMP"
           npm install --global --prefix "$RUNNER_TEMP/npm-global" "$RUNNER_TEMP"/openengine.cc-engine-*.tgz
           "$RUNNER_TEMP/npm-global/bin/engine" --help
+          # Installer/service smoke checks opt out; sandbox.yml covers VMs.
+          "$RUNNER_TEMP/npm-global/bin/engine" vm use process
           "$RUNNER_TEMP/npm-global/bin/engine" daemon setup
           "$RUNNER_TEMP/npm-global/bin/engine" daemon stop
       - name: Install and start OpenEngine

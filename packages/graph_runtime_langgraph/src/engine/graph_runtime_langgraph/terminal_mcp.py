@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, replace
+from typing import cast
+from engine.graph_runtime_langgraph.sandbox_workspace import WorkspaceCopy
 from datetime import UTC, datetime
 
 from engine.domain import (
@@ -27,6 +29,22 @@ from engine.graph_runtime_langgraph.executions import NodeExecution
 from engine.graph_runtime_langgraph.store import CommentRecord, PullRequestRecord
 
 WORKSPACE_ID = "workspaceId"
+
+
+class _WorkspaceSourceControl:
+    def __init__(self, source: SourceControl, workspace: WorkspaceCopy):
+        self.source, self.workspace = source, workspace
+
+    def __getattr__(self, name: str):
+        method = getattr(self.source, name)
+        if name not in {"run_git", "request_review", "create_branch", "commit_all", "publish"}:
+            return method
+        async def invoke(*args, **kwargs):
+            if name == "run_git" and self.workspace.policy == "read-only":
+                return await self.workspace.inspect_git(args[1])
+            async with self.workspace.host_operation():
+                return await method(*args, **kwargs)
+        return invoke
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +223,11 @@ class TerminalMcpServer:
                 },
                 result=broker.result,
                 clarification=broker.clarification,
+                sandbox=broker.sandbox_bridge,
+                bind_workspace=lambda copy: broker.enable_repository_tools(
+                    cast(SourceControl, _WorkspaceSourceControl(source_control, copy)),
+                    served, WorkspaceId(workspace), approve,
+                ),
             )
 
 

@@ -988,7 +988,7 @@ engine vm list [-h] [--image IMAGE] [--config CONFIG] [--json]
 
 ### `engine vm use`
 
-Select the sandbox backend (process is the default).
+Select the sandbox backend (smolvm is the default).
 
 ```text
 engine vm use [-h] [--image IMAGE] [--config CONFIG] [--json] {process,smolvm}

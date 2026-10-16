@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 
 WORKSPACE = Path("/workspace")
+MEMORY_HOME_ROOT = Path("/dev/shm")
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 10_000
@@ -19,6 +20,80 @@ GUEST_ENV_ALLOWLIST = frozenset({
     "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE",
     "TMPDIR", "TMP", "TEMP", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
 })
+
+
+def _is_tmpfs(path: Path) -> bool:
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        fields = line.split()
+        if fields[4] == str(path) and line.split(" - ", 1)[1].split()[0] == "tmpfs":
+            return True
+    return False
+
+
+def _home_path(home: Path, relative: str) -> Path:
+    path = Path(relative)
+    target = home / path
+    _check_destination(target)
+    if path.is_absolute() or not relative or not target.resolve().is_relative_to(home):
+        message = "private home path leaves its home"
+        raise ValueError(message)
+    return target
+
+
+def create_home(payload: dict) -> str:
+    if not _is_tmpfs(MEMORY_HOME_ROOT):
+        message = "model credentials require a tmpfs guest home"
+        raise RuntimeError(message)
+    home = Path(tempfile.mkdtemp(prefix="oe-home-", dir=MEMORY_HOME_ROOT)).resolve()
+    previous = os.umask(0o077)
+    try:
+        for relative, value in payload["files"].items():
+            path = _home_path(home, relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("x", encoding="utf-8") as stream:
+                stream.write(value)
+        for relative in (".tmp", ".config", ".cache", ".local/share", *payload["paths"].values()):
+            _home_path(home, relative).mkdir(parents=True, exist_ok=True)
+        (home / ".oe-home.json").write_text(json.dumps({
+            "paths": payload["paths"], "env_files": payload["env_files"],
+        }))
+        return str(home)
+    except BaseException:
+        shutil.rmtree(home)
+        raise
+    finally:
+        os.umask(previous)
+
+
+def home_environment(value: str) -> dict[str, str]:
+    home = Path(value).resolve()
+    if home == MEMORY_HOME_ROOT.resolve() or not home.is_relative_to(MEMORY_HOME_ROOT.resolve()):
+        message = "private home must stay inside guest tmpfs"
+        raise ValueError(message)
+    config = json.loads((home / ".oe-home.json").read_text())
+    environment = {
+        "HOME": str(home), "TMPDIR": str(home / ".tmp"),
+        "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
+        "XDG_DATA_HOME": str(home / ".local/share"),
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+    }
+    environment.update({key: str(_home_path(home, path)) for key, path in config["paths"].items()})
+    environment.update({key: _home_path(home, path).read_text() for key, path in config["env_files"].items()})
+    return environment
+
+
+def remove_home(value: str) -> None:
+    home = Path(value)
+    if home.parent.resolve() != MEMORY_HOME_ROOT.resolve() or not home.name.startswith("oe-home-"):
+        message = "private home cleanup must stay inside guest tmpfs"
+        raise ValueError(message)
+    if home.is_symlink():
+        home.unlink()
+    elif home.exists():
+        home.chmod(0o700)
+        for directory, _, _ in os.walk(home, followlinks=False):
+            Path(directory).chmod(0o700)
+        shutil.rmtree(home)
 
 
 def require_patched_python() -> None:
@@ -163,9 +238,86 @@ def unpack(archive: Path, destination: Path, export: bool = False) -> None:
                 Path(directory).chmod(0o700)
 
 
+
+def session_directory(home: str, provider: str) -> Path:
+    # These are the only durable guest directories; auth/config/MCP files stay
+    # in tmpfs. Validate the home just as exec does before resolving descendants.
+    home_environment(home)
+    relative = {"codex": ".codex/sessions", "claude": ".claude/projects"}[provider]
+    result = _home_path(Path(home), relative)
+    for path in (result, *result.parents):
+        if path == Path(home):
+            break
+        if path.is_symlink():
+            message = "agent session directory must not be a symlink"
+            raise ValueError(message)
+    return result
+
+
+def session_transfer(operation: str, home: str, provider: str, archive: str) -> None:
+    directory = session_directory(home, provider)
+    with tempfile.TemporaryDirectory(prefix="oe-session-") as temporary:
+        root = Path(temporary).resolve()
+        if operation == "session-pack":
+            payload = root / "payload"
+            payload.mkdir()
+            if directory.exists():
+                # Refuse all links, including links to credentials within HOME.
+                if any(path.is_symlink() for path in directory.rglob("*")):
+                    message = "agent sessions cannot contain symlinks"
+                    raise ValueError(message)
+                shutil.copytree(directory, payload / directory.name)
+            pack(payload, Path(archive))
+        else:
+            payload = root / "payload"
+            unpack(Path(archive), payload, True)
+            for path in payload.rglob("*"):
+                if path.is_symlink() or path.relative_to(payload).parts[0] != directory.name:
+                    message = "invalid agent session checkpoint"
+                    raise ValueError(message)
+            if (payload / directory.name).exists():
+                directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                shutil.copytree(payload / directory.name, directory, dirs_exist_ok=True)
+
+
+
+def credential_files(home: str, names: str) -> None:
+    # Fixed host-selected names only; never traverse links or emit file data in
+    # failures. Bounds apply on both sides of this private control channel.
+    values = {}
+    for name in json.loads(names):
+        path = _home_path(Path(home), name)
+        if not path.exists():
+            values[name] = None
+            continue
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 65536:
+            message = "invalid guest credential file"
+            raise ValueError(message)
+        with path.open("rb") as stream:
+            data = stream.read(65537)
+        if len(data) > 65536:
+            message = "guest credential exceeds byte budget"
+            raise ValueError(message)
+        try:
+            values[name] = data.decode("utf-8")
+        except UnicodeError:
+            message = "guest credential is not UTF-8"
+            raise ValueError(message) from None
+    print(json.dumps(values))
+
+
 def _dispatch(operation: str, arguments: list[str]) -> None:
     if operation == "init":
         WORKSPACE.mkdir(parents=True, exist_ok=True)
+    elif operation == "home":
+        payload = json.loads(sys.stdin.buffer.read(256 * 1024 + 1))
+        print(json.dumps(create_home(payload)))
+    elif operation == "credentials":
+        credential_files(*arguments)
+    elif operation == "home-remove":
+        remove_home(arguments[0])
+    elif operation in {"session-pack", "session-unpack"}:
+        session_transfer(operation, *arguments)
     elif operation == "cwd":
         directory = workspace_path(arguments[0])
         if not directory.is_dir():
@@ -176,6 +328,10 @@ def _dispatch(operation: str, arguments: list[str]) -> None:
         cwd, keys, *command = arguments
         allowed = GUEST_ENV_ALLOWLIST | set(json.loads(keys))
         environment = {key: value for key, value in os.environ.items() if key in allowed}
+        if command[0] == "--home":
+            environment.update(home_environment(command[1]))
+            os.umask(0o077)
+            command = command[2:]
         os.chdir(workspace_path(cwd))
         os.execvpe(command[0], command, environment)
     elif operation == "check":

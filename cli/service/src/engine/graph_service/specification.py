@@ -62,7 +62,11 @@ def graph_spec(_arguments: object = None) -> int:
     - None of these keys: the checkout.
 
     Steps accept `name` and `description`. Agent steps also accept `tools`,
-    `outputs`, `model`, `steering` and `facets`. Tools must be
+    `outputs`, `model`, `steering`, `facets`, `timeout` and `allowed_hosts`. Timeout
+    is finite positive seconds (default 1800), including VM startup, tools and
+    approval waits; expiry fails the node and tears down its VM. `allowed_hosts` is
+    a list of exact DNS hostnames added to this node's model-provider endpoints;
+    it requires SmolVM and rejects URLs, ports, wildcards and IP addresses. Tools must be
     registered repository tools. Outputs map names to declarations with `type`,
     `enum`, `required`, `description` and `lineage: required` for findings.
     Types are @OUTPUT_TYPES@. A model may be a tier, model name or template. Facets run in

@@ -198,7 +198,7 @@ def test_doctor_reports_config_port_and_tools_without_requiring_an_agent(home: P
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
         port = free.getsockname()[1]
-    config.write_text(f"[server]\nport = {port}\n")
+    config.write_text(f'[sandbox]\nbackend = "process"\n[server]\nport = {port}\n')
     monkeypatch.setattr(daemon, "engine_web_executable", lambda: Path("/venv/bin/engine-web"))
     monkeypatch.setattr(daemon.shutil, "which", lambda name: f"/tools/{name}" if name in {"git", "node", "npx"} else None)
 
@@ -306,7 +306,7 @@ def test_start_status_stop_lifecycle_with_a_detached_process(home: Path, monkeyp
     program.chmod(0o755)
     config = home / "config" / "openengine" / "engine.toml"
     config.parent.mkdir(parents=True)
-    config.write_text(f"[server]\nport = {port}\n")
+    config.write_text(f'[sandbox]\nbackend = "process"\n[server]\nport = {port}\n')
     spec = daemon.ServiceSpec(str(program), str(config), port, str(daemon.log_path()), {})
     daemon.prepare_directories()
     daemon.write_record(daemon.Record("process", spec))
@@ -538,7 +538,7 @@ def test_node_installs_across_managers(tmp_path, monkeypatch):
 def test_start_heals_node(home, monkeypatch, capsys, healable, recorded):
     spec = _spec(home, tools={'git': '/usr/bin/git', 'node': '/shims/node', 'npx': '/shims/npx'})
     Path(spec.config).parent.mkdir(parents=True)
-    Path(spec.config).write_text('[server]\nport = 4364\n')
+    Path(spec.config).write_text('[sandbox]\nbackend = \"process\"\n[server]\nport = 4364\n')
     daemon.prepare_directories()
     if recorded:
         daemon.write_record(daemon.Record('process', spec))
@@ -577,7 +577,7 @@ def test_start_heals_node(home, monkeypatch, capsys, healable, recorded):
 def test_doctor_probes_node(home, monkeypatch, capsys, recorded, healable):
     spec = _spec(home)
     Path(spec.config).parent.mkdir(parents=True)
-    Path(spec.config).write_text('[server]\nport = 4364\n')
+    Path(spec.config).write_text('[sandbox]\nbackend = \"process\"\n[server]\nport = 4364\n')
     if recorded:
         daemon.prepare_directories()
         daemon.write_record(daemon.Record('process', spec))

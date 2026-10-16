@@ -64,6 +64,7 @@ from __future__ import annotations
 import json
 import asyncio
 import math
+import sys
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -79,7 +80,11 @@ from engine.domain import (
     StepCompleted,
 )
 from engine.ports import ApprovalHandler, ApprovalRequest, SandboxSpec
+from engine.ports.sandbox_network import allowed_hosts as validate_allowed_hosts
+from engine.runtime.terminal_mcp_bridge import TerminalMcpBridge
+from engine.graph_runtime_langgraph.timeouts import DEFAULT_NODE_TIMEOUT, node_timeout
 from engine.graph_runtime_langgraph.sandbox import SandboxACPProvider, SandboxConnectContext, sandbox_provider
+from engine.graph_runtime_langgraph.sandbox_workspace import WorkspaceCopy, WorkspacePolicy
 from langgraph_acp import (
     ACPAgentRegistry,
     ACPConnectionError,
@@ -89,6 +94,8 @@ from langgraph_acp import (
     ACPPermissionRequest,
     ACPPrompt,
     ACPSession,
+    CodexACPProvider,
+    ClaudeACPProvider,
     default_registry,
     resume_continuation,
 )
@@ -120,6 +127,8 @@ class BoundMcpServer:
     config: Mapping[str, Any]
     result: Callable[[], Awaitable[TerminalEvent]] | None = None
     clarification: Callable[[], Awaitable[None]] | None = None
+    sandbox: Callable[[], Awaitable[TerminalMcpBridge]] | None = None
+    bind_workspace: Callable[[WorkspaceCopy], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -562,6 +571,12 @@ class ACPNode:
     """
     sandbox_spec: SandboxSpec | Callable[[Mapping[str, object]], SandboxSpec] | None = None
     """Per-invocation image, timeout and explicit credentials; never checkpointed."""
+    allowed_hosts: tuple[str, ...] = ()
+    """Extra exact DNS hosts granted to this node's VM, alongside its model provider."""
+    timeout: float = DEFAULT_NODE_TIMEOUT
+    """Wall-clock seconds for one ACP invocation, including startup, tools and approvals."""
+    workspace_policy: WorkspacePolicy = "apply"
+    """Sandbox writes return as a host-applied patch; read-only copies are discarded."""
     session_config: Mapping[str, object] | None = None
     """Provider settings sent with ``session/new`` and ``session/load``.
 
@@ -571,6 +586,8 @@ class ACPNode:
     """
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "timeout", node_timeout(self.timeout))
+        object.__setattr__(self, "allowed_hosts", validate_allowed_hosts(self.allowed_hosts))
         # A literal is checkable now; a resolver is not, and is checked on the
         # invocation that runs it. Empty rather than absent because `cwd=""` is
         # the same accident spelled differently: ACP would resolve it against
@@ -609,11 +626,33 @@ class ACPNode:
             runner = stored.agent
         await execution.emit(EventKind.RUNNER_SELECTED, {"runner": runner})
         node = self._for_runner(runner)
-        return await node._run(state, cwd, stored, resuming)
+        provider = (node.registry or default_registry()).resolve(node.agent)
+        if execution.runtime.sandbox is None and not isinstance(provider, SandboxACPProvider):
+            return await node._timed_run(state, cwd, stored, resuming)
+        async with execution.runtime.workspace_copies.create(cwd, node.workspace_policy) as workspace:
+            update = await node._timed_run(state, cwd, stored, resuming, workspace=workspace)
+            patch = await workspace.accept()
+            if patch:
+                await execution.tool(
+                    f"workspace-patch-{execution.execution_id}", "apply_workspace_patch",
+                    {"bytes": len(patch)}, "Applied node workspace changes.",
+                )
+            return update
 
     def _for_runner(self, runner: str) -> ACPNode:
         """Configure the effective runner after overrides and recovery resolve."""
         return self if runner == self.agent else replace(self, agent=runner)
+
+    async def _timed_run(self, *args, **kwargs):
+        deadline = asyncio.timeout(self.timeout)
+        try:
+            async with deadline:
+                return await self._run(*args, **kwargs)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            message = f"node {current_execution().node_id} timed out after {self.timeout:g} seconds"
+            raise TimeoutError(message) from error
 
     async def _run(
         self,
@@ -621,6 +660,8 @@ class ACPNode:
         cwd: str,
         stored: ACPContinuation | None,
         resuming: _StoredAnswer | None,
+        *,
+        workspace: WorkspaceCopy | None = None,
     ) -> dict[str, object]:
         execution = current_execution()
         runtime = execution.runtime
@@ -634,21 +675,35 @@ class ACPNode:
 
         async with AsyncExitStack() as servers:
             mcp_servers = list(self.mcp_servers)
+            bound_servers: list[BoundMcpServer] = []
             terminal_results: list[Callable[[], Awaitable[TerminalEvent]]] = []
             clarifications: list[Callable[[], Awaitable[None]]] = []
             for binding in self.mcp_server_bindings:
                 bound = await servers.enter_async_context(
                     binding(state, execution, approve)
                 )
+                bound_servers.append(bound)
+                if workspace is not None and bound.bind_workspace is not None:
+                    bound.bind_workspace(workspace)
                 mcp_servers.append(bound.config)
                 if bound.result is not None:
                     terminal_results.append(bound.result)
                 if bound.clarification is not None:
                     clarifications.append(bound.clarification)
+            pending_prompts: deque[str] = deque(execution.pending_messages())
+            provider = (self.registry or default_registry()).resolve(self.agent)
+            persistent = isinstance(provider, (CodexACPProvider, ClaudeACPProvider)) or (
+                isinstance(provider, SandboxACPProvider) and provider.model_provider is not None
+            )
+            reopening = bool(workspace is not None and persistent
+                and getattr(runtime.store, "agent_sessions", None) is not None
+                and self.graph_node_always_open and pending_prompts
+                and stored is not None and stored.agent == self.agent)
             client, session = await self._open(
-                stored if resuming else None, cwd, tuple(mcp_servers),
+                stored if resuming or reopening else None, cwd, tuple(mcp_servers),
                 self.session_config,
                 self.sandbox_spec(state) if callable(self.sandbox_spec) else self.sandbox_spec,
+                workspace=workspace, bound_servers=tuple(bound_servers),
             )
             turn = _Turn(self, execution, key, session.session_id)
             if resuming is not None:
@@ -668,10 +723,10 @@ class ACPNode:
                     {
                         "agent": self.agent,
                         "sessionId": session.session_id,
-                        "resumed": resuming is not None,
+                        "resumed": resuming is not None or reopening,
                     },
                 )
-                pending_prompts: deque[str] = deque(execution.pending_messages())
+                pending_prompts.extend(execution.pending_messages())
                 node_events = [
                     event for event in runtime.store.events_since(execution.run_id)
                     if event.node_id == execution.node_id
@@ -689,7 +744,7 @@ class ACPNode:
                 opening = prompt_text(asked)
                 if not resuming and history and pending_prompts:
                     opening = pending_prompts.popleft()
-                    asked = _replay_prompt(history, opening)
+                    asked = opening if reopening else _replay_prompt(history, opening)
                     if steering := steering_id_of(opening):
                         # The replay wraps the message; keep it traceable.
                         asked = SteeringMessage(asked, steering)
@@ -783,7 +838,13 @@ class ACPNode:
                         task.cancel()
                 await asyncio.gather(*terminal_tasks, return_exceptions=True)
                 _TURNS.pop(session.session_id, None)
-                await client.close()
+                primary = sys.exception()
+                try:
+                    await client.close()
+                except Exception as cleanup:  # noqa: BLE001 -- preserve a failed node's original error
+                    if primary is None:
+                        raise
+                    primary.add_note(f"sandbox cleanup failed: {cleanup}")
 
     def _binding(
         self, execution: NodeExecution, session: ACPSession, key: str
@@ -802,6 +863,9 @@ class ACPNode:
         mcp_servers: tuple[Mapping[str, Any], ...],
         session_config: Mapping[str, object] | None = None,
         sandbox_spec: SandboxSpec | None = None,
+        *,
+        workspace: WorkspaceCopy | None = None,
+        bound_servers: tuple[BoundMcpServer, ...] = (),
     ) -> tuple[Any, ACPSession]:
         """Reach the conversation: the stored one when resuming, else a new one.
 
@@ -812,18 +876,42 @@ class ACPNode:
         execution = current_execution()
         context = SandboxConnectContext(
             workspace=cwd, run_id=str(execution.run_id), node_id=str(execution.node_id),
-            execution_id=str(execution.execution_id), sandbox_spec=sandbox_spec or SandboxSpec(),
+            execution_id=str(execution.execution_id), session_key=self.session_key or str(execution.node_id), sandbox_spec=sandbox_spec or SandboxSpec(),
         )
         registry = self.registry or default_registry()
         selected = registry.resolve(stored.agent if stored is not None else self.agent)
         if execution.runtime.sandbox is not None:
             selected = sandbox_provider(selected, execution.runtime.sandbox)
+        if self.allowed_hosts and not isinstance(selected, SandboxACPProvider):
+            message = "allowed_hosts requires a sandbox backend with egress enforcement"
+            raise ValueError(message)
         if isinstance(selected, SandboxACPProvider):
-            if any("command" in server for server in mcp_servers):
-                raise ACPConnectionError(
-                    "host stdio MCP bindings require the sandbox MCP bridge (#678)",
-                    agent=selected.name, operation="connect",
-                )
+            spec = context.sandbox_spec
+            context = replace(context, sandbox_spec=replace(
+                spec, egress_allowlist=tuple(dict.fromkeys((*(spec.egress_allowlist or ()), *self.allowed_hosts))),
+            ))
+            bridged = []
+            bridges = []
+            for server in mcp_servers:
+                if "command" not in server:
+                    bridged.append(server)
+                    continue
+                bound = next((bound for bound in bound_servers if bound.config is server and bound.sandbox is not None), None)
+                if bound is None or bound.sandbox is None:
+                    raise ACPConnectionError(
+                        "host stdio MCP server has no trusted sandbox bridge",
+                        agent=selected.name, operation="connect",
+                    )
+                bridge = await bound.sandbox()
+                bridges.append(bridge)
+                bridged.append(bridge.config)
+            selected = replace(selected, mcp_bridges=tuple(bridges),
+                sessions=getattr(getattr(execution.runtime, "store", None), "agent_sessions", None))
+            mcp_servers = tuple(bridged)
+            if workspace is not None:
+                selected = replace(selected, backend=workspace.backend(selected.backend))
+            if source := getattr(execution.runtime, "model_credentials", None):
+                selected = replace(selected, credential_source=source)
         registry = ACPAgentRegistry([selected])
         if stored is not None:
             return await resume_continuation(

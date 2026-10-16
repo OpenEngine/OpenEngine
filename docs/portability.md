@@ -36,8 +36,11 @@ and independently authenticated:
 
 - `git` is required for workspace management.
 - `gh` is required for GitHub-backed source control.
-- Node.js with `npx` is required to run an agent. Every agent runs over ACP,
-  and OpenEngine launches the pinned ACP adapters
+- Graph agents default to SmolVM on Apple Silicon macOS and Linux KVM; see
+  [sandbox setup and the process opt-out](sandbox.md). Unsupported hosts must
+  explicitly select `process`. Guest images include the pinned agent adapters.
+- Node.js with `npx` is required for host agents (concierges, scoper and the
+  graph process opt-out). OpenEngine launches the pinned ACP adapters
   (`@agentclientprotocol/codex-acp` and
   `@agentclientprotocol/claude-agent-acp`) through `npx`. The Codex adapter
   brings its own Codex, so no `codex` executable is needed; each provider still

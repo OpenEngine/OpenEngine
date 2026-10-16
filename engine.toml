@@ -82,6 +82,6 @@ deny = [
 [workflows]
 directory = "workflows"
 
-# Host process execution remains the default; smolvm requires a built guest image.
+# Graph ACP nodes use SmolVM by default. Set process to opt out; see docs/sandbox.md.
 [sandbox]
-backend = "process"
+backend = "smolvm"

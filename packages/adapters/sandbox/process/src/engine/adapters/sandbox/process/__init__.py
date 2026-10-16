@@ -5,7 +5,7 @@ Images and egress restrictions are rejected rather than silently ignored.
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
@@ -15,6 +15,7 @@ import stat
 import tempfile
 
 from engine.ports.sandbox import SANDBOX_STREAM_LIMIT, SandboxSpec, command_environment
+from engine.ports.sandbox_tasks import filesystem_work as _filesystem_work, settle_task
 
 
 def _kill(process: asyncio.subprocess.Process) -> None:
@@ -25,23 +26,6 @@ def _kill(process: asyncio.subprocess.Process) -> None:
             process.kill()
     except ProcessLookupError:
         pass
-
-
-async def _filesystem_work(function: Callable[..., None], *args: object) -> None:
-    # Cancelling to_thread does not stop its worker. Keep ownership until the
-    # worker finishes, even if teardown or repeated cancellation arrives.
-    worker = asyncio.create_task(asyncio.to_thread(function, *args))
-    cancelled = False
-    while not worker.done():
-        try:
-            await asyncio.shield(worker)
-        except asyncio.CancelledError:
-            cancelled = True
-    try:
-        worker.result()
-    finally:
-        if cancelled:
-            raise asyncio.CancelledError
 
 
 class ProcessExecution:
@@ -87,7 +71,8 @@ class ProcessSandboxInstance:
         relative = Path(path)
         resolved = (self._root / relative).resolve()
         if relative.is_absolute() or not resolved.is_relative_to(self._root):
-            raise ValueError("sandbox path must stay within its workspace")
+            message = "sandbox path must stay within its workspace"
+            raise ValueError(message)
         return resolved
 
     async def working_directory(self, path: str = ".") -> str:
@@ -109,15 +94,10 @@ class ProcessSandboxInstance:
                 stderr=asyncio.subprocess.PIPE, start_new_session=os.name == "posix",
                 limit=SANDBOX_STREAM_LIMIT,
             ))
-            cancelled = False
-            while not spawning.done():
-                try:
-                    await asyncio.shield(spawning)
-                except asyncio.CancelledError:
-                    cancelled = True
+            process, cancelled = await settle_task(spawning)
             # Keep ownership through repeated cancellation and register the
             # child before propagating it, so teardown cannot miss a process.
-            execution = self._track(spawning.result())
+            execution = self._track(process)
             if cancelled:
                 raise asyncio.CancelledError
             return execution
@@ -149,17 +129,9 @@ class ProcessSandboxInstance:
         if self._cleanup is None:
             self._destroyed = True
             self._cleanup = asyncio.create_task(self._destroy())
-        cancelled = False
-        while not self._cleanup.done():
-            try:
-                await asyncio.shield(self._cleanup)
-            except asyncio.CancelledError:
-                cancelled = True
-        try:
-            self._cleanup.result()
-        finally:
-            if cancelled:
-                raise asyncio.CancelledError
+        _, cancelled = await settle_task(self._cleanup)
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _destroy(self) -> None:
         async with self._spawn_lock:
@@ -199,7 +171,8 @@ def _remove_workspace(root: Path) -> None:
 def _copy(source: Path, destination: Path) -> None:
     # Never follow an existing destination link, including dangling links.
     if destination.is_symlink():
-        raise ValueError("copy destination must not be a symlink")
+        message = "copy destination must not be a symlink"
+        raise ValueError(message)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_symlink():
         destination.symlink_to(source.readlink(), target_is_directory=source.is_dir())
@@ -217,8 +190,18 @@ def _copy(source: Path, destination: Path) -> None:
 class ProcessSandbox:
     @asynccontextmanager
     async def create(self, spec: SandboxSpec) -> AsyncIterator[ProcessSandboxInstance]:
+        if spec.sessions is not None:
+            message = "process sandbox does not support private agent sessions"
+            raise ValueError(message)
+        if spec.home is not None:
+            message = "process backend does not provide a private tmpfs home"
+            raise ValueError(message)
+        if spec.sockets:
+            message = "process backend does not support socket forwarding"
+            raise ValueError(message)
         if spec.image is not None or spec.egress_allowlist is not None:
-            raise ValueError("process backend does not support images or egress restrictions")
+            message = "process backend does not support images or egress restrictions"
+            raise ValueError(message)
         root = Path(tempfile.mkdtemp(prefix="engine-sandbox-")).resolve()
         sandbox = ProcessSandboxInstance(root, spec)
         try:

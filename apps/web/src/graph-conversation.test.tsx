@@ -1108,3 +1108,13 @@ it("hides the stop button when nothing is running on the node", async () => {
 
   expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
 });
+
+it("offers the failed node's patch for download and clears it on retry", async () => {
+  const patch = { name: "workspace.patch", encoding: "base64", content: btoa("diff --git a/file b/file\n") };
+  const failure = event({ type: "run.failed", payload: { error: "Workspace patch conflicts", patch } });
+  await open([failure], graphRun({ status: "failed", activeExecutions: [] }));
+  const link = await screen.findByRole("link", { name: "Download patch" });
+  expect(link).toHaveAttribute("download", "workspace.patch");
+  expect(link).toHaveAttribute("href", `data:application/octet-stream;base64,${patch.content}`);
+  expect(graphConversation([failure, event({ sequence: 2, type: "run.forked" })]).patch).toBeUndefined();
+});

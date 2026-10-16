@@ -16,6 +16,11 @@ import re
 import secrets
 import shlex
 import sys
+import os
+from pathlib import Path
+import tempfile
+from engine.ports.sandbox_socket import SandboxSocket
+from engine.runtime.terminal_mcp_bridge import TerminalMcpBridge
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -242,6 +247,9 @@ class TerminalMcpBroker:
         # 256 bits, out of an alphabet nothing reads as an option.
         self._token = secrets.token_hex(32)
         self._server: asyncio.Server | None = None
+        self._bridge_server: asyncio.Server | None = None
+        self._bridge_directory: tempfile.TemporaryDirectory[str] | None = None
+        self._bridge: TerminalMcpBridge | None = None
         self._connections: set[asyncio.Task[None]] = set()
         self._result: asyncio.Future[TerminalEvent] | None = None
         self._clarifications: asyncio.Queue[None] | None = None
@@ -372,11 +380,26 @@ class TerminalMcpBroker:
         self._result = asyncio.get_running_loop().create_future()
         self._clarifications = asyncio.Queue()
         self._server = await asyncio.start_server(
-            self._handle_connection, "127.0.0.1", 0
+            self._handle_connection, "127.0.0.1", 0, limit=8 * 1024 * 1024
         )
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
+        cleanup = asyncio.create_task(self._close())
+        cancelled = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _close(self) -> None:
+        if self._bridge_server is not None:
+            self._bridge_server.close()
+            await self._bridge_server.wait_closed()
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -387,6 +410,48 @@ class TerminalMcpBroker:
             await asyncio.gather(*connections, return_exceptions=True)
         if self._result is not None and not self._result.done():
             self._result.cancel()
+        if self._bridge_directory is not None:
+            self._bridge_directory.cleanup()
+        self._bridge = None
+
+    async def sandbox_bridge(self) -> TerminalMcpBridge:
+        if self._server is None or not self._server.is_serving():
+            raise RuntimeError("terminal MCP broker has not been started")
+        if self._bridge is None:
+            # /tmp keeps sockaddr_un below macOS's path-length limit even when
+            # the application config lives deep in a user profile directory.
+            self._bridge_directory = tempfile.TemporaryDirectory(prefix="oe-mcp-", dir="/tmp")
+            path = Path(self._bridge_directory.name) / "broker.sock"
+            self._bridge_server = await asyncio.start_unix_server(self._handle_bridge, path, limit=8 * 1024 * 1024)
+            os.chmod(path, 0o600)
+            identity = secrets.token_hex(12)
+            self._bridge = TerminalMcpBridge(_SERVER_NAME, SandboxSocket(path, f"/run/openengine/mcp-{identity}.sock"), self._token, identity)
+        return self._bridge
+
+    async def _handle_bridge(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        self._connections.add(task)
+        try:
+            async with asyncio.timeout(10):
+                envelope = json.loads(await reader.readline())
+            if not isinstance(envelope, dict) or not isinstance(envelope.get("token"), str) or not secrets.compare_digest(envelope["token"], self._token):
+                response = _rpc_error(None, -32600, "terminal session is not authorized")
+            else:
+                config = self.config
+                port = int(config.args[config.args.index("--port") + 1])
+                response = await _mcp_response("127.0.0.1", port, self._token, envelope.get("request"),
+                    repository_tools=self._repository_tools, terminal_tools=self._step is not None,
+                    status_updates=self._status_reporter is not None, create_workorder=self._workorder_creator is not None)
+            writer.write(json.dumps(response, separators=(",", ":")).encode() + b"\n")
+            await writer.drain()
+        except (OSError, ValueError, TimeoutError):
+            pass
+        finally:
+            writer.close()
+            with suppress(ConnectionError):
+                await writer.wait_closed()
+            self._connections.discard(task)
 
     @property
     def config(self) -> McpServerConfig:
@@ -1563,25 +1628,16 @@ async def _forward_call(
     name: object,
     arguments: object,
 ) -> dict[str, object]:
-    reader, writer = await asyncio.open_connection(host, port)
-    writer.write(
-        json.dumps(
-            {
-                "token": token,
-                "request_id": request_id,
-                "name": name,
-                "arguments": arguments,
-            },
-            separators=(",", ":"),
-        ).encode()
-        + b"\n"
-    )
-    await writer.drain()
-    response = json.loads(await reader.readline())
-    writer.close()
-    with suppress(ConnectionError):
-        await writer.wait_closed()
-    return response
+    reader, writer = await asyncio.open_connection(host, port, limit=8 * 1024 * 1024)
+    try:
+        writer.write(json.dumps({"token": token, "request_id": request_id, "name": name,
+            "arguments": arguments}, separators=(",", ":")).encode() + b"\n")
+        await writer.drain()
+        return json.loads(await reader.readline())
+    finally:
+        writer.close()
+        with suppress(ConnectionError):
+            await writer.wait_closed()
 
 
 async def _serve_stdio(

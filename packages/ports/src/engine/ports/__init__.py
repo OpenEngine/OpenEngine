@@ -51,6 +51,8 @@ from engine.ports.source_control import (
     WorkItem,
 )
 from engine.ports.sandbox import Sandbox, SandboxInstance, SandboxProcess, SandboxSpec
+from engine.ports.sandbox_home import SandboxHome
+from engine.ports.sandbox_socket import SandboxSocket
 from engine.ports.state_store import StateStore
 from engine.ports.workflow_runtime import WorkflowRuntime
 from engine.ports.workspace_provider import Workspace, WorkspaceProvider, WorkspaceState
@@ -60,6 +62,8 @@ __all__ = [
     "SandboxInstance",
     "SandboxProcess",
     "SandboxSpec",
+    "SandboxHome",
+    "SandboxSocket",
     "AgentRunner",
     "AgentTurn",
     "ApprovalDecision",
