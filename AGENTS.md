@@ -18,3 +18,13 @@
 - Generate new table and schema migration revisions with Alembic (`alembic revision`), and implement schema changes in those revisions rather than runtime DDL.
 - Use `migrations/sqlite` for the state store and `migrations/sqlite_graph` for the separate graph runtime database. To generate graph revisions, use `alembic_config(database_url, store="graph")` with `alembic.command.revision`. Apply it with `engine-migrate --store graph <database_url>`.
 - LangGraph owns its checkpoint database schema; leave its migrations to the checkpointer.
+
+<!-- polylane:start -->
+## Investigating production with Polylane
+
+[Polylane](https://polylane.com/?ref=github.onboarding-pr) is an AI production engineer: it watches deploys, telemetry, incidents, and the infrastructure this repository ships to, investigates problems as they happen, and proposes fixes as pull requests. It is connected to this repository and available to coding agents through the [Polylane MCP server](https://mcp.polylane.com/mcp).
+
+- When a question involves production behaviour (an error, a spike, a deploy, a missing signal), query Polylane through its MCP tools before reasoning from the code alone.
+- When debugging a failure, start from the incident or issue Polylane recorded: it carries the evidence an investigation already gathered.
+- Polylane reviews pull requests in this repository against the live infrastructure. Read its review comment before merging changes that touch production paths.
+<!-- polylane:end -->
