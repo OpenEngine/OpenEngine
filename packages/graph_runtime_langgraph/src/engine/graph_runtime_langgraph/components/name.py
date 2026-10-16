@@ -73,8 +73,9 @@ class NameNode(ACPNode):
             ["gh", "issue", "view"], ["gh", "pr", "view"],
         ):
             return False
+        # gh routes URL reads to that host's API; trust only github.com.
         if not re.fullmatch(
-            r"[0-9]+|https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/"
+            r"[0-9]+|https://github\.com/[A-Za-z0-9_.-]+/"
             r"[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+",
             args[3],
         ):

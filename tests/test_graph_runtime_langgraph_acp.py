@@ -1429,6 +1429,14 @@ def test_a_node_that_refuses_permissions_declines_without_asking() -> None:
     ("gh pr view 911 --json title,body --comments -R OpenEngine/OpenEngine", True),
     ("gh issue view https://github.com/OpenEngine/OpenEngine/issues/830", True),
     ("gh pr view https://github.com/OpenEngine/OpenEngine/pull/911 --repo other/repo", True),
+    *[(f"gh {kind} view https://{host}/OpenEngine/OpenEngine/{path}/830", False)
+      for kind, path in (("issue", "issues"), ("pr", "pull"))
+      for host in (
+          "localhost", "127.0.0.1", "10.0.0.1", "169.254.169.254",
+          "untrusted.example", "github.com.untrusted.example", "githubXcom",
+          "github.com@127.0.0.1", "[::1]", "github.com:8443",
+      )],
+    ("gh issue view 830 --repo untrusted.example/owner/repo", False),
     ("gh issue view 830; rm -rf .", False),
     ("gh issue edit 830", False),
     ("gh issue view 830 --web", False),
