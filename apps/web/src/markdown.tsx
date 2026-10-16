@@ -3,26 +3,15 @@ import MarkdownRenderer from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 
-const SAFE_HREF = /^(?:https?:\/\/|mailto:)/i;
-
-function safeHref(href: string | undefined): string | null {
-  if (typeof href !== "string" || href.length === 0) {
-    return null;
-  }
-  if (!SAFE_HREF.test(href)) {
-    return null;
-  }
-  return href;
-}
+import { linkable } from "./github-activity";
 
 const components: Components = {
   a: ({ href, children }) => {
-    const safe = safeHref(href);
-    if (safe === null) {
+    if (typeof href !== "string" || href.length === 0 || !linkable(href, true)) {
       return <>{children}</>;
     }
     return (
-      <a href={safe} target="_blank" rel="noopener noreferrer">
+      <a href={href} target="_blank" rel="noopener noreferrer">
         {children}
       </a>
     );
