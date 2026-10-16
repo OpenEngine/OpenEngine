@@ -19,10 +19,14 @@ inputs:
     description: The runner that picks the issue and writes the tests
     default: claude
     choices: [claude, codex, opencode]
+  tests_ready:
+    description: "yes when the failing tests are already committed on the base branch, such as one pushed by tdd-tests; the tests step is then skipped"
+    default: "no"
+    choices: ["yes", "no"]
   implementer:
     description: The runner that makes the tests pass; a different one from the test writer gives the change a second model's eyes
     default: claude
-    choices: [claude, codex, opencode, qwen]
+    choices: [claude, codex, opencode, qwen, bazzite, coder]
   reviewer:
     description: The runner that reviews the generated guide
     default: claude
@@ -349,6 +353,7 @@ review:
 flow:
   - from: pick
     route:
+      - {when: "outputs.pick.found == 'yes' && inputs.tests_ready == 'yes'", to: implement}
       - {when: "outputs.pick.found == 'yes'", to: tdd}
       - {to: end}
   - from: reranker
