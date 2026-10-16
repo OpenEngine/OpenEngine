@@ -1116,6 +1116,123 @@ describe("RunDetailPage", () => {
     expect(screen.getByRole("heading", { name: "Review (Performance)" })).toBeVisible();
   });
 
+  describe("step summaries", () => {
+    /** A finished graph run whose nodes report `values`, read back as the
+     *  step card each one draws. */
+    async function stepCards(values: Record<string, unknown>) {
+      const graphRun = run({ workflowId: "implementation-review-codex" });
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === "/api/runs/run-1") return json(graphRun);
+        if (path === "/graph/api/runs/run-1") return json({
+          runId: "run-1", graphId: graphRun.workflowId, status: "completed",
+          activeExecutions: [], nextNodes: [], values, pendingApprovals: [], error: "",
+        });
+        if (path === `/graph/api/graphs/${graphRun.workflowId}`) return json({
+          graphId: graphRun.workflowId,
+          nodes: Object.keys(values).map((nodeId) => ({ nodeId, name: nodeId, kind: "agent" })),
+        });
+        if (path.includes("/github-comments")) return json(noComments);
+        return json({ events: [] });
+      }));
+      render(<RunDetailPage runId="run-1" />);
+      await screen.findByRole("heading", { name: Object.keys(values)[0] });
+      return (nodeId: string) => screen.getByRole("heading", { name: nodeId }).closest("article")!;
+    }
+
+    /** What `selector` matches in a step card's summary, leaving out the
+     *  header, the started and outcome lines and the other outputs. */
+    function inSummary(step: Element, selector: string) {
+      return [...step.querySelectorAll(selector)]
+        .filter((element) => !element.closest("header, .step-outcome, .step-outputs"));
+    }
+
+    it("renders a summary written in Markdown as formatted text", async () => {
+      const card = await stepCards({
+        implementation: {
+          summary: [
+            "Made **the change** with `npm test` passing.",
+            "",
+            "- first",
+            "- second",
+            "",
+            "```",
+            "const answer = 42;",
+            "```",
+          ].join("\n"),
+          pr_url: "https://github.com/example/repo/pull/1",
+        },
+      });
+
+      const step = card("implementation");
+      expect(inSummary(step, "strong").map((strong) => strong.textContent)).toEqual(["the change"]);
+      const inline = inSummary(step, "code").filter((code) => !code.closest("pre"));
+      expect(inline.map((code) => code.textContent)).toEqual(["npm test"]);
+      const list = within(step).getByRole("list");
+      expect(list.tagName).toBe("UL");
+      expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["first", "second"]);
+      expect(step.querySelector("pre > code")).toHaveTextContent("const answer = 42;");
+      expect(step).not.toHaveTextContent("**");
+      // The summary's Markdown is rendered; the other outputs are left as they are.
+      expect(within(step).getByRole("link", { name: "https://github.com/example/repo/pull/1 ↗" })).toBeVisible();
+    });
+
+    it("keeps a plain-text summary as it reads today, single line breaks included", async () => {
+      const card = await stepCards({ planning: "Planned the work.\nOpened a branch." });
+
+      const step = card("planning");
+      expect(step).toHaveTextContent(/Planned the work\.\s*Opened a branch\./);
+      const paragraph = within(step).getByText("Planned the work.", { exact: false });
+      expect(paragraph.querySelectorAll("br")).toHaveLength(1);
+      expect(inSummary(step, "p")).toEqual([paragraph]);
+      expect(inSummary(step, "strong, em, code, ul, ol, a")).toEqual([]);
+    });
+
+    it("shows raw HTML in a summary as text", async () => {
+      const html = 'Done <img src="x" onerror="alert(1)"> and <script>alert(2)</script>';
+      const card = await stepCards({ implementation: { summary: html } });
+
+      const step = card("implementation");
+      expect(step).toHaveTextContent(html);
+      expect(document.querySelector("script, img[onerror], [onerror]")).toBeNull();
+    });
+
+    it("opens summary links in a new tab and leaves unsafe ones unclickable", async () => {
+      const card = await stepCards({
+        implementation: { summary: "See [the docs](https://example.com/docs) and [this](javascript:alert(1))." },
+      });
+
+      const step = within(card("implementation"));
+      const link = step.getByRole("link", { name: "the docs" });
+      expect(link).toHaveAttribute("href", "https://example.com/docs");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      expect(step.queryByRole("link", { name: "this" })).not.toBeInTheDocument();
+      expect(card("implementation").querySelector('[href^="javascript" i]')).toBeNull();
+    });
+
+    it("draws nothing for an empty or missing summary", async () => {
+      const card = await stepCards({
+        blank: { summary: "" },
+        missing: { count: 1 },
+        none: null,
+      });
+
+      for (const nodeId of ["blank", "missing", "none"])
+        expect(inSummary(card(nodeId), "p, ul, ol, pre, strong, em, code, br")).toEqual([]);
+    });
+
+    it("keeps a long summary and its code blocks inside the step card", async () => {
+      const long = "x".repeat(400);
+      const card = await stepCards({
+        implementation: { summary: `${long}\n\n\`\`\`\n${long}\n\`\`\`` },
+      });
+
+      const step = card("implementation");
+      expect(step.querySelector("pre")).toHaveTextContent(long);
+      expect([...document.querySelectorAll("pre")].every((pre) => step.contains(pre))).toBe(true);
+    });
+  });
 });
 
 it("polls graph events incrementally and retains completed nodes", async () => {
