@@ -189,3 +189,7 @@ runs, pull requests, spend and limits. Use `--json` for JSON.
 `engine loop resume NAME_OR_ID` restarts scheduling; it is refused while a
 limit is still reached. Supply higher `--max-prs` or `--max-spend` limits
 when resuming. Pausing does not cancel an active run.
+
+`engine loop stop NAME_OR_ID` permanently stops scheduling and cancels the
+active run. A stopped loop remains available for inspection and cannot be
+paused or resumed. Create a new loop with another `--name` to schedule again.

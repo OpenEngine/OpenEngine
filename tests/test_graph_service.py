@@ -19,7 +19,7 @@ import httpx
 import pytest
 import yaml
 from engine.domain import RunId, WorkspaceId
-from engine.graph_runtime import GraphId, RunStatus
+from engine.graph_runtime import GraphId, RunStatus, UnknownGraphError, UnknownRunError
 from engine.graph_runtime_langgraph import (
     LangGraphRuntime,
     PullRequestRecord,
@@ -1502,3 +1502,103 @@ def test_typed_completion_flows_through_broker_and_downstream_nodes():
     builder.add_edge("map", END)
     result = asyncio.run(builder.compile().ainvoke({}))
     assert result["mapped"] == [1, 2]
+
+
+@pytest.mark.parametrize("stop_during_start", [False, True])
+def test_stopping_a_loop_is_permanent_even_during_start(tmp_path: Path, stop_during_start: bool) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+            if stop_during_start:
+                start = service._start_version
+
+                async def stop_then_start(*args, **kwargs):
+                    await service.stop_loop("default", loop_id)
+                    return await start(*args, **kwargs)
+
+                service._start_version = stop_then_start
+            await service.tick()
+            await service.stop_loop("default", loop_id)
+            stopped = await service.loop_json(loop_id)
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            run_id = service.store.loop_runs(loop_id)[0][1]
+            assert (await service.run_json(run_id))["status"] == "cancelled"
+            for action in (service.pause_loop, service.resume_loop):
+                with pytest.raises(Conflict, match="stopped loop"):
+                    await action("default", loop_id)
+            await service._pause(loop_id, "late failure")
+            clock.advance(hours=3)
+            await service.tick()
+            assert (await service.loop_json(loop_id))["state"] == "stopped"
+            assert len(service.store.loop_runs(loop_id)) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", [UnknownRunError, UnknownGraphError])
+def test_stopping_loop_clears_missing_active_run(tmp_path: Path, monkeypatch, missing) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+            service.store.update_loop(loop_id, active_run_id="run-missing")
+            cancel = AsyncMock(side_effect=missing("already gone"))
+            monkeypatch.setattr(service.runtime, "cancel", cancel)
+
+            stopped = await service.stop_loop("default", loop_id)
+
+            cancel.assert_awaited_once_with(RunId("run-missing"))
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            assert service.store.loop(loop_id).active_run_id is None
+            await service.stop_loop("default", loop_id)
+            cancel.assert_awaited_once()
+            clock.advance(hours=3)
+            await service.tick()
+            assert service.store.loop_runs(loop_id) == ()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", [UnknownRunError, UnknownGraphError])
+def test_stopping_loop_during_start_clears_missing_run(tmp_path: Path, monkeypatch, missing) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+
+            async def stop_then_start(*args, **kwargs):
+                await service.stop_loop("default", loop_id)
+                return RunId("run-missing")
+
+            monkeypatch.setattr(service, "_start_version", stop_then_start)
+            cancel = AsyncMock(side_effect=missing("already gone"))
+            monkeypatch.setattr(service.runtime, "cancel", cancel)
+            await service.tick()
+
+            cancel.assert_awaited_once_with(RunId("run-missing"))
+            stopped = await service.loop_json(loop_id)
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            assert service.store.loop(loop_id).active_run_id is None
+            clock.advance(hours=3)
+            await service.tick()
+            assert len(service.store.loop_runs(loop_id)) == 1
+            cancel.assert_awaited_once()
+
+    asyncio.run(scenario())
