@@ -1160,9 +1160,11 @@ select:disabled { cursor: default; }
 /* The Markdown component's own styles, kept here so any container that hosts
    a rendered source wraps long lines and scrolls code instead of widening. */
 .markdown { overflow-wrap: anywhere; }
+/* :where keeps these zeros at the gap rule's own specificity, and before it,
+   so the gap still applies between blocks. */
+.markdown :where(p, ul, ol, pre) { margin: 0; }
 .markdown > * + * { margin-top: 8px; }
-.markdown p { margin: 0; }
-.markdown ul, .markdown ol { margin: 0; padding-left: 22px; }
+.markdown ul, .markdown ol { padding-left: 22px; }
 .markdown li + li { margin-top: 4px; }
 .markdown code {
   padding: 1px 5px;
@@ -1170,7 +1172,7 @@ select:disabled { cursor: default; }
   border: 1px solid var(--rule);
   font: 400 .92em/1.4 var(--mono);
 }
-.markdown pre { margin: 0; padding: 12px 14px; overflow-x: auto; background: var(--paper); border: 1px solid var(--rule); }
+.markdown pre { padding: 12px 14px; overflow-x: auto; background: var(--paper); border: 1px solid var(--rule); }
 .markdown pre code { padding: 0; background: none; border: 0; font-size: 13px; line-height: 1.5; }
 .markdown a { color: var(--flame-deep); }
 .step-outcome { margin-top: 12px; color: var(--muted); font: 400 13px/1.4 var(--mono); }
