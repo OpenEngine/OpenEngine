@@ -22,7 +22,7 @@ erDiagram
         TEXT decision "nullable"
         INTEGER ordinal "nullable"
     }
-    %% graph_cli_agents schema fingerprint: 8f9fc8572ac6bc2db6fd02edb214587cc88515507d2747880254196d497f387e
+    %% graph_cli_agents schema fingerprint: 6e0c997153c3dfde6e6c529ca8c7ee0ca615c94bc90894f0a388c50553d6c451
     graph_cli_agents["graph_cli_agents"] {
         TEXT name PK "not null"
         TEXT kind "not null"
@@ -30,6 +30,8 @@ erDiagram
         TEXT url "not null; default: ''"
         TEXT created_at "not null"
         TEXT updated_at "not null"
+        INTEGER context_limit "not null; default: '0'"
+        INTEGER output_limit "not null; default: '0'"
     }
     %% graph_cli_graph_versions schema fingerprint: a26b4bb1c32a44e2697ae8055125ad8ddf498d38e437b9096b859e62b16231e0
     graph_cli_graph_versions["graph_cli_graph_versions"] {
