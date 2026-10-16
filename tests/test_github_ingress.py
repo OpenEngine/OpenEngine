@@ -116,14 +116,17 @@ def test_the_people_who_can_write_to_a_repository_can_direct_engine(association)
     assert comment_from_payload("issue_comment", payload) is not None
 
 
-def test_engine_does_not_answer_its_own_comments() -> None:
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+def test_engine_does_not_answer_its_own_comments(event) -> None:
     """Engine posts as a machine user, not a GitHub app: that account is an
     ordinary `User` and a collaborator, so only its login distinguishes it."""
     payload = _issue_comment(user={"login": "OpenEngine-worker", "type": "User"})
-    assert comment_from_payload("issue_comment", payload) is not None
-    assert comment_from_payload("issue_comment", payload, self_login="OpenEngine-worker") is None
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
+    assert comment_from_payload(event, payload) is not None
+    assert comment_from_payload(event, payload, self_login="OpenEngine-worker") is None
     # GitHub logins are case-insensitive, so the comparison has to be too.
-    assert comment_from_payload("issue_comment", payload, self_login="openengine-worker") is None
+    assert comment_from_payload(event, payload, self_login="openengine-worker") is None
     # Somebody else's comment is still answered.
     assert comment_from_payload("issue_comment", _issue_comment(), self_login="OpenEngine-worker")
 
@@ -249,9 +252,9 @@ def test_a_comment_is_handled_once_however_often_it_is_delivered() -> None:
     async def scenario():
         handled = []
         ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=_record(handled))
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=2, body="again"))
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=2, body="again"), self_login="OpenEngineBot")
         await ingress.drain()
         assert [c.comment_id for c in handled] == ["1", "2"]
         await ingress.close()
@@ -269,14 +272,14 @@ def test_a_full_queue_asks_github_to_redeliver() -> None:
             await gate.wait()
 
         ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=handle, capacity=1)
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
         await asyncio.sleep(0)  # the worker takes the first comment off the queue
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=2))
-        assert not ingress.accept("issue_comment", _issue_comment(comment_id=3))
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=2), self_login="OpenEngineBot")
+        assert not ingress.accept("issue_comment", _issue_comment(comment_id=3), self_login="OpenEngineBot")
         gate.set()
         await ingress.drain()
         # The refused delivery is not remembered, so GitHub's retry is taken.
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=3))
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=3), self_login="OpenEngineBot")
         await ingress.drain()
         assert [c.comment_id for c in handled] == ["1", "2", "3"]
         await ingress.close()
@@ -286,7 +289,7 @@ def test_a_full_queue_asks_github_to_redeliver() -> None:
 
 def test_nothing_is_queued_with_nothing_to_answer_it() -> None:
     ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET)
-    assert not ingress.accept("issue_comment", _issue_comment())
+    assert not ingress.accept("issue_comment", _issue_comment(), self_login="OpenEngineBot")
     # A delivery this route never acts on is still settled, handler or not.
     assert ingress.accept("issues", _issue_comment())
 
@@ -304,13 +307,13 @@ def test_a_failed_comment_can_be_redelivered() -> None:
                 raise RuntimeError("agent is down")
 
         ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=handle)
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
         await ingress.drain()
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
         await ingress.drain()
         assert attempts == ["1", "1"]
         # Once it succeeds it is remembered again, so a third copy is dropped.
-        assert ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        assert ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
         await ingress.drain()
         assert attempts == ["1", "1"]
         await ingress.close()
@@ -327,9 +330,9 @@ def test_a_failing_handler_does_not_stop_the_next_comment() -> None:
             raise RuntimeError("agent is down")
 
         ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET, handle=handle)
-        ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
         await ingress.drain()
-        ingress.accept("issue_comment", _issue_comment(comment_id=2))
+        ingress.accept("issue_comment", _issue_comment(comment_id=2), self_login="OpenEngineBot")
         await ingress.drain()
         assert [c.comment_id for c in handled] == ["1", "2"]
         await ingress.close()
@@ -350,9 +353,9 @@ def test_what_became_of_each_delivery_is_logged(caplog) -> None:
 
         ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
                                 handle=handle, activity=activity)
-        ingress.accept("issue_comment", _issue_comment(comment_id=1), delivery_id="d-1")
-        ingress.accept("issue_comment", _issue_comment(comment_id=1), delivery_id="d-2")
-        ingress.accept("issue_comment", dict(_issue_comment(comment_id=2), action="edited"),
+        ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot", delivery_id="d-1")
+        ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot", delivery_id="d-2")
+        ingress.accept("issue_comment", dict(_issue_comment(comment_id=2), action="edited"), self_login="OpenEngineBot",
                        delivery_id="d-3")
         ingress.accept("issues", {"action": "closed"}, delivery_id="d-4")
         await ingress.drain()
@@ -384,9 +387,9 @@ def test_a_delivery_that_holds_the_queue_is_reported_while_it_does(caplog) -> No
 
         ingress = GithubIngress(repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
                                 handle=handle, stall_warning_seconds=0.01)
-        ingress.accept("issue_comment", _issue_comment(comment_id=1))
+        ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
         await asyncio.sleep(0)  # the worker takes the first comment off the queue
-        ingress.accept("issue_comment", _issue_comment(comment_id=2))
+        ingress.accept("issue_comment", _issue_comment(comment_id=2), self_login="OpenEngineBot")
         await asyncio.sleep(0.05)
         gate.set()
         await ingress.drain()
@@ -505,7 +508,14 @@ def _client(secret: str = WEBHOOK_SECRET, handle=None, repository: str = "acme/a
         handle = None
     elif handle is None:
         handle = _record([])
-    ingress = GithubIngress(repository=repository, webhook_secret=lambda: secret, handle=handle)
+
+    async def lookup(repository):
+        return "OpenEngineBot"
+
+    ingress = GithubIngress(
+        repository=repository, webhook_secret=lambda: secret, handle=handle,
+        authenticated_login=lookup,
+    )
     app = Starlette(routes=[Route("/api/github/events", ingress.webhook, methods=["POST"])])
     return TestClient(app), ingress
 
@@ -796,8 +806,9 @@ def test_assignment_webhook_resolves_login(resolved, expected):
     lookup.assert_awaited_once_with("acme/api")
 
 
+@pytest.mark.parametrize("event", ["issues", "issue_comment", "pull_request_review_comment"])
 @pytest.mark.parametrize("failure", [None, "", RuntimeError("lookup failed"), TimeoutError()])
-def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
+def test_delivery_without_resolved_login_warns_and_can_retry(caplog, failure, event):
     from unittest.mock import AsyncMock
     from starlette.applications import Starlette
     from starlette.routing import Route
@@ -810,13 +821,16 @@ def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
     handled = []
     ingress = GithubIngress(
         repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
-        authenticated_login=lookup, handle_assignment=_record(handled),
+        authenticated_login=lookup, handle_assignment=_record(handled), handle=_record(handled),
     )
     app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
-    body = json.dumps(_assigned_issue()).encode()
+    payload = _assigned_issue() if event == "issues" else _issue_comment()
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
+    body = json.dumps(payload).encode()
     with TestClient(app) as client:
         response = client.post("/events", content=body,
-                               headers=dict(_signed(body), **{"x-github-event": "issues"}))
+                               headers=dict(_signed(body), **{"x-github-event": event}))
         assert response.status_code == 503
         assert not handled
         assert any(record.levelname == "WARNING" and "self-login" in record.message
@@ -825,7 +839,7 @@ def test_assignment_without_resolved_login_warns_and_can_retry(caplog, failure):
             lookup.side_effect = None
             lookup.return_value = "OpenEngineBot"
             response = client.post("/events", content=body,
-                                   headers=dict(_signed(body), **{"x-github-event": "issues"}))
+                                   headers=dict(_signed(body), **{"x-github-event": event}))
             assert response.status_code == 200
             client.portal.call(ingress.drain)
             assert len(handled) == 1
@@ -929,8 +943,8 @@ def test_nothing_is_handled_for_a_sender_who_cannot_write() -> None:
         allowed["comment"]["user"]["login"] = "maintainer"
         refused = _issue_comment(comment_id=2)
         refused["comment"]["user"]["login"] = "stranger"
-        assert ingress.accept("issue_comment", allowed)
-        assert ingress.accept("issue_comment", refused)
+        assert ingress.accept("issue_comment", allowed, self_login="OpenEngineBot")
+        assert ingress.accept("issue_comment", refused, self_login="OpenEngineBot")
         assert ingress.accept("issues", _assigned_issue(), self_login="openenginebot")
         await ingress.drain()
         assert [c.comment_id for c in comments] == ["1"]
@@ -989,3 +1003,32 @@ def test_assignment_login_uses_delivery_repository_and_skips_unconfigured():
         client.portal.call(ingress.close)
     assert lookup.await_args_list == [call("acme/api"), call("other/web")]
     assert len(handled) == 2
+
+
+@pytest.mark.parametrize("event", ["issue_comment", "pull_request_review_comment"])
+@pytest.mark.parametrize("author, expected", [("OPENENGINEBOT", 0), ("someone", 1)])
+def test_comment_webhook_resolves_login(event, author, expected):
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    handled = []
+    lookup = AsyncMock(return_value="OpenEngineBot")
+    ingress = GithubIngress(
+        repository="acme/api", webhook_secret=lambda: WEBHOOK_SECRET,
+        authenticated_login=lookup, handle=_record(handled),
+    )
+    payload = _issue_comment(user={"login": author, "type": "User"})
+    if event == "pull_request_review_comment":
+        payload["pull_request"] = payload.pop("issue")
+    body = json.dumps(payload).encode()
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    with TestClient(app) as client:
+        response = client.post("/events", content=body,
+                               headers=dict(_signed(body), **{"x-github-event": event}))
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert response.status_code == 200
+    assert len(handled) == expected
+    lookup.assert_awaited_once_with("acme/api")

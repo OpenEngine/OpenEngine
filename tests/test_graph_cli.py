@@ -261,23 +261,31 @@ def test_an_agent_on_a_model_server_has_nothing_to_sign_in_to(monkeypatch, capsy
 
 
 def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys) -> None:
-    qwen = {"name": "qwen", "kind": "opencode", "model": "qwen3", "url": "http://gpu:8000/v1", "builtin": False}
+    qwen = {
+        "name": "qwen", "kind": "opencode", "model": "qwen3", "url": "http://gpu:8000/v1",
+        "contextLimit": 65536, "outputLimit": None, "builtin": False,
+    }
     backend = serve(
         monkeypatch, qwen,
         {"agents": [{"name": "claude", "kind": "claude", "model": "", "url": "", "builtin": True}, qwen]},
         {**qwen, "removed": True},
     )
-    assert main(["agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1"]) == 0
+    assert main([
+        "agent", "add", "opencode", "--name", "qwen", "--model", "qwen3", "--url", "http://gpu:8000/v1",
+        "--context", "65536",
+    ]) == 0
     assert main(["agents"]) == 0
     assert main(["agent", "remove", "qwen"]) == 0
     assert [(r["method"], r["url"].removeprefix("http://127.0.0.1:4364/api/v1")) for r in backend.requests] == [
         ("POST", "/agents"), ("GET", "/agents"), ("DELETE", "/agents/qwen"),
     ]
     assert backend.requests[0]["body"] == {
-        "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://gpu:8000/v1", "replace": False,
+        "kind": "opencode", "name": "qwen", "model": "qwen3", "url": "http://gpu:8000/v1",
+        "contextLimit": 65536, "outputLimit": None, "replace": False,
     }
     out = capsys.readouterr().out
     assert "built in" in out and "http://gpu:8000/v1" in out and "removed qwen" in out
+    assert "LIMIT" in out and "65536" in out
 
 
 def test_graph_run_sends_the_repository_it_is_run_from(
@@ -448,7 +456,7 @@ def test_graph_run_live_selection(monkeypatch, capsys, stdin_tty, stdout_tty, fl
         assert "run-1  pair v1" in output
 
 
-@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0)])
+@pytest.mark.parametrize("status,code", [("completed", 0), ("failed", 1), ("cancelled", 1), ("interrupted", 0), ("stopped", 0)])
 def test_watch_finished_run(monkeypatch, capsys, status, code):
     serve(monkeypatch, {**RUN, "status": status, "terminal": True})
     assert main(["run", "watch", "run-1"]) == code
@@ -479,7 +487,7 @@ def test_pretty_run_lists_approvals_and_ui(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("status,code", [
-    ("completed", 0), ("failed", 1), ("cancelled", 0), ("interrupted", 0), ("stopped", 0),
+    ("completed", 0), ("failed", 1), ("cancelled", 1), ("interrupted", 0), ("stopped", 0),
 ])
 @pytest.mark.parametrize("args", [["run", "get", "run-1"], ["run", "wait", "run-1"],
                                   ["graph", "run", "pair", "--wait"]])
@@ -569,6 +577,19 @@ def test_go_review_target(monkeypatch, target, key, option):
     assert main(["go", option, target, "--repo", "o/r"]) == 0
     assert recorded.requests[-1]["body"]["inputs"] == {key: resolved}
     assert recorded.requests[-1]["body"]["graph"] == "review"
+
+
+@pytest.mark.parametrize('target', ['', 'topic'])
+def test_go_review_disconnected_shows_local_banner(monkeypatch, capsys, tmp_path, target):
+    from engine.cli import repository
+    monkeypatch.setattr(repository, 'current', lambda: repository.Repository(tmp_path, 'o/r', 'topic', False))
+    context = {'mode': 'disconnected',
+               'summary': 'disconnected · local branch only (run engine connect github to publish)'}
+    recorded = serve_go(monkeypatch, {**RUN, 'forgeContext': context}, repo=str(tmp_path),
+                        graph='review', target={'ref': 'topic', 'mode': 'disconnected'})
+    assert main(['go', 'review', *([target] if target else [])]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == 'review · disconnected · topic · will keep results and commits local'
+    assert recorded.requests[-1]['body']['inputs'] == {'ref': 'topic'}
 
 
 def test_go_wait_json_keeps_banner_off_stdout(monkeypatch, capsys):
@@ -672,3 +693,19 @@ def test_repo_add_gitlab_url(monkeypatch):
     assert main(['repo', 'add', 'https://gitlab.com/group/repo.git']) == 0
     assert backend.requests[0]['body']['repository'] == 'https://gitlab.com/group/repo.git'
     assert backend.requests[0]['body']['path'] is None
+
+
+@pytest.mark.parametrize("outcome", ["finished", "cancelled"])
+def test_workspace_hint_preserves_explicit_backend(monkeypatch, capsys, outcome):
+    import shlex
+    from engine.cli import live
+
+    backends.add("remote-machine", "http://remote:4364")
+    run = {**RUN, "workspace": {"path": "/tmp/workspace"}}
+    monkeypatch.setattr(live.Watch, "follow", lambda self: (run, outcome))
+    main(["run", "watch", "run-1", "--backend", "remote-machine"])
+    hint = next(line for line in capsys.readouterr().out.splitlines()
+                if line.startswith("Workspace details: "))
+    assert shlex.split(hint.removeprefix("Workspace details: ")) == [
+        "engine", "run", "get", "run-1", "--backend", "remote-machine",
+    ]

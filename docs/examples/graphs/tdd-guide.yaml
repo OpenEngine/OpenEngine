@@ -28,6 +28,10 @@ inputs:
     default: claude
     choices: [claude, codex, opencode]
 
+# Names the run after the issue it picks, on the runner's cheapest model.
+naming:
+  agent: ${inputs.runner}
+
 plan:
   workspace:
     base_ref: origin/main

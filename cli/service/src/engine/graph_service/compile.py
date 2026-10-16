@@ -1,6 +1,6 @@
 """A `GraphSpec`, compiled to a LangGraph `StateGraph` of the engine's components.
 
-    checkout (WorkspaceNode) -> entry nodes -> ... -> END
+    checkout (WorkspaceNode) -> [naming (NameNode)] -> entry nodes -> ... -> END
 
     agent   ACPNode, one langgraph-acp session per execution; with `tools` or
             `outputs`, a TerminalMcpServer the agent finishes through
@@ -25,9 +25,10 @@ The graph's id is the version's id, so a run pins exactly what it started.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from engine.domain import ForgeMode, StepCompleted, forge_mode
 from engine.graph_runtime.inputs import RUNNER_POLICIES, WorkflowInput
@@ -41,15 +42,17 @@ from engine.graph_runtime_langgraph import (
     graph_workflow,
 )
 from engine.graph_runtime_langgraph.acp import TerminalEvent
-from engine.graph_runtime_langgraph.components import ACPNode, CICheck, TriageNode, checkout
+from engine.graph_runtime_langgraph.components import ACPNode, CICheck, NameNode, TriageNode, checkout
 from engine.graph_runtime_langgraph.components.findings import parse_findings
 from engine.ports import WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry
+from langgraph_acp.providers import ClaudeACPProvider
 
 from engine.graph_service.expressions import parse, template
 from engine.graph_service.language import (
     END as FLOW_END,
+    NAMING_NODE,
     STAGE_GROUPS,
     GraphSpec,
     NodeSpec,
@@ -58,11 +61,16 @@ from engine.graph_service.language import (
     RunnerRule,
 )
 
-#: What `model: default` and `model: elevated` mean when a backend says nothing.
+#: What `model: default`, `model: elevated` and `model: cheapest` mean when a
+#: backend says nothing. `cheapest` is what a graph's naming turn uses.
 DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
-    "claude": {"default": "sonnet", "elevated": "opus"},
-    "codex": {"default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
+    "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
+    "codex": {"cheapest": "gpt-5.6-terra", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
 }
+NAMING_TIER = "cheapest"
+#: The only tools a Claude naming turn has: the ACP adapter's `READ_ONLY_TOOLS`,
+#: which this package may not import.
+NAMING_TOOLS = ("Read", "Glob", "Grep")
 
 Groups = Mapping[str, tuple[tuple[str, ...], bool]]
 """Node id -> (the LangGraph node keys it compiled to, whether it is parallel)."""
@@ -106,8 +114,12 @@ def compile_graph(
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
-    tiers = {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}
+    tiers = {
+        runner: {**DEFAULT_MODEL_TIERS.get(runner, {}), **models}
+        for runner, models in {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}.items()
+    }
     runners = tuple(registry.names)
+    models = {} if agent_models is None else agent_models
     builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(
         spec.checkout,
@@ -118,12 +130,25 @@ def compile_graph(
             ref_input=spec.ref_input,
         ),
     )
+    if spec.naming:
+        builder.add_node(NAMING_NODE, GraphNameNode(
+            agent=_default_runner(spec.naming.runner, runners),
+            registry=registry,
+            cwd=checkout,
+            session_config=session_config,
+            rule=spec.naming.runner,
+            model_template=spec.naming.model or NAMING_TIER,
+            groups=groups,
+            tiers=tiers,
+            agent_models=models,
+            runners=runners,
+        ))
     for node in spec.nodes:
         for key, branch in zip(node.keys, node.parallel or (None,)):
             builder.add_node(key, _node(
                 node, key, branch.item if branch else None, groups,
                 registry=registry, runners=runners, tiers=tiers, session_config=session_config,
-                agent_models={} if agent_models is None else agent_models,
+                agent_models=models,
             ))
 
     def keys_of(name: str) -> list[str]:
@@ -132,9 +157,13 @@ def compile_graph(
         return list(groups[name][0])
 
     builder.add_edge(START, spec.checkout)
+    first = spec.checkout
+    if spec.naming:
+        builder.add_edge(spec.checkout, NAMING_NODE)
+        first = NAMING_NODE
     for entry in spec.entries:
         for key in keys_of(entry):
-            builder.add_edge(spec.checkout, key)
+            builder.add_edge(first, key)
     joined: set[str] = set()
     for rule in spec.flow:
         if rule.sources == ("start",):
@@ -271,45 +300,24 @@ def _default_runner(rule: RunnerRule, runners: Sequence[str]) -> str:
     return runners[0] if runners else "claude"
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class GraphAgentNode(ACPNode):
-    """An agent node whose runner, model and output shape come from the graph."""
+@dataclass(frozen=True, kw_only=True)
+class _GraphRunner:
+    """How a graph's agent node picks its runner and model when it runs."""
 
-    state_key: str
+    # No slots of its own, so it can sit beside the slotted ACPNode; each node
+    # that mixes it in slots these fields itself.
+    __slots__ = ()
+    if TYPE_CHECKING:
+        agent: str
+        session_config: Mapping[str, object] | None
     rule: RunnerRule
     model_template: str = ""
-    outputs: tuple[OutputSpec, ...] = ()
     item: Mapping[str, Any] | None = None
-    facet_id: str = ""
     groups: Groups = field(default_factory=dict)
     tiers: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     agent_models: Mapping[str, str] = field(default_factory=dict)
     """An added agent's own model, for a node that names none or a tier it has no entry for."""
     runners: tuple[str, ...] = ()
-
-    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
-        execution = current_execution()
-        record = await execution.runtime.store.run(execution.run_id)
-        override = record.runner_overrides.get(execution.node_id) if record else None
-        runner = override or self.resolve_runner(state)
-        config = dict(self.session_config or {})
-        if model := self.model_for(state, runner):
-            config["model"] = model
-        node = replace(
-            self,
-            agent=runner,
-            session_config=config or None,
-            mcp_server_bindings=tuple(
-                replace(binding, agent_id=runner) if isinstance(binding, TerminalMcpServer) else binding
-                for binding in self.mcp_server_bindings
-            ),
-        )
-        update = await ACPNode.__call__(node, state)
-        return {
-            **update,
-            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
-            runner_key(self.state_key): runner,
-        }
 
     def resolve_runner(self, state: Mapping[str, object]) -> str:
         rule = self.rule
@@ -330,13 +338,58 @@ class GraphAgentNode(ACPNode):
             return other or (pool[0] if pool else self.agent)
         return next((runner for runner in pool if runner != other), self.agent)
 
-    def model_for(self, state: Mapping[str, object], runner: str) -> str:
+    def configured_session(
+        self, state: Mapping[str, object], runner: str, chosen: str | None = None,
+    ) -> Mapping[str, object] | None:
+        """The node's session config, with the model it uses on `runner`."""
+        config = dict(self.session_config or {})
+        if model := self.model_for(state, runner, chosen):
+            config["model"] = model
+        return config or None
+
+    def render_model(self, state: Mapping[str, object]) -> str:
+        """The node's `model` with the run's values filled in: a tier or a model name."""
+        return template(self.model_template).render(environment(state, self.groups, self.item)).strip()
+
+    def model_for(self, state: Mapping[str, object], runner: str, chosen: str | None = None) -> str:
+        """The model on `runner`; `chosen` is `render_model`'s result when it was already worked out."""
         fallback = self.agent_models.get(runner, "")
         if not self.model_template:
             return fallback
-        chosen = template(self.model_template).render(environment(state, self.groups, self.item)).strip()
+        if chosen is None:
+            chosen = self.render_model(state)
         named = {tier for tiers in self.tiers.values() for tier in tiers}
         return self.tiers.get(runner, {}).get(chosen, fallback if chosen in named else chosen)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GraphAgentNode(_GraphRunner, ACPNode):
+    """An agent node whose runner, model and output shape come from the graph."""
+
+    state_key: str
+    outputs: tuple[OutputSpec, ...] = ()
+    facet_id: str = ""
+
+    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+        execution = current_execution()
+        record = await execution.runtime.store.run(execution.run_id)
+        override = record.runner_overrides.get(execution.node_id) if record else None
+        runner = override or self.resolve_runner(state)
+        node = replace(
+            self,
+            agent=runner,
+            session_config=self.configured_session(state, runner),
+            mcp_server_bindings=tuple(
+                replace(binding, agent_id=runner) if isinstance(binding, TerminalMcpServer) else binding
+                for binding in self.mcp_server_bindings
+            ),
+        )
+        update = await ACPNode.__call__(node, state)
+        return {
+            **update,
+            visits_key(self.state_key): int(state.get(visits_key(self.state_key)) or 0) + 1,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
+            runner_key(self.state_key): runner,
+        }
 
     def _terminal_update(self, event: TerminalEvent) -> dict[str, object]:
         base = ACPNode._terminal_update(self, event)
@@ -346,7 +399,7 @@ class GraphAgentNode(ACPNode):
         for output in self.outputs:
             if output.name not in base:
                 continue
-            raw = base[output.name]
+            raw = _decode_output(base[output.name], output)
             if output.type == "findings":
                 findings = parse_findings(raw, require_lineage=output.lineage)
                 if not output.lineage:
@@ -358,6 +411,48 @@ class GraphAgentNode(ACPNode):
             # Where CICheck and the forge tools look for the change.
             update["pr_url"] = base["pr_url"]
         return update
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GraphNameNode(_GraphRunner, NameNode):
+    """The graph's `naming:` turn: the runner it names, on that runner's cheapest model by default.
+
+    Like any `NameNode` it is hidden from the sidebar, and a failure leaves the
+    run its fallback name.
+    """
+
+    model_template: str = NAMING_TIER
+    chosen_model: str | None = None
+    """`model_template` rendered against the run, once `__call__` has the run's values."""
+
+    async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+        # The model is rendered now, while the run's inputs are at hand; the
+        # runner it applies to is settled later, after any override.
+        node = replace(self, agent=self.resolve_runner(state), chosen_model=self.render_model(state))
+        return await NameNode.__call__(node, state)
+
+    def _for_runner(self, runner: str) -> ACPNode:
+        config = self.configured_session({}, runner, self.chosen_model)
+        if self.registry is not None and isinstance(self.registry.resolve(runner), ClaudeACPProvider):
+            config = _read_only_claude(config)
+        return replace(self, agent=runner, session_config=config)
+
+
+def _read_only_claude(config: Mapping[str, object] | None) -> dict[str, object]:
+    """`config` with Claude held to reading: its `default` mode and `NAMING_TOOLS` only.
+
+    Refusing permission requests is not enough on its own. Without a pinned mode
+    Claude starts in the operator's own, and one like `acceptEdits` or `auto`
+    acts without asking; `tools` removes the rest of Claude's built-in tools.
+    """
+    config = dict(config or {})
+    claude = config.get("claudeCode")
+    claude = dict(claude) if isinstance(claude, Mapping) else {}
+    options = claude.get("options")
+    options = dict(options) if isinstance(options, Mapping) else {}
+    options["allowedTools"] = list(NAMING_TOOLS)
+    options["tools"] = list(NAMING_TOOLS)
+    return {**config, "mode": "default", "claudeCode": {**claude, "options": options}}
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,6 +512,11 @@ def _completion_instructions(outputs: Sequence[OutputSpec]) -> str:
         lines[-1] += "."
         return "\n".join(lines)
     lines[-1] += " and these outputs:"
+    if any(output.type not in ("string", "findings") for output in outputs):
+        lines.append(
+            'Send typed outputs as JSON-encoded strings, for example '
+            '"model": "{\\"a\\": 1}". All output values must be strings on the wire.'
+        )
     for output in outputs:
         detail = {
             "findings": (
@@ -458,10 +558,11 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
         values = {output.name: output.value for output in event.outputs}
         for output in outputs:
             value = values.get(output.name)
-            if value is None or value == "":
+            if value is None or (value == "" and output.type in ("string", "findings")):
                 if output.required:
                     raise ValueError(f"output {output.name} is required")
                 continue
+            value = _decode_output(value, output)
             if output.type == "findings":
                 parse_findings(value, require_lineage=output.lineage)
             elif output.enum and value not in output.enum:
@@ -470,6 +571,18 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
                 raise ValueError(f"output {output.name} must be a {output.type}")
 
     return validate
+
+
+def _decode_output(value: object, output: OutputSpec) -> Any:
+    """Decode wire values consistently for validation and downstream graph state."""
+    if output.type not in ("string", "findings") and isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"output {output.name} must be JSON for type {output.type}: {error}"
+            ) from error
+    return value
 
 
 def _typed(value: object, kind: str) -> bool:

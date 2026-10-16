@@ -49,6 +49,39 @@ All repositories use the same `work_orders.workflow` default (or the sole
 available workflow) and the same webhook secret. Configure that secret on each
 repository's webhook, pointing them all at the same endpoint.
 
+### Choosing the workflow
+
+`work_orders.workflow` names what an assignment or an @mention starts. Either
+kind of workflow may be named, and the name is resolved in this order:
+
+1. A Python workflow from `[workflows] directory`, by its id. A deployment that
+   already names one keeps it, even when a graph of the same name is also
+   registered.
+2. A graph registered with `engine graph add`, by name (or `name@N`): first in
+   the project named after the repository the work is for, such as `acme/api`,
+   then in the `default` project, where `engine graph add` puts a graph when no
+   project is named. A graph registered only in some other project is not used
+   for this repository; name it by its graph or version id (`g-...`, `gv-...`)
+   to run it anyway.
+
+```toml
+[work_orders]
+workflow = "tdd-guide"
+```
+
+A registered graph is started on the same path `engine graph run` takes in the
+daemon, and is given what the webhook knows as the inputs it declares:
+`instruction` is the task (for an assignment, the issue's title, body and URL)
+and, for an assignment, `issue` is the issue's number. A mention on a pull
+request leaves `issue` at its default, since a pull request is not an issue to
+work. A graph that declares neither input still runs with the task. A Python
+workflow gets the task and its own defaults, as before.
+
+A name that matches neither kind, for any repository in `[github]
+repositories`, stops `engine-web` and `engine-web --check` at startup with a
+configuration error naming it and the repositories it does not resolve for. Without `work_orders.workflow`,
+the sole workflow on offer is used, registered graphs included.
+
 The slug format is validated at startup. Deliveries from other repositories are
 acknowledged and ignored, even when signed with the same secret. Repository
 names are compared without regard to case. Without a configured repository,
@@ -155,7 +188,12 @@ concierge model turn is needed: assignment itself requests implementation.
 Progress is reported on the issue rather than in Slack, as three milestones
 only: implementation starting (again, if review sends the work back), review
 finishing, and the work order finishing, which follows the pull request's merge
-answering its human review. Other stages, approvals, failures, resumes, and
+answering its human review. The first two are named by node: a node with id
+`implementation` starting, and one with id `reranker` finishing. A registered
+graph without such a node -- `tdd-guide` has `reranker` but no
+`implementation` node -- posts only the milestones it has nodes for. The pull
+request claim, and a merge accepting a `human` node's review, work the same for
+a registered graph as for a Python workflow. Other stages, approvals, failures, resumes, and
 agent transcript text stay on the work order, both to keep the issue quiet and
 because the issue may be public. Each comment links to the work order when
 `public_url` is set, and to the pull request once the run has opened one.

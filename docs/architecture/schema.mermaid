@@ -1,0 +1,275 @@
+---
+title: Latest schema (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% state_ and graph_ are separate SQLite databases, not SQL name prefixes.
+    %% REMOVED tables/columns are comparison-only tombstones, absent from the latest schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    %% Solid edges are declared FKs; dashed edges are selected logical references.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    %% graph_approvals schema fingerprint: 155ed433c493376fba74c6e7eb9b6fa24bd14922932008107568e258ca801a78
+    graph_approvals["graph_approvals"] {
+        TEXT approval_id PK "not null"
+        TEXT run_id "not null"
+        TEXT record "not null"
+        TEXT status "not null; default: 'pending'"
+        TEXT decision "nullable"
+        INTEGER ordinal "nullable"
+    }
+    %% graph_cli_agents schema fingerprint: 8f9fc8572ac6bc2db6fd02edb214587cc88515507d2747880254196d497f387e
+    graph_cli_agents["graph_cli_agents"] {
+        TEXT name PK "not null"
+        TEXT kind "not null"
+        TEXT model "not null; default: ''"
+        TEXT url "not null; default: ''"
+        TEXT created_at "not null"
+        TEXT updated_at "not null"
+    }
+    %% graph_cli_graph_versions schema fingerprint: a26b4bb1c32a44e2697ae8055125ad8ddf498d38e437b9096b859e62b16231e0
+    graph_cli_graph_versions["graph_cli_graph_versions"] {
+        TEXT version_id PK "not null"
+        TEXT graph_id UK "not null"
+        INTEGER number UK "not null"
+        TEXT manifest "not null"
+        TEXT digest "not null"
+        TEXT created_at "not null"
+        TEXT format "not null; default: 'yaml'"
+        TEXT source "not null; default: ''"
+    }
+    %% graph_cli_graphs schema fingerprint: 5aee8f558bcc555a82912d937cac1398f1606ccabae845362ed3fd628cbd5b93
+    graph_cli_graphs["graph_cli_graphs"] {
+        TEXT graph_id PK "not null"
+        TEXT project UK "not null"
+        TEXT name UK "not null"
+        TEXT latest_version_id "not null"
+        TEXT created_at "not null"
+        TEXT updated_at "not null"
+    }
+    %% graph_cli_loop_runs schema fingerprint: 59d2259bbc61971213bcfe6614028527f26007911fd5fa82e9fe2f4e8c916f40
+    graph_cli_loop_runs["graph_cli_loop_runs"] {
+        TEXT loop_id PK "not null"
+        TEXT tick PK "not null"
+        TEXT run_id "not null"
+        TEXT started_at "not null"
+    }
+    %% graph_cli_loops schema fingerprint: 52feee19a423c4be946ce93abc2309680ca67d451fb99867964323e115ba7232
+    graph_cli_loops["graph_cli_loops"] {
+        TEXT loop_id PK "not null"
+        TEXT project UK "not null"
+        TEXT name UK "not null"
+        TEXT graph_id "not null"
+        TEXT version_id "not null"
+        TEXT instruction "not null"
+        TEXT repository "not null"
+        TEXT inputs "not null"
+        INTEGER interval_seconds "not null"
+        INTEGER max_prs "nullable"
+        FLOAT max_spend_usd "nullable"
+        TEXT state "not null"
+        TEXT pause_reason "not null; default: ''"
+        TEXT next_run_at "not null"
+        TEXT active_run_id "nullable"
+        TEXT created_at "not null"
+        TEXT updated_at "not null"
+    }
+    %% graph_cli_node_executions schema fingerprint: a5576b947c9ed79c878d5923e9cf011e44ed0022c95bce89bc42f3f911d708d2
+    graph_cli_node_executions["graph_cli_node_executions"] {
+        TEXT execution_id PK "not null"
+        TEXT run_id "not null"
+        TEXT node_id "not null"
+        INTEGER attempt "not null"
+        TEXT status "not null"
+        TEXT started_at "not null"
+        TEXT finished_at "nullable"
+        TEXT error "not null; default: ''"
+    }
+    %% graph_cli_projects schema fingerprint: 9d8d42c7800fbae162803c49bec0ce6cf814bc66db14f076b61a89d30ebebda5
+    graph_cli_projects["graph_cli_projects"] {
+        TEXT name PK "not null"
+        TEXT verbs "not null"
+    }
+    %% graph_cli_run_submissions schema fingerprint: 120a9769558e4da0bf951f490b21f5976837f9cdf851aedee143d531da96dd59
+    graph_cli_run_submissions["graph_cli_run_submissions"] {
+        TEXT idempotency_key PK "not null"
+        TEXT request_digest "not null"
+        TEXT run_id "not null"
+        TEXT version_id "not null"
+        TEXT created_at "not null"
+    }
+    %% graph_cli_steering schema fingerprint: a77d3cabca6ac2f2c4b9d537923b53f14a8799823d0203b6f792ead509467be4
+    graph_cli_steering["graph_cli_steering"] {
+        INTEGER sequence PK "not null"
+        TEXT steering_id UK "not null"
+        TEXT idempotency_key UK "not null"
+        TEXT run_id "not null"
+        TEXT execution_id "not null"
+        TEXT message "not null"
+        TEXT status "not null"
+        TEXT error "not null; default: ''"
+        TEXT accepted_at "not null"
+        TEXT delivered_at "nullable"
+        TEXT applied_at "nullable"
+    }
+    %% graph_events schema fingerprint: 2cd24d20da6561bbcc52d97a31ad9e33602927563035b1e643824ab8479b0568
+    graph_events["graph_events"] {
+        INTEGER sequence PK "not null"
+        TEXT run_id "not null"
+        TEXT kind "not null"
+        TEXT payload "not null"
+        TEXT node_id "nullable"
+        TEXT execution_id "nullable"
+    }
+    %% graph_github_comments schema fingerprint: 26b5811fa19a326a71c4b8a22a3a8e5b5db933970ae2fbe68d3a144ce15dfdde
+    graph_github_comments["graph_github_comments"] {
+        INTEGER comment_id PK "not null"
+        TEXT repository PK "not null"
+        TEXT kind PK "not null"
+        INTEGER pr_number "not null"
+        TEXT run_id "not null"
+        TEXT node_id "nullable"
+        TEXT posted_at "not null"
+        TEXT url "nullable"
+    }
+    %% graph_github_pull_requests schema fingerprint: 6e50dc94e3dc889149e8a57c4fcb649b56a4227ab74f50b471a1cb29a186a126
+    graph_github_pull_requests["graph_github_pull_requests"] {
+        TEXT repository PK "not null"
+        INTEGER number PK "not null"
+        TEXT run_id "not null"
+        TEXT node_id "nullable"
+        TEXT opened_at "not null"
+        TEXT url "nullable"
+    }
+    %% graph_runs schema fingerprint: eb063f6bd565f656470334611c18eb4ac67afbee07d6eab568e00d255a26d3af
+    graph_runs["graph_runs"] {
+        TEXT run_id PK "not null"
+        TEXT graph_id "not null"
+        TEXT error "not null; default: ''"
+        INTEGER ordinal "nullable"
+        TEXT auto_approve_nodes "not null; default: '[]'"
+        TEXT runner_overrides "not null; default: '{}'"
+        TEXT forge_context "not null; default: '{}'"
+        TEXT name "nullable"
+        TEXT prompt "nullable"
+        TEXT repository "nullable"
+        TEXT requester "nullable"
+        TEXT origin_channel "nullable"
+        TEXT origin_thread_id "nullable"
+        TEXT parent_run_id "nullable"
+        TEXT depends_on_run_id "nullable"
+        TEXT failure_reason "nullable"
+        TEXT created_at "nullable"
+        TEXT started_at "nullable"
+        TEXT task_id "nullable"
+        JSON inputs "nullable"
+        JSON origin "nullable"
+        BOOLEAN scheduled "nullable; default: '0'"
+    }
+    %% graph_sessions schema fingerprint: ef4bc0b6f26c4ed3a55a499e15aa980babb6f2e16f8bfccfb843eb6565bb68fc
+    graph_sessions["graph_sessions"] {
+        TEXT run_id PK "not null"
+        TEXT session_key PK "not null"
+        TEXT continuation "not null"
+    }
+    %% state_agent_instances schema fingerprint: 7c41a6f3366dbb2e57d2b8ff4d019db0bf0518da4a19c99412d782e6453ce90f
+    state_agent_instances["state_agent_instances"] {
+        INTEGER sequence PK "not null"
+        TEXT instance_id UK "not null"
+        TEXT agent_id "not null"
+        TEXT conversation_id UK "not null"
+        TEXT task_id "nullable"
+        TEXT workspace_id "nullable"
+        TEXT title "not null; default: 'New chat'"
+        INTEGER archived "not null; default: '0'"
+        TEXT runner "not null; default: ''"
+        INTEGER auto_approve "not null; default: '0'"
+        TEXT workflow_run_id "nullable"
+        TEXT workflow_step_id "nullable"
+    }
+    %% state_agent_runs schema fingerprint: 4a84662815ec2d74fa17afb284c679a4c82687ddd08c346bf84986099335c571
+    state_agent_runs["state_agent_runs"] {
+        TEXT agent_run_id PK "not null"
+        TEXT instance_id FK "not null"
+        TEXT status "not null"
+        TEXT summary "not null"
+        TEXT changed_files "not null"
+        TEXT runner "not null"
+    }
+    state_agent_instances ||--o{ state_agent_runs : "instance_id"
+    %% state_approvals schema fingerprint: 908cbb48cbdbd25b8bd71c6eacf9168ca8da9a8cf5151ec8dbe6de7f19c90bf5
+    state_approvals["state_approvals"] {
+        INTEGER sequence PK "not null"
+        TEXT approval_id UK "not null"
+        TEXT agent_run_id "not null"
+        TEXT instance_id FK "not null"
+        TEXT runner "not null"
+        TEXT kind "not null"
+        TEXT reason "nullable"
+        TEXT command "nullable"
+        TEXT cwd "nullable"
+        TEXT tool_name "nullable"
+        TEXT tool_call_id "nullable"
+        TEXT workspace_id "nullable"
+        TEXT arguments "nullable"
+        TEXT questions "nullable"
+        TEXT answers "nullable"
+        TEXT allowed_decisions "not null"
+        TEXT status "not null"
+        TEXT decision "nullable"
+        TEXT decision_source "nullable"
+        TEXT requested_at "not null"
+        TEXT decided_at "nullable"
+    }
+    state_agent_instances ||--o{ state_approvals : "instance_id"
+    %% state_legacy_run_metadata schema fingerprint: 4d253530109453b589e15c7ca221443343e1c04c95ee510d2d00cffca90af40e
+    state_legacy_run_metadata["state_legacy_run_metadata"] {
+        INTEGER sequence PK "not null"
+        TEXT run_id "not null"
+        TEXT state_json "not null"
+        TEXT requester "nullable"
+        TEXT origin_channel "nullable"
+        TEXT origin_thread_id "nullable"
+    }
+    %% state_messages schema fingerprint: 147132f6f0019a69e4017e7602e56aa69803f72f22ea0258238e7320e9aff6ea
+    state_messages["state_messages"] {
+        INTEGER sequence PK "not null"
+        TEXT instance_id FK "not null"
+        TEXT role "not null"
+        TEXT content "not null"
+        TEXT tool_calls "not null"
+        TEXT tool_call_id "nullable"
+    }
+    state_agent_instances ||--o{ state_messages : "instance_id"
+    %% state_session_grants schema fingerprint: 85ccc435297a7500b0678b40834c98b57e1600413753e957e3e427e692417b3a
+    state_session_grants["state_session_grants"] {
+        INTEGER sequence PK "not null"
+        TEXT grant_id UK "not null"
+        TEXT instance_id FK "not null"
+        TEXT runner "not null"
+        TEXT approval_kind "not null"
+        TEXT normalized_scope "not null"
+        TEXT workspace_id "nullable"
+        TEXT created_from_approval_id "not null"
+        TEXT created_at "not null"
+        TEXT revoked_at "nullable"
+    }
+    state_agent_instances ||--o{ state_session_grants : "instance_id"
+    graph_runs |o..o{ graph_approvals : "run_id (logical)"
+    graph_runs |o..o{ graph_events : "run_id (logical)"
+    graph_runs |o..o{ graph_sessions : "run_id (logical)"
+    graph_runs |o..o{ graph_cli_node_executions : "run_id (logical)"
+    graph_runs |o..o{ graph_cli_run_submissions : "run_id (logical)"
+    graph_runs |o..o{ graph_cli_loop_runs : "run_id (logical)"
+    graph_runs |o..o{ graph_cli_steering : "run_id (logical)"
+    graph_runs |o..o{ graph_github_comments : "run_id (logical)"
+    graph_runs |o..o{ graph_github_pull_requests : "run_id (logical)"
+    graph_cli_graphs |o..o{ graph_cli_graph_versions : "graph_id (logical)"
+    graph_cli_graph_versions |o..o{ graph_cli_run_submissions : "version_id (logical)"
+    graph_cli_graphs |o..o{ graph_cli_loops : "graph_id (logical)"
+    graph_cli_loops |o..o{ graph_cli_loop_runs : "loop_id (logical)"
+    graph_cli_node_executions |o..o{ graph_cli_steering : "execution_id (logical)"

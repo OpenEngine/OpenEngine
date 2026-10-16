@@ -6,6 +6,9 @@
 
 OpenEngine is a graph execution engine that meets you where you work.
 
+New here? [Start with `engine go`](docs/getting-started.md): make a local change,
+connect GitHub, and take it through review to a pull request.
+
 ![](docs/images/oe_land.png)
 
 We give you an out-of-the-box configuration to get you up and running. The out-of-the-box graph lives [here](./workflows/implementation_review_graph.py) and looks like this:
@@ -25,7 +28,7 @@ engine go "add a dark mode toggle to the settings page"
 ```
 Or try it without installing:
 ```
-npx @openengine.cc/engine go "add a dark mode toggle to the settings page"
+npx @openengine.cc/engine@latest go "add a dark mode toggle to the settings page"
 ```
 If you installed earlier with the curl installer, npm will refuse to overwrite its `~/.local/bin/engine` launcher. Run `npm i -g --force @openengine.cc/engine` once to replace it.
 `engine go` runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. It follows the run live in your terminal. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
@@ -114,6 +117,12 @@ The binary is `engine`. Run it with no arguments to list its commands:
 - `engine agent add|get|remove|signin` and `engine agents` manage the agents
   graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
   such as `engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
+  Give an agent on a model server its context window with `--context` (and
+  optionally `--output`) so opencode compacts its history before prompts
+  outgrow it. For Ollama, set `PARAMETER num_ctx` in the Modelfile and
+  `--context` to the same value: Ollama's OpenAI-compatible endpoint neither
+  reports nor enforces `num_ctx`, so without the limit every step prefills the
+  whole history.
 - `engine agent claude`, `engine agent codex` and `engine agent opencode`
   start a run whose implementation node is that CLI in this terminal: the
   daemon checks the repository out into a fresh workspace and gives the agent

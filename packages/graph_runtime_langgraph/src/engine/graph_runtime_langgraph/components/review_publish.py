@@ -34,8 +34,8 @@ class PublishReview:
         for item in state.get('review', []):
             finding = Finding.from_dict(item)
             await source.add_comment(target_url(state), finding.as_comment(), file=finding.file, line=finding.line)
-        await source.add_comment(target_url(state),
-            f"Impact: {state['impact_level']}\n\n{state['impact_rationale']}")
+        # The rationale opens with its own Impact line, so it is posted unchanged.
+        await source.add_comment(target_url(state), str(state['impact_rationale']))
         await execution.say('Published review findings and impact summary.')
         return {'review_published': True}
 
@@ -111,7 +111,7 @@ class ApproveReview:
             return {'approved': False, 'approval_reason': reason}
         target = change_request(target_url(state))
         assert target is not None and execution.runtime.source_control is not None
-        body = f"Approved automatically because impact was Green 🟢.\n\n{state['impact_rationale']}"
+        body = f"Approved automatically.\n\n{state['impact_rationale']}"
         await execution.runtime.source_control.approve_change_request(
             target.project, target.number, body, commit_sha=str(state['reviewed_sha']))
         await execution.say(body)

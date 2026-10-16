@@ -15,13 +15,14 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 
 import uvicorn
 from dotenv import dotenv_values
 from starlette.applications import Starlette
 
-from engine.apps.web.api import create_app
+from engine.apps.web.api import create_app, work_order_graph
 from engine.apps.web.composition import (
     Settings,
     build_capabilities,
@@ -37,6 +38,9 @@ from engine.apps.web.repositories import ensure_repository_checkouts
 from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
+from engine.graph_runtime_langgraph.workflows import RUNS
+from engine.graph_service.service import ServiceError, resolve_graph
+from engine.graph_service.store import GraphServiceStore
 from engine.apps.web.source_control import SourceControlPreferences, gh_cli_status
 from engine.runtime import (
     EngineConfigError,
@@ -114,6 +118,48 @@ def report_wiring(settings: Settings) -> None:
                 print(f"  github {repository}: {status}")
         asyncio.run(check_repository_access())
     print(f"assistant-ui chat is live; conversations are stored in {settings.sqlite_path}.")
+
+
+def check_work_order_workflow(settings: Settings, catalog: WorkflowCatalog | None) -> None:
+    """Refuse a `work_orders.workflow` that names neither a workflow nor a registered graph.
+
+    Checked when the server starts rather than when the first assignment or
+    mention arrives, because by then the only place left to say so is a log.
+    """
+    name = settings.engine_config.work_orders.workflow.strip()
+    if not name:
+        return
+    if catalog is not None and name in catalog:
+        return
+    webhook = settings.github_webhook
+    projects = (webhook.webhook_repositories if webhook is not None else ()) or ("",)
+    try:
+        missing = _unregistered_for(Path(settings.graph_state_directory) / RUNS, name, projects)
+    except ServiceError as error:
+        raise EngineConfigError(f"work_orders.workflow is {name!r}: {error}") from error
+    if not missing:
+        return
+    raise EngineConfigError(
+        f"work_orders.workflow is {name!r}, which is neither a workflow in [workflows] directory "
+        "nor a graph registered with `engine graph add`"
+        + (f" for {', '.join(missing)}" if any(missing) else "")
+    )
+
+
+def _unregistered_for(database: Path, name: str, projects: Sequence[str]) -> list[str]:
+    """Which of `projects` a work order could not start the registered graph `name` for.
+
+    Resolved by the rule the webhook routes use, from the graph service's own
+    file; nothing is registered until that file exists.
+    """
+    if not database.is_file():
+        return list(projects)
+    store = GraphServiceStore(database)
+    try:
+        resolve = partial(resolve_graph, store)
+        return [project for project in projects if work_order_graph(resolve, project, name) is None]
+    finally:
+        store.close()
 
 
 def _port(loaded: LoadedEngineConfig) -> int:
@@ -417,6 +463,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         loaded, workflow_catalog = read_configuration(args.config)
         settings = _settings(loaded)
+        check_work_order_workflow(settings, workflow_catalog)
         if args.check:
             _require_login_off_loopback(settings, _github_login_config(loaded))
             _service_token_reader(loaded)

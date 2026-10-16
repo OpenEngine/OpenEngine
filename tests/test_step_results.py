@@ -19,6 +19,7 @@ from engine.domain import (
 )
 from engine.ports import AgentTurn
 from engine.runtime import (
+    INVALID_COMPLETION_ERROR,
     InvalidStepResultError,
     complete_step_tool,
     fail_step_tool,
@@ -38,15 +39,54 @@ STEP = StepSpec(
 )
 
 
-def test_instructions_require_a_valid_tool_call_without_a_json_fallback() -> None:
-    instructions = step_result_instructions(STEP)
+@pytest.mark.parametrize("status_updates", [False, True])
+def test_instructions_require_a_valid_tool_call_without_a_json_fallback(
+    status_updates: bool,
+) -> None:
+    instructions = step_result_instructions(STEP, status_updates=status_updates)
 
     assert "`complete_step`" in instructions
     assert "`clarify`" in instructions
     assert "`fail_step`" in instructions
-    assert "clarification or escalation tool" in instructions
+    assert (
+        "If you are only answering a human's question and did not change the "
+        "implementation, call `clarify` after answering"
+    ) in instructions
     assert "revision" in instructions
     assert "JSON" not in instructions
+
+
+def test_unattended_instructions_require_independent_decisions() -> None:
+    instructions = step_result_instructions(STEP)
+
+    assert (
+        "Nobody is watching this step. When you hit a decision, make the call "
+        "you think is best, say what you chose and why in your summary, and finish "
+        "with `complete_step`. Don't stop to ask."
+    ) in instructions
+    assert "clarification or escalation tool" not in instructions
+    assert "`update_status`" not in instructions
+
+
+def test_watched_instructions_allow_questions_and_require_status_updates() -> None:
+    instructions = step_result_instructions(STEP, status_updates=True)
+
+    assert (
+        "If you need information or a human decision before continuing, use an "
+        "available clarification or escalation tool other than `clarify`."
+    ) in instructions
+    assert "`clarify` only finishes answering a person's question; it does not ask one." in instructions
+    assert "`update_status`" in instructions
+    assert "Nobody is watching" not in instructions
+    assert "Don't stop to ask" not in instructions
+
+
+def test_invalid_completion_error_explains_failure_and_terminal_tools() -> None:
+    assert INVALID_COMPLETION_ERROR == (
+        "The step did not report a valid terminal result. "
+        "Call `complete_step` with the declared outputs, or call `fail_step` "
+        "if the step cannot be completed."
+    )
 
 
 @pytest.mark.parametrize(

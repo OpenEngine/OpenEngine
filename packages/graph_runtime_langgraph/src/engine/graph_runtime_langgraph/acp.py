@@ -258,6 +258,12 @@ class _Turn:
         tool_call_id: str,
     ) -> ApprovalDecision:
         """Ask once, leaving enough behind to reconnect after process loss."""
+        if channel == _ACP_APPROVAL and self.node.grants(command):
+            return ApprovalDecision.ACCEPT
+        if self.node.refuses_permissions:
+            # Outside explicit ACP grants, nobody is asked and nothing is
+            # auto-approved, whatever the prompt talked the node into.
+            return ApprovalDecision.CANCEL
         self.approval_requested = True
         # Whatever the agent said on its way to asking, published before
         # anything about the question is. See `narrating`.
@@ -526,6 +532,13 @@ class ACPNode:
     Sending that again would be a second, independent task: the agent would
     start over from the words it began with, having discarded everything it had
     worked out since. All it needs to know is that the question was answered.
+    """
+    refuses_permissions: bool = False
+    """Refuse permission requests outside explicit ACP grants without asking.
+
+    For a turn that only reads, such as naming: all other tool calls that need
+    permission are declined outright, so neither a person nor a run's
+    auto-approval can expand its grants.
     """
     graph_node_name: str = ""
     """What to call this node on screen. The node's own id when empty."""
@@ -1279,6 +1292,13 @@ class ACPNode:
         return self.prompt
 
     # --- how one agent's permission request reads as an approval -----------
+
+    def grants(self, command: str) -> bool:
+        """Allow an ACP command without approval; deny by default.
+
+        This hook never authorizes independently approved MCP tools.
+        """
+        return False
 
     def kind_of(self, request: ACPPermissionRequest) -> ApprovalKind:
         # ACP's activity kind is often just "other" for these tools; inspect

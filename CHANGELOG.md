@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.9.1](https://github.com/OpenEngine/OpenEngine/compare/v1.9.0...v1.9.1) (2026-10-15)
+
+
+### Miscellaneous Chores
+
+* release 1.9.1 ([#925](https://github.com/OpenEngine/OpenEngine/issues/925)) ([141943f](https://github.com/OpenEngine/OpenEngine/commit/141943f231e39536053360fb784b8131f6b03499))
+
+## [1.9.0](https://github.com/OpenEngine/OpenEngine/compare/v1.8.0...v1.9.0) (2026-10-14)
+
+
+### Features
+
+* **cli:** add vm list and use commands ([#901](https://github.com/OpenEngine/OpenEngine/issues/901)) ([313b011](https://github.com/OpenEngine/OpenEngine/commit/313b011ade00482f9845bf2721452ccb4c9fdd54))
+* **graph:** let tdd-guide use the qwen agent as its implementer ([#897](https://github.com/OpenEngine/OpenEngine/issues/897)) ([8cc9b4b](https://github.com/OpenEngine/OpenEngine/commit/8cc9b4bd4f94d0445432f2127ece0a3fe45ec604))
+* **mcp:** allow review work orders to comment on target PRs ([#918](https://github.com/OpenEngine/OpenEngine/issues/918)) ([303c01b](https://github.com/OpenEngine/OpenEngine/commit/303c01b19f3b5f1eacbf331bdb0fbcc83c64621f))
+
+
+### Bug Fixes
+
+* allow onboarding and trusting local-only repositories ([#899](https://github.com/OpenEngine/OpenEngine/issues/899)) ([d0c49d0](https://github.com/OpenEngine/OpenEngine/commit/d0c49d092031ce527f3f1387fee9693d6b43844c))
+* **npm:** don't write the curl launcher from the npm bootstrapper ([#905](https://github.com/OpenEngine/OpenEngine/issues/905)) ([56693bb](https://github.com/OpenEngine/OpenEngine/commit/56693bb604197a816e84b452da032bbf7361369c))
+
+
+### Documentation
+
+* **site:** add Save Your First Graph guide ([#889](https://github.com/OpenEngine/OpenEngine/issues/889)) ([86959de](https://github.com/OpenEngine/OpenEngine/commit/86959de65d18a6dc0705a950148af51615a101b5))
+
 ## [1.8.0](https://github.com/OpenEngine/OpenEngine/compare/v1.7.0...v1.8.0) (2026-10-13)
 
 

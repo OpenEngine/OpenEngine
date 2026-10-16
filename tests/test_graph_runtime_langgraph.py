@@ -907,3 +907,56 @@ def test_scheduled_run_starts_once_under_reserved_id(tmp_path, persistent):
     finally:
         if persistent:
             store.close()
+
+
+@pytest.mark.parametrize("reject", [False, True])
+def test_start_claim_gates_node_execution(reject):
+    from engine.graph_runtime import RunStatus
+    from engine.graph_service.service import Conflict
+
+    async def scenario():
+        executed = asyncio.Event()
+        checking = asyncio.Event()
+        release = asyncio.Event()
+        builder = StateGraph(State)
+
+        async def work(state):
+            executed.set()
+            return {}
+
+        builder.add_node("work", work)
+        builder.add_edge(START, "work")
+        builder.add_edge("work", END)
+        runtime = LangGraphRuntime(LangGraphDefinition(
+            graph_id=GRAPH, name="Claim gate", graph=builder.compile(checkpointer=InMemorySaver()),
+        ))
+        run_id = RunId("run-claim-gate")
+
+        async def claim(asked):
+            assert asked == run_id
+            checking.set()
+            await release.wait()
+            assert not executed.is_set()
+            if reject:
+                await runtime.cancel(asked)
+                raise Conflict("PR #855 is held by run-winner")
+
+        pending = asyncio.create_task(runtime.start(GRAPH, {}, run_id=run_id, before_launch=claim))
+        try:
+            await asyncio.wait_for(checking.wait(), 1)
+            await asyncio.sleep(0)
+            assert not executed.is_set()
+            release.set()
+            if reject:
+                with pytest.raises(Conflict, match="run-winner"):
+                    await pending
+                assert (await runtime.snapshot(run_id)).status is RunStatus.FAILED
+                assert not executed.is_set()
+            else:
+                await pending
+                await asyncio.wait_for(executed.wait(), 1)
+        finally:
+            release.set()
+            await runtime.aclose()
+
+    asyncio.run(scenario())

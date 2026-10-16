@@ -156,7 +156,7 @@ def exercise_mcp(session_id: str, prompt_text: str) -> None:
     listed = call({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
     clarify_on_correction = bool(
         os.environ.get("STUB_ACP_MCP_CLARIFY_ON_CORRECTION")
-        and "Valid completion states" in prompt_text
+        and "The step did not report a valid terminal result." in prompt_text
     )
     clarified_this_turn = bool(
         (os.environ.get("STUB_ACP_MCP_CLARIFY") or clarify_on_correction)
@@ -217,7 +217,7 @@ def exercise_mcp(session_id: str, prompt_text: str) -> None:
     if (
         terminal
         and not clarified_this_turn
-        and (not terminal_on_correction or "Valid completion states" in prompt_text)
+        and (not terminal_on_correction or "The step did not report a valid terminal result." in prompt_text)
         and (not terminal_after_grant or session.get("granted"))
     ):
         session["mcp_terminal"] = terminal

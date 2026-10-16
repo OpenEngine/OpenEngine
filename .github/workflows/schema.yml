@@ -1,0 +1,113 @@
+name: schema documentation
+
+on:
+  push:
+    paths:
+      - 'migrations/**'
+      - 'alembic.ini'
+      - 'scripts/document_schema.py'
+      - 'scripts/schema_diagram.py'
+      - 'tests/test_schema_diagram.py'
+      - '.github/scripts/**'
+      - 'tests/test_schema_documentation.py'
+      - '.github/workflows/schema.yml'
+  pull_request:
+    paths:
+      - 'migrations/**'
+      - 'alembic.ini'
+      - 'scripts/document_schema.py'
+      - 'scripts/schema_diagram.py'
+      - 'tests/test_schema_diagram.py'
+      - '.github/scripts/**'
+      - 'tests/test_schema_documentation.py'
+      - '.github/workflows/schema.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schema-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  document:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: schema
+          POSTGRES_PASSWORD: schema
+          POSTGRES_DB: schema
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U schema"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Select comparison baseline
+        id: baseline
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            let base = context.payload.pull_request?.base.sha;
+            if (!base && context.ref.startsWith('refs/heads/')) {
+              const pulls = await github.rest.pulls.list({owner, repo,
+                head: `${owner}:${context.ref.slice(11)}`, state: 'open'});
+              base = pulls.data[0]?.base.sha;
+            }
+            base ||= context.payload.before;
+            if (!base || /^0+$/.test(base)) base = context.sha;
+            core.setOutput('sha', base);
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.baseline.outputs.sha }}
+          path: .schema-base
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.9.28'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install publication tooling
+        run: npm ci --prefix .github/scripts
+      - name: Typecheck and test publication
+        run: npm test --prefix .github/scripts
+      - name: Replay and inspect every revision
+        run: >-
+          uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
+          --with 'psycopg[binary]>=3,<4' python scripts/document_schema.py
+          --postgres-url postgresql+psycopg://schema:schema@localhost:5432/schema
+          --manifest schema-changes.json
+      - name: Generate latest schema comparison
+        run: >-
+          uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
+          python scripts/schema_diagram.py --base-root .schema-base
+      - name: Render schema PNG
+        run: |
+          if [ "$(cat diagram-changes.json)" != '[]' ]; then
+            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/schema.mermaid -o docs/architecture/schema.png -s 2
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: schema-documentation
+          path: |
+            docs/schema
+            docs/architecture/schema.mermaid
+            docs/architecture/schema.png
+      # Never execute fork code with a privileged pull_request_target token.
+      - name: Commit changed schemas and comment on open PRs
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await require('./.github/scripts/dist/publish-schema.js').default({github, context, core});

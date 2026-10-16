@@ -1001,3 +1001,51 @@ def test_review_config_defaults_and_repository_overrides(tmp_path):
 def test_invalid_review_configuration(document):
     with pytest.raises(EngineConfigError):
         parse_engine_config(document)
+
+
+@pytest.mark.parametrize("project,workflow,accepted", [
+    (None, "tdd-guide", False),
+    # `engine graph add` with no project, or the repository's own project.
+    ("default", "tdd-guide", True),
+    ("acme/api", "tdd-guide", True),
+    # Another project's graph is not this repository's, by name...
+    ("sandbox", "tdd-guide", False),
+    # ...unless the deployment names it outright.
+    ("sandbox", "g-1", True),
+    # A refusal other than "no such graph" is reported as itself.
+    ("default", "tdd-guide@latest", False),
+])
+def test_web_check_reports_a_work_order_workflow_that_names_nothing(
+    tmp_path, monkeypatch, capsys, project, workflow, accepted,
+):
+    """`work_orders.workflow` names a workflow or a graph registered with `engine graph add`.
+
+    One that names neither, for the repositories webhooks start work in, is
+    refused at startup, with the name, rather than when the first assignment
+    or mention cannot start anything.
+    """
+    from engine.graph_runtime_langgraph.workflows import RUNS
+    from engine.graph_service.store import GraphRow, GraphServiceStore, VersionRow
+
+    path = tmp_path / "engine.toml"
+    path.write_text(
+        f'[github]\nrepositories = ["acme/api"]\n[repos]\n"acme/api" = "{tmp_path}"\n[work_orders]\nworkflow = "{workflow}"\n'
+    )
+    graph_state = tmp_path / "graph-state"
+    graph_state.mkdir()
+    monkeypatch.setenv("ENGINE_GRAPH_STATE_DIRECTORY", str(graph_state))
+    if project is not None:
+        store = GraphServiceStore(graph_state / RUNS)
+        store.insert_graph(GraphRow("g-1", project, "tdd-guide", "gv-1", "now", "now"))
+        store.insert_version(VersionRow("gv-1", "g-1", 1, {}, "digest", "now"))
+        store.close()
+    seen = []
+    monkeypatch.setattr(web_main, "report_wiring", seen.append)
+
+    assert web_main.main(["--check", "--config", str(path)]) == (0 if accepted else 2)
+
+    if accepted:
+        assert len(seen) == 1
+    else:
+        assert not seen
+        assert f"work_orders.workflow is '{workflow}'" in capsys.readouterr().err

@@ -11,6 +11,7 @@ from engine.graph_runtime_langgraph.forge import resolve_forge_context
 from engine.graph_service.service import NotFound, ServiceError
 
 NO_TARGET = 'no such branch or PR; to give an instruction, quote it'
+NO_BRANCH = 'no current branch; switch to a branch or pass one explicitly'
 NO_REPOSITORY = 'no repository: run in a checkout or pass --repo or a full PR URL'
 CONNECT = 'cannot read this repository while disconnected; run engine connect github'
 FORK_FIX = 'cannot fix a fork PR or a PR with an unavailable head repository; check out the fork and fix it there'
@@ -64,11 +65,19 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
         raise ServiceError(OUTSIDE_REPOSITORY)
     if not repository:
         raise ServiceError(NO_REPOSITORY)
-    if not target and not number and verb != 'go' and checkout:
-        target = await _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
     context = await resolve_forge_context(service.runtime.source_control,
         {'repository': path, 'inputs': {'mode': 'disconnected'} if local else {}})
     disconnected = context['mode'] == 'disconnected'
+    if not target and not number and checkout and verb != 'go':
+        target = await _git(path, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+        if not target and disconnected and verb == 'review':
+            raise ServiceError(NO_BRANCH)
+    exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
+    # Free-form instructions must not acquire a ref: that selects review mode.
+    if disconnected and verb == 'go' and checkout and not target and not number:
+        return {'repo': repository, 'mode': context['mode']}
+    if disconnected and verb in ('review', 'go') and exists and not number:
+        return {'repo': repository, 'mode': context['mode'], 'ref': target}
     inspector = getattr(service.runtime.source_control, 'inspect_target', None)
     details: dict[str, Any] = {}
     if project and inspector:
@@ -86,7 +95,6 @@ async def resolve_target(service: GraphService, repository: str, target: str, *,
             raise ServiceError(OUTSIDE_REPOSITORY)
     if verb == 'fix' and details.get('pr_url') and str(details.get('head_repository', '')).casefold() != project.casefold():
         raise ServiceError(FORK_FIX)
-    exists = bool(target and checkout and await _git(path, 'show-ref', '--verify', '--hash', f'refs/heads/{target}'))
     if target and not exists and not details.get('exists'):
         raise NotFound(NO_TARGET)
     if number and not details.get('pr_url'):

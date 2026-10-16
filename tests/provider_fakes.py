@@ -61,6 +61,7 @@ import select
 import shlex
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -482,6 +483,10 @@ def _acp_turn(
         kind = str(step.get("type"))
         if kind == "say":
             _acp_say(session_id, str(step.get("text", "")))
+        elif kind == "wait":
+            if _acp_wait(session_id, float(step["seconds"])):
+                _acp_respond(message_id, {"stopReason": "cancelled"})
+                return
         elif kind == "tool":
             called = _require(server, "ACP")
             name = str(step["name"])
@@ -509,6 +514,25 @@ def _acp_turn(
         else:
             raise SystemExit(f"ACP cannot play a {kind!r} step")
     _acp_respond(message_id, {"stopReason": "end_turn"})
+
+
+def _acp_wait(session_id: str, seconds: float) -> bool:
+    """Pause the scripted agent without showing a fake command or spawning a child."""
+    deadline = time.monotonic() + seconds
+    while (remaining := deadline - time.monotonic()) > 0:
+        readable, _, _ = select.select([sys.stdin], [], [], remaining)
+        if not readable:
+            continue
+        line = sys.stdin.readline()
+        if not line:
+            return True
+        message = json.loads(line)
+        if (
+            message.get("method") == "session/cancel"
+            and (message.get("params") or {}).get("sessionId") == session_id
+        ):
+            return True
+    return False
 
 
 def _acp_execute(session_id: str, command: str, cwd: str) -> tuple[int, str, bool]:

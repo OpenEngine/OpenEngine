@@ -222,6 +222,7 @@ def slack_app(web_app):
         pull_requests=None,
         approval_policy=None,
         repos=None,
+        graph_service=None,
     ):
 
         stub = object()
@@ -266,6 +267,7 @@ def slack_app(web_app):
                 github_repositories=github_repositories,
                 review_request_workflow=review_request_workflow,
                 **({"pull_requests": pull_requests} if pull_requests is not None else {}),
+                **({"graph_service": graph_service} if graph_service is not None else {}),
             ),
             capabilities,
             slack_store,

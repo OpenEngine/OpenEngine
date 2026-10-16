@@ -1053,7 +1053,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <div className="detail-title">
               <div className="workorder-heading">
                 <p className="eyebrow">{run.workflowName}</p>
-                <h1>{run.name}</h1>
+                <h1 title={run.name}>{run.name}</h1>
                 <WorkOrderPrompt key={run.runId} prompt={run.taskPrompt} />
               </div>
               <span className={`chip ${phaseAccent(run.phase) === "flame" ? "chip-flame" : "chip-ink"}`}>

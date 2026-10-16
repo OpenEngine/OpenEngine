@@ -110,6 +110,16 @@ def test_agent_transcript_is_mirrored(
 
         state = browser.portal.call(finished)
         assert state.phase is (RunPhase.SUCCEEDED if ending == "finished" else RunPhase.FAILED)
+        if origin == "slack":
+            # The runtime snapshot can be terminal before its notification is delivered.
+            async def notified():
+                text = ("Work order finished." if ending == "finished"
+                        else "Work order failed: unexpected service failure")
+                async with asyncio.timeout(10):
+                    while not any(m.text == text for _, m, _ in communications.posts):
+                        await asyncio.sleep(0.01)
+
+            browser.portal.call(notified)
         events = browser.get(f"/api/runs/{run_id}/graph-events").json()["events"]
         diagnostics = [e for e in events if e["type"] == EventKind.NOTIFICATION_FAILED.value]
         assert len(diagnostics) == int(origin == "slack" and fail_post and not blank_report)

@@ -18,7 +18,7 @@ _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 FIELDS = {
     "graph": {
         "description", "inputs", "repository",
-        *SECTIONS, "flow", "loop",
+        *SECTIONS, "flow", "loop", "naming",
     },
     "input": {"description", "default", "choices"},
     "checkout": {"base_ref", "ref", "name", "description"},
@@ -33,6 +33,7 @@ FIELDS = {
     "flow": {"from", "to", "route"},
     "route": {"when", "to"},
     "loop": {"every"},
+    "naming": {"agent"},
 }
 
 
@@ -97,6 +98,11 @@ FIELD_RULES = {
                       error="required; lowercase letters, digits, '.', '_' and '-'"),
     },
     "input": {"required": _REQUIRED},
+    "naming": {
+        "model": Field("Model for the naming turn: a tier, a model, or ${inputs...}; "
+                       "empty means the agent's cheapest tier.", types=(str,), default="",
+                       error="must be a tier such as cheapest, a model, or ${...}"),
+    },
     "agent step": {
         "timeout": Field("Wall-clock seconds for one agent invocation, including startup, tools and approvals; finite and positive.",
                          types=(int, float), default=1800.0, fallback=1800.0,
