@@ -93,9 +93,16 @@ jobs:
           uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
           python scripts/schema_diagram.py --base-root .schema-base
       - name: Render schema PNG
+        env:
+          # Use Ubuntu's installed Chrome, covered by its AppArmor profile.
+          # Puppeteer's downloaded Chrome cannot create user namespaces here.
+          PUPPETEER_SKIP_DOWNLOAD: "true"
         run: |
           if [ "$(cat diagram-changes.json)" != '[]' ]; then
-            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/schema.mermaid -o docs/architecture/schema.png -s 2
+            SCHEMA_CHROME="$(command -v google-chrome)"
+            export SCHEMA_CHROME
+            node -e 'require("node:fs").writeFileSync(process.env.RUNNER_TEMP + "/schema-puppeteer.json", JSON.stringify({executablePath: process.env.SCHEMA_CHROME, headless: true}))'
+            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/schema.mermaid -o docs/architecture/schema.png -s 2 --puppeteerConfigFile "$RUNNER_TEMP/schema-puppeteer.json"
           fi
       - uses: actions/upload-artifact@v7
         with:

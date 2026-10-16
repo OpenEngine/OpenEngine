@@ -8,6 +8,7 @@ import pytest
 
 from engine.apps.web import onboarding as onboard
 from engine.runtime.repositories import RepositoryRegistry
+from engine.runtime.config import EngineConfig, SandboxConfig
 
 
 @pytest.mark.parametrize('reference', [
@@ -252,7 +253,8 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
     monkeypatch.setattr(onboard, 'ensure_repository_checkouts', lambda repos, **kwargs: target.mkdir())
     monkeypatch.setattr(RepositoryRegistry, '_project', lambda self, path: 'owner/repo')
     registry = RepositoryRegistry(projects={})
-    settings = Settings(graph_state_directory=str(tmp_path / 'graphs'), workspace_root=str(tmp_path / 'workspaces'))
+    settings = Settings(graph_state_directory=str(tmp_path / 'graphs'), workspace_root=str(tmp_path / 'workspaces'),
+                        engine_config=EngineConfig(sandbox=SandboxConfig(backend='process')))
     runner = ConcurrentRunner()
     app = create_app(_session(runner), {'test': runner}, repos=registry,
                      workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'config.toml',

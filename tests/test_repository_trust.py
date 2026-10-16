@@ -9,7 +9,7 @@ import pytest
 from engine.apps.web.onboarding import RepositoryOnboarding, persist_repository
 from engine.cli.commands import _check_trust
 from engine.graph_service.api import create_app
-from engine.runtime.config import EngineConfigError, parse_engine_config
+from engine.runtime.config import EngineConfig, EngineConfigError, SandboxConfig, parse_engine_config
 from engine.runtime.repositories import RepositoryRegistry
 
 
@@ -113,7 +113,8 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path):
 
     config_path = tmp_path / 'engine.toml'
     registry = RepositoryRegistry({'owner/repo': str(tmp_path / 'checkout')}, projects={})
-    settings = Settings(graph_state_directory=str(tmp_path / 'graphs'), workspace_root=str(tmp_path / 'workspaces'))
+    settings = Settings(graph_state_directory=str(tmp_path / 'graphs'), workspace_root=str(tmp_path / 'workspaces'),
+                        engine_config=EngineConfig(sandbox=SandboxConfig(backend='process')))
     runner = ConcurrentRunner()
     app = create_web_app(_session(runner), {'test': runner}, repos=registry,
                          workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=config_path,

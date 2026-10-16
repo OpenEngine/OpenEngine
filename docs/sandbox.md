@@ -668,14 +668,29 @@ Without an image these cases skip; once opted in, network failures fail the test
 
 ## Hardware CI
 
-`.github/workflows/sandbox.yml` runs the real sandbox suite and the complete
-built-in default workflow on `[self-hosted, macOS, ARM64]` from #662. Set the
-repository variable `SMOLVM_TEST_IMAGE` to the absolute path of the runner's
-prebuilt guest archive;
-optionally set `SMOLVM_EXECUTABLE` to its installed wrapper. The image must be
-rebuilt from this checkout's pinned guest Dockerfile when its contents change.
-The job fails if prerequisites or the image are missing, rather than silently
-skipping real-VM tests. Fork PRs stay off the self-hosted machine, as in #662.
+`.github/workflows/sandbox.yml` provisions and tests the sandbox from this
+repository. Push updates to an open PR to run it automatically. Once this
+workflow exists on the default branch, it can also be started through
+**Actions → sandbox → Run workflow**:
+
+1. A GitHub-hosted `ubuntu-24.04-arm` job builds the ARM64 guest from the checked-in
+   Dockerfile and npm lock, then uploads the archive as a short-lived artifact.
+   This job only builds an image; it does not run Linux KVM tests.
+2. The `[self-hosted, macOS, ARM64]` runner from #662 downloads that archive and
+   installs the full SmolVM 1.27.1 release through its immutable upstream installer.
+   The installation is cached under `$RUNNER_TOOL_CACHE/openengine-smolvm/1.27.1`.
+   Docker is not needed on the Mac, and shell profiles are not modified.
+3. The Mac checks hardware support, then runs the real sandbox suite and the
+   complete default workflow with synthetic peers and credentials.
+
+No repository variables are required. Operators can still set
+`SMOLVM_EXECUTABLE` to an absolute wrapper path, or `SMOLVM_TEST_IMAGE` to an
+absolute prebuilt archive path on the Mac. An image override skips the hosted
+build; it must be rebuilt whenever the guest Dockerfile or npm lock changes.
+Missing prerequisites, failed provisioning and empty images fail the job rather
+than silently skipping real-VM tests. Fork PRs stay off the self-hosted machine,
+as in #662. The Mac runner must already exist and allow hardware virtualization;
+the workflow installs software on that runner, not a runner service or host VM.
 
 The default-workflow test replaces only the model peers, keeps the real graph
 and MCP bridge, and forbids host ACP provider connections. It runs all agent

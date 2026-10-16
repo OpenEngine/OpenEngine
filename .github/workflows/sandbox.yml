@@ -14,10 +14,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  guest-image:
+    name: Build ARM64 guest image
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.SMOLVM_TEST_IMAGE == ''
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the pinned guest for the Mac runner
+        run: |
+          docker build --platform linux/arm64 \
+            -f packages/adapters/sandbox/smolvm/guest/Dockerfile \
+            -t openengine-sandbox:ci .
+          docker save openengine-sandbox:ci -o "$RUNNER_TEMP/openengine-sandbox.tar"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sandbox-guest-arm64
+          path: ${{ runner.temp }}/openengine-sandbox.tar
+          compression-level: 0
+          retention-days: 1
+
   macos:
     name: sandbox (macOS ARM64)
+    needs: guest-image
+    # An operator-provided archive skips the build; failed builds never run tests.
     # Matches #662: never execute a fork PR on the persistent runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: always() && (needs.guest-image.result == 'success' || needs.guest-image.result == 'skipped') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     env:
@@ -33,20 +55,39 @@ jobs:
           enable-cache: true
       - name: Install workspace
         run: uv sync --locked --all-packages
+      - uses: actions/download-artifact@v8
+        if: vars.SMOLVM_TEST_IMAGE == ''
+        with:
+          name: sandbox-guest-arm64
+          path: ${{ runner.temp }}/sandbox-image
+      - name: Install pinned SmolVM when no runner override is configured
+        if: vars.SMOLVM_EXECUTABLE == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TOOL_CACHE:-$HOME/.cache}/openengine-smolvm/1.27.1"
+          if [ ! -x "$prefix/smolvm" ] || [ "$(cat "$prefix/.version" 2>/dev/null || true)" != "1.27.1" ] || ! "$prefix/smolvm" --version; then
+            # Immutable upstream installer from v1.27.1; installs the complete
+            # release with libraries, rootfs and disk templates, not just a binary.
+            curl --fail --show-error --location --retry 3 \
+              https://raw.githubusercontent.com/smol-machines/smolvm/fd9e3795a77e289d2b26c01abd80b21c90fcb051/scripts/install.sh \
+              --output "$RUNNER_TEMP/install-smolvm.sh"
+            bash "$RUNNER_TEMP/install-smolvm.sh" --version 1.27.1 --prefix "$prefix" --no-modify-path
+          fi
+          echo "OE_SMOLVM_EXECUTABLE=$prefix/smolvm" >> "$GITHUB_ENV"
       - name: Require real hardware and a configured guest image
         shell: bash
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$PATH"
-          executable="${SMOLVM_WRAPPER:-$(command -v smolvm || true)}"
-          test -n "$executable" || { echo '::error::Install the complete SmolVM release on the runner'; exit 1; }
-          test -n "$OE_SMOLVM_TEST_IMAGE" && test -s "$OE_SMOLVM_TEST_IMAGE" || {
-            echo '::error::Set SMOLVM_TEST_IMAGE to the prebuilt guest archive; see docs/sandbox.md'
-            exit 1
-          }
+          executable="${SMOLVM_WRAPPER:-${OE_SMOLVM_EXECUTABLE:-}}"
+          image="${OE_SMOLVM_TEST_IMAGE:-$RUNNER_TEMP/sandbox-image/openengine-sandbox.tar}"
+          test -x "$executable" || { echo '::error::SmolVM setup did not produce an executable wrapper'; exit 1; }
+          test -s "$image" || { echo '::error::Guest image is missing or empty; see docs/sandbox.md'; exit 1; }
           export OE_SMOLVM_EXECUTABLE="$executable"
           uv run python -c 'import os; from engine.adapters.sandbox.smolvm.support import detect_support; support = detect_support(os.environ["OE_SMOLVM_EXECUTABLE"]); print(support.reason); assert support.available'
           echo "OE_SMOLVM_EXECUTABLE=$executable" >> "$GITHUB_ENV"
+          echo "OE_SMOLVM_TEST_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Run sandbox suite on real VMs
         run: >-
           uv run pytest -o addopts='' -m 'not compatibility'
