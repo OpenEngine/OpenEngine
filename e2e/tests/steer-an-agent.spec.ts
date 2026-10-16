@@ -30,7 +30,7 @@ const SUGGEST = "one small improvement"
 /** What the reader tells the agent, and so what its next turn is asked. */
 const NUDGE = "Keep the project's name. Suggest a clearer first sentence for README.md instead."
 
-type Run = { runId: string; status: string; terminal?: boolean }
+type Run = { runId: string; status: string; terminal?: boolean; pendingApprovals?: { approvalId: string }[] }
 type Steering = { steeringId: string; status: string; message: string }
 type Node = { node: string; executionId: string; attempt: number; status: string; runner: string; steering?: Steering[] }
 type Agent = { name: string; kind: string; builtin?: boolean }
@@ -122,11 +122,16 @@ test.describe(graphsCategory, () => {
             scenarios: [
               // Listed first: the turn that carries the reader's message quotes it.
               { when: NUDGE, steps: [{ type: "say", text: "Suggesting a clearer first sentence, and keeping the name." }] },
-              { when: READ, steps: [{ type: "say", text: "This is an example project; its README is one heading." }] },
+              { when: READ, steps: [
+                { type: "run", command: "cat README.md" },
+                { type: "say", text: "This is an example project; its README is one heading." },
+              ] },
               {
                 when: SUGGEST,
                 steps: [
                   { type: "say", text: "I'll suggest a new name for the project." },
+                  // A read action publishes the preceding narration in the live view.
+                  { type: "run", command: "cat README.md", approval: false },
                   // Busy, heading the wrong way, until the reader steers it.
                   { type: "wait", seconds: 600 },
                 ],
@@ -160,7 +165,61 @@ Your terminal comes straight back, and the run goes on in OpenEngine's backgroun
         await clear(terminal)
 
         await step(
-          `To see what each agent in the run is doing, type \`engine nodes --run\` followed by your run ID, and press Enter.
+          `Open the live screen so you can answer an agent's questions and read what it is doing. Type \`engine run watch\` followed by your run ID, and press Enter.
+
+If you declined repository trust in the previous guide, the read step may be waiting for permission to read README.md. The run waits until you answer; waiting longer won't move it along.`,
+          async () => {
+            await terminal.type(`engine run watch ${runId}`)
+            await terminal.press("Enter")
+            await terminal.waitForText(/^Allow\? \[y\/n\][ \t]*$/m)
+            expect((await run(engine, runId)).pendingApprovals).toHaveLength(1)
+            await show(terminal, engine, testInfo, await terminal.row(/^Allow\? \[y\/n\][ \t]*$/),
+              "The agent is waiting for permission to read the file")
+          },
+        )
+
+        await step(
+          `Read the question. Here the agent asks to run \`cat README.md\`, which reads the file describing your project. Type \`y\` and press Enter to allow it.
+
+Answer any further permission questions the same way if you want to allow the action. Then watch the lines after ┃: they show the agent's words and actions. Here the suggest agent says it will suggest a new project name. That's the direction we'll correct. Your agent's words may differ, and a short step may finish before you can steer it.`,
+          async () => {
+            await terminal.type("y")
+            await terminal.press("Enter")
+            await terminal.waitForText(/┃.*I'll suggest a new name for the project\./)
+            expect((await run(engine, runId)).pendingApprovals ?? []).toHaveLength(0)
+            await show(terminal, engine, testInfo,
+              await terminal.row(/┃.*I'll suggest a new name for the project\./),
+              "The agent is planning a rename; you want clearer wording")
+          },
+        )
+
+        await step(
+          `To return to your terminal while the agent keeps working, press Ctrl-C. The screen asks what you want to do.`,
+          async () => {
+            await terminal.press("Control+C")
+            const question = /\[d\]etach and leave it running, \[c\]ancel the run, or keep \[w\]atching\?/
+            await terminal.waitForText(question)
+            await show(terminal, engine, testInfo, await terminal.row(question),
+              "Choose whether to leave the run going")
+          },
+        )
+
+        await step(
+          `Type \`d\` and press Enter to detach: close this screen and leave the run going. You can now check individual steps and send your message.`,
+          async () => {
+            await terminal.type("d")
+            await terminal.press("Enter")
+            expect(await terminal.waitForPrompt()).toBe(0)
+            expect((await run(engine, runId)).status).toBe("running")
+            await show(terminal, engine, testInfo, await terminal.row(/^Detached\./),
+              "The live screen is closed; the agent is still working")
+          },
+        )
+
+        await clear(terminal)
+
+        await step(
+          `To see which steps are running or finished, type \`engine nodes --run\` followed by your run ID, and press Enter.
 
 You'll see one row for each step that has started so far. **NODE** is the step's name, **STATUS** says how it's going (*running* while its agent works, *completed* when it's done), and **RUNNER** is the agent doing it. **EXECUTION** is that step's own ID: copy the one for \`suggest\`, the step that's still running. You can leave the other columns alone.
 
@@ -196,7 +255,7 @@ You'll see the same row on its own. It's a quick way to check on one agent while
         await clear(terminal)
 
         await step(
-          `Say the \`suggest\` agent has started working on a new name for your project, and you only wanted its README's wording improved. Tell it so. Type \`engine node steer\`, the ID you copied, and your message in quotes, then press Enter:
+          `You saw the \`suggest\` agent propose a new name for your project, and you only wanted its README's wording improved. Tell it so. Type \`engine node steer\`, the ID you copied, and your message in quotes, then press Enter:
 
 \`\`\`sh
 engine node steer EXECUTION "${NUDGE}"
