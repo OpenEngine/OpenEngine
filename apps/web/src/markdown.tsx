@@ -1,3 +1,4 @@
+import { memo } from "react";
 import MarkdownRenderer from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -26,9 +27,12 @@ const components: Components = {
       </a>
     );
   },
+  // An image would make the viewer's browser fetch whatever URL the agent
+  // wrote, leaking the data in that URL along with the viewer's IP.
+  img: ({ alt }) => (alt ? <>{alt}</> : null),
 };
 
-export function Markdown({
+export const Markdown = memo(function Markdown({
   children,
 }: {
   children?: string | null;
@@ -46,4 +50,4 @@ export function Markdown({
       </MarkdownRenderer>
     </div>
   );
-}
+});

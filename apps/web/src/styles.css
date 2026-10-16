@@ -148,7 +148,7 @@ ul, ol { padding: 0; list-style: none; }
   white-space: pre-line;
 }
 .notice-block { margin: 26px var(--gutter); }
-.notice code, .code-inline {
+.notice code, .code-inline, .markdown :not(pre) > code {
   padding: 2px 5px;
   background: #00000010;
   font: 400 .92em/1.4 var(--mono);
@@ -1163,7 +1163,6 @@ select:disabled { cursor: default; }
 .markdown p { margin: 0 0 10px; }
 .markdown ul, .markdown ol { margin: 0 0 10px; padding-left: 22px; }
 .markdown li { margin: 3px 0; }
-.markdown :not(pre) > code { padding: 2px 5px; background: #00000010; font: 400 .92em/1.4 var(--mono); }
 .markdown pre {
   margin: 0 0 10px;
   padding: 12px 15px;

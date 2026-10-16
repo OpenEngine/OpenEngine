@@ -717,7 +717,7 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
           </p>
         )}
-        {step.summary && (
+        {step.summary.trim() && (
           <div className="step-summary">
             <Markdown>{step.summary}</Markdown>
           </div>
