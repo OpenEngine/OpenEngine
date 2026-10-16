@@ -188,7 +188,7 @@ The \`loop\` part is new. \`every: 1h\` says to run the graph once an hour, and 
         await step(
           `Set up the loop. Type \`${ADD}\` and press Enter.
 
-\`--max-spend 5\` means its agents may spend at most $5 in all, across every run. \`--max-prs 1\` means it may open at most one pull request. When the loop reaches either limit, it pauses itself. \`--every 1h\` says how often to run; you can leave it out when the graph says, as this one does.
+\`--max-spend 5\` sets a $5 limit on reported agent usage across every run. OpenEngine stops the active run when reported spending reaches the limit; usage it cannot price and other costs, such as hosting, are not included. \`--max-prs 1\` means it may open at most one pull request. When the loop reaches either limit, it pauses itself. \`--every 1h\` says how often to run; you can leave it out when the graph says, as this one does.
 
 OpenEngine shows the loop's name, that it's *active*, how often it runs and when it runs next, and what it has used so far of each limit. Its first run starts right away. If OpenEngine asks whether to trust the folder, answer \`n\`, as in the last guide.`,
           async () => {
@@ -291,7 +291,7 @@ If it paused itself because it reached a limit, it won't start again until you r
         const runId = await activeRun(engine)
 
         await step(
-          `When you no longer want a loop at all, stop it. Unlike pausing, stopping is for good: the loop starts no more runs, the run it's doing now is stopped too, and it can't be started again. To have the graph run on a schedule again later, set up a new loop.
+          `When you no longer want a loop at all, stop it. Unlike pausing, stopping is for good: the loop starts no more runs, the run it's doing now is stopped too, and it can't be started again. To have the graph run on a schedule again later, set up a new loop with a different name using \`--name\`.
 
 Type \`engine loop stop check-readme\` and press Enter. OpenEngine shows the loop as *stopped*.`,
           async () => {
