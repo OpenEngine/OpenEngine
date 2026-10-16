@@ -14,17 +14,6 @@ Index messages by conversation and sequence.
 
  CREATE INDEX milestones_by_project ON milestones (project_id);
 
-@@ -104,8 +106,8 @@
-    milestone_id TEXT,
-    PRIMARY KEY (sequence),
-    CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
--   UNIQUE (run_id),
--   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id)
-+   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
-+   UNIQUE (run_id)
- );
-
- CREATE TABLE session_grants (
 ```
 
 ## Schema
