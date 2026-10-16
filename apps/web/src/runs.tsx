@@ -28,6 +28,7 @@ import {
   linkable,
   useRunGithubComments,
 } from "./github-activity";
+import { Markdown } from "./markdown";
 
 export const IN_PROGRESS_PHASES = new Set([
   "pending",
@@ -716,7 +717,11 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
           </p>
         )}
-        {step.summary && <p className="step-summary">{step.summary}</p>}
+        {step.summary && (
+          <div className="step-summary">
+            <Markdown>{step.summary}</Markdown>
+          </div>
+        )}
         {step.outputs.length > 0 && (
           <dl className="step-outputs">
             {step.outputs.map((output) => (
