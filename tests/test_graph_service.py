@@ -1568,3 +1568,37 @@ def test_stopping_loop_clears_missing_active_run(tmp_path: Path, monkeypatch, mi
             assert service.store.loop_runs(loop_id) == ()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", [UnknownRunError, UnknownGraphError])
+def test_stopping_loop_during_start_clears_missing_run(tmp_path: Path, monkeypatch, missing) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+
+            async def stop_then_start(*args, **kwargs):
+                await service.stop_loop("default", loop_id)
+                return RunId("run-missing")
+
+            monkeypatch.setattr(service, "_start_version", stop_then_start)
+            cancel = AsyncMock(side_effect=missing("already gone"))
+            monkeypatch.setattr(service.runtime, "cancel", cancel)
+            await service.tick()
+
+            cancel.assert_awaited_once_with(RunId("run-missing"))
+            stopped = await service.loop_json(loop_id)
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            assert service.store.loop(loop_id).active_run_id is None
+            clock.advance(hours=3)
+            await service.tick()
+            assert len(service.store.loop_runs(loop_id)) == 1
+            cancel.assert_awaited_once()
+
+    asyncio.run(scenario())

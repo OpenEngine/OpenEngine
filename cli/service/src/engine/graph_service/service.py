@@ -1103,7 +1103,10 @@ class GraphService:
         # Stop may have arrived while starting the run awaited the runtime.
         fresh = self.store.loop(row.loop_id)
         if fresh is not None and fresh.state == "stopped":
-            await self.runtime.cancel(run_id)
+            try:
+                await self.runtime.cancel(run_id)
+            except (UnknownRunError, UnknownGraphError):
+                pass  # The run is already gone; clear its stale reference below.
             self.store.update_loop(row.loop_id, active_run_id=None, updated_at=self._now_iso())
 
     async def _schedule(self) -> None:
