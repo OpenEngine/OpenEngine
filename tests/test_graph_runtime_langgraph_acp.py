@@ -59,6 +59,7 @@ from engine.ports import (
 from engine.graph_runtime_langgraph.acp import (
     APPROVAL_ID, ACPNode, _replay_history, _replay_prompt, _Turn, _TURNS,
 )
+from engine.graph_runtime_langgraph.components.name import NameNode
 from engine.graph_runtime.events import EventKind
 from engine.runtime import INVALID_COMPLETION_ERROR
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -1398,7 +1399,7 @@ def test_steering_sent_during_a_steered_turn_still_reaches_the_agent(
 
 
 def test_a_node_that_refuses_permissions_declines_without_asking() -> None:
-    """A read-only turn such as naming is never granted anything.
+    """A refusing node without explicit grants is never granted anything.
 
     Not by a person and not by a run's auto-approval: the request is refused
     before it becomes an approval at all.
@@ -1421,6 +1422,59 @@ def test_a_node_that_refuses_permissions_declines_without_asking() -> None:
         del _TURNS["refusing"]
 
     assert not outcome.granted
+
+
+@pytest.mark.parametrize(("command", "granted"), [
+    ("gh issue view 830", True),
+    ("gh pr view 911 --json title,body --comments -R OpenEngine/OpenEngine", True),
+    ("gh issue view https://github.com/OpenEngine/OpenEngine/issues/830", True),
+    ("gh pr view https://github.com/OpenEngine/OpenEngine/pull/911 --repo other/repo", True),
+    ("gh issue view 830; rm -rf .", False),
+    ("gh issue edit 830", False),
+    ("gh issue view 830 --web", False),
+    ("gh issue view 830 --json title --jq .", False),
+    ("gh issue view 830 --repo", False),
+    ("gh issue view 830 --json --web", False),
+    ("gh issue view 830 --json ''", False),
+    ("gh issue view 830 --comments extra", False),
+    ("gh issue view branch-name", False),
+    ("gh issue view '830", False),
+    ("gh issue view", False),
+    ("", False),
+    ("sh -c 'gh issue view 830'", False),
+    *[(f"gh issue view 830{character}echo", False)
+      for character in ";&|<>$`()\n\r"],
+])
+def test_naming_grants_only_read_only_acp_commands(command: str, granted: bool) -> None:
+    class Unasked:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"naming reached its execution: {name}")
+
+    node = NameNode(agent=AGENT, cwd=".")
+    turn = _Turn(node, Unasked(), "naming", "naming-grant")  # type: ignore[arg-type]
+    request = ACPPermissionRequest(
+        agent=AGENT,
+        session_id="naming-grant",
+        tool_call={"rawInput": {"command": command}, "toolCallId": "call_1"},
+        options=(ACPPermissionOption("yes", kind="allow_once"),),
+    )
+    outcome = asyncio.run(turn.ask(request))
+    assert outcome.granted is granted
+    assert not turn.approval_requested
+
+
+def test_naming_grants_do_not_authorize_mcp_tools() -> None:
+    from engine.ports import ApprovalRequest
+
+    node = NameNode(agent=AGENT, cwd=".")
+    turn = _Turn(node, None, "naming", "naming-mcp")  # type: ignore[arg-type]
+    decision = asyncio.run(turn.approve(ApprovalRequest(
+        approval_id="mcp-read",
+        kind=ApprovalKind.COMMAND_EXECUTION,
+        command="gh issue view 830",
+    )))
+    assert decision == ApprovalDecision.CANCEL
+    assert not ACPNode(agent=AGENT, cwd=".").grants("gh issue view 830")
 
 
 def test_an_acp_permission_request_becomes_an_answerable_approval(

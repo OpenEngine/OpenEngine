@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -19,7 +21,8 @@ log = logging.getLogger(__name__)
 NAMING_PROMPT = (
     "Give this WorkOrder a concise display name based on the task below. When "
     "the request points at an issue or a pull request instead of describing the "
-    "work, read that item first and name what it is actually about. If it names "
+    "work, read that item first using plain `gh issue view N` or `gh pr view N` "
+    "(or its URL) and name what it is actually about. If it names "
     "an issue or pull request by number, lead the name with the number, as in "
     '"#270 Dependencies can run arbitrary install scripts". Do not change the '
     "workspace and do not perform the task. Return a JSON object with a single "
@@ -52,11 +55,46 @@ class NameNode(ACPNode):
     graph_node_show_in_sidebar: bool = False
     graph_node_group: str = WorkState.PLANNING
     refuses_permissions: bool = True
-    """Naming reads untrusted issue text, so nothing it asks to do is granted.
+    """Naming reads untrusted text, so only explicit read-only grants are allowed.
 
     This does not reach what an agent's sandbox allows without asking, such as
     Codex writing inside the checkout.
     """
+
+    def grants(self, command: str) -> bool:
+        """Permit only plain GitHub issue/PR reads, including other repositories."""
+        if any(character in command for character in ";&|<>$`()\n\r"):
+            return False
+        try:
+            args = shlex.split(command)
+        except ValueError:
+            return False
+        if len(args) < 4 or args[:3] not in (
+            ["gh", "issue", "view"], ["gh", "pr", "view"],
+        ):
+            return False
+        if not re.fullmatch(
+            r"[0-9]+|https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/"
+            r"[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+",
+            args[3],
+        ):
+            return False
+        index = 4
+        while index < len(args):
+            flag = args[index]
+            index += 1
+            if flag == "--comments":
+                continue
+            if flag not in ("--json", "-R", "--repo") or index == len(args):
+                return False
+            pattern = (
+                r"[A-Za-z][A-Za-z0-9]*(?:,[A-Za-z][A-Za-z0-9]*)*"
+                if flag == "--json" else r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+            )
+            if not re.fullmatch(pattern, args[index]):
+                return False
+            index += 1
+        return True
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         try:
