@@ -298,19 +298,18 @@ class LoadedEngineConfig:
     def _base_directory(self) -> Path:
         return self.path.parent if self.path is not None else Path.cwd()
 
-    @property
-    def claude_config_dir(self) -> Path | None:
-        configured = self.config.claude.config_dir
+    def _config_directory(self, configured: str) -> Path | None:
         if not configured:
             return None
         return _relative_to(Path(configured).expanduser(), self._base_directory).resolve()
 
     @property
+    def claude_config_dir(self) -> Path | None:
+        return self._config_directory(self.config.claude.config_dir)
+
+    @property
     def gh_config_dir(self) -> Path | None:
-        configured = self.config.github.gh_config_dir
-        if not configured:
-            return None
-        return _relative_to(Path(configured).expanduser(), self._base_directory).resolve()
+        return self._config_directory(self.config.github.gh_config_dir)
 
     @property
     def workflows_directory(self) -> Path | None:
@@ -398,10 +397,12 @@ def load_engine_config(
         config=parse_engine_config(document), path=path,
         explicit=explicit_path is not None or bool(environment.get(CONFIG_ENVIRONMENT_VARIABLE)),
     )
-    if (directory := loaded.claude_config_dir) is not None and not directory.is_dir():
-        raise EngineConfigError(f"claude.config_dir is not an existing directory: {directory}")
-    if (directory := loaded.gh_config_dir) is not None and not directory.is_dir():
-        raise EngineConfigError(f"github.gh_config_dir is not an existing directory: {directory}")
+    for label, directory in (
+        ("claude.config_dir", loaded.claude_config_dir),
+        ("github.gh_config_dir", loaded.gh_config_dir),
+    ):
+        if directory is not None and not directory.is_dir():
+            raise EngineConfigError(f"{label} is not an existing directory: {directory}")
     return loaded
 
 
