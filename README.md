@@ -17,7 +17,9 @@ Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change
 ```
 ## Getting started
 
-Install the CLI, then run it from inside any git repository:
+Install the CLI, then run it from inside any git repository. For a local backend,
+[set up SmolVM and its guest image](docs/sandbox.md) first; graph agents default
+to VMs. Unsupported hosts must explicitly select `engine vm use process`:
 
 ```bash
 npm i -g @openengine.cc/engine
@@ -70,6 +72,12 @@ uv sync --all-packages  # install all workspace packages, editable
 npm --prefix apps/web install
 npm --prefix apps/web run build
 ```
+Graph agents default to SmolVM on Apple Silicon macOS and Linux KVM. Follow
+[the sandbox setup](docs/sandbox.md) to install SmolVM and select a built guest
+image. To use host processes instead, explicitly set `[sandbox] backend =
+"process"` in your configuration (or run `engine vm use process`). Concierges
+and the scoper continue running on the host.
+
 Then, run it by pointing it at your directory:
 ```bash
 uv run \
@@ -82,7 +90,9 @@ Or install the checked-out commit as your `engine`, in place of a release,
 exactly as the one-line installer would. It is labeled with the commit, such as
 `1.2.0-ffdb7cd`, and takes the installer's options:
 ```bash
-scripts/install-local.sh
+scripts/install-local.sh --no-start
+# Configure SmolVM and its image (or explicitly select process), then:
+engine daemon setup
 ```
 The production service defaults to `http://127.0.0.1:4364`. Verify its identity
 and readiness after startup:

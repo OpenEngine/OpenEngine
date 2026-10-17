@@ -25,7 +25,7 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     actions = command.add_subparsers(dest="vm_action")
     listing = actions.add_parser("list", help="list sandbox backends; * marks the configured backend")
     _options(listing, inherited=True)
-    use = actions.add_parser("use", help="select the sandbox backend (process is the default)")
+    use = actions.add_parser("use", help="select the sandbox backend (smolvm is the default)")
     use.add_argument("backend", choices=("process", "smolvm"))
     _options(use, inherited=True)
     for backend in ("process", "smolvm"):
@@ -104,7 +104,7 @@ def _select(arguments: argparse.Namespace) -> dict:
         updated = tomlkit.dumps(document)
         sandbox = parse_engine_config(document.unwrap()).sandbox
         _save(path, original, updated)
-    notice = "Existing services must be restarted to load changes (engine daemon restart for the managed service). Node execution remains on the host until sandbox routing is implemented."
+    notice = "Existing services must be restarted to load changes (engine daemon restart for the managed service)."
     return {"config": str(path), "backend": sandbox.backend, "image": sandbox.image, "changed": changed, "notice": notice}
 
 
@@ -116,7 +116,7 @@ def main(arguments: argparse.Namespace) -> int:
         return 1
     if arguments.vm_action == "list":
         rows = [{"name": name, "current": name == result['backend'], "description": description}
-                for name, description in (("process", "Local subprocesses (default)"), ("smolvm", "SmolVM virtual machines"))]
+                for name, description in (("process", "Local subprocesses (opt-out)"), ("smolvm", "SmolVM virtual machines (default)"))]
         if arguments.json:
             print(json.dumps({"current": result['backend'], "backends": rows, "config": result['config']}))
         else:

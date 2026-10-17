@@ -87,6 +87,42 @@ that could approve them does not exist yet; and the history an agent replays
 while loading a session is dropped, because no turn is streaming when it
 arrives.
 
+## Connection context and transports
+
+Providers implement `connect(*, context: ACPConnectContext | None = None)`.
+The optional immutable context carries workspace, run, node and execution
+identifiers. Applications can extend it with deployment-specific configuration
+without introducing dependencies into this library. Both the minimal node and
+`resume_continuation(..., context=context)` forward it to the provider. Custom
+providers must accept this keyword; direct `connect()` calls remain supported.
+
+`connect_over_transport()` initializes the same ACP client over an owned
+`ACPTransport` (binary stdin/stdout/stderr, exit status, wait and close). A
+transport can represent a subprocess or a sandbox. Its owner is closed on
+initialization failure and on client close. The optional `session_cwd` fixes the
+connection's protocol working directory for sandboxes; `allow_session_load=False`
+explicitly rejects loading conversations whose storage is not retained.
+
+Local stdio launches inherit only `HOST_ENV_ALLOWLIST` variables. Credentials
+and agent-specific settings must be explicitly supplied in the provider's `env`:
+
+```python
+provider = CodexACPProvider(env={
+    "OPENAI_API_KEY": explicitly_supplied_key,
+    "DEFAULT_AUTH_REQUEST": '{"methodId":"api-key"}',
+})
+```
+
+Explicit values override allowlisted defaults. Full host-environment inheritance
+is no longer supported. `HOST_ENV_ALLOWLIST` and `agent_environment()` are public
+so applications can inspect the policy; custom providers remain responsible for
+their own launch environments.
+
+The host Claude provider also forwards the named `CLAUDE_CONFIG_DIR` setting to
+preserve the application's selected login directory. Explicit provider env wins
+over that path; other `CLAUDE_*` variables are not inherited. Sandbox providers
+use only explicit guest configuration and do not copy this host path into VMs.
+
 ## Development
 
 A standalone distribution, deliberately outside the `uv` workspace at the root

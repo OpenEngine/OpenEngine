@@ -234,7 +234,7 @@ class WorkOrdersConfig:
 
 @dataclass(frozen=True, slots=True)
 class SandboxConfig:
-    backend: str = "process"
+    backend: str = "smolvm"
     image: str = ""
 
 
@@ -457,7 +457,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     )
     sandbox = _table(document.get("sandbox", {}), "sandbox")
     _reject_unknown(sandbox, {"backend", "image"}, "sandbox")
-    sandbox_backend = sandbox.get("backend", "process")
+    sandbox_backend = sandbox.get("backend", "smolvm")
     if sandbox_backend not in ("process", "smolvm"):
         raise EngineConfigError("sandbox.backend must be process or smolvm")
     sandbox_image = sandbox.get("image", "")

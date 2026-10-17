@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from langgraph_acp._json import JSONValue, copied_mapping
 from langgraph_acp.agent import ACPAgentRegistry, default_registry
 from langgraph_acp.events import ACPEventType
+from langgraph_acp.context import ACPConnectContext
 from langgraph_acp.result import ACPResult
 from langgraph_acp.session import ACPPrompt
 
@@ -45,7 +46,9 @@ class ACPNode:
 
     async def __call__(self, prompt: ACPPrompt) -> ACPResult:
         provider = (self.registry or default_registry()).resolve(self.agent)
-        client = await provider.connect()
+        client = await provider.connect(context=ACPConnectContext(
+            workspace=None if self.working_directory is None else os.fspath(self.working_directory),
+        ))
         try:
             session = await client.new_session(cwd=self.working_directory)
             message_parts: list[str] = []

@@ -21,9 +21,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from engine.domain import ApprovalDecision, ApprovalKind, WorkState
+from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, WorkState
 from engine.graph_runtime import EventKind
-from engine.graph_runtime_langgraph.executions import current_execution
+from engine.graph_runtime_langgraph.executions import NodeExecution, current_execution
 
 #: The tool name the request is raised under, so a client can tell the one
 #: approval that is a person's verdict from the ones that are an agent asking
@@ -65,11 +65,13 @@ class HumanReviewNode:
     async def __call__(self, _state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
         await execution.say(self.prompt)
-        decision = await execution.ask(
-            reason=self.reason,
-            kind=ApprovalKind.USER_INPUT,
-            tool_name=TOOL_NAME,
-        )
+        decision = await self._restored_decision(execution)
+        if decision is None:
+            decision = await execution.ask(
+                reason=self.reason,
+                kind=ApprovalKind.USER_INPUT,
+                tool_name=TOOL_NAME,
+            )
         note = "\n".join(execution.pending_messages()).strip()
         accepted = decision is not ApprovalDecision.CANCEL
         if note:
@@ -82,6 +84,21 @@ class HumanReviewNode:
             },
         )
         return {DECISION: "approved" if accepted else "rejected", NOTE: note}
+
+    @staticmethod
+    async def _restored_decision(execution: NodeExecution) -> ApprovalDecision | None:
+        # A restart re-enters the unfinished node. Recover the answer to its
+        # last request, but never reuse a verdict from a completed review.
+        for event in reversed(execution.runtime.store.events_since(execution.run_id)):
+            if event.kind is EventKind.RUN_FORKED:
+                break  # Explicit checkpoint replay starts a new review attempt.
+            if event.node_id != execution.node_id:
+                continue
+            if event.kind is EventKind.NODE_FINISHED:
+                break
+            if event.kind is EventKind.APPROVAL_REQUESTED and event.payload.get("toolName") == TOOL_NAME:
+                return await execution.runtime.recorded_decision(ApprovalId(str(event.payload["approvalId"])))
+        return None
 
 
 __all__ = ["DECISION", "NOTE", "TOOL_NAME", "HumanReviewNode"]

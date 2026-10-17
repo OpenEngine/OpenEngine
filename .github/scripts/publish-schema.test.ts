@@ -12,13 +12,14 @@ test('publication skips unchanged/stale runs and commits only schema documents',
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-test-'));
   const calls: Array<CreateTree | CreateCommit | UpdateRef | Comment> = [];
   let head = 'source';
+  let treeSha = 'tree';
   const github: GitHub = {
     rest: {
       git: {
         createBlob: async () => {throw new Error('Unexpected binary upload');},
         getRef: async () => ({data: {object: {sha: head}}}),
         getCommit: async () => ({data: {tree: {sha: 'old-tree'}}}),
-        createTree: async args => { calls.push(args); return {data: {sha: 'tree'}}; },
+        createTree: async args => { calls.push(args); return {data: {sha: treeSha}}; },
         createCommit: async args => { calls.push(args); return {data: {sha: 'commit'}}; },
         updateRef: async args => { calls.push(args); },
       },
@@ -47,6 +48,14 @@ test('publication skips unchanged/stale runs and commits only schema documents',
     await publish({github, context, core});
     assert.equal(calls.length, 0);
     head = 'source';
+    // A populated manifest with an unchanged tree must not produce another
+    // bot commit, ref update, or comment requiring fresh workflow approval.
+    treeSha = 'old-tree';
+    await publish({github, context, core});
+    assert.equal(calls.length, 1);
+    assert.equal((calls[0] as CreateTree).base_tree, 'old-tree');
+    calls.length = 0;
+    treeSha = 'tree';
     await publish({github, context, core});
     assert.deepEqual((calls[0] as CreateTree).tree.map(file => file.path), ['docs/schema/sqlite/revision.md']);
     assert.equal((calls[0] as CreateTree).base_tree, 'old-tree');

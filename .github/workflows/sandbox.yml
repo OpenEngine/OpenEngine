@@ -1,0 +1,142 @@
+name: sandbox
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guest-image:
+    name: Build ARM64 guest image
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.SMOLVM_TEST_IMAGE == ''
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the pinned guest for the Mac runner
+        run: |
+          docker build --platform linux/arm64 \
+            -f packages/adapters/sandbox/smolvm/guest/Dockerfile \
+            -t openengine-sandbox:ci .
+          docker save openengine-sandbox:ci -o "$RUNNER_TEMP/openengine-sandbox.tar"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sandbox-guest-arm64
+          path: ${{ runner.temp }}/openengine-sandbox.tar
+          compression-level: 0
+          retention-days: 1
+
+  macos:
+    name: sandbox (macOS ARM64)
+    needs: guest-image
+    # An operator-provided archive skips the build; failed builds never run tests.
+    # Matches #662: never execute a fork PR on the persistent runner.
+    if: always() && (needs.guest-image.result == 'success' || needs.guest-image.result == 'skipped') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 45
+    env:
+      UV_PYTHON: "3.12"
+      UV_MANAGED_PYTHON: "true"
+      OE_SMOLVM_TEST_IMAGE: ${{ vars.SMOLVM_TEST_IMAGE }}
+      SMOLVM_WRAPPER: ${{ vars.SMOLVM_EXECUTABLE }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+          enable-cache: true
+      - name: Install workspace
+        run: uv sync --locked --all-packages
+      - name: Check runner-local guest image cache
+        id: guest-cache
+        if: vars.SMOLVM_TEST_IMAGE == ''
+        shell: bash
+        env:
+          IMAGE_KEY: ${{ hashFiles('packages/adapters/sandbox/smolvm/guest/Dockerfile', 'packages/adapters/sandbox/smolvm/guest/package*.json') }}
+        run: |
+          set -euo pipefail
+          test -n "$IMAGE_KEY"
+          cache="${RUNNER_TOOL_CACHE:-$HOME/.cache}/openengine-sandbox-images/v1/linux-arm64/$IMAGE_KEY"
+          echo "directory=$cache" >> "$GITHUB_OUTPUT"
+          if [ -s "$cache/openengine-sandbox.tar" ]; then
+            echo 'hit=true' >> "$GITHUB_OUTPUT"
+            echo "Reusing runner-local guest image: $cache"
+            echo "OE_SMOLVM_TEST_IMAGE=$cache/openengine-sandbox.tar" >> "$GITHUB_ENV"
+          else
+            echo 'hit=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v8
+        if: vars.SMOLVM_TEST_IMAGE == '' && steps.guest-cache.outputs.hit != 'true'
+        with:
+          name: sandbox-guest-arm64
+          path: ${{ runner.temp }}/sandbox-image
+      - name: Save guest image on the runner
+        if: vars.SMOLVM_TEST_IMAGE == '' && steps.guest-cache.outputs.hit != 'true'
+        shell: bash
+        env:
+          IMAGE_CACHE: ${{ steps.guest-cache.outputs.directory }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/sandbox-image/openengine-sandbox.tar"
+          test -s "$archive"
+          tar -tf "$archive" > /dev/null
+          mkdir -p "$IMAGE_CACHE"
+          temporary="$(mktemp "$IMAGE_CACHE/.download-XXXXXX")"
+          trap 'rm -f "$temporary"' EXIT
+          cp "$archive" "$temporary"
+          # Publish only complete downloads, including after cancellation.
+          mv -f "$temporary" "$IMAGE_CACHE/openengine-sandbox.tar"
+          echo "OE_SMOLVM_TEST_IMAGE=$IMAGE_CACHE/openengine-sandbox.tar" >> "$GITHUB_ENV"
+      - name: Install pinned SmolVM when no runner override is configured
+        if: vars.SMOLVM_EXECUTABLE == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TOOL_CACHE:-$HOME/.cache}/openengine-smolvm/1.27.1"
+          if [ ! -x "$prefix/smolvm" ] || [ "$(cat "$prefix/.version" 2>/dev/null || true)" != "1.27.1" ] || ! "$prefix/smolvm" --version; then
+            # Immutable upstream installer from v1.27.1; installs the complete
+            # release with libraries, rootfs and disk templates, not just a binary.
+            curl --fail --show-error --location --retry 3 \
+              https://raw.githubusercontent.com/smol-machines/smolvm/7daa6ecedc8c95e8d8ef0fdfba3f69a1d69e4a5a/scripts/install.sh \
+              --output "$RUNNER_TEMP/install-smolvm.sh"
+            bash "$RUNNER_TEMP/install-smolvm.sh" --version 1.27.1 --prefix "$prefix" --no-modify-path
+          fi
+          echo "OE_SMOLVM_EXECUTABLE=$prefix/smolvm" >> "$GITHUB_ENV"
+      - name: Require real hardware and a configured guest image
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          executable="${SMOLVM_WRAPPER:-${OE_SMOLVM_EXECUTABLE:-}}"
+          image="${OE_SMOLVM_TEST_IMAGE:-$RUNNER_TEMP/sandbox-image/openengine-sandbox.tar}"
+          test -x "$executable" || { echo '::error::SmolVM setup did not produce an executable wrapper'; exit 1; }
+          test -s "$image" || { echo '::error::Guest image is missing or empty; see docs/sandbox.md'; exit 1; }
+          export OE_SMOLVM_EXECUTABLE="$executable"
+          uv run python -c 'import os; from engine.adapters.sandbox.smolvm.support import detect_support; support = detect_support(os.environ["OE_SMOLVM_EXECUTABLE"]); print(support.reason); assert support.available'
+          echo "OE_SMOLVM_EXECUTABLE=$executable" >> "$GITHUB_ENV"
+          echo "OE_SMOLVM_TEST_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Run sandbox suite on real VMs
+        run: >-
+          uv run pytest -o addopts='' -m 'not compatibility'
+          tests/test_default_workflow_sandbox.py
+          tests/test_sandbox_contract.py tests/test_sandbox_tasks.py tests/test_smolvm_sandbox.py
+          tests/test_sandbox_acp_provider.py tests/test_node_workspace_copy.py
+          tests/test_model_credentials.py tests/test_credential_rotation.py tests/test_sandbox_egress.py
+          tests/test_sandbox_terminal_bridge.py tests/test_sandbox_lifecycle.py
+          tests/test_sandbox_sessions.py tests/test_graph_sandbox_composition.py
+          --junitxml=sandbox-results.xml -v
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sandbox-macos-arm64
+          path: sandbox-results.xml
+          if-no-files-found: ignore

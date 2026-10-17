@@ -26,7 +26,7 @@ FIELDS = {
     "human": {"prompt", "choose"},
     "ci step": {"ci", "name", "description"},
     "agent step": {
-        "agent", "name", "description", "tools", "outputs", "facets",
+        "agent", "name", "description", "tools", "outputs", "facets", "allowed_hosts", "timeout",
     },
     "runner": {"not", "same", "choices"},
     "output": {"enum", "lineage", "description"},
@@ -104,6 +104,9 @@ FIELD_RULES = {
                        error="must be a tier such as cheapest, a model, or ${...}"),
     },
     "agent step": {
+        "timeout": Field("Wall-clock seconds for one agent invocation, including startup, tools and approvals; finite and positive.",
+                         types=(int, float), default=1800.0, fallback=1800.0,
+                         error="must be finite positive seconds"),
         "prompt": Field("What the agent is asked to do.", types=(str,), nonblank=True,
                         error="required; what the agent is asked to do"),
         "model": Field("Model tier, model name, or expression template.", types=(str,), default="",

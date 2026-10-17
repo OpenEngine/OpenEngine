@@ -131,14 +131,21 @@ def test_delete_failure_is_reported(smolvm_cli):
             shutil.rmtree(path)
 
 
-def test_unsupported_policy_is_rejected_before_boot(smolvm_cli):
+@pytest.mark.parametrize("hosts,flags", [
+    (None, ["--net"]),
+    ((), []),
+    (("example.com",), ["--net-backend", "virtio-net", "--allow-host-pattern", "example.com"]),
+])
+def test_egress_policy_configures_host_side_network(smolvm_cli, hosts, flags):
     launcher, root = smolvm_cli
     async def run():
-        with pytest.raises(ValueError, match="egress"):
-            async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec(egress_allowlist=())):
-                pytest.fail("unsupported egress policy was ignored")
+        async with SmolvmSandbox("fixture", executable=str(launcher)).create(SandboxSpec(egress_allowlist=hosts)):
+            pass
     asyncio.run(run())
-    assert not (root / "commands.jsonl").exists()
+    create = next(args for line in (root / "commands.jsonl").read_text().splitlines()
+                  if (args := json.loads(line))[:2] == ["machine", "create"])
+    start = create.index("--image") + 2
+    assert create[start:create.index("--label")] == flags
 
 
 @pytest.mark.parametrize("cancellations", [1, 3])
@@ -425,10 +432,32 @@ def test_command_output_flood_is_bounded_and_process_reaped(monkeypatch, stream)
     )
 
     async def run():
+        # Hold the detached retirement waiter after process exit. Cleanup must
+        # remove a fully reaped command without relying on callback scheduling.
+        release = asyncio.Event()
+        waiters = []
+        create_task = asyncio.create_task
+
+        def delayed_retirement(coroutine, *args, **kwargs):
+            if getattr(coroutine, "cr_code", None) is asyncio.subprocess.Process.wait.__code__:
+                async def wait():
+                    status = await coroutine
+                    await release.wait()
+                    return status
+                task = create_task(wait(), *args, **kwargs)
+                waiters.append(task)
+                return task
+            return create_task(coroutine, *args, **kwargs)
+
+        monkeypatch.setattr(adapter.asyncio, "create_task", delayed_retirement)
         instance = adapter.SmolvmInstance(sys.executable, "fixture", SandboxSpec())
-        with pytest.raises(SmolvmError, match="output exceeds byte budget"):
-            await asyncio.wait_for(instance._command(["-c", f"import os, time; {writes}; time.sleep(60)"]), 5)
-        assert not instance._processes
+        try:
+            with pytest.raises(SmolvmError, match="output exceeds byte budget"):
+                await asyncio.wait_for(instance._command(["-c", f"import os, time; {writes}; time.sleep(60)"]), 5)
+            assert not instance._processes
+        finally:
+            release.set()
+            await asyncio.gather(*waiters)
     asyncio.run(run())
 
 
@@ -610,3 +639,70 @@ def test_malformed_guest_error_json_does_not_leak_secrets(smolvm_cli, report):
                 await sandbox._helper("init")
             assert "private-value" not in repr(caught.value)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('status', [0, 1])
+@pytest.mark.skipif(sys.platform == 'win32', reason='SmolVM subprocess lifecycle requires POSIX')
+def test_command_cleanup_honors_late_cancellation_but_keeps_command_failure(monkeypatch, status):
+    import sys
+    import engine.adapters.sandbox.smolvm as adapter
+    async def exercise():
+        cleaning, release = asyncio.Event(), asyncio.Event()
+        original = adapter._discard_process_output
+        async def delayed(process):
+            cleaning.set()
+            await release.wait()
+            await original(process)
+        monkeypatch.setattr(adapter, '_discard_process_output', delayed)
+        instance = adapter.SmolvmInstance(sys.executable, 'local-helper-test', SandboxSpec())
+        task = asyncio.create_task(instance._command(['-c', f'import sys; sys.exit({status})']))
+        await cleaning.wait()
+        for _ in range(2):
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError if status == 0 else SmolvmError):
+            await task
+        assert not instance._processes
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('status', [0, 1])
+@pytest.mark.skipif(sys.platform == 'win32', reason='SmolVM subprocess lifecycle requires POSIX')
+def test_archive_cleanup_honors_late_cancellation_but_keeps_stream_failure(monkeypatch, tmp_path, status):
+    import sys
+    import engine.adapters.sandbox.smolvm as adapter
+    async def exercise():
+        cleaning, release = asyncio.Event(), asyncio.Event()
+        instance = adapter.SmolvmInstance(sys.executable, 'local-stream-test', SandboxSpec())
+        script = f"import sys; sys.stdout.buffer.write(b'payload'); sys.exit({status})"
+        monkeypatch.setattr(instance, '_exec_arguments', lambda _: (['-c', script], None))
+        spawn = instance._spawn
+        async def delayed_spawn(*args):
+            process = await spawn(*args)
+            wait = process.wait
+            calls = 0
+            async def wait_again():
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    cleaning.set()
+                    await release.wait()
+                return await wait()
+            monkeypatch.setattr(process, 'wait', wait_again)
+            return process
+        monkeypatch.setattr(instance, '_spawn', delayed_spawn)
+        destination = tmp_path / 'stream.tar'
+        task = asyncio.create_task(instance._receive_archive('guest.tar', destination))
+        await cleaning.wait()
+        for _ in range(2):
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError if status == 0 else SmolvmError):
+            await task
+        assert destination.read_bytes() == b'payload'
+        assert not instance._processes
+    asyncio.run(exercise())

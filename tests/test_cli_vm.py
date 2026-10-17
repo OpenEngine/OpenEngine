@@ -24,7 +24,7 @@ def test_show_defaults_without_writing(config, capsys):
     original = config.read_bytes()
     assert cli.main(['vm', '--json']) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result['backend'] == 'process' and result['changed'] is False
+    assert result['backend'] == 'smolvm' and result['changed'] is False
     assert config.read_bytes() == original
 
 
@@ -157,8 +157,8 @@ def test_vm_list_json_and_config_options_work_before_or_after_list(config, befor
     arguments = ['vm', *flags, 'list'] if before else ['vm', 'list', *flags]
     assert cli.main(arguments) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result['current'] == 'process'
-    assert [(row['name'], row['current']) for row in result['backends']] == [('process', True), ('smolvm', False)]
+    assert result['current'] == 'smolvm'
+    assert [(row['name'], row['current']) for row in result['backends']] == [('process', False), ('smolvm', True)]
 
 
 @pytest.mark.parametrize('before', [True, False])

@@ -29,13 +29,26 @@ def guest(path, machine):
     return directory / str(path).lstrip("/")
 
 if action == "create":
-    (root / option("--name")).mkdir()
+    machine = root / option("--name")
+    machine.mkdir()
+    labels = dict(args[index + 1].split("=", 1) for index, flag in enumerate(args) if flag == "--label")
+    (machine / "labels.json").write_text(json.dumps(labels))
+    mounts = {}
+    for index, flag in enumerate(args):
+        if flag == "--mount-socket":
+            host, guest_path = args[index + 1].split(":", 1)
+            mounts[guest_path] = host
+    (machine / "sockets.json").write_text(json.dumps(mounts))
 elif action == "start":
     assert (root / option("--name")).exists()
 elif action == "delete":
-    shutil.rmtree(root / option("--name"))
+    machine = root / option("--name")
+    # Deleting a VM disk is independent of guest filesystem permissions.
+    for directory, _, _ in os.walk(machine, followlinks=False):
+        Path(directory).chmod(0o700)
+    shutil.rmtree(machine)
 elif action == "ls":
-    print(json.dumps([{"name": path.name} for path in root.glob("oe-sandbox-*")]))
+    print(json.dumps([{"name": path.name, "labels": json.loads((path / "labels.json").read_text()) if (path / "labels.json").exists() else {}} for path in root.glob("oe-sandbox-*")]))
 elif action == "cp":
     source, destination = args
     if ":" in source:
@@ -51,11 +64,19 @@ elif action == "cp":
         # Only substitute the VM's absolute workspace for the fake filesystem.
         destination.write_text(destination.read_text().replace(
             'WORKSPACE = Path("/workspace")', f'WORKSPACE = Path({str(root / machine / "workspace")!r})',
-        ))
+        ).replace(
+            'MEMORY_HOME_ROOT = Path("/dev/shm")', f'MEMORY_HOME_ROOT = Path({str(root / machine / "memory-home")!r})',
+        ).replace('if not _is_tmpfs(MEMORY_HOME_ROOT):', 'if False:'))
+        mapping = json.loads((root / machine / "sockets.json").read_text())
+        source = destination.read_text()
+        source = source.replace('for relative, value in payload["files"].items():',
+            'for relative, value in payload["files"].items():\n            for guest_socket, host_socket in ' + repr(mapping) + '.items():\n                value = value.replace(guest_socket, host_socket)')
+        destination.write_text(source)
+        (root / machine / "memory-home").mkdir()
 elif action == "exec":
     machine = option("--name")
     command = args[args.index("--") + 1:]
-    environment = {"PATH": os.environ["PATH"]}
+    environment = {"PATH": os.environ["PATH"], "UNAPPROVED_IMAGE_DEFAULT": "must-be-filtered"}
     for index, flag in enumerate(args):
         if flag in {"--env", "--secret-env"}:
             key, value = args[index + 1].split("=", 1)
@@ -65,7 +86,9 @@ elif action == "exec":
         # Do not rescue unqualified python3: it must obey the command's PATH.
         command[0] = sys.executable
         command[1] = str(guest(command[1], machine))
-        if command[2] == "pack":
+        if command[2] in {"session-pack", "session-unpack"}:
+            command[5] = str(guest(command[5], machine))
+        elif command[2] == "pack":
             command[4] = str(guest(command[4], machine))
         elif command[2] in {"unpack", "remove", "stream"}:
             command[3] = str(guest(command[3], machine))

@@ -13,8 +13,8 @@ Record who started each work order.
     state_json TEXT NOT NULL,
 -   milestone_id TEXT, origin_channel TEXT, origin_thread_id TEXT,
 +   milestone_id TEXT, origin_channel TEXT, origin_thread_id TEXT, requester TEXT,
-    PRIMARY KEY (sequence),
     CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
+    PRIMARY KEY (sequence),
     UNIQUE (run_id)
 ```
 
@@ -46,8 +46,8 @@ CREATE TABLE agent_instances (
     auto_approve INTEGER DEFAULT '0' NOT NULL,
     workflow_run_id TEXT,
     workflow_step_id TEXT,
-    UNIQUE (instance_id),
-    UNIQUE (conversation_id)
+    UNIQUE (conversation_id),
+    UNIQUE (instance_id)
 );
 
 CREATE TABLE agent_runs (
@@ -57,8 +57,8 @@ CREATE TABLE agent_runs (
     summary TEXT NOT NULL,
     changed_files TEXT NOT NULL,
     runner TEXT NOT NULL,
-    PRIMARY KEY (agent_run_id),
-    FOREIGN KEY(instance_id) REFERENCES agent_instances (instance_id)
+    FOREIGN KEY(instance_id) REFERENCES agent_instances (instance_id),
+    PRIMARY KEY (agent_run_id)
 );
 
 CREATE TABLE approvals (
@@ -124,8 +124,8 @@ CREATE TABLE "run_states" (
     run_id TEXT NOT NULL,
     state_json TEXT NOT NULL,
     milestone_id TEXT, origin_channel TEXT, origin_thread_id TEXT, requester TEXT,
-    PRIMARY KEY (sequence),
     CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
+    PRIMARY KEY (sequence),
     UNIQUE (run_id)
 );
 

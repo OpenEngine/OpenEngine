@@ -53,7 +53,7 @@ from typing import Any
 from uuid import uuid4
 
 from engine.domain import ApprovalDecision, ApprovalId, ApprovalKind, RunId, WorkspaceId
-from engine.ports import SourceControl, WorkspaceState
+from engine.ports import Sandbox, SourceControl, WorkspaceState
 from engine.runtime.terminal_mcp import WorkorderCreator
 from langgraph.checkpoint.base import create_checkpoint
 
@@ -84,6 +84,8 @@ from engine.graph_runtime_langgraph.executions import (
     driving,
 )
 from engine.graph_runtime_langgraph.graphs import START, LangGraphDefinition
+from engine.graph_runtime_langgraph.sandbox_workspace import WorkspaceCopies, WorkspacePatchConflict
+from engine.runtime.model_credentials import ModelCredentialSource
 from engine.graph_runtime_langgraph.store import (
     ApprovalRecord,
     GraphRuntimeStore,
@@ -116,6 +118,7 @@ class _Live:
     run_id: RunId
     graph_id: GraphId
     task: asyncio.Task[None] | None = None
+    stopping: asyncio.Task[None] | None = None
     executions: dict[ExecutionId, NodeExecution] | None = None
     published: set[CheckpointId] | None = None
     """Checkpoints already announced, so a resume does not re-announce one."""
@@ -153,9 +156,16 @@ class LangGraphRuntime:
         source_control: SourceControl | None = None,
         checkpointer: Any | None = None,
         public_url: str = "",
+        sandbox: Sandbox | None = None,
+        model_credentials: ModelCredentialSource | None = None,
     ) -> None:
         self._definitions = {graph.graph_id: graph for graph in graphs}
         self.public_url = public_url
+        self.sandbox = sandbox
+        self._startup_task: asyncio.Task[None] | None = None
+        self._closing = False
+        self.model_credentials = model_credentials
+        self.workspace_copies = WorkspaceCopies()
         self.checkpointer = checkpointer
         """What a graph added after construction is compiled against.
 
@@ -224,6 +234,9 @@ class LangGraphRuntime:
         self, graph_id: GraphId, values: Mapping[str, object], *, run_id: RunId | None = None,
         before_launch: Callable[[RunId], Awaitable[None]] | None = None,
     ) -> RunSnapshot:
+        await self.startup()
+        if self._closing:
+            raise RuntimeError("graph runtime is closing")
         definition = self._definitions.get(graph_id)
         if definition is None:
             raise UnknownGraphError(f"unknown graph: {graph_id}")
@@ -557,9 +570,40 @@ class LangGraphRuntime:
                 )
             return await self._snapshot(run_id)
 
+    async def startup(self) -> None:
+        if self._startup_task is None:
+            async def recover():
+                sweep = getattr(self.sandbox, "sweep_orphans", None)
+                if sweep is not None:
+                    removed = await sweep()
+                    if removed:
+                        logging.getLogger(__name__).info("reclaimed orphaned sandboxes: %s", ", ".join(removed))
+            self._startup_task = asyncio.create_task(recover())
+        await self._finish_cleanup(self._startup_task)
+
+    @staticmethod
+    async def _finish_cleanup(task: asyncio.Task) -> None:
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
     async def aclose(self) -> None:
-        for live in tuple(self._live.values()):
-            await self._stop(live)
+        self._closing = True
+        async def close_all():
+            if self._startup_task is not None:
+                await asyncio.gather(self._startup_task, return_exceptions=True)
+            # Complete every stop even if another run's teardown reports an error.
+            results = await asyncio.gather(*(self._stop(live) for live in tuple(self._live.values())), return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+        await self._finish_cleanup(asyncio.create_task(close_all()))
 
     # --- what a test may ask that a client cannot --------------------------
 
@@ -731,6 +775,8 @@ class LangGraphRuntime:
     def _launch(
         self, live: _Live, definition: LangGraphDefinition, config: Mapping[str, Any]
     ) -> None:
+        if self._closing:
+            raise RuntimeError("graph runtime is closing")
         live.task = asyncio.create_task(self._drive(live, definition, dict(config)))
 
     async def _drive(
@@ -895,9 +941,11 @@ class LangGraphRuntime:
         )
         if record is not None:
             await self._store.remember_run(replace(record, error=error))
-        await self.publish(
-            live.run_id, EventKind.RUN_FAILED, {"error": error}, node_id
-        )
+        await self._store.abandon_run_approvals(live.run_id)
+        payload: dict[str, object] = {"error": error}
+        if isinstance(failure, WorkspacePatchConflict):
+            payload["patch"] = failure.attachment()
+        await self.publish(live.run_id, EventKind.RUN_FAILED, payload, node_id)
 
     async def _refuse(self, record: ApprovalRecord) -> None:
         """What "no" does to the run that asked.
@@ -988,11 +1036,17 @@ class LangGraphRuntime:
         self._launch(live, definition, self._config(run_id))
 
     async def _stop(self, live: _Live) -> None:
-        task, live.task = live.task, None
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        await self._release_all(live)
+        if live.stopping is None or live.stopping.done():
+            task, live.task = live.task, None
+            async def stop():
+                try:
+                    if task is not None and not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                finally:
+                    await self._release_all(live)
+            live.stopping = asyncio.create_task(stop())
+        await self._finish_cleanup(live.stopping)
 
     async def _release_all(self, live: _Live) -> None:
         for execution_id, execution in tuple(live.executions.items()):  # pyright: ignore[reportOptionalMemberAccess]  # Baseline: see docs/pyright.md

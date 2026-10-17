@@ -40,3 +40,41 @@ def test_reserved_postgres_revision_has_no_schema_changes() -> None:
     # The reserved revision has no operations and is dialect-independent.
     generated = documents(ROOT / "migrations/postgres", "sqlite://")
     assert "No schema changes." in generated["postgres/postgres_0001.md"]
+
+
+def test_constraint_order_is_canonical_but_column_order_and_literals_are_preserved():
+    import sqlite3
+    from scripts.document_schema import canonical_sqlite_ddl
+
+    columns = '''
+    "z" TEXT DEFAULT 'comma, (text)',
+    "a" TEXT CHECK (a IN ('one', 'two''s'))'''
+    constraints = ['UNIQUE (z, a)', 'FOREIGN KEY(a) REFERENCES parent(id)',
+                   'CONSTRAINT "named (check)" CHECK (z != \'comment -- /* ), */\')']
+    left = 'CREATE TABLE "table (name)" (' + columns + ',\n    ' + ',\n    '.join(constraints) + '\n);'
+    right = 'CREATE TABLE "table (name)" (' + columns + ',\n    ' + ',\n    '.join(reversed(constraints)) + '\n);'
+    assert canonical_sqlite_ddl(left) == canonical_sqlite_ddl(right)
+    canonical = canonical_sqlite_ddl(left)
+    assert columns in canonical
+    with sqlite3.connect(':memory:') as connection:
+        connection.execute(canonical)
+        assert [row[1] for row in connection.execute('PRAGMA table_info("table (name)")')] == ['z', 'a']
+        assert len(list(connection.execute('PRAGMA foreign_key_list("table (name)")'))) == 1
+    for sql in ("CREATE INDEX index_name ON t(a)", "CREATE VIRTUAL TABLE t USING fts5(content)"):
+        assert canonical_sqlite_ddl(sql) == sql
+
+
+def test_schema_documents_are_identical_across_independent_replays():
+    import subprocess
+    import sys
+    from engine.ports.sandbox import command_environment
+
+    script = '''import json
+from scripts.document_schema import ROOT, documents
+print(json.dumps({name: documents(ROOT / 'migrations' / name, 'sqlite://')
+                  for name in ('sqlite', 'sqlite_graph')}, sort_keys=True))
+'''
+    outputs = [subprocess.run([sys.executable, '-c', script], cwd=ROOT,
+        env=command_environment({'PYTHONHASHSEED': seed}), check=True,
+        capture_output=True, timeout=120).stdout for seed in ('1', '2', '23')]
+    assert outputs[0] == outputs[1] == outputs[2]

@@ -31,6 +31,8 @@ from typing import Any
 
 from engine.graph_runtime_langgraph.components.findings import REVIEW_FACETS
 from engine.runtime.terminal_mcp import REPOSITORY_TOOL_NAMES
+from engine.ports.sandbox_network import allowed_hosts as validate_allowed_hosts
+from engine.graph_runtime_langgraph.timeouts import DEFAULT_NODE_TIMEOUT, node_timeout
 
 from engine.graph_service.expressions import Expression, ExpressionError, Template, parse, template
 from engine.graph_service.schema import (
@@ -128,6 +130,8 @@ class NodeSpec:
     runner: RunnerRule | None = None
     model: str = ""
     tools: tuple[str, ...] = ()
+    allowed_hosts: tuple[str, ...] = ()
+    timeout: float = DEFAULT_NODE_TIMEOUT
     outputs: tuple[OutputSpec, ...] = ()
     always_open: bool = False
     parallel: tuple[Branch, ...] = ()
@@ -484,6 +488,21 @@ def _agent(
     for index, tool in enumerate(tools):
         if tool not in TOOLS:
             problem(f"{where}.tools[{index}]", f"unknown tool {tool!r}; available: {', '.join(TOOLS)}")
+    timeout = fields["timeout"].read(value, "timeout", f"{where}.timeout", problem)
+    try:
+        timeout = node_timeout(timeout)
+    except ValueError as error:
+        problem(f"{where}.timeout", str(error))
+        timeout = DEFAULT_NODE_TIMEOUT
+    hosts = value.get("allowed_hosts", [])
+    if not isinstance(hosts, list):
+        problem(f"{where}.allowed_hosts", "must be a list of exact DNS hostnames")
+        hosts = []
+    try:
+        hosts = validate_allowed_hosts(hosts)
+    except ValueError as error:
+        problem(f"{where}.allowed_hosts", str(error))
+        hosts = ()
     outputs = _outputs(value.get("outputs"), f"{where}.outputs", problem)
     model = fields["model"].read(value, "model", f"{where}.model", problem)
     if any("model" in branch.item for branch in parallel):
@@ -493,7 +512,7 @@ def _agent(
     steering = fields["steering"].read(value, "steering", f"{where}.steering", problem)
     return NodeSpec(
         node_id, "agent", stage, prompt=prompt.strip(), runner=runner, model=model.strip(),
-        tools=tuple(tools), outputs=outputs, always_open=steering == "always-open",
+        tools=tuple(tools), allowed_hosts=hosts, timeout=timeout, outputs=outputs, always_open=steering == "always-open",
         parallel=parallel, **common,
     )
 

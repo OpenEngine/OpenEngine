@@ -1936,7 +1936,7 @@ def test_pull_request_work_order_footer(public_url, body_kind, issue_linked):
 def test_work_order_url_reaches_graph_broker_from_config(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from engine.apps.web.composition import Settings, build_graph_runtime
-    from engine.runtime.config import EngineConfig
+    from engine.runtime.config import EngineConfig, SandboxConfig
     from engine.graph_runtime_langgraph import terminal_mcp
 
     captured = []
@@ -1950,7 +1950,7 @@ def test_work_order_url_reaches_graph_broker_from_config(tmp_path, monkeypatch):
     async def scenario():
         settings = Settings(
             graph_state_directory=tmp_path / "graph",
-            engine_config=EngineConfig(public_url="https://engine.example/"),
+            engine_config=EngineConfig(public_url="https://engine.example/", sandbox=SandboxConfig(backend="process")),
         )
         async with build_graph_runtime(settings, (), RecordingRepository()) as runtime:
             execution = SimpleNamespace(

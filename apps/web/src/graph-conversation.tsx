@@ -99,6 +99,7 @@ export type GraphConversation = {
   unplaced: InlineApproval[];
   /** Why the run stopped here, when it stopped here. */
   failure: string;
+  patch?: { name: string; content: string };
 };
 
 /** The turn an unplaced request belongs to, which is none: it is drawn from
@@ -140,6 +141,7 @@ export function graphConversation(
   pending: ApiGraphRun["pendingApprovals"] = [],
 ): GraphConversation {
   const messages: GraphMessage[] = [];
+  let patch: GraphConversation["patch"];
   const requests: Request[] = [];
   const calls = new Map<string, Extract<GraphMessagePart, { type: "tool-call" }>>();
   // A steering message is published twice: once when it is sent, and again when
@@ -291,9 +293,18 @@ export function graphConversation(
       }
       case "run.failed":
         failure = String(payload.error ?? "");
+        {
+          const attachment = payload.patch;
+          patch = attachment && typeof attachment === "object" && !Array.isArray(attachment)
+            && "encoding" in attachment && attachment.encoding === "base64"
+            && "content" in attachment && typeof attachment.content === "string"
+            ? { name: "workspace.patch", content: attachment.content }
+            : undefined;
+        }
         break;
       case "run.forked":
         failure = "";
+        patch = undefined;
         break;
       default:
         break;
@@ -307,6 +318,7 @@ export function graphConversation(
   return {
     messages,
     failure,
+    patch,
     requests: requests.map((request) => ({
       messageIndex: request.messageIndex,
       approval: approvalOf(request, open.get(request.approvalId), resolved),
@@ -527,6 +539,7 @@ function GraphDock({
   workspaceRunId,
   error,
   failure,
+  patch,
   retry,
   retryDisabled,
   retryBusy,
@@ -540,6 +553,7 @@ function GraphDock({
   workspaceRunId: string;
   error: string;
   failure: string;
+  patch?: GraphConversation["patch"];
   retry: () => void;
   retryDisabled: boolean;
   retryBusy: boolean;
@@ -563,6 +577,8 @@ function GraphDock({
       {failure && (
         <div className="notice">
           <p>{failure}</p>
+          {patch && <a className="btn" download={patch.name}
+            href={`data:application/octet-stream;base64,${patch.content}`}>Download patch</a>}
           <button type="button" className="btn" disabled={retryDisabled} onClick={retry}>
             {retryBusy ? "Retrying…" : "Retry"}
           </button>
@@ -853,6 +869,7 @@ export function GraphConversationPage({
               workspaceRunId={workspaceRunId}
               error={steerError}
               failure={conversation.failure}
+              patch={conversation.patch}
               retry={() => void retry()}
               retryDisabled={run?.status !== "failed" || runnerBusy || retryBusy}
               retryBusy={retryBusy}

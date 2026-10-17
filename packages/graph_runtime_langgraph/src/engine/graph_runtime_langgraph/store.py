@@ -40,6 +40,8 @@ from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from .sandbox_sessions import AgentSessions
+
 from engine.domain import (
     ApprovalDecision,
     ApprovalId,
@@ -314,6 +316,7 @@ class InMemoryGraphRuntimeStore:
     """
 
     def __init__(self) -> None:
+        self.agent_sessions = AgentSessions()
         self._events: dict[RunId, list[RuntimeEvent]] = {}
         self._runs: dict[RunId, RunRecord] = {}
         self._sessions: dict[tuple[RunId, str], ACPContinuation] = {}
@@ -371,6 +374,8 @@ class InMemoryGraphRuntimeStore:
                      if row.metadata.origin_channel == channel and row.metadata.origin_thread_id == thread_id)
 
     async def delete_run(self, run_id: RunId) -> bool:
+        self.agent_sessions.delete(str(run_id))
+        self._sessions = {key: value for key, value in self._sessions.items() if key[0] != run_id}
         return self._runs.pop(run_id, None) is not None
 
     async def remember_session(
@@ -464,6 +469,7 @@ class SqliteGraphRuntimeStore:
     """
 
     def __init__(self, path: str | Path) -> None:
+        self.agent_sessions = AgentSessions(Path(str(path) + ".agent-sessions"))
         self._connection = sqlite3.connect(
             str(path), isolation_level=None, check_same_thread=False
         )
@@ -574,6 +580,8 @@ class SqliteGraphRuntimeStore:
             "ORDER BY created_at DESC, rowid DESC", (channel, thread_id)))
 
     async def delete_run(self, run_id: RunId) -> bool:
+        self.agent_sessions.delete(str(run_id))
+        self._connection.execute("DELETE FROM sessions WHERE run_id = ?", (str(run_id),))
         return self._connection.execute("DELETE FROM runs WHERE run_id = ?", (str(run_id),)).rowcount > 0
 
     async def remember_session(

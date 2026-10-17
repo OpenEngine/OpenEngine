@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal
 
 from collections.abc import Mapping
 
@@ -206,6 +206,7 @@ class ReviewNode(ACPNode):
     """Store validated findings under this facet's own key for parallel writes."""
 
     facet: str
+    workspace_policy: Literal["apply", "read-only"] = "read-only"
     graph_node_group: str = WorkState.REVIEW
 
     @property
@@ -234,6 +235,7 @@ class RerankerNode(ACPNode):
     """Keep the reranker's accepted findings as structured checkpoint state."""
 
     graph_node_group: str = WorkState.REVIEW
+    workspace_policy: Literal["apply", "read-only"] = "read-only"
 
     @property
     def graph_node_findings_key(self) -> str:

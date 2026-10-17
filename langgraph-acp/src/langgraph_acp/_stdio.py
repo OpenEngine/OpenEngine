@@ -61,6 +61,8 @@ from langgraph_acp.permissions import (
     deny_permission,
 )
 from langgraph_acp.session import ACPPrompt, ACPSession
+from langgraph_acp.environment import agent_environment
+from langgraph_acp.transport import ACPTransport, SubprocessACPTransport, connect_over_transport
 
 #: Room for one JSON-RPC message. ACP carries file contents and diffs inline,
 #: so the 64 KiB an asyncio stream defaults to is not enough by a wide margin.
@@ -126,9 +128,8 @@ async def connect_over_stdio(
 ) -> ACPClient:
     """Launch `command` and initialize ACP against it.
 
-    `env` is overlaid on this process's environment rather than replacing it: a
-    command found through `PATH` stops being findable the moment `PATH` is not
-    inherited, and every agent CLI is found that way.
+    Only explicitly allowlisted host variables are inherited. `env` grants
+    additional values deliberately, including any agent credentials.
 
     `permissions` answers `session/request_permission`; without one the
     connection declines every request. See `langgraph_acp.permissions`.
@@ -142,7 +143,7 @@ async def connect_over_stdio(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=None if env is None else {**os.environ, **env},
+            env=agent_environment(env),
             cwd=None if cwd is None else os.fspath(cwd),
             limit=MAX_MESSAGE_BYTES,
         )
@@ -153,53 +154,46 @@ async def connect_over_stdio(
             operation="connect",
         ) from exc
 
-    try:
-        client = StdioACPClient(
-            agent=agent,
-            process=process,
-            permissions=permissions,
-            elicitations=elicitations,
-        )
-    except BaseException:
-        process.kill()
-        raise
-    try:
-        await client.initialize()
-    except BaseException:
-        await client.close()
-        raise
-    return client
+    return await connect_over_transport(
+        agent=agent, transport=SubprocessACPTransport(process),
+        permissions=permissions, elicitations=elicitations,
+    )
 
 
 class StdioACPClient:
-    """An `ACPClient` backed by a child process speaking ACP on its pipes."""
+    """An `ACPClient` over owned binary streams, local or sandbox-backed."""
 
     def __init__(
         self,
         *,
         agent: str,
-        process: asyncio.subprocess.Process,
+        transport: ACPTransport,
         permissions: ACPPermissionHandler | None = None,
         elicitations: ACPElicitationHandler | None = None,
+        session_cwd: str | None = None,
+        allow_session_load: bool = True,
     ) -> None:
-        if process.stdin is None or process.stdout is None:
+        if transport.stdin is None or transport.stdout is None:
             raise ACPConnectionError(
                 "the ACP agent was launched without the pipes the protocol needs",
                 agent=agent,
                 operation="connect",
             )
         self._agent = agent
+        self._session_cwd = session_cwd
+        self._allow_session_load = allow_session_load
         self._permissions = permissions or deny_permission
         self._elicitations = elicitations
-        self._process = process
+        self._transport = transport
         self._capabilities = ACPCapabilities()
         self._stderr: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
         self._streams: dict[str, asyncio.Queue[ACPEvent | _Completion]] = {}
         self._closed = False
+        self._closing: asyncio.Task[None] | None = None
         self._draining = asyncio.create_task(self._drain_stderr())
         self._peer = JSONRPCPeer(
-            process.stdout,
-            process.stdin,
+            transport.stdout,
+            transport.stdin,
             on_request=self._on_request,
             on_notification=self._on_notification,
             on_closed=self._closed_error,
@@ -242,7 +236,7 @@ class StdioACPClient:
         session_config: Mapping[str, JSONValue] | None = None,
     ) -> ACPSession:
         params: JSONObject = {
-            "cwd": _working_directory(cwd),
+            "cwd": self._session_cwd or _working_directory(cwd),
             "mcpServers": _servers(mcp_servers),
         }
         if session_config:
@@ -269,6 +263,12 @@ class StdioACPClient:
         mcp_servers: Sequence[Mapping[str, JSONValue]] = (),
         session_config: Mapping[str, JSONValue] | None = None,
     ) -> ACPSession:
+        if not self._allow_session_load:
+            raise ACPSessionError(
+                "cannot load an ACP session into a fresh disposable sandbox; "
+                "the previous sandbox session state is not persisted",
+                agent=self._agent, session_id=session_id, operation="session/load",
+            )
         if not self._capabilities.load_session:
             raise ACPAgentCapabilityError(
                 f"agent {self._agent!r} cannot resume a session: it does not "
@@ -279,7 +279,7 @@ class StdioACPClient:
             )
         params: JSONObject = {
             "sessionId": session_id,
-            "cwd": _working_directory(cwd),
+            "cwd": self._session_cwd or _working_directory(cwd),
             "mcpServers": _servers(mcp_servers),
         }
         if session_config:
@@ -314,13 +314,33 @@ class StdioACPClient:
                 )
 
     async def close(self) -> None:
-        if self._closed:
-            return
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close())
+        cancelled = False
+        while not self._closing.done():
+            try:
+                await asyncio.shield(self._closing)
+            except asyncio.CancelledError:
+                cancelled = True
+        self._closing.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _close(self) -> None:
         self._closed = True
         self._streams.clear()
-        await self._peer.aclose()
-        await self._reap()
-        self._draining.cancel()
+        try:
+            # A non-reading agent can leave buffered stdin unable to flush.
+            # Teardown must still reach the process / sandbox owner in that case.
+            await asyncio.wait_for(self._peer.aclose(), timeout=5)
+        except TimeoutError:
+            pass
+        finally:
+            try:
+                await self._reap()
+            finally:
+                self._draining.cancel()
+                await asyncio.gather(self._draining, return_exceptions=True)
 
     async def call(
         self,
@@ -472,7 +492,7 @@ class StdioACPClient:
             stream.put_nowait(event)
 
     async def _drain_stderr(self) -> None:
-        stream = self._process.stderr
+        stream = self._transport.stderr
         if stream is None:
             return
         try:
@@ -493,7 +513,7 @@ class StdioACPClient:
         cannot explain itself.
         """
         try:
-            await asyncio.wait_for(self._process.wait(), timeout=5)
+            await asyncio.wait_for(self._transport.wait(), timeout=5)
         except TimeoutError:
             return
         await asyncio.wait({self._draining}, timeout=5)
@@ -552,7 +572,7 @@ class StdioACPClient:
         return rendered + "; the agent process's recent output is in the log"
 
     def _closed_error(self) -> BaseException:
-        status = self._process.returncode
+        status = self._transport.returncode
         ended = (
             f"exited with status {status}"
             if status is not None
@@ -569,17 +589,7 @@ class StdioACPClient:
         )
 
     async def _reap(self) -> None:
-        """Give the agent its chance to exit on EOF, then insist."""
-        for stop in (None, self._process.terminate, self._process.kill):
-            if self._process.returncode is not None:
-                return
-            try:
-                if stop is not None:
-                    stop()
-                await asyncio.wait_for(self._process.wait(), timeout=5)
-                return
-            except (TimeoutError, ProcessLookupError):
-                continue
+        await self._transport.close()
 
 
 class StdioACPSession:

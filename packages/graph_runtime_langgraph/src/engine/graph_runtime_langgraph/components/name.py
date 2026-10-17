@@ -9,6 +9,7 @@ import re
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from langgraph_acp import ACPPrompt
 
@@ -54,6 +55,7 @@ class NameNode(ACPNode):
     graph_node_description: str = "Gives the WorkOrder a concise display name."
     graph_node_show_in_sidebar: bool = False
     graph_node_group: str = WorkState.PLANNING
+    workspace_policy: Literal["apply", "read-only"] = "read-only"
     refuses_permissions: bool = True
     """Naming reads untrusted text, so only explicit read-only grants are allowed.
 

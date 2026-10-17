@@ -25,8 +25,10 @@ PUBLIC_MODULES = (
     "langgraph_acp.agent",
     "langgraph_acp.client",
     "langgraph_acp.config",
+    "langgraph_acp.context",
     "langgraph_acp.continuation",
     "langgraph_acp.elicitation",
+    "langgraph_acp.environment",
     "langgraph_acp.errors",
     "langgraph_acp.events",
     "langgraph_acp.node",
@@ -36,6 +38,7 @@ PUBLIC_MODULES = (
     "langgraph_acp.result",
     "langgraph_acp.session",
     "langgraph_acp.store",
+    "langgraph_acp.transport",
     "langgraph_acp.workspace",
 )
 

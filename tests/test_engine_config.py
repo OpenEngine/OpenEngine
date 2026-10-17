@@ -858,7 +858,7 @@ def test_web_claude_provider_inherits_configured_login(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("backend", ["process", "smolvm"])
 def test_sandbox_configuration(backend):
-    assert parse_engine_config({}).sandbox.backend == "process"
+    assert parse_engine_config({}).sandbox.backend == "smolvm"
     assert parse_engine_config({"sandbox": {"backend": backend}}).sandbox.backend == backend
 
 
@@ -877,9 +877,9 @@ def test_sandbox_backend_composition(app, tmp_path):
     settings = app.Settings()
     if hasattr(settings, "sqlite_path"):
         settings = replace(settings, sqlite_path=str(tmp_path / "state.sqlite"))
-    assert isinstance(app.build_capabilities(settings).sandbox, ProcessSandbox)
-    settings = replace(settings, engine_config=parse_engine_config({"sandbox": {"backend": "smolvm"}}))
     assert isinstance(app.build_capabilities(settings).sandbox, SmolvmSandbox)
+    settings = replace(settings, engine_config=parse_engine_config({"sandbox": {"backend": "process"}}))
+    assert isinstance(app.build_capabilities(settings).sandbox, ProcessSandbox)
 
 
 def test_sandbox_image_configuration():

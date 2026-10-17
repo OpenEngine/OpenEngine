@@ -1,0 +1,50 @@
+@startuml openengine-simple
+title How OpenEngine works today — simplified example
+skinparam shadowing false
+skinparam defaultFontSize 14
+skinparam activityBackgroundColor #EDF3FA
+skinparam activityBorderColor #557799
+
+start
+:Start a run of a graph;
+
+partition "Graph: steps connected in an order" {
+  :Step 1: Prepare a workspace;
+
+  partition "Step 2: Agent node — for example, implement a change" {
+    :Build a prompt from selected graph state;
+    :langgraph-acp connects to the selected agent\nCodex OR Claude, through its ACP adapter;
+    :Create an agent session\n(or load an existing session when recovering);
+    :Send the prompt through ACP;
+    :Agent works in the workspace\nand streams responses / tool updates;
+    :OpenEngine handles permission requests\nand records events;
+    :Write the node's result into graph state;
+  }
+
+  :Step 3: Run checks;
+  :Step 4: Review the result\n(can be another Codex or Claude agent node);
+}
+
+:Finish the run;
+stop
+
+note right
+  This is an example graph, not a fixed pipeline.
+  Each graph defines its own steps and connections.
+  Graphs can also branch, repeat steps, or run steps in parallel.
+
+  Only agent nodes need ACP.
+  Other nodes can run ordinary application code.
+end note
+
+legend bottom
+  Graph = workflow definition: steps and connections.
+  Run = one execution of that graph.
+  Graph state = data passed between steps.
+  Agent session = conversation held by Codex or Claude.
+  ACP = protocol used to communicate with that agent.
+
+  Today, the existing ACP providers launch agents on the host.
+  Moving agent execution inside a VM is the proposed change.
+endlegend
+@enduml

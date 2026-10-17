@@ -42,6 +42,7 @@ import pytest
 from langgraph_acp import (
     PROTOCOL_VERSION,
     ACPNode,
+    ACPAgentRegistry,
     ACPPermissionOutcome,
     ACPPermissionRequest,
     ClaudeACPProvider,
@@ -168,7 +169,10 @@ def test_a_turn_through_the_codex_adapter_answers(
             os.environ.get("DEFAULT_AUTH_REQUEST", '{"methodId": "api-key"}'),
         )
     result = asyncio.run(
-        ACPNode(agent="codex")(
+        ACPNode(agent="codex", registry=ACPAgentRegistry([CodexACPProvider(env={
+            key: os.environ[key] for key in ("OPENAI_API_KEY", "DEFAULT_AUTH_REQUEST", "CODEX_HOME")
+            if key in os.environ
+        })]))(
             "Reply with exactly the word: pineapple. No tools, no preamble."
         )
     )
@@ -203,7 +207,9 @@ def test_a_permission_request_is_parsed_and_the_answer_honoured(
         return ACPPermissionOutcome.selected(allow.option_id)
 
     async def turn() -> None:
-        client = await ClaudeACPProvider(permissions=answer).connect()
+        client = await ClaudeACPProvider(permissions=answer, env={
+            key: os.environ[key] for key in ("ANTHROPIC_API_KEY",) if key in os.environ
+        }).connect()
         try:
             session = await client.new_session(cwd=tmp_path)
             async for _ in session.prompt(

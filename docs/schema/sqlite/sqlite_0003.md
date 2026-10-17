@@ -44,8 +44,8 @@ CREATE TABLE agent_instances (
     auto_approve INTEGER DEFAULT '0' NOT NULL,
     workflow_run_id TEXT,
     workflow_step_id TEXT,
-    UNIQUE (instance_id),
-    UNIQUE (conversation_id)
+    UNIQUE (conversation_id),
+    UNIQUE (instance_id)
 );
 
 CREATE TABLE agent_runs (
@@ -55,8 +55,8 @@ CREATE TABLE agent_runs (
     summary TEXT NOT NULL,
     changed_files TEXT NOT NULL,
     runner TEXT NOT NULL,
-    PRIMARY KEY (agent_run_id),
-    FOREIGN KEY(instance_id) REFERENCES agent_instances (instance_id)
+    FOREIGN KEY(instance_id) REFERENCES agent_instances (instance_id),
+    PRIMARY KEY (agent_run_id)
 );
 
 CREATE TABLE approvals (

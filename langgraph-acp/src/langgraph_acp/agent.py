@@ -32,6 +32,7 @@ from typing import Protocol, runtime_checkable
 from langgraph_acp._json import checked_sequence
 from langgraph_acp._stdio import connect_over_stdio
 from langgraph_acp.client import ACPClient
+from langgraph_acp.context import ACPConnectContext
 from langgraph_acp.elicitation import ACPElicitationHandler
 from langgraph_acp.errors import ACPAgentNotFoundError
 from langgraph_acp.permissions import ACPPermissionHandler
@@ -65,7 +66,7 @@ class ACPAgentProvider(Protocol):
         """The name this agent answers to, as a graph would write it."""
         ...
 
-    async def connect(self) -> ACPClient:
+    async def connect(self, *, context: ACPConnectContext | None = None) -> ACPClient:
         """Reach the agent and complete the ACP handshake.
 
         Returns a client only once the agent has answered `initialize`, so a
@@ -93,7 +94,7 @@ class StdioACPProvider:
     command: Sequence[str]
     """The executable and its arguments, as `subprocess` takes them."""
     env: Mapping[str, str] | None = None
-    """Overlaid on this process's environment, never replacing it."""
+    """Explicit values overlaid on allowlisted host environment variables."""
     cwd: str | os.PathLike[str] | None = None
     """Where to launch the process. Not the workspace a session is given."""
     permissions: ACPPermissionHandler | None = None
@@ -109,7 +110,7 @@ class StdioACPProvider:
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
 
-    async def connect(self) -> ACPClient:
+    async def connect(self, *, context: ACPConnectContext | None = None) -> ACPClient:
         return await connect_over_stdio(
             agent=self.name,
             command=self.command,

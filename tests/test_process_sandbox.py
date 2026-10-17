@@ -24,9 +24,9 @@ def test_host_environment_and_workspace_cleanup(monkeypatch):
     async def run():
         async with ProcessSandbox().create(SandboxSpec()) as sandbox:
             process = await sandbox.exec([sys.executable, "-c",
-                "import os; print(os.getcwd()); print(os.environ['SANDBOX_INHERITED'])"])
+                "import os; print(os.getcwd()); print(os.getenv('SANDBOX_INHERITED'))"])
             lines = (await process.stdout.read()).decode().splitlines()
-            assert lines[1] == "host"
+            assert lines[1] == "None"
             root = Path(lines[0])
             assert root.is_dir()
             assert await process.wait() == 0

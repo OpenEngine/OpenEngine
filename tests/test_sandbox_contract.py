@@ -56,21 +56,37 @@ def test_workspace_copy_and_transfers(sandbox_backend, tmp_path, command):
     source = tmp_path / "source"
     source.mkdir()
     (source / "input").write_text("original")
+    report = tmp_path / "report.txt"
+    report.write_text("report")
+    reports = tmp_path / "reports"
+    reports.mkdir()
 
     async def run():
         async with sandbox_backend.create(SandboxSpec(workspace=source)) as sandbox:
             await sandbox.copy_in(source, "nested")
+            await sandbox.copy_in(report, ".")
+            cwd = await sandbox.working_directory("nested")
+            assert cwd != str(source)
+            assert cwd == str(Path(await sandbox.working_directory()) / "nested")
             process = await sandbox.exec(command(
-                "from pathlib import Path; "
+                "import os; from pathlib import Path; print(os.getcwd()); "
                 "assert Path('input').read_text() == 'original'; "
                 "Path('input').write_text('changed')"
             ), cwd="nested")
+            assert (await process.stdout.read()).decode().strip() == cwd
             assert await process.wait() == 0
             await sandbox.copy_out("nested", tmp_path / "output")
             await sandbox.copy_out("input", tmp_path / "single")
+            await sandbox.copy_out("report.txt", reports)
+            with pytest.raises(ValueError, match="workspace"):
+                await sandbox.working_directory("../escape")
+            with pytest.raises(FileNotFoundError):
+                await sandbox.working_directory("missing")
         assert (tmp_path / "output/input").read_text() == "changed"
         assert (tmp_path / "single").read_text() == "original"
         assert (source / "input").read_text() == "original"
+        assert list(reports.iterdir()) == [reports / "report.txt"]
+        assert (reports / "report.txt").read_text() == "report"
     asyncio.run(run())
 
 
@@ -85,35 +101,6 @@ def test_absolute_command_with_path_excluding_python(sandbox_backend):
             assert await process.stderr.read() == b""
             assert await process.wait() == 0
     asyncio.run(asyncio.wait_for(run(), 120))
-
-
-def test_file_transfers_into_existing_directories_keep_basename(sandbox_backend, tmp_path):
-    source = tmp_path / "report.txt"
-    source.write_text("report")
-    output = tmp_path / "output"
-    output.mkdir()
-
-    async def run():
-        async with sandbox_backend.create(SandboxSpec()) as sandbox:
-            await sandbox.copy_in(source, ".")
-            await sandbox.copy_out("report.txt", output)
-        assert list(output.iterdir()) == [output / "report.txt"]
-        assert (output / "report.txt").read_text() == "report"
-    asyncio.run(run())
-
-
-def test_environment_and_secrets(sandbox_backend, command):
-    async def run():
-        spec = SandboxSpec(secrets={"SANDBOX_TEST_SECRET": "private"})
-        assert "private" not in repr(spec)
-        async with sandbox_backend.create(spec) as sandbox:
-            process = await sandbox.exec(command(
-                "import os; print(os.environ['SANDBOX_TEST_SECRET']); "
-                "print(os.environ['SANDBOX_TEST_ENV'])"
-            ), env={"SANDBOX_TEST_ENV": "value"})
-            assert await process.stdout.read() == b"private\nvalue\n"
-            assert await process.wait() == 0
-    asyncio.run(run())
 
 
 @pytest.mark.parametrize("exit_kind", ["normal", "exception", "cancel"])
@@ -215,3 +202,26 @@ def test_smolvm_copy_out_requires_safe_staging(sandbox_backend, tmp_path, comman
         assert not (checkout / ".git/config").exists()
         assert (staging / "result.txt").read_text() == "safe output"
     asyncio.run(asyncio.wait_for(run(), 120))
+
+
+def test_exec_environment_is_explicit(sandbox_backend, command, monkeypatch):
+    import json
+    from engine.ports.sandbox import HOST_ENV_ALLOWLIST
+
+    monkeypatch.setenv("UNSELECTED_HOST_VARIABLE", "must-not-be-inherited")
+    monkeypatch.setenv("GITHUB_TOKEN", "unselected-host-key")
+
+    async def run():
+        spec = SandboxSpec(secrets={"SELECTED_KEY": "selected"})
+        assert "selected" not in repr(spec)
+        async with sandbox_backend.create(spec) as sandbox:
+            process = await sandbox.exec(command(
+                "import json, os; print(json.dumps(dict(os.environ)))"
+            ), env={"EXPLICIT_SETTING": "yes", "SELECTED_KEY": "overridden"})
+            environment = json.loads(await process.stdout.read())
+            assert await process.wait() == 0
+            assert set(environment) <= HOST_ENV_ALLOWLIST | {"EXPLICIT_SETTING", "SELECTED_KEY"}
+            assert environment["SELECTED_KEY"] == "selected"
+            assert environment["EXPLICIT_SETTING"] == "yes"
+
+    asyncio.run(run())

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from langgraph_acp.agent import StdioACPProvider, launch_command
 from langgraph_acp.client import ACPClient
+from langgraph_acp.context import ACPConnectContext
 from langgraph_acp.elicitation import ACPElicitationHandler
 from langgraph_acp.permissions import ACPPermissionHandler
 
@@ -34,15 +35,22 @@ class ClaudeACPProvider:
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
 
-    async def connect(self) -> ACPClient:
+    async def connect(self, *, context: ACPConnectContext | None = None) -> ACPClient:
+        # The host application selects its Claude login directory at startup.
+        # Preserve that named configuration path, not arbitrary host variables.
+        # Sandbox providers use explicit env/spec values and never take this path.
+        environment = {
+            **{key: os.environ[key] for key in ("CLAUDE_CONFIG_DIR",) if key in os.environ},
+            **(self.env or {}),
+        }
         return await StdioACPProvider(
             name=self.name,
             command=self.command,
-            env=self.env,
+            env=environment,
             cwd=self.cwd,
             permissions=self.permissions,
             elicitations=self.elicitations,
-        ).connect()
+        ).connect(context=context)
 
 
 __all__ = ["CLAUDE_ACP_COMMAND", "ClaudeACPProvider"]

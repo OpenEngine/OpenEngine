@@ -42,7 +42,7 @@ Supported YAML fields (from parser validation):
 | human step | `description`, `human`, `name` |
 | human | `choose`, `prompt` |
 | ci step | `ci`, `description`, `name` |
-| agent step | `agent`, `description`, `facets`, `model`, `name`, `outputs`, `prompt`, `steering`, `tools` |
+| agent step | `agent`, `allowed_hosts`, `description`, `facets`, `model`, `name`, `outputs`, `prompt`, `steering`, `timeout`, `tools` |
 | runner | `choices`, `not`, `same` |
 | output | `description`, `enum`, `lineage`, `required`, `type` |
 | flow | `from`, `route`, `to` |
@@ -60,6 +60,7 @@ Scalar field constraints:
 | graph | name | Project-scoped graph name. | required; type: str; pattern: `^[a-z0-9][a-z0-9._-]{0,62}$` |
 | input | required | Whether the value is required. | default: `False`; type: bool |
 | naming | model | Model for the naming turn: a tier, a model, or ${inputs...}; empty means the agent's cheapest tier. | default: `''`; type: str |
+| agent step | timeout | Wall-clock seconds for one agent invocation, including startup, tools and approvals; finite and positive. | default: `1800.0`; type: int, float |
 | agent step | prompt | What the agent is asked to do. | required; type: str; nonblank |
 | agent step | model | Model tier, model name, or expression template. | default: `''`; type: str |
 | agent step | steering | Allow steering while the agent runs. | default: `None`; choices: `None`, `'always-open'` |
@@ -91,7 +92,11 @@ A step's keys determine its kind:
 - None of these keys: the checkout.
 
 Steps accept `name` and `description`. Agent steps also accept `tools`,
-`outputs`, `model`, `steering` and `facets`. Tools must be
+`outputs`, `model`, `steering`, `facets`, `timeout` and `allowed_hosts`. Timeout
+is finite positive seconds (default 1800), including VM startup, tools and
+approval waits; expiry fails the node and tears down its VM. `allowed_hosts` is
+a list of exact DNS hostnames added to this node's model-provider endpoints;
+it requires SmolVM and rejects URLs, ports, wildcards and IP addresses. Tools must be
 registered repository tools. Outputs map names to declarations with `type`,
 `enum`, `required`, `description` and `lineage: required` for findings.
 Types are `string`, `number`, `integer`, `boolean`, `list`, `object`, `findings`. A model may be a tier, model name or template. Facets run in

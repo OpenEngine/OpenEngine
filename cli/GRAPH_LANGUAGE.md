@@ -119,6 +119,41 @@ per facet, in parallel. A facet is a built-in id or `{id, name, focus}`, and
 its other fields (`model`, ...) become `item`. Its output is the list of
 every facet's output.
 
+**Agent deadlines.** Each ACP agent invocation has a 30-minute wall-clock
+budget by default. Set `timeout: 3600` on a YAML agent step or
+`ACPNode(..., timeout=3600)` in Python. Values are finite positive seconds;
+`0`, `null`, booleans, strings and infinities are rejected. Each parallel facet
+gets its own deadline. The budget covers VM startup/copy-in, MCP bindings,
+model work, tool calls and approval waits. Expiry fails the node, settles pending
+approvals and tears down the VM. Cleanup is awaited even when it exceeds the
+budget. Final patch application follows successful teardown. This is separate
+from `SandboxSpec.timeout`, which limits individual sandbox commands. Human and
+CI waiting nodes do not create VMs and retain their existing wait semantics.
+
+**Sandbox networking.** Agent steps may add exact DNS hostnames with
+`allowed_hosts`. The selected provider's API and auth endpoints are always
+granted; these entries add access for this node only, including each of its
+parallel facets. Hosts are literal names, without URLs, ports, IP addresses,
+wildcards or expression templates. Subdomains require their own entries.
+
+```yaml
+implementation:
+  implementer:
+    agent: codex
+    prompt: Implement the change and run tests.
+    allowed_hosts: [registry.npmjs.org]
+```
+
+The equivalent Python configuration is
+`ACPNode(agent="codex", prompt="Implement", cwd=checkout,
+allowed_hosts=("registry.npmjs.org",))`. Omitting the list or using `[]` grants
+only the provider endpoints. Codex defaults to `api.openai.com`,
+`auth.openai.com`, and `chatgpt.com`; Claude defaults to `api.anthropic.com`,
+`console.anthropic.com`, `claude.ai`, and `platform.claude.com`.
+SmolVM enforces these rules outside the guest. A node declaring extra hosts
+fails on the host process backend, which cannot enforce them. Selecting
+SmolVM remains an operator configuration choice.
+
 **Flow.** The written order is the default flow: the first step starts, each
 step goes on to the next, and the last goes to `end`. `flow` adds what the
 order cannot express. `a -> b` is an edge, `[a, b] -> c` waits for both, and

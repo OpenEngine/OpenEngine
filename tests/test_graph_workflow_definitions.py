@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,7 @@ from engine.adapters.workspace_provider.git_worktree import (
 )
 from engine.apps.control_server.__main__ import main as control_server
 from engine.apps.control_server.composition import Settings as ControlServerSettings
-from engine.apps.web.__main__ import build_app
+from engine.apps.web.__main__ import build_app, compose_app, read_configuration
 from engine.apps.web.composition import Settings
 from engine.apps.worker.__main__ import main as worker
 from engine.apps.worker.composition import Settings as WorkerSettings
@@ -40,6 +41,7 @@ from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.ports import Workspace
 from engine.runtime.config import parse_engine_config
 from engine.runtime.workflows import load_workflow_catalog
+from engine.runtime.config import SandboxConfig
 
 #: The repository's own workflow directory: what a deployment here actually
 #: loads, rather than a fixture shaped like one.
@@ -717,7 +719,11 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
     monkeypatch.chdir(tmp_path)
-    app = build_app()
+    # This exercises graph discovery, not VM hardware. Keep the real deployment
+    # configuration and catalog, opting out of the default VM backend explicitly.
+    loaded, workflow_catalog = read_configuration()
+    loaded = replace(loaded, config=replace(loaded.config, sandbox=SandboxConfig(backend="process")))
+    app = compose_app(loaded, workflow_catalog)
 
     async def ask() -> dict:
         async with async_client(app, base_url="http://localhost") as client:

@@ -12,6 +12,27 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from engine.ports.sandbox_home import SandboxHome
+from engine.ports.sandbox_sessions import SandboxSessions
+from engine.ports.sandbox_socket import SandboxSocket
+from engine.ports.sandbox_network import allowed_hosts
+
+
+# Bound a newline-delimited message without imposing asyncio's 64 KiB default.
+SANDBOX_STREAM_LIMIT = 8 * 1024 * 1024
+HOST_ENV_ALLOWLIST = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE",
+    "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "SystemRoot", "WINDIR",
+    "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "__CF_USER_TEXT_ENCODING", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+})
+
+
+def command_environment(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Allowlisted host defaults plus explicitly granted command variables."""
+    import os
+
+    return {**{key: value for key, value in os.environ.items() if key in HOST_ENV_ALLOWLIST}, **(env or {})}
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,13 +43,23 @@ class SandboxSpec:
     secrets: Mapping[str, str] = field(default_factory=dict, repr=False)
     """Environment variables injected into every command."""
     egress_allowlist: tuple[str, ...] | None = None
-    """None requests unrestricted egress; an empty tuple denies all egress."""
+    """Exact DNS hostnames. None requests unrestricted egress; () disables networking."""
     timeout: float | None = None
     """Maximum seconds per command, including time before wait() is called."""
     labels: Mapping[str, str] = field(default_factory=dict)
+    sockets: tuple[SandboxSocket, ...] = ()
+    """Explicit host control sockets forwarded over the VM transport, never TCP egress."""
+    home: SandboxHome | None = field(default=None, repr=False)
+    """An isolated tmpfs home outside the workspace; no host home is mounted."""
+
+    sessions: SandboxSessions | None = field(default=None, repr=False)
+    """Selected session directories to restore and checkpoint before destruction."""
 
     def __post_init__(self) -> None:
         import math
+
+        if self.egress_allowlist is not None:
+            object.__setattr__(self, "egress_allowlist", allowed_hosts(self.egress_allowlist))
 
         if self.timeout is not None and (
             not math.isfinite(self.timeout) or self.timeout <= 0
@@ -52,6 +83,10 @@ class SandboxProcess(Protocol):
 
 @runtime_checkable
 class SandboxInstance(Protocol):
+    async def working_directory(self, path: str = ".") -> str:
+        """Resolve a workspace-relative path for a guest protocol such as ACP."""
+        ...
+
     async def exec(
         self, argv: Sequence[str], *, cwd: str = ".", env: Mapping[str, str] | None = None
     ) -> SandboxProcess:
@@ -68,10 +103,21 @@ class SandboxInstance(Protocol):
 
 
 @runtime_checkable
+class SandboxCredentialRefresh(Protocol):
+    """Optional capability for capturing selected credentials before export.
+
+    A sandbox with observed private credentials must implement this capability.
+    A final capture runs after the agent has stopped, before releasing its login.
+    """
+
+    async def refresh_credentials(self, *, final: bool = False) -> None: ...
+
+
+@runtime_checkable
 class Sandbox(Protocol):
     def create(self, spec: SandboxSpec) -> AbstractAsyncContextManager[SandboxInstance]:
         """Create an environment on entry and always destroy it on exit."""
         ...
 
 
-__all__ = ["Sandbox", "SandboxInstance", "SandboxProcess", "SandboxSpec"]
+__all__ = ["Sandbox", "SandboxInstance", "SandboxProcess", "SandboxSpec", "SandboxCredentialRefresh"]

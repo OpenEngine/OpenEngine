@@ -14,17 +14,6 @@ Index messages by conversation and sequence.
 
  CREATE INDEX milestones_by_project ON milestones (project_id);
 
-@@ -104,8 +106,8 @@
-    milestone_id TEXT,
-    PRIMARY KEY (sequence),
-    CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
--   UNIQUE (run_id),
--   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id)
-+   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
-+   UNIQUE (run_id)
- );
-
- CREATE TABLE session_grants (
 ```
 
 ## Schema
@@ -57,8 +46,8 @@ CREATE TABLE agent_instances (
     auto_approve INTEGER DEFAULT '0' NOT NULL,
     workflow_run_id TEXT,
     workflow_step_id TEXT,
-    UNIQUE (instance_id),
-    UNIQUE (conversation_id)
+    UNIQUE (conversation_id),
+    UNIQUE (instance_id)
 );
 
 CREATE TABLE agent_runs (
@@ -68,8 +57,8 @@ CREATE TABLE agent_runs (
     summary TEXT NOT NULL,
     changed_files TEXT NOT NULL,
     runner TEXT NOT NULL,
-    PRIMARY KEY (agent_run_id),
-    FOREIGN KEY(instance_id) REFERENCES agent_instances (instance_id)
+    FOREIGN KEY(instance_id) REFERENCES agent_instances (instance_id),
+    PRIMARY KEY (agent_run_id)
 );
 
 CREATE TABLE approvals (
@@ -136,9 +125,9 @@ CREATE TABLE "run_states" (
     state_json TEXT NOT NULL,
     workstream_id TEXT,
     milestone_id TEXT,
-    PRIMARY KEY (sequence),
     CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
     FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
+    PRIMARY KEY (sequence),
     UNIQUE (run_id)
 );
 

@@ -177,7 +177,7 @@ export async function startEngine({
   const backendsFile = path.join(root, "backends.json")
   const githubConfig = path.join(root, "gh")
   mkdirSync(githubConfig)
-  writeFileSync(config, "# The e2e daemon's configuration: built-in defaults unless a spec says otherwise.\n")
+  writeFileSync(config, '# Browser tests exercise host ACP fixtures; hardware CI covers SmolVM.\n[sandbox]\nbackend = "process"\n')
 
   const passed = agentMode === "real" ? [...INHERITED, ...AGENT_LOGINS] : INHERITED
   const inherited = Object.fromEntries(passed.flatMap((name) => (process.env[name] ? [[name, process.env[name]!]] : [])))

@@ -62,7 +62,9 @@ def test_claude_consumes_output_settings_on_new_and_loaded_sessions(tmp_path: Pa
             options["systemPrompt"]["append"] += (
                 f"\nFor every capture_description call, set prompt_probe to {prompt_probe}."
             )
-            client = await ClaudeACPProvider(permissions=permit_capture).connect()
+            client = await ClaudeACPProvider(permissions=permit_capture, env={
+                key: os.environ[key] for key in ("ANTHROPIC_API_KEY",) if key in os.environ
+            }).connect()
             try:
                 if session_id is None:
                     session = await client.new_session(

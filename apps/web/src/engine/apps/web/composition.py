@@ -38,6 +38,7 @@ from langgraph_acp.providers import (
 )
 
 from engine.runtime.repositories import RepositoryRegistry
+from engine.runtime.model_credentials import host_model_credential
 from engine.adapters.agent_runner.acp import (
     READ_ONLY_TOOLS,
     allowed_tools_for,
@@ -297,7 +298,7 @@ def build_capabilities(
         )
     Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
     sandbox = (
-        SmolvmSandbox(image=settings.engine_config.sandbox.image or None)
+        SmolvmSandbox(image=settings.engine_config.sandbox.image or None, state_directory=settings.graph_state_directory)
         if settings.engine_config.sandbox.backend == "smolvm" else ProcessSandbox()
     )
     return Capabilities(
@@ -388,6 +389,11 @@ def build_graph_runtime(
         source_control=source_control,
         allow_empty=True,
         public_url=settings.engine_config.public_url,
+        sandbox=(
+            SmolvmSandbox(image=settings.engine_config.sandbox.image or None, state_directory=settings.graph_state_directory)
+            if settings.engine_config.sandbox.backend == "smolvm" else None
+        ),
+        model_credentials=host_model_credential,
     )
 
 

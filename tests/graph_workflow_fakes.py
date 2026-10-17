@@ -35,9 +35,9 @@ from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider  # noqa:
 from provider_fakes import fake_acp  # noqa: E402
 
 
-def scripted_catalog(workspace_root: str, binaries: Path) -> WorkflowCatalog:
+def scripted_catalog(workspace_root: str, binaries: Path, *, script: Path | None = None) -> WorkflowCatalog:
     """The shipped workflow, ready to run against fake ACP agents."""
-    agent = fake_acp(binaries)
+    agent = fake_acp(binaries, script=script)
     scripted = agent_registry(
         [
             CodexACPProvider(name="codex", command=[agent]),

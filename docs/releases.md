@@ -43,6 +43,12 @@ On macOS or Linux (x86_64 or arm64), with only `curl` and `tar`:
 curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
+New configurations default graph agents to SmolVM. For a fresh local setup,
+install with `sh -s -- --no-start`, follow [sandbox setup](sandbox.md) to select
+a guest image (or explicitly run `engine vm use process`), then run
+`engine daemon setup`. Unsupported hosts require the process opt-out. The
+concierges and scoper retain their host launchers.
+
 `scripts/install.sh` is published on the site and attached to each release. It
 downloads a pinned uv into `~/.local/share/openengine/bin`, isolated from any
 uv configuration on the machine, fetches the latest release (or `--version

@@ -403,6 +403,7 @@ def pipeline(
             + str(state.get("task", ""))
         ),
         mcp_server_bindings=(TerminalMcpServer(step_id=SPEC, agent_id=runner),),
+        workspace_policy="read-only",
         output_key=SPEC, graph_node_name="Specification", graph_node_group=WorkState.PLANNING,
         session_config=session_config,
     ))
@@ -585,6 +586,7 @@ def pipeline(
             ),
             output_key=IMPACT_ANALYSIS,
             graph_node_name="Impact analysis",
+            workspace_policy="read-only",
             graph_node_description="Ranks change impact as Green 🟢, Orange 🟠, or Red 🔴.",
             graph_node_group=WorkState.REVIEW,
             session_config=session_config,
