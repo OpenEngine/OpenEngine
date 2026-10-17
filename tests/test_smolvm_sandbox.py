@@ -432,6 +432,53 @@ def test_command_output_flood_is_bounded_and_process_reaped(monkeypatch, stream)
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("flood", [False, True])
+def test_command_cleanup_does_not_depend_on_background_waiter(monkeypatch, flood):
+    import engine.adapters.sandbox.smolvm as adapter
+
+    original = asyncio.create_subprocess_exec
+    monkeypatch.setattr(adapter, "MAX_COMMAND_OUTPUT_BYTES", 1024)
+
+    async def run():
+        release, finished = asyncio.Event(), asyncio.Event()
+
+        async def spawn(*args, **kwargs):
+            process = await original(*args, **kwargs)
+            original_wait = process.wait
+            first = True
+
+            async def wait():
+                nonlocal first
+                if first:
+                    first = False
+                    try:
+                        await release.wait()
+                        return await original_wait()
+                    finally:
+                        finished.set()
+                return await original_wait()
+
+            process.wait = wait
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+        instance = adapter.SmolvmInstance(sys.executable, "fixture", SandboxSpec())
+        try:
+            if flood:
+                with pytest.raises(SmolvmError, match="output exceeds byte budget"):
+                    await asyncio.wait_for(instance._command([
+                        "-c", "import os, time; os.write(1, b'x' * 2048); time.sleep(60)",
+                    ]), 5)
+            else:
+                assert await instance._command(["-c", "print('done')"]) == (b"done\n", b"", 0)
+            assert not instance._processes
+        finally:
+            release.set()
+            await asyncio.wait_for(finished.wait(), 5)
+
+    asyncio.run(run())
+
+
 def test_replaced_guest_helper_cannot_flood_host(smolvm_cli, monkeypatch):
     import engine.adapters.sandbox.smolvm as adapter
 

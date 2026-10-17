@@ -189,6 +189,12 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
             _text(body, "project") or None, request.path_params["ref"], _text(body, "reason"),
         ))
 
+    async def stop_loop(request: Request) -> JSONResponse:
+        body = await _body(request)
+        return JSONResponse(await service.stop_loop(
+            _text(body, "project") or None, request.path_params["ref"],
+        ))
+
     async def resume_loop(request: Request) -> JSONResponse:
         body = await _body(request)
         return JSONResponse(await service.resume_loop(
@@ -211,6 +217,8 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
             name=_text(body, "name"),
             model=_text(body, "model"),
             url=_text(body, "url"),
+            context_limit=body.get("contextLimit"),
+            output_limit=body.get("outputLimit"),
             overwrite=overwrite,
         ), status_code=201)
 
@@ -263,6 +271,7 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
             Route("/loops", _guard(add_loop), methods=["POST"]),
             Route("/loops/{ref}", _guard(get_loop)),
             Route("/loops/{ref}/pause", _guard(pause_loop), methods=["POST"]),
+            Route("/loops/{ref}/stop", _guard(stop_loop), methods=["POST"]),
             Route("/loops/{ref}/resume", _guard(resume_loop), methods=["POST"]),
         ],
     )

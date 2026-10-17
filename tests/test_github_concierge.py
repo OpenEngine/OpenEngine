@@ -100,11 +100,13 @@ def _graph_runtime(
     runtime.steer = AsyncMock()
     runtime.cancel = AsyncMock()
     runtime.decide = AsyncMock()
-    async def start(graph_id, values, *, run_id=None):
+    async def start(graph_id, values, *, run_id=None, before_launch=None):
         from dataclasses import replace
         runtime.started_run_id = run_id
         record = await metadata_store.run(run_id)
         await metadata_store.save_metadata(run_id, graph_id, replace(record.metadata, scheduled=False))
+        if before_launch is not None:
+            await before_launch(run_id)
         return await snapshot(run_id)
 
     runtime.start = AsyncMock(side_effect=start)
@@ -1520,6 +1522,175 @@ def test_assigning_issue_to_engine_starts_workorder(
     assert not communications.posts
 
 
+class _RegisteredGraphs:
+    """The graph service as the webhook paths ask it: which registered graph a name is.
+
+    Holds `workflow` under each of `names`, as `engine graph add` would have
+    registered it, and nothing else.
+    """
+
+    default_repository = ""
+
+    def __init__(self, workflow, names=("tdd-guide",)) -> None:
+        self.workflow = workflow
+        self.names = names
+        self.resolved = []
+
+    async def open(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+    def workflows(self):
+        return (self.workflow,)
+
+    def version_workflow(self, version_id):
+        return self.workflow if version_id == str(self.workflow.graph_id) else None
+
+    def claims_pull_request(self, graph_id):
+        return graph_id in ("fix", "review")
+
+    def resolve(self, project, name):
+        from types import SimpleNamespace
+        from engine.graph_service import NotFound
+
+        self.resolved.append((project, name))
+        if name not in self.names:
+            raise NotFound(f"no graph named {name!r}")
+        return SimpleNamespace(), SimpleNamespace(version_id=str(self.workflow.graph_id))
+
+    def added_agents(self):
+        return ()
+
+    def agents_json(self):
+        return []
+
+    def runners(self):
+        return ()
+
+    async def observe(self, event) -> None:
+        pass
+
+
+def _registered_graph(*inputs):
+    """A graph registered with `engine graph add`, its id the version id the service gives it."""
+    from engine.graph_runtime_langgraph import State, graph_workflow
+    from langgraph.graph import END, START, StateGraph
+
+    builder = StateGraph(State)
+    builder.add_node("work", lambda state: {})
+    builder.add_edge(START, "work")
+    builder.add_edge("work", END)
+    return graph_workflow(builder, id="gv-tdd", name="tdd-guide v1", inputs=inputs)
+
+
+def _tdd_guide():
+    from engine.graph_runtime.inputs import WorkflowInput
+
+    return _registered_graph(
+        WorkflowInput("instruction", "Instruction"), WorkflowInput("issue", "Issue"),
+        WorkflowInput("milestone", "Milestone", default="next"),
+    )
+
+
+@pytest.mark.parametrize("workflow,graph,expected_graph,expected_inputs", [
+    # A registered graph is given the task and the issue it declares inputs for.
+    ("tdd-guide", _tdd_guide(), "gv-tdd", {"issue": "7", "milestone": "next"}),
+    # One declaring neither still runs, with the task as its instruction.
+    ("tdd-guide", _registered_graph(), "gv-tdd", None),
+    # A Python workflow of the same name wins, and gets what it always got.
+    ("implementation-review-v1", _tdd_guide(), "implementation-review-v1", None),
+])
+def test_an_assignment_starts_the_workflow_or_registered_graph_named_for_work_orders(
+    tmp_path, workflow, graph, expected_graph, expected_inputs, *, github_app, git_repo, client
+):
+    from test_github_ingress import _assigned_issue, _signed as github_signed
+
+    runtime, opened = _graph_runtime()
+    registered = _RegisteredGraphs(graph, names=("tdd-guide", "implementation-review-v1"))
+    app, capabilities, _ = github_app(
+        RecordingCommunications(),
+        WorkOrdersConfig(repository="other/repo", workflow=workflow),
+        _workflow_catalog(),
+        provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+        graph_service=lambda runtime, start: registered,
+        repos={"acme/api": str(git_repo(tmp_path / "api", origin="git@github.com:Acme/API.git"))},
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot")))
+    body = json.dumps(_assigned_issue()).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "issues"})
+    with client(app) as browser:
+        assert browser.post("/api/github/events", content=body, headers=headers).status_code == 200
+        browser.portal.call(app.state.github_ingress.drain)
+        runtime.start.assert_awaited_once()
+        graph_id, values = runtime.start.await_args.args
+        assert str(graph_id) == expected_graph
+        assert "Fix the bug" in values["task"]
+        if expected_inputs is None:
+            assert "inputs" not in values
+        else:
+            assert values["inputs"] == {"instruction": values["task"], **expected_inputs}
+        # Progress still goes to the issue, whichever kind runs.
+        assert values["issue"] == {"repository": "acme/api", "number": 7}
+        runs = browser.portal.call(app.state.run_reader.list_runs)
+        assert runs[0].origin.thread_id == "issue/7"
+        assert str(runs[0].workflow_id) == expected_graph
+    # Looked up in the issue's repository's project first.
+    if expected_graph == "gv-tdd":
+        assert registered.resolved[0] == ("acme/api", "tdd-guide")
+    else:
+        assert not registered.resolved
+
+
+@pytest.mark.parametrize("workflow,expected_graph", [
+    ("tdd-guide", "gv-tdd"), ("implementation-review-v1", "implementation-review-v1"),
+])
+def test_a_mention_starts_the_workflow_or_registered_graph_named_for_work_orders(
+    workflow, expected_graph, *, github_app, client
+):
+    from test_github_ingress import _issue_comment, _signed as github_signed
+
+    runtime, opened = _graph_runtime(pr_number=99)
+    app, capabilities, _ = github_app(
+        RecordingCommunications(),
+        WorkOrdersConfig(repository="other/repo", workflow=workflow, runner="default"),
+        _workflow_catalog(),
+        provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET,
+        graph_runtime=opened,
+        graph_service=lambda runtime, start: _RegisteredGraphs(_tdd_guide()),
+    )
+    object.__setattr__(capabilities, "source_control", MagicMock(
+        add_comment=AsyncMock(), can_write_repository=AsyncMock(return_value=True),
+        authenticated_login=AsyncMock(return_value="OpenEngineBot")))
+    payload = _issue_comment(1, "@OpenEngineBot new workorder please")
+    payload["issue"]["pull_request"] = {}
+    body = json.dumps(payload).encode()
+    with client(app) as browser:
+        assert browser.post("/api/github/events", content=body, headers=dict(
+            github_signed(body), **{"x-github-event": "issue_comment"})).status_code == 200
+        browser.portal.call(app.state.github_ingress.drain)
+        runtime.start.assert_awaited_once()
+        graph_id, values = runtime.start.await_args.args
+        assert str(graph_id) == expected_graph
+        if expected_graph == "gv-tdd":
+            # A pull request is not an issue to work, so only the task is given.
+            assert values["inputs"] == {
+                "instruction": values["task"], "issue": "", "milestone": "next",
+            }
+        else:
+            assert "inputs" not in values
+        # The started run owns the pull request either way.
+        runtime.store.claim_pull_request.assert_awaited_once()
+        assert runtime.store.claim_pull_request.await_args.args[0].run_id == RunId(
+            runtime.started_run_id)
+
+
 def _review_catalog():
     """A catalog whose workflow can start in review, as the shipped one can."""
     from engine.domain import WorkState
@@ -2044,3 +2215,18 @@ def test_assignments_from_multiple_repositories_use_their_configured_checkouts(
     assert source.can_write_repository.await_args_list == [
         call(f"https://github.com/{repo}/pull/7", "maintainer") for repo in repos
     ]
+
+
+def test_an_ambiguous_work_order_graph_name_is_reported_as_ambiguous():
+    """A name two graphs share is refused as such, not passed off as no graph at all."""
+    from engine.apps.web.api import work_order_graph
+    from engine.graph_service import NotFound
+    from engine.graph_service.service import Conflict
+
+    def resolve(project, name):
+        if project == "acme/api":
+            raise NotFound("no graph named 'tdd-guide'")
+        raise Conflict("graph name 'tdd-guide' is ambiguous; name a project or use a graph id")
+
+    with pytest.raises(Conflict, match="ambiguous"):
+        work_order_graph(resolve, "acme/api", "tdd-guide")

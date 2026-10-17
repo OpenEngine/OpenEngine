@@ -107,6 +107,12 @@ The binary is `engine`. Run it with no arguments to list its commands:
 - `engine agent add|get|remove|signin` and `engine agents` manage the agents
   graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
   such as `engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
+  Give an agent on a model server its context window with `--context` (and
+  optionally `--output`) so opencode compacts its history before prompts
+  outgrow it. For Ollama, set `PARAMETER num_ctx` in the Modelfile and
+  `--context` to the same value: Ollama's OpenAI-compatible endpoint neither
+  reports nor enforces `num_ctx`, so without the limit every step prefills the
+  whole history.
 - `engine agent claude`, `engine agent codex` and `engine agent opencode`
   start a run whose implementation node is that CLI in this terminal: the
   daemon checks the repository out into a fresh workspace and gives the agent

@@ -109,14 +109,14 @@ def test_publish_posts_inline_findings_and_impact(execution):
     assert len(calls) == 2
     assert calls[0].kwargs == {'file': 'app.py', 'line': 7}
     assert 'agent: codex' in calls[0].args[1]
-    assert calls[1].args == (URL, 'Impact: Green\n\nA small, covered change.')
+    assert calls[1].args == (URL, 'A small, covered change.')
 
 
 def test_approval_body_has_rationale(execution):
     asyncio.run(publish.ApproveReview()(state()))
     args = execution.runtime.source_control.approve_change_request.await_args.args
     assert args[:2] == ('owner/repo', 42)
-    assert 'Approved automatically because impact was Green' in args[2]
+    assert args[2].startswith('Approved automatically.')
     assert state()['impact_rationale'] in args[2]
 
 

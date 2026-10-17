@@ -203,7 +203,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--repo", default="")
     adding.add_argument("--input", "-i", action="append", default=[], metavar="NAME=VALUE")
     adding.add_argument("--no-run-now", action="store_true", help="first run after one interval, not now")
-    for name, help_text in (("get", "one loop's state and budget"), ("pause", "stop starting runs"), ("resume", "start runs again")):
+    for name, help_text in (("get", "one loop's state and budget"), ("pause", "stop starting runs"), ("resume", "start runs again"), ("stop", "permanently stop the loop and its active run")):
         action = actions.add_parser(name, parents=[scoped], help=help_text)
         action.add_argument("loop", help="a loop name or id")
         if name == "pause":
@@ -239,6 +239,11 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     adding.add_argument("--name", default="", help="what graphs call it (default: the kind)")
     adding.add_argument("--model", default="", help="the model it runs when a node names none")
     adding.add_argument("--url", default="", help="an OpenAI-compatible endpoint (opencode only; needs --model)")
+    adding.add_argument(
+        "--context", type=int, metavar="TOKENS",
+        help="the model's context window, so opencode compacts before it (needs --url; match Ollama's num_ctx)",
+    )
+    adding.add_argument("--output", type=int, metavar="TOKENS", help="the most tokens one reply may use (needs --context)")
     adding.add_argument("--replace", action="store_true", help="overwrite an agent with this name")
     for name, help_text in (("get", "one agent"), ("remove", "stop offering an added agent")):
         action = actions.add_parser(name, parents=[common], help=help_text)
@@ -549,7 +554,7 @@ def graph_run(arguments: argparse.Namespace) -> int:
             print(f"started {run['runId']} ({run['graph']} v{run['version']}); waiting...", file=sys.stderr)
         run = _wait_for_run(client, run["runId"], arguments.timeout)
     if arguments.command == "go" and not arguments.json:
-        for line in live.summary(run):
+        for line in live.summary(run, backend.name):
             print(line)
         return EXIT_FAILED if _run_failed(run) else EXIT_OK
     return _show_run(run, backend, arguments.pretty)
@@ -595,7 +600,7 @@ def _watch_run(client: Client, run_id: str, backend: Backend) -> int:
         command = shlex.join(["engine", "run", "watch", run_id, "--backend", backend.name])
         print(live.safe_text(f"Detached. Reattach with: {command}"))
         return EXIT_OK
-    for line in live.summary(run):
+    for line in live.summary(run, backend.name):
         print(line)
     return EXIT_FAILED if outcome == "cancelled" or _run_failed(run) else EXIT_OK
 
@@ -662,6 +667,14 @@ def loop_pause(arguments: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def loop_stop(arguments: argparse.Namespace) -> int:
+    backend, client = _connect(arguments)
+    loop = client.post(f"/loops/{quote(arguments.loop)}/stop",
+                       {"project": _project(arguments, backend)})
+    _emit(loop, arguments.pretty, _loop_summary)
+    return EXIT_OK
+
+
 def loop_resume(arguments: argparse.Namespace) -> int:
     backend, client = _connect(arguments)
     loop = client.post(f"/loops/{quote(arguments.loop)}/resume", {
@@ -719,7 +732,8 @@ def agent_add(arguments: argparse.Namespace) -> int:
     _backend, client = _connect(arguments)
     agent = client.post("/agents", {
         "kind": arguments.kind, "name": arguments.name, "model": arguments.model,
-        "url": arguments.url, "replace": arguments.replace,
+        "url": arguments.url, "contextLimit": arguments.context, "outputLimit": arguments.output,
+        "replace": arguments.replace,
     })
     _emit(agent, arguments.pretty, _agent_line)
     return EXIT_OK
@@ -916,7 +930,7 @@ def _wait_for_steering(client: Client, execution_id: str, steering_id: str, time
 
 
 def _run_failed(run: dict[str, Any]) -> bool:
-    return run["status"] == "failed"
+    return run["status"] in {"failed", "cancelled"}
 
 
 def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
@@ -988,8 +1002,15 @@ def _backend_line(body: dict[str, Any]) -> str:
 
 
 def _agent_line(body: dict[str, Any]) -> str:
-    detail = " ".join(part for part in (body.get("model") or "", body.get("url") or "") if part)
+    detail = " ".join(part for part in (body.get("model") or "", body.get("url") or "", _agent_limit(body)) if part)
     return f"{body['name']}  {body['kind']}{'  ' + detail if detail else ''}{'  (built in)' if body.get('builtin') else ''}"
+
+
+def _agent_limit(body: dict[str, Any]) -> str:
+    """An added agent's token limits, `context` or `context/output`, or blank when it has none."""
+    if not body.get("contextLimit"):
+        return ""
+    return f"{body['contextLimit']}" + (f"/{body['outputLimit']}" if body.get("outputLimit") else "")
 
 
 def _loop_summary(loop: dict[str, Any]) -> str:
@@ -1047,7 +1068,7 @@ def _duration(seconds: int) -> str:
 
 
 _AGENT_COLUMNS: list[tuple[str, Any]] = [
-    ("NAME", "name"), ("KIND", "kind"), ("MODEL", "model"), ("URL", "url"),
+    ("NAME", "name"), ("KIND", "kind"), ("MODEL", "model"), ("URL", "url"), ("LIMIT", _agent_limit),
     ("", lambda row: "built in" if row.get("builtin") else ""),
 ]
 _NODE_COLUMNS: list[tuple[str, Any]] = [
@@ -1084,6 +1105,7 @@ _HANDLERS = {
     ("loop", "get"): loop_get,
     ("loop", "pause"): loop_pause,
     ("loop", "resume"): loop_resume,
+    ("loop", "stop"): loop_stop,
     ("loop", "list"): loops_list,
     ("node", "list"): nodes_list,
     ("node", "get"): node_get,

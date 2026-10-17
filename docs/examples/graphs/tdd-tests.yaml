@@ -1,0 +1,73 @@
+apiVersion: openengine.cc/v1
+kind: Graph
+name: tdd-tests
+description: Write the failing tests for one issue and push them to a branch of their own, with no implementation and no pull request. Start several implementers from that branch, as the `base` of a tdd-guide run, so they all work to the same tests.
+
+inputs:
+  instruction:
+    description: Anything to add to the issue, such as what to leave alone
+  issue:
+    description: The issue number to write tests for
+  base:
+    description: "The branch to build on, such as origin/agent/e2e-agent-mode; empty means main"
+    default: ""
+  runner:
+    description: The runner that reads the issue and writes the tests
+    default: claude
+    choices: [claude, codex, opencode]
+
+plan:
+  workspace:
+    base_ref: origin/main
+    ref: ${inputs.base}
+
+  pick:
+    name: Read the issue
+    agent: ${inputs.runner}
+    prompt: |
+      Read issue #${inputs.issue} in full with `gh issue view ${inputs.issue} --comments`.
+      Do not edit anything.
+
+      ${instruction}
+    outputs:
+      issue: {type: string, required: true, description: the issue number}
+      title: {type: string, required: true, description: the issue title}
+      brief: {type: string, required: true, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
+      branch: {type: string, required: true, description: "agent/issue-N-tests, the branch the tests will be pushed to"}
+
+implementation:
+  tdd:
+    name: Write failing tests
+    agent: {same: pick}
+    tools: [git_subcommand]
+    prompt: |
+      Write the tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, before any
+      implementation exists. Change only test files and test fixtures.
+
+      This checkout is fresh. Prepare it first: `uv sync --all-packages`.
+
+      ${outputs.pick.brief}
+
+      ${instruction}
+
+      Cover every acceptance criterion in the issue.
+
+      Run the new tests and confirm they fail because the behaviour is missing,
+      not because of a typo or a broken import. Commit them with git_subcommand
+      as a Conventional Commit (`test(...): ...`).
+    outputs:
+      tests: {type: string, required: true, description: "the test files and test names written, one per line"}
+      failure: {type: string, required: true, description: "why the tests fail now, from their output"}
+
+  push:
+    name: Push the tests
+    agent: {same: tdd}
+    tools: [git_subcommand]
+    prompt: |
+      Push this checkout's commits with git_subcommand to `${outputs.pick.branch}`
+      (`["push", "origin", "HEAD:refs/heads/${outputs.pick.branch}"]`).
+      Never push an engine/ws-* branch. Do not open a pull request.
+
+      Report the pushed commit's SHA.
+    outputs:
+      sha: {type: string, required: true, description: the SHA of the pushed commit}

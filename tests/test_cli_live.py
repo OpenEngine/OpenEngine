@@ -139,7 +139,7 @@ def test_live_messages_results_and_summary_escape_controls():
     run["failure"] = {"error": UNTRUSTED}
     run["workspace"] = {"path": UNTRUSTED, "ref": UNTRUSTED}
     rendered = "\n".join(plain(run, width=500))
-    summary = "\n".join(live.summary(run))
+    summary = "\n".join(live.summary(run, "local"))
     for output in (rendered, summary):
         assert ESCAPED.removesuffix(r"\nbenign") in output
         assert all(char not in output for char in ("\r", "\x1b", "\x9b", "\b", "\t", "\u202e"))
@@ -151,3 +151,12 @@ def test_terminal_escapes_content_but_preserves_owned_styles():
     terminal.color = True
     assert terminal._line([(UNTRUSTED, live._BOLD)], 500) == live._BOLD + ESCAPED + live._RESET
     assert terminal._line([("\x1b[2K", "")], 4) == r"\x1b"
+
+
+def test_summary_points_to_workspace_details_without_printing_machine_paths():
+    run = run_state("completed")
+    run["workspace"] = {"path": "/private/tmp/engine-workspaces/ws-example", "ref": "engine/ws-example"}
+    output = "\n".join(live.summary(run, "local"))
+    assert "Workspace details: engine run get run-1 --backend local" in output
+    assert run["workspace"]["path"] not in output
+    assert run["workspace"]["ref"] not in output

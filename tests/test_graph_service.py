@@ -19,7 +19,7 @@ import httpx
 import pytest
 import yaml
 from engine.domain import RunId, WorkspaceId
-from engine.graph_runtime import GraphId, RunStatus
+from engine.graph_runtime import GraphId, RunStatus, UnknownGraphError, UnknownRunError
 from engine.graph_runtime_langgraph import (
     LangGraphRuntime,
     PullRequestRecord,
@@ -311,6 +311,24 @@ def test_a_new_version_does_not_change_a_run_already_pinned(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_a_work_order_can_pin_a_version_that_is_no_longer_the_latest(tmp_path: Path) -> None:
+    """`work_orders.workflow = "solo@1"` starts version 1 after version 2 is added."""
+    from engine.apps.web.api import work_order_graph
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            first, _ = await service.add_graph("default", source=single("solo", "one"))
+            second, _ = await service.add_graph("default", source=single("solo", "two"))
+            for reference, expected in (("solo@1", first), (first["versionId"], first), ("solo", second)):
+                version = work_order_graph(service.resolve, "acme/api", reference)
+                assert version is not None and version.version_id == expected["versionId"]
+                workflow = service.version_workflow(version.version_id)
+                assert workflow is not None and str(workflow.graph_id) == expected["versionId"]
+            assert service.version_workflow("gv-missing") is None
+
+    asyncio.run(scenario())
+
+
 def test_names_resolve_within_a_project_and_ambiguity_is_refused(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
@@ -583,7 +601,7 @@ def test_a_loop_shows_the_output_of_its_latest_completed_run(tmp_path: Path) -> 
             second = (await service.loop_json(loop["loopId"]))["activeRunId"]
             assert second != first
             stopped = await settled(service, second)
-            assert stopped["status"] == "failed" and stopped["output"] is None
+            assert stopped["status"] == "cancelled" and stopped["output"] is None
 
             latest = (await service.loop_json(loop["loopId"]))["latestOutput"]
             assert latest == {"runId": first, **run["output"]}
@@ -603,10 +621,14 @@ def test_reaching_max_spend_stops_the_run_and_survives_a_restart(tmp_path: Path)
             await service.tick()
             run_id = (await service.loop_json(loop["loopId"]))["activeRunId"]
             run = await settled(service, run_id)
-            assert run["status"] == "failed"  # cancelled once the cap was reached
+            assert run["status"] == "cancelled"  # cancelled once the cap was reached
+            assert run["failure"] is None
+            assert [row["runId"] for row in await service.list_runs("default", status="cancelled")] == [run_id]
+            assert await service.list_runs("default", status="failed") == []
             assert "review" not in run["results"]
         async with graph_service(tmp_path, clock=clock) as service:
             loop = await service.loop_json(loop["loopId"])
+            assert (await service.run_json(run_id))["status"] == "cancelled"
             assert loop["state"] == "paused" and loop["pauseReason"].startswith("max-spend reached")
             assert loop["spend"]["usd"] == pytest.approx(0.5)
             clock.advance(hours=2)
@@ -835,6 +857,34 @@ def test_an_opencode_agent_on_a_model_server_gets_its_own_provider() -> None:
         }},
     }
     assert opencode_config(AgentRow("o", "opencode", "", "", "", "")) == {}
+    limited = AgentRow("qwen", "opencode", "qwen-agent:latest", "http://127.0.0.1:11434/v1", "", "", 65536, 8192)
+    assert opencode_config(limited)["provider"]["engine"]["models"] == {
+        "qwen-agent:latest": {"name": "qwen-agent:latest", "limit": {"context": 65536, "output": 8192}},
+    }
+
+
+def test_an_agent_on_a_model_server_keeps_its_context_limit(tmp_path: Path) -> None:
+    from engine.graph_service.service import opencode_config
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            url = "http://127.0.0.1:11434/v1"
+            added = await service.add_agent("opencode", name="qwen", model="q", url=url, context_limit=65536)
+            assert (added["contextLimit"], added["outputLimit"]) == (65536, None)
+            row = service.store.agent("qwen")
+            assert row is not None and opencode_config(row)["provider"]["engine"]["models"]["q"]["limit"] == {
+                "context": 65536, "output": 0,
+            }
+            plain = await service.add_agent("opencode", name="plain", model="q", url=url)
+            assert plain["contextLimit"] is None
+            for limits in ({"context_limit": "big"}, {"context_limit": -1}, {"output_limit": 8192},
+                           {"context_limit": 4096, "output_limit": 8192}):
+                with pytest.raises(ServiceError):
+                    await service.add_agent("opencode", name="bad", model="q", url=url, **limits)
+            with pytest.raises(ServiceError):
+                await service.add_agent("claude", name="bad", context_limit=65536)
+
+    asyncio.run(scenario())
 
 
 def test_an_added_agents_model_applies_when_a_node_names_none_or_an_unknown_tier() -> None:
@@ -890,8 +940,10 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
 # --- through the daemon -------------------------------------------------------
 
 
+@pytest.mark.parametrize("mode,customized", [(None, False), ("fix", False), ("review", False),
+                                           ("fix", True), ("review", True)])
 def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
-    tmp_path: Path, *, workflow_app
+    tmp_path: Path, mode: str | None, customized: bool, *, workflow_app
 ) -> None:
     """`engine-web` mounts the service at /api/v1 and starts runs as WorkOrders."""
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -913,12 +965,17 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
                 finally:
                     await runtime.aclose()
 
+            services = []
+
             def factory(runtime: LangGraphRuntime, start: Any) -> GraphService:
-                return GraphService(
+                service = GraphService(
                     runtime, tmp_path / DATABASE,
                     workspace_provider=Checkouts(tmp_path / "checkout"),
                     registry=registry, start=start, default_repository="example/repo",
                 )
+
+                services.append(service)
+                return service
 
             app = workflow_app(
                 InMemoryStateStore(), ConcurrentRunner(), graph_runtime=running(), graph_service=factory,
@@ -926,20 +983,59 @@ def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
                 async with app.router.lifespan_context(app):
-                    added = await client.post("/api/v1/graphs", json={"source": PAIR})
+                    if mode:
+                        from engine.cli import starters
+                        # Keep the shipped graph identity and input declarations;
+                        # replace agent execution with one deterministic node.
+                        source = starters.source(mode) + """
+from dataclasses import replace
+from langgraph.graph import StateGraph, START, END
+from engine.graph_runtime_langgraph import State
+builder = StateGraph(State)
+builder.add_node("work", lambda state: {})
+builder.add_edge(START, "work")
+builder.add_edge("work", END)
+workflow = replace(workflow, builder=builder)
+"""
+                        if customized:
+                            source += '\nworkflow = replace(workflow, graph_id="custom-change", name="custom-change")\n'
+                        added = await client.post("/api/v1/graphs", json={"source": source, "format": "python"})
+                    else:
+                        added = await client.post("/api/v1/graphs", json={"source": PAIR})
                     assert added.status_code == 201, added.text
+                    if customized:
+                        service = services[0]
+                        version_id = added.json()["versionId"]
+                        assert not service.claims_pull_request(version_id)
+                        # A binding in another project must not affect this graph.
+                        service.bind_verb("other", mode, version_id)
+                        assert not service.claims_pull_request(version_id)
+                        binding = await client.post(f"/api/v1/verbs/{mode}", json={"graph": "custom-change"})
+                        assert binding.status_code == 200, binding.text
+                        assert service.claims_pull_request(version_id)
+                        invalid = await client.post("/api/v1/runs", json={
+                            "graph": "custom-change", "instruction": "it", "idempotencyKey": "invalid",
+                            "inputs": {"pr_url": "https://github.com/other/repo/pull/855"},
+                        })
+                        assert invalid.status_code == 400, invalid.text
                     run = await client.post("/api/v1/runs", json={
-                        "graph": "pair", "instruction": "it", "idempotencyKey": "k",
+                        "graph": "custom-change" if customized else mode or "pair",
+                        "instruction": "it", "idempotencyKey": "k",
+                        "inputs": {"pr_url": "https://github.com/example/repo/pull/855"} if mode else {},
                     })
                     assert run.status_code == 201, run.text
                     run_id = run.json()["runId"]
+                    assert run.json()["pullRequests"] == (
+                        [{"repository": "example/repo", "number": 855}] if mode else []
+                    )
                     for _ in range(600):
                         body = (await client.get(f"/api/v1/runs/{run_id}")).json()
                         if body["terminal"]:
                             break
                         await asyncio.sleep(0.05)
                     assert body["status"] == "completed", body
-                    assert body["results"]["review"] == "echo: review echo: do it (plain)"
+                    if not mode:
+                        assert body["results"]["review"] == "echo: review echo: do it (plain)"
                     listed = (await client.get("/api/runs")).json()["runs"]
                     assert [item["runId"] for item in listed] == [run_id]
                     assert listed[0]["phase"] == "succeeded"
@@ -1281,5 +1377,228 @@ def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp
             assert await service.list_runs(None, requester="bob") == []
             assert await service.list_runs(None, origin="github") == []
             assert (await service.run_json("reserved"))["status"] == "scheduled"
+
+    asyncio.run(scenario())
+
+
+def typed_completion(values):
+    from engine.domain import AgentRunId, StepCompleted, StepId, StepOutput
+
+    return StepCompleted(
+        run_id=RunId("typed-run"), step_id=StepId("s"),
+        agent_run_id=AgentRunId("typed-agent"), outcome="success", summary="Done",
+        outputs=tuple(StepOutput(name, value) for name, value in values.items()),
+    )
+
+
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("kind,wire,expected", [
+    ("object", '{"a": 1}', {"a": 1}),
+    ("list", '[1, {"a": 2}]', [1, {"a": 2}]),
+    ("number", "1.5", 1.5),
+    ("integer", "1", 1),
+    ("boolean", "false", False),
+    ("string", '{"a": 1}', '{"a": 1}'),
+    ("findings", "[]", []),
+])
+def test_typed_outputs_validate_and_reach_graph_state(kind, wire, expected, required):
+    from engine.graph_service.compile import GraphAgentNode, _validator
+    from engine.graph_service.language import OutputSpec, RunnerRule
+
+    outputs = (OutputSpec("model", kind, required=required),)
+    event = typed_completion({"model": wire})
+    _validator(outputs)(event)
+    node = GraphAgentNode(
+        agent="stub", cwd="/tmp", state_key="s", output_key="s", rule=RunnerRule("literal", "stub"),
+        outputs=outputs,
+    )
+    value = node._terminal_update(event)["s"]["model"]
+    assert value == expected
+    assert type(value) is type(expected)
+    if not required:
+        _validator(outputs)(typed_completion({}))
+        assert "model" not in node._terminal_update(typed_completion({}))["s"]
+
+
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("kind,wire", [
+    ("object", "[1]"), ("list", "{}"), ("number", "true"),
+    ("integer", "1.5"), ("integer", "true"), ("boolean", "1"),
+    ("object", "null"),
+])
+def test_typed_outputs_reject_wrong_json_type(kind, wire, required):
+    from engine.graph_service.compile import _validator
+    from engine.graph_service.language import OutputSpec
+
+    with pytest.raises(ValueError, match=f"output model must be a {kind}"):
+        _validator((OutputSpec("model", kind, required=required),))(
+            typed_completion({"model": wire}),
+        )
+
+
+@pytest.mark.parametrize("kind", ["object", "list", "number", "integer", "boolean"])
+@pytest.mark.parametrize("wire", ["not JSON", ""])
+def test_typed_outputs_reject_invalid_json(kind, wire):
+    from engine.graph_service.compile import _validator
+    from engine.graph_service.language import OutputSpec
+
+    with pytest.raises(ValueError, match=f"output model must be JSON for type {kind}:"):
+        _validator((OutputSpec("model", kind),))(typed_completion({"model": wire}))
+
+
+def test_typed_completion_flows_through_broker_and_downstream_nodes():
+    from engine.domain import AgentId, AgentRunId, StepId, StepSpec
+    from engine.graph_service.compile import GraphAgentNode, _completion_instructions, _validator, environment
+    from engine.graph_service.expressions import parse, template
+    from engine.graph_service.language import OutputSpec, RunnerRule
+    from engine.runtime.terminal_mcp import TerminalMcpBroker, TerminalResultRegistry
+    from langgraph.graph import END, START, StateGraph
+    from engine.graph_runtime_langgraph import State
+    from tests.test_terminal_mcp import _direct_request
+
+    outputs = tuple(OutputSpec(name, kind, required=True) for name, kind in (
+        ("model", "object"), ("items", "list"), ("ready", "boolean"), ("count", "number"),
+    ))
+    node = GraphAgentNode(
+        agent="stub", cwd="/tmp", state_key="s", output_key="s", rule=RunnerRule("literal", "stub"),
+        outputs=outputs,
+    )
+    groups = {"s": (("s",), False)}
+    instructions = _completion_instructions(outputs)
+    assert "JSON-encoded strings" in instructions
+    assert '"model": "{\\"a\\": 1}"' in instructions
+
+    async def source(state):
+        broker = TerminalMcpBroker(
+            run_id=RunId("typed-run"), agent_run_id=AgentRunId("typed-agent"),
+            step=StepSpec(StepId("s"), AgentId("stub"), tuple(o.name for o in outputs)),
+            registry=TerminalResultRegistry(), validate_completion=_validator(outputs),
+        )
+        async with broker:
+            response = await broker._submit(_direct_request(broker, 1, "complete_step", {
+                "outcome": "success", "summary": "Done", "outputs": {
+                    "model": '{"a": 1}', "items": '[{"a": 1}, {"a": 2}]',
+                    "ready": "false", "count": "2.5",
+                },
+            }))
+            assert response["ok"] is True
+            return node._terminal_update(await broker.result())
+
+    def route(state):
+        names = environment(state, groups)
+        return "map" if parse("outputs.s.ready == false && outputs.s.count > 2").evaluate(names) else END
+
+    def consume(state):
+        names = environment(state, groups)
+        assert isinstance(state["s"]["model"], dict)
+        assert json.loads(template("${outputs.s.model}").render(names)) == {"a": 1}
+        return {"mapped": [item["a"] for item in parse("outputs.s.items").evaluate(names)]}
+
+    builder = StateGraph(State)
+    builder.add_node("s", source)
+    builder.add_node("map", consume)
+    builder.add_edge(START, "s")
+    builder.add_conditional_edges("s", route, ["map", END])
+    builder.add_edge("map", END)
+    result = asyncio.run(builder.compile().ainvoke({}))
+    assert result["mapped"] == [1, 2]
+
+
+@pytest.mark.parametrize("stop_during_start", [False, True])
+def test_stopping_a_loop_is_permanent_even_during_start(tmp_path: Path, stop_during_start: bool) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+            if stop_during_start:
+                start = service._start_version
+
+                async def stop_then_start(*args, **kwargs):
+                    await service.stop_loop("default", loop_id)
+                    return await start(*args, **kwargs)
+
+                service._start_version = stop_then_start
+            await service.tick()
+            await service.stop_loop("default", loop_id)
+            stopped = await service.loop_json(loop_id)
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            run_id = service.store.loop_runs(loop_id)[0][1]
+            assert (await service.run_json(run_id))["status"] == "cancelled"
+            for action in (service.pause_loop, service.resume_loop):
+                with pytest.raises(Conflict, match="stopped loop"):
+                    await action("default", loop_id)
+            await service._pause(loop_id, "late failure")
+            clock.advance(hours=3)
+            await service.tick()
+            assert (await service.loop_json(loop_id))["state"] == "stopped"
+            assert len(service.store.loop_runs(loop_id)) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", [UnknownRunError, UnknownGraphError])
+def test_stopping_loop_clears_missing_active_run(tmp_path: Path, monkeypatch, missing) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+            service.store.update_loop(loop_id, active_run_id="run-missing")
+            cancel = AsyncMock(side_effect=missing("already gone"))
+            monkeypatch.setattr(service.runtime, "cancel", cancel)
+
+            stopped = await service.stop_loop("default", loop_id)
+
+            cancel.assert_awaited_once_with(RunId("run-missing"))
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            assert service.store.loop(loop_id).active_run_id is None
+            await service.stop_loop("default", loop_id)
+            cancel.assert_awaited_once()
+            clock.advance(hours=3)
+            await service.tick()
+            assert service.store.loop_runs(loop_id) == ()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", [UnknownRunError, UnknownGraphError])
+def test_stopping_loop_during_start_clears_missing_run(tmp_path: Path, monkeypatch, missing) -> None:
+    from unittest.mock import AsyncMock
+
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("slow", "WAIT ${instruction}"))
+            loop = await service.add_loop(project="default", graph="slow", instruction="x", every="1h")
+            loop_id = loop["loopId"]
+
+            async def stop_then_start(*args, **kwargs):
+                await service.stop_loop("default", loop_id)
+                return RunId("run-missing")
+
+            monkeypatch.setattr(service, "_start_version", stop_then_start)
+            cancel = AsyncMock(side_effect=missing("already gone"))
+            monkeypatch.setattr(service.runtime, "cancel", cancel)
+            await service.tick()
+
+            cancel.assert_awaited_once_with(RunId("run-missing"))
+            stopped = await service.loop_json(loop_id)
+            assert stopped["state"] == "stopped"
+            assert stopped["activeRunId"] is None
+            assert stopped["nextRunAt"] is None
+            assert service.store.loop(loop_id).active_run_id is None
+            clock.advance(hours=3)
+            await service.tick()
+            assert len(service.store.loop_runs(loop_id)) == 1
+            cancel.assert_awaited_once()
 
     asyncio.run(scenario())

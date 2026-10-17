@@ -24,6 +24,8 @@ export type TerminalTestApi = {
    * wrapped are joined back together and trailing spaces are dropped.
    */
   text(): string
+  /** Show the beginning of the scrollback for long command output. */
+  scrollToTop(): void
   /** The index of the last visible row matching `pattern` (the nth `.xterm-rows > div`), or -1. */
   rowIndexOf(pattern: Pattern): number
   /**

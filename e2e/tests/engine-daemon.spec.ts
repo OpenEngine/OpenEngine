@@ -80,6 +80,7 @@ test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
       const graph = path.join(engine.root, "hello.yaml")
       writeFileSync(graph, "apiVersion: openengine.cc/v1\nkind: Graph\nname: hello\nimplementation:\n  greet:\n    agent: claude\n    prompt: Say hello.\n")
       await terminal.run(`engine graph add ${graph}`)
+      await terminal.run("engine repo untrust")
       await terminal.run('engine graph run hello "Say hello" --wait')
       expect(ours().length).toBeGreaterThan(0)
     } finally {

@@ -334,7 +334,7 @@ export function LoopPage({ loopId }: { loopId: string }) {
       <header className="detail-head">
         <p className="eyebrow">OpenEngine / Loop</p>
         <div className="detail-title">
-          <h1>{loop.name}</h1>
+          <h1 title={loop.name}>{loop.name}</h1>
           <button className="btn" type="button" onClick={() => void remove()}>Delete loop</button>
         </div>
         <p className="workorder-prompt-text">{loop.prompt}</p>

@@ -447,7 +447,7 @@ engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--
 Recurring runs of a graph, within limits.
 
 ```text
-engine loop [-h] {spec,add,get,pause,resume,list} ...
+engine loop [-h] {spec,add,get,pause,resume,stop,list} ...
 ```
 
 ### `engine loop spec`
@@ -537,6 +537,21 @@ engine loop resume [-h] [--json] [--backend NAME] [--project NAME] [--max-prs MA
 | `loop` | a loop name or id |
 | `--max-prs MAX_PRS` |  |
 | `--max-spend USD` |  |
+
+### `engine loop stop`
+
+Permanently stop the loop and its active run.
+
+```text
+engine loop stop [-h] [--json] [--backend NAME] [--project NAME] loop
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of readable output |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+| `loop` | a loop name or id |
 
 ### `engine loop list`
 
@@ -654,7 +669,7 @@ Offer claude, codex or opencode under a name.
 
 ```text
 engine agent add [-h] [--json] [--backend NAME] [--name NAME] [--model MODEL] [--url URL]
-                 [--replace]
+                 [--context TOKENS] [--output TOKENS] [--replace]
                  {claude,codex,opencode}
 ```
 
@@ -666,6 +681,8 @@ engine agent add [-h] [--json] [--backend NAME] [--name NAME] [--model MODEL] [-
 | `--name NAME` | what graphs call it (default: the kind) |
 | `--model MODEL` | the model it runs when a node names none |
 | `--url URL` | an OpenAI-compatible endpoint (opencode only; needs --model) |
+| `--context TOKENS` | the model's context window, so opencode compacts before it (needs --url; match Ollama's num_ctx) |
+| `--output TOKENS` | the most tokens one reply may use (needs --context) |
 | `--replace` | overwrite an agent with this name |
 
 ### `engine agent get`

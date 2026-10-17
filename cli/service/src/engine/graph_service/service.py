@@ -329,6 +329,7 @@ class GraphService:
         if row is not None:
             return {
                 "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
+                "contextLimit": row.context_limit or None, "outputLimit": row.output_limit or None,
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
             }
         if name in self._builtin_agents:
@@ -336,7 +337,8 @@ class GraphService:
         raise NotFound(f"no agent named {name!r}", agent=name)
 
     async def add_agent(
-        self, kind: str, *, name: str = "", model: str = "", url: str = "", overwrite: bool = False,
+        self, kind: str, *, name: str = "", model: str = "", url: str = "",
+        context_limit: object = None, output_limit: object = None, overwrite: bool = False,
     ) -> dict[str, Any]:
         """Offer a harness under a name graphs can use, with its own model or endpoint."""
         if self._agent_factory is None:
@@ -357,6 +359,14 @@ class GraphService:
         if url and _carries_credential(url):
             # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
             raise ServiceError("url must not carry an api key in its query string")
+        context = _token_limit("context", context_limit)
+        output = _token_limit("output", output_limit)
+        if (context or output) and not url:
+            raise ServiceError("only an agent with a url takes a context or output limit")
+        if output and not context:
+            raise ServiceError("an output limit needs a context limit")
+        if context and output >= context:
+            raise ServiceError("output limit must be less than the context limit", context=context, output=output)
         if name in self._builtin_agents:
             raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
         async with self._lock:
@@ -364,7 +374,7 @@ class GraphService:
             if existing is not None and not overwrite:
                 raise Conflict(f"an agent named {name} already exists; pass replace to change it", agent=name)
             at = self._now_iso()
-            row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at)
+            row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at, context, output)
             self._offer_agent(row)
             self.store.upsert_agent(row)
         return self.agent_json(name, row)
@@ -508,6 +518,32 @@ class GraphService:
                 self.store.insert_version(version)
             return self._graph_json(graph, version, definition=True), True
 
+    def version_workflow(self, version_id: str) -> GraphWorkflow | None:
+        """The loaded workflow of one registered version, latest or not; `None` if it did not load."""
+        loaded = self._loaded.get(version_id)
+        return loaded.workflow if loaded is not None else None
+
+    def claims_pull_request(self, graph_id: str) -> bool:
+        """Recognize stock graphs and project graphs bound to fix/review."""
+        version = self.store.version(graph_id)
+        if version is None:
+            return graph_id in ("fix", "review")
+        source_id = version.manifest.get("workflowId", version.manifest.get("name"))
+        if source_id in ("fix", "review"):
+            return True
+        graph = self.store.graph(version.graph_id)
+        if graph is None:
+            return False
+        bindings = self.verbs(graph.project)
+        for verb in ("fix", "review"):
+            try:
+                bound, _ = self.resolve(graph.project, bindings[verb])
+            except NotFound:
+                continue
+            if bound.graph_id == graph.graph_id:
+                return True
+        return False
+
     def workflows(self) -> tuple[GraphWorkflow, ...]:
         """The latest usable graph definitions, for the WorkOrder form."""
         return tuple(
@@ -526,44 +562,8 @@ class GraphService:
         return self._graph_json(graph, version, definition=True, versions=True)
 
     def resolve(self, project: str | None, reference: str) -> tuple[GraphRow, VersionRow]:
-        """A graph id, a version id, a name, or `name@N`, within the project.
-
-        A name with no project is looked up everywhere, and refused rather than
-        guessed when two projects use it.
-        """
-        reference = reference.strip()
-        if not reference:
-            raise ServiceError("name a graph")
-        if reference.startswith("gv-"):
-            version = self.store.version(reference)
-            graph = self.store.graph(version.graph_id) if version else None
-            if version is None or graph is None:
-                raise NotFound(f"no graph version {reference}")
-            return graph, version
-        if reference.startswith("g-"):
-            graph = self.store.graph(reference)
-            if graph is None:
-                raise NotFound(f"no graph {reference}")
-            return graph, self._version(graph.latest_version_id)
-        name, _, number = reference.partition("@")
-        matches = self.store.graphs_named(name, _project(project) if project else None)
-        if not matches:
-            where = f" in project {_project(project)!r}" if project else ""
-            raise NotFound(f"no graph named {name!r}{where}")
-        if len(matches) > 1:
-            raise Conflict(
-                f"graph name {name!r} is ambiguous; name a project or use a graph id",
-                candidates=[{"graphId": graph.graph_id, "project": graph.project} for graph in matches],
-            )
-        graph = matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
-        if not number:
-            return graph, self._version(graph.latest_version_id)
-        if not number.isdigit():
-            raise ServiceError(f"{reference!r}: a version is a number, as in {name}@2")
-        version = self.store.version_numbered(graph.graph_id, int(number))
-        if version is None:
-            raise NotFound(f"graph {name!r} has no version {number}")
-        return graph, version
+        """A graph id, a version id, a name, or `name@N`, within the project; see `resolve_graph`."""
+        return resolve_graph(self.store, project, reference)
 
     # --- runs ---------------------------------------------------------------
 
@@ -629,7 +629,7 @@ class GraphService:
         activity = _latest_activity(events)
         selected = _selected_runners(events)
         failure: dict[str, Any] | None = None
-        if snapshot.status is RunStatus.FAILED:
+        if snapshot.status is RunStatus.FAILED and snapshot.error != CANCELLED:
             failed = next((row for row in reversed(executions) if row.status == "failed"), None)
             node_id = failed.node_id if failed else ""
             failure = {"error": snapshot.error, "node": node_id or None}
@@ -649,7 +649,7 @@ class GraphService:
             "graph": graph.name if graph else str(snapshot.graph_id),
             "project": graph.project if graph else None,
             "version": version.number if version else None,
-            "status": snapshot.status.value,
+            "status": "cancelled" if snapshot.error == CANCELLED else snapshot.status.value,
             "terminal": snapshot.status in TERMINAL_RUN_STATUSES,
             "loopId": self.store.loop_for_run(run_id),
             "format": version.format if version else None,
@@ -694,9 +694,9 @@ class GraphService:
         limit: int = DEFAULT_RUN_LIMIT,
     ) -> list[dict[str, Any]]:
         """All graph runs, newest first, with optional registration metadata."""
-        if status and status not in {item.value for item in RunStatus}:
+        if status and status not in {item.value for item in RunStatus} | {"cancelled"}:
             raise ServiceError(
-                f"unknown status {status!r}; one of {', '.join(item.value for item in RunStatus)}"
+                f"unknown status {status!r}; one of {', '.join(item.value for item in RunStatus)}, cancelled"
             )
         if limit < 1:
             raise ServiceError("limit must be at least 1")
@@ -714,7 +714,7 @@ class GraphService:
                 snapshot = await self.runtime.snapshot(RunId(row.run_id))
             except (UnknownRunError, UnknownGraphError):
                 snapshot = None
-            if snapshot is None or (status and snapshot.status.value != status):
+            if snapshot is None or (status and ("cancelled" if snapshot.error == CANCELLED else snapshot.status.value) != status):
                 continue
             version = self.store.version(row.version_id) if row.version_id else None
             graph_row = self.store.graph(version.graph_id) if version else None
@@ -728,7 +728,7 @@ class GraphService:
                 "graph": graph_row.name if graph_row else str(snapshot.graph_id),
                 "project": graph_row.project if graph_row else None,
                 "version": version.number if version else None,
-                "status": snapshot.status.value,
+                "status": "cancelled" if snapshot.error == CANCELLED else snapshot.status.value,
                 "terminal": snapshot.status in TERMINAL_RUN_STATUSES,
                 "loopId": row.loop_id,
                 "loop": loop_row.name if loop_row else None,
@@ -976,10 +976,26 @@ class GraphService:
     async def pause_loop(self, project: str | None, reference: str, reason: str = "") -> dict[str, Any]:
         row = self.resolve_loop(project, reference)
         async with self._lock:
+            if self.resolve_loop(project, reference).state == "stopped":
+                raise Conflict("cannot pause a stopped loop; create a new loop")
             self.store.update_loop(
                 row.loop_id, state="paused", pause_reason=reason.strip() or "paused by a person",
                 updated_at=self._now_iso(),
             )
+        return await self.loop_json(row.loop_id)
+
+    async def stop_loop(self, project: str | None, reference: str) -> dict[str, Any]:
+        async with self._lock:
+            row = self.resolve_loop(project, reference)
+            self.store.update_loop(
+                row.loop_id, state="stopped", pause_reason="", updated_at=self._now_iso(),
+            )
+        if row.active_run_id:
+            try:
+                await self.runtime.cancel(RunId(row.active_run_id))
+            except (UnknownRunError, UnknownGraphError):
+                pass  # The run is already gone; clear its stale reference below.
+            self.store.update_loop(row.loop_id, active_run_id=None, updated_at=self._now_iso())
         return await self.loop_json(row.loop_id)
 
     async def resume_loop(
@@ -1000,6 +1016,8 @@ class GraphService:
         if reached := self._limit_reached(candidate, await self.accounting(candidate)):
             raise Conflict(f"cannot resume: {reached}; raise the limit to resume")
         async with self._lock:
+            if self.resolve_loop(project, reference).state == "stopped":
+                raise Conflict("cannot resume a stopped loop; create a new loop")
             self.store.update_loop(
                 row.loop_id, state="active", pause_reason="", max_prs=limits[0],
                 max_spend_usd=limits[1], next_run_at=self._now_iso(), updated_at=self._now_iso(),
@@ -1082,6 +1100,14 @@ class GraphService:
             return
         self.store.set_tick_run(row.loop_id, tick, str(run_id))
         self.store.update_loop(row.loop_id, active_run_id=str(run_id), updated_at=self._now_iso())
+        # Stop may have arrived while starting the run awaited the runtime.
+        fresh = self.store.loop(row.loop_id)
+        if fresh is not None and fresh.state == "stopped":
+            try:
+                await self.runtime.cancel(run_id)
+            except (UnknownRunError, UnknownGraphError):
+                pass  # The run is already gone; clear its stale reference below.
+            self.store.update_loop(row.loop_id, active_run_id=None, updated_at=self._now_iso())
 
     async def _schedule(self) -> None:
         while True:
@@ -1099,6 +1125,9 @@ class GraphService:
         return ""
 
     async def _pause(self, loop_id: str, reason: str) -> None:
+        row = self.store.loop(loop_id)
+        if row is None or row.state == "stopped":
+            return
         self.store.update_loop(loop_id, state="paused", pause_reason=reason, updated_at=self._now_iso())
         log.info("loop %s paused: %s", loop_id, reason)
 
@@ -1414,10 +1443,7 @@ class GraphService:
         return body
 
     def _version(self, version_id: str) -> VersionRow:
-        version = self.store.version(version_id)
-        if version is None:
-            raise NotFound(f"no graph version {version_id}")
-        return version
+        return _version(self.store, version_id)
 
     def _now_iso(self) -> str:
         return now_iso(self._clock())
@@ -1607,10 +1633,28 @@ def opencode_config(row: AgentRow) -> dict[str, Any]:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": row.name,
                 "options": {"baseURL": row.url},
-                "models": {row.model: {"name": row.model}},
+                "models": {row.model: _opencode_model(row)},
             },
         }
     return config
+
+
+def _opencode_model(row: AgentRow) -> dict[str, Any]:
+    """The model entry: its limit tells opencode when to compact, so prompts fit the server's window."""
+    model: dict[str, Any] = {"name": row.model}
+    if row.context_limit:
+        # opencode reads a limit as both or neither; 0 output leaves its own default in place.
+        model["limit"] = {"context": row.context_limit, "output": row.output_limit or 0}
+    return model
+
+
+def _token_limit(name: str, value: object) -> int:
+    """A token limit given to `add_agent`: 0 or absent for none, otherwise a positive whole number."""
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ServiceError(f"{name} limit must be a whole number of tokens", **{name: value})
+    return value
 
 
 def _parse_yaml(source: str, *, runners: Sequence[str] | None) -> GraphSpec:
@@ -1683,6 +1727,58 @@ def _following(due: datetime, interval: int, now: datetime) -> datetime:
     return due + step * (missed + 1)
 
 
+def resolve_graph(
+    store: GraphServiceStore, project: str | None, reference: str,
+) -> tuple[GraphRow, VersionRow]:
+    """A graph id, a version id, a name, or `name@N`, within the project.
+
+    A name with no project is looked up everywhere, and refused rather than
+    guessed when two projects use it. Only `store` is read, so this answers
+    as well before the daemon's runtime is open as after.
+    """
+    reference = reference.strip()
+    if not reference:
+        raise ServiceError("name a graph")
+    if reference.startswith("gv-"):
+        version = store.version(reference)
+        graph = store.graph(version.graph_id) if version else None
+        if version is None or graph is None:
+            raise NotFound(f"no graph version {reference}")
+        return graph, version
+    if reference.startswith("g-"):
+        graph = store.graph(reference)
+        if graph is None:
+            raise NotFound(f"no graph {reference}")
+        return graph, _version(store, graph.latest_version_id)
+    name, _, number = reference.partition("@")
+    matches = store.graphs_named(name, _project(project) if project else None)
+    if not matches:
+        where = f" in project {_project(project)!r}" if project else ""
+        raise NotFound(f"no graph named {name!r}{where}")
+    if len(matches) > 1:
+        raise Conflict(
+            f"graph name {name!r} is ambiguous; name a project or use a graph id",
+            candidates=[{"graphId": graph.graph_id, "project": graph.project} for graph in matches],
+        )
+    graph = matches[0]  # pyright: ignore[reportGeneralTypeIssues]  # Baseline: see docs/pyright.md
+    if not number:
+        return graph, _version(store, graph.latest_version_id)
+    if not number.isdigit():
+        raise ServiceError(f"{reference!r}: a version is a number, as in {name}@2")
+    version = store.version_numbered(graph.graph_id, int(number))
+    if version is None:
+        raise NotFound(f"graph {name!r} has no version {number}")
+    return graph, version
+
+
+
+def _version(store: GraphServiceStore, version_id: str) -> VersionRow:
+    version = store.version(version_id)
+    if version is None:
+        raise NotFound(f"no graph version {version_id}")
+    return version
+
+
 def _project(project: str | None) -> str:
     return (project or DEFAULT_PROJECT).strip() or DEFAULT_PROJECT
 
@@ -1706,5 +1802,6 @@ __all__ = [
     "Unavailable",
     "auth_required",
     "opencode_config",
+    "resolve_graph",
     "session_model",
 ]

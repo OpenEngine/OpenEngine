@@ -17,8 +17,7 @@ engine --version
 ```
 
 The installer puts `engine` in `~/.local/bin` and starts the local daemon at
-`http://127.0.0.1:4364`. If your shell cannot find `engine`, add `~/.local/bin`
-to your `PATH`. Check the service and available agents:
+`http://127.0.0.1:4364`. Check the service and available agents:
 
 ```sh
 engine daemon status
@@ -41,8 +40,7 @@ engine go "Add a regression test for empty input in the parser and fix the bug"
 ```
 
 Without a forge connection, the run is **disconnected**: changes and findings
-stay local. This does not mean offline; your coding agent may still use its
-online service. If GitHub is already connected, add `--local` to deliberately
+stay local. If GitHub is already connected, add `--local` to deliberately
 try this mode:
 
 ```sh
