@@ -9,6 +9,18 @@ from engine.runtime.config import EngineConfigError
 from engine.runtime.repositories import RepositoryRegistry
 
 
+def test_explicit_connected_mode_uses_default_without_deprecations(monkeypatch, caplog):
+    from engine.domain import ForgeMode
+
+    monkeypatch.setattr(RepositoryRegistry, "_project", lambda self, path: None)
+    registry = RepositoryRegistry({"first": "/first"}, {"first": ForgeMode.CONNECTED}, projects={})
+    registry.add("second", "/second", mode="connected")
+    assert registry.snapshot.repos == {"first": "/first", "second": "/second"}
+    assert registry.snapshot.repo_modes == {}
+    assert registry.snapshot.disconnected == frozenset()
+    assert "deprecated" not in caplog.text
+
+
 def test_concurrent_adds_publish_complete_snapshots(monkeypatch, tmp_path):
     resolve = Mock(side_effect=lambda path: f"acme/{path.rsplit('/', 1)[-1]}")
     monkeypatch.setattr(RepositoryRegistry, "_project", lambda self, path: resolve(path))
@@ -132,3 +144,15 @@ def test_local_only_registry(monkeypatch, tmp_path, origin):
     assert registry.snapshot.run_projects == {}
     assert registry.snapshot.login_repositories == ()
     assert registry.snapshot.disconnected == registry.snapshot.trusted == frozenset({tmp_path})
+
+
+def test_registry_validates_nested_settings_without_deprecations(caplog):
+    registry = RepositoryRegistry({'local': '/local'}, {'local': 'disconnected'},
+                                  {'local': False}, projects={})
+    registry.add('second', '/second', 'disconnected', trusted=True)
+    registry.trust('local', True)
+    assert registry.snapshot.trusted_repos == {'local', 'second'}
+    assert registry.snapshot.repo_modes == {'local': 'disconnected', 'second': 'disconnected'}
+    assert 'deprecated' not in caplog.text
+    with pytest.raises(EngineConfigError):
+        registry.trust('missing', True)

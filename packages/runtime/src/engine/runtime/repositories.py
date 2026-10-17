@@ -45,11 +45,16 @@ class RepositoryRegistry:
         self._lock = RLock()
         self._hosts = frozenset(host_aliases)
         self._extra_login = tuple(login_repositories)
-        config = parse_engine_config({
-            "repos": dict(repos or {}),
-            "repo_modes": dict(repo_modes or {}),
-            "trusted_repos": dict(trusted_repos) if isinstance(trusted_repos, Mapping) else dict.fromkeys(trusted_repos, True),
-        })
+        entries: dict[str, dict[str, object]] = {name: {"path": path} for name, path in (repos or {}).items()}
+        trust = dict(trusted_repos) if isinstance(trusted_repos, Mapping) else dict.fromkeys(trusted_repos, True)
+        for key, values in (("mode", repo_modes or {}), ("trusted", trust)):
+            for name, value in values.items():
+                if name not in entries:
+                    message = f"{name} names no repository under [repos]"
+                    raise EngineConfigError(message)
+                if key != "mode" or value != "connected":
+                    entries[name][key] = value
+        config = parse_engine_config({"repos": entries})
         resolved = dict(projects) if projects is not None else {
             name: project for name, path in {".": ".", **config.repos}.items()
             if (project := self._project(path)) is not None
@@ -97,11 +102,12 @@ class RepositoryRegistry:
 
     def add(self, name: str, path: str, mode: str | None = None, *, trusted: bool | None = None) -> None:
         """Validate like config loading, resolve origin once, then publish atomically."""
-        config = parse_engine_config({
-            "repos": {name: path},
-            "repo_modes": {} if mode is None else {name: mode},
-            "trusted_repos": {} if trusted is None else {name: trusted},
-        })
+        entry: dict[str, object] = {"path": path}
+        if mode is not None and mode != "connected":
+            entry["mode"] = mode
+        if trusted is not None:
+            entry["trusted"] = trusted
+        config = parse_engine_config({"repos": {name: entry}})
         if name in self.snapshot.repos:
             message = f"repos.{name} already exists"
             raise EngineConfigError(message)
@@ -124,7 +130,10 @@ class RepositoryRegistry:
         """Publish a trust decision without changing the registered checkout."""
         with self._lock:
             previous = self._snapshot
-            config = parse_engine_config({"repos": dict(previous.repos), "trusted_repos": {name: trusted}})
+            if name not in previous.repos:
+                message = f"{name} names no repository under [repos]"
+                raise EngineConfigError(message)
+            config = parse_engine_config({"repos": {name: {"path": previous.repos[name], "trusted": trusted}}})
             self._snapshot = self._build(previous.repos, previous.repo_modes,
                 {**previous.trust_decisions, **config.repository_trust}, previous.projects)
 

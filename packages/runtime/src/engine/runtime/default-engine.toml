@@ -26,7 +26,7 @@ provider = "slack"
 # config_dir = "~/repo/work/.claude-work"
 
 # Keep global approvals manual; engine repo trust opts individual repositories in.
-# [trusted_repos] maps [repos] names to true (auto-approve) or false (manual).
+# Set trusted = true (auto-approve) or false (manual) in each [repos."owner/name"].
 # A saved false decision suppresses the first-run trust prompt.
 [approvals]
 auto_approve = false
@@ -56,6 +56,10 @@ review_request_workflow = "review"
 [pull_requests]
 auto_approve_green = false
 
-# Optional overrides keyed by names already declared under [repos].
-# [pull_requests.repos]
-# "owner/name" = true
+# Optional repository configuration (slug keys accept webhooks by default):
+# [repos."owner/name"]
+# path = "~/code/name"
+# auto_approve_green = true
+# trusted = false
+# default = true
+# webhooks = false # opt out of webhook deliveries

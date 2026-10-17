@@ -7,10 +7,11 @@ evaluation remains a separate concern.
 
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from engine.domain import ForgeMode
@@ -21,7 +22,7 @@ from engine.runtime.terminal_mcp import REPOSITORY_TOOL_NAMES
 CONFIG_ENVIRONMENT_VARIABLE = "ENGINE_CONFIG"
 DEFAULT_CONFIG_NAME = "engine.toml"
 DEFAULT_CONFIG_TEMPLATE = Path(__file__).with_name("default-engine.toml")
-#: What `[repo_modes]` may say a repository's WorkOrders run as.
+#: What a repository table's `mode` may say a repository's WorkOrders run as.
 REPO_MODES = tuple(str(mode) for mode in ForgeMode)
 """A distributable `engine.toml`: loopback only, nothing machine-specific."""
 
@@ -169,8 +170,8 @@ class GitHubConfig:
     The shared secret that signs those deliveries is deliberately absent: like
     the login client secret it belongs in a server-local `.env` beside this
     file, because `engine.toml` is checked in and a secret in it is published
-    the moment it is committed. Naming the repository here is what keeps the
-    two out of the handler's source.
+    the moment it is committed. Repository webhook names are derived from
+    `[repos]`, keeping deployment settings out of the handler's source.
     """
 
     review_request_workflow: str = "review"
@@ -238,6 +239,18 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RepoConfig:
+    """Settings owned by one configured checkout."""
+
+    path: str
+    mode: str | None = None
+    trusted: bool | None = None
+    auto_approve_green: bool | None = None
+    webhooks: bool = True
+    default: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     """All configuration understood by this version of Engine."""
 
@@ -269,6 +282,7 @@ class EngineConfig:
     tier and each backend decides which model that is.
     """
     attribution: bool = True
+    repo_configs: Mapping[str, RepoConfig] = field(default_factory=dict)
     repos: Mapping[str, str] = field(default_factory=dict)
     repo_modes: Mapping[str, str] = field(default_factory=dict)
     """`[repos]` names mapped to the mode their WorkOrders run in.
@@ -636,52 +650,27 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             "orchestrator.health_check_interval must be a positive number"
         )
 
-    repos = {
-        _nonblank_string(name, "repos name"): _nonblank_string(path, f"repos.{name}")
-        for name, path in _table(document.get("repos", {}), "repos").items()
-    }
     pull_requests = _table(document.get("pull_requests", {}), "pull_requests")
     _reject_unknown(pull_requests, {"auto_approve_green", "repos"}, "pull_requests")
     auto_approve_green = pull_requests.get("auto_approve_green", False)
     if not isinstance(auto_approve_green, bool):
         raise EngineConfigError("pull_requests.auto_approve_green must be a boolean")
-    review_repos = _table(pull_requests.get("repos", {}), "pull_requests.repos")
-    _reject_unknown(review_repos, set(repos), "pull_requests.repos")
-    review_overrides: dict[str, bool] = {}
-    for name, value in review_repos.items():
-        if not isinstance(value, bool):
-            raise EngineConfigError("pull_requests.repos values must be booleans")
-        review_overrides[name] = value
-    repo_names = {name.lower() for name in repos}
-    for repository in (github_repository, *github_repositories):
-        if repository and repository.lower() not in repo_names:
-            raise EngineConfigError(
-                f"GitHub webhook repository {repository!r} requires a checkout path under [repos]"
-            )
-    repo_modes = {}
-    for name, mode in _table(document.get("repo_modes", {}), "repo_modes").items():
-        if name not in repos:
-            raise EngineConfigError(f"repo_modes.{name} names no repository under [repos]")
-        if mode not in REPO_MODES:
-            raise EngineConfigError(
-                f"repo_modes.{name} must be one of: {', '.join(REPO_MODES)}"
-            )
-        repo_modes[name] = mode
-    trusted_repos = set()
-    repository_trust: dict[str, bool] = {}
-    for name, trusted in _table(document.get("trusted_repos", {}), "trusted_repos").items():
-        if name not in repos:
-            raise EngineConfigError(f"trusted_repos.{name} names no repository under [repos]")
-        if not isinstance(trusted, bool):
-            raise EngineConfigError(f"trusted_repos.{name} must be a boolean")
-        repository_trust[name] = trusted
-        if trusted:
-            trusted_repos.add(name)
+    repo_configs, work_order_repository = _repo_configs(
+        document, github, pull_requests, work_orders,
+        (github_repository, *github_repositories), work_order_repository,
+    )
+    repos = {name: repo.path for name, repo in repo_configs.items()}
+    repo_modes = {name: repo.mode for name, repo in repo_configs.items() if repo.mode is not None}
+    repository_trust = {name: repo.trusted for name, repo in repo_configs.items() if repo.trusted is not None}
+    trusted_repos = {name for name, repo in repo_configs.items() if repo.trusted}
+    review_overrides = {name: repo.auto_approve_green for name, repo in repo_configs.items() if repo.auto_approve_green is not None}
+    github_repositories = tuple(name for name, repo in repo_configs.items() if repo.webhooks)
 
     return EngineConfig(
         sandbox=SandboxConfig(backend=sandbox_backend, image=sandbox_image.strip()),
         attribution=attribution,
         repos=repos,
+        repo_configs=repo_configs,
         pull_requests=PullRequestsConfig(auto_approve_green, review_overrides),
         repo_modes=repo_modes,
         trusted_repos=frozenset(trusted_repos),
@@ -754,6 +743,105 @@ def _optional_nonblank_string(value: object, name: str) -> str:
     if value and not value.strip():
         raise EngineConfigError(f"{name} must not be blank")
     return value.strip()
+
+
+def _repo_configs(
+    document: Mapping[str, object], github: Mapping[str, object],
+    pull_requests: Mapping[str, object], work_orders: Mapping[str, object],
+    webhook_names: tuple[str, ...], work_order_repository: str,
+) -> tuple[dict[str, RepoConfig], str]:
+    entries: dict[str, dict[str, object]] = {}
+    for name, value in _table(document.get("repos", {}), "repos").items():
+        name = _nonblank_string(name, "repos name")
+        entry: dict[str, object] = {"path": value} if isinstance(value, str) else dict(_table(value, f"repos.{name}"))
+        _reject_unknown(entry, {"path", "mode", "trusted", "auto_approve_green", "webhooks", "default"}, f"repos.{name}")
+        if "mode" in entry and entry["mode"] != "disconnected":
+            raise EngineConfigError(f'repos.{name}.mode must be "disconnected"; omit mode for connected repositories')
+        entries[name] = entry
+
+    def warn(section: str, spelling: str) -> None:
+        logging.getLogger(__name__).warning(
+            "%s is deprecated and will be removed in the next release; use %s", section, spelling,
+        )
+
+    def merge(name: str, key: str, value: object, section: str) -> None:
+        if name not in entries:
+            raise EngineConfigError(f"{section}.{name} names no repository under [repos]")
+        entry = entries[name]
+        if key in entry and (entry[key] != value or type(entry[key]) is not type(value)):
+            raise EngineConfigError(f"{section} conflicts with repos.{name}.{key}")
+        entry[key] = value
+
+    for section, key, source in (
+        ("repo_modes", "mode", document),
+        ("trusted_repos", "trusted", document),
+        ("repos", "auto_approve_green", pull_requests),
+    ):
+        label = "pull_requests.repos" if source is pull_requests else section
+        if section in source:
+            warn(label, f'[repos."owner/name"] {key} = ...')
+            for name, value in _table(source[section], label).items():
+                merge(name, key, value, label)
+
+    for key in ("repository", "repositories"):
+        if key in github:
+            warn(f"github.{key}", '[repos."owner/name"] webhooks = true (the default)')
+    names = {name.lower(): name for name in entries}
+    for repository in webhook_names:
+        if not repository:
+            continue
+        if repository.lower() not in names:
+            raise EngineConfigError(
+                f"GitHub webhook repository {repository!r} requires a checkout path under [repos]"
+            )
+        merge(names[repository.lower()], "webhooks", True, "github")
+
+    configs = {}
+    for name, entry in entries.items():
+        path = _nonblank_string(entry.get("path"), f"repos.{name}.path")
+        mode = entry.get("mode")
+        if "mode" in entry and (not isinstance(mode, str) or mode not in REPO_MODES):
+            raise EngineConfigError(f"repos.{name}.mode must be one of: {', '.join(REPO_MODES)}")
+        flags: dict[str, bool] = {}
+        for key in ("trusted", "auto_approve_green", "webhooks", "default"):
+            if key in entry:
+                value = entry[key]
+                if not isinstance(value, bool):
+                    raise EngineConfigError(f"repos.{name}.{key} must be a boolean")
+                flags[key] = value
+        try:
+            _repository_slug(name, "repos name")
+            slug = True
+        except EngineConfigError:
+            slug = False
+        configs[name] = RepoConfig(
+            path=path, mode=mode if isinstance(mode, str) else None, trusted=flags.get("trusted"),
+            auto_approve_green=flags.get("auto_approve_green"),
+            webhooks=slug and flags.get("webhooks", True), default=flags.get("default", False),
+        )
+
+    defaults = [name for name, repo in configs.items() if repo.default]
+    if len(defaults) > 1:
+        raise EngineConfigError("at most one repository may set default = true")
+    if "repository" in work_orders:
+        warn("work_orders.repository", '[repos."owner/name"] default = true')
+        matching = work_order_repository if work_order_repository in configs else next(
+            (name for name, repo in configs.items()
+             if work_order_repository and Path(repo.path).expanduser().resolve()
+             == Path(work_order_repository).expanduser().resolve()),
+            None,
+        )
+        if matching is not None:
+            merge(matching, "default", True, "work_orders.repository")
+            if defaults and defaults != [matching]:
+                raise EngineConfigError("work_orders.repository conflicts with repository default = true")
+            configs[matching] = replace(configs[matching], default=True)
+            defaults = [matching]
+        elif defaults and work_order_repository:
+            raise EngineConfigError("work_orders.repository conflicts with repository default = true")
+    if defaults:
+        work_order_repository = configs[defaults[0]].path
+    return configs, work_order_repository
 
 
 def _repository_slug(value: object, name: str) -> str:

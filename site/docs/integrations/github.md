@@ -13,8 +13,8 @@ OpenEngine opens the pull request, and the rest of the review happens on it. Rev
 Only comments from owners, members and collaborators are acted on. Merges by bots and merge queues don't count as approval.
 
 ```toml title="engine.toml"
-[github]
-repository = "owner/name"
+[repos."owner/name"]
+path = "~/code/name" # webhooks enabled by default
 ```
 
 ```bash title=".env (beside engine.toml, never committed)"
@@ -37,9 +37,8 @@ review_request_workflow = "review"
 [pull_requests]
 auto_approve_green = false
 
-# Optional overrides, keyed by existing [repos] names:
-[pull_requests.repos]
-"owner/name" = true
+# Set this in the repository table above to override the global default:
+# auto_approve_green = true
 ```
 
 Configuration supplies defaults when each run starts. A repository override

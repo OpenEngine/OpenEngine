@@ -100,7 +100,7 @@ def test_trust_preserves_home_relative_config_path(tmp_path, monkeypatch):
     for decision in (True, False):
         assert onboarding.repository_trust('owner/repo', decision)['trusted'] is decision
         assert registry.lookup(str(tmp_path / 'checkout')) == ('owner/repo', decision)
-        assert config_path.read_text().startswith(original)
+        assert 'path = "~/checkout" # keep this path' in config_path.read_text()
         saved = parse_engine_config(tomllib.loads(config_path.read_text()))
         assert saved.repository_trust == {'owner/repo': decision}
 
@@ -143,7 +143,7 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path):
                         headers={'Origin': origin} if origin else {})
                     assert response.status_code == 200
                     assert registry.lookup('owner/repo')[1] is True
-                    assert tomllib.loads(config_path.read_text())['trusted_repos'] == {'owner/repo': True}
+                    assert tomllib.loads(config_path.read_text())['repos']['owner/repo']['trusted'] is True
     asyncio.run(run())
 
 
@@ -171,7 +171,7 @@ def test_concurrent_config_writes_preserve_decisions(tmp_path):
         futures = [pool.submit(persist_repository, path, f'owner/repo{i}', str(tmp_path / str(i)), 'connected', bool(i % 2)) for i in range(8)]
         for future in futures:
             future.result()
-    assert tomllib.loads(path.read_text())['trusted_repos'] == {f'owner/repo{i}': bool(i % 2) for i in range(8)}
+    assert parse_engine_config(tomllib.loads(path.read_text())).repository_trust == {f'owner/repo{i}': bool(i % 2) for i in range(8)}
     assert path.read_text().startswith('# preserved')
 
 
@@ -191,7 +191,7 @@ def test_first_checkout_registration(tmp_path, monkeypatch):
     assert not config.exists()
     assert onboarding.repository_trust(str(root), True)['trusted'] is True
     assert registry.snapshot.trusted == frozenset({root})
-    assert tomllib.loads(config.read_text())['repos'] == {'owner/repo': str(root)}
+    assert tomllib.loads(config.read_text())['repos'] == {'owner/repo': {'path': str(root), 'trusted': True}}
 
 
 @pytest.mark.parametrize('command', [['go', 'change'], ['graph', 'run', 'default'], ['loop', 'add', 'default'], ['agent', 'codex'], ['repo', 'add', 'owner/repo']])

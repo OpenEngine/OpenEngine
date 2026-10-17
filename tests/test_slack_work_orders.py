@@ -1199,7 +1199,7 @@ def test_checked_in_slack_repository_is_current_checkout():
     import tomllib
 
     config = tomllib.loads((Path(__file__).resolve().parents[1] / "engine.toml").read_text())
-    assert config["work_orders"]["repository"] == "."
+    assert config["repos"]["local"] == {"path": ".", "default": True}
 
 
 @pytest.mark.parametrize("ending", ("finished", "human_review", "failed"))
