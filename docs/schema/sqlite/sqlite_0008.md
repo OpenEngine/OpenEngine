@@ -19,7 +19,7 @@ Remove workstreams, rehoming their runs on the milestone above them.
 
  CREATE TABLE agent_instances (
     sequence INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-@@ -102,12 +98,10 @@
+@@ -102,11 +98,9 @@
     sequence INTEGER NOT NULL,
     run_id TEXT NOT NULL,
     state_json TEXT NOT NULL,
@@ -27,12 +27,10 @@ Remove workstreams, rehoming their runs on the milestone above them.
     milestone_id TEXT,
     PRIMARY KEY (sequence),
     CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
--   UNIQUE (run_id),
--   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id)
-+   UNIQUE (run_id)
+-   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
+    UNIQUE (run_id)
  );
 
- CREATE TABLE session_grants (
 @@ -124,12 +118,3 @@
     FOREIGN KEY(instance_id) REFERENCES agent_instances (instance_id),
     UNIQUE (grant_id)
