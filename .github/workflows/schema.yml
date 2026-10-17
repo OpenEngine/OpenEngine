@@ -59,7 +59,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      schema: ${{ steps.paths.outputs.schema }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@v3
+        id: paths
+        with:
+          filters: |
+            schema:
+              - 'migrations/**'
+              - 'alembic.ini'
+              - 'scripts/document_schema.py'
+              - 'scripts/schema_diagram.py'
+              - 'tests/test_schema_diagram.py'
+              - 'tests/test_schema_documentation.py'
+              - '.github/scripts/**'
+              - '.github/workflows/schema.yml'
+
   document:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.schema == 'true'
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -120,13 +149,6 @@ jobs:
         run: >-
           uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
           python scripts/schema_diagram.py --base-root .schema-base
-      - name: Generate latest package architecture
-        run: uv run --no-project python scripts/package_diagram.py
-      - name: Render package PNG
-        run: |
-          if [ "$(cat package-changes.json)" != '[]' ]; then
-            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/packages.mermaid -o docs/architecture/packages.png --size 2400 -s 2
-          fi
       - name: Render schema PNG
         run: |
           if [ "$(cat diagram-changes.json)" != '[]' ]; then
@@ -139,19 +161,68 @@ jobs:
             docs/schema
             docs/architecture/schema.mermaid
             docs/architecture/schema.png
-            docs/architecture/packages.mermaid
-            docs/architecture/packages.png
       # Never execute fork code with a privileged pull_request_target token.
       - name: Commit changed schemas and comment on open PRs
+        id: publish
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v8
         with:
           script: |
             const publish = require('./.github/scripts/dist/publish-schema.js').default;
             const sha = await publish({github, context, core});
-            // Both diagrams publish serially against the head just committed above.
-            if (sha) {
-              context.sha = sha;
-              if (context.payload.pull_request) context.payload.pull_request.head.sha = sha;
+            if (sha) core.setOutput('sha', sha);
+
+  packages:
+    needs: [changes, document]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.document.result == 'success' || needs.document.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Follow the schema commit when both jobs run, avoiding competing writes.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.document.outputs.sha || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.9.28'
+      - name: Generate latest package architecture
+        run: uv run --no-project python scripts/package_diagram.py
+      - name: Detect package changes
+        id: changes
+        run: echo "changed=$([ "$(cat package-changes.json)" != '[]' ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v7
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          node-version: '22'
+      - name: Render package PNG
+        run: |
+          if [ "$(cat package-changes.json)" != '[]' ]; then
+            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/packages.mermaid -o docs/architecture/packages.png --size 2400 -s 2
+          fi
+      - uses: actions/upload-artifact@v7
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          name: package-architecture
+          path: |
+            docs/architecture/packages.mermaid
+            docs/architecture/packages.png
+          if-no-files-found: error
+      - name: Install publication tooling
+        if: steps.changes.outputs.changed == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        run: npm ci --prefix .github/scripts && npm test --prefix .github/scripts
+      - name: Commit package diagram and comment on open PRs
+        if: steps.changes.outputs.changed == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: actions/github-script@v8
+        env:
+          DOCUMENT_SHA: ${{ needs.document.outputs.sha }}
+        with:
+          script: |
+            const publish = require('./.github/scripts/dist/publish-schema.js').default;
+            if (process.env.DOCUMENT_SHA) {
+              context.sha = process.env.DOCUMENT_SHA;
+              if (context.payload.pull_request) context.payload.pull_request.head.sha = context.sha;
             }
             await publish({github, context, core}, 'packages');

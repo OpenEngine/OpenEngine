@@ -1,0 +1,49 @@
+name: fork package architecture comment
+
+on:
+  workflow_run:
+    workflows: ['architecture documentation']
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+concurrency:
+  group: package-comment-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      # Runs from the default branch: never check out or execute PR code, or
+      # download artifact contents, with this privileged token.
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const {owner, repo} = context.repo;
+            if (!run.head_repository || run.head_repository.id === context.payload.repository.id) return;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
+              {owner, repo, run_id: run.id, per_page: 100});
+            const artifact = artifacts.find(a => a.name === 'package-architecture' && !a.expired);
+            if (!artifact) return; // No substantive package change.
+            // Fork workflow_run payloads can have an empty pull_requests list.
+            // Match against live PR metadata instead of trusting artifact input.
+            const pulls = await github.paginate(github.rest.pulls.list,
+              {owner, repo, state: 'open', per_page: 100});
+            for (const pull of pulls) {
+              if (pull.head.repo?.id !== run.head_repository.id || pull.head.sha !== run.head_sha
+                  || pull.head.ref !== run.head_branch) continue;
+              const marker = `<!-- package-architecture:${run.id} -->`;
+              const comments = await github.paginate(github.rest.issues.listComments,
+                {owner, repo, issue_number: pull.number, per_page: 100});
+              if (comments.some(c => c.user?.login === 'github-actions[bot]' && c.body?.includes(marker))) continue;
+              const url = `https://github.com/${owner}/${repo}/actions/runs/${run.id}/artifacts/${artifact.id}`;
+              await github.rest.issues.createComment({owner, repo, issue_number: pull.number,
+                body: `${marker}\nPackage architecture for ${run.head_sha}: `
+                  + `[Download PNG and Mermaid source](${url}).\n\n`
+                  + 'The artifact contains packages.png and packages.mermaid; download it before the workflow artifact expires.'});
+            }
