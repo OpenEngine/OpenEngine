@@ -9,6 +9,43 @@
   still load with deprecation warnings and will be removed in the next release.
   Legacy string checkout paths remain accepted silently.
 
+## [1.10.0](https://github.com/OpenEngine/OpenEngine/compare/v1.9.1...v1.10.0) (2026-10-17)
+
+
+### Features
+
+* choose the gh login with github.gh_config_dir ([#947](https://github.com/OpenEngine/OpenEngine/issues/947)) ([8871446](https://github.com/OpenEngine/OpenEngine/commit/88714468d6d4b69a0c6895e7ca51a87559293933))
+* **cli:** set a context limit on an agent added with --url ([#937](https://github.com/OpenEngine/OpenEngine/issues/937)) ([ec348d5](https://github.com/OpenEngine/OpenEngine/commit/ec348d5fb7a980236643435eb897095c07b2f26b))
+* consolidate per-repository configuration ([#938](https://github.com/OpenEngine/OpenEngine/issues/938)) ([faa024f](https://github.com/OpenEngine/OpenEngine/commit/faa024f5955f2528577bdfa88e21e4b9724af064))
+* document Alembic schemas and publish revision changes ([#909](https://github.com/OpenEngine/OpenEngine/issues/909)) ([c3ecc00](https://github.com/OpenEngine/OpenEngine/commit/c3ecc009adb5bc17443f54d0741c5ab1457371d6))
+* generate and publish package architecture diagrams ([#936](https://github.com/OpenEngine/OpenEngine/issues/936)) ([a30416f](https://github.com/OpenEngine/OpenEngine/commit/a30416f8447108fe5686ac39b39e86e4b381e029))
+* **graph:** add tdd-tests graph and a tests_ready input to tdd-guide ([#951](https://github.com/OpenEngine/OpenEngine/issues/951)) ([83fb8e5](https://github.com/OpenEngine/OpenEngine/commit/83fb8e50c55a787eb63892bcb060a8a2f71fdfa3))
+* **graph:** name runs of YAML graphs with the cheapest model ([#911](https://github.com/OpenEngine/OpenEngine/issues/911)) ([66b4a85](https://github.com/OpenEngine/OpenEngine/commit/66b4a85a7c78e9ae68e0e626cbf1c90373d1e92c))
+* **graph:** shorten impact analysis and add a mermaid change map ([#934](https://github.com/OpenEngine/OpenEngine/issues/934)) ([9c6ce14](https://github.com/OpenEngine/OpenEngine/commit/9c6ce1431d3482c8b972710417812e05f9708742))
+* **loops:** add scheduling guide and permanent loop stop ([#953](https://github.com/OpenEngine/OpenEngine/issues/953)) ([b766883](https://github.com/OpenEngine/OpenEngine/commit/b766883b3cbac7405948a485ca496d8770db5d47))
+* **web:** let work_orders.workflow name a registered YAML graph ([#916](https://github.com/OpenEngine/OpenEngine/issues/916)) ([a73e015](https://github.com/OpenEngine/OpenEngine/commit/a73e015d241c28ec0abc2fea85a33c090ba6a83e))
+
+
+### Bug Fixes
+
+* **cli:** review local branches without a forge connection ([#895](https://github.com/OpenEngine/OpenEngine/issues/895)) ([f19a318](https://github.com/OpenEngine/OpenEngine/commit/f19a3182aeb4998114352481cf1bd0c49a1cd528))
+* **graph:** accept JSON-encoded typed step outputs ([#900](https://github.com/OpenEngine/OpenEngine/issues/900)) ([7a74874](https://github.com/OpenEngine/OpenEngine/commit/7a74874fc5308b6addc2ab3c8ba8f8fc20d97d51))
+* **graph:** let naming nodes read referenced issues and PRs ([#949](https://github.com/OpenEngine/OpenEngine/issues/949)) ([9e36c57](https://github.com/OpenEngine/OpenEngine/commit/9e36c5779ec3cc2fa75d20c6613badf4dd5fd0b5))
+* **runs:** claim pull requests when fix and review runs start ([#875](https://github.com/OpenEngine/OpenEngine/issues/875)) ([b096011](https://github.com/OpenEngine/OpenEngine/commit/b096011fb1b978af0a44c1fa5895ca27d6af883e))
+* **runtime:** tell unattended agents to decide and complete ([#941](https://github.com/OpenEngine/OpenEngine/issues/941)) ([e046887](https://github.com/OpenEngine/OpenEngine/commit/e046887fac5bd9ca65a98f3a7da9c9f5bef7e5d3))
+* **web:** cap detail header title height so long names don't hide run details ([#930](https://github.com/OpenEngine/OpenEngine/issues/930)) ([3ca7e12](https://github.com/OpenEngine/OpenEngine/commit/3ca7e126b210e87ff8684866b7b5b42fc7e74f67))
+* **web:** ignore own comments on GitHub comment events ([#928](https://github.com/OpenEngine/OpenEngine/issues/928)) ([c93013b](https://github.com/OpenEngine/OpenEngine/commit/c93013bbda3049d1b4ccff97ce3fd75e03799112))
+
+
+### Documentation
+
+* add a getting-started guide that leads with engine go ([#852](https://github.com/OpenEngine/OpenEngine/issues/852)) ([e705c04](https://github.com/OpenEngine/OpenEngine/commit/e705c04da7a1e6166538d81235884144e79d0e4a))
+* add a guide to running and following graphs ([#903](https://github.com/OpenEngine/OpenEngine/issues/903)) ([78b43ba](https://github.com/OpenEngine/OpenEngine/commit/78b43ba186b7bb6b51cd5b4484e350997943647d))
+* bust caches with latest ([bd9fcf9](https://github.com/OpenEngine/OpenEngine/commit/bd9fcf967c2149c8cc42a7b5d40681a85c0dfda4))
+* **guides:** show how to check on and steer agents ([#955](https://github.com/OpenEngine/OpenEngine/issues/955)) ([53c8638](https://github.com/OpenEngine/OpenEngine/commit/53c8638c4cf844878c801bbced0fdeb064a63a5a))
+* Refine getting started instructions ([#931](https://github.com/OpenEngine/OpenEngine/issues/931)) ([c5275cc](https://github.com/OpenEngine/OpenEngine/commit/c5275cc84252f20319e4cad814a36a8deda313fb))
+* Update installation instructions for OpenEngine ([8b7c689](https://github.com/OpenEngine/OpenEngine/commit/8b7c68945338cd05c448696919a5dd7ef30445fc))
+
 ## [1.9.1](https://github.com/OpenEngine/OpenEngine/compare/v1.9.0...v1.9.1) (2026-10-15)
 
 
