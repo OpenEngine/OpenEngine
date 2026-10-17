@@ -48,7 +48,11 @@ The architecture documentation workflow runs on any source change in these packa
 folders, including additions and deletions. It generates the current dependency
 graph, renders PNG when its content changes (or PNG is missing), commits changed
 outputs to the source branch, and embeds the PNG with a Mermaid link in open PRs.
-Code-only changes still attach the current diagram. Fork PRs receive downloadable
+Publication is skipped when the generated package graph is unchanged: source edits,
+version bumps and external dependency updates do not post another diagram. Package
+additions, removals, moves and first-party dependency changes update the graph.
+Push runs are limited to main; PR branches run only on pull request events, avoiding
+duplicate publication for the same commit. Fork PRs receive downloadable
 workflow artifacts because their token cannot write to the source branch.
 Publication checks the branch head and never forces updates.
 

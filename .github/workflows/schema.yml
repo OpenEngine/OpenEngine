@@ -2,6 +2,8 @@ name: architecture documentation
 
 on:
   push:
+    # PR branches are handled only by pull_request, avoiding duplicate publication.
+    branches: [main]
     paths:
       - 'packages/**'
       - 'apps/**'

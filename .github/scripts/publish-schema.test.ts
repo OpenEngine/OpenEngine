@@ -129,12 +129,16 @@ test(`${kind} diagram PNG is uploaded as a binary blob and embedded in one PR co
       ]);
       tree = [];
       fs.writeFileSync('package-changes.json', '[]');
-      await publish({github, context: {repo: {owner: 'org', repo: 'repo'},
-        payload: {action: 'opened'}, ref: 'refs/heads/feature', sha: 'source'},
-        core: {notice: () => {}}}, kind);
+      // Unchanged packages must not publish on opening, later commits, or reruns.
+      github.rest.git.getRef = async () => {throw new Error('Unexpected publication');};
+      for (const action of [undefined, 'opened', 'synchronize', 'reopened']) {
+        await publish({github, context: {repo: {owner: 'org', repo: 'repo'},
+          payload: {action, pull_request: {number: 12, head: {ref: 'feature', sha: 'source'}}},
+          ref: 'refs/heads/feature', sha: 'source'},
+          core: {notice: () => {}}}, kind);
+      }
       assert.equal(tree.length, 0);
-      assert.equal(comments.length, 2);
-      assert.match(comments[1].body, /blob\/source/);
+      assert.equal(comments.length, 1);
     }
   } finally {
     process.chdir(cwd);

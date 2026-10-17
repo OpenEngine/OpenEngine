@@ -14,9 +14,6 @@ export default async function publish({github, context, core}: PublisherOptions,
   const needsCommit = files.length > 0;
   const {owner, repo} = context.repo;
   // A branch may already have generated documents before its PR is opened.
-  if (packages && !needsCommit) {
-    files = ['docs/architecture/packages.mermaid', 'docs/architecture/packages.png'];
-  }
   if (!packages && !needsCommit && context.payload.action === 'opened' && context.payload.pull_request) {
     const changed = await github.paginate(github.rest.pulls.listFiles, {
       owner, repo, pull_number: context.payload.pull_request.number, per_page: 100,

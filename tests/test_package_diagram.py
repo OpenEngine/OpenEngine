@@ -51,3 +51,40 @@ def test_manifest_skips_unchanged_output_and_recovers_missing_png(tmp_path, monk
     (output / 'packages.png').unlink()
     main()
     assert json.loads(manifest.read_text()) == expected
+
+
+def test_only_package_structure_changes_affect_diagram(tmp_path):
+    app = tmp_path / 'apps/example'
+    app.mkdir(parents=True)
+    manifest = app / 'package.json'
+    data = {'name': 'example', 'version': '1.0', 'dependencies': {'external': '1'}}
+    manifest.write_text(json.dumps(data))
+    original = diagram(packages(tmp_path))
+
+    (app / 'index.js').write_text('// implementation changed')
+    data.update(version='2.0', description='Updated description')
+    data['dependencies']['external'] = '2'
+    data['devDependencies'] = {'tool': '1'}
+    manifest.write_text(json.dumps(data))
+    assert diagram(packages(tmp_path)) == original
+
+    shared = tmp_path / 'npm/shared'
+    shared.mkdir(parents=True)
+    (shared / 'package.json').write_text(json.dumps({'name': 'shared'}))
+    added = diagram(packages(tmp_path))
+    assert added != original
+
+    data['dependencies']['shared'] = '*'
+    manifest.write_text(json.dumps(data))
+    linked = diagram(packages(tmp_path))
+    assert linked != added
+    assert linked.count(' --> ') == 1
+
+    data['dependencies']['shared'] = '^2'
+    manifest.write_text(json.dumps(data))
+    assert diagram(packages(tmp_path)) == linked
+
+    shared.rename(tmp_path / 'npm/relocated')
+    assert diagram(packages(tmp_path)) != linked
+    (tmp_path / 'npm/relocated/package.json').unlink()
+    assert diagram(packages(tmp_path)) == original
