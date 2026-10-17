@@ -38,3 +38,6 @@ and `npm test --prefix .github/scripts` to compile with strict type checking and
 run the publication tests. The publisher imports generated JSON manifests through
 `parseManifest`, validating the array and allowed paths before reading files or
 calling GitHub. Alembic replay remains in Python.
+
+For service relationships and the generated package dependency diagram, see
+[package architecture](architecture.md).
