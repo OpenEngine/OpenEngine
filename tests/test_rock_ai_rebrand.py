@@ -14,26 +14,14 @@ OLD_NAME = "PA" + "TY"
 TESTS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "tests.yml"
 
 
-def tracked_files():
-    listed = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=REPO_ROOT, check=True, capture_output=True,
-    ).stdout.decode().split("\0")
-    return [REPO_ROOT / name for name in listed if name and "node_modules/" not in name]
-
-
 def test_no_tracked_file_names_the_old_brand():
-    needle = OLD_NAME.casefold()
-    hits = []
-    for path in tracked_files():
-        if not path.is_file():
-            continue
-        data = path.read_bytes()
-        if b"\0" in data:
-            continue  # binary, as `grep -I` skips it
-        for number, line in enumerate(data.decode(errors="replace").splitlines(), 1):
-            if needle in line.casefold():
-                hits.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}")
-    assert hits == []
+    found = subprocess.run(
+        ["git", "grep", "-niI", OLD_NAME],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    # `git grep` searches tracked files, skips binaries (-I), and is
+    # case-insensitive (-i); it exits 0 only when a match is found.
+    assert found.returncode != 0, found.stdout
 
 
 def smoke_mkdir_lines():
