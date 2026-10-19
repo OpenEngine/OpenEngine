@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5AWXEEZC8TDQE0R6W5JQZ5F",
+  "strategy": "manual-commit",
+  "branch": "shawkins/nats_migrate",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "v2/README.md",
+    "v2/apps/cli/README.md",
+    "v2/apps/cli/pyproject.toml",
+    "v2/apps/cli/src/openengine/cli/commands/__init__.py",
+    "v2/apps/cli/src/openengine/cli/migrations/streams.py",
+    "v2/apps/cli/tests/test_lifecycle.py",
+    "v2/apps/cli/tests/test_streams.py",
+    "v2/infra/nats/README.md",
+    "v2/infra/nats/streams/cxn-egress.json",
+    "v2/infra/nats/streams/cxn-events.json",
+    "v2/infra/nats/streams/cxn-ingress.json",
+    "v2/infra/nats/streams/ge-events.json",
+    "v2/infra/nats/streams/vcp-events.json",
+    "v2/uv.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 50796,
+    "cache_read_tokens": 1177479,
+    "output_tokens": 14652,
+    "api_call_count": 19
+  }
+}

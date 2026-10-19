@@ -1,0 +1,41 @@
+write the 
+
+- [ ] Write the CLI migrate command
+- [ ] Migrate NATS on CLI migrate
+
+command
+
+using these as our durable streams
+
+
+
+<pasted_content id="584d">
+```
+infra/nats/
+  nats-server.conf             # Broker settings
+  authorization.conf          # Service permissions
+
+  streams/                    # What messages are stored
+    cxn-ingress.json
+    cxn-egress.json
+    cxn-events.json
+    ge-events.json
+    vcp-events.json
+  
+```
+</pasted_content id="584d">
+
+---
+
+<task-notification>
+<task-id>bmhze3wvh</task-id>
+<tool-use-id>toolu_01UbFb2cUEkxavXdkhqL7WB3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-shea-code-openengine/3feb4ca6-3b92-4aa2-99e1-ad4a3d04ed98/tasks/bmhze3wvh.output</output-file>
+<status>failed</status>
+<summary>Background command "uv run oe migrate --nats-url nats://127.0.0.1:1 ; echo "exit $?"" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+discard: "new": when capacity is reached, reject new publishes rather than evict pending work.
+Add max_bytes: explicitly bound disk usage, for example 1073741824 (1 GiB).
