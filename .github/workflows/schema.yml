@@ -76,13 +76,6 @@ jobs:
           filters: |
             schema:
               - 'migrations/**'
-              - 'alembic.ini'
-              - 'scripts/document_schema.py'
-              - 'scripts/schema_diagram.py'
-              - 'tests/test_schema_diagram.py'
-              - 'tests/test_schema_documentation.py'
-              - '.github/scripts/**'
-              - '.github/workflows/schema.yml'
 
   document:
     needs: changes
