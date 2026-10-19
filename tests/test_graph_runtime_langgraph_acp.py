@@ -2535,7 +2535,7 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
 ) -> None:
     """End to end over a real store, for a step that opened its pull request
     with `gh pr create`: the forge vouches for the report and the run claims
-    it -- unless an active run already holds it, which keeps it."""
+    it -- unless an active run or one with an unknown status already holds it."""
 
     from engine.graph_runtime import RunSnapshot, RunStatus, UnknownGraphError, UnknownRunError
     from engine.graph_runtime_langgraph.store import PullRequestRecord
@@ -2666,7 +2666,7 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
 
     result, owned, holder = asyncio.run(scenario())
 
-    if previous not in ("running", "scheduled", "awaiting_approval"):
+    if previous not in ("running", "scheduled", "awaiting_approval", "unknown_graph"):
         assert result.get("isError") is not True
         assert owned == (("acme/repository", 7),)
         assert holder == RunId("run-1")

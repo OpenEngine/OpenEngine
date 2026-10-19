@@ -142,7 +142,10 @@ class TerminalMcpServer:
                 if replacing is not None and replacing != execution.run_id:
                     try:
                         snapshot = await execution.runtime.snapshot(replacing)
-                    except (UnknownGraphError, UnknownRunError):
+                    except UnknownGraphError:
+                        # The holder still exists, but its status is unknown.
+                        return False
+                    except UnknownRunError:
                         snapshot = None
                     if snapshot is not None and snapshot.status not in (
                         RunStatus.COMPLETED, RunStatus.FAILED,
