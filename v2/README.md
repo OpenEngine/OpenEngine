@@ -15,6 +15,7 @@ apps/ -- the `oe` CLI and the supervisor `oe up` starts
 infra/
   nats/
     nats-server.conf # nats server configuration
+    streams/ # the durable JetStream streams `oe migrate` creates
     authentication.conf
 integration_tests/ # tests which cross the NATS service boundary
 packages/
@@ -40,8 +41,8 @@ All services contain a persistence directory which contains the migrations neces
 TODO:
 - [x] Write the CLI up command
 - [x] Boot NATS on up 
-- [ ] Write the CLI migrate command
-- [ ] Migrate NATS on CLI migrate
+- [x] Write the CLI migrate command
+- [x] Migrate NATS on CLI migrate
 - [ ] Write shared postgres/sqlite migration layer
 - [ ] Write shared NATS client
 - [ ] Construct e2e testing environment

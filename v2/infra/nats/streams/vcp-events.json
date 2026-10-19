@@ -1,0 +1,14 @@
+{
+  "name": "vcp-events",
+  "description": "What the virtual control plane has done, for any service to follow.",
+  "subjects": [
+    "vcp.events.>"
+  ],
+  "retention": "limits",
+  "storage": "file",
+  "discard": "new",
+  "max_age": 604800000000000,
+  "max_bytes": 1073741824,
+  "duplicate_window": 120000000000,
+  "num_replicas": 1
+}

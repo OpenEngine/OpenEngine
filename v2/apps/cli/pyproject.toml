@@ -4,7 +4,10 @@ version = "0.0.0"
 description = "Terminal entry point for running OpenEngine V2 locally."
 requires-python = ">=3.11"
 # `oe up` starts the supervisor with this interpreter, so it is installed alongside.
-dependencies = ["openengine-supervisor"]
+dependencies = [
+    "nats-py>=2.16.0",
+    "openengine-supervisor",
+]
 
 [project.scripts]
 oe = "openengine.cli.__main__:main"
