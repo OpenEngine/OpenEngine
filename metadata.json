@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5AZCM3ZB0D9N2TPCXBNNGNZ",
+  "strategy": "manual-commit",
+  "branch": "shawkins/sql_migrate",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "v2/apps/cli/src/openengine/cli/migrations/streams.py",
+    "v2/pyproject.toml",
+    "v2/uv.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 9295,
+    "cache_read_tokens": 835207,
+    "output_tokens": 3731,
+    "api_call_count": 10
+  }
+}

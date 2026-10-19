@@ -1,0 +1,19 @@
+can you fix this and push it onto shawkins/nats_migrate
+
+
+
+<pasted_content id="584d">
+    |
+127 |     except ClientError as error:
+128 |         # No responders means JetStream is not enabled on the server.
+129 |         raise MigrationError(f"JetStream did not answer at {url}: {error}") from error
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+130 |     finally:
+131 |         await client.close()
+    |
+
+</pasted_content id="584d">
+
+---
+
+remove co-authored byh
