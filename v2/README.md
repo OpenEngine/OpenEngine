@@ -11,7 +11,7 @@ It is essentially a durable way to execute and pace long-running work.
 
 The repo is structured as follows
 ```
-apps/ -- this is where the CLI lives
+apps/ -- the `oe` CLI and the supervisor `oe up` starts
 infra/
   nats/
     nats-server.conf # nats server configuration
@@ -38,8 +38,8 @@ All services contain a persistence directory which contains the migrations neces
 
 
 TODO:
-- [ ] Write the CLI up command 
-- [ ] Boot NATS on up 
+- [x] Write the CLI up command
+- [x] Boot NATS on up 
 - [ ] Write the CLI migrate command
 - [ ] Migrate NATS on CLI migrate
 - [ ] Write shared postgres/sqlite migration layer

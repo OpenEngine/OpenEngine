@@ -1,0 +1,17 @@
+# V2 is its own uv workspace, separate from V1's at the repository root.
+[tool.uv.workspace]
+members = ["apps/cli", "apps/supervisor"]
+
+[dependency-groups]
+dev = ["openengine-cli", "pytest>=8.0"]
+
+[tool.uv.sources]
+openengine-cli = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["apps/cli/tests", "apps/supervisor/tests"]
+# Each app keeps its own tests/, so test module names may repeat across apps.
+addopts = "-q --import-mode=importlib"
+markers = [
+    "integration: boots a real local dependency and exercises its public interface",
+]
