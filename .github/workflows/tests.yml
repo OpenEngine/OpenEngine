@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           # Startup smoke checks need local paths, not deployment SSH access.
-          mkdir -p "$HOME/code/OpenEngine" "$HOME/code/PATY"
+          mkdir -p "$HOME/code/OpenEngine" "$HOME/code/Rock"
           uv run engine-web > "$RUNNER_TEMP/engine-web.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -304,7 +304,7 @@ jobs:
           ENGINE_GITHUB_LOGIN_CLIENT_SECRET: ""
         run: |
           # Startup smoke checks need local paths, not deployment SSH access.
-          mkdir -p "$HOME/code/OpenEngine" "$HOME/code/PATY"
+          mkdir -p "$HOME/code/OpenEngine" "$HOME/code/Rock"
           uv run engine-control-server
           uv run engine-worker
           uv run engine-web --check
