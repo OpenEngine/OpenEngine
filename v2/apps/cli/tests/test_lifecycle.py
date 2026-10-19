@@ -1,4 +1,4 @@
-"""`oe up`, `status`, `logs` and `down` against a real supervisor and nats-server.
+"""`oe up`, `status`, `logs`, `migrate` and `down` against a real supervisor and nats-server.
 
 The real cache directory is kept, so only the first run downloads nats-server.
 """
@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+from openengine.cli.migrations.streams import streams_directory
 
 pytestmark = pytest.mark.integration
 
@@ -94,3 +96,32 @@ def test_up_reports_why_nats_could_not_start(oe) -> None:
     assert up.returncode == 1
     assert "nats-server exited with status" in up.stderr
     assert oe("status").returncode == 1
+
+
+def test_migrate_creates_the_streams_once_and_updates_drifted_ones(oe, tmp_path: Path) -> None:
+    port = _free_port()
+    assert oe("up", "--nats-port", str(port), "--nats-monitor-port", str(_free_port())).returncode == 0
+
+    first = oe("migrate")
+    assert first.returncode == 0, first.stderr
+    assert first.stdout.count("created") == 5
+    assert "cxn-ingress" in first.stdout
+
+    again = oe("migrate")
+    assert again.returncode == 0, again.stderr
+    assert again.stdout.count("unchanged") == 5
+
+    streams = tmp_path / "streams"
+    streams.mkdir()
+    config = json.loads((streams_directory() / "ge-events.json").read_text())
+    (streams / "ge-events.json").write_text(json.dumps({**config, "description": "changed"}))
+    changed = oe("migrate", "--streams", str(streams))
+    assert changed.returncode == 0, changed.stderr
+    assert "ge-events  updated" in changed.stdout
+
+
+def test_migrate_needs_a_running_openengine(oe) -> None:
+    migrate = oe("migrate")
+
+    assert migrate.returncode == 1
+    assert "not running" in migrate.stderr

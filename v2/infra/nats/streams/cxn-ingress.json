@@ -1,0 +1,14 @@
+{
+  "name": "cxn-ingress",
+  "description": "Inbound integration traffic waiting for the connection bus to resolve it into a job.",
+  "subjects": [
+    "cxn.ingress.>"
+  ],
+  "retention": "workqueue",
+  "storage": "file",
+  "discard": "new",
+  "max_age": 604800000000000,
+  "max_bytes": 1073741824,
+  "duplicate_window": 120000000000,
+  "num_replicas": 1
+}
