@@ -48,10 +48,8 @@ test('publication skips unchanged/stale runs and commits only schema documents',
     await publish({github, context, core});
     assert.equal(calls.length, 0);
     head = 'source';
-    // A populated manifest with an unchanged tree must not produce another
-    // bot commit, ref update, or comment requiring fresh workflow approval.
     treeSha = 'old-tree';
-    await publish({github, context, core});
+    assert.equal(await publish({github, context, core}), 'source');
     assert.equal(calls.length, 1);
     assert.equal((calls[0] as CreateTree).base_tree, 'old-tree');
     calls.length = 0;
@@ -85,11 +83,13 @@ test('publication skips unchanged/stale runs and commits only schema documents',
   }
 });
 
-test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', async () => {
+for (const kind of ['schema', 'packages'] as const) {
+test(`${kind} diagram PNG is uploaded as a binary blob and embedded in one PR comment`, async () => {
   const cwd = process.cwd();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-png-test-'));
   const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   let tree: TreeEntry[] = [];
+  let treeSha = 'tree';
   const comments: Comment[] = [];
   const github: GitHub = {
     rest: {
@@ -101,7 +101,7 @@ test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', 
           assert.deepEqual(Buffer.from(args.content, 'base64'), png);
           return {data: {sha: 'png-blob'}};
         },
-        createTree: async args => {tree = args.tree; return {data: {sha: 'tree'}};},
+        createTree: async args => {tree = args.tree; return {data: {sha: treeSha}};},
         createCommit: async () => ({data: {sha: 'commit'}}),
         updateRef: async () => {},
       },
@@ -116,24 +116,51 @@ test('diagram PNG is uploaded as a binary blob and embedded in one PR comment', 
   try {
     process.chdir(directory);
     fs.mkdirSync('docs/architecture', {recursive: true});
-    fs.writeFileSync('docs/architecture/schema.png', png);
-    fs.writeFileSync('docs/architecture/schema.mermaid', 'erDiagram\n');
+    fs.writeFileSync(`docs/architecture/${kind}.png`, png);
+    fs.writeFileSync(`docs/architecture/${kind}.mermaid`, 'flowchart LR\n');
     fs.writeFileSync('schema-changes.json', '[]');
-    fs.writeFileSync('diagram-changes.json', JSON.stringify([
-      'docs/architecture/schema.mermaid', 'docs/architecture/schema.png',
+    fs.writeFileSync(kind === 'schema' ? 'diagram-changes.json' : 'package-changes.json', JSON.stringify([
+      `docs/architecture/${kind}.mermaid`, `docs/architecture/${kind}.png`,
     ]));
-    await publish({github, context: {repo: {owner: 'org', repo: 'repo'},
-      payload: {}, ref: 'refs/heads/feature', sha: 'source'}, core: {notice: () => {}}});
+    const publishedSha = await publish({github, context: {repo: {owner: 'org', repo: 'repo'},
+      payload: {}, ref: 'refs/heads/feature', sha: 'source'}, core: {notice: () => {}}}, kind);
+    assert.equal(publishedSha, 'commit');
     assert.equal(tree[1].sha, 'png-blob');
     assert.equal(tree[1].content, undefined);
     assert.equal(comments.length, 1);
-    assert.match(comments[0].body, /!\[Schema changes\].*schema\.png\?raw=true/);
+    assert.ok(comments[0].body.includes(`${kind}.png?raw=true`));
+    assert.ok(comments[0].body.includes(`${kind}.mermaid`));
     assert.match(comments[0].body, /blob\/commit/);
+    treeSha = 'old-tree';
+    const unchangedSha = await publish({github, context: {repo: {owner: 'org', repo: 'repo'},
+      payload: {}, ref: 'refs/heads/feature', sha: 'source'}, core: {notice: () => {}}}, kind);
+    assert.equal(unchangedSha, 'source');
+    assert.equal(comments.length, 1);
+    treeSha = 'tree';
+    if (kind === 'packages') {
+      assert.deepEqual(tree.map(entry => entry.path), [
+        'docs/architecture/packages.mermaid', 'docs/architecture/packages.png',
+      ]);
+      tree = [];
+      fs.writeFileSync('package-changes.json', '[]');
+      // Unchanged packages must not publish on opening, later commits, or reruns.
+      github.rest.git.getRef = async () => {throw new Error('Unexpected publication');};
+      for (const action of [undefined, 'opened', 'synchronize', 'reopened']) {
+        await publish({github, context: {repo: {owner: 'org', repo: 'repo'},
+          payload: {action, pull_request: {number: 12, head: {ref: 'feature', sha: 'source'}}},
+          ref: 'refs/heads/feature', sha: 'source'},
+          core: {notice: () => {}}}, kind);
+      }
+      assert.equal(tree.length, 0);
+      assert.equal(comments.length, 1);
+    }
   } finally {
     process.chdir(cwd);
     fs.rmSync(directory, {recursive: true, force: true});
   }
 });
+
+}
 
 test('manifest parser accepts generated paths and rejects malformed imports', () => {
   assert.deepEqual(parseManifest('[]', 'schema'), []);
@@ -145,4 +172,7 @@ test('manifest parser accepts generated paths and rejects malformed imports', ()
     assert.throws(() => parseManifest(source, 'schema'), /Invalid schema manifest/);
   }
   assert.throws(() => parseManifest('["sqlite/rev.md"]', 'diagram'), /Invalid diagram manifest/);
+  assert.deepEqual(parseManifest('["docs/architecture/packages.png"]', 'packages'),
+    ['docs/architecture/packages.png']);
+  assert.throws(() => parseManifest('["docs/architecture/schema.png"]', 'packages'), /Invalid packages manifest/);
 });
