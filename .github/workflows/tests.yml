@@ -186,6 +186,60 @@ jobs:
           # Diagnostics, not archives.
           retention-days: 14
 
+  cli-e2e:
+    name: CLI end to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      E2E_AGENT: stub
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --locked --all-packages
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install CLI e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Drive the CLI through the terminal
+        working-directory: e2e
+        run: npm test
+
+      - name: Upload the CLI Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-playwright-report
+          path: e2e/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload the CLI traces of what failed
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-playwright-traces
+          path: e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
   boundaries:
     # Separated from the test matrix on purpose: this job answers "did someone
     # break the architecture?", which is a different question from "did someone
