@@ -7,6 +7,8 @@ retried only under the idempotency key that makes the retry safe.
 
 import io
 import json
+from pathlib import Path
+from runpy import run_path
 from typing import Any
 from urllib.error import HTTPError, URLError
 
@@ -54,6 +56,14 @@ def isolated(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv(backends.SELECTED_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
     monkeypatch.setattr(http.time, "sleep", lambda _seconds: None)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def generator() -> dict[str, Any]:
+    return run_path(str(ROOT / "scripts/generate_cli_docs.py"))
 
 
 def serve(monkeypatch, *answers: Any) -> Backend:
@@ -317,38 +327,24 @@ def test_spec_prints_current_documentation_without_a_backend(command, monkeypatc
     assert output.out.rstrip() in capsys.readouterr().out
 
 
-def test_generated_spec_documentation_matches_command_documentation() -> None:
-    from pathlib import Path
-    from runpy import run_path
-
-    root = Path(__file__).resolve().parents[1]
-    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
-    assert (root / "site/docs/cli-specs.md").read_text() == generator["render"]()
-    assert (root / "cli/client/src/engine/cli/specs.py").read_text() == generator["render_cli"]()
-    assert (root / "site/docs/cli-reference.md").read_text() == generator["render_reference"]()
+def test_generated_spec_documentation_matches_command_documentation(generator) -> None:
+    assert (ROOT / "site/docs/cli-specs.md").read_text() == generator["render"]()
+    assert (ROOT / "cli/client/src/engine/cli/specs.py").read_text() == generator["render_cli"]()
+    assert (ROOT / "site/docs/cli-reference.md").read_text() == generator["render_reference"]()
 
 
-def test_generated_markdown_cannot_break_mdx() -> None:
-    from pathlib import Path
-    from runpy import run_path
-
-    root = Path(__file__).resolve().parents[1]
-    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
+def test_generated_markdown_cannot_break_mdx(generator) -> None:
     mdx, pipes = generator["mdx"], generator["pipes"]
     assert mdx(pipes("a ${x} or <b> | `${y} <c> | d`")) == r"a $\{x} or \<b> \| `${y} <c> \| d`"
     assert mdx("<a>\n```yaml\nx: ${y}\n```\n{b}") == "\\<a>\n```yaml\nx: ${y}\n```\n\\{b}"
 
 
-def test_mdx_escaping_reaches_the_whole_site_page_but_not_cli_output(monkeypatch) -> None:
+def test_mdx_escaping_reaches_the_whole_site_page_but_not_cli_output(monkeypatch, generator) -> None:
     from dataclasses import replace
-    from pathlib import Path
-    from runpy import run_path
     from engine.graph_service import schema
 
     name, field = next(iter(schema.FIELD_RULES["loop"].items()))
     monkeypatch.setitem(schema.FIELD_RULES["loop"], name, replace(field, description="Uses {x} or <y>."))
-    root = Path(__file__).resolve().parents[1]
-    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
     original = generator["specifications"].__globals__["run_path"]
     expressions = {"specification": lambda: "Write ${example} or <name>."}
     monkeypatch.setitem(generator["specifications"].__globals__, "run_path", lambda path: {
@@ -375,12 +371,8 @@ def test_documented_graph_and_loop_examples_match_current_language() -> None:
     assert parsed.loop.instruction == loop["loop"]["instruction"]
 
 
-def test_spec_generation_tracks_parser_definitions(tmp_path, monkeypatch) -> None:
-    from pathlib import Path
-    from runpy import run_path
-
-    root = Path(__file__).resolve().parents[1]
-    source = root / "cli/service/src/engine/graph_service"
+def test_spec_generation_tracks_parser_definitions(tmp_path, monkeypatch, generator) -> None:
+    source = ROOT / "cli/service/src/engine/graph_service"
     for name in ("schema.py", "expressions.py", "specification.py"):
         (tmp_path / name).write_text((source / name).read_text())
     with (tmp_path / "schema.py").open("a") as file:
@@ -390,7 +382,6 @@ def test_spec_generation_tracks_parser_definitions(tmp_path, monkeypatch) -> Non
 
     parser = run_path(str(tmp_path / "expressions.py"))
     assert parser["parse"]("new_root").evaluate({"new_root": 42}) == 42
-    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
     monkeypatch.setitem(generator["specifications"].__globals__, "SERVICE", tmp_path)
     specs = generator["specifications"]()
     assert "`new_root`" in specs["graph"]
@@ -399,10 +390,8 @@ def test_spec_generation_tracks_parser_definitions(tmp_path, monkeypatch) -> Non
     assert "minimum of 120 seconds" in specs["loop"]
 
 
-def test_field_constraints_drive_parser_and_reference(monkeypatch) -> None:
+def test_field_constraints_drive_parser_and_reference(monkeypatch, generator) -> None:
     from dataclasses import replace
-    from pathlib import Path
-    from runpy import run_path
     from engine.graph_service import schema
     from engine.graph_service.language import GraphError, parse_graph
 
@@ -421,8 +410,6 @@ def test_field_constraints_drive_parser_and_reference(monkeypatch) -> None:
     graph["name"] = "changed"
     assert parse_graph(graph, runners=["claude"]).nodes[0].outputs[0].required is True
 
-    root = Path(__file__).resolve().parents[1]
-    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
     original = generator["specifications"].__globals__["run_path"]
 
     def load(path):
