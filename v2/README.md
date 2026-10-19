@@ -12,6 +12,8 @@ It is essentially a durable way to execute and pace long-running work.
 The repo is structured as follows
 ```
 apps/ -- the `oe` CLI and the supervisor `oe up` starts
+docs/
+  schema/ # each service's schema and ERD at every migration revision; latest_<service>.svg is the newest
 infra/
   nats/
     nats-server.conf # nats server configuration

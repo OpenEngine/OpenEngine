@@ -53,3 +53,12 @@ column changes work on SQLite, and write shared column types as the plain types
 they store so they never import service code. Each service's tests assert
 `PERSISTENCE.drift(metadata) == []` after upgrading, so a schema change without
 a matching revision fails.
+
+### Schema documentation
+`python -m openengine.persistence.documentation` writes, for every revision of
+every service, `docs/schema/<service>/<revision>.md` (its SQL and the diff from
+its parent) and `<revision>.mermaid`, an ERD highlighting what the revision
+added, removed or changed. The head revision's ERD is also
+`docs/schema/latest_<service>.mermaid`. The v2 schema documentation workflow
+runs it whenever a migration changes, renders the changed ERDs to SVG with
+Mermaid CLI, commits them and comments each service's new schema on the PR.

@@ -1,0 +1,21 @@
+---
+title: cxn at 0a34e647834f (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% REMOVED tables/columns are tombstones, absent from this revision's schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    connections["connections (ADDED)"] {
+        VARCHAR(36) id PK "ADDED; not null"
+        VARCHAR(64) provider UK "ADDED; not null"
+        VARCHAR(255) external_id UK "ADDED; not null"
+        VARCHAR(255) name "ADDED; not null"
+        DATETIME created_at "ADDED; not null"
+    }
+    class connections added
