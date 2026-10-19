@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import json
 
 from engine.domain import ForgeMode, WorkState, forge_mode
 from engine.graph_runtime_langgraph.acp import NoWorkingDirectoryError
@@ -89,6 +90,7 @@ class WorkspaceNode:
         await execution.say(f"Preparing a working copy at {base_ref}.")
         workspace = await self.provider.provision(
             repository, base_ref, co_author=str(state.get(CO_AUTHOR) or ""),
+            include_local_changes=forge_mode(inputs) is ForgeMode.DISCONNECTED and not requested,
             **({"issue": state["issue"]} if state.get("issue") else {}),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
         )
         # Checked here rather than left for whoever reads the state, so the
@@ -109,10 +111,19 @@ class WorkspaceNode:
             {"repository": repository, "baseRef": base_ref},
             workspace.root_path,
         )
+        if workspace.preflight is not None:
+            await execution.tool("preflight", "workspace_preflight", {}, json.dumps(dict(workspace.preflight)))
+            await execution.say(
+                f"Workspace ready: {workspace.preflight['includedFiles']} files, "
+                f"{workspace.preflight['sourceBytes']} bytes; "
+                f"{workspace.preflight['untrackedFiles']} untracked files included, "
+                f"{workspace.preflight['ignoredEntries']} ignored entries excluded."
+            )
         return {
             CHECKOUT: workspace.root_path,
             "workspaceRef": workspace.ref,
             "workspaceId": str(workspace.workspace_id),
+            **({"workspaceSummary": dict(workspace.preflight)} if workspace.preflight is not None else {}),
         }
 
 

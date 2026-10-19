@@ -68,7 +68,7 @@ class RecordingWorkspaceProvider:
     """
 
     async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = ""
+        self, repository: str, base_ref: str, *, co_author: str = "", include_local_changes: bool = False
     ) -> Workspace:
         return Workspace(
             workspace_id=WorkspaceId("ws-recorded"),

@@ -94,7 +94,7 @@ class RecordingWorkspaceProvider:
     co_authors: list[str] = field(default_factory=list)
 
     async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = ""
+        self, repository: str, base_ref: str, *, co_author: str = "", include_local_changes: bool = False
     ) -> Workspace:
         self.provisioned.append((repository, base_ref))
         self.co_authors.append(co_author)
@@ -506,6 +506,29 @@ def test_a_workspace_node_checks_out_where_the_next_node_works(
     }
 
 
+def test_workspace_inventory_reaches_graph_state_and_run_events(tmp_path: Path) -> None:
+    report = {"includedFiles": 3, "sourceBytes": 90, "untrackedFiles": 2, "ignoredEntries": 1}
+
+    class InspectedProvider(RecordingWorkspaceProvider):
+        async def provision(self, repository, base_ref, *, co_author="", include_local_changes=False):
+            workspace = await super().provision(repository, base_ref, co_author=co_author,
+                include_local_changes=include_local_changes)
+            return replace(workspace, preflight=report)
+
+    workflow = assembled(InspectedProvider(), [])
+
+    async def scenario():
+        async with running([workflow], tmp_path) as (runtime, log):
+            run = await runtime.start(workflow.graph_id, {"task": TASK, "repository": REPOSITORY})
+            events = await until(log, run.run_id, "approval.requested")
+            return await runtime.snapshot(run.run_id), events
+
+    snapshot, events = asyncio.run(scenario())
+    assert snapshot.values["workspaceSummary"] == report
+    assert any(event.kind.value == "tool.call" and event.payload["name"] == "workspace_preflight" for event in events)
+    assert any(event.kind.value == "transcript" and "3 files" in event.payload.get("text", "") for event in events)
+
+
 def test_state_keeps_what_earlier_nodes_reported(tmp_path: Path) -> None:
     """A node reporting one key does not erase the checkout the rest need."""
     provider = RecordingWorkspaceProvider()
@@ -808,9 +831,9 @@ def test_a_provider_that_answers_with_no_path_is_refused(tmp_path: Path) -> None
 
     class Pathless(RecordingWorkspaceProvider):
         async def provision(
-            self, repository: str, base_ref: str, *, co_author: str = ""
+            self, repository: str, base_ref: str, *, co_author: str = "", include_local_changes: bool = False
         ) -> Workspace:
-            given = await super().provision(repository, base_ref, co_author=co_author)
+            given = await super().provision(repository, base_ref, co_author=co_author, include_local_changes=include_local_changes)
             return replace(given, root_path="")
 
     seen: list[str] = []

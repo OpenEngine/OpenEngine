@@ -256,6 +256,33 @@ workspace handoff below to retain accepted file changes between nodes.
 
 ### Per-node workspace handoff
 
+Disconnected runs started without an explicit ref first copy the local checkout's
+current files into a separate run worktree. This includes staged and unstaged
+edits, deletions, and non-ignored untracked source folders; no preliminary commit
+is required. The original checkout and its staging area are left unchanged.
+Ignored files (such as build outputs and ignored `.env` files) are excluded.
+An explicit ref or connected run continues to start from the selected committed
+state. Host paths mentioned in prompts are not mounted: a local folder such as
+`rust/snip` inside the repository becomes `/workspace/rust/snip` in the VM.
+
+Workspace preparation reports the initial included file count and size, tracked,
+changed, deleted and untracked counts, ignored entries, a bounded list of project
+manifests and large files. Git change counts may overlap (for example, a deleted
+file is also changed). Ignored directories are counted as entries, not recursively
+inventoried. The report is visible as a `workspace_preflight` tool event and is
+passed to agent nodes as initial workspace context. It reads metadata, not source
+contents. Swift sources trigger a reminder that the SmolVM guest is Linux and
+cannot execute a native macOS UI.
+
+Empty inputs are noted so a planner can distinguish a new project from missing
+existing code. Unsafe symlinks, unsupported file types and source trees exceeding
+256 MiB or 10,000 entries fail workspace preparation with an explanation. Local
+inputs are checked before copying into the run worktree. Ignore build outputs
+or large data files to reduce the input. These are source checks: the sandbox
+also enforces its full archive limits, including Git metadata and archive overhead,
+at the transfer boundary. The inventory describes the initial input; agents still
+need to inspect relevant files and verify available build tools.
+
 Every sandbox-backed graph ACP invocation gets a fresh snapshot of the run's
 current checkout, including tracked edits and non-ignored untracked outputs from
 earlier nodes. Git worktrees are materialized as independent repositories with
@@ -511,6 +538,8 @@ host against that checkout, using existing host credentials and approvals.
 Afterwards, a fresh sanitized host snapshot refreshes the guest's files and Git
 metadata. Guest hooks, config, index and commits are never imported. Ignored
 build caches are retained where they do not obstruct refreshed tracked paths.
+The refresh file list is streamed over stdin, so repositories with many or long
+file names do not exceed the guest's command-line argument limit.
 API/Git operation errors remain correctable tool errors; a workspace conflict,
 credential leak or refresh failure fails the node. Conflicts retain the patch.
 

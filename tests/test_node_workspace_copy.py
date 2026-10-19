@@ -6,9 +6,12 @@ read-only and graph integration checks still exercise all sandbox backends.
 
 import asyncio
 import base64
+import json
 from contextlib import asynccontextmanager
 import os
 import stat
+import subprocess
+from pathlib import Path
 from typing import TypedDict
 
 import pytest
@@ -22,7 +25,9 @@ from engine.graph_runtime import EventLog, GraphId
 from engine.graph_runtime_langgraph import ACPNode, LangGraphDefinition, LangGraphRuntime
 from engine.graph_runtime_langgraph.components import ReviewNode
 from engine.graph_runtime_langgraph.sandbox_workspace import WorkspaceCopies, WorkspacePatchConflict
+from engine.graph_runtime_langgraph import sandbox_workspace as workspace_module
 from engine.ports import SandboxSpec
+from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
 
 
 @pytest.fixture(params=["process", "smolvm-fake", pytest.param("smolvm-real", marks=pytest.mark.integration)])
@@ -44,6 +49,73 @@ async def command(sandbox, code):
     stdout, stderr, result = await asyncio.gather(process.stdout.read(), process.stderr.read(), process.wait())
     assert result == 0, stderr.decode()
     return stdout.decode()
+
+
+def test_large_workspace_refresh_uses_stdin_instead_of_exec_arguments(backend, git_repo, monkeypatch):
+    # Larger than Linux's per-argument limit, even with tiny file contents.
+    names = [f"file-{i:04d}-" + "x" * 200 for i in range(700)]
+    payload = json.dumps(names).encode()
+    assert len(payload) > 128 * 1024
+    source = git_repo(commit=True)
+    (source / names[0]).write_text("source")
+    (source / ".gitignore").write_text("ignored-build-cache\n")
+    original_git = workspace_module._git
+
+    def large_manifest(directory, *args, **kwargs):
+        result = original_git(directory, *args, **kwargs)
+        if args[-3:] == ("ls-files", "--cached", "-z"):
+            # Simulate many previously known paths without spending the test
+            # copying hundreds of irrelevant files. Missing retired paths are
+            # valid refresh inputs and must not inflate the exec arguments.
+            result.stdout += b"\0".join(os.fsencode(name) for name in names) + b"\0"
+        return result
+
+    monkeypatch.setattr(workspace_module, "_git", large_manifest)
+
+    async def run():
+        async with WorkspaceCopies().create(str(source), "apply") as copy:
+            async with copy.backend(backend).create(SandboxSpec()) as vm:
+                await command(vm, "from pathlib import Path; Path('README.md').write_text('guest edit'); "
+                    "Path('ignored-build-cache').write_text('keep')")
+                async with copy.host_operation():
+                    # The production host-tool boundary must finish the guest
+                    # refresh as well as executing the tiny host Git command.
+                    assert (source / "README.md").read_text() == "guest edit"
+                    subprocess.run(["git", "-C", str(source), "status", "--short"],
+                        check=True, capture_output=True)
+                    (source / names[0]).unlink()
+                    (source / "host-result.txt").write_text("host result")
+                await command(vm, "from pathlib import Path; assert Path('host-result.txt').read_text() == 'host result'; "
+                    "assert Path('README.md').read_text() == 'guest edit'; "
+                    "assert Path('ignored-build-cache').read_text() == 'keep'; assert Path('.git').is_dir()")
+                assert await command(vm, f"from pathlib import Path; print(Path({names[0]!r}).exists())") == "False\n"
+            await copy.accept()
+    asyncio.run(run())
+
+
+def test_new_local_source_reaches_vm_and_agent_edits_stay_in_run_branch(backend, git_repo, tmp_path):
+    source = git_repo(commit=True)
+    project = source / "rust" / "snip"
+    project.mkdir(parents=True)
+    (project / "Cargo.toml").write_text("local prototype\n")
+    (project / ".gitignore").write_text("target/\n")
+    (project / "target").mkdir()
+    (project / "target/build").write_text("ignored")
+
+    async def run():
+        provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"))
+        workspace = await provider.provision(str(source), "HEAD", include_local_changes=True)
+        run_root = Path(workspace.root_path)
+        async with WorkspaceCopies().create(str(run_root), "apply") as copy:
+            async with copy.backend(backend).create(SandboxSpec()) as vm:
+                await command(vm, "from pathlib import Path; p = Path('rust/snip/Cargo.toml'); "
+                    "assert p.read_text() == 'local prototype\\n'; "
+                    "assert not Path('rust/snip/target').exists(); p.write_text('agent improvement\\n')")
+                assert (run_root / "rust/snip/Cargo.toml").read_text() == "local prototype\n"
+            await copy.accept()
+        assert (run_root / "rust/snip/Cargo.toml").read_text() == "agent improvement\n"
+        assert (project / "Cargo.toml").read_text() == "local prototype\n"
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("backend", ["process"], indirect=True)

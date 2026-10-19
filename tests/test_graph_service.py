@@ -66,7 +66,7 @@ class Checkouts:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    async def provision(self, repository: str, base_ref: str, *, co_author: str = "") -> Workspace:
+    async def provision(self, repository: str, base_ref: str, *, co_author: str = "", include_local_changes: bool = False) -> Workspace:
         self.root.mkdir(exist_ok=True)
         return Workspace(
             workspace_id=WorkspaceId("ws-test"), root_path=str(self.root),

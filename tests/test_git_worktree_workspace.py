@@ -27,6 +27,110 @@ def _git(repository: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
+def test_local_source_includes_uncommitted_files_without_changing_source(tmp_path, git_repo):
+    source = git_repo(commit=True)
+    (source / "deleted.txt").write_text("delete me")
+    (source / "staged-deletion.txt").write_text("delete me too")
+    (source / "binary").write_bytes(b"\x00old")
+    _git(source, "add", ".")
+    _git(source, *_IDENTITY, "commit", "-m", "test: initial files")
+    (source / "README.md").write_text("staged edit")
+    _git(source, "add", "README.md")
+    (source / "README.md").write_text("latest unstaged edit")
+    (source / "binary").write_bytes(b"\x00new")
+    (source / "deleted.txt").unlink()
+    _git(source, "rm", "staged-deletion.txt")
+    (source / ".gitignore").write_text("target/\n.env\n")
+    project = source / "rust" / "snip"
+    project.mkdir(parents=True)
+    (project / "Cargo.toml").write_text("[package]\nname = 'snip'\n")
+    (project / "target").mkdir()
+    (project / "target" / "output").write_text("ignored build")
+    (source / ".env").write_text("ignored secret")
+    executable = project / "run.sh"
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+    (project / "manifest-link").symlink_to("Cargo.toml")
+    head = _git(source, "rev-parse", "HEAD")
+    status = _git(source, "status", "--porcelain")
+    index = (source / ".git/index").read_bytes()
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"))
+    workspace = asyncio.run(provider.provision(str(source), "HEAD", include_local_changes=True))
+    copied = Path(workspace.root_path)
+    assert (copied / "rust/snip/Cargo.toml").read_text() == (project / "Cargo.toml").read_text()
+    assert (copied / "README.md").read_text() == "latest unstaged edit"
+    assert (copied / "binary").read_bytes() == b"\x00new"
+    assert not (copied / "deleted.txt").exists()
+    assert not (copied / "staged-deletion.txt").exists()
+    assert not (copied / "rust/snip/target").exists()
+    assert not (copied / ".env").exists()
+    assert (copied / "rust/snip/run.sh").stat().st_mode & 0o111
+    assert (copied / "rust/snip/manifest-link").is_symlink()
+    (copied / "rust/snip/Cargo.toml").write_text("agent edit")
+    assert (project / "Cargo.toml").read_text() != "agent edit"
+    assert (source / ".git/index").read_bytes() == index
+    assert _git(source, "rev-parse", "HEAD") == head
+    assert _git(source, "status", "--porcelain") == status
+    clean = asyncio.run(provider.provision(str(source), "HEAD"))
+    assert not Path(clean.root_path, "rust/snip").exists()
+
+
+@pytest.mark.parametrize("target", ["outside", ".git/config"])
+def test_local_source_rejects_escaping_links_and_cleans_up_workspace(tmp_path, git_repo, target):
+    source = git_repo(commit=True)
+    external = tmp_path / "outside"
+    external.write_text("private")
+    (source / "link").symlink_to(external if target == "outside" else target)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"))
+    with pytest.raises(ValueError, match="symlink"):
+        asyncio.run(provider.provision(str(source), "HEAD", include_local_changes=True))
+    assert not list((tmp_path / "workspaces").glob("ws-*"))
+    assert not _git(source, "branch", "--list", "engine/ws-*")
+
+
+def test_local_source_handles_file_directory_replacements(tmp_path, git_repo):
+    source = git_repo(commit=True)
+    (source / "was-file").write_text("old")
+    (source / "was-directory").mkdir()
+    (source / "was-directory/child").write_text("old")
+    _git(source, "add", ".")
+    _git(source, *_IDENTITY, "commit", "-m", "test: file directory changes")
+    (source / "was-file").unlink()
+    (source / "was-file").mkdir()
+    (source / "was-file/new-child").write_text("new")
+    shutil.rmtree(source / "was-directory")
+    (source / "was-directory").write_text("replacement")
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"))
+    workspace = asyncio.run(provider.provision(str(source), "HEAD", include_local_changes=True))
+    assert Path(workspace.root_path, "was-file/new-child").read_text() == "new"
+    assert Path(workspace.root_path, "was-directory").read_text() == "replacement"
+
+
+def test_local_changes_cannot_be_overlaid_on_an_unrelated_ref(tmp_path, git_repo):
+    source = git_repo(commit=True)
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"))
+    with pytest.raises(ValueError, match="only.*HEAD"):
+        asyncio.run(provider.provision(str(source), "main", include_local_changes=True))
+
+
+def test_staged_replacement_cannot_delete_through_a_baseline_symlink(tmp_path, git_repo):
+    source = git_repo(commit=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "child").write_text("must survive")
+    (source / "link").symlink_to(external, target_is_directory=True)
+    _git(source, "add", "link")
+    _git(source, *_IDENTITY, "commit", "-m", "test: old link")
+    (source / "link").unlink()
+    (source / "link").mkdir()
+    (source / "link/child").write_text("staged replacement")
+    _git(source, "add", "link")
+    (source / "link/child").unlink()
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"))
+    asyncio.run(provider.provision(str(source), "HEAD", include_local_changes=True))
+    assert (external / "child").read_text() == "must survive"
+
+
 def test_origin_main_is_refreshed_without_moving_local_main(
     tmp_path: Path, *, git_repo
 ) -> None:

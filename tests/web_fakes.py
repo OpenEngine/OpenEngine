@@ -50,7 +50,7 @@ class ConversationWorkspaces:
         self.attachments: list[tuple[str, str, str]] = []
 
     async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = ""
+        self, repository: str, base_ref: str, *, co_author: str = "", include_local_changes: bool = False
     ) -> Workspace:
         self.count += 1
         return self._workspace(f"ws-{self.count}", repository, base_ref)

@@ -230,7 +230,7 @@ shutil.copytree(root, target, symlinks=True, ignore=ignored)
 '''
 _REFRESH = """import json, pathlib, shutil, sys
 root = pathlib.Path.cwd()
-for name in [*json.loads(sys.argv[1]), '.git']:
+for name in [*json.load(sys.stdin), '.git']:
     relative = pathlib.Path(name)
     if relative.is_absolute() or '..' in relative.parts:
         raise ValueError('invalid refresh path')
@@ -375,7 +375,9 @@ class WorkspaceCopy:
                 try:
                     await _work(self._resnapshot)
                     refreshed = (await _work(_git, self.snapshot, "ls-files", "--cached", "-z")).stdout
-                    await guest_command(self.active, _REFRESH, json.dumps([os.fsdecode(p) for p in (known + refreshed).split(b"\0") if p]))
+                    names = sorted({os.fsdecode(p) for p in (known + refreshed).split(b"\0") if p})
+                    # Repository-sized data must not become a single exec argument.
+                    await guest_command(self.active, _REFRESH, input=json.dumps(names).encode())
                     await self.active.copy_in(self.snapshot, ".")
                 except Exception as error:
                     self.failure = error

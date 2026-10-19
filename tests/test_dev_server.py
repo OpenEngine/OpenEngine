@@ -96,6 +96,7 @@ def test_a_change_the_running_process_cannot_see_restarts_it(
         "conversations.sqlite3",
         "conversations.sqlite3-wal",
         "conversations.sqlite3-shm",
+        "graph-state/registered-graphs/gv_example.py",
         # Somebody else's files, and the first two are full of `*.py`.
         ".venv/lib/python3.11/site-packages/starlette/applications.py",
         "apps/web/node_modules/some-package/setup.py",
@@ -135,6 +136,22 @@ def test_a_configuration_file_outside_the_checkout_is_watched_where_it_lives(
 
     assert elsewhere.parent in watch.directories
     assert restarts_on(watch)(elsewhere)
+
+
+def test_registered_graph_sources_beside_external_config_do_not_restart_server(
+    checkout: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    config = tmp_path_factory.mktemp("configuration") / "engine.toml"
+    config.write_text("default_branch = 'main'\n")
+    # The state folder may not exist until the first API child starts.
+    generated = config.parent / "graph-state" / "registered-graphs" / "gv_example.py"
+    watches = restarts_on(dev.reload_watch(config_path=config))
+    assert not watches(generated)
+    generated.parent.mkdir(parents=True)
+    generated.write_text("# saved workflow\n")
+    assert not watches(generated)
+    assert watches(config)
+    assert watches(checkout / "workflows" / "implementation_review_graph.py")
 
 
 def test_exclusions_are_absolute(checkout: Path) -> None:

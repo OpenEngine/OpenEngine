@@ -34,10 +34,24 @@ except ProcessLookupError:
 '''
 
 
-async def guest_command(sandbox: SandboxInstance, script: str, *args: str) -> bytes:
+async def guest_command(sandbox: SandboxInstance, script: str, *args: str, input: bytes | None = None) -> bytes:
     process = await sandbox.exec(("python3", "-c", script, *args))
-    process.stdin.close()
-    stdout, stderr, code = await asyncio.gather(process.stdout.read(), process.stderr.read(), process.wait())
+
+    async def feed() -> None:
+        try:
+            if input is not None:
+                for offset in range(0, len(input), 65536):
+                    process.stdin.write(input[offset:offset + 65536])
+                    await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            # Report the guest's exit status and stderr below, as communicate does.
+            pass
+        finally:
+            process.stdin.close()
+
+    stdout, stderr, code, _ = await asyncio.gather(
+        process.stdout.read(), process.stderr.read(), process.wait(), feed(),
+    )
     if code:
         message = "sandbox guest command failed: " + (stderr or stdout).decode(errors="replace")[:2000]
         raise RuntimeError(message)

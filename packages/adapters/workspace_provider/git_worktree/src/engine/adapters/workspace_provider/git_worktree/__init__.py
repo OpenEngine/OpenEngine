@@ -9,6 +9,7 @@ human, whether or not a worktree is currently sitting on it.
 """
 
 import asyncio
+from dataclasses import replace
 import json
 import shlex
 import re
@@ -22,6 +23,9 @@ from engine.domain.ids import WorkspaceId
 from engine.ports.workspace_provider import Workspace, WorkspaceState
 from engine.runtime.change_requests import remote_project
 from engine.runtime.issue_links import issue_reference
+from engine.ports.sandbox_tasks import filesystem_work
+from .local_changes import copy_local_changes
+from engine.runtime.workspace_preflight import inspect_workspace
 
 #: Where checkouts go when nothing says otherwise.
 #:
@@ -58,18 +62,31 @@ class GitWorktreeWorkspaceProvider:
         self._root_directory = Path(root_directory).resolve()
 
     async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = "", issue: Mapping[str, object] | None = None
+        self, repository: str, base_ref: str, *, co_author: str = "", issue: Mapping[str, object] | None = None,
+        include_local_changes: bool = False,
     ) -> Workspace:
+        if include_local_changes and base_ref != "HEAD":
+            raise ValueError("local changes can only be included when provisioning HEAD")
         workspace_id = WorkspaceId(f"ws-{uuid4().hex[:12]}")
         repository_root = await _repository_root(repository)
         resolved_base = await _resolve_base(repository_root, base_ref)
-        return await self._checkout(
+        report = await filesystem_work(inspect_workspace, Path(repository_root), local_changes=True) if include_local_changes else None
+        workspace = await self._checkout(
             workspace_id,
             repository_root,
             base_ref,
             resolved_base=resolved_base,
             co_author=co_author, issue=issue,
         )
+        try:
+            if include_local_changes:
+                await filesystem_work(copy_local_changes, Path(repository_root), Path(workspace.root_path))
+            else:
+                report = await filesystem_work(inspect_workspace, Path(workspace.root_path), local_changes=False)
+        except BaseException:
+            await self.dispose(workspace_id)
+            raise
+        return replace(workspace, preflight=report)
 
     async def provision_branch(self, repository: str, branch: str, *, borrow_existing: bool = False) -> Workspace:
         """Fix an existing local branch, retaining a clean checkout already holding it.
@@ -322,7 +339,14 @@ async def _repository_root(repository: str) -> str:
             finally:
                 await asyncio.to_thread(shutil.rmtree, staging)
         repository = str(destination)
-    return await _git(repository, "rev-parse", "--show-toplevel")
+    try:
+        return await _git(repository, "rev-parse", "--show-toplevel")
+    except GitWorktreeError as error:
+        message = (
+            f"Cannot prepare workspace from {repository!r}. Select an initialized Git repository; "
+            "uncommitted files and new folders inside it are supported. " + str(error)
+        )
+        raise GitWorktreeError(message) from error
 
 
 async def _resolve_base(repository_root: str, base_ref: str) -> str:

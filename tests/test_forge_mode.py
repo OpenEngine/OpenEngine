@@ -207,6 +207,7 @@ def test_disconnected_run_keeps_commits_on_a_descriptive_local_branch(tmp_path, 
 
     repository = tmp_path / "repository"
     git_repo(repository, commit=True)
+    (repository / "new-local.txt").write_text("uncommitted local input\n")
     provider = GitWorktreeWorkspaceProvider(str(tmp_path / "workspaces"))
 
     class LocalGit:
@@ -224,11 +225,12 @@ def test_disconnected_run_keeps_commits_on_a_descriptive_local_branch(tmp_path, 
 
     async def implement(state):
         assert state["inputs"]["mode"] == "disconnected"
+        assert Path(state["workspace"], "new-local.txt").read_text() == "uncommitted local input\n"
         Path(state["workspace"], "change.txt").write_text("local change\n")
         server = TerminalMcpServer(step_id="implement", agent_id="test", required_outputs=("pr_url",))
         async with server(state, current_execution(), approve) as bound:
             args = list(bound.config["args"])
-            for arguments in (["switch", "-c", "agent/local-change"], ["add", "change.txt"],
+            for arguments in (["switch", "-c", "agent/local-change"], ["add", "change.txt", "new-local.txt"],
                               ["commit", "-m", "feat: local change"]):
                 reply = await _mcp_response(
                     args[args.index("--host") + 1], int(args[args.index("--port") + 1]),

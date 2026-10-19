@@ -34,6 +34,8 @@ class Workspace:
     workspace's history" is. Survives `detach`, so it stays the answer to
     "what did the agent do?" when there is no checkout to look in.
     """
+    preflight: Mapping[str, object] | None = None
+    """Bounded inventory of the initial input, when supplied by the provider."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,12 +57,16 @@ class WorkspaceProvider(Protocol):
     """Creates and destroys isolated working environments."""
 
     async def provision(
-        self, repository: str, base_ref: str, *, co_author: str = "", issue: Mapping[str, object] | None = None
+        self, repository: str, base_ref: str, *, co_author: str = "", issue: Mapping[str, object] | None = None,
+        include_local_changes: bool = False,
     ) -> Workspace:
         """Mint a new workspace, with a checkout ready to work in.
 
         ``co_author`` -- `Name <email>` -- is credited as a co-author on every
         commit made in the checkout, and nobody is when it is empty.
+        ``include_local_changes`` includes the source checkout's current files,
+        including non-ignored untracked files, without changing that checkout.
+        It is valid only when provisioning from HEAD.
         """
         ...
 
