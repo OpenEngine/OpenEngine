@@ -3,11 +3,15 @@ import MarkdownRenderer from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 
-import { linkable } from "./github-activity";
+// A summary is what an agent wrote, so its links are the agent's word rather
+// than the engine's. A browser reads URL schemes case-insensitively, so the
+// allowlist must be too, and only a web page or an e-mail address may be
+// clicked.
+const SAFE_HREF = /^(?:https?:\/\/|mailto:)/i;
 
 const components: Components = {
   a: ({ href, children }) => {
-    if (typeof href !== "string" || href.length === 0 || !linkable(href, true)) {
+    if (typeof href !== "string" || !SAFE_HREF.test(href)) {
       return <>{children}</>;
     }
     return (
@@ -23,14 +27,16 @@ const components: Components = {
 
 export const Markdown = memo(function Markdown({
   children,
+  className,
 }: {
   children?: string | null;
+  className?: string;
 }) {
   if (typeof children !== "string" || children.trim() === "") {
     return null;
   }
   return (
-    <div className="markdown">
+    <div className={className ? `markdown ${className}` : "markdown"}>
       <MarkdownRenderer
         remarkPlugins={[remarkBreaks]}
         components={components}

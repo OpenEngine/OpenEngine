@@ -50,11 +50,10 @@ function statusLabel(status: string): string {
  *
  *  The comment's link comes from the webhook body, so it is GitHub's word
  *  rather than this engine's, and a `javascript:` URL in an anchor runs on
- *  click. The one guard for every externally-sourced link the page draws:
- *  the WorkOrder page's pull-request link, and the Markdown renderer's for
- *  a summary's links, which may also be an e-mail address. */
-export function linkable(url: string, mailto = false): boolean {
-  return /^https?:\/\//i.test(url) || (mailto && /^mailto:/i.test(url));
+ *  click. The same guard the WorkOrder page applies to every other
+ *  externally-sourced link, including a step's output values. */
+export function linkable(url: string): boolean {
+  return /^https?:\/\//.test(url);
 }
 
 function kindLabel(event: string): string {

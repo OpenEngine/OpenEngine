@@ -717,18 +717,14 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             Outcome: <strong>{phaseLabel(step.outcome)}</strong>
           </p>
         )}
-        {step.summary.trim() && (
-          <div className="step-summary">
-            <Markdown>{step.summary}</Markdown>
-          </div>
-        )}
+        <Markdown className="step-summary">{step.summary}</Markdown>
         {step.outputs.length > 0 && (
           <dl className="step-outputs">
             {step.outputs.map((output) => (
               <div key={output.name}>
                 <dt>{output.name}</dt>
                 <dd>
-                  {/^https?:\/\//.test(output.value) ? (
+                  {linkable(output.value) ? (
                     <a href={output.value} target="_blank" rel="noreferrer">
                       {output.value} ↗
                     </a>

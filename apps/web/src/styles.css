@@ -1161,6 +1161,15 @@ select:disabled { cursor: default; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 10px; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+  margin: 14px 0 6px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+.markdown h1 { font-size: 16px; }
+.markdown h2 { font-size: 15px; }
+.markdown h3 { font-size: 14px; }
+.markdown h4, .markdown h5, .markdown h6 { font-size: 13px; }
 .markdown ul, .markdown ol { margin: 0 0 10px; padding-left: 22px; }
 .markdown ul { list-style: disc; }
 .markdown ol { list-style: decimal; }
@@ -1169,6 +1178,9 @@ select:disabled { cursor: default; }
   margin: 0 0 10px;
   padding: 12px 15px;
   overflow-x: auto;
+  /* A code block scrolls sideways instead of inheriting the soft wrap that
+     keeps a summary line inside the card. */
+  overflow-wrap: normal;
   white-space: pre;
   background: var(--paper);
   border: 1px solid var(--rule);
