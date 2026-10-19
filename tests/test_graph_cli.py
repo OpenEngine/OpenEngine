@@ -328,16 +328,18 @@ def test_generated_spec_documentation_matches_command_documentation() -> None:
     assert (root / "site/docs/cli-reference.md").read_text() == generator["render_reference"]()
 
 
-def test_generated_table_cells_cannot_break_mdx() -> None:
+def test_generated_markdown_cannot_break_mdx() -> None:
     from pathlib import Path
     from runpy import run_path
 
     root = Path(__file__).resolve().parents[1]
-    cell = run_path(str(root / "scripts/generate_cli_docs.py"))["cell"]
-    assert cell("a ${x} or <b> | `${y} <c> | d`") == r"a $\{x} or \<b> \| `${y} <c> \| d`"
+    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
+    mdx, pipes = generator["mdx"], generator["pipes"]
+    assert mdx(pipes("a ${x} or <b> | `${y} <c> | d`")) == r"a $\{x} or \<b> \| `${y} <c> \| d`"
+    assert mdx("<a>\n```yaml\nx: ${y}\n```\n{b}") == "\\<a>\n```yaml\nx: ${y}\n```\n\\{b}"
 
 
-def test_mdx_escaping_reaches_loop_details_but_not_cli_output(monkeypatch) -> None:
+def test_mdx_escaping_reaches_the_whole_site_page_but_not_cli_output(monkeypatch) -> None:
     from dataclasses import replace
     from pathlib import Path
     from runpy import run_path
@@ -348,9 +350,11 @@ def test_mdx_escaping_reaches_loop_details_but_not_cli_output(monkeypatch) -> No
     root = Path(__file__).resolve().parents[1]
     generator = run_path(str(root / "scripts/generate_cli_docs.py"))
     original = generator["specifications"].__globals__["run_path"]
-    monkeypatch.setitem(generator["specifications"].__globals__, "run_path",
-                        lambda path: vars(schema) if Path(path).name == "schema.py" else original(path))
-    assert r"Uses \{x} or \<y>." in generator["render"]()
+    expressions = {"specification": lambda: "Write ${example} or <name>."}
+    monkeypatch.setitem(generator["specifications"].__globals__, "run_path", lambda path: {
+        "schema.py": vars(schema), "expressions.py": expressions}.get(Path(path).name) or original(path))
+    site = generator["render"]()
+    assert r"Uses \{x} or \<y>." in site and r"Write $\{example} or \<name>." in site
     cli = generator["specifications"]()
     assert "Uses {x} or <y>." in cli["graph"] and "Uses {x} or <y>." in cli["loop"]
 
