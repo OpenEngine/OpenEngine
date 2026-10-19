@@ -150,9 +150,10 @@ jobs:
           uv run --no-project --with 'alembic>=1.16,<2' --with 'sqlalchemy>=2,<3'
           python scripts/schema_diagram.py --base-root .schema-base
       - name: Render schema PNG
+        # Hosted Ubuntu runners can block Chromium's sandbox via AppArmor.
         run: |
           if [ "$(cat diagram-changes.json)" != '[]' ]; then
-            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/schema.mermaid -o docs/architecture/schema.png -s 2
+            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -p .github/scripts/puppeteer-config.json -i docs/architecture/schema.mermaid -o docs/architecture/schema.png -s 2
           fi
       - uses: actions/upload-artifact@v7
         with:
@@ -198,9 +199,10 @@ jobs:
         with:
           node-version: '22'
       - name: Render package PNG
+        # Use the same runner-compatible browser settings as the schema render.
         run: |
           if [ "$(cat package-changes.json)" != '[]' ]; then
-            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -i docs/architecture/packages.mermaid -o docs/architecture/packages.png --size 2400 -s 2
+            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -p .github/scripts/puppeteer-config.json -i docs/architecture/packages.mermaid -o docs/architecture/packages.png --size 2400 -s 2
           fi
       - uses: actions/upload-artifact@v7
         if: steps.changes.outputs.changed == 'true'
