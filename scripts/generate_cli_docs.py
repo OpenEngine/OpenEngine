@@ -7,6 +7,8 @@ committed reference is kept; tests reject a stale one.
 """
 
 import argparse
+import os
+import re
 from inspect import getdoc
 from pathlib import Path
 from runpy import run_path
@@ -14,6 +16,12 @@ from runpy import run_path
 ROOT = Path(__file__).resolve().parents[1]
 SERVICE = ROOT / "cli/service/src/engine/graph_service"
 CLIENT = ROOT / "cli/client/src/engine/cli/specs.py"
+
+
+def cell(text: str) -> str:
+    """Escape a Markdown table cell so MDX reads `{` and `<` outside code spans as text."""
+    parts = re.split(r"(`[^`]*`)", text.replace("|", "\\|"))
+    return "".join(part if part.startswith("`") else re.sub(r"([{<])", r"\\\1", part) for part in parts)
 
 
 def specifications() -> dict[str, str]:
@@ -28,7 +36,7 @@ def specifications() -> dict[str, str]:
     rules = schema["FIELD_RULES"]
     field_details = "\n\nScalar field constraints:\n\n| Declaration | Field | Meaning | Constraints |\n| --- | --- | --- | --- |\n"
     field_details += "\n".join(
-        f"| {declaration} | {name} | {field.description} | {field.constraints()} |"
+        f"| {declaration} | {name} | {cell(field.description)} | {cell(field.constraints())} |"
         for declaration, fields in rules.items() for name, field in fields.items()
     )
     replacements = {
@@ -63,7 +71,7 @@ def render_cli() -> str:
     for command, text in specifications().items():
         sections.append(
             f"def {command}_spec(_arguments: object = None) -> int:\n"
-            + '    """' + text.replace("\n", "\n    ") + '\n    """\n'
+            + '    """' + text.replace("\\", "\\\\").replace("\n", "\n    ") + '\n    """\n'
             + f"    print(getdoc({command}_spec))\n    return 0"
         )
     return "\n".join(line.rstrip() for line in "\n\n\n".join(sections).splitlines()) + "\n"
@@ -95,7 +103,7 @@ def _argument_rows(parser: argparse.ArgumentParser) -> list[str]:
         name = ", ".join(action.option_strings) or action.metavar or action.dest
         if action.option_strings and action.nargs != 0:
             name += f" {action.metavar or action.dest.upper()}"
-        meaning = (action.help or "").replace("|", "\\|")
+        meaning = cell(action.help or "")
         if action.choices and not action.option_strings:
             meaning = (meaning + "; " if meaning else "") + "one of " + ", ".join(f"`{c}`" for c in action.choices)
         rows.append(f"| `{name}` | {meaning} |")
@@ -145,6 +153,7 @@ def render_reference(parser: argparse.ArgumentParser | None = None) -> str:
 
 
 if __name__ == "__main__":
+    os.environ["NO_COLOR"] = "1"  # argparse colors help on a TTY from Python 3.14.
     CLIENT.write_text(render_cli(), encoding="utf-8")
     (ROOT / "site/docs/cli-specs.md").write_text(render(), encoding="utf-8")
     try:

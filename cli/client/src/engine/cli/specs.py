@@ -60,7 +60,7 @@ def graph_spec(_arguments: object = None) -> int:
     | graph | kind | Definition kind. | default: `'Graph'`; choices: `'Graph'` |
     | graph | name | Project-scoped graph name. | required; type: str; pattern: `^[a-z0-9][a-z0-9._-]{0,62}$` |
     | input | required | Whether the value is required. | default: `False`; type: bool |
-    | naming | model | Model for the naming turn: a tier, a model, or ${inputs...}; empty means the agent's cheapest tier. | default: `''`; type: str |
+    | naming | model | Model for the naming turn: a tier, a model, or `${inputs...}`; empty means the agent's cheapest tier. | default: `''`; type: str |
     | agent step | prompt | What the agent is asked to do. | required; type: str; nonblank |
     | agent step | model | Model tier, model name, or expression template. | default: `''`; type: str |
     | agent step | steering | Allow steering while the agent runs. | default: `None`; choices: `None`, `'always-open'` |

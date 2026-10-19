@@ -328,6 +328,15 @@ def test_generated_spec_documentation_matches_command_documentation() -> None:
     assert (root / "site/docs/cli-reference.md").read_text() == generator["render_reference"]()
 
 
+def test_generated_table_cells_cannot_break_mdx() -> None:
+    from pathlib import Path
+    from runpy import run_path
+
+    root = Path(__file__).resolve().parents[1]
+    cell = run_path(str(root / "scripts/generate_cli_docs.py"))["cell"]
+    assert cell("a ${x} or <b> | `${y} <c> | d`") == r"a $\{x} or \<b> \| `${y} <c> \| d`"
+
+
 def test_documented_graph_and_loop_examples_match_current_language() -> None:
     from inspect import getdoc
     import re
