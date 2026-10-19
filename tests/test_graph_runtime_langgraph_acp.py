@@ -2526,18 +2526,23 @@ def test_a_ci_fix_step_reports_only_the_pull_request_its_run_opened(
     assert reported == "https://github.com/acme/api/pull/407"
 
 
-@pytest.mark.parametrize("held_by", [None, "run-0"])
+@pytest.mark.parametrize("previous", [
+    "unclaimed", "completed", "failed", "missing", "unknown_run", "unknown_graph",
+    "running", "scheduled", "awaiting_approval",
+])
 def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
-    tmp_path: Path, held_by: str | None,
+    tmp_path: Path, previous: str,
 ) -> None:
     """End to end over a real store, for a step that opened its pull request
     with `gh pr create`: the forge vouches for the report and the run claims
-    it -- unless another run already holds it, which keeps it."""
+    it -- unless an active run already holds it, which keeps it."""
 
+    from engine.graph_runtime import RunSnapshot, RunStatus, UnknownGraphError, UnknownRunError
     from engine.graph_runtime_langgraph.store import PullRequestRecord
     from engine.runtime.terminal_mcp import _mcp_response
 
     url = "https://github.com/acme/repository/pull/7"
+    held_by = None if previous == "unclaimed" else "run-0"
 
     class ShellOpenedSourceControl(RecordingSourceControl):
         did_push = False
@@ -2577,6 +2582,20 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
             self.public_url = ""
             self.store = store
             self.source_control = ShellOpenedSourceControl()
+
+        async def snapshot(self, run_id: RunId) -> RunSnapshot | None:
+            assert run_id == RunId("run-0")
+            if previous == "missing":
+                assert await self.store.run(run_id) is None
+                return None
+            if previous == "unknown_run":
+                raise UnknownRunError(run_id)
+            if previous == "unknown_graph":
+                raise UnknownGraphError(GRAPH)
+            return RunSnapshot(
+                run_id=run_id, graph_id=GRAPH, status=RunStatus(previous),
+                error="the run was cancelled" if previous == "failed" else None,
+            )
 
     class Execution:
         def __init__(self, store: Any) -> None:
@@ -2647,7 +2666,7 @@ def test_a_pull_request_opened_in_the_shell_is_recorded_when_the_forge_shows_it(
 
     result, owned, holder = asyncio.run(scenario())
 
-    if held_by is None:
+    if previous not in ("running", "scheduled", "awaiting_approval"):
         assert result.get("isError") is not True
         assert owned == (("acme/repository", 7),)
         assert holder == RunId("run-1")
