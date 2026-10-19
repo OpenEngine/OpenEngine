@@ -20,6 +20,7 @@ infra/
 integration_tests/ # tests which cross the NATS service boundary
 packages/
   contracts/ # where the contracts between services live
+  persistence/ # the database layer services share; one setting picks SQLite or Postgres
 services/ # where the services themselves live
   connection_bus/
   graph_engine/
@@ -28,13 +29,21 @@ services/ # where the services themselves live
 
 The services communicate over the NATS protocol and the [asyncapi 3](https://www.asyncapi.com/docs/reference/specification/v3.1.0) spec is used to describe the subjects and schemas.
 
-All services contain a persistence directory which contains the migrations necessary to produce the database layer for that service.
+All services contain a persistence directory which holds all of that service's database code. `OE_DATABASE_BACKEND` (`sqlite` by default, or `postgres`, a stub for now) picks the backend for every service; see [packages/persistence](packages/persistence/README.md). Each service's data is isolated: its own SQLite file, or its own Postgres schema.
 ```
     persistence/ # each service defines its own schema
-      postgres/
-      sqlite/
-      migrations/
+      schema.py   # the service's tables
+      store.py    # the Protocol the rest of the service depends on
+      postgres/   # the store, written for Postgres
+      sqlite/     # the store, written for SQLite
+      migrations/ # one Alembic history that runs on both
 ```
+
+| Service | Database | Tables |
+| -- | -- | -- |
+| connection_bus | `cxn` | connections |
+| graph_engine | `ge` | graphs |
+| virtual_control_plane | `vcp` | workspaces |
 
 
 
@@ -43,7 +52,7 @@ TODO:
 - [x] Boot NATS on up 
 - [x] Write the CLI migrate command
 - [x] Migrate NATS on CLI migrate
-- [ ] Write shared postgres/sqlite migration layer
+- [x] Write shared postgres/sqlite migration layer
 - [ ] Write shared NATS client
 - [ ] Construct e2e testing environment
 - [ ] Port graph engine

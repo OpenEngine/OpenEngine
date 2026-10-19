@@ -6,7 +6,11 @@ requires-python = ">=3.11"
 # `oe up` starts the supervisor with this interpreter, so it is installed alongside.
 dependencies = [
     "nats-py>=2.16.0",
+    "openengine-connection-bus",
+    "openengine-graph-engine",
+    "openengine-persistence",
     "openengine-supervisor",
+    "openengine-virtual-control-plane",
 ]
 
 [project.scripts]
@@ -20,4 +24,8 @@ build-backend = "hatchling.build"
 packages = ["src/openengine"]
 
 [tool.uv.sources]
+openengine-connection-bus = { workspace = true }
+openengine-graph-engine = { workspace = true }
+openengine-persistence = { workspace = true }
 openengine-supervisor = { workspace = true }
+openengine-virtual-control-plane = { workspace = true }

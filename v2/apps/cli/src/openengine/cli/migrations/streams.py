@@ -20,6 +20,8 @@ import nats
 from nats.aio.client import Client
 from nats.errors import Error as ClientError
 
+from openengine.cli.migrations import MigrationError
+
 API = "$JS.API.STREAM"
 STREAM_NOT_FOUND = 10059
 CONNECT_TIMEOUT_SECONDS = 5
@@ -36,10 +38,6 @@ class Outcome(StrEnum):
 class StreamResult:
     name: str
     outcome: Outcome
-
-
-class MigrationError(RuntimeError):
-    pass
 
 
 class InvalidStreamConfig(MigrationError):

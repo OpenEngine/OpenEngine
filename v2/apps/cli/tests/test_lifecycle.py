@@ -38,10 +38,10 @@ def _listening(port: int) -> bool:
 def oe(tmp_path: Path):
     environment = {**os.environ, "XDG_STATE_HOME": str(tmp_path / "state")}
 
-    def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+    def run(*arguments: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, "-m", "openengine.cli", *arguments],
-            env=environment,
+            env={**environment, **(env or {})},
             capture_output=True,
             text=True,
             timeout=240,
@@ -98,18 +98,22 @@ def test_up_reports_why_nats_could_not_start(oe) -> None:
     assert oe("status").returncode == 1
 
 
-def test_migrate_creates_the_streams_once_and_updates_drifted_ones(oe, tmp_path: Path) -> None:
+def test_migrate_creates_the_databases_and_streams_once_and_updates_drifted_ones(oe, tmp_path: Path) -> None:
     port = _free_port()
     assert oe("up", "--nats-port", str(port), "--nats-monitor-port", str(_free_port())).returncode == 0
 
     first = oe("migrate")
     assert first.returncode == 0, first.stderr
-    assert first.stdout.count("created") == 5
-    assert "cxn-ingress" in first.stdout
+    databases, streams = first.stdout.split("\n\n")
+    assert databases.count("created") == 3
+    assert streams.count("created") == 5
+    assert "cxn-ingress" in streams
+    for service in ("cxn", "ge", "vcp"):
+        assert (tmp_path / "state" / "openengine" / "databases" / f"{service}.sqlite3").exists()
 
     again = oe("migrate")
     assert again.returncode == 0, again.stderr
-    assert again.stdout.count("unchanged") == 5
+    assert again.stdout.count("unchanged") == 8
 
     streams = tmp_path / "streams"
     streams.mkdir()
@@ -118,6 +122,16 @@ def test_migrate_creates_the_streams_once_and_updates_drifted_ones(oe, tmp_path:
     changed = oe("migrate", "--streams", str(streams))
     assert changed.returncode == 0, changed.stderr
     assert "ge-events  updated" in changed.stdout
+
+
+def test_migrate_reports_a_backend_it_cannot_use(oe) -> None:
+    assert oe("up", "--nats-port", str(_free_port()), "--nats-monitor-port", str(_free_port())).returncode == 0
+
+    migrate = oe("migrate", env={"OE_DATABASE_BACKEND": "postgres"})
+
+    assert migrate.returncode == 1
+    assert "postgres backend does not implement" in migrate.stderr
+    assert "Traceback" not in migrate.stderr
 
 
 def test_migrate_needs_a_running_openengine(oe) -> None:
