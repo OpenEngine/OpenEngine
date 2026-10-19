@@ -10,19 +10,14 @@ name: pages
 on:
   push:
     branches: [main]
-    paths:
+    paths: &site_paths
       - "site/**"
       - "scripts/install.sh"
       - "scripts/generate_cli_docs.py"
       - "cli/service/src/engine/graph_service/**"
       - ".github/workflows/pages.yml"
   pull_request:
-    paths:
-      - "site/**"
-      - "scripts/install.sh"
-      - "scripts/generate_cli_docs.py"
-      - "cli/service/src/engine/graph_service/**"
-      - ".github/workflows/pages.yml"
+    paths: *site_paths
   workflow_dispatch:
 
 permissions:
