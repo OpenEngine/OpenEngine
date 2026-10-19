@@ -1,0 +1,71 @@
+name: v2 schema documentation
+
+# Documents each v2 service's schema at every migration revision, renders its
+# ERD, commits what changed and comments the new schemas on open PRs.
+on:
+  push:
+    # PR branches are handled only by pull_request, avoiding duplicate publication.
+    branches: [main]
+    paths:
+      - 'v2/services/*/persistence/migrations/versions/**'
+      - 'v2/packages/persistence/src/openengine/persistence/documentation.py'
+      - '.github/scripts/**'
+      - '.github/workflows/v2-schema.yml'
+  pull_request:
+    paths:
+      - 'v2/services/*/persistence/migrations/versions/**'
+      - 'v2/packages/persistence/src/openengine/persistence/documentation.py'
+      - '.github/scripts/**'
+      - '.github/workflows/v2-schema.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-schema-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  document:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.9.28'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install publication tooling
+        run: npm ci --prefix .github/scripts
+      - name: Typecheck and test publication
+        run: npm test --prefix .github/scripts
+      - name: Document every revision of every service
+        run: >-
+          uv run --project v2 --frozen python -m openengine.persistence.documentation
+          --services v2/services --output v2/docs/schema --manifest service-schema-changes.json
+      - name: Render changed ERDs
+        # Hosted Ubuntu runners can block Chromium's sandbox via AppArmor.
+        run: |
+          for diagram in $(jq -r '.[] | select(endswith(".mermaid"))' service-schema-changes.json); do
+            npm exec --yes --package=@mermaid-js/mermaid-cli@12.0.0 -- mmdc -p .github/scripts/puppeteer-config.json -i "$diagram" -o "${diagram%.mermaid}.svg"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: v2-schema-documentation
+          path: v2/docs/schema
+      # Never execute fork code with a privileged pull_request_target token.
+      - name: Commit changed schemas and comment on open PRs
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const publish = require('./.github/scripts/dist/publish-service-schemas.js').default;
+            await publish({github, context, core});

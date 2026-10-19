@@ -1,16 +1,34 @@
 # V2 is its own uv workspace, separate from V1's at the repository root.
 [tool.uv.workspace]
-members = ["apps/cli", "apps/supervisor"]
+members = ["apps/cli", "apps/supervisor", "packages/persistence", "services/connection_bus", "services/graph_engine", "services/virtual_control_plane"]
 
 [dependency-groups]
-dev = ["openengine-cli", "pytest>=8.0"]
+dev = [
+    "openengine-cli",
+    "openengine-connection-bus",
+    "openengine-graph-engine",
+    "openengine-persistence",
+    "openengine-virtual-control-plane",
+    "pytest>=8.0",
+]
 
 [tool.uv.sources]
 openengine-cli = { workspace = true }
+openengine-persistence = { workspace = true }
+openengine-connection-bus = { workspace = true }
+openengine-graph-engine = { workspace = true }
+openengine-virtual-control-plane = { workspace = true }
 
 [tool.pytest.ini_options]
-testpaths = ["apps/cli/tests", "apps/supervisor/tests"]
-# Each app keeps its own tests/, so test module names may repeat across apps.
+testpaths = [
+    "apps/cli/tests",
+    "apps/supervisor/tests",
+    "packages/persistence/tests",
+    "services/connection_bus/tests",
+    "services/graph_engine/tests",
+    "services/virtual_control_plane/tests",
+]
+# Each app, package and service keeps its own tests/, so test module names may repeat.
 addopts = "-q --import-mode=importlib"
 markers = [
     "integration: boots a real local dependency and exercises its public interface",

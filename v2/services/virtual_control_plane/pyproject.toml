@@ -1,0 +1,21 @@
+[project]
+name = "openengine-virtual-control-plane"
+version = "0.0.0"
+description = "Manages the lifecycle of agents and the workspaces they work in."
+requires-python = ">=3.11"
+dependencies = ["openengine-persistence"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["persistence"]
+# Editable installs put services/ on the path, so the service imports as `virtual_control_plane`.
+dev-mode-dirs = [".."]
+
+[tool.hatch.build.targets.wheel.sources]
+"" = "virtual_control_plane"
+
+[tool.uv.sources]
+openengine-persistence = { workspace = true }

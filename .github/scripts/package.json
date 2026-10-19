@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/publish-schema.test.js package-comment.test.mjs"
+    "test": "npm run build && node --test dist/publish-schema.test.js dist/publish-service-schemas.test.js package-comment.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
