@@ -330,10 +330,7 @@ class LoadedEngineConfig:
 
     @property
     def github_ssh_key(self) -> Path | None:
-        configured = self.config.github.ssh_key
-        if not configured:
-            return None
-        return _relative_to(Path(configured).expanduser(), self._base_directory).resolve()
+        return self._config_directory(self.config.github.ssh_key)
 
     @property
     def workflows_directory(self) -> Path | None:
