@@ -99,7 +99,7 @@ FIELD_RULES = {
     },
     "input": {"required": _REQUIRED},
     "naming": {
-        "model": Field("Model for the naming turn: a tier, a model, or ${inputs...}; "
+        "model": Field("Model for the naming turn: a tier, a model, or `${inputs...}`; "
                        "empty means the agent's cheapest tier.", types=(str,), default="",
                        error="must be a tier such as cheapest, a model, or ${...}"),
     },

@@ -168,7 +168,7 @@ You'll see detailed reference material about loops: how to set one up, how often
         await clear(terminal)
 
         await step(
-          `A loop needs a graph to run. This guide uses one with a single step. In your project's folder, save this as \`check-readme.yaml\`, then type \`engine graph add check-readme.yaml\` and press Enter to save it to OpenEngine, as in [Save Your First Graph](./save-your-first-graph):
+          `A loop needs a graph to run. This guide uses one with a single step. In your project's folder, save this as \`check-readme.yaml\`, then type \`engine graph add check-readme.yaml\` and press Enter to save it to OpenEngine, as in [Save Your First Graph](./test2doc-save-your-first-graph.mdx):
 
 \`\`\`yaml
 ${GRAPH}\`\`\`
@@ -220,7 +220,7 @@ You'll see one row for each loop, with its graph, its state (*active*, *paused* 
         await step(
           `To look at one loop more closely, type \`engine loop get check-readme\` and press Enter.
 
-Along with what the list shows, you'll see the run it's doing now, if there is one, under *active run*. Once a run has finished, *latest output* shows what its last step replied. To follow the run as it goes, type \`engine run watch\` and the run ID, as in [Run Your Graph and Watch It Work](./run-your-graph-and-watch-it-work).`,
+Along with what the list shows, you'll see the run it's doing now, if there is one, under *active run*. Once a run has finished, *latest output* shows what its last step replied. To follow the run as it goes, type \`engine run watch\` and the run ID, as in [Run Your Graph and Watch It Work](./test2doc-run-your-graph-and-watch-it-work.mdx).`,
           async () => {
             const runId = await activeRun(engine)
             const { output } = await terminal.run("engine loop get check-readme")
