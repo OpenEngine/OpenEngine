@@ -98,6 +98,12 @@ def test_the_cli_e2e_suite_runs_on_pull_requests():
     assert "pull_request" in triggers
 
 
+def test_the_suite_runs_on_linux():
+    # The suite was only ever verified on macOS; CI is its first Linux run.
+    _, _, _, job = _the_cli_e2e_job()
+    assert str(job.get("runs-on", "")).startswith("ubuntu-"), job.get("runs-on")
+
+
 def test_the_job_is_not_the_apps_web_suite():
     _, _, _, job = _the_cli_e2e_job()
     commands = "\n".join(step.get("run", "") for step in job["steps"])
@@ -110,6 +116,8 @@ def test_the_job_installs_uv_and_the_python_workspace():
     assert uv is not None, "the job never installs uv"
     sync = _step_index(job, _runs(r"\buv sync\b.*--all-packages"))
     assert sync is not None, "the job never installs the Python workspace"
+    # Without --locked a stale uv.lock is silently re-resolved instead of failing.
+    assert "--locked" in job["steps"][sync]["run"]
     assert uv < sync < _the_test_step(job)
 
 
@@ -222,3 +230,13 @@ def test_a_path_filter_still_covers_everything_the_suite_drives():
         assert any(
             pattern.rstrip("*/") == directory for pattern in paths
         ), f"a change under {directory}/ would not run the CLI e2e suite: {paths}"
+
+
+def test_a_failed_ci_run_leaves_a_report_and_traces_to_upload():
+    # The uploads above only help if the suite writes what they collect: the
+    # html reporter to playwright-report, and traces of retried failures to
+    # test-results.
+    config = (ROOT / "e2e" / "playwright.config.ts").read_text()
+    assert re.search(r"reporter:[^\n]*process\.env\.CI[^\n]*\"html\"", config), config
+    assert re.search(r"retries:\s*process\.env\.CI\s*\?\s*[1-9]", config)
+    assert re.search(r'trace:\s*"(on-first-retry|retain-on-failure|on-all-retries|on)"', config)
