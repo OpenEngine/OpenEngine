@@ -11,6 +11,7 @@ from engine.domain import (
     AgentId, AgentRunId, ForgeMode, StepCompleted, StepId, StepSpec, forge_mode,
 )
 from engine.domain.ids import WorkspaceId
+from engine.graph_runtime import RunStatus, UnknownGraphError, UnknownRunError
 from engine.ports import ApprovalHandler, SourceControl
 from engine.runtime.notifications import work_order_url
 from engine.runtime.terminal_mcp import (
@@ -137,6 +138,19 @@ class TerminalMcpServer:
             store = execution.runtime.store
 
             async def claim_reported(reported: OpenedPullRequest) -> bool:
+                replacing = await store.run_for_pull_request(reported.repository, reported.number)
+                if replacing is not None and replacing != execution.run_id:
+                    try:
+                        snapshot = await execution.runtime.snapshot(replacing)
+                    except UnknownGraphError:
+                        # The holder still exists, but its status is unknown.
+                        return False
+                    except UnknownRunError:
+                        snapshot = None
+                    if snapshot is not None and snapshot.status not in (
+                        RunStatus.COMPLETED, RunStatus.FAILED,
+                    ):
+                        return False
                 holder = await store.claim_pull_request(
                     PullRequestRecord(
                         repository=reported.repository,
@@ -145,7 +159,8 @@ class TerminalMcpServer:
                         opened_at=datetime.now(UTC).isoformat(),
                         node_id=execution.node_id,
                         url=reported.url,
-                    )
+                    ),
+                    replacing=replacing,
                 )
                 return holder == execution.run_id
 
