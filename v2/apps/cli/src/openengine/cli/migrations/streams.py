@@ -47,6 +47,16 @@ class InvalidStreamConfig(MigrationError):
         super().__init__(f"{path}: {reason}")
 
 
+class ConnectFailed(MigrationError):
+    def __init__(self, url: str, cause: Exception) -> None:
+        super().__init__(f"could not connect to NATS at {url}: {cause or type(cause).__name__}")
+
+
+class JetStreamUnavailable(MigrationError):
+    def __init__(self, url: str, cause: Exception) -> None:
+        super().__init__(f"JetStream did not answer at {url}: {cause}")
+
+
 class JetStreamApiError(MigrationError):
     def __init__(self, operation: str, name: str, error: dict[str, Any]) -> None:
         self.code = error.get("err_code")
@@ -120,12 +130,11 @@ async def migrate_streams(url: str, configs: list[dict[str, Any]]) -> list[Strea
             error_cb=record,
         )
     except (OSError, ClientError, asyncio.TimeoutError) as error:
-        cause = errors[-1] if errors else error
-        raise MigrationError(f"could not connect to NATS at {url}: {cause or type(cause).__name__}") from error
+        raise ConnectFailed(url, errors[-1] if errors else error) from error
     try:
         return [await _migrate(client, config) for config in configs]
     except ClientError as error:
         # No responders means JetStream is not enabled on the server.
-        raise MigrationError(f"JetStream did not answer at {url}: {error}") from error
+        raise JetStreamUnavailable(url, error) from error
     finally:
         await client.close()
