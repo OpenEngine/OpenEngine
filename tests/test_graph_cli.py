@@ -337,6 +337,24 @@ def test_generated_table_cells_cannot_break_mdx() -> None:
     assert cell("a ${x} or <b> | `${y} <c> | d`") == r"a $\{x} or \<b> \| `${y} <c> \| d`"
 
 
+def test_mdx_escaping_reaches_loop_details_but_not_cli_output(monkeypatch) -> None:
+    from dataclasses import replace
+    from pathlib import Path
+    from runpy import run_path
+    from engine.graph_service import schema
+
+    name, field = next(iter(schema.FIELD_RULES["loop"].items()))
+    monkeypatch.setitem(schema.FIELD_RULES["loop"], name, replace(field, description="Uses {x} or <y>."))
+    root = Path(__file__).resolve().parents[1]
+    generator = run_path(str(root / "scripts/generate_cli_docs.py"))
+    original = generator["specifications"].__globals__["run_path"]
+    monkeypatch.setitem(generator["specifications"].__globals__, "run_path",
+                        lambda path: vars(schema) if Path(path).name == "schema.py" else original(path))
+    assert r"Uses \{x} or \<y>." in generator["render"]()
+    cli = generator["specifications"]()
+    assert "Uses {x} or <y>." in cli["graph"] and "Uses {x} or <y>." in cli["loop"]
+
+
 def test_documented_graph_and_loop_examples_match_current_language() -> None:
     from inspect import getdoc
     import re
