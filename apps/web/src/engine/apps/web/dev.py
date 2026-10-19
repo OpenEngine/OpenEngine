@@ -401,6 +401,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Snapshotted before `read_configuration` exports the configured logins, so
+    # every reload child reapplies the current configuration to what we
+    # inherited and a removed setting falls back instead of going stale.
+    inherited = dict(os.environ)
     try:
         loaded, _ = read_configuration(args.config)
     except (EngineConfigError, WorkflowLoadError) as error:
@@ -424,7 +428,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return built.returncode
 
     environment = child_environment(
-        os.environ, config_path=loaded.path, api_url=api_url
+        inherited, config_path=loaded.path, api_url=api_url
     )
     watch = reload_watch(
         config_path=loaded.path, workspace_root=Path(settings.workspace_root)

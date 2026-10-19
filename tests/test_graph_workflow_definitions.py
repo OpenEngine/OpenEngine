@@ -39,6 +39,7 @@ from engine.graph_runtime_langgraph.components.forge import PUBLISH_CHANGE
 from engine.graph_runtime_langgraph.components.name import NAMING_PROMPT
 from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 from engine.ports import Workspace
+from engine.runtime.config import parse_engine_config
 from engine.runtime.workflows import load_workflow_catalog
 from engine.runtime.config import SandboxConfig
 
@@ -56,7 +57,7 @@ GRAPHS = ("implementation-review-rerank",)
 def configured_checkouts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep composition checks independent of host checkouts and SSH access."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    for path in tomllib.loads(CONFIG.read_text()).get("repos", {}).values():
+    for path in parse_engine_config(tomllib.loads(CONFIG.read_text())).repos.values():
         Path(path).expanduser().mkdir(parents=True, exist_ok=True)
 
 

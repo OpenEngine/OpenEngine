@@ -447,7 +447,7 @@ engine runs [-h] [--json] [--backend NAME] [--project NAME] [--all-projects] [--
 Recurring runs of a graph, within limits.
 
 ```text
-engine loop [-h] {spec,add,get,pause,resume,list} ...
+engine loop [-h] {spec,add,get,pause,resume,stop,list} ...
 ```
 
 ### `engine loop spec`
@@ -537,6 +537,21 @@ engine loop resume [-h] [--json] [--backend NAME] [--project NAME] [--max-prs MA
 | `loop` | a loop name or id |
 | `--max-prs MAX_PRS` |  |
 | `--max-spend USD` |  |
+
+### `engine loop stop`
+
+Permanently stop the loop and its active run.
+
+```text
+engine loop stop [-h] [--json] [--backend NAME] [--project NAME] loop
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `--json` | JSON instead of readable output |
+| `--backend NAME` | the backend to use (default: the selected one) |
+| `--project NAME` | the project names resolve in (default: the backend's) |
+| `loop` | a loop name or id |
 
 ### `engine loop list`
 

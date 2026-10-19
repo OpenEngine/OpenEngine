@@ -333,3 +333,26 @@ def test_dev_keeps_its_port_independent_of_production(monkeypatch, explicit_port
     command = commands[0]
     assert command[command.index("--port") + 1] == str(explicit_port or 8000)
     assert probes == ([8000] if explicit_port is None else [])
+
+
+@pytest.mark.parametrize("variable", ["GH_CONFIG_DIR", "CLAUDE_CONFIG_DIR"])
+def test_children_inherit_the_environment_before_configured_logins(monkeypatch, variable):
+    from engine.runtime import EngineConfig
+
+    monkeypatch.delenv(variable, raising=False)
+
+    def read_configuration(_):
+        os.environ[variable] = "/configured/login"
+        return SimpleNamespace(config=EngineConfig(), path=None), None
+
+    monkeypatch.setattr(dev, "read_configuration", read_configuration)
+    monkeypatch.setattr(dev, "chosen_port", lambda host, port: port)
+    environments = []
+    monkeypatch.setattr(dev, "start", lambda name, command, env: environments.append(env))
+    monkeypatch.setattr(dev, "describe_loaded_config", lambda _: "test config")
+    monkeypatch.setattr(dev, "watch_dependencies", lambda *_: None)
+    monkeypatch.setattr(dev, "supervise", lambda *_: 0)
+    assert dev.main(["--no-web"]) == 0
+    # A reload child applies the current setting itself; removing it must not
+    # leave the supervisor's earlier export behind.
+    assert variable not in environments[0]

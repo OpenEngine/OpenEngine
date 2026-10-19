@@ -26,7 +26,7 @@ provider = "slack"
 # config_dir = "~/repo/work/.claude-work"
 
 # Keep global approvals manual; engine repo trust opts individual repositories in.
-# [trusted_repos] maps [repos] names to true (auto-approve) or false (manual).
+# Set trusted = true (auto-approve) or false (manual) in each [repos."owner/name"].
 # A saved false decision suppresses the first-run trust prompt.
 [approvals]
 auto_approve = false
@@ -45,14 +45,21 @@ backend = "process"
 # [onboarding]
 # directory = "~/code/work"
 
-# Review-request webhooks start this graph (also used by `engine go review`).
 [github]
+# Review-request webhooks start this graph (also used by `engine go review`).
 review_request_workflow = "review"
+# The gh login source control and agents use (GH_CONFIG_DIR). Defaults to gh's own
+# location: $XDG_CONFIG_HOME/gh when set, otherwise ~/.config/gh.
+# gh_config_dir = "~/.config/gh-work"
 
 # Defaults resolved when a review run starts; explicit run inputs win.
 [pull_requests]
 auto_approve_green = false
 
-# Optional overrides keyed by names already declared under [repos].
-# [pull_requests.repos]
-# "owner/name" = true
+# Optional repository configuration (slug keys accept webhooks by default):
+# [repos."owner/name"]
+# path = "~/code/name"
+# auto_approve_green = true
+# trusted = false
+# default = true
+# webhooks = false # opt out of webhook deliveries

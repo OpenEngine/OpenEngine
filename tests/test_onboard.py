@@ -35,7 +35,7 @@ def test_atomic_idempotent_config_preserves_content(tmp_path):
     onboard.persist_repository(config, 'owner/repo', str(tmp_path / 'repo'), 'disconnected')
     first = config.read_text()
     assert original in first
-    assert tomllib.loads(first)['repo_modes'] == {'owner/repo': 'disconnected'}
+    assert tomllib.loads(first)['repos']['owner/repo'] == {'path': str(tmp_path / 'repo'), 'mode': 'disconnected'}
     stamp = config.stat().st_mtime_ns
     onboard.persist_repository(config, 'owner/repo', str(tmp_path / 'repo'), 'connected')
     assert config.read_text() == first
@@ -55,7 +55,7 @@ def test_new_config_uses_machine_path(tmp_path, monkeypatch):
     service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), None, AsyncMock())
     assert service.config_path == tmp_path / 'xdg/openengine/engine.toml'
     onboard.persist_repository(service.config_path, 'owner/repo', str(tmp_path / 'repo'), 'connected')
-    assert tomllib.loads(service.config_path.read_text())['repos']['owner/repo'] == str(tmp_path / 'repo')
+    assert tomllib.loads(service.config_path.read_text())['repos']['owner/repo']['path'] == str(tmp_path / 'repo')
 
 
 @pytest.mark.parametrize('failure', ['git', 'agent'])
@@ -121,7 +121,7 @@ def test_job_reuses_checkout_persists_applies_and_is_idempotent(tmp_path, monkey
     assert registry.snapshot.repos == {'owner/repo': str(target)}
     assert registry.snapshot.repo_modes == {'owner/repo': 'disconnected'}
     assert registry.lookup('owner/repo')[1] is trusted
-    assert tomllib.loads(config.read_text())['repos'] == dict(registry.snapshot.repos)
+    assert onboard.parse_engine_config(tomllib.loads(config.read_text())).repos == dict(registry.snapshot.repos)
     starters.assert_awaited_once_with('owner/repo', 'codex')
     clone.assert_called_once()
     if existing:
@@ -488,7 +488,7 @@ def test_add_gitlab_local_or_remote(tmp_path, monkeypatch, local):
         await service.close()
         assert service.jobs[job['id']]['status'] == 'complete'
     asyncio.run(run())
-    assert tomllib.loads(config.read_text())['repos'] == {'gitlab.com/group/sub/repo': str(target)}
+    assert tomllib.loads(config.read_text())['repos'] == {'gitlab.com/group/sub/repo': {'path': str(target)}}
     assert clone.call_args.kwargs['clone_urls'] == {'gitlab.com/group/sub/repo': str(target) if local else origin}
 
 
@@ -517,8 +517,7 @@ def test_local_only_onboarding_and_trust(tmp_path, monkeypatch, origin, trust_fi
         assert service.repository_trust(str(target))['trusted'] is None
         assert service.repository_trust(str(target), True)['trusted'] is True
         assert tomllib.loads(config.read_text()) == {
-            'repos': {'demo': str(target)}, 'repo_modes': {'demo': 'disconnected'},
-            'trusted_repos': {'demo': True},
+            'repos': {'demo': {'path': str(target), 'mode': 'disconnected', 'trusted': True}},
         }
         assert service.repository_trust(str(target))['trusted'] is True
 
@@ -532,8 +531,8 @@ def test_local_only_onboarding_and_trust(tmp_path, monkeypatch, origin, trust_fi
     clone.assert_not_called()
     assert registry.snapshot.disconnected == frozenset({target})
     saved = tomllib.loads(config.read_text())
-    assert saved["repos"] == {"demo": str(target)}
-    assert saved["repo_modes"] == {"demo": "disconnected"}
+    assert saved["repos"]["demo"]["path"] == str(target)
+    assert saved["repos"]["demo"]["mode"] == "disconnected"
 
 
 def test_trust_reserves_active_onboarding_names(tmp_path, monkeypatch):
@@ -575,8 +574,8 @@ def test_trust_reserves_active_onboarding_names(tmp_path, monkeypatch):
 
     asyncio.run(run())
     saved = tomllib.loads(config.read_text())
-    assert saved['repos'] == registry.snapshot.repos == {'demo': str(first)}
-    assert saved['repo_modes'] == {'demo': 'disconnected'}
+    assert onboard.parse_engine_config(saved).repos == registry.snapshot.repos == {'demo': str(first)}
+    assert saved['repos']['demo']['mode'] == 'disconnected'
     assert 'trusted_repos' not in saved
     with pytest.raises(onboard.OnboardingError, match="conflicts with"):
         service.repository_trust(str(second), True)
@@ -645,3 +644,41 @@ def test_trust_api_surfaces_collision_and_recovery(tmp_path, monkeypatch, method
 
     asyncio.run(run())
     assert not onboarding.config_path.exists()
+
+
+def test_update_nested_repository_preserves_other_settings(tmp_path):
+    config = tmp_path / 'engine.toml'
+    config.write_text('''[repos."owner/repo"]
+path = "/repo"
+mode = "disconnected"
+trusted = false
+webhooks = false
+default = true
+auto_approve_green = true
+''')
+    onboard.persist_repository(config, 'owner/repo', '/repo', 'connected', True)
+    assert tomllib.loads(config.read_text()) == {'repos': {'owner/repo': {
+        'path': '/repo', 'mode': 'disconnected', 'trusted': True,
+        'webhooks': False, 'default': True, 'auto_approve_green': True,
+    }}}
+
+
+def test_update_legacy_repository_moves_only_its_policy(tmp_path):
+    config = tmp_path / 'engine.toml'
+    config.write_text('''[repos]
+"owner/repo" = "/repo"
+other = "/other" # preserve
+[repo_modes]
+"owner/repo" = "disconnected"
+other = "connected"
+[trusted_repos]
+"owner/repo" = false
+other = true
+''')
+    onboard.persist_repository(config, 'owner/repo', '/repo', 'connected', True)
+    saved = tomllib.loads(config.read_text())
+    assert saved['repos']['owner/repo'] == {'path': '/repo', 'mode': 'disconnected', 'trusted': True}
+    assert saved['repos']['other'] == '/other'
+    assert saved['repo_modes'] == {'other': 'connected'}
+    assert saved['trusted_repos'] == {'other': True}
+    assert '# preserve' in config.read_text()

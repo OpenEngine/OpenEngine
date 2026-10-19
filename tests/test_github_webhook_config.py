@@ -155,11 +155,10 @@ def test_check_reports_access_for_each_repository(tmp_path, monkeypatch, capsys,
     from engine.runtime import Capabilities
 
     loaded = _loaded(tmp_path, '''
-[github]
-repositories = ["acme/api", "other/web"]
-[repos]
-"acme/api" = "/api"
-"other/web" = "/web"
+[repos."acme/api"]
+path = "/api"
+[repos."other/web"]
+path = "/web"
 ''')
     source = SimpleNamespace(
         authenticated_login=AsyncMock(return_value="engine"),

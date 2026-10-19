@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Consolidate repository settings in `[repos."owner/name"]` tables. Slug keys
+  accept webhooks by default; set `webhooks = false` to opt out.
+- Legacy `[repo_modes]`, `[trusted_repos]`, `[pull_requests.repos]`,
+  `github.repository` / `github.repositories`, and `work_orders.repository`
+  still load with deprecation warnings and will be removed in the next release.
+  Legacy string checkout paths remain accepted silently.
+
 ## [1.9.1](https://github.com/OpenEngine/OpenEngine/compare/v1.9.0...v1.9.1) (2026-10-15)
 
 
