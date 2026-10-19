@@ -1,0 +1,58 @@
+- [ ] Write the CLI up command 
+- [ ] Boot NATS on up 
+
+I'd like to implement these two todos in the existing framing of v2
+
+---
+
+can we bundle a nats-server binary easily?
+
+---
+
+Let's go with 1
+
+---
+
+it should be `oe up`
+
+---
+
+<task-notification>
+<task-id>b18ngolly</task-id>
+<tool-use-id>toolu_014memc89AedVHLUxLdDuLXk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-shea-code-engine/f4638814-26ca-48f2-85d8-411df03c34fa/tasks/b18ngolly.output</output-file>
+<status>completed</status>
+<summary>Background command "Boot oe up, query JetStream, then interrupt" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+structure the cli more like this
+
+
+
+<pasted_content id="17c3">
+apps/
+  cli/                         # Produces the `oe` executable
+    commands/
+      up
+      down
+      status
+      logs
+      jobs/
+      graphs/
+      loops/
+      workspaces/
+      connections/
+    config/                    # Local settings, connection profiles
+    output/                    # Tables, JSON, progress rendering
+
+  supervisor/                  # Background process started by `oe up`
+    processes/
+    readiness/
+    shutdown/
+</pasted_content id="17c3">
+
+---
+
+pytest cache and venv need gitignored
