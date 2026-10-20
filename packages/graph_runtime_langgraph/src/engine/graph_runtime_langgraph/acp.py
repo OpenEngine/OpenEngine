@@ -794,6 +794,14 @@ class ACPNode:
                         client, session, turn = await self._open_turn(
                             execution, key, None, cwd, tuple(mcp_servers),
                         )
+                        await execution.emit(
+                            EventKind.CONVERSATION_STARTED,
+                            {
+                                "agent": self.agent,
+                                "sessionId": session.session_id,
+                                "resumed": False,
+                            },
+                        )
                         continue
                     replayed = None
                     if isinstance(result, (StepCompleted, RunFailed)):

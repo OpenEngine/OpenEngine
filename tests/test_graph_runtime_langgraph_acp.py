@@ -2131,8 +2131,13 @@ def test_steering_replay_fits_a_capped_agents_context_window(
                         payload={"name": "Editing files", "content": "diff" * 180_000},
                     ))
             await runtime.steer(run.run_id, follow_up, node_id=IMPLEMENTATION)
-            await until(log, run.run_id, "run.finished", count=2)
+            events = await until(log, run.run_id, "run.finished", count=2)
+            started.extend(
+                e.payload["sessionId"] for e in events
+                if e.kind.value == "conversation.started"
+            )
 
+    started: list[str] = []
     asyncio.run(scenario())
 
     sent_prompts = prompts(tmp_path)
@@ -2145,6 +2150,8 @@ def test_steering_replay_fits_a_capped_agents_context_window(
         assert DONE in replay
         assert "tool.call:" not in replay
         assert len(sent(tmp_path, "session/new")) == 3
+        # The event log names the session that carries the rest of the turn.
+        assert len(started) == 3 and len(set(started)) == 3
     else:
         assert len(sent_prompts) == 2
         assert "tool.call:" in replay
