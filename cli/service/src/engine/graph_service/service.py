@@ -1191,10 +1191,16 @@ class GraphService:
     def _listing_urls(url: str) -> tuple[str, str]:
         """Where this url's server says which models it runs: Ollama's `/api/ps`
         at the server's root -- the `/v1` a chat url carries is not part of that
-        address -- and the OpenAI-style `/models` under the url as given."""
-        trimmed = url.rstrip("/")
-        root = trimmed[: -len("/v1")] if trimmed.endswith("/v1") else trimmed
-        return f"{root}/api/ps", f"{trimmed}/models"
+        address -- and the OpenAI-style `/models` under the url as given. Both
+        are built on the url's path, so a query it carries is kept, not
+        appended to."""
+        parts = urlsplit(url)
+        path = parts.path.rstrip("/")
+        root = path[: -len("/v1")] if path.endswith("/v1") else path
+        return (
+            urlunsplit(parts._replace(path=f"{root}/api/ps")),
+            urlunsplit(parts._replace(path=f"{path}/models")),
+        )
 
     async def _probe_listing(
         self, client: httpx.AsyncClient, urls: tuple[str, str], rows: list[AgentRow],

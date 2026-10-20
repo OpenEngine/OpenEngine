@@ -959,6 +959,31 @@ def test_an_endpoint_without_ollamas_ps_is_asked_for_its_openai_model_list(tmp_p
     asyncio.run(scenario())
 
 
+def test_an_endpoint_url_with_a_query_is_probed_on_its_path_with_the_query_kept(tmp_path: Path) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return openai_models("qwen3-coder")
+        return httpx.Response(404)
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent(
+                "opencode", name="qwen", model="qwen3-coder", url="https://gpu/v1?api-version=2024-06-01",
+            )
+            await service.poll_endpoints()
+            health = health_of(service, "qwen")
+            assert health["responding"] is True
+            assert health["modelLoaded"] is True
+            assert server.probed() == [
+                "https://gpu/api/ps?api-version=2024-06-01",
+                "https://gpu/v1/models?api-version=2024-06-01",
+            ]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(("models", "loaded"), [
     (openai_models("qwen3-coder"), True),
     (openai_models("llama3.2"), False),
