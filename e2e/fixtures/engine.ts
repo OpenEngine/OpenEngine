@@ -99,8 +99,13 @@ export type AgentScript = {
 
 type AgentDetection = { claudeLogin: boolean; npx: boolean }
 
+/** Where Claude Code keeps its login and session transcripts. */
+export function claudeConfigDir() {
+  return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")
+}
+
 function detectAgent(): AgentDetection {
-  const claudeConfig = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")
+  const claudeConfig = claudeConfigDir()
   let npx = true
   try {
     execFileSync("npx", ["--version"], { stdio: "ignore" })

@@ -1,7 +1,6 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
-import os from "node:os"
 import path from "node:path"
-import { test, expect, claudeModel, CHEAPEST_CLAUDE_MODEL, resolveAgentMode } from "../fixtures/engine.ts"
+import { test, expect, claudeConfigDir, claudeModel, CHEAPEST_CLAUDE_MODEL, resolveAgentMode } from "../fixtures/engine.ts"
 
 /** A one-step graph any agent can finish quickly, and nothing it does can be wrong. */
 const HELLO = `apiVersion: openengine.cc/v1
@@ -19,9 +18,12 @@ function helloWith(name: string, model: string | undefined) {
   return HELLO.replace("name: hello", `name: ${name}`) + (model ? `    model: ${model}\n` : "")
 }
 
-/** Every model Claude Code's transcripts say answered in `workspace`. */
+/**
+ * Every model Claude Code's transcripts say answered in `workspace`, less the
+ * `<synthetic>` entries Claude Code writes itself for errors such as a rate limit.
+ */
 function transcriptModels(workspace: string) {
-  const projects = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"), "projects")
+  const projects = path.join(claudeConfigDir(), "projects")
   const models = new Set<string>()
   for (const cwd of new Set([workspace, realpathSync(workspace)])) {
     const directory = path.join(projects, cwd.replace(/[^a-zA-Z0-9]/g, "-"))
@@ -30,7 +32,8 @@ function transcriptModels(workspace: string) {
       for (const line of readFileSync(path.join(directory, file), "utf8").split("\n")) {
         if (!line.trim()) continue
         const entry = JSON.parse(line)
-        if (entry.type === "assistant" && entry.message?.model) models.add(entry.message.model)
+        const model = entry.type === "assistant" ? entry.message?.model : undefined
+        if (model && model !== "<synthetic>") models.add(model)
       }
     }
   }
