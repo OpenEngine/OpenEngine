@@ -29,7 +29,13 @@ function AgentEntry({ agent }: { agent: AgentRow }) {
         {agent.model && <span className="agent-model">{agent.model}</span>}
       </div>
       {/* Only an agent with an endpoint has anything to say about it; a builtin
-          or hosted row would be reading a health out of an empty field. */}
+          or hosted row would be reading a health out of an empty field. A URL
+          agent the poller has not reached yet is still being checked. */}
+      {health === null && agent.url && (
+        <div className="agent-health">
+          <span className="chip">Checking endpoint</span>
+        </div>
+      )}
       {health !== null && (
         <div className="agent-health">
           <span className={`chip ${health.responding ? "" : "chip-flame"}`}>
@@ -50,40 +56,63 @@ export function AgentList() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
+    let request: AbortController | undefined;
     // The list keeps whatever it printed while a refresh is in flight, so a
-    // row moves only once the server has actually re-answered.
+    // row moves only once the server has actually re-answered. A new read
+    // replaces one still in flight rather than racing it.
     const load = () => {
-      getAgents()
+      request?.abort();
+      const controller = new AbortController();
+      request = controller;
+      getAgents(controller.signal)
         .then((agents) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setAgents(agents);
           setError("");
         })
         .catch((reason: Error) => {
-          if (!cancelled) setError(reason.message);
+          if (!controller.signal.aborted) setError(reason.message);
         });
     };
     load();
     // The poller re-reads every endpoint on its 30-second beat, so the list
-    // reads on the same beat: a printed reading is at most one beat old.
-    const timer = setInterval(load, 30_000);
+    // reads on the same beat: a printed reading is at most one beat old. A
+    // hidden tab skips the beat and reads again as soon as it is shown.
+    const timer = setInterval(() => {
+      if (!document.hidden) load();
+    }, 30_000);
+    const onVisible = () => {
+      if (!document.hidden) load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      cancelled = true;
+      request?.abort();
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
-  if (error) return <p className="notice">Could not read the agents: {error}</p>;
-  if (!agents) return null;
-  if (agents.length === 0) return <p className="state-inline">No agents are registered.</p>;
+  // A failed refresh sits beside the last list it printed, not in its place.
+  const notice = error && <p className="notice">Could not read the agents: {error}</p>;
+  if (!agents) return notice || null;
+  if (agents.length === 0) {
+    return (
+      <>
+        {notice}
+        <p className="state-inline">No agents are registered.</p>
+      </>
+    );
+  }
 
   return (
-    <ul className="agent-list">
-      {agents.map((agent) => (
-        <AgentEntry agent={agent} key={agent.name} />
-      ))}
-    </ul>
+    <>
+      {notice}
+      <ul className="agent-list">
+        {agents.map((agent) => (
+          <AgentEntry agent={agent} key={agent.name} />
+        ))}
+      </ul>
+    </>
   );
 }
 

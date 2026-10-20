@@ -6,6 +6,7 @@ checkpoints -- the same path the daemon takes, minus HTTP and the WorkOrder row.
 """
 
 import asyncio
+import dataclasses
 import json
 import sqlite3
 import sys
@@ -1642,5 +1643,86 @@ def test_the_poller_does_not_send_probes_through_a_proxy_from_the_daemons_enviro
                 assert proxied == [], f"the probe went through the environment's proxy: {proxied}"
         finally:
             server.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_url_with_a_user_name_or_password_is_refused(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            with pytest.raises(ServiceError) as refused:
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://ops:hunter2-secret@gpu:11434/v1")
+            assert "hunter2-secret" not in str(refused.value)
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_probe_never_writes_the_endpoints_credentials_to_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A row stored before credentials were refused is still probed, but its
+    user:password goes out as basic auth and never into a log line."""
+    seen: list[httpx.Request] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/ps":
+            raise RuntimeError("the probe broke")
+        return httpx.Response(200, json={"data": []})
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(answer)) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            row = service.store.agent("qwen")
+            assert row is not None
+            service.store.upsert_agent(dataclasses.replace(row, url="http://ops:hunter2-secret@gpu:11434/v1"))
+            with caplog.at_level("DEBUG"):
+                await service.poll_endpoints()
+            assert seen and all("hunter2-secret" not in str(request.url) for request in seen)
+            assert "hunter2-secret" not in caplog.text
+            assert "hunter2-secret" not in json.dumps(service.agents_json())
+
+    asyncio.run(scenario())
+
+
+def test_a_poll_pass_started_before_an_agent_was_re_added_with_another_model_does_not_keep_the_old_match(
+    tmp_path: Path,
+) -> None:
+    probed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        probed.set()
+        await release.wait()
+        return ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(handle)) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            poll = asyncio.create_task(service.poll_endpoints())
+            await asyncio.wait_for(probed.wait(), 5)
+            await service.add_agent(
+                "opencode", name="qwen", model="llama3.2", url="http://gpu:11434/v1", overwrite=True,
+            )
+            release.set()
+            await poll
+            assert health_of(service, "qwen") is None, (
+                "the re-added agent shows a reading matched against its old model"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_a_bad_ca_bundle_in_the_environment_does_not_stop_the_poller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))
+    server = ModelServer(lambda request: ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404))
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            assert health_of(service, "qwen") == {"responding": True, "modelLoaded": True}
 
     asyncio.run(scenario())

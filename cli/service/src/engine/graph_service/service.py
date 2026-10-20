@@ -28,13 +28,14 @@ import httpx
 import json
 import logging
 import re
+import ssl
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import yaml
 from engine.runtime.repositories import RepositoryRegistry
@@ -275,6 +276,7 @@ class GraphService:
         self._scheduler: asyncio.Task[None] | None = None
         self._endpoint_poller: asyncio.Task[None] | None = None
         self._endpoint_health: dict[str, dict[str, Any]] = {}
+        self._endpoint_tls: ssl.SSLContext | None = None
         self._background: set[asyncio.Task[Any]] = set()
 
     @property
@@ -339,7 +341,8 @@ class GraphService:
         row = row or self.store.agent(name)
         if row is not None:
             return {
-                "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
+                # A row stored before userinfo was refused must not serve it.
+                "name": row.name, "kind": row.kind, "model": row.model, "url": _without_userinfo(row.url),
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
                 # Only an endpoint agent has a health; a row without a url has
                 # nothing the poller could have read, so nothing to serve.
@@ -371,6 +374,10 @@ class GraphService:
         if url and _carries_credential(url):
             # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
             raise ServiceError("url must not carry an api key in its query string")
+        if url and (urlsplit(url).username or urlsplit(url).password):
+            # Same reason: a user:password@ would be served by the agents API and
+            # written to the log by every probe of the endpoint.
+            raise ServiceError("url must not carry a user name or password")
         if name in self._builtin_agents:
             raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
         async with self._lock:
@@ -1143,24 +1150,42 @@ class GraphService:
         for row in rows:
             listings.setdefault(self._listing_urls(row.url), []).append(row)
         # trust_env off: a probe goes to the url the agent was given, and the
-        # daemon's environment must not be able to route it through a proxy.
+        # daemon's environment must not be able to route it through a proxy. The
+        # environment's CA bundle (SSL_CERT_FILE/SSL_CERT_DIR) still applies, so
+        # an endpoint behind a private CA verifies as it does for opencode.
         client = httpx.AsyncClient(
-            transport=self._endpoint_transport, timeout=httpx.Timeout(5.0), trust_env=False
+            transport=self._endpoint_transport,
+            timeout=httpx.Timeout(5.0),
+            trust_env=False,
+            verify=self._endpoint_tls_context(),
         )
         probes = (self._probe_listing(client, urls, group) for urls, group in listings.items())
         try:
-            readings: dict[str, tuple[str, dict[str, Any]]] = {}
+            readings: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
             for reading in await asyncio.gather(*probes):
                 readings.update(reading)
         finally:
             await client.aclose()
         async with self._lock:
             # The pass may have started before an agent was re-added or removed,
-            # so only a reading of the url the agent still has is written back.
-            current = {row.name: row.url for row in self.store.agents()}
+            # so a reading is written back only while the agent still has the
+            # url that was probed and the model it was matched against.
+            current = {row.name: (row.url, row.model) for row in self.store.agents()}
             for name, (probed, reading) in readings.items():
                 if current.get(name) == probed:
                     self._endpoint_health[name] = reading
+
+    def _endpoint_tls_context(self) -> ssl.SSLContext:
+        """The CA bundle probes verify against, built once: the environment's
+        when it names a readable one, certifi's otherwise, so a bad
+        SSL_CERT_FILE cannot stop every pass."""
+        if self._endpoint_tls is None:
+            try:
+                self._endpoint_tls = httpx.create_ssl_context(trust_env=True)
+            except (OSError, ssl.SSLError):
+                log.exception("could not load the environment's CA bundle; probes use the default one")
+                self._endpoint_tls = httpx.create_ssl_context(trust_env=False)
+        return self._endpoint_tls
 
     @staticmethod
     def _listing_urls(url: str) -> tuple[str, str]:
@@ -1173,24 +1198,24 @@ class GraphService:
 
     async def _probe_listing(
         self, client: httpx.AsyncClient, urls: tuple[str, str], rows: list[AgentRow],
-    ) -> dict[str, tuple[str, dict[str, Any]]]:
+    ) -> dict[str, tuple[tuple[str, str], dict[str, Any]]]:
         """One server's share of a pass: its listings fetched once, then every
         agent on it matched against them."""
         try:
             responding, names = await self._listing_names(client, urls)
         except Exception:  # one server must never stop the rest of the pass
-            log.exception("could not probe the server at %s", urls[0])
+            log.exception("could not probe the server at %s", _without_userinfo(urls[0]))
             return {
-                row.name: (row.url, {"responding": False, "modelLoaded": None}) for row in rows
+                row.name: ((row.url, row.model), {"responding": False, "modelLoaded": None})
+                for row in rows
             }
-        readings: dict[str, tuple[str, dict[str, Any]]] = {}
+        readings: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
         for row in rows:
             if names is None:
-                readings[row.name] = (row.url, {"responding": responding, "modelLoaded": None})
+                reading = {"responding": responding, "modelLoaded": None}
             else:
-                readings[row.name] = (
-                    row.url, {"responding": True, "modelLoaded": model_loaded(row.model, names)}
-                )
+                reading = {"responding": True, "modelLoaded": model_loaded(row.model, names)}
+            readings[row.name] = ((row.url, row.model), reading)
         return readings
 
     async def _listing_names(
@@ -1230,8 +1255,13 @@ class GraphService:
         """GET `url`, reading no more than `_probe_body_cap` bytes of its body.
 
         A body the server declared to be bigger than the cap is not read at all.
+        A user:password in `url` is sent as basic auth, never as part of the
+        url, so httpx's request log line cannot print it.
         """
-        async with client.stream("GET", url) as response:
+        target = httpx.URL(url)
+        auth = httpx.BasicAuth(target.username, target.password) if target.userinfo else None
+        target = target.copy_with(username=None, password=None)
+        async with client.stream("GET", target, auth=auth) as response:
             declared = response.headers.get("content-length")
             if declared is not None and declared.isdigit() and int(declared) > self._probe_body_cap:
                 return response.status_code, b""
@@ -1770,6 +1800,12 @@ def session_model(row: AgentRow) -> str:
     return f"{OPENCODE_URL_PROVIDER}/{row.model}" if row.url else row.model
 
 
+def _without_userinfo(url: str) -> str:
+    """`url` with any user:password@ removed, for a log line."""
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+
+
 def model_loaded(model: str, listed: Sequence[str]) -> bool:
     """Whether `model` is among `listed`.
 
@@ -1895,7 +1931,6 @@ __all__ = [
     "StartRun",
     "Unavailable",
     "auth_required",
-    "model_loaded",
     "opencode_config",
     "session_model",
 ]
