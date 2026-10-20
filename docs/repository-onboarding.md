@@ -143,3 +143,49 @@ live UI as part of rollout.
 
 Registering a repository does not configure its GitHub event routing;
 multi-repository webhooks are tracked in #709.
+
+## Dedicated GitHub accounts and authenticated CLI onboarding
+
+With GitHub login enabled, onboarding requires an operator browser session or a
+separate `ENGINE_ONBOARDING_TOKEN`. Set this secret in the daemon environment or
+in `.env` beside its selected `engine.toml`. Use at least 32 non-whitespace
+characters and a different value from `ENGINE_SERVICE_TOKEN`. An unset token
+disables bearer onboarding; using the service token as the onboarding token is
+rejected. File-based secrets are reread on each request for rotation.
+
+This is an operator credential: it explicitly permits cloning, rewriting repository
+configuration, registering starter graphs and setting `trusted=true` through
+onboarding. It authorizes only `POST /api/repositories/onboard` and
+`GET /api/repositories/onboard/{job_id}`. Keep it out of agents and general service
+clients. The general service token cannot onboard repositories or write repository
+trust through `/api/v1/repositories/trust`; use the browser for later trust changes.
+Host and browser Origin checks still apply.
+
+Set the same onboarding secret in your CLI environment, then configure a dedicated
+backend without changing the work-order backend:
+
+```sh
+engine backend add onboarding http://localhost:4364 --token-env ENGINE_ONBOARDING_TOKEN
+engine repo add git@github.com:owner/repo.git --backend onboarding
+```
+
+Use your daemon's actual URL and port. Continue using the regular backend and
+`ENGINE_SERVICE_TOKEN` for work orders.
+
+For a dedicated GitHub account, configure both the GitHub CLI login directory and
+its SSH private key in the daemon's `engine.toml`:
+
+```toml
+[github]
+gh_config_dir = "~/.config/gh-work"
+ssh_key = "~/.ssh/id_ed25519_work"
+```
+
+`ssh_key` must name an existing file. It expands `~` and resolves relative paths
+beside the configuration file. The daemon exports a shell-quoted
+`GIT_SSH_COMMAND` with `IdentitiesOnly=yes` and `BatchMode=yes` before cloning;
+workspace fetches and pushes inherit it. The key must work without an interactive
+passphrase prompt. When omitted, the existing SSH environment is preserved.
+Restart the daemon after changing these settings. Clone failures report git's
+reason with URLs and embedded credentials redacted; publickey denials point to
+`[github] ssh_key`, and timeouts are named explicitly.

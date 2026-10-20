@@ -206,3 +206,65 @@ def test_startup_local_only_repository(tmp_path, monkeypatch):
     assert loaded.config.repos == {'demo': str(target)}
     assert web_main._repository_projects(loaded) == {}
     assert web_main._login_repositories(loaded, {}) == ()
+
+
+@pytest.mark.parametrize('reason', ['Permission denied (publickey).', 'repository not found'])
+def test_clone_error_redacts_urls_and_traceback(tmp_path, monkeypatch, reason):
+    import traceback
+    secret = 'super-secret-password'
+    url = f'https://user:{secret}@github.com/owner/repo.git?token=query-secret'
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, ['git', 'clone', url], stderr=f"fatal: {url}: {reason}")
+    monkeypatch.setattr(repositories.subprocess, 'run', fail)
+    with pytest.raises(EngineConfigError) as caught:
+        repositories.ensure_repository_checkouts({'owner/repo': str(tmp_path / 'repo')}, clone_urls={'owner/repo': url})
+    message = ''.join(traceback.format_exception(caught.value))
+    assert reason in message
+    assert secret not in message
+    assert 'query-secret' not in message
+    if 'publickey' in reason:
+        assert '[github] ssh_key' in message
+
+
+def test_clone_timeout_names_timeout(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise subprocess.TimeoutExpired('git', 300)
+    monkeypatch.setattr(repositories.subprocess, 'run', fail)
+    with pytest.raises(EngineConfigError, match='timed out'):
+        repositories.ensure_repository_checkouts({'owner/repo': str(tmp_path / 'repo')})
+
+
+def test_web_exports_shell_quoted_ssh_key_before_clone(tmp_path, monkeypatch):
+    import os
+    import shlex
+    key = tmp_path / "work key';$x"
+    key.write_text('private key')
+    config = tmp_path / 'engine.toml'
+    config.write_text('[github]\nssh_key = "work key\';$x"\n')
+    monkeypatch.setenv('GIT_SSH_COMMAND', 'old')
+    def clone(*args):
+        assert shlex.split(os.environ['GIT_SSH_COMMAND']) == ['ssh', '-i', str(key), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes']
+    monkeypatch.setattr(web_main, 'ensure_repository_checkouts', clone)
+    loaded, _ = web_main.read_configuration(config)
+    assert loaded.ssh_key == key
+
+
+@pytest.mark.parametrize('value', ['missing', '.', '', 123])
+def test_ssh_key_must_be_nonblank_existing_file(tmp_path, value):
+    import json
+    config = tmp_path / 'engine.toml'
+    config.write_text('[github]\nssh_key = ' + json.dumps(value) + '\n')
+    with pytest.raises(EngineConfigError, match='github.ssh_key'):
+        load_engine_config(config)
+
+
+@pytest.mark.parametrize('inherited', [None, 'ssh -i existing'])
+def test_unconfigured_ssh_key_preserves_environment(tmp_path, monkeypatch, inherited):
+    import os
+    monkeypatch.delenv('GIT_SSH_COMMAND', raising=False)
+    if inherited:
+        monkeypatch.setenv('GIT_SSH_COMMAND', inherited)
+    config = tmp_path / 'engine.toml'
+    config.write_text('')
+    web_main.read_configuration(config)
+    assert os.environ.get('GIT_SSH_COMMAND') == inherited

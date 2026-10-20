@@ -727,3 +727,21 @@ def test_workspace_hint_preserves_explicit_backend(monkeypatch, capsys, outcome)
     assert shlex.split(hint.removeprefix("Workspace details: ")) == [
         "engine", "run", "get", "run-1", "--backend", "remote-machine",
     ]
+
+
+def test_onboarding_401_explains_separate_credential(monkeypatch, capsys):
+    serve(monkeypatch, HTTPError('http://localhost/api/repositories/onboard', 401, '', {}, io.BytesIO(b'{}')))
+    assert main(['repo', 'add', 'owner/repo']) == 1
+    assert 'ENGINE_ONBOARDING_TOKEN' in capsys.readouterr().err
+
+
+def test_onboard_uses_separate_backend_token_for_submit_and_poll(monkeypatch):
+    monkeypatch.setenv('ENGINE_SERVICE_TOKEN', 's' * 40)
+    monkeypatch.setenv('ENGINE_ONBOARDING_TOKEN', 'o' * 40)
+    assert main(['backend', 'add', 'onboarding', 'http://localhost:4364', '--token-env', 'ENGINE_ONBOARDING_TOKEN']) == 0
+    backend = serve(monkeypatch,
+        {'id': 'job1', 'status': 'cloning', 'message': 'Cloning'},
+        {'id': 'job1', 'status': 'complete', 'message': 'Repository onboarded', 'repository': 'owner/repo', 'path': '/repo'},
+    )
+    assert main(['repo', 'add', 'owner/repo', '--backend', 'onboarding']) == 0
+    assert [request['authorization'] for request in backend.requests] == ['Bearer ' + 'o' * 40] * 2
