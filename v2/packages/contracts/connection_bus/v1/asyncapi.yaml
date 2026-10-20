@@ -13,7 +13,7 @@ info:
     > README's *Implementation status*.
 
     ## Versions
-    - AsyncAPI format: `3.0.0` (the `asyncapi` field).
+    - AsyncAPI format: `3.1.0` (the `asyncapi` field).
     - Contract release: `info.version`, semver. Minor releases only add.
     - Subject namespace: `v1` in `oe.v1.cxn.…`. It
       changes only for an incompatible release, which is served side by side.

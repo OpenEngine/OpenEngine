@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import reference
 import validate
 from validate import CONTRACTS, SERVICES, load_contract, validate_message
 
@@ -147,6 +148,14 @@ def test_no_streams_or_consumers_are_added() -> None:
     ]
     consumers = STREAMS.parent / "consumers"
     assert [path.name for path in consumers.iterdir()] == ["README.md"]
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_checked_in_reference_is_current(service: str) -> None:
+    path = reference.reference_path(service)
+    assert path.exists() and path.read_text() == reference.page(service), (
+        f"{path.relative_to(CONTRACTS)} is stale: run `uv run python packages/contracts/tooling/reference.py`"
+    )
 
 
 # Malformed variants of valid CXN examples. Each must be rejected.
