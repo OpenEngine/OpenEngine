@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bz06chm7z</task-id>
+<tool-use-id>toolu_01WGoxEXe8VG2CqRKmEPxwgh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-shea-code-openengine/2a7ff85d-b3b9-4417-a4a7-4f9b5d89105b/tasks/bz06chm7z.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the chain again with tool-call instrumentation" completed (exit code 0)</summary>
+</task-notification>
