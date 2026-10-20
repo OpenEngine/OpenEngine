@@ -176,6 +176,11 @@ async def answer_permission(request: ACPPermissionRequest) -> ACPPermissionOutco
     return await turn.ask(request)
 
 
+async def _close_turn(client: Any, session: ACPSession) -> None:
+    _TURNS.pop(session.session_id, None)
+    await client.close()
+
+
 @dataclass(slots=True)
 class _Turn:
     """One node invocation's ACP state, as the permission handler needs it.
@@ -706,23 +711,16 @@ class ACPNode:
                     terminal_results.append(bound.result)
                 if bound.clarification is not None:
                     clarifications.append(bound.clarification)
-            client, session = await self._open(
-                stored if resuming else None, cwd, tuple(mcp_servers),
-                self.session_config,
+            client, session, turn = await self._open_turn(
+                execution, key, stored if resuming else None, cwd,
+                tuple(mcp_servers),
             )
-            turn = _Turn(self, execution, key, session.session_id)
             if resuming is not None:
                 turn.answer = resuming
-            _TURNS[session.session_id] = turn
-            execution.attach(session)
             terminal_tasks = [
                 asyncio.create_task(result()) for result in terminal_results  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             ]
             try:
-                if resuming is None:
-                    await runtime.store.remember_session(
-                        execution.run_id, key, self._binding(execution, session, key)
-                    )
                 await execution.emit(
                     EventKind.CONVERSATION_STARTED,
                     {
@@ -792,16 +790,9 @@ class ACPNode:
                         # conversation, degrading the run rather than failing it.
                         asked = _replay(history, replayed, context_limit, brief=True)
                         replayed = None
-                        _TURNS.pop(session.session_id, None)
-                        await client.close()
-                        client, session = await self._open(
-                            None, cwd, tuple(mcp_servers), self.session_config,
-                        )
-                        turn = _Turn(self, execution, key, session.session_id)
-                        _TURNS[session.session_id] = turn
-                        execution.attach(session)
-                        await runtime.store.remember_session(
-                            execution.run_id, key, self._binding(execution, session, key)
+                        await _close_turn(client, session)
+                        client, session, turn = await self._open_turn(
+                            execution, key, None, cwd, tuple(mcp_servers),
                         )
                         continue
                     replayed = None
@@ -864,8 +855,32 @@ class ACPNode:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(*terminal_tasks, return_exceptions=True)
-                _TURNS.pop(session.session_id, None)
-                await client.close()
+                await _close_turn(client, session)
+
+    async def _open_turn(
+        self,
+        execution: NodeExecution,
+        key: str,
+        stored: ACPContinuation | None,
+        cwd: str,
+        mcp_servers: tuple[Mapping[str, Any], ...],
+    ) -> tuple[Any, ACPSession, _Turn]:
+        """Open a session and track its turn; a new session is also remembered."""
+        client, session = await self._open(
+            stored, cwd, mcp_servers, self.session_config
+        )
+        turn = _Turn(self, execution, key, session.session_id)
+        _TURNS[session.session_id] = turn
+        execution.attach(session)
+        if stored is None:
+            try:
+                await execution.runtime.store.remember_session(
+                    execution.run_id, key, self._binding(execution, session, key)
+                )
+            except BaseException:
+                await _close_turn(client, session)
+                raise
+        return client, session, turn
 
     def _binding(
         self, execution: NodeExecution, session: ACPSession, key: str
