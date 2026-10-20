@@ -16,8 +16,6 @@ from engine.runtime import EngineConfigError
 
 def redact_clone_message(message: str, remote: str = "") -> str:
     """Remove URLs and remote credentials even when git echoes them separately."""
-    # Drop the entire URL: credentials can appear in userinfo, query or path.
-    message = re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+", "[redacted URL]", message)
     try:
         parsed = urlsplit(remote)
         secrets = [parsed.username, parsed.password, *(value for _, value in parse_qsl(parsed.query))]
@@ -25,6 +23,9 @@ def redact_clone_message(message: str, remote: str = "") -> str:
         secrets = []
     for secret in sorted({value for value in secrets if value}, key=len, reverse=True):
         message = message.replace(secret, "[redacted]").replace(unquote(secret), "[redacted]")
+    # Replace credentials first so URL delimiters cannot leave a secret suffix.
+    # Drop the entire URL: credentials can appear in userinfo, query or path.
+    message = re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+", "[redacted URL]", message)
     return message
 
 

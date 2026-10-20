@@ -208,6 +208,17 @@ def test_startup_local_only_repository(tmp_path, monkeypatch):
     assert web_main._login_repositories(loaded, {}) == ()
 
 
+@pytest.mark.parametrize('delimiter', ["'", '<', '>', '"', '%27', '%3C', '%3E', '%22'])
+def test_clone_redaction_removes_credential_suffix_after_delimiter(delimiter):
+    from urllib.parse import unquote
+
+    secret = f'super{delimiter}credential-suffix'
+    remote = f'https://user:{secret}@github.com/owner/repo.git'
+    for echoed_url in (remote, unquote(remote)):
+        message = repositories.redact_clone_message(f"fatal: '{echoed_url}': repository not found", remote)
+        assert message == "fatal: '[redacted URL]': repository not found"
+
+
 @pytest.mark.parametrize('reason', ['Permission denied (publickey).', 'repository not found'])
 def test_clone_error_redacts_urls_and_traceback(tmp_path, monkeypatch, reason):
     import traceback
