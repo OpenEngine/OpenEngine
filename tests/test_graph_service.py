@@ -887,6 +887,21 @@ def test_an_agent_on_a_model_server_keeps_its_context_limit(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_an_added_agents_context_limit_reaches_the_nodes_that_run_it(tmp_path: Path) -> None:
+    """The node bounds its replay by the window the agent was added with."""
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            url = "http://127.0.0.1:11434/v1"
+            await service.add_agent("opencode", name="qwen", model="q", url=url, context_limit=65536)
+            graph, _ = await service.add_graph("p", source=PAIR.replace("agent: stub", "agent: qwen", 1))
+            loaded = service._loaded[graph["versionId"]].workflow
+            node = loaded.builder.nodes["implement"].runnable.afunc
+            assert node.context_limits.get("qwen") == 65536
+
+    asyncio.run(scenario())
+
+
 def test_an_added_agents_model_applies_when_a_node_names_none_or_an_unknown_tier() -> None:
     from engine.graph_service.compile import GraphAgentNode
     from engine.graph_service.language import RunnerRule
