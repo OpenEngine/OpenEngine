@@ -64,7 +64,7 @@ jobs:
       # Never execute fork code with a privileged pull_request_target token.
       - name: Commit changed schemas and comment on open PRs
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const publish = require('./.github/scripts/dist/publish-service-schemas.js').default;
