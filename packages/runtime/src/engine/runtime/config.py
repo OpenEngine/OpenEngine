@@ -192,6 +192,9 @@ class GitHubConfig:
     gh_config_dir: str = ""
     """`gh` login directory (GH_CONFIG_DIR), or empty to inherit the provider environment."""
 
+    ssh_key: str = ""
+    """Private key git uses over SSH (GIT_SSH_COMMAND), or empty to use the host's own SSH setup."""
+
     @property
     def webhook_repositories(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(
@@ -326,6 +329,10 @@ class LoadedEngineConfig:
         return self._config_directory(self.config.github.gh_config_dir)
 
     @property
+    def github_ssh_key(self) -> Path | None:
+        return self._config_directory(self.config.github.ssh_key)
+
+    @property
     def workflows_directory(self) -> Path | None:
         configured = self.config.workflows.directory
         if not configured:
@@ -417,6 +424,8 @@ def load_engine_config(
     ):
         if directory is not None and not directory.is_dir():
             raise EngineConfigError(f"{label} is not an existing directory: {directory}")
+    if (key := loaded.github_ssh_key) is not None and not key.is_file():
+        raise EngineConfigError(f"github.ssh_key is not an existing file: {key}")
     return loaded
 
 
@@ -483,12 +492,16 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     github = _table(document.get("github", {}), "github")
     _reject_unknown(
         github,
-        {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow", "gh_config_dir"},
+        {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow", "gh_config_dir", "ssh_key"},
         "github",
     )
     gh_config_dir = (
         _nonblank_string(github["gh_config_dir"], "github.gh_config_dir")
         if "gh_config_dir" in github else ""
+    )
+    ssh_key = (
+        _nonblank_string(github["ssh_key"], "github.ssh_key")
+        if "ssh_key" in github else ""
     )
     resolve_addressed_threads = github.get("resolve_addressed_threads", True)
     if not isinstance(resolve_addressed_threads, bool):
@@ -693,6 +706,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             repositories=github_repositories,
             resolve_addressed_threads=resolve_addressed_threads,
             gh_config_dir=gh_config_dir,
+            ssh_key=ssh_key,
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()
