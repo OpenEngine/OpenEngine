@@ -13,7 +13,6 @@ import asyncio
 import ipaddress
 import logging
 import os
-import shlex
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
@@ -352,10 +351,6 @@ def read_configuration(
     # Likewise for `gh`: the source-control provider and agents' `gh` share this login.
     if (directory := loaded.gh_config_dir) is not None:
         os.environ["GH_CONFIG_DIR"] = str(directory)
-    # Git over SSH takes its identity from the host, which a daemon cannot choose
-    # per account; a configured key is the one every clone, fetch and push uses.
-    if (key := loaded.github_ssh_key) is not None:
-        os.environ["GIT_SSH_COMMAND"] = f"ssh -i {shlex.quote(str(key))} -o IdentitiesOnly=yes"
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(

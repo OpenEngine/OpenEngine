@@ -785,63 +785,6 @@ def test_config_directory_settings_are_strict(table, key, attribute, variable, v
         parse_engine_config({table: {key: value}})
 
 
-@pytest.mark.parametrize("value", ["id_rock", "~/id_rock"])
-def test_github_ssh_key_resolves_at_load(tmp_path, monkeypatch, value):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    key = tmp_path / "id_rock"
-    key.write_text("")
-    config = tmp_path / "engine.toml"
-    config.write_text(f'[github]\nssh_key = "{value}"\n')
-    monkeypatch.chdir(tmp_path.parent)
-
-    loaded = load_engine_config(config)
-
-    assert loaded.config.github.ssh_key == value
-    assert loaded.github_ssh_key == key
-
-
-@pytest.mark.parametrize("value", ["missing", "directory"])
-def test_github_ssh_key_must_be_an_existing_file(tmp_path, value):
-    (tmp_path / "directory").mkdir()
-    config = tmp_path / "engine.toml"
-    config.write_text(f'[github]\nssh_key = "{value}"\n')
-    with pytest.raises(EngineConfigError, match="github.ssh_key"):
-        load_engine_config(config)
-
-
-@pytest.mark.parametrize("value", [1, "", " "])
-def test_github_ssh_key_is_strict(value):
-    with pytest.raises(EngineConfigError):
-        parse_engine_config({"github": {"ssh_key": value}})
-
-
-def test_web_git_ssh_uses_the_configured_key(tmp_path, monkeypatch):
-    """A dedicated key is the identity every clone, fetch and push over SSH uses."""
-    import os
-
-    key = tmp_path / "id rock"
-    key.write_text("")
-    config = tmp_path / "engine.toml"
-    config.write_text('[github]\nssh_key = "id rock"\n')
-    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -o Inherited=yes")
-    web_main.read_configuration(config)
-    assert os.environ["GIT_SSH_COMMAND"] == f"ssh -i '{key}' -o IdentitiesOnly=yes"
-
-
-def test_web_git_ssh_is_untouched_without_a_configured_key(tmp_path, monkeypatch):
-    """Out of the box git keeps using whatever the person set up locally."""
-    import os
-
-    config = tmp_path / "engine.toml"
-    config.write_text("")
-    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
-    web_main.read_configuration(config)
-    assert "GIT_SSH_COMMAND" not in os.environ
-    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -o Inherited=yes")
-    web_main.read_configuration(config)
-    assert os.environ["GIT_SSH_COMMAND"] == "ssh -o Inherited=yes"
-
-
 def test_claude_settings_reject_unknown_keys():
     with pytest.raises(EngineConfigError):
         parse_engine_config({"claude": {"unknown": "x"}})

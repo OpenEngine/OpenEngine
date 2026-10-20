@@ -176,16 +176,6 @@ Git commits still use Git's author/committer configuration and configured
 agent attribution; pushes still use the host's Git credential helper or SSH
 credentials (`gh auth setup-git` makes Git use the same login).
 
-Git over SSH does not follow `gh_config_dir`: the daemon has no SSH agent and
-falls back to the host's default key, which may belong to a different account.
-To run as a dedicated account, set `[github] ssh_key` to that account's private
-key. engine-web then exports `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes"`,
-so every clone, fetch and push the engine and its agents run over SSH uses that
-key, and no checkout's config or `~/.ssh/config` has to change. The key must
-already be authorized on the account and not need a passphrase prompt (load it
-into the keychain, or use a key without a passphrase). Leaving it unset keeps the
-host's own SSH setup. HTTPS remotes are unaffected.
-
 Browser login requests `read:user` and only creates a session cookie. The
 separate Settings device flow stores repository connection credentials in the
 OS keychain. With browser login enabled, its token and client-ID keys include

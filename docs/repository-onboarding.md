@@ -85,9 +85,8 @@ with the repository name. The checkout path is yours to choose.
 
 At web startup (including `engine-web --check`), a missing path whose name is
 a GitHub `owner/repo` is cloned from `git@github.com:owner/repo.git`. This uses
-the worker's existing SSH identity and the remote's default branch, or the key
-named by `[github] ssh_key` when that is set (see [GitHub login](github-login.md)).
-Git and working GitHub SSH access must already be installed on the host. No credentials
+the worker's existing SSH identity and the remote's default branch. Git and
+working GitHub SSH access must already be installed on the host. No credentials
 are created or changed. Cloning has a five-minute timeout and uses a temporary
 sibling directory; failure stops startup with a configuration error and leaves
 the configured destination absent so startup can be retried.

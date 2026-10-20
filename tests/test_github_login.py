@@ -473,8 +473,6 @@ def _service_app(token=SERVICE_TOKEN):
         Route("/api/runs", lambda _r: _J({"runId": "run-1"}, status_code=201), methods=["GET", "POST"]),
         Route("/api/runs/{run_id}", lambda _r: _J({"ok": True}), methods=["POST"]),
         Route("/api/data", lambda _r: _J({"ok": True}), methods=["GET", "POST"]),
-        Route("/api/repositories/onboard", lambda _r: _J({"id": "job-1"}, status_code=202), methods=["POST"]),
-        Route("/api/repositories/onboard/{job_id}", lambda _r: _J({"status": "done"})),
     ]
     return TestClient(flow.middleware(Starlette(routes=routes)), base_url="https://engine.test")
 
@@ -483,16 +481,6 @@ def test_service_token_admits_run_creation():
     client = _service_app()
     response = client.post("/api/runs", json={}, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
     assert response.status_code == 201
-
-
-@pytest.mark.parametrize("method, path, status", [
-    ("POST", "/api/repositories/onboard", 202), ("GET", "/api/repositories/onboard/job-1", 200),
-])
-def test_service_token_admits_repository_onboarding(method, path, status):
-    """`engine repo add` reaches onboarding with the same credential as the rest of the CLI."""
-    client = _service_app()
-    response = client.request(method, path, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
-    assert response.status_code == status
 
 
 @pytest.mark.parametrize("method, path", [
