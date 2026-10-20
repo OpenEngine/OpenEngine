@@ -13,9 +13,6 @@ default_branch = "main"
 # The gh login source control and agents use (GH_CONFIG_DIR). Defaults to gh's own
 # location: $XDG_CONFIG_HOME/gh when set, otherwise ~/.config/gh.
 # gh_config_dir = "~/.config/gh-work"
-# The private key git uses over SSH (clone, fetch, push), for a dedicated account. Defaults
-# to the host's own SSH setup.
-# ssh_key = "~/.ssh/id_ed25519_rock"
 # Set false when reviewers prefer to resolve addressed review threads themselves.
 resolve_addressed_threads = true
 # Explicit aliases of the SAME forge, mapped to its transport authority (host and optional port).

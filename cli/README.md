@@ -86,7 +86,7 @@ Reaching a Mac mini: `engine daemon` binds loopback only, so expose it over
 something you trust — an SSH tunnel (`ssh -NL 4365:127.0.0.1:4364 mac-mini`,
 then add `http://127.0.0.1:4365`) or a tailnet. If the daemon has GitHub login
 configured, the CLI authenticates with its `ENGINE_SERVICE_TOKEN`; `/api/v1`
-and `engine repo add` accept that token and operators, and refuses users who see only some
+accepts that token and operators, and refuses users who see only some
 repositories.
 
 ## Graphs

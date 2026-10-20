@@ -467,44 +467,6 @@ def test_clone_preserves_remote_url(tmp_path, monkeypatch, reference):
     assert len(commands) == 1
 
 
-def _failing_clone(monkeypatch, stderr):
-    from engine.apps.web import repositories
-    def clone(args, **kwargs):
-        raise subprocess.CalledProcessError(128, args, '', stderr)
-    monkeypatch.setattr(repositories.subprocess, 'run', clone)
-    return repositories
-
-
-def test_failed_clone_reports_what_git_said(tmp_path, monkeypatch):
-    from engine.runtime import EngineConfigError
-    repositories = _failing_clone(monkeypatch, "Cloning into 'checkout'...\nfatal: repository 'https://github.com/owner/repo.git/' not found\n")
-    with pytest.raises(EngineConfigError) as error:
-        repositories.ensure_repository_checkouts({'owner/repo': str(tmp_path / 'repo')})
-    assert "fatal: repository 'https://github.com/owner/repo.git/' not found" in str(error.value)
-    assert 'CalledProcessError' not in str(error.value)
-    assert not (tmp_path / 'repo').exists()
-
-
-def test_failed_ssh_clone_points_at_the_ssh_key_setting(tmp_path, monkeypatch):
-    from engine.runtime import EngineConfigError
-    repositories = _failing_clone(monkeypatch, "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n")
-    with pytest.raises(EngineConfigError) as error:
-        repositories.ensure_repository_checkouts({'owner/repo': str(tmp_path / 'repo')})
-    message = str(error.value)
-    assert 'Permission denied (publickey)' in message
-    assert '[github] ssh_key' in message
-
-
-def test_failed_clone_without_output_still_names_the_cause(tmp_path, monkeypatch):
-    from engine.apps.web import repositories
-    from engine.runtime import EngineConfigError
-    def clone(args, **kwargs):
-        raise subprocess.TimeoutExpired(args, 300)
-    monkeypatch.setattr(repositories.subprocess, 'run', clone)
-    with pytest.raises(EngineConfigError, match='timed out'):
-        repositories.ensure_repository_checkouts({'owner/repo': str(tmp_path / 'repo')})
-
-
 @pytest.mark.parametrize('local', [True, False])
 def test_add_gitlab_local_or_remote(tmp_path, monkeypatch, local):
     target = tmp_path / 'repo'
