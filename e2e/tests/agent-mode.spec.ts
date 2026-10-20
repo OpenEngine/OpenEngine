@@ -1,6 +1,6 @@
-import { readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { test, expect, resolveAgentMode } from "../fixtures/engine.ts"
+import { test, expect, claudeConfigDir, claudeModel, CHEAPEST_CLAUDE_MODEL, resolveAgentMode } from "../fixtures/engine.ts"
 
 /** A one-step graph any agent can finish quickly, and nothing it does can be wrong. */
 const HELLO = `apiVersion: openengine.cc/v1
@@ -13,12 +13,61 @@ implementation:
     prompt: Reply with one short, friendly sentence greeting the reader. Do not run commands or edit files.
 `
 
+/** HELLO under another name, with its step asking for `model` (left out when undefined). */
+function helloWith(name: string, model: string | undefined) {
+  return HELLO.replace("name: hello", `name: ${name}`) + (model ? `    model: ${model}\n` : "")
+}
+
+/**
+ * Every model Claude Code's transcripts say answered in `workspace`, less the
+ * `<synthetic>` entries Claude Code writes itself for errors such as a rate limit.
+ */
+function transcriptModels(workspace: string) {
+  const projects = path.join(claudeConfigDir(), "projects")
+  const models = new Set<string>()
+  for (const cwd of new Set([workspace, realpathSync(workspace)])) {
+    const directory = path.join(projects, cwd.replace(/[^a-zA-Z0-9]/g, "-"))
+    if (!existsSync(directory)) continue
+    for (const file of readdirSync(directory).filter((name) => name.endsWith(".jsonl"))) {
+      for (const line of readFileSync(path.join(directory, file), "utf8").split("\n")) {
+        if (!line.trim()) continue
+        const entry = JSON.parse(line)
+        const model = entry.type === "assistant" ? entry.message?.model : undefined
+        if (model && model !== "<synthetic>") models.add(model)
+      }
+    }
+  }
+  return [...models]
+}
+
 test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
   test("scripts the agents unless real ones are asked for", () => {
     expect(resolveAgentMode({})).toBe("stub")
     expect(resolveAgentMode({ E2E_AGENT: "stub" })).toBe("stub")
     expect(resolveAgentMode({ E2E_AGENT: "real" }, { claudeLogin: true, npx: true })).toBe("real")
     expect(() => resolveAgentMode({ E2E_AGENT: "sometimes" })).toThrow(/E2E_AGENT must be real or stub/)
+  })
+
+  test("real agents run the cheapest Claude model unless E2E_CLAUDE_MODEL names another", () => {
+    expect(claudeModel({})).toBe(CHEAPEST_CLAUDE_MODEL)
+    expect(claudeModel({ E2E_CLAUDE_MODEL: "claude-sonnet-5" })).toBe("claude-sonnet-5")
+  })
+
+  test("runs every model tier on the model real agents are given", async ({ engine, terminal }) => {
+    test.skip(engine.agentMode !== "real", "only real agents run a model")
+    test.setTimeout(600_000)
+    expect(engine.daemonEnv.ANTHROPIC_MODEL).toBe(claudeModel())
+    await terminal.run("engine repo untrust")
+    for (const [name, model] of [["untiered", undefined], ["tier-default", "default"], ["tier-elevated", "elevated"]] as const) {
+      const graph = path.join(engine.root, `${name}.yaml`)
+      writeFileSync(graph, helloWith(name, model))
+      await terminal.run(`engine graph add ${graph}`)
+      // stderr carries the "started" line; stdout is the finished run alone.
+      const { output } = await terminal.run(`engine graph run ${name} "Say hello" --wait --json 2>/dev/null`, { timeout: 180_000 })
+      const detail = JSON.parse(output)
+      expect(detail.status, `${name} ran to completion`).toBe("completed")
+      expect(transcriptModels(detail.workspace.path), `the models that answered ${name}`).toEqual([claudeModel()])
+    }
   })
 
   test("refuses real agents where none can run, rather than quietly scripting them", () => {
