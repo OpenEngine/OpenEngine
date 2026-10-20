@@ -1,0 +1,20 @@
+{
+  "summary": "Rejected: resuming never resurrects a cancelled job.",
+  "message": "ResumeJobResponse",
+  "in_reply_to": "oe.v1.ge.control.jobs.job_42.resume",
+  "payload": {
+    "command_id": "cmd_resume_42",
+    "status": "rejected",
+    "error": {
+      "code": "INVALID_STATE",
+      "message": "job_42 is cancelled.",
+      "retryable": false,
+      "details": {
+        "resource_type": "job",
+        "resource_id": "job_42",
+        "current_state": "cancelled",
+        "allowed_states": ["paused"]
+      }
+    }
+  }
+}

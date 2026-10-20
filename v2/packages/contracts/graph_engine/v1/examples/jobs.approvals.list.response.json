@@ -1,0 +1,23 @@
+{
+  "message": "ListJobApprovalsResponse",
+  "in_reply_to": "oe.v1.ge.query.jobs.job_42.approvals.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "approval_id": "wfappr_ship42",
+          "job_id": "job_42",
+          "execution_id": "exec_42a",
+          "step_instance_id": "stepi_42_ship",
+          "node_id": "ship",
+          "state": "requested",
+          "prompt": "Ship this change?",
+          "requested_at": "2026-10-19T22:58:00Z",
+          "expires_at": "2026-10-22T22:58:00Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

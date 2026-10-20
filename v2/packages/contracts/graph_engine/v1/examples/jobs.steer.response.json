@@ -1,0 +1,10 @@
+{
+  "message": "SteerJobResponse",
+  "in_reply_to": "oe.v1.ge.control.jobs.job_42.steer",
+  "payload": {
+    "command_id": "cmd_steer_42",
+    "status": "accepted",
+    "operation_id": "op_steer_42",
+    "resource_id": "job_42"
+  }
+}

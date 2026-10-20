@@ -1,0 +1,5 @@
+{
+  "message": "ResumeLoopCommand",
+  "subject": "oe.v1.ge.control.loops.loop_nightly.resume",
+  "payload": { "command_id": "cmd_resumeloop", "causal_path": ["cmd_resumeloop"], "payload": {} }
+}

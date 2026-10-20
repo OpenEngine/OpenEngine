@@ -1,0 +1,20 @@
+{
+  "summary": "Paused: no new steps are scheduled; the two running reviewers continue.",
+  "message": "ExecutionPaused",
+  "subject": "oe.v1.ge.events.jobs.job_42.execution.paused",
+  "headers": { "Nats-Msg-Id": "evt_42_paused" },
+  "payload": {
+    "event_id": "evt_42_paused",
+    "event_type": "execution.paused",
+    "occurred_at": "2026-10-19T22:06:00Z",
+    "producer": "ge",
+    "causal_path": ["cmd_pause_42", "evt_42_paused"],
+    "resources": { "job_id": "job_42", "execution_id": "exec_42a" },
+    "resource_version": 9,
+    "payload": {
+      "operation": { "operation_id": "op_pause_42", "command_id": "cmd_pause_42" },
+      "active_tasks": "continue",
+      "running_step_instance_ids": ["stepi_42_sec", "stepi_42_bugs"]
+    }
+  }
+}

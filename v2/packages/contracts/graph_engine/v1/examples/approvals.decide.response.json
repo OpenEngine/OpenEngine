@@ -1,0 +1,10 @@
+{
+  "message": "DecideApprovalResponse",
+  "in_reply_to": "oe.v1.ge.control.approvals.wfappr_ship42.decide",
+  "payload": {
+    "command_id": "cmd_decide_ship",
+    "status": "accepted",
+    "operation_id": "op_decide_ship",
+    "resource_id": "wfappr_ship42"
+  }
+}

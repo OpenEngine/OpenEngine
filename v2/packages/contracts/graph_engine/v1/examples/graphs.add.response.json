@@ -1,0 +1,10 @@
+{
+  "message": "AddGraphResponse",
+  "in_reply_to": "oe.v1.ge.control.graphs.add",
+  "payload": {
+    "command_id": "cmd_addgraph_3",
+    "status": "accepted",
+    "operation_id": "op_addgraph_3",
+    "resource_id": "graph_review"
+  }
+}

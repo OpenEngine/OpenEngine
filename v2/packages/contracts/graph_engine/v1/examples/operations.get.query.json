@@ -1,0 +1,5 @@
+{
+  "message": "GetOperationQuery",
+  "subject": "oe.v1.ge.query.operations.op_steer_42.get",
+  "payload": { "params": {} }
+}

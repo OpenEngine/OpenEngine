@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Loops",
+  "description": "Loops create jobs on a schedule from a graph and a job template. Pausing or removing a loop changes only future scheduling; jobs it already created are never cancelled by it.",
+  "$defs": {
+    "loop_state": { "type": "string", "enum": ["active", "paused", "removed"] },
+    "loop_name": { "$ref": "../../../common/v1/types.schema.json#/$defs/slug" },
+    "loop_graph": {
+      "description": "The graph each new job runs: a pinned revision, or the latest revision at each trigger.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["graph_id", "revision"],
+          "additionalProperties": false,
+          "properties": {
+            "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+            "revision": { "$ref": "graph.schema.json#/$defs/revision" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["graph_id", "track_latest"],
+          "additionalProperties": false,
+          "properties": {
+            "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+            "track_latest": { "const": true }
+          }
+        }
+      ]
+    },
+    "trigger": {
+      "description": "When the loop fires.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "every_seconds"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "interval" },
+            "every_seconds": { "type": "integer", "minimum": 60, "maximum": 31536000 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "expression", "timezone"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "cron" },
+            "expression": {
+              "type": "string",
+              "pattern": "^\\S+( \\S+){4}$",
+              "description": "Five-field cron expression."
+            },
+            "timezone": {
+              "description": "IANA time zone, such as `UTC` or `Europe/Berlin`.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        }
+      ]
+    },
+    "concurrency": {
+      "description": "Limit on concurrently open jobs created by the loop.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_active_jobs": { "type": "integer", "minimum": 1, "maximum": 100, "default": 1 },
+        "on_overlap": {
+          "description": "When a trigger fires at the limit: skip it, or queue one job to start when a slot frees.",
+          "type": "string",
+          "enum": ["skip", "queue"],
+          "default": "skip"
+        }
+      }
+    },
+    "job_template": {
+      "description": "What each created job is given.",
+      "type": "object",
+      "required": ["goal", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "goal": { "$ref": "job.schema.json#/$defs/goal" },
+        "context": { "$ref": "job.schema.json#/$defs/context" },
+        "inputs": {
+          "description": "Values for the graph's declared `inputs`, by name. Validated against the revision's input declarations at acceptance.",
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "null", "array", "object"]
+          }
+        }
+      }
+    },
+    "loop": {
+      "description": "Snapshot of a loop.",
+      "type": "object",
+      "required": [
+        "loop_id",
+        "version",
+        "name",
+        "state",
+        "graph",
+        "trigger",
+        "concurrency",
+        "job_template",
+        "next_run_at",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
+        "name": { "$ref": "#/$defs/loop_name" },
+        "state": { "$ref": "#/$defs/loop_state" },
+        "graph": { "$ref": "#/$defs/loop_graph" },
+        "trigger": { "$ref": "#/$defs/trigger" },
+        "concurrency": { "$ref": "#/$defs/concurrency" },
+        "job_template": { "$ref": "#/$defs/job_template" },
+        "starts_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "next_run_at": {
+          "anyOf": [
+            { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+            { "type": "null" }
+          ],
+          "description": "Next scheduled trigger; null when paused or removed."
+        },
+        "active_job_count": { "type": "integer", "minimum": 0 },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "updated_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    }
+  }
+}

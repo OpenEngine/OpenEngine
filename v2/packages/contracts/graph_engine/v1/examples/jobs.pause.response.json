@@ -1,0 +1,10 @@
+{
+  "message": "PauseJobResponse",
+  "in_reply_to": "oe.v1.ge.control.jobs.job_42.pause",
+  "payload": {
+    "command_id": "cmd_pause_42",
+    "status": "accepted",
+    "operation_id": "op_pause_42",
+    "resource_id": "job_42"
+  }
+}

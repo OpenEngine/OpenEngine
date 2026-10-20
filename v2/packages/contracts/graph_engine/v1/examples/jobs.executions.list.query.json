@@ -1,0 +1,6 @@
+{
+  "summary": "Every execution the job has had: the completed first one and the follow-up.",
+  "message": "ListJobExecutionsQuery",
+  "subject": "oe.v1.ge.query.jobs.job_42.executions.list",
+  "payload": { "params": {} }
+}

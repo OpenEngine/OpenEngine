@@ -1,0 +1,35 @@
+{
+  "message": "ListJobExecutionsResponse",
+  "in_reply_to": "oe.v1.ge.query.jobs.job_42.executions.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "execution_id": "exec_42a",
+          "job_id": "job_42",
+          "graph": { "graph_id": "graph_review", "revision": 3 },
+          "inputs": { "instruction": "Address the security review" },
+          "status": "succeeded",
+          "active_step_instance_ids": [],
+          "created_at": "2026-10-19T21:30:02Z",
+          "updated_at": "2026-10-19T23:05:00Z",
+          "started_at": "2026-10-19T21:30:02Z",
+          "ended_at": "2026-10-19T23:05:00Z"
+        },
+        {
+          "execution_id": "exec_42b",
+          "job_id": "job_42",
+          "graph": { "graph_id": "graph_review", "revision": 3 },
+          "inputs": { "instruction": "Address the security review" },
+          "status": "running",
+          "active_step_instance_ids": ["stepi_42b_impl"],
+          "created_at": "2026-10-20T08:00:00Z",
+          "updated_at": "2026-10-20T08:00:00Z",
+          "started_at": "2026-10-20T08:00:00Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

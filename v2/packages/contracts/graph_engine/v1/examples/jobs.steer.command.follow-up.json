@@ -1,0 +1,18 @@
+{
+  "summary": "Steer a job that already completed. `if_completed: follow_up` reopens it with a new execution instead of rejecting.",
+  "message": "SteerJobCommand",
+  "subject": "oe.v1.ge.control.jobs.job_42.steer",
+  "payload": {
+    "command_id": "cmd_steer_42",
+    "causal_path": [
+      "gh-conn_acme_gh-dlv_4411",
+      "cmd_submit_42",
+      "evt_job42_completed",
+      "cmd_steer_42"
+    ],
+    "payload": {
+      "instruction": "Also rotate the leaked token in config/dev.env",
+      "if_completed": "follow_up"
+    }
+  }
+}
