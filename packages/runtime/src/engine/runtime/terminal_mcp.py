@@ -227,6 +227,8 @@ class TerminalMcpBroker:
         work_order_url: str | None = None,
         deliver: TerminalDelivery | None = None,
         validate_completion: Callable[[StepCompleted], None] | None = None,
+        validate_outputs: Callable[[object], dict[str, str]] | None = None,
+        outputs_schema: dict[str, object] | None = None,
     ) -> None:
         self._run_id = run_id
         self._work_order_url = work_order_url
@@ -235,6 +237,8 @@ class TerminalMcpBroker:
         self._registry = registry
         self._deliver = deliver
         self._validate_completion = validate_completion
+        self._validate_outputs = validate_outputs
+        self._outputs_schema = outputs_schema
         # Hex rather than URL-safe base64, because this credential is handed to
         # the provider as an argv element: `token_urlsafe` can begin with `-`,
         # and roughly one session in sixty-four then had its server exit on
@@ -403,6 +407,8 @@ class TerminalMcpBroker:
             "--token",
             self._token,
         )
+        if self._outputs_schema is not None:
+            arguments = (*arguments, "--outputs-schema", json.dumps(self._outputs_schema))
         for name in self._repository_tools:
             arguments = (*arguments, "--repository-tool", name)
         if self._workorder_creator is not None:
@@ -548,6 +554,7 @@ class TerminalMcpBroker:
                     step=self._step,
                     agent_run_id=self._agent_run_id,
                     arguments=arguments,
+                    validate_outputs=self._validate_outputs,
                     mcp_request_id=request_id,
                 )
                 if self._validate_completion is not None:
@@ -1079,8 +1086,13 @@ def _tools(
     terminal_tools: bool = True,
     status_updates: bool = False,
     create_workorder: bool = False,
+    outputs_schema: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = list(_TERMINAL_TOOLS) if terminal_tools else []
+    if terminal_tools and outputs_schema is not None:
+        complete = json.loads(json.dumps(tools[0]))
+        complete["inputSchema"]["properties"]["outputs"] = outputs_schema
+        tools[0] = complete
     if create_workorder:
         tools.append(_CREATE_WORKORDER_TOOL)
     if status_updates:
@@ -1593,6 +1605,7 @@ async def _serve_stdio(
     terminal_tools: bool = True,
     status_updates: bool = False,
     create_workorder: bool = False,
+    outputs_schema: dict[str, object] | None = None,
 ) -> None:
     """Serve newline-delimited MCP JSON-RPC without writing logs to stdout."""
     while line := await asyncio.to_thread(sys.stdin.buffer.readline):
@@ -1607,6 +1620,7 @@ async def _serve_stdio(
                 terminal_tools=terminal_tools,
                 status_updates=status_updates,
                 create_workorder=create_workorder,
+                outputs_schema=outputs_schema,
             )
             if response is None:
                 continue
@@ -1630,6 +1644,7 @@ async def _mcp_response(
     terminal_tools: bool = True,
     status_updates: bool = False,
     create_workorder: bool = False,
+    outputs_schema: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
     if not isinstance(request, dict):
         return _rpc_error(None, -32600, "Invalid Request")
@@ -1664,6 +1679,7 @@ async def _mcp_response(
                     terminal_tools=terminal_tools,
                     status_updates=status_updates,
                     create_workorder=create_workorder,
+                    outputs_schema=outputs_schema,
                 )
             },
         )
@@ -1747,6 +1763,7 @@ def main() -> None:
         help="serve update_status, for a run with a conversation to report to",
     )
     parser.add_argument("--create-workorder", action="store_true")
+    parser.add_argument("--outputs-schema", type=json.loads)
     args = parser.parse_args()
     asyncio.run(
         _serve_stdio(
@@ -1757,6 +1774,7 @@ def main() -> None:
             terminal_tools=not args.repository_tools_only,
             status_updates=args.status_updates,
             create_workorder=args.create_workorder,
+            outputs_schema=args.outputs_schema,
         )
     )
 

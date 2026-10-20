@@ -45,6 +45,7 @@ from engine.graph_runtime_langgraph.acp import TerminalEvent
 from engine.graph_runtime_langgraph.components import ACPNode, CICheck, NameNode, TriageNode, checkout
 from engine.graph_runtime_langgraph.components.findings import parse_findings
 from engine.ports import WorkspaceProvider
+from engine.runtime.step_results import InvalidStepResultError
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry
 from langgraph_acp.providers import ClaudeACPProvider
@@ -509,15 +510,11 @@ def _completion_instructions(outputs: Sequence[OutputSpec]) -> str:
         lines[-1] += "."
         return "\n".join(lines)
     lines[-1] += " and these outputs:"
-    if any(output.type not in ("string", "findings") for output in outputs):
-        lines.append(
-            'Send typed outputs as JSON-encoded strings, for example '
-            '"model": "{\\"a\\": 1}". All output values must be strings on the wire.'
-        )
+    lines.append('Send typed outputs as native JSON values (for example "ready": true).')
     for output in outputs:
         detail = {
             "findings": (
-                "a JSON array of findings, each {\"tagline\": 1-2 plain-language lines, "
+                "a JSON-encoded string containing an array of findings, each {\"tagline\": 1-2 plain-language lines, "
                 "\"description\": 1-3 lines on what it is and why it matters, \"file\"?: path, "
                 "\"line\"?: number, \"severity\"?: \"high\"|\"medium\"|\"low\"}; [] when there are none"
                 + ("; keep each finding's agent and facet unchanged" if output.lineage else "")
@@ -542,10 +539,51 @@ class GraphTerminalMcpServer(TerminalMcpServer):
     outputs: tuple[OutputSpec, ...] = ()
 
     def for_mode(self, mode: ForgeMode) -> TerminalMcpServer:
+        outputs = _mode_outputs(self.outputs, mode)
         return replace(
             TerminalMcpServer.for_mode(self, mode),
-            validate_completion=_validator(_mode_outputs(self.outputs, mode)),
+            validate_completion=_validator(outputs),
+            validate_outputs=_wire_outputs(outputs),
+            outputs_schema=_outputs_schema(outputs),
         )
+
+
+def _outputs_schema(outputs: Sequence[OutputSpec]) -> dict[str, object]:
+    properties = {}
+    for output in outputs:
+        schema: dict[str, object] = {"type": {"list": "array", "findings": "string"}.get(output.type, output.type)}
+        if output.type == "list":
+            schema["items"] = {}
+        if output.enum:
+            schema["enum"] = list(output.enum)
+        properties[output.name] = schema
+    return {
+        "type": "object", "properties": properties,
+        "required": [output.name for output in outputs if output.required],
+        "additionalProperties": False,
+    }
+
+
+def _wire_outputs(outputs: Sequence[OutputSpec]) -> Callable[[object], dict[str, str]]:
+    """Validate YAML's JSON contract, then encode for the shared string event store."""
+    def validate(values: object) -> dict[str, str]:
+        if not isinstance(values, dict):
+            raise InvalidStepResultError("step result outputs must be a JSON object")
+        extra = set(values) - {output.name for output in outputs}
+        if extra:
+            raise ValueError(f"step result has undeclared outputs: {', '.join(sorted(extra))}")
+        encoded = {}
+        for output in outputs:
+            if output.name not in values:
+                if output.required:
+                    raise ValueError(f"output {output.name} is required")
+                continue
+            value = values[output.name]
+            if not _typed(value, output.type):
+                raise ValueError(f"output {output.name} must be a {output.type}")
+            encoded[output.name] = value if isinstance(value, str) else json.dumps(value)
+        return encoded
+    return validate
 
 
 def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]:
@@ -555,7 +593,7 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
         values = {output.name: output.value for output in event.outputs}
         for output in outputs:
             value = values.get(output.name)
-            if value is None or (value == "" and output.type in ("string", "findings")):
+            if output.name not in values or (output.required and value == "" and output.type in ("string", "findings")):
                 if output.required:
                     raise ValueError(f"output {output.name} is required")
                 continue

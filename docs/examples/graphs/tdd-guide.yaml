@@ -60,17 +60,17 @@ plan:
         and no pushed `agent/issue-N-*` branch (`git ls-remote --heads origin "agent/issue-N-*"`).
 
       Read the chosen issue in full with `gh issue view N --comments`.
-      If nothing qualifies, set found to no and every other output to "none".
+      If nothing qualifies, set found to false and omit the other outputs.
+      Otherwise, set found to true and report all the other outputs.
 
       ${instruction}
-    # Every output is required text: complete_step accepts nothing else yet.
     outputs:
-      found: {type: string, enum: ["yes", "no"], required: true, description: whether there is an issue to work}
-      issue: {type: string, required: true, description: the issue number}
-      title: {type: string, required: true, description: the issue title}
-      brief: {type: string, required: true, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
-      branch: {type: string, required: true, description: "agent/issue-N-short-slug, the branch the pull request will use"}
-      guide: {type: string, enum: ["yes", "no"], required: true, description: whether the issue adds or changes a guide spec under e2e/tests}
+      found: {type: boolean, required: true, description: whether there is an issue to work}
+      issue: {type: integer, description: the issue number}
+      title: {type: string, description: the issue title}
+      brief: {type: string, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
+      branch: {type: string, description: "agent/issue-N-short-slug, the branch the pull request will use"}
+      guide: {type: boolean, description: whether the issue adds or changes a guide spec under e2e/tests}
 
 implementation:
   tdd:
@@ -353,8 +353,8 @@ review:
 flow:
   - from: pick
     route:
-      - {when: "outputs.pick.found == 'yes' && inputs.tests_ready == 'yes'", to: implement}
-      - {when: "outputs.pick.found == 'yes'", to: tdd}
+      - {when: "outputs.pick.found == true && inputs.tests_ready == 'yes'", to: implement}
+      - {when: "outputs.pick.found == true", to: tdd}
       - {to: end}
   - from: reranker
     route:
