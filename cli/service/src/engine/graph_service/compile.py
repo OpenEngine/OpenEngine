@@ -111,6 +111,7 @@ def compile_graph(
     session_config: Mapping[str, object] | None = None,
     model_tiers: Mapping[str, Mapping[str, str]] | None = None,
     agent_models: Mapping[str, str] | None = None,
+    agent_context_limits: Mapping[str, int] | None = None,
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
@@ -120,6 +121,7 @@ def compile_graph(
     }
     runners = tuple(registry.names)
     models = {} if agent_models is None else agent_models
+    context_limits = {} if agent_context_limits is None else agent_context_limits
     builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(
         spec.checkout,
@@ -148,7 +150,7 @@ def compile_graph(
             builder.add_node(key, _node(
                 node, key, branch.item if branch else None, groups,
                 registry=registry, runners=runners, tiers=tiers, session_config=session_config,
-                agent_models=models,
+                agent_models=models, context_limits=context_limits,
             ))
 
     def keys_of(name: str) -> list[str]:
@@ -226,6 +228,7 @@ def _node(
     runners: tuple[str, ...],
     tiers: Mapping[str, Mapping[str, str]],
     agent_models: Mapping[str, str],
+    context_limits: Mapping[str, int],
     session_config: Mapping[str, object] | None,
 ) -> Any:
     label = node.name or node.id
@@ -284,6 +287,7 @@ def _node(
         groups=groups,
         tiers=tiers,
         agent_models=agent_models,
+        context_limits=context_limits,
         runners=runners,
         **common,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     )

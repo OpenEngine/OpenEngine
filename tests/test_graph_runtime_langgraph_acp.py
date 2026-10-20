@@ -2089,6 +2089,68 @@ def test_finished_node_steering_replays_durable_transcript(
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("overflows", [False, True])
+def test_steering_replay_fits_a_capped_agents_context_window(
+    tmp_path: Path, overflows: bool,
+) -> None:
+    """A replay is one message, so it has to fit the agent's own window.
+
+    The agent accepts prompts up to 120,000 characters. A 50,000 token window
+    caps the replay near 100,000; when the agent refuses even that as too large,
+    a fresh session gets a brief replay without tool output instead.
+    """
+    from dataclasses import replace
+
+    follow_up = "Please adjust the implementation."
+
+    def build(saver: Any, agents: ACPAgentRegistry, where: Path) -> LangGraphDefinition:
+        builder = StateGraph(State)
+        builder.add_node(str(IMPLEMENTATION), ACPNode(
+            agent=AGENT, prompt=PROMPT, registry=agents, cwd=str(where),
+            graph_node_always_open=True, context_limits={AGENT: 50_000},
+        ))
+        builder.add_edge(START, str(IMPLEMENTATION))
+        builder.add_edge(str(IMPLEMENTATION), END)
+        return LangGraphDefinition(
+            graph_id=GRAPH, name="conversation", graph=builder.compile(checkpointer=saver)
+        )
+
+    async def scenario() -> None:
+        provider = registry(tmp_path, narrates=True).resolve(AGENT)
+        limit = "60000" if overflows else "120000"
+        agents = ACPAgentRegistry([
+            replace(provider, env={**provider.env, "STUB_ACP_MAX_PROMPT": limit}),
+        ])
+        async with runtime_over(tmp_path, agents, build=build) as (runtime, log):
+            run = await runtime.start(GRAPH, {})
+            await until(log, run.run_id, "run.finished")
+            for _ in range(20):
+                for kind in (EventKind.TOOL_CALL, EventKind.TOOL_RESULT):
+                    runtime.store.append_event(RuntimeEvent(
+                        run_id=run.run_id, node_id=IMPLEMENTATION, kind=kind,
+                        payload={"name": "Editing files", "content": "diff" * 180_000},
+                    ))
+            await runtime.steer(run.run_id, follow_up, node_id=IMPLEMENTATION)
+            await until(log, run.run_id, "run.finished", count=2)
+
+    asyncio.run(scenario())
+
+    sent_prompts = prompts(tmp_path)
+    replay = sent_prompts[-1]
+    assert replay.startswith("Continue the previous conversation")
+    assert replay.endswith(f"User: {follow_up}")
+    assert len(replay) <= 100_000 + 1_000
+    if overflows:
+        assert len(sent_prompts) == 3
+        assert DONE in replay
+        assert "tool.call:" not in replay
+        assert len(sent(tmp_path, "session/new")) == 3
+    else:
+        assert len(sent_prompts) == 2
+        assert "tool.call:" in replay
+        assert "[Content truncated for replay.]" in replay
+
+
 @pytest.mark.parametrize("kind", [EventKind.TRANSCRIPT, EventKind.TOOL_CALL])
 def test_replay_history_bounds_total_size_and_keeps_recent_context(kind: EventKind) -> None:
     history = [

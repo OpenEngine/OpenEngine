@@ -396,11 +396,40 @@ def prompt_text(prompt: ACPPrompt) -> str:
 
 _REPLAY_OMITTED = "[Earlier conversation omitted from replay.]\n\n"
 _MAX_REPLAY_PROMPT_CHARS = 1_048_576
+_MAX_REPLAY_HISTORY_CHARS = 512_000
+# About four characters a token. A replay is the first message of a fresh
+# session, and an agent cannot compact a single message that overflows its
+# window, so it takes at most half of a known window.
+_CHARS_PER_TOKEN = 4
 
 
-def _replay_prompt(history: Sequence[RuntimeEvent], opening: str) -> str:
-    """Budget the complete input, preserving the new message verbatim."""
-    prefix = "Continue the previous conversation below, including its tool history.\n\n"
+def _replay_budget(context_limit: int, *, brief: bool = False) -> int:
+    """Characters of history a replay may carry for an agent with this window.
+
+    No limit keeps the fixed cap. A brief replay is the fallback after the
+    agent refused a full one as too large, so it is much smaller still.
+    """
+    budget = _MAX_REPLAY_HISTORY_CHARS
+    if context_limit > 0:
+        budget = min(budget, context_limit * _CHARS_PER_TOKEN // 2)
+    return budget // 4 if brief else budget
+
+
+def _replay_prompt(
+    history: Sequence[RuntimeEvent], opening: str, *,
+    max_chars: int = _MAX_REPLAY_HISTORY_CHARS, brief: bool = False,
+) -> str:
+    """Budget the complete input, preserving the new message verbatim.
+
+    A brief replay carries only the conversation's own words, without tool
+    calls or their output.
+    """
+    if brief:
+        history = [event for event in history if event.kind is EventKind.TRANSCRIPT]
+    prefix = (
+        "Continue the previous conversation below.\n\n" if brief else
+        "Continue the previous conversation below, including its tool history.\n\n"
+    )
     suffix = f"\n\nUser: {opening}"
     available = _MAX_REPLAY_PROMPT_CHARS - len(prefix) - len(suffix)
     if available < len(_REPLAY_OMITTED):
@@ -409,11 +438,28 @@ def _replay_prompt(history: Sequence[RuntimeEvent], opening: str) -> str:
             f"within {_MAX_REPLAY_PROMPT_CHARS:,} characters "
             f"(message: {len(opening):,} characters). Shorten the message and retry."
         )
-    return prefix + _replay_history(history, max_chars=min(512_000, available)) + suffix
+    return prefix + _replay_history(history, max_chars=min(max_chars, available)) + suffix
+
+
+def _replay(
+    history: Sequence[RuntimeEvent], opening: str, context_limit: int, *, brief: bool,
+) -> ACPPrompt:
+    """A replay sized for the agent's window, keeping a steered message traceable."""
+    asked = _replay_prompt(
+        history, opening, brief=brief,
+        max_chars=_replay_budget(context_limit, brief=brief),
+    )
+    steering = steering_id_of(opening)
+    return SteeringMessage(asked, steering) if steering else asked
+
+
+def _context_overflow(exc: BaseException) -> bool:
+    """Whether the agent refused a prompt as larger than its context window."""
+    return "ContextOverflowError" in str(exc)
 
 
 def _replay_history(
-    history: Sequence[RuntimeEvent], *, max_chars: int = 512_000,
+    history: Sequence[RuntimeEvent], *, max_chars: int = _MAX_REPLAY_HISTORY_CHARS,
 ) -> str:
     """Bound synthetic history, which is sent as one provider input string.
 
@@ -531,6 +577,12 @@ class ACPNode:
     """
     graph_node_name: str = ""
     """What to call this node on screen. The node's own id when empty."""
+    context_limits: Mapping[str, int] = field(default_factory=dict)
+    """Each runner's context window in tokens, where one is known.
+
+    Bounds the history replayed into a fresh session: one replay larger than
+    the window is a message the agent can neither accept nor compact.
+    """
     graph_node_kind: str = "agent"
     graph_node_description: str = ""
     graph_node_always_open: bool = False
@@ -695,19 +747,19 @@ class ACPNode:
                 ), None)
                 asked = self.continuation_prompt if resuming else self._prompt(state)
                 opening = prompt_text(asked)
+                # What a replay ends with, kept to rebuild it smaller if the
+                # agent refuses the full one.
+                replayed: str | None = None
                 if not resuming and history and pending_prompts:
-                    opening = pending_prompts.popleft()
-                    asked = _replay_prompt(history, opening)
-                    if steering := steering_id_of(opening):
-                        # The replay wraps the message; keep it traceable.
-                        asked = SteeringMessage(asked, steering)
+                    opening = replayed = pending_prompts.popleft()
                 elif not resuming and history and last_outcome is EventKind.RUN_FAILED:
                     # A replacement session must retain the interrupted follow-up
                     # and tool context, including when the operator changed runners.
-                    asked = _replay_prompt(
-                        history, "Continue from where the conversation failed."
-                    )
+                    replayed = "Continue from where the conversation failed."
                     opening = ""
+                context_limit = self.context_limits.get(self.agent, 0)
+                if replayed is not None:
+                    asked = _replay(history, replayed, context_limit, brief=False)
                 # Published before the turn it starts, because a transcript that
                 # holds only the agent's half is not a conversation: a reader
                 # opening one has to guess what was asked, and cannot tell the work
@@ -726,17 +778,39 @@ class ACPNode:
                 said = ""
                 terminal_result: TerminalEvent | None = None
                 while True:
-                    result = await self._speak_or_terminal(
-                        turn, session, asked,
-                        terminal_tasks if terminal_result is None else [],
-                        clarifications,
-                    )
+                    try:
+                        result = await self._speak_or_terminal(
+                            turn, session, asked,
+                            terminal_tasks if terminal_result is None else [],
+                            clarifications,
+                        )
+                    except Exception as exc:
+                        if replayed is None or not _context_overflow(exc):
+                            raise
+                        # The session now holds a message too large to compact,
+                        # so retry once in a fresh one with only the recent
+                        # conversation, degrading the run rather than failing it.
+                        asked = _replay(history, replayed, context_limit, brief=True)
+                        replayed = None
+                        _TURNS.pop(session.session_id, None)
+                        await client.close()
+                        client, session = await self._open(
+                            None, cwd, tuple(mcp_servers), self.session_config,
+                        )
+                        turn = _Turn(self, execution, key, session.session_id)
+                        _TURNS[session.session_id] = turn
+                        execution.attach(session)
+                        await runtime.store.remember_session(
+                            execution.run_id, key, self._binding(execution, session, key)
+                        )
+                        continue
+                    replayed = None
                     if isinstance(result, (StepCompleted, RunFailed)):
                         # Keep the accepted result while queued steering runs.
                         # Racing its completed task again would cancel those turns.
                         terminal_result = result
                         result = _TurnResult("")
-                    if result is _CLARIFIED:
+                    if isinstance(result, _Clarified):
                         # Do not return from the LangGraph node: that would commit
                         # this superstep and follow its outgoing edge. The live
                         # execution remains at the same graph position until a

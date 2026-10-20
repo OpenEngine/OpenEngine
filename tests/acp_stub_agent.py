@@ -325,6 +325,13 @@ def run_turn(message_id: Any, session_id: str, prompt_text: str) -> None:
             "code": -32603, "message": "You've hit your limit",
         }})
         return
+    max_prompt = os.environ.get("STUB_ACP_MAX_PROMPT")
+    if max_prompt and len(prompt_text) > int(max_prompt):
+        send({"jsonrpc": "2.0", "id": message_id, "error": {
+            "code": -32603, "message": "Internal error: Session too large to compact",
+            "data": {"service": "session", "errorName": "ContextOverflowError"},
+        }})
+        return
     if prompt_text == os.environ.get("STUB_ACP_CANCEL_PROMPT"):
         say(session_id, os.environ.get("STUB_ACP_CANCEL_TEXT", ""))
         respond(message_id, {"stopReason": "cancelled"})
