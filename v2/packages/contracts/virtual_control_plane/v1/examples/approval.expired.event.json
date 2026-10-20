@@ -1,0 +1,20 @@
+{
+  "summary": "Restoration onto generation 2 could not carry the pending approval across, so it expired rather than being left undecidable.",
+  "message": "ApprovalExpired",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.approval.expired",
+  "headers": { "Nats-Msg-Id": "evt_appr_exp_a1" },
+  "payload": {
+    "event_id": "evt_appr_exp_a1",
+    "event_type": "approval.expired",
+    "occurred_at": "2026-10-19T22:04:50Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_exec_a2", "evt_appr_exp_a1"],
+    "resources": {
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1",
+      "approval_id": "rtappr_a1"
+    },
+    "payload": { "reason": "runtime_generation_changed", "runtime_generation": 1 }
+  }
+}

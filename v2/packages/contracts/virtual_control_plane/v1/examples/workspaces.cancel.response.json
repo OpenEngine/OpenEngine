@@ -1,0 +1,10 @@
+{
+  "message": "CancelResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.ws_a1.cancel",
+  "payload": {
+    "command_id": "cmd_cancel_a2",
+    "status": "accepted",
+    "operation_id": "op_cancel_a2",
+    "resource_id": "attempt_a2"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "message": "DecideApprovalResponse",
+  "in_reply_to": "oe.v1.vcp.control.approvals.rtappr_a2.decide",
+  "payload": {
+    "command_id": "cmd_decide_a2",
+    "status": "accepted",
+    "operation_id": "op_decide_a2",
+    "resource_id": "rtappr_a2"
+  }
+}

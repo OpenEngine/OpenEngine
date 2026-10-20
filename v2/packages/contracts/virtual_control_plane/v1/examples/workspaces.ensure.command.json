@@ -1,0 +1,9 @@
+{
+  "message": "EnsureWorkspaceCommand",
+  "subject": "oe.v1.vcp.control.workspaces.ws_a1.ensure",
+  "payload": {
+    "command_id": "cmd_ensure_a",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_ensure_a"],
+    "payload": { "restore": "allow" }
+  }
+}

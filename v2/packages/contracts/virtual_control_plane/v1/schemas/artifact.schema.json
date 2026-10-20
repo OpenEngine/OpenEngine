@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Artifacts",
+  "description": "Files and results a workspace produces.",
+  "$defs": {
+    "artifact_kind": {
+      "type": "string",
+      "enum": ["patch", "file", "log", "report", "result", "other"]
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "workspace_id",
+        "kind",
+        "name",
+        "size_bytes",
+        "uri",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/artifact_id" },
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "kind": { "$ref": "#/$defs/artifact_kind" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "uri": {
+          "description": "Where the content is stored. Reading it is outside this contract.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    }
+  }
+}

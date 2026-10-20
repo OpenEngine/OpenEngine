@@ -1,0 +1,31 @@
+{
+  "message": "GetCapabilitiesResponse",
+  "in_reply_to": "oe.v1.vcp.query.capabilities.get",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "providers": [
+        {
+          "provider": "smolvm",
+          "isolation": "microvm",
+          "checkpoint": true,
+          "suspend": true,
+          "restore": "same_host",
+          "approvals_survive_restore": false,
+          "max_resources": { "cpu_millis": 8000, "memory_mib": 16384, "disk_gib": 100 },
+          "tools": ["git", "terminal", "browser"]
+        },
+        {
+          "provider": "process",
+          "isolation": "process",
+          "checkpoint": false,
+          "suspend": false,
+          "restore": "none",
+          "approvals_survive_restore": false,
+          "max_resources": { "cpu_millis": 4000, "memory_mib": 8192, "disk_gib": 50 },
+          "tools": ["git", "terminal"]
+        }
+      ]
+    }
+  }
+}

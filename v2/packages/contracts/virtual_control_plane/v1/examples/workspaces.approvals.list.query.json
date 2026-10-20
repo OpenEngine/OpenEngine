@@ -1,0 +1,5 @@
+{
+  "message": "ListApprovalsQuery",
+  "subject": "oe.v1.vcp.query.workspaces.ws_a1.approvals.list",
+  "payload": { "params": { "session_id": "session_a1" } }
+}

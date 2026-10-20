@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Runtime approvals",
+  "description": "Approvals raised by an agent runner inside a workspace (VCP-owned). Distinct from GE workflow approvals, which gate graph transitions.",
+  "$defs": {
+    "approval_state": {
+      "description": "pending: awaiting a decision. approved / rejected: decided. expired: can no longer be decided, because it timed out or its runtime generation ended and the provider could not carry it across restoration.",
+      "type": "string",
+      "enum": ["pending", "approved", "rejected", "expired"]
+    },
+    "decision": { "type": "string", "enum": ["approve", "reject"] },
+    "binding": {
+      "description": "What a runtime approval belongs to. A decision must restate it exactly.",
+      "type": "object",
+      "required": ["workspace_id", "session_id", "attempt_id", "runtime_generation"],
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        }
+      }
+    },
+    "request": {
+      "description": "What the agent asked to do.",
+      "type": "object",
+      "required": ["kind", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["tool_call", "command", "file_write", "network", "other"]
+        },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "details": { "type": "object", "maxProperties": 64 }
+      }
+    },
+    "provider_handle": {
+      "description": "The runner's own approval handle, kept opaque so the decision can be delivered to it.",
+      "type": "object",
+      "required": ["provider", "handle"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "../../../common/v1/types.schema.json#/$defs/slug" },
+        "handle": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "runtime_approval": {
+      "type": "object",
+      "required": ["approval_id", "binding", "state", "request", "provider_handle", "requested_at"],
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_approval_id"
+        },
+        "binding": { "$ref": "#/$defs/binding" },
+        "state": { "$ref": "#/$defs/approval_state" },
+        "request": { "$ref": "#/$defs/request" },
+        "provider_handle": { "$ref": "#/$defs/provider_handle" },
+        "requested_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "expires_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "decided_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "decision": { "$ref": "#/$defs/decision" },
+        "comment": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "expiry_reason": { "$ref": "#/$defs/expiry_reason" }
+      }
+    },
+    "expiry_reason": {
+      "type": "string",
+      "enum": ["timeout", "runtime_generation_changed", "attempt_ended"]
+    }
+  }
+}

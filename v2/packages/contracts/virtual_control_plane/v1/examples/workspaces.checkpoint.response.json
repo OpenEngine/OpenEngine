@@ -1,0 +1,10 @@
+{
+  "message": "CheckpointResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.ws_a1.checkpoint",
+  "payload": {
+    "command_id": "cmd_ckpt_a",
+    "status": "accepted",
+    "operation_id": "op_ckpt_a",
+    "resource_id": "ws_a1"
+  }
+}

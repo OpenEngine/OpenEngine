@@ -1,0 +1,9 @@
+{
+  "message": "CheckpointCommand",
+  "subject": "oe.v1.vcp.control.workspaces.ws_a1.checkpoint",
+  "payload": {
+    "command_id": "cmd_ckpt_a",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_ckpt_a"],
+    "payload": { "label": "before-refactor" }
+  }
+}

@@ -1,0 +1,314 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Virtual Control Plane queries",
+  "description": "Requests and responses of `oe.v1.vcp.query.…`. Read-only; no query creates an operation.",
+  "$defs": {
+    "get_capabilities_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": {
+              "description": "Omit `provider` for every configured provider.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "provider": { "$ref": "workspace.schema.json#/$defs/provider" } }
+            }
+          }
+        }
+      ]
+    },
+    "get_capabilities_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/capabilities_result" } } }
+      ]
+    },
+    "capabilities_result": {
+      "type": "object",
+      "required": ["providers"],
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": { "$ref": "capabilities.schema.json#/$defs/provider_capabilities" }
+        }
+      }
+    },
+    "list_workspaces_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": {
+              "description": "Sorted by `created_at` descending, then `workspace_id` descending. Destroyed workspaces are included only when `state` names `destroyed`.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "state": {
+                  "type": "array",
+                  "items": { "$ref": "workspace.schema.json#/$defs/workspace_state" },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "provider": { "$ref": "workspace.schema.json#/$defs/provider" },
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+                "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "list_workspaces_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/workspace_page" } } }
+      ]
+    },
+    "workspace_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "workspace.schema.json#/$defs/workspace" } },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_workspace_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": { "type": "object", "additionalProperties": false, "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "get_workspace_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/workspace_result" } } }
+      ]
+    },
+    "workspace_result": {
+      "type": "object",
+      "required": ["workspace"],
+      "additionalProperties": false,
+      "properties": { "workspace": { "$ref": "workspace.schema.json#/$defs/workspace" } }
+    },
+    "list_sessions_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": {
+              "description": "Sessions of the workspace in the subject, sorted by `created_at` descending, then `session_id` descending.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "state": {
+                  "type": "array",
+                  "items": { "$ref": "session.schema.json#/$defs/session_state" },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+                "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "list_sessions_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/session_page" } } }
+      ]
+    },
+    "session_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "session.schema.json#/$defs/session" } },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "list_approvals_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": {
+              "description": "Runtime approvals of the workspace in the subject, sorted by `requested_at` descending, then `approval_id` descending.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "state": {
+                  "type": "array",
+                  "items": { "$ref": "approval.schema.json#/$defs/approval_state" },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+                "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+                "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "list_approvals_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/approval_page" } } }
+      ]
+    },
+    "approval_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "approval.schema.json#/$defs/runtime_approval" }
+        },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "list_artifacts_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": {
+              "description": "Artifacts of the workspace in the subject, sorted by `created_at` descending, then `artifact_id` descending.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+                "kind": {
+                  "type": "array",
+                  "items": { "$ref": "artifact.schema.json#/$defs/artifact_kind" },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+                "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "list_artifacts_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/artifact_page" } } }
+      ]
+    },
+    "artifact_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "artifact.schema.json#/$defs/artifact" } },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_session_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": { "type": "object", "additionalProperties": false, "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "get_session_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/session_result" } } }
+      ]
+    },
+    "session_result": {
+      "type": "object",
+      "required": ["session"],
+      "additionalProperties": false,
+      "properties": { "session": { "$ref": "session.schema.json#/$defs/session" } }
+    },
+    "list_session_events_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": {
+              "description": "History of the session in the subject, sorted by `sequence` ascending. Entries are append-only, so paging never skips or repeats one.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["message", "tool_call", "steering", "usage"]
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+                "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+                "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "list_session_events_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/session_event_page" } } }
+      ]
+    },
+    "session_event_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "session.schema.json#/$defs/session_event" }
+        },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_operation_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": { "type": "object", "additionalProperties": false, "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "get_operation_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/operation_result" } } }
+      ]
+    },
+    "operation_result": {
+      "type": "object",
+      "required": ["operation"],
+      "additionalProperties": false,
+      "properties": { "operation": { "$ref": "operations.schema.json#/$defs/operation" } }
+    }
+  }
+}

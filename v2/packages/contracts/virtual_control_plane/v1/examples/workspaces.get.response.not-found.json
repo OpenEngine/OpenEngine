@@ -1,0 +1,13 @@
+{
+  "message": "GetWorkspaceResponse",
+  "in_reply_to": "oe.v1.vcp.query.workspaces.ws_zz.get",
+  "payload": {
+    "status": "error",
+    "error": {
+      "code": "NOT_FOUND",
+      "message": "No workspace ws_zz.",
+      "retryable": false,
+      "details": { "resource_type": "workspace", "resource_id": "ws_zz" }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "message": "SteeringApplied",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.steering.applied",
+  "headers": { "Nats-Msg-Id": "evt_steer_a" },
+  "payload": {
+    "event_id": "evt_steer_a",
+    "event_type": "steering.applied",
+    "occurred_at": "2026-10-19T21:40:00Z",
+    "producer": "vcp",
+    "causal_path": [
+      "gh-conn_acme_gh-dlv_88",
+      "cmd_submit_88",
+      "cmd_jobsteer_88",
+      "cmd_steer_a",
+      "evt_steer_a"
+    ],
+    "resources": { "workspace_id": "ws_a1", "session_id": "session_a1" },
+    "payload": {
+      "operation": { "operation_id": "op_steer_a", "command_id": "cmd_steer_a" },
+      "runtime_generation": 1
+    }
+  }
+}
