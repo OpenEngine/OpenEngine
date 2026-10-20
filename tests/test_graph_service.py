@@ -7,6 +7,7 @@ checkpoints -- the same path the daemon takes, minus HTTP and the WorkOrder row.
 
 import asyncio
 import dataclasses
+import gzip
 import json
 import sqlite3
 import sys
@@ -1560,6 +1561,33 @@ def test_the_poller_stops_reading_an_endpoint_that_answers_with_an_endless_body(
                 f"the poller read {served['bytes']} bytes from one endpoint pass without a size cap"
             )
             assert health_of(service, "qwen") is not None
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_does_not_decompress_an_endpoints_body_past_the_size_cap(tmp_path: Path) -> None:
+    """A small gzip body that inflates to many times the cap must not be decoded."""
+    listing = b'{"models": [{"name": "qwen3-coder:latest"}' + b" " * (32 * 1024 * 1024) + b"]}"
+    bomb = gzip.compress(listing)
+    asked: list[str | None] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(request.headers.get("accept-encoding"))
+        return httpx.Response(
+            200, headers={"content-type": "application/json", "content-encoding": "gzip"}, content=bomb,
+        )
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            assert asked and all(value == "identity" for value in asked)
+            health = health_of(service, "qwen")
+            assert health is not None and health["modelLoaded"] is not True, (
+                "the poller decoded a compressed body it had asked not to be sent"
+            )
 
     asyncio.run(scenario())
 

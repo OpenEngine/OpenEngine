@@ -1263,13 +1263,21 @@ class GraphService:
         A body the server declared to be bigger than the cap is not read at all.
         A user:password in `url` is sent as basic auth, never as part of the
         url, so httpx's request log line cannot print it.
+
+        httpx decodes a compressed body before the cap can count it, and one
+        small chunk can inflate far past the cap, so only an uncompressed body
+        is read. The probe asks for identity, and a server that sends a
+        Content-Encoding anyway is answered as if its body were unreadable.
         """
         target = httpx.URL(url)
         auth = httpx.BasicAuth(target.username, target.password) if target.userinfo else None
         target = target.copy_with(username=None, password=None)
-        async with client.stream("GET", target, auth=auth) as response:
+        headers = {"Accept-Encoding": "identity"}
+        async with client.stream("GET", target, auth=auth, headers=headers) as response:
             declared = response.headers.get("content-length")
             if declared is not None and declared.isdigit() and int(declared) > self._probe_body_cap:
+                return response.status_code, b""
+            if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
                 return response.status_code, b""
             chunks: list[bytes] = []
             size = 0
