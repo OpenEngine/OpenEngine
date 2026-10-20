@@ -1436,6 +1436,25 @@ def test_typed_outputs_reject_wrong_json_type(kind, wire, required):
         )
 
 
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("number", ["1e400", "-1e400", "NaN"])
+@pytest.mark.parametrize("kind,template", [
+    ("number", "NUMBER"),
+    ("list", '[0, {"nested": [NUMBER]}]'),
+    ("object", '{"nested": [0, {"value": NUMBER}]}'),
+])
+def test_typed_outputs_reject_nonfinite_numbers(kind, template, number, required):
+    from engine.graph_service.compile import _validator, _wire_outputs
+    from engine.graph_service.language import OutputSpec
+
+    wire = template.replace("NUMBER", number)
+    outputs = (OutputSpec("model", kind, required=required),)
+    with pytest.raises(ValueError, match="output model must contain only finite numbers"):
+        _wire_outputs(outputs)({"model": json.loads(wire)})
+    with pytest.raises(ValueError, match="output model must contain only finite numbers"):
+        _validator(outputs)(typed_completion({"model": wire}))
+
+
 @pytest.mark.parametrize("kind", ["object", "list", "number", "integer", "boolean"])
 @pytest.mark.parametrize("wire", ["not JSON", ""])
 def test_typed_outputs_reject_invalid_json(kind, wire):
@@ -1655,6 +1674,9 @@ def test_compiled_yaml_terminal_accepts_json_outputs(tmp_path, monkeypatch, incl
                 ({**values, "note": "bad"}, "output note must be one of ok"),
                 ({**values, "note": ""}, "output note must be one of ok"),
                 ({**values, "score": True}, "output score must be a number"),
+                ({**values, "score": json.loads("1e400")}, "output score must contain only finite numbers"),
+                ({**values, "items": [0, {"a": [float("-inf")]}]}, "output items must contain only finite numbers"),
+                ({**values, "model": {"a": [{"b": float("nan")}]}}, "output model must contain only finite numbers"),
                 ({**values, "model": []}, "output model must be a object"),
                 ({**values, "note": None}, "output note must be a string"),
                 ({**values, "extra": "x"}, "undeclared outputs: extra"),

@@ -26,6 +26,7 @@ The graph's id is the version's id, so a run pins exactly what it started.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -581,6 +582,7 @@ def _wire_outputs(outputs: Sequence[OutputSpec]) -> Callable[[object], dict[str,
             value = values[output.name]
             if not _typed(value, output.type):
                 raise ValueError(f"output {output.name} must be a {output.type}")
+            _validate_finite_numbers(value, output.name)
             encoded[output.name] = value if isinstance(value, str) else json.dumps(value)
         return encoded
     return validate
@@ -598,6 +600,7 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
                     raise ValueError(f"output {output.name} is required")
                 continue
             value = _decode_output(value, output)
+            _validate_finite_numbers(value, output.name)
             if output.type == "findings":
                 parse_findings(value, require_lineage=output.lineage)
             elif output.enum and value not in output.enum:
@@ -606,6 +609,18 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
                 raise ValueError(f"output {output.name} must be a {output.type}")
 
     return validate
+
+
+def _validate_finite_numbers(value: object, name: str) -> None:
+    """Keep non-finite JSON numbers out of persisted graph state."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"output {name} must contain only finite numbers")
+    if isinstance(value, Mapping):
+        for item in value.values():
+            _validate_finite_numbers(item, name)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_finite_numbers(item, name)
 
 
 def _decode_output(value: object, output: OutputSpec) -> Any:
