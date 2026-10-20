@@ -4,7 +4,7 @@ name: pages
 # serves it at https://openengine.cc, with scripts/install.sh at /install.sh.
 # The custom domain lives in Settings -> Pages; site/static/CNAME records it in the
 # repository as well, so the domain is visible from a checkout.
-# Pull requests generate guides and build, so a page that fails to compile as MDX
+# Pull requests run the build alone, so a page that fails to compile as MDX
 # (such as a generated one) is caught before it reaches main.
 
 on:
@@ -12,7 +12,6 @@ on:
     branches: [main]
     paths: &site_paths
       - "site/**"
-      - "e2e/**"
       - "scripts/install.sh"
       - "scripts/generate_cli_docs.py"
       - "cli/service/src/engine/graph_service/**"
@@ -24,9 +23,6 @@ on:
 permissions:
   contents: read
 
-env:
-  UV_VERSION: "0.9.28"
-
 # One deployment at a time, and never cancel one in flight: the site that is
 # live should always be the last commit that finished, not a half-uploaded one.
 concurrency:
@@ -37,48 +33,14 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
-    env:
-      E2E_AGENT: stub
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: true
-
-      - name: Install workspace
-        run: uv sync --locked --all-packages
-
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: 22
           cache: npm
-          cache-dependency-path: |
-            site/package-lock.json
-            e2e/package-lock.json
-
-      - name: Install CLI e2e dependencies
-        working-directory: e2e
-        run: npm ci
-
-      - name: Install Chromium
-        working-directory: e2e
-        run: npx playwright install --with-deps chromium
-
-      - name: Generate CLI guides
-        working-directory: e2e
-        run: npm run doc
-
-      - name: Upload generated CLI guides
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7
-        with:
-          name: cli-guides
-          path: site/docs/guides
-          if-no-files-found: error
-          retention-days: 14
+          cache-dependency-path: site/package-lock.json
 
       # Served as https://openengine.cc/install.sh for `curl ... | sh`.
       - name: Publish the installer
