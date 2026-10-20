@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5D5G93BH9T9QK33ZFT2EA03",
+  "strategy": "manual-commit",
+  "branch": "shawkins/contracts-vcp",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "v2/packages/contracts/connection_bus/v1/reference.html",
+    "v2/packages/contracts/graph_engine/v1/reference.html",
+    "v2/packages/contracts/tooling/reference.py",
+    "v2/packages/contracts/virtual_control_plane/v1/reference.html"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 276,
+    "cache_creation_tokens": 195628,
+    "cache_read_tokens": 18545575,
+    "output_tokens": 90399,
+    "api_call_count": 134
+  }
+}

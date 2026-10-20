@@ -1,0 +1,169 @@
+we're running a comparison of rivet vs openengine,
+I'd like to do an ootb install of rivet and start to see what the difference is between these two tools
+I'd like to get a workflow in place that runs a fan-out reviewer sequence to see what rivet's able to do
+
+---
+
+let me know when you're done writing and give me a readme that I can run the steps for myself
+
+---
+
+what about steering? how would I steer a rivet agent mid-session?  what would it take to make these use agentos sandboxes so they get their own worktrees? how would I take structured findings and persist them onto a PR?
+
+---
+
+Okay so basically if we want to continue OE as-is it looks like a competitor to rivet? 
+
+What's the difference between a Sandbox Agent and an agentOS sandbox? What would it take to migrate our test to use Sandbox Agent with a local (Boxlite?) provider?
+
+---
+
+start with credentials extract-env and do the migration
+
+---
+
+run the smoke test
+
+How would I persist an agent's changes using boxlite? so the first agent implements, the next agents review
+
+---
+
+yeah I'd like to test the entire chain (implement commit export review)
+
+---
+
+<task-notification>
+<task-id>b1f3ft412</task-id>
+<summary>Monitor event: "chain-1 run status and errors"</summary>
+<event>[2026-10-20T17:18:27.444Z] reviewing | facets done: 0/5</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwrnguvdq</task-id>
+<tool-use-id>toolu_01JDjDAtEmvnTXv8FgsugJLy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-shea-code-openengine/2a7ff85d-b3b9-4417-a4a7-4f9b5d89105b/tasks/bwrnguvdq.output</output-file>
+<status>failed</status>
+<summary>Background command "Run the implement→commit→export→review chain" failed with exit code 143</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>blhr7y0fs</task-id>
+<tool-use-id>toolu_01UXUiByioq5ewxMz7sCFgLh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-shea-code-openengine/2a7ff85d-b3b9-4417-a4a7-4f9b5d89105b/tasks/blhr7y0fs.output</output-file>
+<status>failed</status>
+<summary>Background command "Run the Rivet server" failed with exit code 143</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>level=error actorId=lv1atujt2atca6gpa6iws6evtucl00 actorName=prReview actorKey="[\"chain-1\"]" msg="workflow run failed" error="HistoryDivergedError: Entry \"capture-diff\" exists in history but was not visited. Workflow code may have changed. Use ctx.removed() to handle migrations."
+ts=2026-10-20T17:19:26.612957Z level=error message="napi run handler failed" actor_id=lv1atujt2atca6gpa6iws6evtucl00 error="Entry \"capture-diff\" exists in history but was not visited. Workflow code may have changed. Use ctx.removed() to handle migrations.\n\nCaused by:\n    internal_error: Entry \"capture-diff\" exists in history but was not visited. Workflow code may have changed. Use ctx.removed() to handle migrations."</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>run chain-2 (implement): started
+[2026-10-20T17:19:36.967Z] provisioning</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>ts=2026-10-20T17:19:56.623135Z level=error message="sqlite operation failed" actor_id=lv1atujt2atca6gpa6iws6evtucl00 generation=Some(2) backend=LocalNative operation=query sql="SELECT MIN(trigger_at) FROM _rivet_schedule_events" binding_count=0 statement_count=1 group=sqlite code=transaction_closed error_message="SQLite transaction coordinator is closed." metadata=None error_chain="[\"actor lv1atujt2atca6gpa6iws6evtucl00 generation 2 key chain-1\", \"sqlite transaction coordinator is closed\", \...(truncated)
+ts=2026-10-20T17:19:56.623231Z level=error message="failed to sync scheduled actor alarm" actor_id=lv1atujt2atca6gpa6iws6evtucl00 error="actor lv1atujt2atca6gpa6iws6evtucl00 generation 2 key chain-1\n\nCaused by:\n    0: sqlite transaction coordinator is closed\n    1: transaction_closed: SQLite transaction coordinator is closed."</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+how can I monitor?
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>[2026-10-20T17:19:58.030Z] implementing</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>[2026-10-20T17:20:34.166Z] reviewing | facets done: 0/5</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>[2026-10-20T17:20:46.224Z] reranking</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bimfx0hj8</task-id>
+<tool-use-id>toolu_01NybY125Hg2761AsWg4zwfV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-shea-code-openengine/2a7ff85d-b3b9-4417-a4a7-4f9b5d89105b/tasks/bimfx0hj8.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the implement→commit→export→review chain" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>[2026-10-20T17:20:49.241Z] complete
+"Under the tagline": location goes right after tagline, before description.No python3; I'll edit with the Edit tool.Now the earlier collection error (missing engine.apps.control_server) needs a look.`Finding.as_comment()` now includes the finding's file and line in the PR comment, and the tests pass.
+- A plain `uv run pytest tests/test_review_findings.py -q` fails at collection with `ModuleNotFoundError: No module named 'engine.apps.control_server'`. That import comes from `tests/test_graph_workflow_definitions.py`, and the plain run doesn't install the workspace packages. `--all-packages` fixes it.
+Committed 497b3d82 on b30a351f; exported to /Users/shea/code/rivet-eval/runs/chain-2.git agent/chain-2
+Kept after rerank (1):
+wall clock: 70s</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4xsxfbfm</task-id>
+<summary>Monitor event: "chain-2 run status and errors"</summary>
+<event>ts=2026-10-20T17:21:19.248215Z level=error message="sqlite operation failed" REDACTED generation=Some(1) backend=LocalNative operation=query sql="SELECT MIN(trigger_at) FROM _rivet_schedule_events" binding_count=0 statement_count=1 group=sqlite code=transaction_closed error_message="SQLite transaction coordinator is closed." metadata=None error_chain="[\"actor hwr7rf3w55n26hpwdm1a6qq7ybdl00 generation 1 key chain-2\", \"sqlite transaction coordinator is closed\", \...(truncated)
+ts=2026-10-20T17:21:19.24824Z level=error message="failed to sync scheduled actor alarm" REDACTED error="actor hwr7rf3w55n26hpwdm1a6qq7ybdl00 generation 1 key chain-2\n\nCaused by:\n    0: sqlite transaction coordinator is closed\n    1: transaction_closed: SQLite transaction coordinator is closed."</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+what's the rivet engine credential?
+
+---
+
+<task-notification>
+<task-id>bei046rkx</task-id>
+<tool-use-id>toolu_01PHMTsHfDydqMAPwfSjpUiD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-shea-code-openengine/2a7ff85d-b3b9-4417-a4a7-4f9b5d89105b/tasks/bei046rkx.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the Rivet server" completed (exit code 0)</summary>
+</task-notification>
