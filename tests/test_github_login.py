@@ -484,6 +484,7 @@ def test_service_token_admits_run_creation():
 
 
 @pytest.mark.parametrize("method, path", [
+    ("POST", "/api/v1/repositories/trust"),
     ("GET", "/api/runs"), ("POST", "/api/runs/run-1"), ("POST", "/api/data"), ("GET", "/api/data"),
 ])
 def test_service_token_admits_nothing_else(method, path):
@@ -522,30 +523,32 @@ def test_service_token_rotation_takes_effect_per_request():
     assert client.post("/api/runs", headers={"Authorization": f"Bearer {current['token']}"}).status_code == 201
 
 
-def test_service_token_reader_prefers_environment_and_rereads_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize("variable", ["ENGINE_SERVICE_TOKEN", "ENGINE_ONBOARDING_TOKEN"])
+def test_service_token_reader_prefers_environment_and_rereads_file(tmp_path, monkeypatch, variable):
     from types import SimpleNamespace
     from engine.apps.web.__main__ import _service_token_reader
 
-    monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv(variable, raising=False)
     loaded = SimpleNamespace(path=tmp_path / "engine.toml")
     env = tmp_path / ".env"
-    env.write_text(f"ENGINE_SERVICE_TOKEN={SERVICE_TOKEN}\n")
-    read = _service_token_reader(loaded)
+    env.write_text(f"{variable}={SERVICE_TOKEN}\n")
+    read = _service_token_reader(loaded, variable)
     assert read() == SERVICE_TOKEN
-    env.write_text("ENGINE_SERVICE_TOKEN=rotated-token-rotated-token-rotated\n")
+    env.write_text(f"{variable}=rotated-token-rotated-token-rotated\n")
     assert read() == "rotated-token-rotated-token-rotated"
-    monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "from-environment-" * 2)
+    monkeypatch.setenv(variable, "from-environment-" * 2)
     assert read() == "from-environment-" * 2
 
 
-def test_invalid_service_token_fails_startup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("variable", ["ENGINE_SERVICE_TOKEN", "ENGINE_ONBOARDING_TOKEN"])
+def test_invalid_service_token_fails_startup(tmp_path, monkeypatch, variable):
     from types import SimpleNamespace
     from engine.apps.web.__main__ import _service_token_reader
     from engine.runtime import EngineConfigError
 
-    monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "short")
-    with pytest.raises(EngineConfigError, match="ENGINE_SERVICE_TOKEN"):
-        _service_token_reader(SimpleNamespace(path=tmp_path / "engine.toml"))
+    monkeypatch.setenv(variable, "short")
+    with pytest.raises(EngineConfigError, match=variable):
+        _service_token_reader(SimpleNamespace(path=tmp_path / "engine.toml"), variable)
 
 
 @pytest.mark.parametrize(("answer", "error"), [
@@ -1159,3 +1162,32 @@ def test_the_users_own_token_fills_in_only_the_repositories_the_server_could_not
     assert asyncio.run(flow.writable_repositories(alice)) == {"acme/web"}
     # `acme/docs` is still unknown, so nothing is cached.
     assert 42 not in flow._access
+
+
+@pytest.mark.parametrize('method,path,allowed', [
+    ('POST', '/api/repositories/onboard', True),
+    ('GET', '/api/repositories/onboard/job1', True),
+    ('GET', '/api/repositories/onboard', False),
+    ('POST', '/api/repositories/onboard/job1', False),
+    ('GET', '/api/repositories/onboard/job1/extra', False),
+    ('POST', '/api/repositories/trust', False),
+    ('POST', '/api/runs', False),
+    ('GET', '/api/v1/graphs', False),
+    ('GET', '/api/config', False),
+])
+def test_separate_onboarding_token_scope(method, path, allowed):
+    from starlette.responses import JSONResponse
+    token = 'onboarding-secret-' * 3
+    flow = GitHubLogin(GitHubLoginConfig(
+        'client', 'secret', 'https://engine.test/api/auth/github/callback'
+    ), lambda: SERVICE_TOKEN, onboarding_token=lambda: token)
+    async def endpoint(request):
+        assert await flow.visible_repositories(request) is None
+        return JSONResponse({'ok': True})
+    client = TestClient(flow.middleware(Starlette(routes=[Route(path, endpoint, methods=[method])])),
+                        base_url='https://engine.test')
+    assert client.request(method, path, headers={'Authorization': f'Bearer {token}'}).status_code == (200 if allowed else 401)
+    if path.startswith('/api/repositories/'):
+        assert client.request(method, path, headers={'Authorization': f'Bearer {SERVICE_TOKEN}'}).status_code == 401
+    token = SERVICE_TOKEN
+    assert client.request(method, path, headers={'Authorization': f'Bearer {token}'}).status_code == (200 if path in ['/api/runs', '/api/v1/graphs'] else 401)

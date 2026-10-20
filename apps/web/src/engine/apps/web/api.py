@@ -1166,6 +1166,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     github_client_id_source: str = "configuration",
     github_login_config: GitHubLoginConfig | None = None,
     service_token: Callable[[], str] = lambda: "",
+    onboarding_token: Callable[[], str] = lambda: "",
     source_control_preferences: SourceControlPreferences | None = None,
     loop_settings: LoopSettingsStore | None = None,
     loop_store: LoopStore | None = None,
@@ -4491,6 +4492,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         operators=frozenset(login_operators),
         authorize_user=github_user_repository_access,
         access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
+        onboarding_token=onboarding_token,
     )
     routes = [
         *onboarding.routes(github_login.visible_repositories, _is_local_request),

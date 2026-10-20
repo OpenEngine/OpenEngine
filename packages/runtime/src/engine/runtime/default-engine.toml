@@ -51,6 +51,7 @@ review_request_workflow = "review"
 # The gh login source control and agents use (GH_CONFIG_DIR). Defaults to gh's own
 # location: $XDG_CONFIG_HOME/gh when set, otherwise ~/.config/gh.
 # gh_config_dir = "~/.config/gh-work"
+# ssh_key = "~/.ssh/id_ed25519_work"
 
 # Defaults resolved when a review run starts; explicit run inputs win.
 [pull_requests]

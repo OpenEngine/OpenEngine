@@ -123,6 +123,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     repo = commands.add_parser("repo", help="add repositories and manage trust")
     repo_actions = repo.add_subparsers(dest="action", required=True)
     onboard = repo_actions.add_parser("add", parents=[common], help="add a local checkout or clone a GitHub/GitLab URL")
+    onboard.add_argument("--review-backend", metavar="NAME", help="backend with service credentials for the suggested review work order")
     onboard.add_argument("--trust", "--trusted", action=argparse.BooleanOptionalAction, default=None, help="remember whether agents may run without approval here")
     onboard.add_argument("url", nargs="?", default=".", metavar="repository", help="existing checkout path or GitHub/GitLab URL (default: .)")
     onboard.add_argument("--path", help="clone destination on the daemon machine (default: [onboarding] directory, else ~/code/repo)")
@@ -279,6 +280,9 @@ def main(arguments: argparse.Namespace) -> int:
 
 def onboard_repository(arguments: argparse.Namespace) -> int:
     backend, _ = _connect(arguments)
+    review_backend = backends.load().get(arguments.review_backend) if arguments.review_backend else backend
+    if arguments.review_backend and review_backend.token_env == "ENGINE_ONBOARDING_TOKEN":
+        raise _UsageError("--review-backend must use service credentials, not ENGINE_ONBOARDING_TOKEN")
     client = Client(backend, api_prefix="/api")
     reference, path = arguments.url, arguments.path
     if backend.is_local:
@@ -305,8 +309,12 @@ def onboard_repository(arguments: argparse.Namespace) -> int:
                 print(f"{problem['message']}. Fix: {problem['fix']}", file=sys.stderr)
             return EXIT_FAILED
         if state["status"] == "complete":
+            if review_backend.token_env == "ENGINE_ONBOARDING_TOKEN":
+                print("For a review command, repeat repo add with --review-backend NAME, "
+                      "using a backend for this daemon configured with its service token.")
+                return EXIT_OK
             command = ["engine", "go", "review", "--project", state["repository"],
-                       "--repo", state["path"], "--backend", backend.name, "--input", "ref=HEAD"]
+                       "--repo", state["path"], "--backend", review_backend.name, "--input", "ref=HEAD"]
             print(f"Next: {shlex.join(command)}")
             return EXIT_OK
         time.sleep(WAIT_INTERVAL_SECONDS)

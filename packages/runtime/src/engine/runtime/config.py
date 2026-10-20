@@ -192,6 +192,9 @@ class GitHubConfig:
     gh_config_dir: str = ""
     """`gh` login directory (GH_CONFIG_DIR), or empty to inherit the provider environment."""
 
+    ssh_key: str = ""
+    """SSH private key for daemon git operations, or empty to inherit SSH settings."""
+
     @property
     def webhook_repositories(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(
@@ -326,6 +329,10 @@ class LoadedEngineConfig:
         return self._config_directory(self.config.github.gh_config_dir)
 
     @property
+    def ssh_key(self) -> Path | None:
+        return self._config_directory(self.config.github.ssh_key)
+
+    @property
     def workflows_directory(self) -> Path | None:
         configured = self.config.workflows.directory
         if not configured:
@@ -417,6 +424,8 @@ def load_engine_config(
     ):
         if directory is not None and not directory.is_dir():
             raise EngineConfigError(f"{label} is not an existing directory: {directory}")
+    if loaded.ssh_key is not None and not loaded.ssh_key.is_file():
+        raise EngineConfigError(f"github.ssh_key is not an existing file: {loaded.ssh_key}")
     return loaded
 
 
@@ -483,7 +492,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     github = _table(document.get("github", {}), "github")
     _reject_unknown(
         github,
-        {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow", "gh_config_dir"},
+        {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow", "gh_config_dir", "ssh_key"},
         "github",
     )
     gh_config_dir = (
@@ -693,6 +702,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             repositories=github_repositories,
             resolve_addressed_threads=resolve_addressed_threads,
             gh_config_dir=gh_config_dir,
+            ssh_key=_nonblank_string(github["ssh_key"], "github.ssh_key") if "ssh_key" in github else "",
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()
