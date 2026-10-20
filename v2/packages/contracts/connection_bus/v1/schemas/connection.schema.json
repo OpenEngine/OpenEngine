@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Connection",
+  "description": "A configured link between OpenEngine and one account at an external provider. Nothing here is secret: credentials are held in a secret store and only referenced.",
+  "$defs": {
+    "connection": {
+      "description": "Snapshot of a connection as `get` and `list` return it. A deleted connection keeps its ID and is still returned by `get` with state `deleted`, so historical jobs and audit records that reference it stay readable.",
+      "type": "object",
+      "required": [
+        "connection_id",
+        "version",
+        "provider",
+        "display_name",
+        "external_account",
+        "credential_ref",
+        "scope",
+        "settings",
+        "state",
+        "health",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "connection_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/connection_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
+        "provider": { "$ref": "#/$defs/provider" },
+        "display_name": { "$ref": "#/$defs/display_name" },
+        "external_account": { "$ref": "#/$defs/external_account" },
+        "credential_ref": { "$ref": "#/$defs/credential_ref" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "settings": { "$ref": "#/$defs/settings" },
+        "state": { "$ref": "#/$defs/state" },
+        "health": { "$ref": "#/$defs/health" },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "updated_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "disabled_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "deleted_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "provider": {
+      "description": "Integration provider, such as `github`, `slack` or `linear`. The set of providers is open; an unknown provider is rejected with UNSUPPORTED_CAPABILITY.",
+      "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+    },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "external_account": {
+      "description": "The account at the provider this connection acts for. `id` is the provider's own stable identifier and need not be a subject token.",
+      "type": "object",
+      "required": ["kind", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["organization", "user", "workspace", "installation", "project"]
+        },
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "name": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Human-readable name at the provider."
+        }
+      }
+    },
+    "credential_ref": {
+      "description": "Pointer to a credential in a secret store. The secret itself never crosses this interface.",
+      "type": "object",
+      "required": ["store", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "store": { "$ref": "../../../common/v1/types.schema.json#/$defs/slug" },
+        "key": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "version": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Pinned secret version; omitted means the store's current version."
+        }
+      }
+    },
+    "scope": {
+      "description": "What the connection may act on at the provider. `all` covers everything the credential can reach; `selected` only the listed provider resources (for example `owner/repo`).",
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["all", "selected"] },
+        "resources": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 1000,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        }
+      },
+      "if": { "properties": { "mode": { "const": "selected" } } },
+      "then": { "required": ["resources"], "properties": { "resources": { "minItems": 1 } } },
+      "else": { "not": { "required": ["resources"] } }
+    },
+    "settings": {
+      "description": "Provider-specific, non-secret configuration. Its shape is defined with the provider ingress/egress contracts, which are deferred; until then it is an object of at most 64 keys.",
+      "type": "object",
+      "maxProperties": 64
+    },
+    "state": {
+      "description": "Lifecycle state. active: accepts new integration activity. disabled: accepts none, keeps configuration and bindings. deleted: configuration removed; the record remains for history.",
+      "type": "string",
+      "enum": ["active", "disabled", "deleted"]
+    },
+    "health": {
+      "description": "Observed health, independent of lifecycle state. A degraded connection stays active.",
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["healthy", "degraded", "unknown"] },
+        "reason": { "$ref": "#/$defs/degradation_reason" },
+        "message": { "type": "string", "maxLength": 2048 },
+        "since": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      },
+      "if": { "properties": { "status": { "const": "degraded" } } },
+      "then": { "required": ["reason", "since"] }
+    },
+    "degradation_reason": {
+      "type": "string",
+      "enum": [
+        "credential_invalid",
+        "credential_expired",
+        "rate_limited",
+        "provider_unreachable",
+        "permission_revoked",
+        "delivery_failures"
+      ]
+    },
+    "in_flight_on_disable": {
+      "description": "What happens to deliveries already accepted when the connection is disabled. drain (default): finish them; accept nothing new. hold: pause them and resume on re-enable; any held delivery that cannot be retained is failed explicitly with PROVIDER_ERROR, never dropped.",
+      "type": "string",
+      "enum": ["drain", "hold"],
+      "default": "drain"
+    },
+    "in_flight_on_delete": {
+      "description": "What happens to deliveries accepted but not finished when the connection is deleted. reject (default): refuse the delete with INVALID_STATE while any remain. fail: fail each of them explicitly, report the count, then delete.",
+      "type": "string",
+      "enum": ["reject", "fail"],
+      "default": "reject"
+    }
+  }
+}

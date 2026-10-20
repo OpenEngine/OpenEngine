@@ -1,0 +1,22 @@
+{
+  "summary": "Observed by CXN, not caused by a command, so the event is a root.",
+  "message": "ConnectionDegraded",
+  "subject": "oe.v1.cxn.events.connections.conn_acme_gh.connection.degraded",
+  "headers": { "Nats-Msg-Id": "evt_01JAX7DEGR" },
+  "payload": {
+    "event_id": "evt_01JAX7DEGR",
+    "event_type": "connection.degraded",
+    "occurred_at": "2026-10-19T21:55:00Z",
+    "producer": "cxn",
+    "causal_path": ["evt_01JAX7DEGR"],
+    "resources": { "connection_id": "conn_acme_gh" },
+    "payload": {
+      "health": {
+        "status": "degraded",
+        "reason": "credential_expired",
+        "message": "GitHub returned 401 for the installation token.",
+        "since": "2026-10-19T21:55:00Z"
+      }
+    }
+  }
+}

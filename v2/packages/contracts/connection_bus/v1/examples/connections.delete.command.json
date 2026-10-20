@@ -1,0 +1,5 @@
+{
+  "message": "DeleteConnectionCommand",
+  "subject": "oe.v1.cxn.control.connections.conn_acme_gh.delete",
+  "payload": { "command_id": "cmd_01JAXADEL", "causal_path": ["cmd_01JAXADEL"], "payload": {} }
+}

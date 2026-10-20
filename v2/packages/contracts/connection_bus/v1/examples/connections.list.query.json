@@ -1,0 +1,14 @@
+{
+  "summary": "Second page of degraded GitHub connections. The cursor came from the first page, issued for the same filters.",
+  "message": "ListConnectionsQuery",
+  "subject": "oe.v1.cxn.query.connections.list",
+  "payload": {
+    "request_id": "req_01JAXB",
+    "params": {
+      "provider": "github",
+      "health": ["degraded"],
+      "limit": 1,
+      "cursor": "eyJjIjoiMjAyNi0xMC0xOVQyMTozMDowMFoiLCJpZCI6ImNvbm5fYWNtZV9naCJ9"
+    }
+  }
+}

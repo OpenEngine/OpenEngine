@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Event envelope",
+  "description": "Body of every event published to a service's existing event stream. Events may be delivered more than once: deduplicate on `event_id`. `occurred_at` does not establish a global order; ordering is guaranteed only among events of one partition (the resource named in the subject), in publish order. The final element of `causal_path` must equal `event_id` (checked by `tooling/validate.py`). Service schemas fix `event_type` and `producer` and narrow `resources` and `payload` with `allOf`.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "producer",
+    "causal_path",
+    "resources",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "$ref": "types.schema.json#/$defs/event_id" },
+    "event_type": {
+      "description": "Dotted `{family}.{fact}` name; the schema discriminator. The subject ends with the same tokens.",
+      "type": "string",
+      "pattern": "^[a-z][a-z_]*(\\.[a-z][a-z_]*)+$"
+    },
+    "occurred_at": { "$ref": "types.schema.json#/$defs/utc_timestamp" },
+    "producer": { "$ref": "types.schema.json#/$defs/producer" },
+    "causal_path": { "$ref": "types.schema.json#/$defs/causal_path" },
+    "resources": { "$ref": "types.schema.json#/$defs/resource_refs" },
+    "resource_version": {
+      "description": "Version of the partition resource after this event, where that resource is versioned.",
+      "$ref": "types.schema.json#/$defs/resource_version"
+    },
+    "payload": { "type": "object" }
+  },
+  "$defs": {
+    "operation_ref": {
+      "description": "The command and operation an event completes or reports on. Present in completion events whose cause is a command.",
+      "type": "object",
+      "required": ["operation_id", "command_id"],
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": { "$ref": "types.schema.json#/$defs/operation_id" },
+        "command_id": { "$ref": "types.schema.json#/$defs/command_id" }
+      }
+    },
+    "headers": {
+      "description": "NATS headers sent with every event.",
+      "type": "object",
+      "required": ["Nats-Msg-Id"],
+      "properties": {
+        "Nats-Msg-Id": {
+          "description": "Equal to `event_id`, so JetStream drops republication within the stream's 2-minute duplicate window.",
+          "$ref": "types.schema.json#/$defs/event_id"
+        }
+      }
+    }
+  }
+}

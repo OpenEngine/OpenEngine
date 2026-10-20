@@ -1,0 +1,181 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Connection Bus events",
+  "description": "Events CXN publishes on `oe.v1.cxn.events.connections.{connection_id}.{event_type}`, captured by the existing `cxn-events` stream. Each event is ordered after earlier events of the same connection. Events that complete a command carry its operation reference; CXN exposes no operation query, so these events are how a caller learns a command finished.",
+  "$defs": {
+    "connection_resources": {
+      "type": "object",
+      "required": ["connection_id"],
+      "additionalProperties": false,
+      "properties": {
+        "connection_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/connection_id" }
+      }
+    },
+    "connection_added_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "connection.added" },
+            "producer": { "const": "cxn" },
+            "resources": { "$ref": "#/$defs/connection_resources" },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "connection"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "connection": { "$ref": "connection.schema.json#/$defs/connection" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "connection_configured_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "connection.configured" },
+            "producer": { "const": "cxn" },
+            "resources": { "$ref": "#/$defs/connection_resources" },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "changed", "re_enabled", "connection"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "changed": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "enum": ["display_name", "credential_ref", "scope", "settings", "state"]
+                  }
+                },
+                "re_enabled": { "type": "boolean" },
+                "connection": { "$ref": "connection.schema.json#/$defs/connection" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "connection_disabled_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "connection.disabled" },
+            "producer": { "const": "cxn" },
+            "resources": { "$ref": "#/$defs/connection_resources" },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "in_flight", "outstanding_deliveries"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "in_flight": { "$ref": "connection.schema.json#/$defs/in_flight_on_disable" },
+                "outstanding_deliveries": {
+                  "description": "Accepted deliveries not yet finished when the connection was disabled; they drain or are held per `in_flight`.",
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reason": { "type": "string", "maxLength": 2048 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "connection_deleted_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "connection.deleted" },
+            "producer": { "const": "cxn" },
+            "resources": { "$ref": "#/$defs/connection_resources" },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "failed_deliveries"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "failed_deliveries": {
+                  "description": "Accepted deliveries failed because the delete used `in_flight: fail`. Always 0 under `reject`.",
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reason": { "type": "string", "maxLength": 2048 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "connection_degraded_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "connection.degraded" },
+            "producer": { "const": "cxn" },
+            "resources": { "$ref": "#/$defs/connection_resources" },
+            "payload": {
+              "type": "object",
+              "required": ["health"],
+              "additionalProperties": false,
+              "properties": {
+                "health": {
+                  "allOf": [
+                    { "$ref": "connection.schema.json#/$defs/health" },
+                    { "properties": { "status": { "const": "degraded" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "connection_recovered_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "connection.recovered" },
+            "producer": { "const": "cxn" },
+            "resources": { "$ref": "#/$defs/connection_resources" },
+            "payload": {
+              "type": "object",
+              "required": ["health"],
+              "additionalProperties": false,
+              "properties": {
+                "health": {
+                  "allOf": [
+                    { "$ref": "connection.schema.json#/$defs/health" },
+                    { "properties": { "status": { "const": "healthy" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

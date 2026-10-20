@@ -1,0 +1,19 @@
+{
+  "summary": "Rejected: accepted deliveries are still outstanding and the delete used the default in_flight: reject.",
+  "message": "DeleteConnectionResponse",
+  "in_reply_to": "oe.v1.cxn.control.connections.conn_acme_gh.delete",
+  "payload": {
+    "command_id": "cmd_01JAXADEL",
+    "status": "rejected",
+    "error": {
+      "code": "INVALID_STATE",
+      "message": "2 accepted deliveries are outstanding; disable and drain, or delete with in_flight: fail.",
+      "retryable": true,
+      "details": {
+        "resource_type": "connection",
+        "resource_id": "conn_acme_gh",
+        "current_state": "disabled"
+      }
+    }
+  }
+}

@@ -1,0 +1,259 @@
+# OpenEngine V2 service contracts
+
+The NATS interfaces of the three V2 services, as AsyncAPI documents and
+JSON Schemas:
+
+| Service | Shorthand | Document | Reference |
+| -- | -- | -- | -- |
+| Connection Bus | `cxn` | [`connection_bus/v1/asyncapi.yaml`](connection_bus/v1/asyncapi.yaml) | `dist/connection_bus/index.html` |
+
+Each document is written from its service's point of view: the requests it
+answers (`action: receive`, with a typed reply) and the events it publishes
+(`action: send`).
+
+## Implementation status
+
+**These are contracts, not implementations.** As of this release:
+
+| Defined here | Implemented |
+| -- | -- |
+| Control and query subjects (`oe.v1.…`) with typed requests and replies | No service answers them. No handlers exist. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`) | The `cxn-events`, `ge-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
+| Operation, job, execution, workspace, session and approval models | No persistence or state machine implements them. |
+| Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
+
+This work creates no streams, consumers, queue groups or broker
+permissions. It changes only the subject filter of the three existing event
+streams, from `{svc}.events.>` to `oe.v1.{svc}.events.>`, so events share the
+`oe.v1` namespace; `oe migrate` applies that as a config update. Workspace-daemon contracts and
+provider ingress/egress payloads (`cxn.ingress.>`, `cxn.egress.>`) are out of
+scope.
+
+## Layout
+
+```text
+common/v1/                 envelopes and types every service shares
+  types.schema.json          identifiers, causal paths, timestamps, versions
+  command.schema.json        command-response.schema.json
+  query.schema.json          query-response.schema.json
+  event.schema.json          error.schema.json
+  pagination.schema.json     operation.schema.json
+{service}/v1/
+  asyncapi.yaml            the service's channels, operations and messages
+  schemas/                 typed payloads, grouped with $defs
+  examples/                one JSON file per example message
+tests/                     pytest suite run with the rest of v2
+tooling/                   pinned AsyncAPI CLI, HTML template, and validate.py
+```
+
+Schemas are JSON Schema draft-07 (the newest draft the AsyncAPI parser
+accepts), referenced from AsyncAPI as
+`application/schema+json;version=draft-07`. Service schemas compose the
+common envelopes with `allOf` and never copy them.
+
+## Versions
+
+Three versions are tracked separately:
+
+| Version | Where | Changes when |
+| -- | -- | -- |
+| AsyncAPI format | `asyncapi: 3.1.0` in each document | the documents move to a newer AsyncAPI specification |
+| Contract release | `info.version` (semver; now `1.0.0-draft.1`) | any contract change: patch for wording, minor for compatible additions, major for breaking changes |
+| Subject namespace | `v1` in `oe.v1.…` and the `v1/` directories | a breaking change; `v2` is served alongside `v1` until callers move |
+
+## Subjects
+
+| Kind | Subject | Transport |
+| -- | -- | -- |
+| Control | `oe.v1.{svc}.control.{resource}[.{id}].{action}` | NATS request/reply |
+| Query | `oe.v1.{svc}.query.{resource}[.{id}].{view}` | NATS request/reply |
+| Event | `oe.v1.{svc}.events.{partition}.{id}.{event_type}` | JetStream publish to the `{svc}-events` stream |
+
+Replies use NATS's native reply subject; no payload carries `replyTo`.
+
+Each `{svc}-events` stream captures `oe.v1.{svc}.events.>`. Control and
+query subjects are captured by no stream, so request/reply traffic is never
+persisted; the tests assert both.
+
+Every `{…_id}` in a subject is a single subject token (letters, digits, `_`,
+`-`; no `.`, `*`, `>` or spaces) with its type's prefix (`conn_`, `job_`,
+`ws_`, …), defined in [`types.schema.json`](common/v1/types.schema.json). A
+service answers a malformed token with `INVALID_ARGUMENT`. When an ID appears
+in both the subject and the body, they must agree. An event's subject ends
+with the tokens of its `event_type`.
+
+## Messages
+
+### Commands
+
+[`command.schema.json`](common/v1/command.schema.json):
+`command_id`, `causal_path`, optional `expected_version` and `deadline_at`,
+and the operation's typed `payload`.
+
+- **Accepted means durably recorded, not completed.** An `accepted` reply
+  carries the `operation_id` of the service's durable operation; completion
+  arrives as a lifecycle event carrying `{operation_id, command_id}`, and in GE
+  and VCP through `operations.{operation_id}.get`. CXN exposes no operation
+  query.
+- **Idempotency.** Retrying with the same `command_id` and identical subject,
+  payload, `expected_version` and `causal_path` returns the original reply and
+  operation ID. Reusing a `command_id` with anything else is rejected with
+  `COMMAND_ID_CONFLICT`. Command IDs are retained for at least **7 days**,
+  matching the event streams' retention; after that a reused ID may be
+  treated as new. Non-retryable rejections are retained and replayed;
+  retryable rejections (`UNAVAILABLE`) are not, so a retry may succeed.
+- **Timeouts.** A request that times out has an unknown outcome; it does not
+  mean rejection. Retry with the same `command_id`.
+- **Deadlines.** `deadline_at` bounds acceptance only. A command not accepted
+  by then is rejected with `DEADLINE_EXCEEDED`; accepted work is never
+  cancelled by its deadline. A retry of a command that was already accepted
+  returns the acceptance even after its deadline.
+- **Identity.** The acting identity is taken from the verified NATS
+  authentication or a verified delegation, never from a payload field.
+  Envelopes are closed, so an `actor` field is rejected.
+
+### Causal paths
+
+`causal_path` replaces correlation and causation IDs: an array of IDs, root
+first, ending with the ID of the message that carries it. Display it joined
+with `.` if useful; transmit the array.
+
+- A root command or event has `[self_id]`.
+- Each downstream command or event appends its own ID to the path of its
+  primary cause. Retries and republication keep the same ID and path.
+- Parallel work produces sibling paths: the same prefix, different last
+  elements.
+- Fan-in keeps one primary path (the dependency that completed the join, or
+  the first one recorded). The other dependencies are kept in GE's execution
+  records, not in the path.
+- Events may appear in paths.
+- An external root is scoped by provider and connection so two providers can
+  never produce the same ID: `{provider}-{connection_id}-{external_id}`, for
+  example `gh-conn_acme_gh-dlv_4411`. An external ID that is too long or not
+  token-safe is replaced by a base32 SHA-256 digest of it.
+- **Limit: 32 elements, unique.** A message whose path would exceed 32
+  elements is not sent; the operation that would have sent it fails with
+  `CAUSAL_PATH_TOO_LONG`. A command whose path is already too long is
+  rejected with the same code. Paths are never truncated.
+
+### Queries
+
+[`query.schema.json`](common/v1/query.schema.json): optional `request_id`
+(echoed, for diagnostics only) and required `params` (`{}` when there are
+none). Replies have `status: ok` with `result`, or `status: error` with
+`error`. Queries create no operation.
+
+### Pagination
+
+[`pagination.schema.json`](common/v1/pagination.schema.json): requests send
+`limit` (default 50, maximum 200) and an opaque `cursor`; results return
+`items` and `next_cursor` (`null` on the last page).
+
+- Each list documents its sort order, always ending in the resource ID.
+- A cursor is bound to the filters it was issued with; changing them is
+  `INVALID_CURSOR`. Cursors stay valid for at least 24 hours.
+- Pagination is by key, not offset: records that change between pages are
+  neither repeated nor skipped unless their sort key or filter membership
+  changed; records created after the first page appear only if they sort
+  after the cursor.
+
+### Events
+
+[`event.schema.json`](common/v1/event.schema.json): `event_id`,
+`event_type`, `occurred_at`, `producer`, `causal_path` (ending with
+`event_id`), typed `resources`, `resource_version` where the partition
+resource is versioned, and a typed `payload`.
+
+- Events may be delivered more than once. Deduplicate on `event_id`. It is
+  also sent as the `Nats-Msg-Id` header, so the stream drops republication
+  within its 2-minute duplicate window.
+- `occurred_at` does not order events globally. Order is guaranteed only
+  among events of one partition (the resource in the subject), in publish
+  order.
+- Event families and their exact subjects are in each service's document.
+  Beyond the families the work order lists, the contracts add:
+  - CXN: `connection.recovered`, the counterpart of `connection.degraded`.
+  A cancelled graph execution does not by itself mean the job is permanently
+  cancelled; workspace failure, task failure and operation failure are
+  separate events with separate meanings.
+
+### Errors
+
+[`error.schema.json`](common/v1/error.schema.json): `code`, `message`,
+`retryable`, and typed `details` per code.
+
+| Code | Meaning | Retryable |
+| -- | -- | -- |
+| `INVALID_ARGUMENT` | Malformed message or subject token, or subject/body disagreement | no |
+| `NOT_FOUND` | A named resource does not exist or is not visible | per response |
+| `PERMISSION_DENIED` | The verified actor may not do this | no |
+| `INVALID_STATE` | The resource's state does not allow this | per response |
+| `VERSION_CONFLICT` | `expected_version` did not match | no |
+| `COMMAND_ID_CONFLICT` | Command ID reused with different contents, operation or target | no |
+| `UNSUPPORTED_CAPABILITY` | The service or provider cannot do this | no |
+| `DEADLINE_EXCEEDED` | `deadline_at` passed before acceptance | no |
+| `UNAVAILABLE` | Temporarily unable; retry with the same command ID | yes |
+| `CAUSAL_PATH_TOO_LONG` | The 32-element path limit would be exceeded | no |
+| `STALE_APPROVAL` | Approval decision targets a superseded, expired, decided or older-generation request | no |
+| `INVALID_CURSOR` | Cursor malformed, expired, or issued for other filters | no |
+| `PROVIDER_ERROR` | An external provider failed (operations and lifecycle failures) | per response |
+| `INTERNAL` | Unexpected service fault | per response |
+
+### Operations
+
+[`operation.schema.json`](common/v1/operation.schema.json): `operation_id`,
+`command_id`, `operation` (the command, such as `jobs.cancel`, which
+discriminates the typed `result`), `status` (`pending`, `running`,
+`succeeded`, `failed`, `cancelled`), `resources`, timestamps, and `result`
+on success or `error` on failure. Operation status is not job, task or
+workspace status: a succeeded `jobs.cancel` operation means cancellation was
+carried out.
+
+## Compatibility
+
+- **Requests are strict.** Every schema is closed
+  (`additionalProperties: false`). A service rejects an unknown request field
+  with `INVALID_ARGUMENT`, so a misspelt option fails loudly instead of being
+  ignored. A client must not send a field before the service's release
+  defines it.
+- **Readers are tolerant.** Minor releases may add optional fields to replies,
+  snapshots and event payloads, and new event types. Consumers must ignore
+  unknown fields and event types, and must not reject a reply or event
+  because it validates only against a newer release's schema.
+- **Enums.** Minor releases may add values to enums in replies and events
+  (states, error codes, reasons). Consumers must treat an unknown value as
+  "other": an unknown error code by its `retryable` flag, an unknown state as
+  not terminal. Request enums gain values only together with the capability
+  that uses them.
+- **Never in a minor release:** removing or renaming a field, making an
+  optional request field required, narrowing a type or pattern, changing a
+  subject, or changing the meaning of an existing value. Those need a new
+  subject namespace (`v2`).
+- **Defaults** are part of the contract; changing one is breaking.
+
+## Tooling
+
+Everything is pinned: the AsyncAPI CLI and HTML template in
+[`tooling/package.json`](tooling/package.json) and its lockfile, and the
+Python validator's `jsonschema` and `pyyaml` in `v2/uv.lock`. AsyncAPI CLI
+telemetry is disabled through `tooling/asyncapi-analytics.json`.
+
+```bash
+cd v2/packages/contracts/tooling
+npm ci                                   # install the pinned CLI and template
+npm run validate                         # parse, resolve every $ref, lint all three documents
+npm run bundle                           # inline references → ../dist/{service}/asyncapi.yaml
+npm run docs                             # render → ../dist/{service}/index.html
+node render.mjs preview connection_bus   # live preview of one document in the browser
+
+cd v2
+uv run python packages/contracts/tooling/validate.py   # examples, subjects, cross-field rules
+uv run pytest packages/contracts/tests                 # all of the above, plus malformed variants
+```
+
+`validate.py` covers what JSON Schema cannot: subject templates and token
+types, subject/body ID agreement, causal paths ending in the message's own
+ID, event subjects matching `event_type`, `Nats-Msg-Id` equal to `event_id`,
+replies matching their request's operation, and an example for every
+message. Services can call `validate.validate_message` on live traffic in
+their own tests.

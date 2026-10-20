@@ -1,0 +1,5 @@
+{
+  "message": "GetConnectionQuery",
+  "subject": "oe.v1.cxn.query.connections.conn_acme_gh.get",
+  "payload": { "params": {} }
+}

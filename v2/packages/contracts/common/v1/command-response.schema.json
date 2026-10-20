@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Command response",
+  "description": "Reply to a command. `accepted` means the command is durably recorded and an operation exists; it does not mean the work is done. Completion is reported through lifecycle events and, where the service exposes it, the operation query. A request that times out has an unknown outcome: retry with the same command ID.",
+  "type": "object",
+  "required": ["command_id", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "command_id": { "$ref": "types.schema.json#/$defs/command_id" },
+    "status": { "type": "string", "enum": ["accepted", "rejected"] },
+    "operation_id": { "$ref": "types.schema.json#/$defs/operation_id" },
+    "resource_id": {
+      "description": "Resource the command created or affects, when known at acceptance.",
+      "$ref": "types.schema.json#/$defs/token"
+    },
+    "error": { "$ref": "error.schema.json" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "accepted" } } },
+      "then": { "required": ["operation_id"], "not": { "required": ["error"] } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "rejected" } } },
+      "then": { "required": ["error"], "not": { "required": ["operation_id"] } }
+    }
+  ]
+}

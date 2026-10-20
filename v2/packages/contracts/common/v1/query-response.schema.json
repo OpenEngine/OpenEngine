@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Query response",
+  "description": "Reply to a query. `request_id` is echoed when the request supplied one. Service schemas narrow `result` with `allOf`.",
+  "type": "object",
+  "required": ["status"],
+  "additionalProperties": false,
+  "properties": {
+    "request_id": { "$ref": "types.schema.json#/$defs/request_id" },
+    "status": { "type": "string", "enum": ["ok", "error"] },
+    "result": { "type": "object" },
+    "error": { "$ref": "error.schema.json" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "ok" } } },
+      "then": { "required": ["result"], "not": { "required": ["error"] } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "error" } } },
+      "then": { "required": ["error"], "not": { "required": ["result"] } }
+    }
+  ]
+}

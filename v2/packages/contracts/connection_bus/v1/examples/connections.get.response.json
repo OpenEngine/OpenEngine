@@ -1,0 +1,23 @@
+{
+  "message": "GetConnectionResponse",
+  "in_reply_to": "oe.v1.cxn.query.connections.conn_acme_gh.get",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "connection": {
+        "connection_id": "conn_acme_gh",
+        "version": 4,
+        "provider": "github",
+        "display_name": "Acme GitHub",
+        "external_account": { "kind": "installation", "id": "55012231", "name": "acme" },
+        "credential_ref": { "store": "vault", "key": "openengine/github/acme-app", "version": "7" },
+        "scope": { "mode": "selected", "resources": ["acme/api", "acme/web"] },
+        "settings": { "default_branch": "main" },
+        "state": "active",
+        "health": { "status": "healthy" },
+        "created_at": "2026-10-19T21:30:01Z",
+        "updated_at": "2026-10-19T22:10:40Z"
+      }
+    }
+  }
+}

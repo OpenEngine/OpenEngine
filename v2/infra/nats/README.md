@@ -15,9 +15,9 @@ stream in place.
 | -- | -- | -- |
 | cxn-ingress | `cxn.ingress.>` | workqueue |
 | cxn-egress | `cxn.egress.>` | workqueue |
-| cxn-events | `cxn.events.>` | limits |
-| ge-events | `ge.events.>` | limits |
-| vcp-events | `vcp.events.>` | limits |
+| cxn-events | `oe.v1.cxn.events.>` | limits |
+| ge-events | `oe.v1.ge.events.>` | limits |
+| vcp-events | `oe.v1.vcp.events.>` | limits |
 
 All keep messages for 7 days on file storage, up to 1 GiB per stream, and
 deduplicate publishes that repeat a `Nats-Msg-Id` within 2 minutes. A full
