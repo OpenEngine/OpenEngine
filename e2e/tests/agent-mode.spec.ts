@@ -62,11 +62,10 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
       const graph = path.join(engine.root, `${name}.yaml`)
       writeFileSync(graph, helloWith(name, model))
       await terminal.run(`engine graph add ${graph}`)
-      await terminal.run(`engine graph run ${name} "Say hello" --wait`, { timeout: 180_000 })
-      const listed = (await terminal.run("engine runs list")).output
-      const runId = listed.match(new RegExp(`^(run-\\w+)\\s.*\\s${name} v1\\s+completed\\s`, "m"))?.[1]
-      expect(runId, `${name} ran to completion`).toBeTruthy()
-      const detail = JSON.parse((await terminal.run(`engine run get ${runId} --json`)).output)
+      // stderr carries the "started" line; stdout is the finished run alone.
+      const { output } = await terminal.run(`engine graph run ${name} "Say hello" --wait --json 2>/dev/null`, { timeout: 180_000 })
+      const detail = JSON.parse(output)
+      expect(detail.status, `${name} ran to completion`).toBe("completed")
       expect(transcriptModels(detail.workspace.path), `the models that answered ${name}`).toEqual([claudeModel()])
     }
   })
