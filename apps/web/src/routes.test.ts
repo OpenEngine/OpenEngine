@@ -13,6 +13,11 @@ describe("routeForPath", () => {
     expect(routeForPath("/utilization/")).toEqual({ kind: "utilization" });
   });
 
+  it("routes the rail's agents icon to the agents page", () => {
+    expect(routeForPath("/agents")).toEqual({ kind: "agents" });
+    expect(routeForPath("/agents/")).toEqual({ kind: "agents" });
+  });
+
   it("routes the new loop form and a loop's page", () => {
     expect(routeForPath("/loops/new")).toEqual({ kind: "new-loop" });
     expect(routeForPath("/loops/a%20b")).toEqual({ kind: "loop", loopId: "a b" });

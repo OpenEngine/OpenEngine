@@ -6,6 +6,8 @@ checkpoints -- the same path the daemon takes, minus HTTP and the WorkOrder row.
 """
 
 import asyncio
+import dataclasses
+import gzip
 import json
 import sqlite3
 import sys
@@ -958,6 +960,31 @@ def test_an_endpoint_without_ollamas_ps_is_asked_for_its_openai_model_list(tmp_p
     asyncio.run(scenario())
 
 
+def test_an_endpoint_url_with_a_query_is_probed_on_its_path_with_the_query_kept(tmp_path: Path) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return openai_models("qwen3-coder")
+        return httpx.Response(404)
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent(
+                "opencode", name="qwen", model="qwen3-coder", url="https://gpu/v1?api-version=2024-06-01",
+            )
+            await service.poll_endpoints()
+            health = health_of(service, "qwen")
+            assert health["responding"] is True
+            assert health["modelLoaded"] is True
+            assert server.probed() == [
+                "https://gpu/api/ps?api-version=2024-06-01",
+                "https://gpu/v1/models?api-version=2024-06-01",
+            ]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(("models", "loaded"), [
     (openai_models("qwen3-coder"), True),
     (openai_models("llama3.2"), False),
@@ -1503,5 +1530,252 @@ def test_runs_include_unregistered_scheduled_workorders_and_metadata_filters(tmp
             assert await service.list_runs(None, requester="bob") == []
             assert await service.list_runs(None, origin="github") == []
             assert (await service.run_json("reserved"))["status"] == "scheduled"
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_stops_reading_an_endpoint_that_answers_with_an_endless_body(tmp_path: Path) -> None:
+    """A hostile model server must not be able to push an unbounded body into the daemon on every pass."""
+    chunk = b" " * 65536
+    total = 64 * 1024 * 1024
+    served = {"bytes": 0}
+
+    async def endless(prefix: bytes) -> AsyncIterator[bytes]:
+        served["bytes"] += len(prefix)
+        yield prefix
+        while served["bytes"] < total:
+            served["bytes"] += len(chunk)
+            yield chunk
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        prefix = b'{"models": [' if request.url.path == "/api/ps" else b'{"data": ['
+        return httpx.Response(200, headers={"content-type": "application/json"}, content=endless(prefix))
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            assert served["bytes"] <= 4 * 1024 * 1024, (
+                f"the poller read {served['bytes']} bytes from one endpoint pass without a size cap"
+            )
+            assert health_of(service, "qwen") is not None
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_does_not_decompress_an_endpoints_body_past_the_size_cap(tmp_path: Path) -> None:
+    """A small gzip body that inflates to many times the cap must not be decoded."""
+    listing = b'{"models": [{"name": "qwen3-coder:latest"}' + b" " * (32 * 1024 * 1024) + b"]}"
+    bomb = gzip.compress(listing)
+    asked: list[str | None] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(request.headers.get("accept-encoding"))
+        return httpx.Response(
+            200, headers={"content-type": "application/json", "content-encoding": "gzip"}, content=bomb,
+        )
+
+    server = ModelServer(answer)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            assert asked and all(value == "identity" for value in asked)
+            health = health_of(service, "qwen")
+            assert health is not None and health["modelLoaded"] is not True, (
+                "the poller decoded a compressed body it had asked not to be sent"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_one_endpoint_that_drips_its_answer_cannot_hold_every_agents_health_hostage(tmp_path: Path) -> None:
+    """A model server that sends one byte every second never trips a per-read timeout;
+    the pass must still finish, and the other agents must still get their readings."""
+
+    async def drip(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n")
+            await writer.drain()
+            for _ in range(600):
+                writer.write(b"1\r\n \r\n")
+                await writer.drain()
+                await asyncio.sleep(1.0)
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            writer.close()
+
+    async def ollama(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        body = json.dumps({"models": [{"name": "qwen3-coder:latest"}]}).encode()
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n" % len(body) + body)
+        await writer.drain()
+        writer.close()
+
+    async def scenario() -> None:
+        slow = await asyncio.start_server(drip, "127.0.0.1", 0)
+        live = await asyncio.start_server(ollama, "127.0.0.1", 0)
+        slow_port = slow.sockets[0].getsockname()[1]
+        live_port = live.sockets[0].getsockname()[1]
+        try:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="slow", model="qwen3-coder", url=f"http://127.0.0.1:{slow_port}/v1")
+                await service.add_agent("opencode", name="live", model="qwen3-coder", url=f"http://127.0.0.1:{live_port}/v1")
+                try:
+                    await asyncio.wait_for(service.poll_endpoints(), timeout=20.0)
+                except TimeoutError:
+                    pytest.fail("one dripping endpoint kept the whole poll pass running for over 20s")
+                assert health_of(service, "live") == {"responding": True, "modelLoaded": True}
+        finally:
+            slow.close()
+            live.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_poll_pass_started_before_an_agent_was_re_added_does_not_bring_back_the_old_endpoints_reading(
+    tmp_path: Path,
+) -> None:
+    old_probed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "old":
+            old_probed.set()
+            await release.wait()
+            return ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404)
+        raise httpx.ConnectError("connection refused")
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(handle)) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://old:11434/v1")
+            poll = asyncio.create_task(service.poll_endpoints())
+            await asyncio.wait_for(old_probed.wait(), 5)
+            await service.add_agent(
+                "opencode", name="qwen", model="qwen3-coder", url="http://new:11434/v1", overwrite=True,
+            )
+            release.set()
+            await poll
+            health = health_of(service, "qwen")
+            assert health != {"responding": True, "modelLoaded": True}, (
+                "the re-added agent shows the old endpoint's reading from a pass that started before the change"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_the_poller_does_not_send_probes_through_a_proxy_from_the_daemons_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxied: list[bytes] = []
+
+    async def proxy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        head = await reader.readuntil(b"\r\n\r\n")
+        proxied.append(head.split(b"\r\n", 1)[0])
+        body = json.dumps({"models": [{"name": "qwen3-coder:latest"}]}).encode()
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: %d\r\n\r\n" % len(body) + body)
+        await writer.drain()
+        writer.close()
+
+    async def scenario() -> None:
+        server = await asyncio.start_server(proxy, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{port}")
+        try:
+            async with graph_service(tmp_path) as service:
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu.invalid:11434/v1")
+                await service.poll_endpoints()
+                assert proxied == [], f"the probe went through the environment's proxy: {proxied}"
+        finally:
+            server.close()
+
+    asyncio.run(scenario())
+
+
+def test_an_agent_url_with_a_user_name_or_password_is_refused(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            with pytest.raises(ServiceError) as refused:
+                await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://ops:hunter2-secret@gpu:11434/v1")
+            assert "hunter2-secret" not in str(refused.value)
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_probe_never_writes_the_endpoints_credentials_to_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A row stored before credentials were refused is still probed, but its
+    user:password goes out as basic auth and never into a log line."""
+    seen: list[httpx.Request] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/ps":
+            raise RuntimeError("the probe broke")
+        return httpx.Response(200, json={"data": []})
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(answer)) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            row = service.store.agent("qwen")
+            assert row is not None
+            service.store.upsert_agent(dataclasses.replace(row, url="http://ops:hunter2-secret@gpu:11434/v1"))
+            with caplog.at_level("DEBUG"):
+                await service.poll_endpoints()
+            assert seen and all("hunter2-secret" not in str(request.url) for request in seen)
+            assert "hunter2-secret" not in caplog.text
+            assert "hunter2-secret" not in json.dumps(service.agents_json())
+
+    asyncio.run(scenario())
+
+
+def test_a_poll_pass_started_before_an_agent_was_re_added_with_another_model_does_not_keep_the_old_match(
+    tmp_path: Path,
+) -> None:
+    probed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        probed.set()
+        await release.wait()
+        return ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404)
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=httpx.MockTransport(handle)) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            poll = asyncio.create_task(service.poll_endpoints())
+            await asyncio.wait_for(probed.wait(), 5)
+            await service.add_agent(
+                "opencode", name="qwen", model="llama3.2", url="http://gpu:11434/v1", overwrite=True,
+            )
+            release.set()
+            await poll
+            assert health_of(service, "qwen") is None, (
+                "the re-added agent shows a reading matched against its old model"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_a_bad_ca_bundle_in_the_environment_does_not_stop_the_poller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))
+    server = ModelServer(lambda request: ollama_ps("qwen3-coder:latest") if request.url.path == "/api/ps" else httpx.Response(404))
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path, endpoint_transport=server.transport) as service:
+            await service.add_agent("opencode", name="qwen", model="qwen3-coder", url="http://gpu:11434/v1")
+            await service.poll_endpoints()
+            assert health_of(service, "qwen") == {"responding": True, "modelLoaded": True}
 
     asyncio.run(scenario())

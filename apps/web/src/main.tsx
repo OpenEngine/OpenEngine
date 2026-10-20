@@ -10,6 +10,7 @@ import {
   type EngineConfig,
   type RunnerOption,
 } from "./api";
+import { AgentsPage } from "./agents";
 import { AuthGate } from "./auth";
 import { ChatThread, ConversationStats } from "./chat";
 import { GraphConversationPage } from "./graph-conversation";
@@ -278,7 +279,9 @@ function App() {
               ? "new-loop"
               : route.kind === "utilization"
                 ? "utilization"
-                : undefined
+                : route.kind === "agents"
+                  ? "agents"
+                  : undefined
       }
       onDeleteRun={deleteRun}
     />
@@ -314,6 +317,8 @@ function App() {
           />
         ) : route.kind === "utilization" ? (
           <UtilizationPage />
+        ) : route.kind === "agents" ? (
+          <AgentsPage />
         ) : route.kind === "new-loop" ? (
           <NewLoopPage config={config} />
         ) : route.kind === "loop" ? (

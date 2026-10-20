@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentList } from "./agents";
@@ -44,6 +44,7 @@ async function row(name: string) {
 
 describe("AgentList", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -117,5 +118,44 @@ describe("AgentList", () => {
       expect(within(entry).queryByText(/responding/i)).not.toBeInTheDocument();
       expect(within(entry).queryByText(/^model /i)).not.toBeInTheDocument();
     }
+  });
+
+  it("shows a url agent the poller has not reached yet as being checked", async () => {
+    server([agent("fresh", null)]);
+    render(<AgentList />);
+
+    const fresh = await row("fresh");
+    expect(within(fresh).getByText("Checking endpoint")).toBeInTheDocument();
+    expect(within(fresh).queryByText(/responding/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the last list beside the error when a refresh fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const fetcher = server([agent("qwen", { responding: true, modelLoaded: true })]);
+    render(<AgentList />);
+    await row("qwen");
+
+    fetcher.mockImplementation(async () => json({ error: { message: "daemon down" } }, 500));
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(await screen.findByText(/Could not read the agents/)).toBeInTheDocument();
+    expect(within(await row("qwen")).getByText("Model loaded")).toBeInTheDocument();
+  });
+
+  it("does not poll while the tab is hidden", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const fetcher = server([agent("qwen", { responding: true, modelLoaded: true })]);
+    render(<AgentList />);
+    await row("qwen");
+    const reads = fetcher.mock.calls.length;
+
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    await act(async () => {
+      vi.advanceTimersByTime(90_000);
+    });
+    expect(fetcher.mock.calls.length).toBe(reads);
+    vi.restoreAllMocks();
   });
 });

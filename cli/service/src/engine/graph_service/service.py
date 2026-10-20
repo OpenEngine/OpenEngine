@@ -24,16 +24,18 @@ from engine.graph_runtime.metadata import RunMetadata, run_name
 
 import asyncio
 import hashlib
+import httpx
 import json
 import logging
 import re
+import ssl
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import yaml
 from engine.runtime.repositories import RepositoryRegistry
@@ -231,6 +233,8 @@ class GraphService:
         pull_requests: PullRequestsConfig = PullRequestsConfig(),
         clock: Callable[[], datetime] | None = None,
         tick_seconds: float = 15.0,
+        endpoint_transport: httpx.AsyncBaseTransport | None = None,
+        endpoint_poll_seconds: float = 30.0,
     ) -> None:
         if runtime.checkpointer is None:
             raise ValueError("graphs can only be registered on a runtime that has a checkpointer")
@@ -249,6 +253,8 @@ class GraphService:
         self._default_base_ref = default_base_ref
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._tick_seconds = tick_seconds
+        self._endpoint_transport = endpoint_transport
+        self._endpoint_poll_seconds = endpoint_poll_seconds
         self._model_tiers = model_tiers
         self._allow_python = allow_python
         self._agent_factory = agent_factory
@@ -268,6 +274,9 @@ class GraphService:
         self._loaded: dict[str, Loaded] = {}
         self._lock = asyncio.Lock()
         self._scheduler: asyncio.Task[None] | None = None
+        self._endpoint_poller: asyncio.Task[None] | None = None
+        self._endpoint_health: dict[str, dict[str, Any]] = {}
+        self._endpoint_tls: ssl.SSLContext | None = None
         self._background: set[asyncio.Task[Any]] = set()
 
     @property
@@ -303,11 +312,15 @@ class GraphService:
         self.store.abandon_undelivered_steering("the daemon restarted before it was delivered")
         if schedule:
             self._scheduler = asyncio.create_task(self._schedule())
+            self._endpoint_poller = asyncio.create_task(self._endpoint_schedule())
 
     async def aclose(self) -> None:
         if self._scheduler is not None:
             self._scheduler.cancel()
             await asyncio.gather(self._scheduler, return_exceptions=True)
+        if self._endpoint_poller is not None:
+            self._endpoint_poller.cancel()
+            await asyncio.gather(self._endpoint_poller, return_exceptions=True)
         await asyncio.gather(*self._background, return_exceptions=True)
         self.store.close()
 
@@ -328,11 +341,15 @@ class GraphService:
         row = row or self.store.agent(name)
         if row is not None:
             return {
-                "name": row.name, "kind": row.kind, "model": row.model, "url": row.url,
+                # A row stored before userinfo was refused must not serve it.
+                "name": row.name, "kind": row.kind, "model": row.model, "url": _without_userinfo(row.url),
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
+                # Only an endpoint agent has a health; a row without a url has
+                # nothing the poller could have read, so nothing to serve.
+                "health": self._endpoint_health.get(name) if row.url else None,
             }
         if name in self._builtin_agents:
-            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True, "health": None}
         raise NotFound(f"no agent named {name!r}", agent=name)
 
     async def add_agent(
@@ -357,6 +374,10 @@ class GraphService:
         if url and _carries_credential(url):
             # Not echoed: the refusal would otherwise repeat the secret into responses and logs.
             raise ServiceError("url must not carry an api key in its query string")
+        if url and (urlsplit(url).username or urlsplit(url).password):
+            # Same reason: a user:password@ would be served by the agents API and
+            # written to the log by every probe of the endpoint.
+            raise ServiceError("url must not carry a user name or password")
         if name in self._builtin_agents:
             raise Conflict(f"{name} is built in; give this agent another name with --name", agent=name)
         async with self._lock:
@@ -367,6 +388,9 @@ class GraphService:
             row = AgentRow(name, kind, model, url, existing.created_at if existing else at, at)
             self._offer_agent(row)
             self.store.upsert_agent(row)
+            # A re-added name may point at a new endpoint; the reading the
+            # poller took of the old one is not a reading of this one.
+            self._endpoint_health.pop(name, None)
         return self.agent_json(name, row)
 
     async def remove_agent(self, name: str) -> dict[str, Any]:
@@ -379,6 +403,7 @@ class GraphService:
             self.store.delete_agent(name)
             self._registry.unregister(name)
             self._added_agents.withdraw(name)
+            self._endpoint_health.pop(name, None)
         return {**self.agent_json(name, row), "removed": True}
 
     def _offer_agent(self, row: AgentRow) -> None:
@@ -1091,6 +1116,198 @@ class GraphService:
                 log.exception("the loop scheduler failed a pass")
             await asyncio.sleep(self._tick_seconds)
 
+    # --- endpoint health ----------------------------------------------------
+
+    async def _endpoint_schedule(self) -> None:
+        """Probe endpoint agents on their own interval, independent of the loop tick."""
+        while True:
+            try:
+                await self.poll_endpoints()
+            except Exception:
+                log.exception("the endpoint poller failed a pass")
+            await asyncio.sleep(self._endpoint_poll_seconds)
+
+    # A probe reads the endpoint's model listing, nothing else: an endpoint that
+    # answers a listing with a body bigger than this is not being read at all,
+    # and is read as if it had not answered.
+    _probe_body_cap = 1024 * 1024
+
+    # How long one listing read may take, headers and body together. A server
+    # that answers one byte at a time never trips the per-read timeout, so
+    # without this deadline one dripping endpoint could hold the whole pass --
+    # and with it every agent's health -- for as long as it likes.
+    _probe_budget = 10.0
+
+    async def poll_endpoints(self) -> None:
+        """Record how every added agent's endpoint is responding and which model it loads."""
+        rows = [row for row in self.store.agents() if row.url]
+        if not rows:
+            return
+        # Agents that share a server share its listings, so each listing is
+        # fetched once per pass and every agent on the server is matched
+        # against it.
+        listings: dict[tuple[str, str], list[AgentRow]] = {}
+        for row in rows:
+            listings.setdefault(self._listing_urls(row.url), []).append(row)
+        # trust_env off: a probe goes to the url the agent was given, and the
+        # daemon's environment must not be able to route it through a proxy. The
+        # environment's CA bundle (SSL_CERT_FILE/SSL_CERT_DIR) still applies, so
+        # an endpoint behind a private CA verifies as it does for opencode.
+        client = httpx.AsyncClient(
+            transport=self._endpoint_transport,
+            timeout=httpx.Timeout(5.0),
+            trust_env=False,
+            verify=self._endpoint_tls_context(),
+        )
+        probes = (self._probe_listing(client, urls, group) for urls, group in listings.items())
+        try:
+            readings: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
+            for reading in await asyncio.gather(*probes):
+                readings.update(reading)
+        finally:
+            await client.aclose()
+        async with self._lock:
+            # The pass may have started before an agent was re-added or removed,
+            # so a reading is written back only while the agent still has the
+            # url that was probed and the model it was matched against.
+            current = {row.name: (row.url, row.model) for row in self.store.agents()}
+            for name, (probed, reading) in readings.items():
+                if current.get(name) == probed:
+                    self._endpoint_health[name] = reading
+
+    def _endpoint_tls_context(self) -> ssl.SSLContext:
+        """The CA bundle probes verify against, built once: the environment's
+        when it names a readable one, certifi's otherwise, so a bad
+        SSL_CERT_FILE cannot stop every pass."""
+        if self._endpoint_tls is None:
+            try:
+                self._endpoint_tls = httpx.create_ssl_context(trust_env=True)
+            except (OSError, ssl.SSLError):
+                log.exception("could not load the environment's CA bundle; probes use the default one")
+                self._endpoint_tls = httpx.create_ssl_context(trust_env=False)
+        return self._endpoint_tls
+
+    @staticmethod
+    def _listing_urls(url: str) -> tuple[str, str]:
+        """Where this url's server says which models it runs: Ollama's `/api/ps`
+        at the server's root -- the `/v1` a chat url carries is not part of that
+        address -- and the OpenAI-style `/models` under the url as given. Both
+        are built on the url's path, so a query it carries is kept, not
+        appended to."""
+        parts = urlsplit(url)
+        path = parts.path.rstrip("/")
+        root = path[: -len("/v1")] if path.endswith("/v1") else path
+        return (
+            urlunsplit(parts._replace(path=f"{root}/api/ps")),
+            urlunsplit(parts._replace(path=f"{path}/models")),
+        )
+
+    async def _probe_listing(
+        self, client: httpx.AsyncClient, urls: tuple[str, str], rows: list[AgentRow],
+    ) -> dict[str, tuple[tuple[str, str], dict[str, Any]]]:
+        """One server's share of a pass: its listings fetched once, then every
+        agent on it matched against them."""
+        try:
+            responding, names = await self._listing_names(client, urls)
+        except Exception:  # one server must never stop the rest of the pass
+            log.exception("could not probe the server at %s", _without_userinfo(urls[0]))
+            return {
+                row.name: ((row.url, row.model), {"responding": False, "modelLoaded": None})
+                for row in rows
+            }
+        readings: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
+        for row in rows:
+            if names is None:
+                reading = {"responding": responding, "modelLoaded": None}
+            else:
+                reading = {"responding": True, "modelLoaded": model_loaded(row.model, names)}
+            readings[row.name] = ((row.url, row.model), reading)
+        return readings
+
+    async def _listing_names(
+        self, client: httpx.AsyncClient, urls: tuple[str, str]
+    ) -> tuple[bool, list[str] | None]:
+        """The models the server at `urls` runs, and whether it answered at all.
+
+        `names` is None when the server answered but will not say which of its
+        models are loaded: that is a different thing from it not answering.
+        """
+        ps_url, models_url = urls
+        try:
+            ps = await asyncio.wait_for(
+                self._read_capped(client, ps_url), timeout=self._probe_budget
+            )
+        except (httpx.TransportError, TimeoutError):
+            return False, None
+        except httpx.HTTPError:
+            # It answered, but the listing could not be read; the server is
+            # there, so its other listing may still be readable.
+            ps = None
+        if ps is not None:
+            names = self._listed_names(ps[0], ps[1], "models", "name")
+            if names is not None:
+                return True, names
+        try:
+            status, body = await asyncio.wait_for(
+                self._read_capped(client, models_url), timeout=self._probe_budget
+            )
+        except (httpx.HTTPError, TimeoutError):
+            # It answered the first listing, so it is responding; its
+            # OpenAI-style listing is just unreachable or unreadable.
+            return True, None
+        return True, self._listed_names(status, body, "data", "id")
+
+    async def _read_capped(self, client: httpx.AsyncClient, url: str) -> tuple[int, bytes]:
+        """GET `url`, reading no more than `_probe_body_cap` bytes of its body.
+
+        A body the server declared to be bigger than the cap is not read at all.
+        A user:password in `url` is sent as basic auth, never as part of the
+        url, so httpx's request log line cannot print it.
+
+        httpx decodes a compressed body before the cap can count it, and one
+        small chunk can inflate far past the cap, so only an uncompressed body
+        is read. The probe asks for identity, and a server that sends a
+        Content-Encoding anyway is answered as if its body were unreadable.
+        """
+        target = httpx.URL(url)
+        auth = httpx.BasicAuth(target.username, target.password) if target.userinfo else None
+        target = target.copy_with(username=None, password=None)
+        headers = {"Accept-Encoding": "identity"}
+        async with client.stream("GET", target, auth=auth, headers=headers) as response:
+            declared = response.headers.get("content-length")
+            if declared is not None and declared.isdigit() and int(declared) > self._probe_body_cap:
+                return response.status_code, b""
+            if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+                return response.status_code, b""
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                chunks.append(chunk)
+                size += len(chunk)
+                if size >= self._probe_body_cap:
+                    break
+            return response.status_code, b"".join(chunks)[: self._probe_body_cap]
+
+    @staticmethod
+    def _listed_names(status: int, body: bytes, list_key: str, name_key: str) -> list[str] | None:
+        """The names in a model listing of the given shape; None when the answer
+        is not a readable listing, which is a different thing from an empty one."""
+        if status // 100 != 2:
+            return None
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return None
+        listed = payload.get(list_key) if isinstance(payload, dict) else None
+        if not isinstance(listed, list):
+            return None
+        named = []
+        for item in listed:
+            name = item.get(name_key) if isinstance(item, dict) else None
+            if isinstance(name, str) and name.strip():
+                named.append(name)
+        return named
+
     def _limit_reached(self, row: LoopRow, accounting: Accounting) -> str:
         if row.max_prs is not None and accounting.pull_requests >= row.max_prs:
             return f"max-prs reached ({accounting.pull_requests} of {row.max_prs} pull requests opened)"
@@ -1595,6 +1812,30 @@ def _carries_credential(url: str) -> bool:
 def session_model(row: AgentRow) -> str:
     """The model an added agent's sessions ask for: on its own endpoint, OpenCode's `provider/model`."""
     return f"{OPENCODE_URL_PROVIDER}/{row.model}" if row.url else row.model
+
+
+def _without_userinfo(url: str) -> str:
+    """`url` with any user:password@ removed, for a log line."""
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+
+
+def model_loaded(model: str, listed: Sequence[str]) -> bool:
+    """Whether `model` is among `listed`.
+
+    A tagged request is specific, and only that exact tag answers it. A request
+    without a tag rides the server's default tag, so it is answered only by
+    `name:latest`, not by whatever other tag of the name happens to run.
+    """
+    wanted = model.strip()
+    if not wanted:
+        return False
+    latest = f"{wanted}:latest" if ":" not in wanted else None
+    for name in listed:
+        name = name.strip()
+        if name == wanted or (latest is not None and name == latest):
+            return True
+    return False
 
 
 def opencode_config(row: AgentRow) -> dict[str, Any]:

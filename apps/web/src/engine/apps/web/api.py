@@ -4523,6 +4523,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 Route("/conversations", spa_page),
                 Route("/conversations/{thread_id}", spa_page),
                 Route("/utilization", spa_page),
+                Route("/agents", spa_page),
             ]
         )
         routes.append(Mount("/", BuiltClient(directory=static_directory, html=True)))
