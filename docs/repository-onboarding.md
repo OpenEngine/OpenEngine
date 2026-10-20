@@ -166,11 +166,15 @@ backend without changing the work-order backend:
 
 ```sh
 engine backend add onboarding http://localhost:4364 --token-env ENGINE_ONBOARDING_TOKEN
-engine repo add git@github.com:owner/repo.git --backend onboarding
+engine repo add git@github.com:owner/repo.git --backend onboarding --review-backend local
 ```
 
 Use your daemon's actual URL and port. Continue using the regular backend and
 `ENGINE_SERVICE_TOKEN` for work orders.
+Replace `local` with your regular backend for the same daemon. `--review-backend`
+selects the backend in the printed review command; onboarding still uses
+`--backend onboarding`. Without it, an onboarding-token backend prints setup
+guidance instead of a review command that would fail authentication.
 
 For a dedicated GitHub account, configure both the GitHub CLI login directory and
 its SSH private key in the daemon's `engine.toml`:
