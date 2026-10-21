@@ -311,7 +311,7 @@ def _require_login_off_loopback(
 
 
 def _service_token_reader(loaded: LoadedEngineConfig, variable: str = "ENGINE_SERVICE_TOKEN") -> Callable[[], str]:
-    """Read a service or onboarding bearer secret per request.
+    """Read a service or onboarding bearer secret, caching unchanged files.
 
     Read like the login client secret: the process environment first, then the
     server-local `.env` beside `engine.toml`, never TOML. A reader so rotating
@@ -321,11 +321,25 @@ def _service_token_reader(loaded: LoadedEngineConfig, variable: str = "ENGINE_SE
 
     secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
 
+    cached_stamp: tuple[int, int, int] | None = None
+    cached_token = ""
+
     def read() -> str:
+        nonlocal cached_stamp, cached_token
         if variable in os.environ:
             return os.environ[variable]
-        values = dotenv_values(secret_file, interpolate=False)
-        return values.get(variable) or ""
+        # Refresh on file replacement or edit, without reparsing unchanged files.
+        try:
+            stat = secret_file.stat()
+            stamp = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+        except FileNotFoundError:
+            cached_stamp, cached_token = None, ""
+            return ""
+        if stamp != cached_stamp:
+            values = dotenv_values(secret_file, interpolate=False)
+            cached_token = values.get(variable) or ""
+            cached_stamp = stamp
+        return cached_token
 
     token = read()
     if token and not valid_service_token(token):

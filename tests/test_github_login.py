@@ -1236,3 +1236,66 @@ def test_token_only_daemon_stays_closed_when_its_token_goes_missing(tmp_path, mo
 
     for path in ["/api/v1/graphs", "/api/data", "/graph/api/data"]:
         assert client.get(path).status_code == 401, f"{path} opened without a token after {lose_token}"
+
+
+def test_token_browser_sign_in_rotation_and_logout():
+    from starlette.responses import JSONResponse
+
+    token = SERVICE_TOKEN
+    login = GitHubLogin(None, service_token=lambda: token)
+    app = Starlette(routes=[*login.routes(), Route('/api/data', lambda _r: JSONResponse({'ok': True}))])
+    client = TestClient(login.middleware(app), base_url='https://engine.test')
+    assert client.get('/api/auth/github/status').json()['tokenRequired'] is True
+    assert client.get('/api/data').status_code == 401
+    assert client.post('/api/auth/token', json={'token': 'wrong'}).status_code == 401
+    assert client.post('/api/auth/token', content='token=wrong').status_code == 415
+    response = client.post('/api/auth/token', json={'token': token})
+    assert response.status_code == 200
+    assert 'HttpOnly' in response.headers['set-cookie']
+    assert 'Secure' in response.headers['set-cookie']
+    assert token not in response.headers['set-cookie']
+    assert client.get('/api/data').status_code == 200
+    assert client.get('/api/auth/github/status').json()['authenticated'] is True
+    token = 'rotated-token-' * 3
+    assert client.get('/api/data').status_code == 401
+    assert client.post('/api/auth/token', json={'token': token}).status_code == 200
+    assert client.post('/api/auth/github/logout').status_code == 200
+    assert client.get('/api/data').status_code == 401
+
+
+def test_service_token_reader_caches_unchanged_file(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import engine.apps.web.__main__ as main
+
+    monkeypatch.delenv('ENGINE_SERVICE_TOKEN', raising=False)
+    env = tmp_path / '.env'
+    env.write_text(f'ENGINE_SERVICE_TOKEN={SERVICE_TOKEN}\n')
+    original = main.dotenv_values
+    reads = []
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(main, 'dotenv_values', counted)
+    reader = main._service_token_reader(SimpleNamespace(path=tmp_path / 'engine.toml'))
+    for _ in range(5):
+        assert reader() == SERVICE_TOKEN
+    assert len(reads) == 1
+    env.write_text('ENGINE_SERVICE_TOKEN=' + 'new-token-' * 4)
+    assert reader() == 'new-token-' * 4
+    assert len(reads) == 2
+
+
+def test_protected_request_reads_service_token_once():
+    from starlette.responses import JSONResponse
+
+    reads = []
+    def read():
+        reads.append(1)
+        return SERVICE_TOKEN
+    login = GitHubLogin(None, service_token=read)
+    client = TestClient(login.middleware(Starlette(routes=[
+        Route('/api/data', lambda _r: JSONResponse({'ok': True})),
+    ])))
+    reads.clear()
+    assert client.get('/api/data', headers={'Authorization': f'Bearer {SERVICE_TOKEN}'}).status_code == 200
+    assert len(reads) == 1
