@@ -782,8 +782,8 @@ def test_create_workflow_run_records_the_signed_in_requester(
 
     async def scenario():
         async with async_client(app, base_url="https://engine.test") as client:
-            # The login middleware wraps the app whose lifespan starts the engine.
-            async with app.app.router.lifespan_context(app.app):
+            # Start the engine through the application lifespan.
+            async with app.router.lifespan_context(app):
                 return await client.post(
                     "/api/runs",
                     json={
@@ -3188,7 +3188,7 @@ def test_starting_a_scheduled_workorder_keeps_its_requester(
             requester=proposer,
         ))
         async with async_client(app, base_url="https://engine.test") as client:
-            async with app.app.router.lifespan_context(app.app):
+            async with app.router.lifespan_context(app):
                 return await client.post("/api/runs/run-proposed/start")
 
     with patch.object(
@@ -3520,7 +3520,7 @@ def _login_gate(
         **options,
     )
     callback = next(
-        route.endpoint for route in app.app.routes
+        route.endpoint for route in app.routes
         if getattr(route, "path", "") == "/api/auth/github/callback"
     )
     return getattr(callback.__self__, check)
@@ -3715,7 +3715,7 @@ def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(
 
     async def scenario():
         async with async_client(app, base_url="https://engine.test") as client:
-            async with app.app.router.lifespan_context(app.app):
+            async with app.router.lifespan_context(app):
                 listed = (await client.get("/api/runs")).json()["runs"]
                 assert sorted(run["runId"] for run in listed) == [
                     "run-api", "run-api-path", "run-github",
@@ -3790,7 +3790,7 @@ def test_a_graph_run_stream_is_rechecked_against_its_own_repository(
 
     async def scenario():
         async with async_client(recording, base_url="https://engine.test") as client:
-            async with app.app.router.lifespan_context(app.app):
+            async with app.router.lifespan_context(app):
                 await client.get("/graph/api/runs/run-api")
                 still_visible = scopes[-1][STREAM_ACCESS]
                 assert await still_visible() is True
@@ -3816,7 +3816,7 @@ def test_an_agent_cannot_depend_on_another_repositorys_run(
     app, store, _repos = _scoped_app(tmp_path, runtime, workflow_app=workflow_app)
 
     async def scenario():
-        async with app.app.router.lifespan_context(app.app):
+        async with app.router.lifespan_context(app):
             create = creators[0]
             for prerequisite in ("run-web", "run-web-scheduled", "run-elsewhere", "run-missing"):
                 with pytest.raises(ValueError) as refused:
@@ -3978,7 +3978,7 @@ def test_operators_see_every_run(async_client, tmp_path, *, workflow_app) -> Non
 
     async def scenario():
         async with async_client(app, base_url="https://engine.test") as client:
-            async with app.app.router.lifespan_context(app.app):
+            async with app.router.lifespan_context(app):
                 listed = (await client.get("/api/runs")).json()["runs"]
                 assert (await client.get("/api/runs/run-elsewhere")).status_code == 200
                 config = (await client.get("/api/config")).json()

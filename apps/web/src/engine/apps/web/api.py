@@ -4635,6 +4635,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         routes=routes,
         lifespan=lifespan,
         middleware=[
+            Middleware(github_login.middleware),
             Middleware(TrustedDaemonHostMiddleware, security=request_security),
             Middleware(WebGZipMiddleware, minimum_size=1024, compresslevel=5),
         ],
@@ -4643,9 +4644,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     app.state.thread_service = service
     app.state.slack_ingress = slack_ingress
     app.state.github_ingress = github_ingress
-    # Enforce session auth on API routes when GitHub login is configured.
-    app = github_login.middleware(app)
-    return app  # pyright: ignore[reportReturnType]  # Baseline: see docs/pyright.md
+    return app
 
 
 def _with_workspace(thread: ChatThread, state: WorkspaceState | None) -> ChatThread:
