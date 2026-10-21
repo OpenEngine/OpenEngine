@@ -5,9 +5,9 @@ JSON Schemas:
 
 | Service | Shorthand | Document | Reference |
 | -- | -- | -- | -- |
-| Connection Bus | `cxn` | [`connection_bus/v1/asyncapi.yaml`](connection_bus/v1/asyncapi.yaml) | [`connection_bus/v1/reference.html`](connection_bus/v1/reference.html) ([view](https://raw.githack.com/OpenEngine/OpenEngine/main/v2/packages/contracts/connection_bus/v1/reference.html)) |
-| Graph Engine | `ge` | [`graph_engine/v1/asyncapi.yaml`](graph_engine/v1/asyncapi.yaml) | [`graph_engine/v1/reference.html`](graph_engine/v1/reference.html) ([view](https://raw.githack.com/OpenEngine/OpenEngine/main/v2/packages/contracts/graph_engine/v1/reference.html)) |
-| Virtual Control Plane | `vcp` | [`virtual_control_plane/v1/asyncapi.yaml`](virtual_control_plane/v1/asyncapi.yaml) | [`virtual_control_plane/v1/reference.html`](virtual_control_plane/v1/reference.html) ([view](https://raw.githack.com/OpenEngine/OpenEngine/main/v2/packages/contracts/virtual_control_plane/v1/reference.html)) |
+| Connection Bus | `cxn` | [`connection_bus/v1/asyncapi.yaml`](connection_bus/v1/asyncapi.yaml) | [`connection_bus/v1/reference.html`](connection_bus/v1/reference.html) ([view](https://openengine.cc/contracts/connection_bus/v1/)) |
+| Graph Engine | `ge` | [`graph_engine/v1/asyncapi.yaml`](graph_engine/v1/asyncapi.yaml) | [`graph_engine/v1/reference.html`](graph_engine/v1/reference.html) ([view](https://openengine.cc/contracts/graph_engine/v1/)) |
+| Virtual Control Plane | `vcp` | [`virtual_control_plane/v1/asyncapi.yaml`](virtual_control_plane/v1/asyncapi.yaml) | [`virtual_control_plane/v1/reference.html`](virtual_control_plane/v1/reference.html) ([view](https://openengine.cc/contracts/virtual_control_plane/v1/)) |
 
 Each document is written from its service's point of view: the requests it
 answers (`action: receive`, with a typed reply) and the events it publishes
@@ -237,6 +237,10 @@ carried out.
 - **Defaults** are part of the contract; changing one is breaking.
 
 ## Tooling
+
+The [Pages workflow](../../../.github/workflows/pages.yml) regenerates and
+checks the references against the checked-in pages, then publishes them to
+`https://openengine.cc/contracts/{service}/v1/` on every contract change to main.
 
 Everything is pinned: the AsyncAPI parser in
 [`tooling/package.json`](tooling/package.json) and its lockfile, the Python
