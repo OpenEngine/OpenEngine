@@ -1209,3 +1209,30 @@ def test_token_protects_api_without_github_login_and_rotates(path):
     token = "new-token-" * 4
     assert client.get(path, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}).status_code == 401
     assert client.get(path, headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+@pytest.mark.parametrize("lose_token", ["delete .env", "blank .env"])
+def test_token_only_daemon_stays_closed_when_its_token_goes_missing(tmp_path, monkeypatch, lose_token):
+    """A daemon started with a service token and no GitHub login must not open
+    its API to anyone once that token is blanked or its .env file disappears."""
+    from types import SimpleNamespace
+    from starlette.responses import JSONResponse
+    from engine.apps.web.__main__ import _service_token_reader
+
+    monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
+    env = tmp_path / ".env"
+    env.write_text(f"ENGINE_SERVICE_TOKEN={SERVICE_TOKEN}\n")
+    login = GitHubLogin(None, service_token=_service_token_reader(SimpleNamespace(path=tmp_path / "engine.toml")))
+    app = Starlette(routes=[Route(path, lambda _r: JSONResponse({"ok": True}))
+                            for path in ["/api/v1/graphs", "/api/data", "/graph/api/data"]])
+    client = TestClient(login.middleware(app))
+    for path in ["/api/v1/graphs", "/api/data", "/graph/api/data"]:
+        assert client.get(path).status_code == 401
+
+    if lose_token == "delete .env":
+        env.unlink()
+    else:
+        env.write_text("ENGINE_SERVICE_TOKEN=\n")
+
+    for path in ["/api/v1/graphs", "/api/data", "/graph/api/data"]:
+        assert client.get(path).status_code == 401, f"{path} opened without a token after {lose_token}"
