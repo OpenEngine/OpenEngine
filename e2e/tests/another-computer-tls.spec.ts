@@ -1,7 +1,5 @@
 import { test as base, expect } from "../fixtures/engine.ts"
-
-/** Where the other computer answers, as in the guide (another-computer.spec.ts). */
-const MAC_MINI = "mac-mini.local:4364"
+import { MAC_MINI, MAC_MINI_PATTERN } from "./macMini"
 
 // Sessions without SSL_CERT_FILE, so nothing trusts the proxy's certificate
 // unless a command is given it. Its path stays at hand as MAC_MINI_CERTIFICATE.
@@ -28,7 +26,7 @@ test.describe("another computer over https", { tag: ["@skip-docs"] }, () => {
     await terminal.run(`engine backend add mac-mini https://${MAC_MINI}`)
 
     const untrusted = await macMiniHealth(terminal)
-    expect(untrusted).toMatch(/^down: cannot reach backend mac-mini at https:\/\/mac-mini\.local:4364: /)
+    expect(untrusted).toMatch(new RegExp(`^down: cannot reach backend mac-mini at https://${MAC_MINI_PATTERN}: `))
     expect(untrusted).toMatch(/CERTIFICATE_VERIFY_FAILED/)
 
     // The same command, trusting the certificate, reaches it: only the certificate stood in the way.
