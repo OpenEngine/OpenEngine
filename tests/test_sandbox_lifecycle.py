@@ -23,6 +23,51 @@ from engine.graph_service.language import GraphError, parse_graph
 from engine.ports import SandboxSpec
 
 
+def test_agent_pid_is_not_published_until_its_contents_are_complete(tmp_path, monkeypatch):
+    from engine.adapters.sandbox.process import ProcessSandbox
+    from engine.graph_runtime_langgraph import sandbox_lifecycle as lifecycle
+
+    ready = tmp_path / "write-started"
+    release = tmp_path / "release-write"
+    prefix = f"import tempfile; tempfile.tempdir = {str(tmp_path)!r}\n"
+    delayed_write = f'''import pathlib, time
+original_write = pathlib.Path.write_text
+def partial_write(path, content, *args, **kwargs):
+    path.touch()
+    signal = pathlib.Path({str(ready) + '.pending'!r})
+    signal.write_bytes(path.name.encode())
+    signal.replace({str(ready)!r})
+    while not pathlib.Path({str(release)!r}).exists():
+        time.sleep(0.01)
+    return original_write(path, content, *args, **kwargs)
+pathlib.Path.write_text = partial_write
+'''
+    monkeypatch.setattr(lifecycle, "_LAUNCH", prefix + delayed_write + lifecycle._LAUNCH)
+    monkeypatch.setattr(lifecycle, "_PID", prefix + lifecycle._PID)
+
+    async def scenario():
+        async with ProcessSandbox().create(SandboxSpec()) as sandbox:
+            agent = lifecycle.AgentSandbox(sandbox)
+            launch = asyncio.create_task(agent.exec((sys.executable, "-c", "print('ready')")))
+            try:
+                async with asyncio.timeout(10):
+                    while not ready.exists():
+                        await asyncio.sleep(0.01)
+                control = ready.read_text().removesuffix(".pending")
+                assert not (tmp_path / control).exists(), "PID reader must not see a partially written marker"
+                assert not launch.done()
+                release.write_bytes(b"continue")
+                process = await asyncio.wait_for(asyncio.shield(launch), timeout=10)
+                process.stdin.close()
+                assert await process.stdout.read() == b"ready\n"
+                assert await process.wait() == 0
+            finally:
+                release.write_bytes(b"continue")
+                await asyncio.gather(launch, return_exceptions=True)
+                await agent.stop()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('timeout', [0, -1, None, True, '30m', float('nan'), float('inf'), pytest.param(10 ** 400, id='overflow')])
 def test_invalid_node_timeout_is_refused_in_python_and_yaml(timeout):
     with pytest.raises(ValueError, match='timeout'):

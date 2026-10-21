@@ -11,7 +11,10 @@ from engine.ports import SandboxInstance, SandboxProcess
 _LAUNCH = '''import os, pathlib, sys, tempfile
 if hasattr(os, 'setsid') and os.getpgrp() != os.getpid():
     os.setsid()
-(pathlib.Path(tempfile.gettempdir()) / sys.argv[1]).write_text(str(os.getpid()))
+path = pathlib.Path(tempfile.gettempdir()) / sys.argv[1]
+pending = path.with_name(path.name + '.pending')
+pending.write_text(str(os.getpid()))
+pending.replace(path)
 os.execvp(sys.argv[2], sys.argv[2:])
 '''
 _PID = '''import pathlib, sys, tempfile, time
