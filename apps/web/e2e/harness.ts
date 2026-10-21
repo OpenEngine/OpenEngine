@@ -14,6 +14,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -90,7 +91,11 @@ export const test = base.extend<{
 }>({
   seededDatabase: [false, { option: true }],
   engine: async ({ seededDatabase }, provide, testInfo) => {
-    const root = mkdtempSync(path.join(tmpdir(), "engine-e2e-"));
+    // The server serves the repository's resolved path, and the interface
+    // selects by it, so the fixture starts from the tmp directory already
+    // resolved: on macOS /tmp is a symlink to /private/tmp, and the two
+    // spellings of one path never match in the repository list.
+    const root = mkdtempSync(path.join(realpathSync(tmpdir()), "engine-e2e-"));
     const state = path.join(root, "state");
     mkdirSync(state);
     const { repository, origin } = fixtureRepository(root);
