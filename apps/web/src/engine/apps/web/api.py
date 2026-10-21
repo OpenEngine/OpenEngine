@@ -98,6 +98,7 @@ from engine.apps.web.utilization import (
     UtilizationService,
     utilization_json,
 )
+from engine.adapters.agent_runner.acp import installed_codex_env
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCommunications,
@@ -2912,7 +2913,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             same_repository=lambda one, other: same_repository(one, other),
             may_act=loop_may_act,
         ),
-        loop_provider or CodexACPProvider(permissions=loop_tool_permission),
+        loop_provider or CodexACPProvider(permissions=loop_tool_permission, env=installed_codex_env()),
     )
     loop_runs: set[asyncio.Task[None]] = set()
 
@@ -3519,7 +3520,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         return concierge_result(state)
 
     slack_concierge = SlackConcierge(
-        provider=concierge_provider or CodexACPProvider(permissions=tool_permission),
+        provider=concierge_provider or CodexACPProvider(permissions=tool_permission, env=installed_codex_env()),
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
         turn_finished=concierge_turn_finished,
@@ -3828,7 +3829,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         )
 
     github_concierge = GithubConcierge(
-        provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission),
+        provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission, env=installed_codex_env()),
         continue_workorder=github_continue_workorder, reply=github_reply, react=github_react,
     )
 

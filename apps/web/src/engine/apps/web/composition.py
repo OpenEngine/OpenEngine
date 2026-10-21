@@ -44,6 +44,7 @@ from engine.adapters.agent_runner.acp import (
     claude_acp_runner,
     claude_session_config,
     codex_acp_runner,
+    installed_codex_env,
     opencode_acp_runner,
 )
 from engine.adapters.communications.slack import (
@@ -412,7 +413,9 @@ def build_graph_service(
             runtime,
             Path(settings.graph_state_directory) / RUNS,
             workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
-            registry=agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]),
+            registry=agent_registry(
+                [CodexACPProvider(env=installed_codex_env()), ClaudeACPProvider(), OpenCodeACPProvider()]
+            ),
             agent_factory=added_agent,
             added_agents=ADDED_AGENTS,
             start=start,
@@ -434,7 +437,7 @@ def added_agent(row: AgentRow) -> object:
     if row.kind == "claude":
         provider: object = ClaudeACPProvider(name=row.name)
     elif row.kind == "codex":
-        provider = CodexACPProvider(name=row.name)
+        provider = CodexACPProvider(name=row.name, env=installed_codex_env())
     else:
         config = opencode_config(row)
         env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)} if config else None

@@ -884,6 +884,30 @@ def _count(usage: Mapping[str, Any], name: str) -> int:
 # --- the agents Engine ships with ------------------------------------------
 
 
+def installed_codex(env: Mapping[str, str] | None = None) -> str | None:
+    """The operator's Codex: `CODEX_PATH`, `ENGINE_CODEX_PATH`, or `codex` on `PATH`.
+
+    Resolved here, before npx prepends the adapter's bundled executables to
+    `PATH`. The `@openai/codex` codex-acp bundles trails the installed CLI, and
+    may not know the model the operator's configuration names. `None` leaves
+    codex-acp to its bundled copy.
+    """
+    env = env or {}
+    return (
+        env.get("CODEX_PATH")
+        or os.environ.get("CODEX_PATH")
+        or env.get(CODEX_PATH_VARIABLE)
+        or os.environ.get(CODEX_PATH_VARIABLE)
+        or shutil.which("codex", path=env.get("PATH"))
+    )
+
+
+def installed_codex_env() -> dict[str, str] | None:
+    """The environment that points a bare `CodexACPProvider` at `installed_codex`."""
+    codex = installed_codex()
+    return {"CODEX_PATH": codex} if codex else None
+
+
 def codex_acp_runner(
     *,
     command: Sequence[str] = CODEX_ACP_COMMAND,
@@ -912,7 +936,7 @@ def codex_acp_runner(
         "CODEX_PATH": _codex_policy_launcher(),
         SANDBOX_VARIABLE: sandbox,
     }
-    codex_path = (env or {}).get("CODEX_PATH") or os.environ.get("CODEX_PATH")
+    codex_path = installed_codex(env)
     if codex_path:
         codex_env[CODEX_PATH_VARIABLE] = codex_path
     if not attribution:
@@ -1093,6 +1117,8 @@ __all__ = [
     "claude_acp_runner",
     "claude_session_config",
     "codex_acp_runner",
+    "installed_codex",
+    "installed_codex_env",
     "opencode_acp_runner",
     "render_prompt",
 ]
