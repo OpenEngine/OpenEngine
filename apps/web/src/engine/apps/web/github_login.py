@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
 
 import anyio
+from anyio.to_thread import run_sync
 import httpx
 from dotenv import dotenv_values
 from starlette.requests import Request
@@ -369,7 +370,7 @@ class GitHubLogin:
             supplied = (await request.json()).get("token")
         except (ValueError, AttributeError):
             supplied = None
-        token = await anyio.to_thread.run_sync(lambda: self.request_token(request))
+        token = await run_sync(lambda: self.request_token(request))
         if not isinstance(supplied, str) or not valid_service_token(token) or not secrets.compare_digest(supplied.encode(), token.encode()):
             return JSONResponse({"error": "Token not accepted"}, 401, headers=_HEADERS)
         expires = str(int(time.time()) + _SESSION_TTL)
@@ -538,7 +539,7 @@ class GitHubLogin:
         return response
 
     async def status(self, request: Request) -> Response:
-        await anyio.to_thread.run_sync(lambda: self.request_token(request))
+        await run_sync(lambda: self.request_token(request))
         if not self.configured and self.token_required:
             return JSONResponse({"authenticated": self._token_session(request), "user": None,
                                  "loginRequired": True, "tokenRequired": True}, headers=_HEADERS)
@@ -623,7 +624,7 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        await anyio.to_thread.run_sync(lambda: self.login.request_token(request))
+        await run_sync(lambda: self.login.request_token(request))
         if not self.login.configured and not self.login.token_required:
             await self.app(scope, receive, send)
             return
