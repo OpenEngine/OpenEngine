@@ -325,7 +325,7 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     source = Path(__file__).parents[1] / "docs/examples/graphs/tdd-guide.yaml"
     spec = graph(source.read_text())
     assert [node.id for node in spec.nodes] == [
-        "pick", "tdd", "implement", "publish", "ci", "reviewers", "reproduce", "reranker", "impact", "human_review",
+        "pick", "conventions", "tdd", "implement", "publish", "ci", "reviewers", "reproduce", "reranker", "impact", "human_review",
     ]
     # A run can build on an unmerged branch instead of main, and publishes against it.
     assert (spec.base_ref, spec.ref_input) == ("origin/main", "base")
@@ -340,14 +340,15 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
         ("reproduce", "reranker", False),
         ("impact", "human_review", False),
     } <= set(spec.edges())
-    # The house review panel, with how the guides read as a sixth angle.
+    # The house review panel, with how the guides read and whether the docs build as extra angles.
     assert spec.node("reviewers").keys == tuple(
-        f"reviewers-{facet}" for facet in ("security", "bugs", "performance", "conciseness", "dryness", "guide")
+        f"reviewers-{facet}" for facet in ("security", "bugs", "performance", "conciseness", "dryness", "guide", "docs-build")
     )
     # Who writes the tests, who implements and who reviews are each the run's
     # choice, so a run can use one runner throughout or a different one for each.
     assert [(node.id, node.runner.kind, node.runner.value) for node in spec.nodes if node.kind == "agent"] == [
         ("pick", "input", "runner"),
+        ("conventions", "same", "pick"),
         ("tdd", "same", "pick"),
         ("implement", "input", "implementer"),
         ("publish", "same", "implement"),
@@ -367,12 +368,15 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
 
     routes = {rule.sources[0]: rule.routes for rule in spec.flow if rule.routes}
 
-    def after(step: str, outputs: dict, visits: dict | None = None) -> str:
-        names = {"outputs": outputs, "visits": visits or {}, "inputs": {}, "instruction": "", "item": None}
+    def after(step: str, outputs: dict, visits: dict | None = None, inputs: dict | None = None) -> str:
+        names = {"outputs": outputs, "visits": visits or {}, "inputs": inputs or {}, "instruction": "", "item": None}
         return next(route.targets[0] for route in routes[step] if not route.when or parse(route.when).evaluate(names))
 
-    assert after("pick", {"pick": {"found": False}}) == "end"
-    assert after("pick", {"pick": {"found": True}}) == "tdd"
+    assert after("pick", {"pick": {"found": "no"}}) == "end"
+    assert after("pick", {"pick": {"found": "yes"}}) == "conventions"
+    # The conventions are in place before any work; ready-made tests skip the test writer.
+    assert after("conventions", {}, inputs={"tests_ready": "no"}) == "tdd"
+    assert after("conventions", {}, inputs={"tests_ready": "yes"}) == "implement"
     finding = {"tagline": "x", "description": "y", "agent": "claude", "facet": "bugs"}
     assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 1}) == "implement"
     assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 3}) == "impact"
