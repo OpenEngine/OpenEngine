@@ -1,0 +1,176 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Tool
+description: >-
+  A tool agents can call, offered to an agent step that lists it in
+  `agent.tools`. Agents see it as an MCP tool named after `metadata.name`, with
+  `spec.description` and `spec.inputSchema`; `spec.handler` says what runs
+  when it is called.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: meta.schema.yaml#/$defs/api_version
+  kind:
+    type: string
+    const: Tool
+  metadata:
+    $ref: meta.schema.yaml#/$defs/object_meta
+  spec:
+    $ref: '#/$defs/tool_spec'
+$defs:
+  tool_spec:
+    title: ToolSpec
+    description: What the tool takes, returns and runs.
+    type: object
+    required: [description, inputSchema, handler]
+    additionalProperties: false
+    properties:
+      description:
+        description: What the tool does and when to use it, as the agent reads it.
+        type: string
+        minLength: 1
+        maxLength: 4000
+      inputSchema:
+        description: >-
+          A JSON Schema object for the tool's arguments. Calls whose arguments
+          do not validate are refused before the handler runs.
+        $ref: '#/$defs/object_schema'
+      outputSchema:
+        description: >-
+          A JSON Schema object for the tool's result. Omitted means the result
+          is text.
+        $ref: '#/$defs/object_schema'
+      hints:
+        $ref: '#/$defs/hints'
+      approvalPolicy:
+        description: >-
+          `Always` asks a person to approve each call before it runs, unless
+          the run is auto-approved. `Never` runs calls without asking.
+        type: string
+        enum: [Never, Always]
+        default: Never
+      timeout:
+        description: How long a call may run before it fails.
+        allOf:
+          - $ref: meta.schema.yaml#/$defs/duration
+          - x-oe-seconds: {minimum: 1, maximum: 3600}
+        default: 5m
+      handler:
+        $ref: '#/$defs/handler'
+  object_schema:
+    title: ObjectSchema
+    description: A JSON Schema (draft-07) whose `type` is `object`.
+    type: object
+    required: [type]
+    properties:
+      type:
+        type: string
+        const: object
+  hints:
+    title: Hints
+    description: >-
+      What the tool does to the world, as MCP tool annotations. Hints guide
+      agents and people; they are not enforced.
+    type: object
+    additionalProperties: false
+    properties:
+      readOnly:
+        description: The tool changes nothing.
+        type: boolean
+        default: false
+      destructive:
+        description: The tool may delete or overwrite. Meaningful only when `readOnly` is false.
+        type: boolean
+        default: true
+      idempotent:
+        description: Calling it again with the same arguments has no further effect.
+        type: boolean
+        default: false
+      openWorld:
+        description: The tool reaches systems outside the workspace, such as a forge or a chat service.
+        type: boolean
+        default: true
+  handler:
+    title: Handler
+    description: What runs when the tool is called. Set exactly one of `builtin`, `exec` or `mcp`.
+    type: object
+    additionalProperties: false
+    oneOf:
+      - {required: [builtin]}
+      - {required: [exec]}
+      - {required: [mcp]}
+    properties:
+      builtin:
+        $ref: '#/$defs/builtin_handler'
+      exec:
+        $ref: '#/$defs/exec_handler'
+      mcp:
+        $ref: '#/$defs/mcp_handler'
+  builtin_handler:
+    title: BuiltinHandler
+    description: A tool the workspace host implements, such as `git_subcommand` or `open_pull_request`.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        description: The host's name for the tool. A workspace that lacks it refuses the step.
+        $ref: meta.schema.yaml#/$defs/name
+  exec_handler:
+    title: ExecHandler
+    description: >-
+      Runs a command in the step's workspace. The arguments arrive as one JSON
+      object on standard input; standard output is the result, parsed as JSON
+      when `outputSchema` is given. A non-zero exit fails the call with its
+      standard error.
+    type: object
+    required: [command]
+    additionalProperties: false
+    properties:
+      command:
+        description: The program and its arguments, not run through a shell, such as `[uv, run, scripts/lint.py]`.
+        type: array
+        minItems: 1
+        items:
+          type: string
+          minLength: 1
+      workingDir:
+        description: The directory to run in, relative to the workspace root. Defaults to the root.
+        type: string
+        minLength: 1
+        pattern: ^(?!/)(?!.*(^|/)\.\.(/|$)).*$
+      env:
+        description: Environment variables to set, in addition to the workspace's.
+        type: array
+        items:
+          $ref: '#/$defs/env_var'
+  env_var:
+    title: EnvVar
+    description: One environment variable. Never put a secret here; the definition is stored and shown verbatim.
+    type: object
+    required: [name, value]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+        pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+      value:
+        type: string
+  mcp_handler:
+    title: MCPHandler
+    description: Forwards the call to a tool on a remote MCP server reachable from the workspace.
+    type: object
+    required: [url, tool]
+    additionalProperties: false
+    properties:
+      url:
+        description: The server's streamable HTTP endpoint, such as `https://mcp.example.com/mcp`.
+        type: string
+        format: uri
+        pattern: ^https?://
+      tool:
+        description: The tool's name on that server.
+        type: string
+        minLength: 1
+        maxLength: 128

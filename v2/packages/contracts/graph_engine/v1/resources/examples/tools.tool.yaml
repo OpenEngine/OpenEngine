@@ -1,0 +1,61 @@
+# Several resources may share a file, separated by ---.
+apiVersion: openengine.cc/v2alpha1
+kind: Tool
+metadata:
+  name: git_subcommand
+spec:
+  description: 'Run one git subcommand in the step''s workspace, such as ["commit", "-m", "fix: ..."].'
+  inputSchema:
+    type: object
+    required: [args]
+    additionalProperties: false
+    properties:
+      args: {type: array, minItems: 1, items: {type: string}}
+  hints: {readOnly: false, destructive: false, openWorld: false}
+  handler:
+    builtin: {name: git_subcommand}
+---
+apiVersion: openengine.cc/v2alpha1
+kind: Tool
+metadata:
+  name: open_pull_request
+spec:
+  description: Open a pull request for a branch already pushed to the remote, and return its URL.
+  inputSchema:
+    type: object
+    required: [branch, title, body]
+    additionalProperties: false
+    properties:
+      branch: {type: string, minLength: 1}
+      base_ref: {type: string, minLength: 1}
+      title: {type: string, minLength: 1}
+      body: {type: string}
+  hints: {destructive: false, idempotent: true}
+  approvalPolicy: Always
+  handler:
+    builtin: {name: open_pull_request}
+---
+apiVersion: openengine.cc/v2alpha1
+kind: Tool
+metadata:
+  name: lint
+  annotations:
+    openengine.cc/owner: platform
+spec:
+  description: Lint the given paths and return the problems found.
+  inputSchema:
+    type: object
+    properties:
+      paths: {type: array, items: {type: string}}
+  outputSchema:
+    type: object
+    required: [problems]
+    properties:
+      problems: {type: array, items: {type: string}}
+  hints: {readOnly: true, idempotent: true, openWorld: false}
+  timeout: 2m
+  handler:
+    exec:
+      command: [uv, run, scripts/lint.py, --json]
+      env:
+        - {name: NO_COLOR, value: "1"}

@@ -1,0 +1,364 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Graph
+description: >-
+  The steps of a piece of work and the flow between them. Steps are written in
+  three stages, `plan`, `implementation` and `review`, which run in that order;
+  each stage's steps run in the order written, and the last goes to `end`.
+  `flow` adds only what that order cannot say: joins, branches and loops back.
+  Step names are unique across the whole graph, and `start`, `end` and
+  `naming` are reserved. Cycles must pass through a `route`, so every loop has
+  a way out, and every step must be reachable and able to reach `end`.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: meta.schema.yaml#/$defs/api_version
+  kind:
+    type: string
+    const: Graph
+  metadata:
+    $ref: meta.schema.yaml#/$defs/object_meta
+  spec:
+    $ref: '#/$defs/graph_spec'
+$defs:
+  graph_spec:
+    title: GraphSpec
+    description: What the graph does. At least one stage must have a step.
+    type: object
+    additionalProperties: false
+    anyOf:
+      - {required: [plan]}
+      - {required: [implementation]}
+      - {required: [review]}
+    properties:
+      description:
+        $ref: meta.schema.yaml#/$defs/description
+      inputs:
+        description: Values a run is given, read as `${inputs.NAME}`. Names are unique.
+        type: array
+        maxItems: 64
+        items:
+          $ref: '#/$defs/input'
+      workspace:
+        $ref: '#/$defs/workspace'
+      naming:
+        $ref: '#/$defs/naming'
+      plan:
+        description: Steps that decide what to do. They run first.
+        $ref: '#/$defs/stage'
+      implementation:
+        description: Steps that make the change. They run after `plan`.
+        $ref: '#/$defs/stage'
+      review:
+        description: Steps that check the change. They run last.
+        $ref: '#/$defs/stage'
+      flow:
+        description: Edges and routes the written order cannot express. Applied in order.
+        type: array
+        items:
+          $ref: '#/$defs/flow_rule'
+  input:
+    title: Input
+    description: One value a run is given.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: meta.schema.yaml#/$defs/identifier
+      description:
+        $ref: meta.schema.yaml#/$defs/description
+      required:
+        description: Whether a run must supply the value. A required input has no `default`.
+        type: boolean
+        default: false
+      default:
+        description: The value when a run supplies none.
+        type: string
+        default: ''
+      choices:
+        description: The only values allowed. `default`, when given, must be one of them.
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string}
+  workspace:
+    title: Workspace
+    description: >-
+      The checkout every step works in, prepared before the first step. Its
+      commits are what the steps change and what a pull request publishes.
+    type: object
+    additionalProperties: false
+    properties:
+      baseRef:
+        description: The ref to start from when `ref` is empty, such as `origin/main`.
+        type: string
+        minLength: 1
+        default: origin/HEAD
+      ref:
+        description: The ref to check out, usually from an input, such as `${inputs.base}`. Empty means `baseRef`.
+        $ref: meta.schema.yaml#/$defs/template
+  naming:
+    title: Naming
+    description: >-
+      Gives each run a short name from its instruction, after the checkout.
+      The turn refuses every permission request and cannot change anything.
+      Without it a run is named after its submission.
+    type: object
+    required: [runner]
+    additionalProperties: false
+    properties:
+      runner:
+        $ref: '#/$defs/runner'
+      model:
+        description: A model tier, a model, or a template. Empty means the runner's `cheapest` tier.
+        $ref: meta.schema.yaml#/$defs/template
+  stage:
+    type: array
+    items:
+      $ref: '#/$defs/step'
+  step:
+    title: Step
+    description: >-
+      One step of a stage. Set exactly one of `agent`, `human` or `ci`; it
+      decides what the step does.
+    type: object
+    required: [name]
+    additionalProperties: false
+    oneOf:
+      - {required: [agent]}
+      - {required: [human]}
+      - {required: [ci]}
+    properties:
+      name:
+        description: The step's name, used in `flow`, in `outputs.NAME` and in `visits.NAME`.
+        $ref: meta.schema.yaml#/$defs/identifier
+      displayName:
+        description: How the step is shown to people, such as `Open pull request`. Defaults to `name`.
+        type: string
+        minLength: 1
+        maxLength: 120
+      description:
+        $ref: meta.schema.yaml#/$defs/description
+      agent:
+        $ref: '#/$defs/agent_step'
+      human:
+        $ref: '#/$defs/human_step'
+      ci:
+        $ref: '#/$defs/ci_step'
+  agent_step:
+    title: AgentStep
+    description: >-
+      An agent session in the workspace. Its result is `outputs` when they are
+      declared, otherwise the agent's final message.
+    type: object
+    required: [runner, prompt]
+    additionalProperties: false
+    properties:
+      runner:
+        $ref: '#/$defs/runner'
+      model:
+        description: >-
+          A model tier (`cheapest`, `default`, `elevated`), a model, or a
+          template. Empty means the runner's `default` tier.
+        $ref: meta.schema.yaml#/$defs/template
+      prompt:
+        description: What the agent is asked to do.
+        allOf:
+          - $ref: meta.schema.yaml#/$defs/template
+          - minLength: 1
+      tools:
+        description: Names of the `Tool` resources the agent may call.
+        type: array
+        uniqueItems: true
+        items:
+          $ref: meta.schema.yaml#/$defs/name
+      outputs:
+        description: The structured result the agent must report. Names are unique.
+        type: array
+        maxItems: 64
+        items:
+          $ref: '#/$defs/output'
+      steeringPolicy:
+        description: >-
+          `AlwaysOpen` lets steering, such as a comment on the pull request,
+          re-enter the run at this step after it finished. `Default` accepts
+          steering only while the step runs.
+        type: string
+        enum: [Default, AlwaysOpen]
+        default: Default
+      facets:
+        description: >-
+          Run the step once per facet, in parallel. Each run reads its facet
+          as `item.facet`, and the step's output is the list of every run's
+          output.
+        type: array
+        minItems: 1
+        maxItems: 32
+        items:
+          $ref: '#/$defs/facet'
+  runner:
+    title: Runner
+    description: >-
+      Which runner an agent step uses, decided when it runs. Set exactly one of
+      `name`, `sameAs` or `differentFrom`.
+    type: object
+    additionalProperties: false
+    oneOf:
+      - required: [name]
+        not: {required: [choices]}
+      - required: [sameAs]
+        not: {required: [choices]}
+      - {required: [differentFrom]}
+    properties:
+      name:
+        description: A runner, such as `claude`, or a template such as `${inputs.runner}`.
+        allOf:
+          - $ref: meta.schema.yaml#/$defs/template
+          - minLength: 1
+      sameAs:
+        description: The runner that last ran this step, so a session's work continues in the same runner.
+        $ref: meta.schema.yaml#/$defs/identifier
+      differentFrom:
+        description: Any runner other than the one that last ran this step, for a second model's view.
+        $ref: meta.schema.yaml#/$defs/identifier
+      choices:
+        description: With `differentFrom`, the runners to pick from.
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: meta.schema.yaml#/$defs/name
+  output:
+    title: Output
+    description: One field of an agent step's structured result.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: meta.schema.yaml#/$defs/identifier
+      type:
+        description: >-
+          The value's type. `findings` is a list of review findings, each with
+          a file, line, tagline and description.
+        type: string
+        enum: [string, number, integer, boolean, list, object, findings]
+        default: string
+      description:
+        $ref: meta.schema.yaml#/$defs/description
+      required:
+        description: Whether the agent must report the field.
+        type: boolean
+        default: false
+      enum:
+        description: For a `string`, the only values allowed.
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {type: string}
+      preserveLineage:
+        description: For `findings`, whether each finding must keep the agent and facet that produced it.
+        type: boolean
+        default: false
+  facet:
+    title: Facet
+    description: >-
+      One parallel run of a faceted step. A built-in facet (`security`,
+      `bugs`, `performance`, `conciseness`, `dryness`) needs only its name;
+      any other facet gives its `focus`.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        description: The facet's name, read as `item.facet.id`.
+        $ref: meta.schema.yaml#/$defs/identifier
+      displayName:
+        description: How the facet is shown, read as `item.facet.name`. Defaults to the built-in facet's or to `name`.
+        type: string
+        minLength: 1
+        maxLength: 120
+      focus:
+        description: What this run looks at, read as `item.facet.focus`. Required for a facet that is not built in.
+        type: string
+        minLength: 1
+      model:
+        description: A model tier, a model or a template for this run, overriding the step's `model`.
+        $ref: meta.schema.yaml#/$defs/template
+  human_step:
+    title: HumanStep
+    description: Waits for a person to approve or reject, with an optional note. The step's output is `{decision, note}`.
+    type: object
+    required: [prompt]
+    additionalProperties: false
+    properties:
+      prompt:
+        description: What the person is asked to decide.
+        allOf:
+          - $ref: meta.schema.yaml#/$defs/template
+          - minLength: 1
+      choose:
+        description: >-
+          An expression naming findings, such as `outputs.reranker.findings`.
+          The person then picks which to act on, and the step's output is the
+          findings they picked.
+        $ref: meta.schema.yaml#/$defs/expression
+  ci_step:
+    title: CIStep
+    description: >-
+      Waits for continuous integration on the change's pull request. The
+      step's output is `{passed, ...}`. Written `ci: {}`.
+    type: object
+    additionalProperties: false
+    properties: {}
+  flow_rule:
+    title: FlowRule
+    description: >-
+      Where steps go next. A step named in `from` leaves the written order: it
+      goes only where its rules say. Set exactly one of `to` or `route`.
+    type: object
+    required: [from]
+    additionalProperties: false
+    oneOf:
+      - {required: [to]}
+      - {required: [route]}
+    properties:
+      from:
+        description: >-
+          The steps the rule leaves, or `start` for the graph's entry. Two or
+          more wait for all of them, a join.
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: meta.schema.yaml#/$defs/identifier
+      to:
+        description: Steps to go to unconditionally, in parallel, or `end`.
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: meta.schema.yaml#/$defs/identifier
+      route:
+        description: >-
+          A conditional edge. Branches are tried in order and the first whose
+          `when` holds is taken; the last must have no `when`, as the default.
+        type: array
+        minItems: 1
+        items:
+          $ref: '#/$defs/route'
+  route:
+    title: Route
+    description: One branch of a route.
+    type: object
+    required: [to]
+    additionalProperties: false
+    properties:
+      when:
+        description: The condition, such as `outputs.ci.passed == false && visits.implement < 4`. Omitted means always.
+        $ref: meta.schema.yaml#/$defs/expression
+      to:
+        description: The step to go to, or `end`.
+        $ref: meta.schema.yaml#/$defs/identifier

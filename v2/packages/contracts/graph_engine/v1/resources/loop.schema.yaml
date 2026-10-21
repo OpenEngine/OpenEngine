@@ -1,0 +1,121 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Loop
+description: >-
+  Runs a graph on a schedule: each time the schedule fires, the Graph Engine
+  creates a job from `jobTemplate`. Suspending or deleting a loop changes only
+  future runs; jobs it already created carry on.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: meta.schema.yaml#/$defs/api_version
+  kind:
+    type: string
+    const: Loop
+  metadata:
+    $ref: meta.schema.yaml#/$defs/object_meta
+  spec:
+    $ref: '#/$defs/loop_spec'
+$defs:
+  loop_spec:
+    title: LoopSpec
+    description: What the loop runs and when.
+    type: object
+    required: [graphRef, schedule, jobTemplate]
+    additionalProperties: false
+    properties:
+      graphRef:
+        $ref: '#/$defs/graph_ref'
+      schedule:
+        $ref: '#/$defs/schedule'
+      suspend:
+        description: Stops the schedule firing until set back to false. Jobs already created are not affected.
+        type: boolean
+        default: false
+      startsAt:
+        description: The schedule does not fire before this UTC time, such as `2026-11-01T09:00:00Z`.
+        $ref: ../../../common/v1/types.schema.json#/$defs/utc_timestamp
+      concurrency:
+        $ref: '#/$defs/concurrency'
+      jobTemplate:
+        $ref: '#/$defs/job_template'
+  graph_ref:
+    title: GraphRef
+    description: The graph each job runs.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        description: The `Graph`'s `metadata.name`.
+        $ref: meta.schema.yaml#/$defs/name
+      revision:
+        description: Pins a revision. Omitted means the latest revision each time the schedule fires.
+        type: integer
+        minimum: 1
+  schedule:
+    title: Schedule
+    description: When the loop fires. Set exactly one of `interval` or `cron`.
+    type: object
+    additionalProperties: false
+    oneOf:
+      - required: [interval]
+        not: {required: [timeZone]}
+      - {required: [cron]}
+    properties:
+      interval:
+        description: A fixed interval between runs, such as `1h`.
+        allOf:
+          - $ref: meta.schema.yaml#/$defs/duration
+          - x-oe-seconds: {minimum: 60, maximum: 31536000}
+      cron:
+        description: A five-field cron expression, such as `0 9 * * 1-5`.
+        type: string
+        pattern: ^\S+( \S+){4}$
+      timeZone:
+        description: With `cron`, the IANA time zone it is read in, such as `Europe/Berlin`.
+        type: string
+        minLength: 1
+        maxLength: 64
+        default: UTC
+  concurrency:
+    title: Concurrency
+    description: How many of the loop's jobs may be open at once.
+    type: object
+    additionalProperties: false
+    properties:
+      maxActiveJobs:
+        description: The most jobs from this loop that may be open at once.
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 1
+      overlapPolicy:
+        description: >-
+          When the schedule fires at the limit: `Skip` the run, or `Queue` one
+          job to start when a slot frees.
+        type: string
+        enum: [Skip, Queue]
+        default: Skip
+  job_template:
+    title: JobTemplate
+    description: What each job the loop creates is given.
+    type: object
+    required: [goal]
+    additionalProperties: false
+    properties:
+      goal:
+        description: What each job is for, in plain language.
+        $ref: ../schemas/job.schema.json#/$defs/goal
+      context:
+        description: Non-secret context for each job, such as a milestone. At most 64 keys.
+        $ref: ../schemas/job.schema.json#/$defs/context
+      inputs:
+        description: Values for the graph's `inputs`, by name, checked against the graph when the loop is added.
+        type: object
+        maxProperties: 64
+        propertyNames:
+          $ref: meta.schema.yaml#/$defs/identifier
+        additionalProperties:
+          type: string
