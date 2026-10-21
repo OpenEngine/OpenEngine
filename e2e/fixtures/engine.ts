@@ -397,6 +397,7 @@ export const test = terminalTest.extend<{
   engine: Engine
   requireCommandApproval: boolean
   anotherComputerAt: string | undefined
+  anotherComputerToken: string | undefined
   anotherComputer: AnotherComputer | undefined
 }>({
   requireCommandApproval: [false, { option: true }],
@@ -409,15 +410,18 @@ export const test = terminalTest.extend<{
   },
   /** Where another computer answers, such as `mac-mini.local:4364`; set it with `test.use` to get `anotherComputer`. */
   anotherComputerAt: [undefined, { option: true }],
-  // A daemon of its own sharing the first one's token: one person's two
-  // computers, so a guide needn't cover tokens. Not added as a backend; that
-  // is the guide's to do.
-  anotherComputer: async ({ engine, anotherComputerAt }, use, testInfo) => {
+  /**
+   * The other computer's own token, for a guide about tokens. Unset, it shares
+   * this one's: one person's two computers, so a guide needn't cover tokens.
+   */
+  anotherComputerToken: [undefined, { option: true }],
+  // A daemon of its own. Not added as a backend; that is the guide's to do.
+  anotherComputer: async ({ engine, anotherComputerAt, anotherComputerToken }, use, testInfo) => {
     if (!anotherComputerAt) {
       await use(undefined)
       return
     }
-    const options = { agentMode: engine.agentMode, token: engine.env.ENGINE_SERVICE_TOKEN }
+    const options = { agentMode: engine.agentMode, token: anotherComputerToken ?? engine.env.ENGINE_SERVICE_TOKEN }
     await useDaemon(testInfo, "another computer's daemon", options, (other) => use({ ...other, address: anotherComputerAt }))
   },
   terminalEnv: async ({ engine, anotherComputer }, use) => {
