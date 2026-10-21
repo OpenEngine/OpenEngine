@@ -118,11 +118,14 @@ test('keeps a comment under the size limit', workspace(async () => {
   assert.match(comment.body, /exceeds the comment limit/);
 }));
 
-test('services manifest accepts only generated v2 schema documents', () => {
-  assert.deepEqual(parseManifest('["v2/docs/schema/latest_cxn.svg","v2/docs/schema/ge/b552e26457cd.mermaid"]', 'services'),
-    ['v2/docs/schema/latest_cxn.svg', 'v2/docs/schema/ge/b552e26457cd.mermaid']);
+test('services manifest accepts only generated v2 schema documents and the architecture', () => {
+  assert.deepEqual(parseManifest('["v2/docs/schema/latest_cxn.svg","v2/docs/schema/ge/b552e26457cd.mermaid",'
+    + '"v2/docs/architecture.mermaid","v2/docs/architecture.svg"]', 'services'),
+    ['v2/docs/schema/latest_cxn.svg', 'v2/docs/schema/ge/b552e26457cd.mermaid',
+      'v2/docs/architecture.mermaid', 'v2/docs/architecture.svg']);
   for (const source of ['["v2/docs/schema/../../secret.md"]', '["docs/schema/sqlite/rev.md"]',
-    '["v2/docs/schema/cxn/rev.png"]', '["v2/docs/schema/cxn/nested/rev.md"]']) {
+    '["v2/docs/schema/cxn/rev.png"]', '["v2/docs/schema/cxn/nested/rev.md"]',
+    '["v2/docs/architecture.md"]', '["v2/docs/other/architecture.svg"]']) {
     assert.throws(() => parseManifest(source, 'services'), /Invalid services manifest/);
   }
 });

@@ -4,7 +4,21 @@ Remove workflow runs with the retired human-review phase.
 
 ## Changes from sqlite_0006
 
-No schema changes.
+```diff
+--- sqlite_0006
++++ sqlite_0007
+@@ -106,8 +106,8 @@
+    milestone_id TEXT,
+    PRIMARY KEY (sequence),
+    CONSTRAINT runs_milestone_fk FOREIGN KEY(milestone_id) REFERENCES milestones (milestone_id),
+-   UNIQUE (run_id),
+-   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id)
++   FOREIGN KEY(workstream_id) REFERENCES workstreams (workstream_id),
++   UNIQUE (run_id)
+ );
+
+ CREATE TABLE session_grants (
+```
 
 ## Schema
 
