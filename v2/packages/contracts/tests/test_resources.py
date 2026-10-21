@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import reference
 import resources
 from resources import EXAMPLES, KINDS, load_documents, validate_resource, validate_text
 
@@ -122,3 +123,24 @@ def test_problems_in_a_multi_document_file_name_the_document() -> None:
     text = "apiVersion: openengine.cc/v2alpha1\nkind: Tool\n---\nkind: Loop\n"
     assert [str(problem) for problem in validate_text(text)][0].startswith("[0]")
     assert [str(problem) for problem in validate_text("a: [")][0].startswith("(document): not YAML")
+
+
+ROOT = resources.CONTRACTS.parents[2]
+
+
+def test_pages_regenerates_and_publishes_the_resource_reference() -> None:
+    workflow = (ROOT / ".github/workflows/pages.yml").read_text()
+    assert "tooling/resources.py" in workflow
+    assert "'v2/packages/contracts/**/reference.html'" in workflow
+    assert "-name '*.schema.yaml'" in workflow
+
+
+def test_site_reference_links_every_contract_and_kind() -> None:
+    sidebar = (ROOT / "site/sidebars.js").read_text()
+    overview = (ROOT / "site/docs/service-contracts.md").read_text()
+    for service in reference.NAMES:
+        for text in (sidebar, overview):
+            assert f"pathname:///contracts/{service}/v1/'" in text or f"pathname:///contracts/{service}/v1/)" in text
+    for kind in KINDS:
+        assert f"pathname:///contracts/graph_engine/v1/resources/#{kind.lower()}'" in sidebar
+        assert f"pathname:///contracts/graph_engine/v1/resources/{kind.lower()}.schema.yaml" in overview

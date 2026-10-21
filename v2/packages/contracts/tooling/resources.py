@@ -370,7 +370,7 @@ def page() -> str:
                 types_html.append(
                     f'<h2 class="kind" id="{_anchor(kind)}">{kind}</h2>'
                     f'<div class="path"><code>apiVersion: {API_VERSION}</code> · <code>kind: {kind}</code> · '
-                    f"defined in <code>{html.escape(source)}</code></div>"
+                    f'defined in <a href="{html.escape(path.name)}"><code>{html.escape(source)}</code></a></div>'
                     f"<p>{_inline(root['description'])}</p>{examples}{table}"
                 )
             else:

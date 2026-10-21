@@ -88,15 +88,23 @@ jobs:
       - name: Regenerate contract references
         run: |
           uv run --project v2 --frozen python v2/packages/contracts/tooling/reference.py
-          git diff --exit-code -- 'v2/packages/contracts/*/v1/reference.html'
+          uv run --project v2 --frozen python v2/packages/contracts/tooling/resources.py
+          git diff --exit-code -- 'v2/packages/contracts/**/reference.html'
 
+      # Each reference becomes its directory's index.html. The schemas are published at
+      # their own paths beside it, so their relative $refs resolve against the site.
       - name: Publish contract references
+        working-directory: v2/packages/contracts
         run: |
-          for reference in v2/packages/contracts/*/v1/reference.html; do
-            service=$(basename "$(dirname "$(dirname "$reference")")")
-            destination="site/static/contracts/$service/v1"
+          find . \( -path ./tooling -o -path ./dist \) -prune -o \
+            \( -name reference.html -o -name '*.schema.json' -o -name '*.schema.yaml' \) -print |
+          while read -r file; do
+            destination="../../../site/static/contracts/$(dirname "$file")"
             mkdir -p "$destination"
-            cp "$reference" "$destination/index.html"
+            case "$file" in
+              */reference.html) cp "$file" "$destination/index.html" ;;
+              *) cp "$file" "$destination/" ;;
+            esac
           done
 
       - name: Build
