@@ -25,7 +25,7 @@ Still on the Mac mini, give the token to OpenEngine. Open the file `~/.config/op
 ENGINE_SERVICE_TOKEN=your-token
 ```
 
-Save the file. Then restart OpenEngine there so it reads the token: type `engine daemon stop`, press Enter, then type `engine daemon start` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token.
+Save the file. Then restart OpenEngine there so it reads the token: type `engine daemon stop`, press Enter, then type `engine daemon start` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.
 
 
 Back on this computer, tell OpenEngine about the Mac mini, and the name of the place where you'll keep its token. Type `engine backend add mac-mini https://mac-mini.local:4364 --token-env MAC_MINI_TOKEN` and press Enter.
