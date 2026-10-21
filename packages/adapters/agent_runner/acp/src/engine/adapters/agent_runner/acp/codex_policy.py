@@ -12,9 +12,9 @@ real app-server and rewrites each `turn/start` on its way in: the sandbox policy
 Engine named, `on-request` approval, and a person as the reviewer. Everything
 else passes through untouched, and the app-server answers codex-acp directly.
 
-The real Codex is `ENGINE_CODEX_PATH` when the operator named one, and otherwise
-the one codex-acp would have run: `@openai/codex`, resolved from where the
-`codex-acp` on `PATH` is installed, which is where `npx` puts it.
+The runner resolves the operator's override or installed Codex before npx
+changes PATH and passes it as `ENGINE_CODEX_PATH`. When neither is available,
+use `@openai/codex` bundled with the adapter as a fallback.
 """
 
 import json
