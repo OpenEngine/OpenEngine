@@ -1,0 +1,11 @@
+{
+  "summary": "Accepted; `resource_id` is the new attempt. The original and the retry receive this same response.",
+  "message": "ExecuteResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.ws_a1.execute",
+  "payload": {
+    "command_id": "cmd_exec_a",
+    "status": "accepted",
+    "operation_id": "op_exec_a",
+    "resource_id": "attempt_a1"
+  }
+}

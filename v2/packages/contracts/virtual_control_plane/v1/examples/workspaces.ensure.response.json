@@ -1,0 +1,10 @@
+{
+  "message": "EnsureWorkspaceResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.ws_a1.ensure",
+  "payload": {
+    "command_id": "cmd_ensure_a",
+    "status": "accepted",
+    "operation_id": "op_ensure_a",
+    "resource_id": "ws_a1"
+  }
+}

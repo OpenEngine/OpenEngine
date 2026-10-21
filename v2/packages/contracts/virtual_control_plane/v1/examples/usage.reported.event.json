@@ -1,0 +1,22 @@
+{
+  "message": "UsageReported",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.usage.reported",
+  "headers": { "Nats-Msg-Id": "evt_usage_a1" },
+  "payload": {
+    "event_id": "evt_usage_a1",
+    "event_type": "usage.reported",
+    "occurred_at": "2026-10-19T21:48:00Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_exec_a", "evt_usage_a1"],
+    "resources": {
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1"
+    },
+    "payload": {
+      "usage": { "input_tokens": 120400, "output_tokens": 8800, "cost_usd": 1.92 },
+      "period_start": "2026-10-19T21:32:00Z",
+      "period_end": "2026-10-19T21:48:00Z"
+    }
+  }
+}

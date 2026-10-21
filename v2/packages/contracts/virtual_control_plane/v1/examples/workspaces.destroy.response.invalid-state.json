@@ -1,0 +1,20 @@
+{
+  "summary": "Rejected: destruction never cancels work implicitly.",
+  "message": "DestroyResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.ws_a1.destroy",
+  "payload": {
+    "command_id": "cmd_destroy_a1",
+    "status": "rejected",
+    "error": {
+      "code": "INVALID_STATE",
+      "message": "Workspace ws_a1 has an active attempt (attempt_a2); cancel it and wait for task.cancelled first.",
+      "retryable": false,
+      "details": {
+        "resource_type": "workspace",
+        "resource_id": "ws_a1",
+        "current_state": "ready",
+        "allowed_states": ["ready", "suspended", "failed"]
+      }
+    }
+  }
+}

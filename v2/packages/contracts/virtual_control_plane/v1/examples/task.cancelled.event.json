@@ -1,0 +1,23 @@
+{
+  "summary": "Step 3 of cancel-then-destroy: the attempt stopped; the workspace is still ready.",
+  "message": "TaskCancelled",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.task.cancelled",
+  "headers": { "Nats-Msg-Id": "evt_cancelled_a2" },
+  "payload": {
+    "event_id": "evt_cancelled_a2",
+    "event_type": "task.cancelled",
+    "occurred_at": "2026-10-19T22:19:30Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_cancel_a2", "evt_cancelled_a2"],
+    "resources": {
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a2"
+    },
+    "payload": {
+      "operation": { "operation_id": "op_exec_a2", "command_id": "cmd_exec_a2" },
+      "cancelled_by": { "operation_id": "op_cancel_a2", "command_id": "cmd_cancel_a2" },
+      "reason": "Job cancelled"
+    }
+  }
+}

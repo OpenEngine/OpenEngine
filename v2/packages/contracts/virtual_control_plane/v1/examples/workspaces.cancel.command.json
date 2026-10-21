@@ -1,0 +1,10 @@
+{
+  "summary": "Step 2: cancel the attempt. The workspace is kept.",
+  "message": "CancelCommand",
+  "subject": "oe.v1.vcp.control.workspaces.ws_a1.cancel",
+  "payload": {
+    "command_id": "cmd_cancel_a2",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_cancel_a2"],
+    "payload": { "attempt_id": "attempt_a2", "reason": "Job cancelled" }
+  }
+}

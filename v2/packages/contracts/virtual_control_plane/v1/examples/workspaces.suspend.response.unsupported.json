@@ -1,0 +1,15 @@
+{
+  "summary": "Rejected: the provider has no suspend capability.",
+  "message": "SuspendResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.ws_p1.suspend",
+  "payload": {
+    "command_id": "cmd_suspend_p",
+    "status": "rejected",
+    "error": {
+      "code": "UNSUPPORTED_CAPABILITY",
+      "message": "Provider process cannot suspend workspaces.",
+      "retryable": false,
+      "details": { "capability": "suspend", "provider": "process" }
+    }
+  }
+}

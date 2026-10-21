@@ -1,0 +1,5 @@
+{
+  "message": "ListArtifactsQuery",
+  "subject": "oe.v1.vcp.query.workspaces.ws_a1.artifacts.list",
+  "payload": { "params": { "attempt_id": "attempt_a1", "kind": ["patch"] } }
+}

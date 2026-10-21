@@ -1,0 +1,23 @@
+{
+  "summary": "Detected by VCP, not caused by a command, so the event is a root.",
+  "message": "WorkspaceFailed",
+  "subject": "oe.v1.vcp.events.workspaces.ws_b1.workspace.failed",
+  "headers": { "Nats-Msg-Id": "evt_fail_b" },
+  "payload": {
+    "event_id": "evt_fail_b",
+    "event_type": "workspace.failed",
+    "occurred_at": "2026-10-19T22:30:00Z",
+    "producer": "vcp",
+    "causal_path": ["evt_fail_b"],
+    "resources": { "workspace_id": "ws_b1" },
+    "resource_version": 4,
+    "payload": {
+      "error": {
+        "code": "PROVIDER_ERROR",
+        "message": "The microVM's disk became read-only.",
+        "retryable": false
+      },
+      "runtime_generation": 1
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "summary": "Second page of job_88's live workspaces, using the cursor the first page returned for the same filters.",
+  "message": "ListWorkspacesQuery",
+  "subject": "oe.v1.vcp.query.workspaces.list",
+  "payload": {
+    "request_id": "req_ws_p2",
+    "params": {
+      "job_id": "job_88",
+      "state": ["ready", "suspended"],
+      "limit": 1,
+      "cursor": "eyJjIjoiMjAyNi0xMC0xOVQyMTozMTowMFoiLCJpZCI6IndzX2IxIn0"
+    }
+  }
+}

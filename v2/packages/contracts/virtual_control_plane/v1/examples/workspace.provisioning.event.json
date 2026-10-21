@@ -1,0 +1,18 @@
+{
+  "message": "WorkspaceProvisioning",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.workspace.provisioning",
+  "headers": { "Nats-Msg-Id": "evt_prov_a" },
+  "payload": {
+    "event_id": "evt_prov_a",
+    "event_type": "workspace.provisioning",
+    "occurred_at": "2026-10-19T21:31:00Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_create_a", "evt_prov_a"],
+    "resources": { "workspace_id": "ws_a1" },
+    "resource_version": 1,
+    "payload": {
+      "operation": { "operation_id": "op_create_a", "command_id": "cmd_create_a" },
+      "provider": "smolvm"
+    }
+  }
+}

@@ -1,0 +1,215 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Virtual Control Plane commands",
+  "description": "Requests and responses of `oe.v1.vcp.control.…`. The workspace or approval named in the subject is the target; payloads do not repeat it.",
+  "$defs": {
+    "create_workspace_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/create_workspace_payload" } } }
+      ]
+    },
+    "create_workspace_payload": {
+      "description": "Allocate a workspace identity and provision its first runtime with the requested resources, tools and context.",
+      "type": "object",
+      "required": ["provider"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "workspace.schema.json#/$defs/provider" },
+        "resources": { "$ref": "workspace.schema.json#/$defs/resources" },
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "workspace.schema.json#/$defs/tool" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "context": { "$ref": "workspace.schema.json#/$defs/context" },
+        "required_capabilities": {
+          "type": "array",
+          "items": { "$ref": "workspace.schema.json#/$defs/capability" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "labels": { "$ref": "workspace.schema.json#/$defs/labels" }
+      }
+    },
+    "ensure_workspace_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/ensure_workspace_payload" } } }
+      ]
+    },
+    "ensure_workspace_payload": {
+      "description": "Make the workspace available with a running runtime. A ready workspace is accepted and left unchanged.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "restore": { "$ref": "workspace.schema.json#/$defs/restore_policy" } }
+    },
+    "execute_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/execute_payload" } } }
+      ]
+    },
+    "execute_payload": {
+      "description": "Start a task attempt. Restores compute first when the workspace is suspended and `restore` allows it.",
+      "type": "object",
+      "required": ["agent", "task", "session"],
+      "additionalProperties": false,
+      "properties": {
+        "agent": { "$ref": "session.schema.json#/$defs/agent" },
+        "task": { "$ref": "session.schema.json#/$defs/task" },
+        "session": { "$ref": "session.schema.json#/$defs/session_selection" },
+        "restore": { "$ref": "workspace.schema.json#/$defs/restore_policy" }
+      }
+    },
+    "steer_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/steer_payload" } } }
+      ]
+    },
+    "steer_payload": {
+      "description": "Deliver a message to one session. An idle session receives it as its next turn; an active one mid-attempt.",
+      "type": "object",
+      "required": ["session_id", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "restore": { "$ref": "workspace.schema.json#/$defs/restore_policy" }
+      }
+    },
+    "cancel_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/cancel_payload" } } }
+      ]
+    },
+    "cancel_payload": {
+      "description": "Stop one task attempt. The workspace, its runtime and its sessions are retained.",
+      "type": "object",
+      "required": ["attempt_id"],
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "checkpoint_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/checkpoint_payload" } } }
+      ]
+    },
+    "checkpoint_payload": {
+      "description": "Capture restoration state. Requires the provider's `checkpoint` capability.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "label": { "type": "string", "minLength": 1, "maxLength": 200 } }
+    },
+    "suspend_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/suspend_payload" } } }
+      ]
+    },
+    "suspend_payload": {
+      "description": "Release compute while keeping restoration state. Requires the provider's `suspend` capability.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "if_active": {
+          "description": "reject: refuse with INVALID_STATE while any attempt is active. checkpoint_and_cancel: checkpoint, cancel every active attempt, then suspend; only for providers that can checkpoint.",
+          "type": "string",
+          "enum": ["reject", "checkpoint_and_cancel"],
+          "default": "reject"
+        }
+      }
+    },
+    "destroy_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/destroy_payload" } } }
+      ]
+    },
+    "destroy_payload": {
+      "description": "Dispose of the workspace and its compute. Rejected with INVALID_STATE while any attempt is active: cancel, wait for `task.cancelled`, then destroy.",
+      "type": "object",
+      "required": ["retention"],
+      "additionalProperties": false,
+      "properties": {
+        "retention": { "$ref": "workspace.schema.json#/$defs/retention" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "decide_approval_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/decide_approval_payload" } } }
+      ]
+    },
+    "decide_approval_payload": {
+      "description": "Resolve a pending runtime approval. The binding fields must equal the approval's; any difference, a decided or expired approval, or an older runtime generation is rejected with STALE_APPROVAL.",
+      "type": "object",
+      "required": ["decision", "workspace_id", "session_id", "attempt_id", "runtime_generation"],
+      "additionalProperties": false,
+      "properties": {
+        "decision": { "$ref": "approval.schema.json#/$defs/decision" },
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "comment": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "workspace_command_response": {
+      "description": "Reply to `create`, `ensure`, `checkpoint`, `suspend` and `destroy`. `resource_id` is the workspace; `create` allocates it at acceptance.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" }
+          }
+        }
+      ]
+    },
+    "attempt_command_response": {
+      "description": "Reply to `execute` and `cancel`. `resource_id` is the attempt; `execute` allocates it at acceptance.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" }
+          }
+        }
+      ]
+    },
+    "session_command_response": {
+      "description": "Reply to `steer`. `resource_id` is the steered session.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" }
+          }
+        }
+      ]
+    },
+    "approval_command_response": {
+      "description": "Reply to `approvals.decide`. `resource_id` is the approval.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_approval_id"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

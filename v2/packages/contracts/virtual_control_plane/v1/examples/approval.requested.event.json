@@ -1,0 +1,38 @@
+{
+  "message": "ApprovalRequested",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.approval.requested",
+  "headers": { "Nats-Msg-Id": "evt_appr_req_a2" },
+  "payload": {
+    "event_id": "evt_appr_req_a2",
+    "event_type": "approval.requested",
+    "occurred_at": "2026-10-19T22:06:00Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_exec_a2", "evt_appr_req_a2"],
+    "resources": {
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1",
+      "approval_id": "rtappr_a2"
+    },
+    "payload": {
+      "approval": {
+        "approval_id": "rtappr_a2",
+        "binding": {
+          "workspace_id": "ws_a1",
+          "session_id": "session_a1",
+          "attempt_id": "attempt_a1",
+          "runtime_generation": 2
+        },
+        "state": "pending",
+        "request": {
+          "kind": "command",
+          "summary": "git push origin agent/fix-ssrf",
+          "details": { "command": "git push origin agent/fix-ssrf" }
+        },
+        "provider_handle": { "provider": "claude", "handle": "perm_req_7f3a" },
+        "requested_at": "2026-10-19T22:06:00Z",
+        "expires_at": "2026-10-20T22:06:00Z"
+      }
+    }
+  }
+}

@@ -1,0 +1,579 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Virtual Control Plane events",
+  "description": "Events VCP publishes on `oe.v1.vcp.events.workspaces.{workspace_id}.{event_type}`, captured by the existing `vcp-events` stream. Events of one workspace are ordered in publish order. Workspace failure (`workspace.failed`), task failure (`task.failed`) and operation failure (an operation snapshot with status `failed`) are separate facts.",
+  "$defs": {
+    "workspace_provisioning_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "workspace.provisioning" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "provider"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "provider": { "$ref": "workspace.schema.json#/$defs/provider" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workspace_ready_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "workspace.ready" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "runtime_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["runtime_generation"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref",
+                  "description": "Present when a command caused the event."
+                },
+                "runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workspace_restored_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "workspace.restored" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "runtime_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["runtime_generation", "previous_runtime_generation"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref",
+                  "description": "Present when a command caused the event."
+                },
+                "runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                },
+                "previous_runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                },
+                "from_checkpoint": { "$ref": "workspace.schema.json#/$defs/checkpoint_id" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workspace_checkpointed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "workspace.checkpointed" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["checkpoint"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref",
+                  "description": "Present when a command caused the event."
+                },
+                "checkpoint": { "$ref": "workspace.schema.json#/$defs/checkpoint" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workspace_suspended_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "workspace.suspended" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "cancelled_attempt_ids"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "checkpoint": { "$ref": "workspace.schema.json#/$defs/checkpoint" },
+                "cancelled_attempt_ids": {
+                  "type": "array",
+                  "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+                  "uniqueItems": true
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workspace_destroyed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "workspace.destroyed" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "retention"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "retention": { "$ref": "workspace.schema.json#/$defs/retention" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "workspace_failed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "workspace.failed" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id"] }
+              ]
+            },
+            "payload": {
+              "description": "The environment itself failed and is unusable. Distinct from `task.failed` (one attempt failed; the workspace is fine) and from a failed operation (one command could not be carried out).",
+              "type": "object",
+              "required": ["error"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref",
+                  "description": "Present when a command caused the event."
+                },
+                "error": { "$ref": "../../../common/v1/error.schema.json" },
+                "runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "task_started_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "task.started" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "attempt_id"] }
+              ]
+            },
+            "payload": {
+              "description": "`operation` is the `execute` that started the attempt; this event completes it.",
+              "type": "object",
+              "required": ["operation", "runtime_generation", "session_mode"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                },
+                "session_mode": { "type": "string", "enum": ["new", "continue"] }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "task_completed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "task.completed" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "attempt_id"] }
+              ]
+            },
+            "payload": {
+              "description": "`operation` is the `execute` that started the attempt.",
+              "type": "object",
+              "required": ["operation", "result"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "result": { "$ref": "session.schema.json#/$defs/attempt_result" },
+                "usage": { "$ref": "session.schema.json#/$defs/usage" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "task_failed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "task.failed" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "attempt_id"] }
+              ]
+            },
+            "payload": {
+              "description": "The attempt failed. The workspace stays usable unless a separate `workspace.failed` says otherwise.",
+              "type": "object",
+              "required": ["operation", "error"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "error": { "$ref": "../../../common/v1/error.schema.json" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "task_cancelled_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "task.cancelled" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "attempt_id"] }
+              ]
+            },
+            "payload": {
+              "description": "`operation` is the `execute` that started the attempt; `cancelled_by` is the command that stopped it.",
+              "type": "object",
+              "required": ["operation", "cancelled_by"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "cancelled_by": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref",
+                  "description": "The `cancel` or `suspend` that stopped the attempt."
+                },
+                "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "approval_requested_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "approval.requested" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "attempt_id", "approval_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["approval"],
+              "additionalProperties": false,
+              "properties": {
+                "approval": { "$ref": "approval.schema.json#/$defs/runtime_approval" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "approval_resolved_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "approval.resolved" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "attempt_id", "approval_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "decision", "runtime_generation"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "decision": { "$ref": "approval.schema.json#/$defs/decision" },
+                "runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                },
+                "comment": { "type": "string", "minLength": 1, "maxLength": 4096 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "approval_expired_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "approval.expired" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "attempt_id", "approval_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["reason", "runtime_generation"],
+              "additionalProperties": false,
+              "properties": {
+                "reason": { "$ref": "approval.schema.json#/$defs/expiry_reason" },
+                "runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "steering_applied_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "steering.applied" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "runtime_generation"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "runtime_generation": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "steering_failed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "steering.failed" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "error"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "error": { "$ref": "../../../common/v1/error.schema.json" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "conversation_message_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "conversation.message" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "session_id", "message_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["role", "text", "sequence"],
+              "additionalProperties": false,
+              "properties": {
+                "role": { "type": "string", "enum": ["user", "agent", "system"] },
+                "text": { "type": "string", "minLength": 0, "maxLength": 262144 },
+                "sequence": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "usage_reported_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "usage.reported" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["usage"],
+              "additionalProperties": false,
+              "properties": {
+                "usage": { "$ref": "session.schema.json#/$defs/usage" },
+                "period_start": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+                },
+                "period_end": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "artifact_created_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "properties": {
+            "event_type": { "const": "artifact.created" },
+            "producer": { "const": "vcp" },
+            "resources": {
+              "allOf": [
+                { "$ref": "workspace.schema.json#/$defs/vcp_resources" },
+                { "required": ["workspace_id", "artifact_id"] }
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": ["artifact"],
+              "additionalProperties": false,
+              "properties": { "artifact": { "$ref": "artifact.schema.json#/$defs/artifact" } }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

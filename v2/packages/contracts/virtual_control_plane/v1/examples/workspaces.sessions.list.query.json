@@ -1,0 +1,5 @@
+{
+  "message": "ListSessionsQuery",
+  "subject": "oe.v1.vcp.query.workspaces.ws_a1.sessions.list",
+  "payload": { "params": { "state": ["active", "idle"] } }
+}

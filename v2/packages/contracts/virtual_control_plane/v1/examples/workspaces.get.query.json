@@ -1,0 +1,5 @@
+{
+  "message": "GetWorkspaceQuery",
+  "subject": "oe.v1.vcp.query.workspaces.ws_a1.get",
+  "payload": { "params": {} }
+}

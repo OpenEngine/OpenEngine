@@ -1,0 +1,20 @@
+{
+  "summary": "Rejected: stale approval target.",
+  "message": "DecideApprovalResponse",
+  "in_reply_to": "oe.v1.vcp.control.approvals.rtappr_a1.decide",
+  "payload": {
+    "command_id": "cmd_decide_a1",
+    "status": "rejected",
+    "error": {
+      "code": "STALE_APPROVAL",
+      "message": "Approval rtappr_a1 belonged to runtime generation 1 and expired when the workspace was restored.",
+      "retryable": false,
+      "details": {
+        "approval_id": "rtappr_a1",
+        "reason": "runtime_generation_changed",
+        "current_state": "expired",
+        "current_runtime_generation": 2
+      }
+    }
+  }
+}

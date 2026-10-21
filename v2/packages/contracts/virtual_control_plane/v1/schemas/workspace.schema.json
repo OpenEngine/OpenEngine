@@ -1,0 +1,223 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Workspace",
+  "description": "A workspace is a stable place where agents work. Its identity survives suspension and restoration; the compute behind it (a runtime) is replaced on each restoration and numbered by `runtime_generation`.",
+  "$defs": {
+    "provider": {
+      "description": "Workspace provider that supplies compute, such as `process`, `smolvm` or `kubernetes`.",
+      "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+    },
+    "workspace_state": {
+      "description": "Lifecycle of the environment, independent of any task in it. provisioning: first runtime being created. ready: a runtime is running and can take work. suspending / suspended: compute being / been released with restoration state kept. restoring: a new runtime is being created from restoration state. destroying / destroyed: environment being / been disposed of. failed: the environment cannot be used; a failed task does not put a workspace here.",
+      "type": "string",
+      "enum": [
+        "provisioning",
+        "ready",
+        "suspending",
+        "suspended",
+        "restoring",
+        "destroying",
+        "destroyed",
+        "failed"
+      ]
+    },
+    "runtime_state": {
+      "description": "State of one runtime generation.",
+      "type": "string",
+      "enum": ["starting", "running", "stopping", "stopped", "failed"]
+    },
+    "restore_policy": {
+      "description": "allow: restore compute first if the workspace is suspended and the provider can restore it. forbid: reject with INVALID_STATE instead of restoring.",
+      "type": "string",
+      "enum": ["allow", "forbid"],
+      "default": "allow"
+    },
+    "resources": {
+      "description": "Requested compute. Omitted fields take the provider's defaults.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu_millis": { "type": "integer", "minimum": 1 },
+        "memory_mib": { "type": "integer", "minimum": 1 },
+        "disk_gib": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "tool": {
+      "description": "A tool made available to agents in the workspace, such as `git` or `terminal`.",
+      "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+    },
+    "repository": {
+      "type": "object",
+      "required": ["url"],
+      "additionalProperties": false,
+      "properties": {
+        "url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "ref": {
+          "description": "Branch, tag or commit to check out; defaults to the repository's default branch.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "context_file": {
+      "type": "object",
+      "required": ["path", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Path relative to the workspace root.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "content": { "type": "string", "minLength": 0, "maxLength": 262144 }
+      }
+    },
+    "context": {
+      "description": "What the workspace is provisioned with.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repositories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/repository" },
+          "maxItems": 20
+        },
+        "instructions": {
+          "description": "Standing instructions placed in the workspace for every agent.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/context_file" }, "maxItems": 100 }
+      }
+    },
+    "capability": {
+      "description": "A provider capability a workspace may require. `create` rejects with UNSUPPORTED_CAPABILITY when the provider lacks one.",
+      "type": "string",
+      "enum": [
+        "checkpoint",
+        "suspend",
+        "restore_same_host",
+        "restore_any_host",
+        "isolation_container",
+        "isolation_microvm",
+        "isolation_vm"
+      ]
+    },
+    "labels": {
+      "description": "Back-references to the GE records the workspace serves. VCP stores and filters on them but does not interpret them.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "step_attempt_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id"
+        }
+      }
+    },
+    "runtime": {
+      "description": "The compute currently backing the workspace.",
+      "type": "object",
+      "required": ["runtime_id", "generation", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "runtime_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_id" },
+        "generation": { "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation" },
+        "state": { "$ref": "#/$defs/runtime_state" },
+        "started_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "checkpoint_id": { "type": "string", "pattern": "^ckpt_[A-Za-z0-9_-]{1,123}$" },
+    "checkpoint": {
+      "description": "Restoration state captured from one runtime generation.",
+      "type": "object",
+      "required": ["checkpoint_id", "runtime_generation", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint_id": { "$ref": "#/$defs/checkpoint_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "retention": {
+      "description": "What survives destruction. Both choices are explicit; there is no default.",
+      "type": "object",
+      "required": ["artifacts", "checkpoints"],
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": { "type": "string", "enum": ["retain", "delete"] },
+        "checkpoints": { "type": "string", "enum": ["retain", "delete"] }
+      }
+    },
+    "vcp_resources": {
+      "description": "Resource references VCP messages may carry.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "runtime_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_id" },
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "approval_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_approval_id"
+        },
+        "message_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/message_id" },
+        "artifact_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/artifact_id" }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "required": [
+        "workspace_id",
+        "version",
+        "provider",
+        "state",
+        "resources",
+        "tools",
+        "required_capabilities",
+        "labels",
+        "active_attempt_ids",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
+        "provider": { "$ref": "#/$defs/provider" },
+        "state": { "$ref": "#/$defs/workspace_state" },
+        "runtime": {
+          "description": "Absent while no runtime exists: before the first is created, while suspended, and once destroyed.",
+          "$ref": "#/$defs/runtime"
+        },
+        "resources": { "$ref": "#/$defs/resources" },
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/tool" }, "uniqueItems": true },
+        "required_capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/capability" },
+          "uniqueItems": true
+        },
+        "labels": { "$ref": "#/$defs/labels" },
+        "active_attempt_ids": {
+          "description": "Attempts in `starting`, `running` or `cancelling`. `destroy` and `suspend` (with `if_active: reject`) are refused while this is non-empty.",
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+          "uniqueItems": true
+        },
+        "latest_checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "failure": {
+          "$ref": "../../../common/v1/error.schema.json",
+          "description": "Why the workspace is `failed`. Task failures never appear here."
+        },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "updated_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    }
+  }
+}
