@@ -721,14 +721,6 @@ class ACPNode:
                 asyncio.create_task(result()) for result in terminal_results  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
             ]
             try:
-                await execution.emit(
-                    EventKind.CONVERSATION_STARTED,
-                    {
-                        "agent": self.agent,
-                        "sessionId": session.session_id,
-                        "resumed": resuming is not None,
-                    },
-                )
                 pending_prompts: deque[str] = deque(execution.pending_messages())
                 node_events = [
                     event for event in runtime.store.events_since(execution.run_id)
@@ -793,14 +785,6 @@ class ACPNode:
                         await _close_turn(client, session)
                         client, session, turn = await self._open_turn(
                             execution, key, None, cwd, tuple(mcp_servers),
-                        )
-                        await execution.emit(
-                            EventKind.CONVERSATION_STARTED,
-                            {
-                                "agent": self.agent,
-                                "sessionId": session.session_id,
-                                "resumed": False,
-                            },
                         )
                         continue
                     replayed = None
@@ -873,21 +857,32 @@ class ACPNode:
         cwd: str,
         mcp_servers: tuple[Mapping[str, Any], ...],
     ) -> tuple[Any, ACPSession, _Turn]:
-        """Open a session and track its turn; a new session is also remembered."""
+        """Open a session, track its turn and report the conversation it starts.
+
+        A new session is also remembered, so a later run resumes it.
+        """
         client, session = await self._open(
             stored, cwd, mcp_servers, self.session_config
         )
         turn = _Turn(self, execution, key, session.session_id)
         _TURNS[session.session_id] = turn
         execution.attach(session)
-        if stored is None:
-            try:
+        try:
+            if stored is None:
                 await execution.runtime.store.remember_session(
                     execution.run_id, key, self._binding(execution, session, key)
                 )
-            except BaseException:
-                await _close_turn(client, session)
-                raise
+            await execution.emit(
+                EventKind.CONVERSATION_STARTED,
+                {
+                    "agent": self.agent,
+                    "sessionId": session.session_id,
+                    "resumed": stored is not None,
+                },
+            )
+        except BaseException:
+            await _close_turn(client, session)
+            raise
         return client, session, turn
 
     def _binding(
