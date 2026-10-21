@@ -72,12 +72,8 @@ class Client:
                     payload = json.loads(response.read() or b"{}")
             except HTTPError as error:
                 if error.code == 401 and self.api_prefix == "/api" and path.startswith("/repositories/onboard"):
-                    rejected = (
-                        f"backend {self.backend.name} rejected the token in {_variable(self.backend)}; "
-                        if sent else ""
-                    )
                     raise RequestFailed(
-                        rejected + "repository onboarding requires a browser session or a separate ENGINE_ONBOARDING_TOKEN, "
+                        (_rejected(self.backend) if sent else "") + "repository onboarding requires a browser session or a separate ENGINE_ONBOARDING_TOKEN, "
                         "not the service token; configure it on the daemon and use "
                         "`engine backend add --token-env ENGINE_ONBOARDING_TOKEN`",
                         status=401,
@@ -102,6 +98,10 @@ def _variable(backend: Backend) -> str:
     return backend.token_env or "ENGINE_SERVICE_TOKEN"
 
 
+def _rejected(backend: Backend) -> str:
+    return f"backend {backend.name} rejected the token in {_variable(backend)}; "
+
+
 def _refusal(backend: Backend, error: HTTPError, *, sent: bool = False) -> RequestFailed:
     try:
         payload = json.loads(error.read())
@@ -112,10 +112,7 @@ def _refusal(backend: Backend, error: HTTPError, *, sent: bool = False) -> Reque
     message = str(payload.get("error") or f"HTTP {error.code}")
     if error.code == 401 and sent:
         # The CLI read the variable and sent it; the daemon is what said no.
-        message = (
-            f"backend {backend.name} rejected the token in {_variable(backend)}; "
-            "check it matches the token configured on that daemon"
-        )
+        message = _rejected(backend) + "check it matches the token configured on that daemon"
     elif error.code == 401:
         message = (
             f"backend {backend.name} requires a token; set {_variable(backend)} in this shell "
