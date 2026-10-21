@@ -1,5 +1,11 @@
-Core concepts
-Engine
+```
+NOTICE: This legacy file will be superseded by the v2 architecture.
+```
+[v2/ARCHITECTURE.md](./v2/ARCHITECTURE.md)
+
+
+
+## Legacy:
 
 The engine is the pure decision-making kernel.
 
