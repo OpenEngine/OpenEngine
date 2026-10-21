@@ -68,7 +68,8 @@ Schema in YAML under
   (`validate_resource`, `validate_text`), reporting every problem with its
   path, such as `spec.plan[0].agent.prompt`;
 - the same script generates
-  [`resources/reference.html`](graph_engine/v1/resources/reference.html), a
+  [`resources/reference.html`](graph_engine/v1/resources/reference.html)
+  ([view](https://openengine.cc/contracts/graph_engine/v1/resources/)), a
   static page of every kind, type, field and example. A test fails when it is
   stale.
 
@@ -263,7 +264,11 @@ carried out.
 
 The [Pages workflow](../../../.github/workflows/pages.yml) regenerates and
 checks the references against the checked-in pages, then publishes them to
-`https://openengine.cc/contracts/{service}/v1/` on every contract change to main.
+`https://openengine.cc/contracts/{service}/v1/` on every contract change to main,
+and the resource reference to `https://openengine.cc/contracts/graph_engine/v1/resources/`.
+Every schema file is published at its own path too, so a schema's relative
+`$ref`s resolve against the site, as in
+`https://openengine.cc/contracts/graph_engine/v1/resources/graph.schema.yaml`.
 
 Everything is pinned: the AsyncAPI parser in
 [`tooling/package.json`](tooling/package.json) and its lockfile, the Python
