@@ -46,7 +46,7 @@ def test_apps_and_integrations_connect_where_they_should() -> None:
         assert f'    {integration} -- "webhooks" --> cxn_ingress\n' in DIAGRAM
         assert f'    {integration} --- |"← API calls"| cxn_egress\n' in DIAGRAM
     assert '    cxn -- "jobs" --> ge_control\n' in DIAGRAM
-    assert '    sessions -- "invoke tools" --> tools_control\n' in DIAGRAM
+    assert '    tools_control --- |"← invoke tools"| sessions\n' in DIAGRAM
     assert '    ge -- "tool grants" --> tools_control\n' in DIAGRAM
     assert '    cxn_query --- |"read by tools"| tools\n' in DIAGRAM
     assert '    vcp -- "execute, steer, cancel" --> daemon\n' in DIAGRAM

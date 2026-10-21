@@ -117,6 +117,6 @@ flowchart LR
     vcp_events -. "workspace and task events" .-> ge
     vcp -- "provision, suspend, restore" --> provider
     vcp -- "execute, steer, cancel" --> daemon
-    sessions -- "invoke tools" --> tools_control
+    tools_control --- |"← invoke tools"| sessions
     ge -- "tool grants" --> tools_control
     cxn_query --- |"read by tools"| tools

@@ -217,7 +217,8 @@ def diagram() -> str:
         '    vcp_events -. "workspace and task events" .-> ge',
         '    vcp -- "provision, suspend, restore" --> provider',
         '    vcp -- "execute, steer, cancel" --> daemon',
-        '    sessions -- "invoke tools" --> tools_control',
+        # Undirected from the tool service, so it ranks beside VCP rather than after the runtime.
+        '    tools_control --- |"← invoke tools"| sessions',
         '    ge -- "tool grants" --> tools_control',
         # Undirected from cxn, so cxn stays left of the tool service; the label gives the direction.
         '    cxn_query --- |"read by tools"| tools',
