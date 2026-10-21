@@ -898,6 +898,22 @@ describe("GraphConversationPage", () => {
     ).toHaveAttribute("href", `/runs/${runId}`);
   });
 
+  it("keeps a long WorkOrder name whole on the heading's title", async () => {
+    // The header shows about three lines of it; the rest is a hover away.
+    const name = `#978 ${"A WorkOrder named from a whole issue brief. ".repeat(12)}`.trim();
+    serve([
+      event({
+        sequence: 1,
+        type: "transcript",
+        payload: { role: "assistant", text: "Reading the code." },
+      }),
+    ]);
+    render(<GraphConversationPage runId={runId} nodeId={NODE} workOrderName={name} />);
+    await act(async () => {});
+
+    expect(screen.getByRole("heading", { level: 1, name })).toHaveAttribute("title", name);
+  });
+
   it("names a conversation by its run and its node", () => {
     expect(graphConversationId("run-1", NODE)).toBe("graph--run-1--implementation");
   });
