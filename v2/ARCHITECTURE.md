@@ -1,4 +1,8 @@
+# OpenEngine V2 architecture
+
+## Services
 OpenEngine is split into four services:
+
 | Service Name | Shorthand | Description | Contract |
 | -- | -- | -- | -- |
 | Connection Bus | cxn | The way that external integrations communicate with OpenEngine. | [cxn contract](https://openengine.cc/contracts/connection_bus/v1/) |
