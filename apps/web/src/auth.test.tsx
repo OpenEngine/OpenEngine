@@ -215,3 +215,19 @@ describe("AuthGate", () => {
     expect(screen.queryByText(/expired|not completed|Could not verify/)).not.toBeInTheDocument();
   });
 });
+
+
+it("offers token sign-in and reports a rejected token", async () => {
+  vi.mocked(getAuthStatus).mockResolvedValue({ ...signedOut, tokenRequired: true });
+  const fetchToken = vi.fn().mockResolvedValue({ ok: false });
+  vi.stubGlobal("fetch", fetchToken);
+  render(<AuthGate><p>Private content</p></AuthGate>);
+  const input = await screen.findByLabelText("Token");
+  await userEvent.type(input, "wrong-token");
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Token not accepted");
+  expect(fetchToken).toHaveBeenCalledWith("/api/auth/token", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: "wrong-token" }),
+  });
+});

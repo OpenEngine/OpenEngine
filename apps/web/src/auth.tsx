@@ -3,6 +3,29 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { getAuthStatus, logout, type AuthStatus } from "./api";
 import { routeForPath } from "./routes";
 
+function TokenLoginPage() {
+  const [token, setToken] = useState("");
+  const [error, setError] = useState(false);
+  return <main className="login-page"><form className="login-card" onSubmit={async (event) => {
+    event.preventDefault();
+    try {
+      const response = await fetch("/api/auth/token", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (response.ok) window.location.replace("/");
+      else setError(true);
+    } catch { setError(true); }
+  }}>
+    <h1>OpenEngine</h1>
+    <p>Enter the token set on this OpenEngine computer to sign in.</p>
+    <label>Token <input type="password" autoComplete="current-password" value={token}
+      onChange={(event) => setToken(event.target.value)} required /></label>
+    <button type="submit">Sign in</button>
+    {error && <p role="alert">Token not accepted. Check the token and try again.</p>}
+  </form></main>;
+}
+
 function LoginPage() {
   const params = new URLSearchParams(window.location.search);
   const error = params.get("error");
@@ -55,10 +78,10 @@ function UserBadge({ auth }: { auth: AuthStatus }) {
       setPending(false);
     }
   }
-  if (!auth.loginRequired || !auth.user) return null;
+  if (!auth.loginRequired || (!auth.user && !auth.tokenRequired)) return null;
   return (
-    <div className="user-badge" role="group" aria-label={`Signed in as ${auth.user.login}`}>
-      <span className="user-badge-name">{auth.user.login}</span>
+    <div className="user-badge" role="group" aria-label={`Signed in as ${(auth.user?.login ?? "token holder")}`}>
+      <span className="user-badge-name">{(auth.user?.login ?? "token holder")}</span>
       <button
         className="user-badge-logout"
         disabled={pending}
@@ -125,7 +148,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <main className="state">Starting openengine…</main>;
 
   if (auth.loginRequired && !auth.authenticated)
-    return <LoginPage />;
+    return auth.tokenRequired ? <TokenLoginPage /> : <LoginPage />;
 
   if (route.kind === "login")
     return <Redirect to="/" />;
