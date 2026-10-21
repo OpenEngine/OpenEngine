@@ -735,6 +735,36 @@ def test_onboarding_401_explains_separate_credential(monkeypatch, capsys):
     assert 'ENGINE_ONBOARDING_TOKEN' in capsys.readouterr().err
 
 
+def test_onboarding_401_with_token_set_says_it_was_rejected_not_missing(monkeypatch, capsys):
+    monkeypatch.setenv('MINI_ENGINE_TOKEN', 'm' * 64)
+    backends.add('mini', 'https://mini.example', token_env='MINI_ENGINE_TOKEN', use=True)
+    backend = serve(monkeypatch, HTTPError('https://mini.example/api/repositories/onboard', 401, '', {}, io.BytesIO(b'{}')))
+    assert main(['repo', 'add', 'https://github.com/owner/repo']) == 1
+    error = capsys.readouterr().err
+    assert backend.requests[0]['authorization'] == 'Bearer ' + 'm' * 64
+    assert 'rejected the token in MINI_ENGINE_TOKEN' in error
+    assert 'ENGINE_ONBOARDING_TOKEN' in error
+    assert 'set MINI_ENGINE_TOKEN' not in error
+
+
+def test_401_with_token_set_says_it_was_rejected_not_missing(monkeypatch, capsys):
+    monkeypatch.setenv('MINI_ENGINE_TOKEN', 'm' * 64)
+    backends.add('mini', 'https://mini.example', token_env='MINI_ENGINE_TOKEN', use=True)
+    serve(monkeypatch, HTTPError('https://mini.example/api/v1/runs/run-1', 401, '', {}, io.BytesIO(b'{}')))
+    assert main(['run', 'get', 'run-1']) == 1
+    error = capsys.readouterr().err
+    assert 'rejected the token in MINI_ENGINE_TOKEN' in error
+    assert 'set MINI_ENGINE_TOKEN' not in error
+
+
+def test_401_without_token_says_to_set_it(monkeypatch, capsys):
+    monkeypatch.delenv('MINI_ENGINE_TOKEN', raising=False)
+    backends.add('mini', 'https://mini.example', token_env='MINI_ENGINE_TOKEN', use=True)
+    serve(monkeypatch, HTTPError('https://mini.example/api/v1/runs/run-1', 401, '', {}, io.BytesIO(b'{}')))
+    assert main(['run', 'get', 'run-1']) == 1
+    assert 'requires a token; set MINI_ENGINE_TOKEN' in capsys.readouterr().err
+
+
 def test_onboard_uses_separate_backend_token_for_submit_and_poll(monkeypatch):
     monkeypatch.setenv('ENGINE_SERVICE_TOKEN', 's' * 40)
     monkeypatch.setenv('ENGINE_ONBOARDING_TOKEN', 'o' * 40)
