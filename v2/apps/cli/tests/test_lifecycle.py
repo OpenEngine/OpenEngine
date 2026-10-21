@@ -105,15 +105,15 @@ def test_migrate_creates_the_databases_and_streams_once_and_updates_drifted_ones
     first = oe("migrate")
     assert first.returncode == 0, first.stderr
     databases, streams = first.stdout.split("\n\n")
-    assert databases.count("created") == 3
-    assert streams.count("created") == 5
+    assert databases.count("created") == 4
+    assert streams.count("created") == 6
     assert "cxn-ingress" in streams
-    for service in ("cxn", "ge", "vcp"):
+    for service in ("cxn", "ge", "tools", "vcp"):
         assert (tmp_path / "state" / "openengine" / "databases" / f"{service}.sqlite3").exists()
 
     again = oe("migrate")
     assert again.returncode == 0, again.stderr
-    assert again.stdout.count("unchanged") == 8
+    assert again.stdout.count("unchanged") == 10
 
     streams = tmp_path / "streams"
     streams.mkdir()

@@ -1,0 +1,38 @@
+{
+  "message": "ToolInvocationRunning",
+  "subject": "oe.v1.events.toolinvocations.default.ti-123.running",
+  "headers": {
+    "Nats-Msg-Id": "evt_ti123_running"
+  },
+  "payload": {
+    "event_id": "evt_ti123_running",
+    "event_type": "toolinvocation.running",
+    "occurred_at": "2026-10-21T15:05:01Z",
+    "producer": "tools",
+    "causal_path": [
+      "cmd_tools_invoke_1",
+      "evt_ti123_running"
+    ],
+    "resources": {
+      "invocation_id": "ti-123"
+    },
+    "payload": {
+      "namespace": "default",
+      "invocation": {
+        "name": "ti-123",
+        "uid": "invocation-uid-123"
+      },
+      "toolRef": {
+        "name": "github-issue-comment",
+        "uid": "tool-uid-123",
+        "generation": 1
+      },
+      "workspaceRef": {
+        "name": "review-job-88"
+      },
+      "stepAttemptId": "stepa_88_review_1",
+      "phase": "Running",
+      "attemptCount": 1
+    }
+  }
+}

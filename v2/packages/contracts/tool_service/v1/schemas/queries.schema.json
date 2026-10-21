@@ -1,0 +1,210 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tool Service queries",
+  "description": "Requests and responses of the tool service's query subjects. Every query answers only with what the caller may see: a caller sees tools its workspace has a grant for, and invocations its own workspace made, unless it is a trusted control-plane caller. Lists are sorted by `metadata.name`, then `metadata.uid`.",
+  "$defs": {
+    "get_params": {
+      "description": "A namespaced resource, by namespace and name. One the caller may not see is answered with NOT_FOUND.",
+      "type": "object",
+      "required": ["namespace", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "name": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" }
+      }
+    },
+    "get_tool_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/get_params" } } }
+      ]
+    },
+    "get_tool_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "required": ["tool"],
+              "additionalProperties": false,
+              "properties": { "tool": { "$ref": "../resources/tool.schema.yaml" } }
+            }
+          }
+        }
+      ]
+    },
+    "list_tools_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_tools_params" } } }
+      ]
+    },
+    "list_tools_params": {
+      "type": "object",
+      "required": ["namespace"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "labelSelector": {
+          "description": "A Kubernetes equality-based label selector, such as `provider=github,team!=web`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_tools_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "required": ["items", "next_cursor"],
+              "additionalProperties": false,
+              "properties": {
+                "items": { "type": "array", "items": { "$ref": "../resources/tool.schema.yaml" } },
+                "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "get_tool_grant_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/get_params" } } }
+      ]
+    },
+    "get_tool_grant_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "required": ["grant"],
+              "additionalProperties": false,
+              "properties": { "grant": { "$ref": "../resources/toolgrant.schema.yaml" } }
+            }
+          }
+        }
+      ]
+    },
+    "list_tool_grants_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_tool_grants_params" } } }
+      ]
+    },
+    "list_tool_grants_params": {
+      "type": "object",
+      "required": ["namespace"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "toolName": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "workspaceName": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "stepAttemptId": { "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id" },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_tool_grants_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "required": ["items", "next_cursor"],
+              "additionalProperties": false,
+              "properties": {
+                "items": { "type": "array", "items": { "$ref": "../resources/toolgrant.schema.yaml" } },
+                "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "get_tool_invocation_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/get_params" } } }
+      ]
+    },
+    "get_tool_invocation_response": {
+      "description": "The invocation, with its result once `Succeeded`. This is the only place results are returned.",
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "required": ["invocation"],
+              "additionalProperties": false,
+              "properties": { "invocation": { "$ref": "../resources/toolinvocation.schema.yaml" } }
+            }
+          }
+        }
+      ]
+    },
+    "list_tool_invocations_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_tool_invocations_params" } } }
+      ]
+    },
+    "list_tool_invocations_params": {
+      "description": "Sorted by `metadata.creationTimestamp` descending, then `metadata.uid`.",
+      "type": "object",
+      "required": ["namespace"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "workspaceName": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "stepAttemptId": { "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id" },
+        "phase": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "../resources/toolinvocation.schema.yaml#/$defs/tool_invocation_status/properties/phase" }
+        },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_tool_invocations_response": {
+      "description": "Invocations without their `status.result`; read one with `toolinvocations.get` for it.",
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "required": ["items", "next_cursor"],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "allOf": [
+                      { "$ref": "../resources/toolinvocation.schema.yaml" },
+                      { "properties": { "status": { "not": { "required": ["result"] } } } }
+                    ]
+                  }
+                },
+                "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

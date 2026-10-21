@@ -1,0 +1,92 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: ToolGrant
+description: >-
+  Lets one workspace, or one step execution in it, call one tool. Only trusted
+  control-plane callers may apply or delete grants. The Graph Engine is the
+  usual one: a Graph step's `agent.tools` lists the tools it may call. Once
+  a step attempt has its workspace, and before sending the attempt to run
+  there, the Graph Engine applies a grant for each tool to that attempt in
+  that workspace, and deletes them when the attempt ends. Starting a step
+  that lists tools therefore needs the tool service to be available. A missing, expired or
+  deleted grant denies the call, and grants are checked again just before
+  every dispatch. A grant is bound to the tool as it was when the grant was
+  applied: a tool deleted and created again under the same name has a new
+  `uid`, and the old grant does not cover it.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/tools_api_version
+  kind:
+    type: string
+    const: ToolGrant
+  metadata:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/namespaced_object_meta
+  spec:
+    $ref: '#/$defs/tool_grant_spec'
+  status:
+    $ref: '#/$defs/tool_grant_status'
+$defs:
+  tool_grant_spec:
+    title: ToolGrantSpec
+    description: Who may call which tool, within what limits, until when.
+    type: object
+    required: [subject, toolRef]
+    additionalProperties: false
+    properties:
+      subject:
+        $ref: '#/$defs/grant_subject'
+      toolRef:
+        description: The Tool in the grant's namespace.
+        $ref: '#/$defs/name_ref'
+      constraints:
+        description: >-
+          Limits on the arguments, such as `issueNumbers: [42]`. Their shape
+          is the tool's adapter's to define; it validates them when the grant
+          is applied and enforces them on every call.
+        type: object
+        maxProperties: 64
+        default: {}
+      expiresAt:
+        description: After this UTC time the grant denies every call. Omitted means it does not expire.
+        $ref: ../../../common/v1/types.schema.json#/$defs/utc_timestamp
+  grant_subject:
+    title: GrantSubject
+    description: >-
+      The caller the grant covers. Without `stepAttemptId` it covers the whole
+      workspace. A step's grant can never exceed what the control plane allows
+      its workspace.
+    type: object
+    required: [workspaceRef]
+    additionalProperties: false
+    properties:
+      workspaceRef:
+        description: The Workspace, by name.
+        $ref: '#/$defs/name_ref'
+      stepAttemptId:
+        description: The step attempt, by its Graph Engine ID, such as `stepa_88_review_1`.
+        $ref: ../../../common/v1/types.schema.json#/$defs/step_attempt_id
+  name_ref:
+    title: NameRef
+    description: Refers to another resource by name.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/dns_label
+  tool_grant_status:
+    title: ToolGrantStatus
+    description: Set by the service; ignored on apply.
+    type: object
+    required: [phase]
+    additionalProperties: false
+    properties:
+      phase:
+        description: '`Active`: it allows calls. `Expired`: `expiresAt` has passed.'
+        type: string
+        enum: [Active, Expired]
+      toolUid:
+        description: The `uid` of the tool the grant was bound to when it was applied.
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/uid

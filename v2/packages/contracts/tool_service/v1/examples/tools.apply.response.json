@@ -1,0 +1,10 @@
+{
+  "message": "ApplyToolResponse",
+  "in_reply_to": "oe.v1.tools.apply",
+  "payload": {
+    "command_id": "cmd_tools_apply_1",
+    "status": "accepted",
+    "operation_id": "op_tools_apply_1",
+    "resource_id": "tool-uid-123"
+  }
+}

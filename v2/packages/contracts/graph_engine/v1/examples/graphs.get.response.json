@@ -15,10 +15,15 @@
       "revision": {
         "graph_id": "graph_review",
         "revision": 3,
-        "format": "yaml",
-        "source": "apiVersion: openengine.cc/v1\nkind: Graph\nname: review\ndescription: Plan, implement, review in parallel, then ask a person.\n\ninputs:\n  instruction: {required: true, description: The change to make}\n\nplan:\n  planner:\n    agent: claude\n    prompt: \"Plan: ${instruction}\"\n\nimplementation:\n  implementer:\n    agent: {same: planner}\n    prompt: \"Implement the plan: ${outputs.planner}\"\n\nreview:\n  reviewers:\n    agent: {not: implementer}\n    facets:\n      - {facet: security, model: elevated}\n      - {facet: bugs, model: default}\n    prompt: \"Review the change for ${item.facet.name}\"\n  reranker:\n    agent: {same: implementer}\n    prompt: \"Consolidate: ${json(outputs.reviewers)}\"\n  ship:\n    human: \"Ship this change?\"\n",
-        "source_sha256": "9f2c5b1e0a4d7c3b8e6f1a2d4c5b7e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9",
-        "inputs": { "instruction": { "required": true, "description": "The change to make" } },
+        "format": "resource",
+        "source": "{\"apiVersion\":\"openengine.cc/v2alpha1\",\"kind\":\"Graph\",\"metadata\":{\"name\":\"review\"},\"spec\":{\"description\":\"Plan, implement, review in parallel, then ask a person.\",\"implementation\":[{\"agent\":{\"prompt\":\"Implement the plan: ${outputs.planner}\",\"runner\":{\"sameAs\":\"planner\"}},\"name\":\"implementer\"}],\"inputs\":[{\"description\":\"The change to make\",\"name\":\"instruction\",\"required\":true}],\"plan\":[{\"agent\":{\"prompt\":\"Plan: ${inputs.instruction}\",\"runner\":{\"name\":\"claude\"}},\"name\":\"planner\"}],\"review\":[{\"agent\":{\"facets\":[{\"model\":\"elevated\",\"name\":\"security\"},{\"name\":\"bugs\"}],\"prompt\":\"Review the change for ${item.facet.name}\",\"runner\":{\"differentFrom\":\"implementer\"}},\"name\":\"reviewers\"},{\"agent\":{\"prompt\":\"Consolidate: ${json(outputs.reviewers)}\",\"runner\":{\"sameAs\":\"implementer\"}},\"name\":\"reranker\"},{\"human\":{\"prompt\":\"Ship this change?\"},\"name\":\"ship\"}]}}",
+        "source_sha256": "01921dcf50552e2ecdf4504a31b7afc34e0de29be20ff7af6b6d9ca6a87b4536",
+        "inputs": {
+          "instruction": {
+            "required": true,
+            "description": "The change to make"
+          }
+        },
         "nodes": [
           "workspace",
           "planner",

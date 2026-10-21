@@ -1,0 +1,146 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Common
+description: >-
+  Fields every OpenEngine resource shares. Resources follow Kubernetes
+  conventions: `apiVersion` and `kind` say what a document is, `metadata`
+  identifies it, `spec` holds what its author wants, and `status`, where a
+  kind has one, is what the service observed. Applying a resource creates it
+  under a new name and updates it under a known one; `status` and the
+  service-set `metadata` fields are ignored on apply. Several resources may
+  share one file, separated by `---`.
+$defs:
+  core_api_version:
+    description: The version of the core resources (Graph, Loop, Connection).
+    type: string
+    const: openengine.cc/v2alpha1
+  tools_api_version:
+    description: The version of the tool service's resources (Tool, ToolGrant, ToolInvocation).
+    type: string
+    const: tools.openengine.cc/v1alpha1
+  name:
+    description: >-
+      Lower-case name, unique among resources of its kind: a letter, then
+      letters, digits, `_` and `-`, at most 64 characters.
+    $ref: types.schema.json#/$defs/slug
+  dns_label:
+    description: >-
+      A name that is also one NATS subject token: lower-case letters, digits
+      and `-`, starting and ending with a letter or digit, at most 63
+      characters. No `.`, `_` or wildcards.
+    type: string
+    pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+  tool_ref:
+    description: >-
+      A Tool (`tools.openengine.cc`) as `namespace.name`, such as
+      `default.github-issue-comment`: two DNS labels joined by `.`.
+    type: string
+    pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+  identifier:
+    description: >-
+      A name that expressions refer to, such as `outputs.pick.issue`: a
+      lower-case letter, then lower-case letters, digits and `_`. `-` is not
+      allowed because `${outputs.a-b}` would read as a subtraction.
+    type: string
+    pattern: ^[a-z][a-z0-9_]{0,62}$
+  description:
+    description: Plain-language description, at most 2000 characters.
+    type: string
+    minLength: 1
+    maxLength: 2000
+  template:
+    description: >-
+      Text that may contain `${...}` expressions, filled in when the step
+      runs. Expressions read `inputs.NAME`, `outputs.STEP[.FIELD]`,
+      `visits.STEP`, `item` inside a faceted step, literals, comparisons,
+      `&&`, `||`, `!`, `size(...)` and `json(...)`.
+    type: string
+  expression:
+    description: A bare expression, without `${...}`, in the same language as templates.
+    type: string
+    minLength: 1
+  duration:
+    description: >-
+      A duration of whole units, largest first, such as `90s`, `15m`, `1h30m`
+      or `7d` (`s`, `m`, `h`, `d`).
+    type: string
+    pattern: ^(\d+d)?(\d+h)?(\d+m)?(\d+s)?$
+    minLength: 2
+  label_key:
+    description: >-
+      An optional DNS-subdomain prefix and `/`, then a name of at most 63
+      characters, such as `team` or `openengine.cc/owner`.
+    type: string
+    pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$
+    maxLength: 317
+  labels:
+    description: >-
+      Short values for selecting and grouping resources, such as
+      `team: platform`. Values are at most 63 characters of letters,
+      digits, `-`, `_` and `.`, starting and ending alphanumeric, or empty.
+    type: object
+    maxProperties: 64
+    propertyNames:
+      $ref: '#/$defs/label_key'
+    additionalProperties:
+      type: string
+      pattern: ^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$
+  annotations:
+    description: Free-form notes for tools and people. Services never act on them.
+    type: object
+    maxProperties: 64
+    propertyNames:
+      $ref: '#/$defs/label_key'
+    additionalProperties:
+      type: string
+      maxLength: 4096
+  uid:
+    description: >-
+      Set by the service when the resource is created, and never reused.
+      Deleting a resource and creating another under the same name gives a new
+      `uid`, so nothing granted to the old one carries over.
+    type: string
+    pattern: ^[a-z0-9][-a-z0-9]{0,62}$
+  object_meta:
+    title: ObjectMeta
+    description: >-
+      Identifies a resource that is not namespaced (Graph, Loop, Connection).
+      The service sets everything else about it, such as its revision and
+      timestamps.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: '#/$defs/name'
+      labels:
+        $ref: '#/$defs/labels'
+      annotations:
+        $ref: '#/$defs/annotations'
+  namespaced_object_meta:
+    title: NamespacedObjectMeta
+    description: >-
+      Identifies a namespaced resource. `namespace` and `name` each fit in one
+      NATS subject token. A namespace groups resources; it does not by itself
+      isolate tenants.
+    type: object
+    required: [name, namespace]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: '#/$defs/dns_label'
+      namespace:
+        $ref: '#/$defs/dns_label'
+      labels:
+        $ref: '#/$defs/labels'
+      annotations:
+        $ref: '#/$defs/annotations'
+      uid:
+        description: Set by the service; ignored on apply.
+        $ref: '#/$defs/uid'
+      generation:
+        description: Set by the service; incremented by every change to `spec`. Ignored on apply.
+        type: integer
+        minimum: 1
+      creationTimestamp:
+        description: Set by the service; ignored on apply.
+        $ref: types.schema.json#/$defs/utc_timestamp

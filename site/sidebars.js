@@ -14,12 +14,17 @@ const sidebars = {
       {type: 'category', label: 'Service contracts', link: {type: 'doc', id: 'service-contracts'}, items: [
         {type: 'link', label: 'Connection Bus', href: 'pathname:///contracts/connection_bus/v1/'},
         {type: 'link', label: 'Graph Engine', href: 'pathname:///contracts/graph_engine/v1/'},
+        {type: 'link', label: 'Tool Service', href: 'pathname:///contracts/tool_service/v1/'},
         {type: 'link', label: 'Virtual Control Plane', href: 'pathname:///contracts/virtual_control_plane/v1/'},
       ]},
-      {type: 'category', label: 'Graph Engine resources', link: {type: 'doc', id: 'service-contracts'}, items: [
+      {type: 'category', label: 'Resources', link: {type: 'doc', id: 'service-contracts'}, items: [
+        {type: 'link', label: 'Connection', href: 'pathname:///contracts/connection_bus/v1/resources/#connection'},
         {type: 'link', label: 'Graph', href: 'pathname:///contracts/graph_engine/v1/resources/#graph'},
         {type: 'link', label: 'Loop', href: 'pathname:///contracts/graph_engine/v1/resources/#loop'},
-        {type: 'link', label: 'Tool', href: 'pathname:///contracts/graph_engine/v1/resources/#tool'},
+        {type: 'link', label: 'Tool', href: 'pathname:///contracts/tool_service/v1/resources/#tool'},
+        {type: 'link', label: 'ToolGrant', href: 'pathname:///contracts/tool_service/v1/resources/#toolgrant'},
+        {type: 'link', label: 'ToolInvocation', href: 'pathname:///contracts/tool_service/v1/resources/#toolinvocation'},
+        {type: 'link', label: 'Workspace', href: 'pathname:///contracts/virtual_control_plane/v1/resources/#workspace'},
       ]},
     ]},
     {type: 'category', label: 'Integrations', collapsible: false, link: {type: 'doc', id: 'integrations'}, items: ['integrations/slack', 'integrations/github', 'integrations/mcp']},

@@ -94,7 +94,7 @@
       }
     },
     "capability": {
-      "description": "A provider capability a workspace may require. `create` rejects with UNSUPPORTED_CAPABILITY when the provider lacks one.",
+      "description": "A provider capability a workspace may require. `apply` rejects with UNSUPPORTED_CAPABILITY when the provider lacks one.",
       "type": "string",
       "enum": [
         "checkpoint",
@@ -175,6 +175,7 @@
       "type": "object",
       "required": [
         "workspace_id",
+        "name",
         "version",
         "provider",
         "state",
@@ -189,6 +190,10 @@
       "additionalProperties": false,
       "properties": {
         "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "name": {
+          "description": "The Workspace resource's `metadata.name`, which tool grants refer to.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name"
+        },
         "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
         "provider": { "$ref": "#/$defs/provider" },
         "state": { "$ref": "#/$defs/workspace_state" },

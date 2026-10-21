@@ -16,7 +16,9 @@ def test_every_subject_is_drawn_with_its_service(service: str) -> None:
     short = NAMES[service][1]
     block = DIAGRAM.split(f"    subgraph {short}[", 1)[1].split("\n    end\n", 1)[0]
     for group, addresses in architecture.subjects(service).items():
-        prefix = f"oe.v1.{short}.{group}."
+        if not addresses:
+            continue
+        prefix = architecture._prefix(addresses)
         assert f"<b>{prefix}</b>" in block
         for address in addresses:
             assert f"<br/>{address.removeprefix(prefix)}" in block, address
@@ -44,6 +46,9 @@ def test_apps_and_integrations_connect_where_they_should() -> None:
         assert f'    {integration} -- "webhooks" --> cxn_ingress\n' in DIAGRAM
         assert f'    {integration} --- |"← API calls"| cxn_egress\n' in DIAGRAM
     assert '    cxn -- "jobs" --> ge_control\n' in DIAGRAM
+    assert '    sessions -- "invoke tools" --> tools_control\n' in DIAGRAM
+    assert '    ge -- "tool grants" --> tools_control\n' in DIAGRAM
+    assert '    cxn_query --- |"read by tools"| tools\n' in DIAGRAM
     assert '    vcp -- "execute, steer, cancel" --> daemon\n' in DIAGRAM
 
 

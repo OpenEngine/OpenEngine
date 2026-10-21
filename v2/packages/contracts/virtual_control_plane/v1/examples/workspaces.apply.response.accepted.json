@@ -1,0 +1,11 @@
+{
+  "summary": "Accepted: workspace ID allocated, provisioning continues.",
+  "message": "ApplyWorkspaceResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.apply",
+  "payload": {
+    "command_id": "cmd_create_a",
+    "status": "accepted",
+    "operation_id": "op_create_a",
+    "resource_id": "ws_a1"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "message": "DeleteToolGrantCommand",
+  "subject": "oe.v1.toolgrants.delete",
+  "payload": {
+    "command_id": "cmd_toolgrants_delete_1",
+    "causal_path": [
+      "cmd_toolgrants_delete_1"
+    ],
+    "payload": {
+      "namespace": "default",
+      "name": "reviewer-comment-access"
+    }
+  }
+}

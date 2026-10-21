@@ -3,35 +3,18 @@
   "title": "Virtual Control Plane commands",
   "description": "Requests and responses of `oe.v1.vcp.control.…`. The workspace or approval named in the subject is the target; payloads do not repeat it.",
   "$defs": {
-    "create_workspace_command": {
+    "apply_workspace_command": {
       "allOf": [
         { "$ref": "../../../common/v1/command.schema.json" },
-        { "properties": { "payload": { "$ref": "#/$defs/create_workspace_payload" } } }
+        { "properties": { "payload": { "$ref": "#/$defs/apply_workspace_payload" } } }
       ]
     },
-    "create_workspace_payload": {
-      "description": "Allocate a workspace identity and provision its first runtime with the requested resources, tools and context.",
+    "apply_workspace_payload": {
+      "description": "Create or update the workspace named by `workspace.metadata.name`. A new name allocates a workspace ID and provisions its first runtime with the requested resources, tools and context.",
       "type": "object",
-      "required": ["provider"],
+      "required": ["workspace"],
       "additionalProperties": false,
-      "properties": {
-        "provider": { "$ref": "workspace.schema.json#/$defs/provider" },
-        "resources": { "$ref": "workspace.schema.json#/$defs/resources" },
-        "tools": {
-          "type": "array",
-          "items": { "$ref": "workspace.schema.json#/$defs/tool" },
-          "uniqueItems": true,
-          "default": []
-        },
-        "context": { "$ref": "workspace.schema.json#/$defs/context" },
-        "required_capabilities": {
-          "type": "array",
-          "items": { "$ref": "workspace.schema.json#/$defs/capability" },
-          "uniqueItems": true,
-          "default": []
-        },
-        "labels": { "$ref": "workspace.schema.json#/$defs/labels" }
-      }
+      "properties": { "workspace": { "$ref": "../resources/workspace.schema.yaml" } }
     },
     "ensure_workspace_command": {
       "allOf": [
@@ -166,7 +149,7 @@
       }
     },
     "workspace_command_response": {
-      "description": "Reply to `create`, `ensure`, `checkpoint`, `suspend` and `destroy`. `resource_id` is the workspace; `create` allocates it at acceptance.",
+      "description": "Reply to `apply`, `ensure`, `checkpoint`, `suspend` and `destroy`. `resource_id` is the workspace; `apply` allocates it at acceptance for a new name.",
       "allOf": [
         { "$ref": "../../../common/v1/command-response.schema.json" },
         {

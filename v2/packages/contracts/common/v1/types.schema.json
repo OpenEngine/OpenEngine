@@ -52,7 +52,12 @@
     "producer": {
       "description": "Logical service that emitted a message.",
       "type": "string",
-      "enum": ["cxn", "ge", "vcp"]
+      "enum": ["cxn", "ge", "vcp", "tools"]
+    },
+    "resource_name": {
+      "description": "A namespace or the name of a namespaced resource, such as a Tool or a ToolInvocation: lower-case letters, digits and `-`, starting and ending with a letter or digit, at most 63 characters. It has no type prefix; the subject's position says what it names.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
     },
     "operation_id": { "type": "string", "pattern": "^op_[A-Za-z0-9_-]{1,125}$" },
     "connection_id": { "type": "string", "pattern": "^conn_[A-Za-z0-9_-]{1,123}$" },

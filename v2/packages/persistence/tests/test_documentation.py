@@ -78,4 +78,4 @@ def test_manifest_lists_changed_paths_and_the_svgs_to_render(tmp_path: Path) -> 
     changed = json.loads(manifest.read_text())
     assert str(output / "latest_cxn.mermaid") in changed
     assert str(output / "latest_cxn.svg") in changed
-    assert {path.split("/")[-2] for path in changed if path.endswith(".md")} == {"cxn", "ge", "vcp"}
+    assert {path.split("/")[-2] for path in changed if path.endswith(".md")} == {"cxn", "ge", "tools", "vcp"}

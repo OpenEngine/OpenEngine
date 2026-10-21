@@ -1,0 +1,10 @@
+{
+  "message": "GetToolGrantQuery",
+  "subject": "oe.v1.toolgrants.get",
+  "payload": {
+    "params": {
+      "namespace": "default",
+      "name": "reviewer-comment-access"
+    }
+  }
+}

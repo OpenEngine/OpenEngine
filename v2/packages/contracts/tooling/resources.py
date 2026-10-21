@@ -1,16 +1,17 @@
-"""Validates Graph Engine resources and writes their checked-in HTML reference.
+"""Validates OpenEngine resources and writes each service's checked-in HTML reference.
 
-The `Graph`, `Loop` and `Tool` resources are defined once, as JSON Schemas
-written in YAML under `graph_engine/v1/resources/`. The same files validate a
-resource (`validate_resource`) and generate `resources/reference.html`, so
-the reference cannot drift from what is enforced. Beyond draft-07 they use
-one keyword, `x-oe-seconds: {minimum, maximum}`, bounding a duration such as
-`1h30m`.
+The resources people write (Connection, Graph, Loop, Tool, ToolGrant, ...) are
+defined once, as JSON Schemas written in YAML under each service's
+`{service}/v1/resources/`, sharing `common/v1/meta.schema.yaml`. The same
+files validate a resource (`validate_resource`) and generate that service's
+`resources/reference.html`, so the reference cannot drift from what is
+enforced. Beyond draft-07 they use one keyword, `x-oe-seconds: {minimum,
+maximum}`, bounding a duration such as `1h30m`.
 
-A test regenerates the reference and fails when the checked-in page is stale.
+A test regenerates the references and fails when a checked-in page is stale.
 Run from `v2/`:
 
-    uv run python packages/contracts/tooling/resources.py               # regenerate the reference
+    uv run python packages/contracts/tooling/resources.py               # regenerate the references
     uv run python packages/contracts/tooling/resources.py check FILE..  # validate resource files
 """
 
@@ -34,10 +35,34 @@ from referencing.jsonschema import DRAFT7
 from validate import CONTRACTS, _load
 from validate import _retrieve as _retrieve_file
 
-RESOURCES = CONTRACTS / "graph_engine" / "v1" / "resources"
-EXAMPLES = RESOURCES / "examples"
-API_VERSION = "openengine.cc/v2alpha1"
-KINDS = ("Graph", "Loop", "Tool")
+META = CONTRACTS / "common" / "v1" / "meta.schema.yaml"
+
+
+@dataclass(frozen=True)
+class Group:
+    """One service's resources: the kinds it owns, under one API version."""
+
+    service: str
+    title: str
+    api_version: str
+    kinds: tuple[str, ...]
+
+    @property
+    def directory(self) -> Path:
+        return CONTRACTS / self.service / "v1" / "resources"
+
+    @property
+    def examples(self) -> Path:
+        return self.directory / "examples"
+
+
+GROUPS = (
+    Group("connection_bus", "Connection Bus", "openengine.cc/v2alpha1", ("Connection",)),
+    Group("graph_engine", "Graph Engine", "openengine.cc/v2alpha1", ("Graph", "Loop")),
+    Group("tool_service", "Tool Service", "tools.openengine.cc/v1alpha1", ("Tool", "ToolGrant", "ToolInvocation")),
+    Group("virtual_control_plane", "Virtual Control Plane", "openengine.cc/v2alpha1", ("Workspace",)),
+)
+KINDS = tuple(kind for group in GROUPS for kind in group.kinds)
 _DURATION_UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
 
 
@@ -76,8 +101,12 @@ def _duration(seconds: int) -> str:
 _ResourceValidator = validators.extend(Draft7Validator, {"x-oe-seconds": _seconds})
 
 
+def group_of(kind: str) -> Group:
+    return next(group for group in GROUPS if kind in group.kinds)
+
+
 def schema_path(kind: str) -> Path:
-    return RESOURCES / f"{kind.lower()}.schema.yaml"
+    return group_of(kind).directory / f"{kind.lower()}.schema.yaml"
 
 
 def _retrieve(uri: str) -> Resource:
@@ -132,11 +161,14 @@ def validate_resource(document: Any) -> list[Problem]:
     """Every problem with one resource, each with the path it was found at."""
     if not isinstance(document, Mapping):
         return [Problem("", "a resource is a mapping with apiVersion, kind, metadata and spec")]
-    if document.get("apiVersion") != API_VERSION:
-        return [Problem("apiVersion", f"must be {API_VERSION}")]
+    versions = list(dict.fromkeys(group.api_version for group in GROUPS))
+    version = document.get("apiVersion")
+    if version not in versions:
+        return [Problem("apiVersion", f"must be one of {', '.join(versions)}")]
+    kinds = [kind for group in GROUPS if group.api_version == version for kind in group.kinds]
     kind = document.get("kind")
-    if kind not in KINDS:
-        return [Problem("kind", f"must be one of {', '.join(KINDS)}")]
+    if kind not in kinds:
+        return [Problem("kind", f"must be one of {', '.join(kinds)} for {version}")]
     errors = sorted(_validator(kind).iter_errors(document), key=lambda error: list(map(str, error.absolute_path)))
     return [Problem(_path(iter(error.absolute_path)), _message(error)) for error in errors]
 
@@ -291,7 +323,7 @@ def _table(kind: _Type) -> tuple[str, list[_Type]]:
 def _examples(kind: str) -> list[tuple[str, str]]:
     """(file name, text) of each example document of `kind`, as written."""
     found = []
-    for path in sorted(EXAMPLES.glob("*.yaml")):
+    for path in sorted(group_of(kind).examples.glob("*.yaml")):
         for chunk in re.split(r"(?m)^---\s*$", path.read_text()):
             text = re.sub(r"\A(\s*#.*\n)+", "", chunk.strip("\n") + "\n")
             documents = load_documents(text)
@@ -345,10 +377,10 @@ code.name { background: none; padding: 0; font-weight: 600; }
 """
 
 
-def page() -> str:
+def page(group: Group) -> str:
     seen: set[str] = set()
     sections, nav = [], []
-    for kind in KINDS:
+    for kind in group.kinds:
         path = schema_path(kind)
         root = _load(path)
         stack = [_Type(kind, root, path)]  # depth first, so each type follows the field that introduces it
@@ -369,7 +401,7 @@ def page() -> str:
                 )
                 types_html.append(
                     f'<h2 class="kind" id="{_anchor(kind)}">{kind}</h2>'
-                    f'<div class="path"><code>apiVersion: {API_VERSION}</code> · <code>kind: {kind}</code> · '
+                    f'<div class="path"><code>apiVersion: {group.api_version}</code> · <code>kind: {kind}</code> · '
                     f'defined in <a href="{html.escape(path.name)}"><code>{html.escape(source)}</code></a></div>'
                     f"<p>{_inline(root['description'])}</p>{examples}{table}"
                 )
@@ -384,14 +416,15 @@ def page() -> str:
             f'<li class="kind"><a href="#{_anchor(kind)}">{kind}</a></li>'
             + "".join(f'<li class="sub"><a href="#{_anchor(title)}">{html.escape(title)}</a></li>' for title in subs)
         )
-    meta = _load(RESOURCES / "meta.schema.yaml")
+    meta = _load(META)
+    title = html.escape(f"{group.title} resources")
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Graph Engine resources</title>
-<!-- Generated by packages/contracts/tooling/resources.py from graph_engine/v1/resources/*.schema.yaml. Do not edit. -->
+<title>{title}</title>
+<!-- Generated by packages/contracts/tooling/resources.py from {group.service}/v1/resources/*.schema.yaml. Do not edit. -->
 <style>{_STYLE}</style>
 </head>
 <body>
@@ -399,7 +432,7 @@ def page() -> str:
 <nav><h2>Resources</h2><ul>{"".join(nav)}</ul></nav>
 <main>
 <header>
-<h1>Graph Engine resources</h1>
+<h1>{title}</h1>
 <p>{_inline(meta["description"])}</p>
 <p>Validate files with <code>uv run python packages/contracts/tooling/resources.py check FILE…</code> from <code>v2/</code>.</p>
 </header>
@@ -411,8 +444,8 @@ def page() -> str:
 """
 
 
-def reference_path() -> Path:
-    return RESOURCES / "reference.html"
+def reference_path(group: Group) -> Path:
+    return group.directory / "reference.html"
 
 
 def main(arguments: list[str]) -> int:
@@ -423,8 +456,9 @@ def main(arguments: list[str]) -> int:
                 failed = True
                 print(f"{name}: {problem}")
         return int(failed)
-    reference_path().write_text(page())
-    print(f"wrote {reference_path().relative_to(CONTRACTS)}")
+    for group in GROUPS:
+        reference_path(group).write_text(page(group))
+        print(f"wrote {reference_path(group).relative_to(CONTRACTS)}")
     return 0
 
 

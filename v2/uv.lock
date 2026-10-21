@@ -9,6 +9,7 @@ members = [
     "openengine-graph-engine",
     "openengine-persistence",
     "openengine-supervisor",
+    "openengine-tool-service",
     "openengine-virtual-control-plane",
 ]
 
@@ -19,6 +20,7 @@ dev = [
     { name = "openengine-connection-bus", editable = "services/connection_bus" },
     { name = "openengine-graph-engine", editable = "services/graph_engine" },
     { name = "openengine-persistence", editable = "packages/persistence" },
+    { name = "openengine-tool-service", editable = "services/tool_service" },
     { name = "openengine-virtual-control-plane", editable = "services/virtual_control_plane" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -337,6 +339,7 @@ dependencies = [
     { name = "openengine-graph-engine" },
     { name = "openengine-persistence" },
     { name = "openengine-supervisor" },
+    { name = "openengine-tool-service" },
     { name = "openengine-virtual-control-plane" },
 ]
 
@@ -347,6 +350,7 @@ requires-dist = [
     { name = "openengine-graph-engine", editable = "services/graph_engine" },
     { name = "openengine-persistence", editable = "packages/persistence" },
     { name = "openengine-supervisor", editable = "apps/supervisor" },
+    { name = "openengine-tool-service", editable = "services/tool_service" },
     { name = "openengine-virtual-control-plane", editable = "services/virtual_control_plane" },
 ]
 
@@ -393,6 +397,17 @@ requires-dist = [
 name = "openengine-supervisor"
 version = "0.0.0"
 source = { editable = "apps/supervisor" }
+
+[[package]]
+name = "openengine-tool-service"
+version = "0.0.0"
+source = { editable = "services/tool_service" }
+dependencies = [
+    { name = "openengine-persistence" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "openengine-persistence", editable = "packages/persistence" }]
 
 [[package]]
 name = "openengine-virtual-control-plane"

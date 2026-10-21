@@ -26,6 +26,7 @@ def test_creates_each_services_database_then_leaves_it_at_head(tmp_path: Path) -
     assert [(upgrade.service, outcome(upgrade)) for upgrade in first] == [
         ("cxn", Outcome.CREATED),
         ("ge", Outcome.CREATED),
+        ("tools", Outcome.CREATED),
         ("vcp", Outcome.CREATED),
     ]
     assert {outcome(upgrade) for upgrade in again} == {Outcome.UNCHANGED}

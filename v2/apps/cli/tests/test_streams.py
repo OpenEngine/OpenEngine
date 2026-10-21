@@ -20,7 +20,7 @@ from openengine.cli.migrations.streams import (
 def test_packages_the_infra_stream_configs() -> None:
     names = [config["name"] for config in load_stream_configs(streams_directory())]
 
-    assert names == ["cxn-egress", "cxn-events", "cxn-ingress", "ge-events", "vcp-events"]
+    assert names == ["cxn-egress", "cxn-events", "cxn-ingress", "ge-events", "tools-events", "vcp-events"]
 
 
 def test_refuses_a_config_named_differently_from_its_file(tmp_path: Path) -> None:

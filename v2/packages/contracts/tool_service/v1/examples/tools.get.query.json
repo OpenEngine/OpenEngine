@@ -1,0 +1,10 @@
+{
+  "message": "GetToolQuery",
+  "subject": "oe.v1.tools.get",
+  "payload": {
+    "params": {
+      "namespace": "default",
+      "name": "github-issue-comment"
+    }
+  }
+}

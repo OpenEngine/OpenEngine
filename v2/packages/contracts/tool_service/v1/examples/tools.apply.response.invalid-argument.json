@@ -1,0 +1,22 @@
+{
+  "summary": "Rejected: the adapter cannot honour the declared recovery.",
+  "message": "ApplyToolResponse",
+  "in_reply_to": "oe.v1.tools.apply",
+  "payload": {
+    "command_id": "cmd_tools_apply_2",
+    "status": "rejected",
+    "error": {
+      "code": "INVALID_ARGUMENT",
+      "message": "Adapter nango does not implement provider-idempotent recovery for github-issue-comment.",
+      "retryable": false,
+      "details": {
+        "violations": [
+          {
+            "field": "/payload/tool/spec/execution/recovery",
+            "description": "not supported by the adapter"
+          }
+        ]
+      }
+    }
+  }
+}
