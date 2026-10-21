@@ -91,8 +91,10 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
       await page.locator("#terminal").click()
       await page.keyboard.type(`echo "${ids[0]} ${ids[1]} ${ids[0]} | ${time}"`)
       await page.keyboard.press("Enter")
-      await expect.poll(() => bufferText(page)).toContain(`${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
-      const row = page.locator(".xterm-rows > div").filter({ hasText: "|" }).last()
+      // The echoed command contains the same text; wait for the output row.
+      await expect.poll(async () => (await bufferText(page)).split("\n")).toContain(`${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^g-/ }).last()
+      await expect(row).toHaveText(/^g-[0-9a-f]{12} run-[0-9a-f]{12} g-[0-9a-f]{12} \| \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$/)
       const text = (await row.textContent())!.trim()
       await page.close()
       return text
