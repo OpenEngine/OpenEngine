@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Query envelope",
+  "description": "Request body of every query subject (`oe.v1.{service}.query.…`), sent with NATS request/reply. Queries have no side effects and create no operation. Service schemas narrow `params` with `allOf`.",
+  "type": "object",
+  "required": ["params"],
+  "additionalProperties": false,
+  "properties": {
+    "request_id": { "$ref": "types.schema.json#/$defs/request_id" },
+    "params": {
+      "type": "object",
+      "description": "Typed filters, selectors and pagination. `{}` when the query takes none."
+    }
+  }
+}

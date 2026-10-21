@@ -1,0 +1,31 @@
+{
+  "message": "ListConnectionsResponse",
+  "in_reply_to": "oe.v1.cxn.query.connections.list",
+  "payload": {
+    "request_id": "req_01JAXB",
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "connection_id": "conn_acme_gh_legacy",
+          "version": 9,
+          "provider": "github",
+          "display_name": "Acme GitHub (legacy)",
+          "external_account": { "kind": "organization", "id": "1182", "name": "acme" },
+          "credential_ref": { "store": "vault", "key": "openengine/github/acme-legacy" },
+          "scope": { "mode": "all" },
+          "settings": {},
+          "state": "active",
+          "health": {
+            "status": "degraded",
+            "reason": "rate_limited",
+            "since": "2026-10-19T20:02:11Z"
+          },
+          "created_at": "2026-03-02T09:00:00Z",
+          "updated_at": "2026-10-19T20:02:11Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

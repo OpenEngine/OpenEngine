@@ -10,6 +10,8 @@ dev = [
     "openengine-persistence",
     "openengine-virtual-control-plane",
     "pytest>=8.0",
+    "jsonschema>=4.23",
+    "pyyaml>=6.0",
 ]
 
 [tool.uv.sources]
@@ -27,6 +29,7 @@ testpaths = [
     "services/connection_bus/tests",
     "services/graph_engine/tests",
     "services/virtual_control_plane/tests",
+    "packages/contracts/tests",
 ]
 # Each app, package and service keeps its own tests/, so test module names may repeat.
 addopts = "-q --import-mode=importlib"

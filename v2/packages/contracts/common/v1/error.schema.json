@@ -1,0 +1,277 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Error",
+  "description": "Structured error carried by rejected command responses, failed query responses and failed operations. `code` is stable and machine-readable; `message` is for people and may change. `retryable` says whether sending the unchanged request again may succeed, and is authoritative over any default implied by the code. Consumers must treat an unknown `code` as a non-specific failure and rely on `retryable`.",
+  "type": "object",
+  "required": ["code", "message", "retryable"],
+  "additionalProperties": false,
+  "properties": {
+    "code": { "$ref": "#/$defs/code" },
+    "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "retryable": { "type": "boolean" },
+    "details": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "code": { "const": "INVALID_ARGUMENT" } } },
+      "then": {
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/invalid_argument_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "NOT_FOUND" } } },
+      "then": { "properties": { "details": { "$ref": "#/$defs/resource_details" } } }
+    },
+    {
+      "if": { "properties": { "code": { "const": "PERMISSION_DENIED" } } },
+      "then": {
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/permission_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "INVALID_STATE" } } },
+      "then": { "properties": { "details": { "$ref": "#/$defs/invalid_state_details" } } }
+    },
+    {
+      "if": { "properties": { "code": { "const": "VERSION_CONFLICT" } } },
+      "then": {
+        "required": ["details"],
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/version_conflict_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "COMMAND_ID_CONFLICT" } } },
+      "then": {
+        "required": ["details"],
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/command_id_conflict_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "UNSUPPORTED_CAPABILITY" } } },
+      "then": {
+        "required": ["details"],
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/unsupported_capability_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "DEADLINE_EXCEEDED" } } },
+      "then": {
+        "required": ["details"],
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/deadline_exceeded_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "UNAVAILABLE" } } },
+      "then": {
+        "properties": {
+          "retryable": { "const": true },
+          "details": { "$ref": "#/$defs/unavailable_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "CAUSAL_PATH_TOO_LONG" } } },
+      "then": {
+        "required": ["details"],
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/causal_path_too_long_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "STALE_APPROVAL" } } },
+      "then": {
+        "required": ["details"],
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/stale_approval_details" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "INVALID_CURSOR" } } },
+      "then": {
+        "properties": {
+          "retryable": { "const": false },
+          "details": { "$ref": "#/$defs/invalid_cursor_details" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "code": {
+      "type": "string",
+      "enum": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "PERMISSION_DENIED",
+        "INVALID_STATE",
+        "VERSION_CONFLICT",
+        "COMMAND_ID_CONFLICT",
+        "UNSUPPORTED_CAPABILITY",
+        "DEADLINE_EXCEEDED",
+        "UNAVAILABLE",
+        "CAUSAL_PATH_TOO_LONG",
+        "STALE_APPROVAL",
+        "INVALID_CURSOR",
+        "PROVIDER_ERROR",
+        "INTERNAL"
+      ],
+      "description": "INVALID_ARGUMENT: the message, a subject token, or a subject/payload pairing is malformed. NOT_FOUND: a named resource does not exist or is not visible. PERMISSION_DENIED: the verified actor may not perform the action. INVALID_STATE: the resource is in a state that does not allow the action. VERSION_CONFLICT: `expected_version` did not match. COMMAND_ID_CONFLICT: the command ID was already used with different contents, operation or target. UNSUPPORTED_CAPABILITY: the provider or service does not support what was asked. DEADLINE_EXCEEDED: `deadline_at` passed before the command could be accepted. UNAVAILABLE: temporarily unable to answer; retry with the same command ID. CAUSAL_PATH_TOO_LONG: the causal path cannot be extended within its 32-element limit. STALE_APPROVAL: an approval decision targets a request that was superseded, expired, already decided, or belongs to an earlier runtime generation. INVALID_CURSOR: a page cursor is malformed, expired, or was issued for different filters. PROVIDER_ERROR: an external provider failed (operation and lifecycle failures). INTERNAL: an unexpected service fault."
+    },
+    "field_violation": {
+      "type": "object",
+      "required": ["field", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "JSON pointer into the message, or `subject.{parameter}` for a subject token."
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "invalid_argument_details": {
+      "type": "object",
+      "required": ["violations"],
+      "additionalProperties": false,
+      "properties": {
+        "violations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/field_violation" }
+        }
+      }
+    },
+    "resource_details": {
+      "type": "object",
+      "required": ["resource_type", "resource_id"],
+      "additionalProperties": false,
+      "properties": {
+        "resource_type": { "type": "string" },
+        "resource_id": { "$ref": "types.schema.json#/$defs/token" }
+      }
+    },
+    "permission_details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "permission": {
+          "type": "string",
+          "description": "The permission that was missing, such as `ge.jobs.cancel`."
+        }
+      }
+    },
+    "invalid_state_details": {
+      "type": "object",
+      "required": ["resource_type", "resource_id", "current_state"],
+      "additionalProperties": false,
+      "properties": {
+        "resource_type": { "type": "string" },
+        "resource_id": { "$ref": "types.schema.json#/$defs/token" },
+        "current_state": { "type": "string" },
+        "allowed_states": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "version_conflict_details": {
+      "type": "object",
+      "required": ["expected_version", "actual_version"],
+      "additionalProperties": false,
+      "properties": {
+        "expected_version": { "$ref": "types.schema.json#/$defs/resource_version" },
+        "actual_version": { "$ref": "types.schema.json#/$defs/resource_version" }
+      }
+    },
+    "command_id_conflict_details": {
+      "type": "object",
+      "required": ["command_id"],
+      "additionalProperties": false,
+      "properties": {
+        "command_id": { "$ref": "types.schema.json#/$defs/command_id" },
+        "original_subject": {
+          "type": "string",
+          "description": "Subject the command ID was first used on, when the caller may see it."
+        },
+        "original_operation_id": { "$ref": "types.schema.json#/$defs/operation_id" }
+      }
+    },
+    "unsupported_capability_details": {
+      "type": "object",
+      "required": ["capability"],
+      "additionalProperties": false,
+      "properties": {
+        "capability": { "type": "string" },
+        "provider": { "$ref": "types.schema.json#/$defs/slug" }
+      }
+    },
+    "deadline_exceeded_details": {
+      "type": "object",
+      "required": ["deadline_at", "received_at"],
+      "additionalProperties": false,
+      "properties": {
+        "deadline_at": { "$ref": "types.schema.json#/$defs/utc_timestamp" },
+        "received_at": { "$ref": "types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "unavailable_details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "retry_after_ms": { "type": "integer", "minimum": 0 } }
+    },
+    "causal_path_too_long_details": {
+      "type": "object",
+      "required": ["max_length", "length"],
+      "additionalProperties": false,
+      "properties": {
+        "max_length": { "type": "integer" },
+        "length": { "type": "integer", "description": "Length the path would have reached." }
+      }
+    },
+    "stale_approval_details": {
+      "type": "object",
+      "required": ["approval_id", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": { "$ref": "types.schema.json#/$defs/token" },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "already_decided",
+            "superseded",
+            "expired",
+            "runtime_generation_changed",
+            "target_mismatch"
+          ]
+        },
+        "current_state": { "type": "string" },
+        "current_runtime_generation": { "$ref": "types.schema.json#/$defs/runtime_generation" }
+      }
+    },
+    "invalid_cursor_details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason": { "type": "string", "enum": ["malformed", "expired", "filters_changed"] }
+      }
+    }
+  }
+}

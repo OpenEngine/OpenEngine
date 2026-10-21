@@ -1,0 +1,10 @@
+{
+  "summary": "Disable while a credential is investigated, holding accepted deliveries until re-enabled.",
+  "message": "DisableConnectionCommand",
+  "subject": "oe.v1.cxn.control.connections.conn_acme_gh.disable",
+  "payload": {
+    "command_id": "cmd_01JAX8DIS",
+    "causal_path": ["cmd_01JAX8DIS"],
+    "payload": { "in_flight": "hold", "reason": "Credential rotation" }
+  }
+}

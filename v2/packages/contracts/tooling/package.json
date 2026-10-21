@@ -1,0 +1,12 @@
+{
+  "name": "@openengine/contracts-tooling",
+  "private": true,
+  "description": "Pinned AsyncAPI parser for validating the OpenEngine V2 service contracts.",
+  "type": "module",
+  "scripts": {
+    "validate": "node validate.mjs"
+  },
+  "devDependencies": {
+    "@asyncapi/parser": "3.6.3"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pagination",
+  "description": "Keyset pagination for list queries. A list query's `params` include `limit` and `cursor`; its `result` holds `items` and `next_cursor`. Each list documents its sort order, always ending in the resource ID as a tie-breaker. A cursor is opaque, bound to the filters it was issued with (reusing it with different filters is INVALID_CURSOR) and valid for at least 24 hours. Records that change between pages are neither repeated nor skipped unless their sort key or filter membership changed; records created after the first page appear only if they sort after the cursor.",
+  "$defs": {
+    "limit": {
+      "description": "Page size. Defaults to 50; at most 200.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 50
+    },
+    "cursor": {
+      "description": "`next_cursor` from the previous page; omitted or null for the first page.",
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "next_cursor": {
+      "description": "Cursor for the next page, or null when this is the last page.",
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  }
+}

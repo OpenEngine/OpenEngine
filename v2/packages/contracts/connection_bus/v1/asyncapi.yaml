@@ -1,0 +1,462 @@
+asyncapi: 3.1.0
+id: urn:openengine:v2:connection-bus
+info:
+  title: OpenEngine Connection Bus (cxn)
+  version: 1.0.0-draft.1
+  description: |
+    The Connection Bus links OpenEngine to external providers. This document
+    describes the NATS interface **CXN serves**: the commands and queries it
+    answers and the events it publishes.
+
+    > **Contract only.** These subjects are a defined API, not an
+    > implemented one. No CXN handler answers them yet; see the package
+    > README's *Implementation status*.
+
+    ## Versions
+    - AsyncAPI format: `3.1.0` (the `asyncapi` field).
+    - Contract release: `info.version`, semver. Minor releases only add.
+    - Subject namespace: `v1` in `oe.v1.cxn.…`. It
+      changes only for an incompatible release, which is served side by side.
+
+    ## Request/reply
+    Control and query subjects use native NATS request/reply: the reply goes
+    to the request's reply inbox, and payloads carry no `replyTo`. Every
+    reply is a typed response, including rejections.
+
+    - **Control** (`oe.v1.cxn.control.…`): `accepted` means the command is
+      durably recorded with an operation; it does not mean it is done.
+      Completion is announced by the lifecycle event that carries the
+      command's `operation` reference. CXN has no operation query.
+    - **Query** (`oe.v1.cxn.query.…`): read-only, creates no operation.
+    - A request that times out has an **unknown** outcome. Retry with the
+      same `command_id`.
+
+    ## Idempotency
+    A retry with the same `command_id` and identical subject, payload,
+    `expected_version` and `causal_path` returns the original response and
+    operation ID. The same `command_id` with anything else is rejected with
+    `COMMAND_ID_CONFLICT`. Command IDs are remembered for at least **7 days**.
+    Non-retryable rejections are remembered and replayed; retryable ones
+    (`UNAVAILABLE`) are not.
+
+    ## Identity
+    The acting identity comes from the authenticated NATS connection (or a
+    verified delegation), never from a payload field.
+
+    ## Subject tokens
+    Every `{…_id}` parameter is a single subject token of the form its
+    prefix names (`conn_…`). A malformed token is answered with
+    `INVALID_ARGUMENT` naming `subject.{parameter}`.
+
+    ## In-flight work
+    - **disable** stops new ingress and egress. Deliveries already accepted
+      are drained (`in_flight: drain`, default) or held until the connection
+      is re-enabled (`hold`). Held work that cannot be retained is failed
+      explicitly; nothing accepted is dropped silently.
+    - **delete** is refused with `INVALID_STATE` while accepted deliveries
+      remain (`in_flight: reject`, default), or fails each of them explicitly
+      and reports the count (`fail`). Historical job and audit records are
+      kept and the connection ID is never reused.
+
+    ## Out of scope
+    Mapping, reconciliation, binding resolution, delivery queries, operation
+    queries, and provider ingress/egress payloads (`cxn.ingress.>`,
+    `cxn.egress.>`) are not part of this contract.
+  license:
+    name: Apache-2.0
+defaultContentType: application/json
+
+servers:
+  local:
+    host: localhost:4222
+    protocol: nats
+    description: The NATS server `oe up` starts.
+
+channels:
+  connectionsAdd:
+    address: oe.v1.cxn.control.connections.add
+    title: Add a connection
+    messages:
+      AddConnectionCommand: { $ref: '#/components/messages/AddConnectionCommand' }
+  connectionConfigure:
+    address: oe.v1.cxn.control.connections.{connection_id}.configure
+    title: Configure a connection
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      ConfigureConnectionCommand: { $ref: '#/components/messages/ConfigureConnectionCommand' }
+  connectionDisable:
+    address: oe.v1.cxn.control.connections.{connection_id}.disable
+    title: Disable a connection
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      DisableConnectionCommand: { $ref: '#/components/messages/DisableConnectionCommand' }
+  connectionDelete:
+    address: oe.v1.cxn.control.connections.{connection_id}.delete
+    title: Delete a connection
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      DeleteConnectionCommand: { $ref: '#/components/messages/DeleteConnectionCommand' }
+  connectionsList:
+    address: oe.v1.cxn.query.connections.list
+    title: List connections
+    messages:
+      ListConnectionsQuery: { $ref: '#/components/messages/ListConnectionsQuery' }
+  connectionGet:
+    address: oe.v1.cxn.query.connections.{connection_id}.get
+    title: Get a connection
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      GetConnectionQuery: { $ref: '#/components/messages/GetConnectionQuery' }
+  replyInbox:
+    address: null
+    title: NATS reply inbox
+    description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
+    messages:
+      AddConnectionResponse: { $ref: '#/components/messages/AddConnectionResponse' }
+      ConfigureConnectionResponse: { $ref: '#/components/messages/ConfigureConnectionResponse' }
+      DisableConnectionResponse: { $ref: '#/components/messages/DisableConnectionResponse' }
+      DeleteConnectionResponse: { $ref: '#/components/messages/DeleteConnectionResponse' }
+      ListConnectionsResponse: { $ref: '#/components/messages/ListConnectionsResponse' }
+      GetConnectionResponse: { $ref: '#/components/messages/GetConnectionResponse' }
+
+  connectionAddedEvents:
+    address: oe.v1.cxn.events.connections.{connection_id}.connection.added
+    title: Connection added
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      ConnectionAdded: { $ref: '#/components/messages/ConnectionAdded' }
+  connectionConfiguredEvents:
+    address: oe.v1.cxn.events.connections.{connection_id}.connection.configured
+    title: Connection configured
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      ConnectionConfigured: { $ref: '#/components/messages/ConnectionConfigured' }
+  connectionDisabledEvents:
+    address: oe.v1.cxn.events.connections.{connection_id}.connection.disabled
+    title: Connection disabled
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      ConnectionDisabled: { $ref: '#/components/messages/ConnectionDisabled' }
+  connectionDeletedEvents:
+    address: oe.v1.cxn.events.connections.{connection_id}.connection.deleted
+    title: Connection deleted
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      ConnectionDeleted: { $ref: '#/components/messages/ConnectionDeleted' }
+  connectionDegradedEvents:
+    address: oe.v1.cxn.events.connections.{connection_id}.connection.degraded
+    title: Connection degraded
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      ConnectionDegraded: { $ref: '#/components/messages/ConnectionDegraded' }
+  connectionRecoveredEvents:
+    address: oe.v1.cxn.events.connections.{connection_id}.connection.recovered
+    title: Connection recovered
+    parameters:
+      connection_id: { $ref: '#/components/parameters/connection_id' }
+    messages:
+      ConnectionRecovered: { $ref: '#/components/messages/ConnectionRecovered' }
+
+operations:
+  addConnection:
+    action: receive
+    title: Add a connection
+    summary: Create a connection from a provider, external account, credential reference and scope.
+    description: |
+      Accepted once the connection is recorded; `resource_id` is the new
+      connection ID. Completes with `connection.added`.
+    channel: { $ref: '#/channels/connectionsAdd' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/AddConnectionResponse' }]
+  configureConnection:
+    action: receive
+    title: Configure a connection
+    summary: Replace configuration fields, or re-enable a disabled connection with `enabled true`.
+    description: |
+      Rejected with `INVALID_STATE` for a deleted connection and
+      `VERSION_CONFLICT` when `expected_version` is stale. Completes with
+      `connection.configured`.
+    channel: { $ref: '#/channels/connectionConfigure' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ConfigureConnectionResponse' }]
+  disableConnection:
+    action: receive
+    title: Disable a connection
+    summary: Stop new integration activity while keeping configuration and bindings.
+    description: |
+      Already-accepted deliveries drain or are held per `in_flight`. Completes
+      with `connection.disabled`.
+    channel: { $ref: '#/channels/connectionDisable' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/DisableConnectionResponse' }]
+  deleteConnection:
+    action: receive
+    title: Delete a connection
+    summary: Remove connection configuration; historical job and audit records are kept.
+    description: |
+      With `in_flight: reject` (default) the delete is rejected with
+      `INVALID_STATE` while accepted deliveries remain. Completes with
+      `connection.deleted`.
+    channel: { $ref: '#/channels/connectionDelete' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/DeleteConnectionResponse' }]
+  listConnections:
+    action: receive
+    title: List connections
+    summary: Page through connections by provider, state and health. Never returns secrets.
+    channel: { $ref: '#/channels/connectionsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListConnectionsResponse' }]
+  getConnection:
+    action: receive
+    title: Get a connection
+    summary: Return one connection's configuration and status, including deleted ones.
+    channel: { $ref: '#/channels/connectionGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetConnectionResponse' }]
+
+  publishConnectionAdded:
+    action: send
+    title: Connection added
+    channel: { $ref: '#/channels/connectionAddedEvents' }
+    tags: [{ name: event }]
+  publishConnectionConfigured:
+    action: send
+    title: Connection configured
+    channel: { $ref: '#/channels/connectionConfiguredEvents' }
+    tags: [{ name: event }]
+  publishConnectionDisabled:
+    action: send
+    title: Connection disabled
+    channel: { $ref: '#/channels/connectionDisabledEvents' }
+    tags: [{ name: event }]
+  publishConnectionDeleted:
+    action: send
+    title: Connection deleted
+    channel: { $ref: '#/channels/connectionDeletedEvents' }
+    tags: [{ name: event }]
+  publishConnectionDegraded:
+    action: send
+    title: Connection degraded
+    summary: Health fell to degraded. The connection stays active.
+    channel: { $ref: '#/channels/connectionDegradedEvents' }
+    tags: [{ name: event }]
+  publishConnectionRecovered:
+    action: send
+    title: Connection recovered
+    summary: Health returned to healthy after a degradation.
+    channel: { $ref: '#/channels/connectionRecoveredEvents' }
+    tags: [{ name: event }]
+
+components:
+  parameters:
+    connection_id:
+      description: Connection ID, a single subject token `conn_…`.
+      x-oe-identifier: connection_id
+
+  messageTraits:
+    eventHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/event.schema.json#/$defs/headers' }
+
+  messages:
+    AddConnectionCommand:
+      name: AddConnectionCommand
+      title: Add connection command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/add_connection_command' }
+      examples:
+        - name: add-github
+          payload: { $ref: './examples/connections.add.command.json#/payload' }
+        - name: add-retry
+          summary: An identical retry after a timeout. Same command ID and path; receives the original response.
+          payload: { $ref: './examples/connections.add.command.retry.json#/payload' }
+    AddConnectionResponse:
+      name: AddConnectionResponse
+      title: Add connection response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/connection_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/connections.add.response.accepted.json#/payload' }
+        - name: rejected-conflict
+          summary: The command ID was reused with a different payload.
+          payload: { $ref: './examples/connections.add.response.command-id-conflict.json#/payload' }
+    ConfigureConnectionCommand:
+      name: ConfigureConnectionCommand
+      title: Configure connection command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/configure_connection_command' }
+      examples:
+        - name: re-enable
+          payload: { $ref: './examples/connections.configure.command.json#/payload' }
+    ConfigureConnectionResponse:
+      name: ConfigureConnectionResponse
+      title: Configure connection response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/connection_command_response' }
+      examples:
+        - name: rejected-version-conflict
+          payload: { $ref: './examples/connections.configure.response.version-conflict.json#/payload' }
+    DisableConnectionCommand:
+      name: DisableConnectionCommand
+      title: Disable connection command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/disable_connection_command' }
+      examples:
+        - name: hold
+          payload: { $ref: './examples/connections.disable.command.json#/payload' }
+    DisableConnectionResponse:
+      name: DisableConnectionResponse
+      title: Disable connection response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/connection_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/connections.disable.response.json#/payload' }
+    DeleteConnectionCommand:
+      name: DeleteConnectionCommand
+      title: Delete connection command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/delete_connection_command' }
+      examples:
+        - name: delete
+          payload: { $ref: './examples/connections.delete.command.json#/payload' }
+    DeleteConnectionResponse:
+      name: DeleteConnectionResponse
+      title: Delete connection response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/connection_command_response' }
+      examples:
+        - name: rejected-in-flight
+          summary: Accepted deliveries are still outstanding and `in_flight` is `reject`.
+          payload: { $ref: './examples/connections.delete.response.invalid-state.json#/payload' }
+    ListConnectionsQuery:
+      name: ListConnectionsQuery
+      title: List connections query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_connections_query' }
+      examples:
+        - name: second-page
+          payload: { $ref: './examples/connections.list.query.json#/payload' }
+    ListConnectionsResponse:
+      name: ListConnectionsResponse
+      title: List connections response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_connections_response' }
+      examples:
+        - name: page
+          payload: { $ref: './examples/connections.list.response.json#/payload' }
+    GetConnectionQuery:
+      name: GetConnectionQuery
+      title: Get connection query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_connection_query' }
+      examples:
+        - name: get
+          payload: { $ref: './examples/connections.get.query.json#/payload' }
+    GetConnectionResponse:
+      name: GetConnectionResponse
+      title: Get connection response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_connection_response' }
+      examples:
+        - name: found
+          payload: { $ref: './examples/connections.get.response.json#/payload' }
+        - name: not-found
+          payload: { $ref: './examples/connections.get.response.not-found.json#/payload' }
+
+    ConnectionAdded:
+      name: ConnectionAdded
+      title: connection.added
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/connection_added_event' }
+      examples:
+        - name: added
+          payload: { $ref: './examples/connection.added.event.json#/payload' }
+    ConnectionConfigured:
+      name: ConnectionConfigured
+      title: connection.configured
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/connection_configured_event' }
+      examples:
+        - name: re-enabled
+          payload: { $ref: './examples/connection.configured.event.json#/payload' }
+    ConnectionDisabled:
+      name: ConnectionDisabled
+      title: connection.disabled
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/connection_disabled_event' }
+      examples:
+        - name: held
+          payload: { $ref: './examples/connection.disabled.event.json#/payload' }
+    ConnectionDeleted:
+      name: ConnectionDeleted
+      title: connection.deleted
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/connection_deleted_event' }
+      examples:
+        - name: deleted
+          payload: { $ref: './examples/connection.deleted.event.json#/payload' }
+    ConnectionDegraded:
+      name: ConnectionDegraded
+      title: connection.degraded
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/connection_degraded_event' }
+      examples:
+        - name: credential-expired
+          payload: { $ref: './examples/connection.degraded.event.json#/payload' }
+    ConnectionRecovered:
+      name: ConnectionRecovered
+      title: connection.recovered
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/connection_recovered_event' }
+      examples:
+        - name: recovered
+          payload: { $ref: './examples/connection.recovered.event.json#/payload' }

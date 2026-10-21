@@ -1,0 +1,14 @@
+{
+  "message": "ConnectionRecovered",
+  "subject": "oe.v1.cxn.events.connections.conn_acme_gh.connection.recovered",
+  "headers": { "Nats-Msg-Id": "evt_01JAX9RCVD" },
+  "payload": {
+    "event_id": "evt_01JAX9RCVD",
+    "event_type": "connection.recovered",
+    "occurred_at": "2026-10-19T22:10:41Z",
+    "producer": "cxn",
+    "causal_path": ["cmd_01JAX9CFG", "evt_01JAX9CFGD", "evt_01JAX9RCVD"],
+    "resources": { "connection_id": "conn_acme_gh" },
+    "payload": { "health": { "status": "healthy", "since": "2026-10-19T22:10:41Z" } }
+  }
+}

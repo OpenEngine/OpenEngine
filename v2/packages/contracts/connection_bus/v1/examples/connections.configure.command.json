@@ -1,0 +1,14 @@
+{
+  "summary": "Re-enable a disabled connection and rotate its credential, guarded by the version last read.",
+  "message": "ConfigureConnectionCommand",
+  "subject": "oe.v1.cxn.control.connections.conn_acme_gh.configure",
+  "payload": {
+    "command_id": "cmd_01JAX9CFG",
+    "causal_path": ["cmd_01JAX9CFG"],
+    "expected_version": 3,
+    "payload": {
+      "credential_ref": { "store": "vault", "key": "openengine/github/acme-app", "version": "7" },
+      "enabled": true
+    }
+  }
+}

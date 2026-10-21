@@ -1,0 +1,13 @@
+{
+  "message": "GetConnectionResponse",
+  "in_reply_to": "oe.v1.cxn.query.connections.conn_missing.get",
+  "payload": {
+    "status": "error",
+    "error": {
+      "code": "NOT_FOUND",
+      "message": "No connection conn_missing.",
+      "retryable": false,
+      "details": { "resource_type": "connection", "resource_id": "conn_missing" }
+    }
+  }
+}

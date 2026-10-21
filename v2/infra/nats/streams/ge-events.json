@@ -2,7 +2,7 @@
   "name": "ge-events",
   "description": "What the graph engine has done, for any service to follow.",
   "subjects": [
-    "ge.events.>"
+    "oe.v1.ge.events.>"
   ],
   "retention": "limits",
   "storage": "file",

@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Shared primitive types",
+  "description": "Identifiers, causal paths, timestamps and versions shared by every OpenEngine V2 contract. Every identifier is a single NATS subject token: it never contains '.', '*', '>' or whitespace, so it can be placed in a subject without escaping. Resource identifiers carry a type prefix so an identifier placed in the wrong slot is rejected.",
+  "$defs": {
+    "token": {
+      "description": "A single NATS subject token: ASCII letters, digits, '_' and '-', starting with a letter or digit, at most 128 characters.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "command_id": {
+      "description": "Instance-wide identity of a logical command, chosen by the sender and reused unchanged on every retry. Any subject token; `cmd_` is the conventional prefix.",
+      "$ref": "#/$defs/token"
+    },
+    "event_id": {
+      "description": "Stable identity of an event, reused unchanged when the event is republished. Also sent as the `Nats-Msg-Id` header so the stream deduplicates republication.",
+      "type": "string",
+      "pattern": "^evt_[A-Za-z0-9_-]{1,124}$"
+    },
+    "request_id": {
+      "description": "Caller-chosen diagnostic identifier for a query. Not used for routing.",
+      "$ref": "#/$defs/token"
+    },
+    "causal_id": {
+      "description": "One element of a causal path: a command ID, an event ID, or a scoped external root ID such as `gh-conn_7-delivery_4411`.",
+      "$ref": "#/$defs/token"
+    },
+    "causal_path": {
+      "description": "Primary causal ancestry, root first, ending with the ID of the message that carries it. At most 32 elements, no repeats. A message whose path would exceed 32 elements is not sent and its operation fails with CAUSAL_PATH_TOO_LONG; paths are never truncated.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/causal_id" }
+    },
+    "utc_timestamp": {
+      "description": "RFC 3339 timestamp in UTC, written with a trailing 'Z'.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "resource_version": {
+      "description": "Monotonic version of a resource, starting at 1 and incremented by every accepted change.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "slug": {
+      "description": "Lower-case machine name, such as a provider or agent name.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "producer": {
+      "description": "Logical service that emitted a message.",
+      "type": "string",
+      "enum": ["cxn", "ge", "vcp"]
+    },
+    "operation_id": { "type": "string", "pattern": "^op_[A-Za-z0-9_-]{1,125}$" },
+    "connection_id": { "type": "string", "pattern": "^conn_[A-Za-z0-9_-]{1,123}$" },
+    "graph_id": { "type": "string", "pattern": "^graph_[A-Za-z0-9_-]{1,122}$" },
+    "job_id": { "type": "string", "pattern": "^job_[A-Za-z0-9_-]{1,124}$" },
+    "execution_id": {
+      "description": "A graph execution: one run of a graph revision within a job.",
+      "type": "string",
+      "pattern": "^exec_[A-Za-z0-9_-]{1,123}$"
+    },
+    "step_instance_id": {
+      "description": "One entry into a graph node within a graph execution.",
+      "type": "string",
+      "pattern": "^stepi_[A-Za-z0-9_-]{1,122}$"
+    },
+    "step_attempt_id": {
+      "description": "One try at a step instance. A retried step has several attempts.",
+      "type": "string",
+      "pattern": "^stepa_[A-Za-z0-9_-]{1,122}$"
+    },
+    "workflow_approval_id": {
+      "description": "A GE-owned approval gate in a graph execution.",
+      "type": "string",
+      "pattern": "^wfappr_[A-Za-z0-9_-]{1,121}$"
+    },
+    "loop_id": { "type": "string", "pattern": "^loop_[A-Za-z0-9_-]{1,123}$" },
+    "workspace_id": {
+      "description": "Stable workspace identity. Survives suspension, restoration and runtime replacement.",
+      "type": "string",
+      "pattern": "^ws_[A-Za-z0-9_-]{1,125}$"
+    },
+    "runtime_id": {
+      "description": "One provisioned compute runtime backing a workspace. Restoration after suspension creates a new runtime.",
+      "type": "string",
+      "pattern": "^rt_[A-Za-z0-9_-]{1,125}$"
+    },
+    "runtime_generation": {
+      "description": "Counter incremented every time a workspace receives a new runtime. Runtime approvals and sessions are bound to the generation that created them.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "session_id": {
+      "description": "An agent conversation inside a workspace. A session can span several task attempts.",
+      "type": "string",
+      "pattern": "^session_[A-Za-z0-9_-]{1,120}$"
+    },
+    "attempt_id": {
+      "description": "One task attempt started by `execute`: the unit VCP cancels.",
+      "type": "string",
+      "pattern": "^attempt_[A-Za-z0-9_-]{1,120}$"
+    },
+    "runtime_approval_id": {
+      "description": "A VCP-owned approval raised by an agent runtime inside a workspace.",
+      "type": "string",
+      "pattern": "^rtappr_[A-Za-z0-9_-]{1,121}$"
+    },
+    "artifact_id": { "type": "string", "pattern": "^artifact_[A-Za-z0-9_-]{1,119}$" },
+    "message_id": {
+      "description": "A conversation message within a session.",
+      "type": "string",
+      "pattern": "^msg_[A-Za-z0-9_-]{1,124}$"
+    },
+    "resource_refs": {
+      "description": "Typed references to the resources a message concerns, keyed by identifier name. Service schemas narrow this to the exact keys each message requires.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z_]*_id$" },
+      "additionalProperties": { "$ref": "#/$defs/token" }
+    }
+  }
+}
