@@ -5,9 +5,7 @@ import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { screenshot } from "@test2doc/playwright/screenshots"
 import { test, expect, type Engine } from "../fixtures/engine.ts"
 import { anotherComputerCategory } from "./docCategories"
-
-/** Where the Mac mini in this guide answers. */
-const MAC_MINI = "mac-mini.local:4364"
+import { MAC_MINI, MAC_MINI_PATTERN } from "./macMini"
 
 test.use({ terminalSession: { cols: 120, rows: 30 }, anotherComputerAt: MAC_MINI })
 
@@ -96,7 +94,7 @@ If you see *down* beside the Mac mini instead, check that it's switched on, that
           async () => {
             const { output } = await terminal.run("engine backends list --check")
             expect(output).toMatch(/^\*\s+local\s.*\bup\b/m)
-            expect(output).toMatch(new RegExp(`^\\s+mac-mini\\s+https://${MAC_MINI.replace(/\./g, "\\.")}\\s.*\\bup\\b`, "m"))
+            expect(output).toMatch(new RegExp(`^\\s+mac-mini\\s+https://${MAC_MINI_PATTERN}\\s.*\\bup\\b`, "m"))
             await show(await terminal.row(/^\s+mac-mini\s.*\bup\b/), "The Mac mini is up: OpenEngine can reach it")
           },
         )
