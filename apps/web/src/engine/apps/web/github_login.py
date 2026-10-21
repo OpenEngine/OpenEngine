@@ -344,12 +344,12 @@ class GitHubLogin:
 
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
-        if (
+        if self.configured and (
             (request.method, request.url.path) != _SERVICE_ROUTE
             and not request.url.path.startswith(_SERVICE_PREFIX)
         ):
             return False
-        if request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
+        if self.configured and request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
             return False
         expected = self.service_token()
         if not valid_service_token(expected):
@@ -541,13 +541,13 @@ class GitHubLogin:
         """ASGI middleware that enforces session auth on the web and graph API routes.
 
         Unauthenticated requests to protected API endpoints receive a 401.
-        Auth-related endpoints, static assets, and SPA pages are exempt. The
-        service token admits `POST /api/runs`, for the MCP gateway, and the
-        `/api/v1/` graph API (except trust writes), for a CLI pointed at this server.
+        Auth-related endpoints, static assets, and SPA pages are exempt.
+        With GitHub login, the service token admits `POST /api/runs`, for the
+        MCP gateway, and the `/api/v1/` graph API (except trust writes), for a CLI.
+        Without GitHub login, a configured service token protects all API routes
+        and grants its holder access to them. Public exemptions remain available.
         A distinct onboarding token admits only job creation and polling.
         """
-        if not self.configured:
-            return app
         return _SessionAuthMiddleware(app, self)
 
 
@@ -575,6 +575,9 @@ class _SessionAuthMiddleware:
             return
         path: str = scope.get("path", "")
         if not path.startswith(("/api/", "/graph/api/")) or path in _AUTH_EXEMPT:
+            await self.app(scope, receive, send)
+            return
+        if not self.login.configured and not self.login.service_token():
             await self.app(scope, receive, send)
             return
         request = Request(scope)

@@ -242,7 +242,7 @@ export async function startEngine({
   }
 
   try {
-    const url = await waitUntilServing(daemon, output, () => failure)
+    const url = await waitUntilServing(daemon, output, () => failure, token)
     writeFileSync(backendsFile, JSON.stringify({ current: "local", backends: { local: { url } } }, null, 2))
     return {
       url,
@@ -261,7 +261,7 @@ export async function startEngine({
   }
 }
 
-async function waitUntilServing(daemon: ChildProcess, output: string[], failure: () => string | undefined) {
+async function waitUntilServing(daemon: ChildProcess, output: string[], failure: () => string | undefined, token: string) {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS
   while (Date.now() < deadline) {
     if (failure()) throw new Error(failure())
@@ -269,7 +269,7 @@ async function waitUntilServing(daemon: ChildProcess, output: string[], failure:
     const url = output.join("").match(/Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/)?.[1]
     if (url) {
       try {
-        if ((await fetch(`${url}/api/config`)).ok) return url
+        if ((await fetch(`${url}/api/config`, { headers: { Authorization: `Bearer ${token}` } })).ok) return url
       } catch {
         // Bound but not answering yet.
       }
