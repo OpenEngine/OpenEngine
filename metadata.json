@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5FHD5D5AGA4EK40E4KFDCQ4",
+  "strategy": "manual-commit",
+  "branch": "shawkins/contracts",
+  "checkpoints_count": 12,
+  "files_touched": [
+    "v2/packages/contracts/README.md",
+    "v2/packages/contracts/tests/test_contracts.py",
+    "v2/packages/contracts/tooling/asyncapi-analytics.json",
+    "v2/packages/contracts/tooling/package-lock.json",
+    "v2/packages/contracts/tooling/package.json",
+    "v2/packages/contracts/tooling/reference.py",
+    "v2/packages/contracts/tooling/render.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 308398,
+    "cache_read_tokens": 7265790,
+    "output_tokens": 16354,
+    "api_call_count": 26
+  }
+}
