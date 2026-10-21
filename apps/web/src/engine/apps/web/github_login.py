@@ -143,12 +143,14 @@ class GitHubLogin:
         self.access_check_failing = False
         # A reader rather than a value, so rotating the secret on disk takes
         # effect on the next request without a restart.
+        self.token_required = bool(service_token())
         self.service_token = service_token
         self.onboarding_token = onboarding_token
         self._signing_key = secrets.token_bytes(32)
 
     def routes(self) -> list[Route]:
         return [
+            Route("/api/auth/token", self.token_login, methods=["POST"]),
             Route(f"{_PATH}/login", self.login),
             Route(f"{_PATH}/callback", self.callback),
             Route(f"{_PATH}/status", self.status),
@@ -342,6 +344,41 @@ class GitHubLogin:
                         login, ", ".join(sorted(confirmed)))
         return frozenset(confirmed)
 
+    def request_token(self, request: Request) -> str:
+        if not hasattr(request.state, "service_token"):
+            request.state.service_token = self.service_token()
+        token = request.state.service_token
+        self.token_required = self.token_required or bool(token)
+        return token
+
+    def _token_session(self, request: Request) -> bool:
+        token = self.request_token(request)
+        value = request.cookies.get("engine_token_session", "")
+        expires, _, signature = value.partition(".")
+        return (valid_service_token(token) and len(expires) <= 12 and expires.isascii() and expires.isdigit()
+                and int(expires) > time.time()
+                and secrets.compare_digest(signature.encode(), self._sign(f"token:{token}:{expires}").encode()))
+
+    async def token_login(self, request: Request) -> Response:
+        if self.configured:
+            return JSONResponse({"error": "Use GitHub sign-in"}, 403, headers=_HEADERS)
+        # A JSON-only endpoint prevents cross-site HTML forms from signing a browser in.
+        if request.headers.get("content-type", "").split(";")[0] != "application/json":
+            return JSONResponse({"error": "JSON required"}, 415, headers=_HEADERS)
+        try:
+            supplied = (await request.json()).get("token")
+        except (ValueError, AttributeError):
+            supplied = None
+        token = await anyio.to_thread.run_sync(lambda: self.request_token(request))
+        if not isinstance(supplied, str) or not valid_service_token(token) or not secrets.compare_digest(supplied.encode(), token.encode()):
+            return JSONResponse({"error": "Token not accepted"}, 401, headers=_HEADERS)
+        expires = str(int(time.time()) + _SESSION_TTL)
+        response = JSONResponse({"ok": True}, headers=_HEADERS)
+        response.set_cookie("engine_token_session", f"{expires}.{self._sign(f'token:{token}:{expires}')}",
+                            max_age=_SESSION_TTL, httponly=True, samesite="strict",
+                            secure=request.url.scheme == "https")
+        return response
+
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
         if self.configured and (
@@ -351,7 +388,7 @@ class GitHubLogin:
             return False
         if self.configured and request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
             return False
-        expected = self.service_token()
+        expected = self.request_token(request)
         if not valid_service_token(expected):
             return False
         headers = request.headers.getlist("authorization")
@@ -369,7 +406,7 @@ class GitHubLogin:
             return False
         expected = self.onboarding_token()
         # Misconfiguration must never promote the general service credential.
-        if not valid_service_token(expected) or expected == self.service_token():
+        if not valid_service_token(expected) or expected == self.request_token(request):
             return False
         headers = request.headers.getlist("authorization")
         return len(headers) == 1 and secrets.compare_digest(
@@ -501,7 +538,10 @@ class GitHubLogin:
         return response
 
     async def status(self, request: Request) -> Response:
-        """Return the current session state for the frontend auth gate."""
+        await anyio.to_thread.run_sync(lambda: self.request_token(request))
+        if not self.configured and self.token_required:
+            return JSONResponse({"authenticated": self._token_session(request), "user": None,
+                                 "loginRequired": True, "tokenRequired": True}, headers=_HEADERS)
         user = self._read_session(request)
         allowed = None if user is None else await self.has_access(user)
         if user is not None and allowed is None:
@@ -528,6 +568,10 @@ class GitHubLogin:
         return response
 
     async def logout(self, request: Request) -> Response:
+        if not self.configured:
+            response = JSONResponse({"ok": True}, headers=_HEADERS)
+            response.delete_cookie("engine_token_session", path="/")
+            return response
         session = self._session(request)
         if session is None:
             return JSONResponse({"ok": True}, headers=_HEADERS)
@@ -554,6 +598,7 @@ class GitHubLogin:
 # Paths under /api/ that must remain accessible without a session cookie so
 # the login flow itself can work.
 _AUTH_EXEMPT = frozenset({
+    "/api/auth/token",
     "/api/health",  # Public service identity and readiness; no user data.
     f"{_PATH}/login",
     f"{_PATH}/callback",
@@ -577,10 +622,14 @@ class _SessionAuthMiddleware:
         if not path.startswith(("/api/", "/graph/api/")) or path in _AUTH_EXEMPT:
             await self.app(scope, receive, send)
             return
-        if not self.login.configured and not self.login.service_token():
+        request = Request(scope)
+        await anyio.to_thread.run_sync(lambda: self.login.request_token(request))
+        if not self.login.configured and not self.login.token_required:
             await self.app(scope, receive, send)
             return
-        request = Request(scope)
+        if not self.login.configured and self.login._token_session(request):
+            await self.app(scope, receive, send)
+            return
         if self.login._has_service_token(request) or self.login._has_onboarding_token(request):
             await self.app(scope, receive, send)
             return
