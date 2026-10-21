@@ -457,6 +457,16 @@ ul, ol { padding: 0; list-style: none; }
   line-height: 1.1;
   letter-spacing: -.035em;
   overflow-wrap: anywhere;
+  /* The same cap the run and loop detail titles got in #930: a name taken
+     from an issue brief runs to hundreds of characters, and a header that
+     grows with it pushes the conversation off the screen. The full name
+     stays on the heading's title attribute. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  max-height: calc(3 * 1.1em);
+  overflow: hidden;
 }
 .panel-head .lede { font-size: 15px; }
 
