@@ -395,7 +395,9 @@ class GraphService:
         assert self._agent_factory is not None
         provider = self._agent_factory(row)
         self._registry.register(provider, replace=True)
-        self._added_agents.offer(provider, session_model(row) if row.model else "")
+        self._added_agents.offer(
+            provider, session_model(row) if row.model else "", row.context_limit,
+        )
 
     # --- sessions -----------------------------------------------------------
 
@@ -1242,7 +1244,9 @@ class GraphService:
                     spec, version_id=version.version_id, number=version.number,
                     workspace_provider=self._workspace_provider, registry=self._registry,
                     session_config=self._session_config, model_tiers=self._model_tiers,
-                    agent_models=self._added_agents.models, default_base_ref=self._default_base_ref,
+                    agent_models=self._added_agents.models,
+                    agent_context_limits=self._added_agents.context_limits,
+                    default_base_ref=self._default_base_ref,
                 ), spec)
             return loaded, loaded.workflow.compiled(self.runtime.checkpointer)
 

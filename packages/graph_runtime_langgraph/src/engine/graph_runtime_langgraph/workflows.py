@@ -263,17 +263,26 @@ class AddedAgents(ACPAgentRegistry):
     def __init__(self) -> None:
         super().__init__()
         self.models: dict[str, str] = {}
+        self.context_limits: dict[str, int] = {}
+        """Each agent's context window in tokens, where it was given one."""
 
-    def offer(self, provider: ACPAgentProvider, model: str = "") -> None:
+    def offer(
+        self, provider: ACPAgentProvider, model: str = "", context_limit: int = 0,
+    ) -> None:
         self.register(provider, replace=True)
         if model:
             self.models[provider.name] = model
         else:
             self.models.pop(provider.name, None)
+        if context_limit > 0:
+            self.context_limits[provider.name] = context_limit
+        else:
+            self.context_limits.pop(provider.name, None)
 
     def withdraw(self, name: str) -> None:
         self.unregister(name)
         self.models.pop(name, None)
+        self.context_limits.pop(name, None)
 
 
 #: This process's added agents: what its graph service offers.

@@ -13,6 +13,7 @@ import asyncio
 import ipaddress
 import logging
 import os
+import shlex
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
@@ -306,8 +307,8 @@ def _require_login_off_loopback(
         )
 
 
-def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
-    """How the login middleware reads `ENGINE_SERVICE_TOKEN`, per request.
+def _service_token_reader(loaded: LoadedEngineConfig, variable: str = "ENGINE_SERVICE_TOKEN") -> Callable[[], str]:
+    """Read a service or onboarding bearer secret per request.
 
     Read like the login client secret: the process environment first, then the
     server-local `.env` beside `engine.toml`, never TOML. A reader so rotating
@@ -318,15 +319,15 @@ def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
     secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
 
     def read() -> str:
-        if "ENGINE_SERVICE_TOKEN" in os.environ:
-            return os.environ["ENGINE_SERVICE_TOKEN"]
+        if variable in os.environ:
+            return os.environ[variable]
         values = dotenv_values(secret_file, interpolate=False)
-        return values.get("ENGINE_SERVICE_TOKEN") or ""
+        return values.get(variable) or ""
 
     token = read()
     if token and not valid_service_token(token):
         raise EngineConfigError(
-            "ENGINE_SERVICE_TOKEN must contain at least 32 non-whitespace characters"
+            f"{variable} must contain at least 32 non-whitespace characters"
         )
     return read
 
@@ -351,6 +352,10 @@ def read_configuration(
     # Likewise for `gh`: the source-control provider and agents' `gh` share this login.
     if (directory := loaded.gh_config_dir) is not None:
         os.environ["GH_CONFIG_DIR"] = str(directory)
+    if (key := loaded.ssh_key) is not None:
+        os.environ["GIT_SSH_COMMAND"] = shlex.join([
+            "ssh", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+        ])
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(
@@ -406,6 +411,7 @@ def compose_app(
         github_client_id_source=_github_client_id_source(),
         github_login_config=github_login_config,
         service_token=_service_token_reader(loaded),
+        onboarding_token=_service_token_reader(loaded, "ENGINE_ONBOARDING_TOKEN"),
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
         github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
@@ -469,6 +475,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.check:
             _require_login_off_loopback(settings, _github_login_config(loaded))
             _service_token_reader(loaded)
+            _service_token_reader(loaded, "ENGINE_ONBOARDING_TOKEN")
             report_wiring(settings)
             return 0
         configure_logging()

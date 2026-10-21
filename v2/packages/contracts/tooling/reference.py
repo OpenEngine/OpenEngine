@@ -12,6 +12,9 @@ fails when a checked-in page is stale. Run it from `v2/` after changing a
 contract:
 
     uv run python packages/contracts/tooling/reference.py
+
+`--bundle` also writes each self-contained document to
+`dist/{service}/asyncapi.json` for tools that want one file.
 """
 
 from __future__ import annotations
@@ -119,6 +122,11 @@ def main() -> int:
     for service in SERVICES:
         reference_path(service).write_text(page(service))
         print(f"wrote {reference_path(service).relative_to(CONTRACTS)}")
+        if "--bundle" in sys.argv[1:]:
+            bundle = CONTRACTS / "dist" / service / "asyncapi.json"
+            bundle.parent.mkdir(parents=True, exist_ok=True)
+            bundle.write_text(json.dumps(self_contained(service), indent=2, ensure_ascii=False) + "\n")
+            print(f"wrote {bundle.relative_to(CONTRACTS)}")
     return 0
 
 

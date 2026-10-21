@@ -11,7 +11,8 @@
 // resolveAgentMode): the stub is fast and does exactly what a spec needs on
 // cue, and real agents are there to show the whole thing works. Specs assert
 // on state -- statuses, what was registered, what exists -- and never on what
-// an agent said, so one spec passes either way.
+// an agent said, so one spec passes either way. That needs no strong model, so
+// real agents run the cheapest one (see claudeModel).
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -65,6 +66,20 @@ const STUB_DAEMON = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 
 export type AgentMode = "real" | "stub"
 
+/** The cheapest Claude model: specs assert on state, never wording, so they don't need a stronger one. */
+export const CHEAPEST_CLAUDE_MODEL = "claude-haiku-5-5"
+
+/**
+ * The model real agents run: `E2E_CLAUDE_MODEL` when a stronger one is wanted
+ * locally, the cheapest otherwise. A full model ID, never an alias such as
+ * `haiku`, and the `opus`/`sonnet` aliases are left alone: remapping one that
+ * resolves to a 1M-context variant carries its `[1m]` over to a model that
+ * refuses it.
+ */
+export function claudeModel(env: Record<string, string | undefined> = process.env) {
+  return env.E2E_CLAUDE_MODEL || CHEAPEST_CLAUDE_MODEL
+}
+
 /** What the scripted agent says and does; see tests/provider_fakes.py. */
 export type AgentScript = {
   title?: string
@@ -84,8 +99,13 @@ export type AgentScript = {
 
 type AgentDetection = { claudeLogin: boolean; npx: boolean }
 
+/** Where Claude Code keeps its login and session transcripts. */
+export function claudeConfigDir() {
+  return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")
+}
+
 function detectAgent(): AgentDetection {
-  const claudeConfig = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")
+  const claudeConfig = claudeConfigDir()
   let npx = true
   try {
     execFileSync("npx", ["--version"], { stdio: "ignore" })
@@ -177,7 +197,15 @@ export async function startEngine({
   const backendsFile = path.join(root, "backends.json")
   const githubConfig = path.join(root, "gh")
   mkdirSync(githubConfig)
-  writeFileSync(config, "# The e2e daemon's configuration: built-in defaults unless a spec says otherwise.\n")
+  const model = claudeModel()
+  writeFileSync(config, [
+    "# The e2e daemon's configuration: built-in defaults unless a spec says otherwise.",
+    // Real agents run one model whichever tier a step asks for.
+    ...(agentMode === "real"
+      ? ["", "[runners.claude.models]", ...["cheapest", "default", "elevated"].map((tier) => `${tier} = "${model}"`)]
+      : []),
+    "",
+  ].join("\n"))
 
   const passed = agentMode === "real" ? [...INHERITED, ...AGENT_LOGINS] : INHERITED
   const inherited = Object.fromEntries(passed.flatMap((name) => (process.env[name] ? [[name, process.env[name]!]] : [])))
@@ -191,7 +219,8 @@ export async function startEngine({
     ENGINE_SERVICE_TOKEN: token,
     // An empty gh configuration and no token: the daemon must never act on GitHub as whoever runs the tests.
     GH_CONFIG_DIR: githubConfig,
-    ...(agentMode === "stub" ? { ENGINE_FAKE_SCRIPT: scriptPath } : {}),
+    // A step that names no model runs the one Claude Code is told to default to.
+    ...(agentMode === "stub" ? { ENGINE_FAKE_SCRIPT: scriptPath } : { ANTHROPIC_MODEL: model }),
   }
   // Started in the repository: with no [repos] configured, that is what a run checks out.
   const [command, ...args] =

@@ -71,6 +71,12 @@ class Client:
                 with urlopen(Request(url, data=data, method=method, headers=headers), timeout=self.timeout) as response:
                     payload = json.loads(response.read() or b"{}")
             except HTTPError as error:
+                if error.code == 401 and self.api_prefix == "/api" and path.startswith("/repositories/onboard"):
+                    raise RequestFailed(
+                        "repository onboarding requires a browser session or a separate ENGINE_ONBOARDING_TOKEN; "
+                        "configure it on the daemon and use `engine backend add --token-env ENGINE_ONBOARDING_TOKEN`",
+                        status=401,
+                    ) from None
                 raise _refusal(self.backend, error) from None
             except (URLError, TimeoutError, ConnectionError) as error:
                 last = error

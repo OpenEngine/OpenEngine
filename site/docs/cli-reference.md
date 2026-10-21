@@ -189,7 +189,7 @@ engine repo [-h] {add,trust,untrust} ...
 Add a local checkout or clone a GitHub/GitLab URL.
 
 ```text
-engine repo add [-h] [--json] [--backend NAME]
+engine repo add [-h] [--json] [--backend NAME] [--review-backend NAME]
                 [--trust | --no-trust | --trusted | --no-trusted] [--path PATH]
                 [--mode {connected,disconnected}]
                 [repository]
@@ -199,6 +199,7 @@ engine repo add [-h] [--json] [--backend NAME]
 | --- | --- |
 | `--json` | JSON instead of readable output |
 | `--backend NAME` | the backend to use (default: the selected one) |
+| `--review-backend NAME` | backend with service credentials for the suggested review work order |
 | `--trust, --no-trust, --trusted, --no-trusted` | remember whether agents may run without approval here |
 | `repository` | existing checkout path or GitHub/GitLab URL (default: .) |
 | `--path PATH` | clone destination on the daemon machine (default: [onboarding] directory, else ~/code/repo) |

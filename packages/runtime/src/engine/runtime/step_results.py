@@ -1,7 +1,7 @@
 """Workflow terminal-tool instructions and argument validation."""
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -203,6 +203,7 @@ def _step_completed(
     step: StepSpec,
     agent_run_id: AgentRunId,
     result: dict[str, Any],
+    validate_outputs: Callable[[object], dict[str, str]] | None = None,
 ) -> StepCompleted:
     outcome = result.get("outcome")
     if not isinstance(outcome, str) or not outcome:
@@ -214,7 +215,11 @@ def _step_completed(
     if not isinstance(summary, str):
         raise InvalidStepResultError("step result summary must be a string")
 
-    outputs = _validate_outputs(step, result.get("outputs", {}))
+    outputs = (
+        validate_outputs(result.get("outputs", {}))
+        if validate_outputs is not None
+        else _validate_outputs(step, result.get("outputs", {}))
+    )
     return StepCompleted(
         run_id=run_id,
         step_id=step.step_id,
@@ -233,6 +238,7 @@ def step_completed_from_tool_call(
     step: StepSpec,
     agent_run_id: AgentRunId,
     call: ToolCall,
+    validate_outputs: Callable[[object], dict[str, str]] | None = None,
 ) -> StepCompleted:
     """Validate a ``complete_step`` call and return its completion event."""
     result = _arguments_from_tool_call(call, "complete_step")
@@ -245,6 +251,7 @@ def step_completed_from_tool_call(
         step=step,
         agent_run_id=agent_run_id,
         result=result,
+        validate_outputs=validate_outputs,
     )
 
 
@@ -286,6 +293,7 @@ def step_completed_from_arguments(
     agent_run_id: AgentRunId,
     arguments: object,
     mcp_request_id: str | int,
+    validate_outputs: Callable[[object], dict[str, str]] | None = None,
 ) -> StepCompleted:
     """Validate bound MCP arguments with the canonical terminal-tool parser."""
     if not isinstance(arguments, dict):
@@ -294,6 +302,7 @@ def step_completed_from_arguments(
         run_id=run_id,
         step=step,
         agent_run_id=agent_run_id,
+        validate_outputs=validate_outputs,
         call=ToolCall(
             call_id=str(mcp_request_id),
             name="complete_step",

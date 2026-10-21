@@ -4,7 +4,6 @@ import copy
 import json
 import shutil
 import subprocess
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -281,12 +280,15 @@ def test_a_causal_path_of_exactly_32_elements_is_allowed() -> None:
 
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
-def test_asyncapi_documents_validate_and_render(tmp_path: Path) -> None:
+def test_asyncapi_parser_accepts_every_document() -> None:
     tooling = CONTRACTS / "tooling"
     if not (tooling / "node_modules").exists():
         pytest.skip("run `npm ci` in packages/contracts/tooling first")
-    for command in ("validate", "docs"):
-        result = subprocess.run(["node", "render.mjs", command], cwd=tooling, capture_output=True, text=True)
-        assert result.returncode == 0, result.stdout + result.stderr
+    result = subprocess.run(["node", "validate.mjs"], cwd=tooling, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_bundled_documents_resolve_every_file_reference() -> None:
     for service in SERVICES:
-        assert (CONTRACTS / "dist" / service / "index.html").stat().st_size > 0
+        text = json.dumps(reference.self_contained(service))
+        assert ".schema.json" not in text and "/examples/" not in text, service

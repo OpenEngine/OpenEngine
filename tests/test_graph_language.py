@@ -365,21 +365,14 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     # A comment on the pull request re-enters the run at the implementer.
     assert [node.id for node in spec.nodes if node.always_open] == ["implement"]
 
-    # complete_step accepts only the required outputs, and only as text, so
-    # every output a step can finish with must be one (see the runtime's
-    # step-result validation); findings travel as a JSON string.
-    for node in spec.nodes:
-        for output in node.outputs:
-            assert output.required and output.type in ("string", "findings"), (node.id, output.name)
-
     routes = {rule.sources[0]: rule.routes for rule in spec.flow if rule.routes}
 
     def after(step: str, outputs: dict, visits: dict | None = None) -> str:
         names = {"outputs": outputs, "visits": visits or {}, "inputs": {}, "instruction": "", "item": None}
         return next(route.targets[0] for route in routes[step] if not route.when or parse(route.when).evaluate(names))
 
-    assert after("pick", {"pick": {"found": "no"}}) == "end"
-    assert after("pick", {"pick": {"found": "yes"}}) == "tdd"
+    assert after("pick", {"pick": {"found": False}}) == "end"
+    assert after("pick", {"pick": {"found": True}}) == "tdd"
     finding = {"tagline": "x", "description": "y", "agent": "claude", "facet": "bugs"}
     assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 1}) == "implement"
     assert after("reranker", {"reranker": {"findings": [finding]}}, {"implement": 3}) == "impact"

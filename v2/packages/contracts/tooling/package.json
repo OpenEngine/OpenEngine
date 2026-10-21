@@ -1,15 +1,12 @@
 {
   "name": "@openengine/contracts-tooling",
   "private": true,
-  "description": "Pinned AsyncAPI tooling for validating, bundling and rendering the OpenEngine V2 service contracts.",
+  "description": "Pinned AsyncAPI parser for validating the OpenEngine V2 service contracts.",
+  "type": "module",
   "scripts": {
-    "validate": "node render.mjs validate",
-    "bundle": "node render.mjs bundle",
-    "docs": "node render.mjs docs",
-    "preview": "node render.mjs preview"
+    "validate": "node validate.mjs"
   },
   "devDependencies": {
-    "@asyncapi/cli": "6.2.0",
-    "@asyncapi/html-template": "3.5.6"
+    "@asyncapi/parser": "3.6.3"
   }
 }

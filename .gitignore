@@ -13,7 +13,6 @@ coverage.xml
 .ruff_cache/
 .mypy_cache/
 .DS_Store
-.idea/
 node_modules/
 *.tsbuildinfo
 /conversations.sqlite3

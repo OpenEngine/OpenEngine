@@ -51,6 +51,8 @@ class TerminalMcpServer:
     workspace_key: str = WORKSPACE_ID
     # Raise ValueError to return a correctable tool error before acceptance.
     validate_completion: Callable[[StepCompleted], None] | None = None
+    validate_outputs: Callable[[object], dict[str, str]] | None = None
+    outputs_schema: dict[str, object] | None = None
     create_workorder: bool = False
 
     def __call__(
@@ -108,6 +110,8 @@ class TerminalMcpServer:
             ),
             registry=TerminalResultRegistry(),
             validate_completion=self.validate_completion,
+            validate_outputs=self.validate_outputs,
+            outputs_schema=self.outputs_schema,
         )
         if isinstance(state.get("issue"), dict):
             broker.enable_issue(state["issue"])  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
