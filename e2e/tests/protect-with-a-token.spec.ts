@@ -46,7 +46,7 @@ test.describe(anotherComputerCategory, () => {
       slug: "/guides/other-computers/protect-with-a-token",
     }),
     () => {
-      test("Set a token on the Mac mini and use it from this computer", async ({ engine, anotherComputer, terminal }, testInfo) => {
+      test("Set a token on the Mac mini and use it from this computer", async ({ engine, anotherComputer, terminal, browser }, testInfo) => {
         /**
          * Screenshot the screen down to its last row in use, with `highlight`
          * labelled. Neither the port the OS picked for this computer nor a
@@ -74,6 +74,25 @@ test.describe(anotherComputerCategory, () => {
           expect((await ask(MAC_MINI_TOKEN)).ok).toBe(true)
         })
 
+        await test.step("[nodoc] A browser can sign in with the Mac mini token", async () => {
+          const page = await browser.newPage()
+          await page.goto(`${anotherComputer!.url}/api/health`)
+          const request = (path: string, token?: string) => page.evaluate(async ({ path, token }) => {
+            const response = await fetch(path, token === undefined ? {} : {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token }),
+            })
+            return response.status
+          }, { path, token })
+          expect(await request("/api/v1/graphs")).toBe(401)
+          expect(await request("/api/auth/token", OLD_TOKEN)).toBe(401)
+          expect(await request("/api/auth/token", MAC_MINI_TOKEN)).toBe(200)
+          expect(await request("/api/v1/graphs")).toBe(200)
+          await page.context().clearCookies()
+          expect(await request("/api/v1/graphs")).toBe(401)
+          await page.close()
+        })
+
         await step(
           `OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. When it runs on another computer, such as a Mac mini, anyone who can reach that computer's address could use it: start agents on your code, or change what it's set up to do. A **token** stops that. It's a long secret, like a password, that you set on the other computer. OpenEngine there then only answers commands that come with it.
 
@@ -93,7 +112,7 @@ You'll see a long line of letters and numbers. That's your token. Keep it secret
 ENGINE_SERVICE_TOKEN=your-token
 \`\`\`
 
-Save the file. Then restart OpenEngine there so it reads the token: type \`engine daemon stop\`, press Enter, then type \`engine daemon start\` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token.`,
+Save the file. Then restart OpenEngine there so it reads the token: type \`engine daemon stop\`, press Enter, then type \`engine daemon start\` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.`,
         )
 
         await step(
