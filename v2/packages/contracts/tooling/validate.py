@@ -70,9 +70,14 @@ def _load(path: Path) -> Any:
     return yaml.safe_load(text) if path.suffix in {".yaml", ".yml"} else json.loads(text)
 
 
+class NonLocalReference(LookupError):
+    def __init__(self, uri: str) -> None:
+        super().__init__(f"only local references are allowed, not {uri}")
+
+
 def _retrieve(uri: str) -> Resource:
     if not uri.startswith("file://"):
-        raise LookupError(f"only local references are allowed, not {uri}")
+        raise NonLocalReference(uri)
     return Resource.from_contents(_load(Path(uri.removeprefix("file://"))), default_specification=DRAFT7)
 
 
