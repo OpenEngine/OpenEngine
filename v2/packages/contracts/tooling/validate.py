@@ -72,7 +72,8 @@ def _load(path: Path) -> Any:
 
 def _retrieve(uri: str) -> Resource:
     if not uri.startswith("file://"):
-        raise LookupError(f"only local references are allowed, not {uri}")
+        message = f"only local references are allowed, not {uri}"
+        raise LookupError(message)
     return Resource.from_contents(_load(Path(uri.removeprefix("file://"))), default_specification=DRAFT7)
 
 
