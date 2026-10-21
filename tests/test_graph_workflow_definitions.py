@@ -716,6 +716,7 @@ def test_the_interface_offers_the_graphs_by_their_own_names(
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "")
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
+    monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
     monkeypatch.chdir(tmp_path)
     app = build_app()
 
@@ -765,6 +766,7 @@ def test_every_composition_root_still_starts(
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "")
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", "")
     monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "")
+    monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
     assert build_app() is not None
 
 
