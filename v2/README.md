@@ -7,8 +7,6 @@ OpenEngine V2 is a grounds-up rewrite of OpenEngine in a service-oriented archit
 | Graph Engine | ge | The component that decides which steps need to execute and when. |
 | Virtual Control Plane | vcp | The controller of which workspaces + agents are active. |
 
-It is essentially a durable way to execute and pace long-running work. 
-
 The repo is structured as follows
 ```
 apps/ -- the `oe` CLI and the supervisor `oe up` starts
