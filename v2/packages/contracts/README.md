@@ -44,6 +44,7 @@ common/v1/                 envelopes and types every service shares
   asyncapi.yaml            the service's channels, operations and messages
   schemas/                 typed payloads, grouped with $defs
   examples/                one JSON file per example message
+graph_engine/v1/resources/  the Graph, Loop and Tool resources people write
 tests/                     pytest suite run with the rest of v2
 tooling/                   pinned AsyncAPI parser, validate.py and reference.py
 ```
@@ -52,6 +53,28 @@ Schemas are JSON Schema draft-07 (the newest draft the AsyncAPI parser
 accepts), referenced from AsyncAPI as
 `application/schema+json;version=draft-07`. Service schemas compose the
 common envelopes with `allOf` and never copy them.
+
+## Graph Engine resources
+
+`Graph`, `Loop` and `Tool` are the documents people write for the Graph
+Engine, in Kubernetes style: `apiVersion: openengine.cc/v2alpha1`, `kind`,
+`metadata` and `spec`, camelCase fields, lists of named objects, and unions
+written as exactly one of several keys. Each kind is defined once, as a JSON
+Schema in YAML under
+[`graph_engine/v1/resources/`](graph_engine/v1/resources), with examples in
+`resources/examples/`. Those files are the single source of truth:
+
+- `tooling/resources.py` validates resources against them
+  (`validate_resource`, `validate_text`), reporting every problem with its
+  path, such as `spec.plan[0].agent.prompt`;
+- the same script generates
+  [`resources/reference.html`](graph_engine/v1/resources/reference.html), a
+  static page of every kind, type, field and example. A test fails when it is
+  stale.
+
+The schemas check structure. Rules that span fields, such as unique step
+names, `flow` naming steps that exist, reachability and expression syntax, are
+the Graph Engine's to check when a resource is added.
 
 ## Versions
 
@@ -252,6 +275,8 @@ cd v2
 uv run python packages/contracts/tooling/validate.py              # examples, subjects, cross-field rules
 uv run python packages/contracts/tooling/reference.py             # regenerate {service}/v1/reference.html
 uv run python packages/contracts/tooling/reference.py --bundle    # also write dist/{service}/asyncapi.json
+uv run python packages/contracts/tooling/resources.py            # regenerate graph_engine/v1/resources/reference.html
+uv run python packages/contracts/tooling/resources.py check F..  # validate Graph, Loop and Tool files
 uv run pytest packages/contracts/tests                            # all of the above, plus malformed variants
 ```
 

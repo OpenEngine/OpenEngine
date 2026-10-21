@@ -1,0 +1,81 @@
+apiVersion: openengine.cc/v2alpha1
+kind: Graph
+metadata:
+  name: implement-review
+  labels:
+    team: platform
+spec:
+  description: Implement an issue, open a pull request, wait for CI, then review it from several angles until nothing actionable is left.
+  inputs:
+    - name: instruction
+      required: true
+      description: The change to make
+    - name: base
+      description: The branch to build on; empty means main
+    - name: runner
+      default: claude
+      choices: [claude, codex]
+  workspace:
+    baseRef: origin/main
+    ref: ${inputs.base}
+  naming:
+    runner: {name: "${inputs.runner}"}
+  implementation:
+    - name: implement
+      agent:
+        runner: {name: "${inputs.runner}"}
+        steeringPolicy: AlwaysOpen
+        tools: [git_subcommand]
+        prompt: |
+          ${inputs.instruction}
+
+          Findings to address, if any: ${json(outputs.consolidate.findings)}
+          CI result, if any: ${json(outputs.ci)}
+    - name: publish
+      displayName: Open pull request
+      agent:
+        runner: {sameAs: implement}
+        tools: [git_subcommand, open_pull_request]
+        prompt: Push this checkout's commits to a new agent/ branch and open a pull request against ${inputs.base}.
+        outputs:
+          - {name: pr_url, type: string, required: true, description: the pull request's URL}
+    - name: ci
+      displayName: CI
+      ci: {}
+  review:
+    - name: reviewers
+      displayName: Review
+      agent:
+        runner: {differentFrom: implement, choices: [claude, codex]}
+        facets:
+          - {name: security, model: elevated}
+          - {name: bugs}
+          - name: docs
+            displayName: Documentation
+            focus: Whether user-facing documentation matches the change.
+        prompt: "Review ${outputs.publish.pr_url} for ${item.facet.name}: ${item.facet.focus}"
+        outputs:
+          - {name: findings, type: findings, required: true}
+    - name: consolidate
+      agent:
+        runner: {sameAs: implement}
+        prompt: "Drop duplicates and nitpicks from these reviews: ${json(outputs.reviewers)}"
+        outputs:
+          - {name: findings, type: findings, required: true, preserveLineage: true}
+    - name: approve
+      displayName: Human review
+      human:
+        prompt: Approve ${outputs.publish.pr_url}, or reject it with a note saying what to change.
+  flow:
+    - from: [ci]
+      route:
+        - {when: "outputs.ci.passed == false && visits.implement < 4", to: implement}
+        - {to: reviewers}
+    - from: [consolidate]
+      route:
+        - {when: "size(outputs.consolidate.findings) > 0 && visits.implement < 3", to: implement}
+        - {to: approve}
+    - from: [approve]
+      route:
+        - {when: "outputs.approve.decision == 'rejected' && size(outputs.approve.note) > 0", to: implement}
+        - {to: end}
