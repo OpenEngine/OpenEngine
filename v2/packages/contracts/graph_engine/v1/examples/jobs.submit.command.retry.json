@@ -1,0 +1,19 @@
+{
+  "summary": "The same submission resent after a timeout: same command ID, same path, same payload. GE returns the original response and operation ID.",
+  "message": "SubmitJobCommand",
+  "subject": "oe.v1.ge.control.jobs.submit",
+  "payload": {
+    "command_id": "cmd_submit_42",
+    "causal_path": ["gh-conn_acme_gh-dlv_4411", "cmd_submit_42"],
+    "deadline_at": "2026-10-19T21:31:00Z",
+    "payload": {
+      "goal": "Address the security review on acme/api#88",
+      "context": { "repository": "acme/api", "pull_request": 88 },
+      "execution": {
+        "mode": "run_graph",
+        "graph": { "graph_id": "graph_review" },
+        "inputs": { "instruction": "Address the security review" }
+      }
+    }
+  }
+}

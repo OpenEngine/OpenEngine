@@ -1,0 +1,16 @@
+{
+  "summary": "A decision for an approval raised on runtime generation 1, sent after the workspace was restored onto generation 2.",
+  "message": "DecideApprovalCommand",
+  "subject": "oe.v1.vcp.control.approvals.rtappr_a1.decide",
+  "payload": {
+    "command_id": "cmd_decide_a1",
+    "causal_path": ["web-sess_77", "cmd_decide_a1"],
+    "payload": {
+      "decision": "approve",
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1",
+      "runtime_generation": 1
+    }
+  }
+}

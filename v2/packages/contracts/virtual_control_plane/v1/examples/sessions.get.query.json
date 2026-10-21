@@ -1,0 +1,5 @@
+{
+  "message": "GetSessionQuery",
+  "subject": "oe.v1.vcp.query.sessions.session_a1.get",
+  "payload": { "params": {} }
+}

@@ -1,0 +1,9 @@
+{
+  "message": "PauseLoopCommand",
+  "subject": "oe.v1.ge.control.loops.loop_nightly.pause",
+  "payload": {
+    "command_id": "cmd_pauseloop",
+    "causal_path": ["cmd_pauseloop"],
+    "payload": { "reason": "Quiet week" }
+  }
+}

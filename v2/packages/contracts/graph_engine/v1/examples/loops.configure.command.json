@@ -1,0 +1,10 @@
+{
+  "message": "ConfigureLoopCommand",
+  "subject": "oe.v1.ge.control.loops.loop_nightly.configure",
+  "payload": {
+    "command_id": "cmd_cfgloop",
+    "causal_path": ["cmd_cfgloop"],
+    "expected_version": 1,
+    "payload": { "concurrency": { "max_active_jobs": 2, "on_overlap": "queue" } }
+  }
+}

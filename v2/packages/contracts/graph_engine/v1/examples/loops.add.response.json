@@ -1,0 +1,10 @@
+{
+  "message": "AddLoopResponse",
+  "in_reply_to": "oe.v1.ge.control.loops.add",
+  "payload": {
+    "command_id": "cmd_addloop",
+    "status": "accepted",
+    "operation_id": "op_addloop",
+    "resource_id": "loop_nightly"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "message": "ConversationMessage",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.conversation.message",
+  "headers": { "Nats-Msg-Id": "evt_msg_a1_4" },
+  "payload": {
+    "event_id": "evt_msg_a1_4",
+    "event_type": "conversation.message",
+    "occurred_at": "2026-10-19T21:47:50Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_exec_a", "evt_msg_a1_4"],
+    "resources": {
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1",
+      "message_id": "msg_a1_4"
+    },
+    "payload": {
+      "role": "agent",
+      "text": "Fixed the SSRF finding and added a regression test.",
+      "sequence": 4
+    }
+  }
+}

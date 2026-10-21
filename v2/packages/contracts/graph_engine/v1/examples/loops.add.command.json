@@ -1,0 +1,18 @@
+{
+  "message": "AddLoopCommand",
+  "subject": "oe.v1.ge.control.loops.add",
+  "payload": {
+    "command_id": "cmd_addloop",
+    "causal_path": ["cmd_addloop"],
+    "payload": {
+      "name": "nightly-dependency-review",
+      "graph": { "graph_id": "graph_review", "track_latest": true },
+      "trigger": { "kind": "cron", "expression": "0 3 * * *", "timezone": "UTC" },
+      "concurrency": { "max_active_jobs": 1, "on_overlap": "skip" },
+      "job_template": {
+        "goal": "Review dependency updates",
+        "inputs": { "instruction": "Review open dependency PRs" }
+      }
+    }
+  }
+}

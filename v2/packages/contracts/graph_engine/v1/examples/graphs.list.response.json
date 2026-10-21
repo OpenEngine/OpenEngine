@@ -1,0 +1,20 @@
+{
+  "message": "ListGraphsResponse",
+  "in_reply_to": "oe.v1.ge.query.graphs.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "graph_id": "graph_review",
+          "name": "review",
+          "description": "Plan, implement, review in parallel, then ask a person.",
+          "latest_revision": 3,
+          "created_at": "2026-09-01T10:00:00Z",
+          "updated_at": "2026-10-18T09:12:00Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

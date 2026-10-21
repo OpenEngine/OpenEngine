@@ -1,0 +1,39 @@
+{
+  "message": "ListSessionEventsResponse",
+  "in_reply_to": "oe.v1.vcp.query.sessions.session_a1.events.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "sequence": 1,
+          "occurred_at": "2026-10-19T21:32:00Z",
+          "attempt_id": "attempt_a1",
+          "kind": "message",
+          "message_id": "msg_a1_1",
+          "role": "user",
+          "text": "Address the security review on acme/api#412."
+        },
+        {
+          "sequence": 2,
+          "occurred_at": "2026-10-19T21:33:10Z",
+          "attempt_id": "attempt_a1",
+          "kind": "tool_call",
+          "tool": "terminal",
+          "status": "succeeded",
+          "summary": "pytest tests/test_fetch.py"
+        },
+        {
+          "sequence": 3,
+          "occurred_at": "2026-10-19T21:40:00Z",
+          "attempt_id": "attempt_a1",
+          "kind": "steering",
+          "message": "Keep the public API unchanged.",
+          "status": "applied",
+          "operation_id": "op_steer_a"
+        }
+      ],
+      "next_cursor": "eyJzZXEiOjN9"
+    }
+  }
+}

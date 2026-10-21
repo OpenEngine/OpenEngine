@@ -1,0 +1,23 @@
+{
+  "summary": "Parallel branch A: path [root, cmd_submit_88, cmd_exec_a, evt_start_a].",
+  "message": "TaskStarted",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.task.started",
+  "headers": { "Nats-Msg-Id": "evt_start_a" },
+  "payload": {
+    "event_id": "evt_start_a",
+    "event_type": "task.started",
+    "occurred_at": "2026-10-19T21:32:00Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_exec_a", "evt_start_a"],
+    "resources": {
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1"
+    },
+    "payload": {
+      "operation": { "operation_id": "op_exec_a", "command_id": "cmd_exec_a" },
+      "runtime_generation": 1,
+      "session_mode": "new"
+    }
+  }
+}

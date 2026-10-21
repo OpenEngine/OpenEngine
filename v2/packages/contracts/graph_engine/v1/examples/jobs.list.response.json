@@ -1,0 +1,26 @@
+{
+  "summary": "A page with a further cursor. Changing the filters while reusing this cursor is INVALID_CURSOR.",
+  "message": "ListJobsResponse",
+  "in_reply_to": "oe.v1.ge.query.jobs.list",
+  "payload": {
+    "request_id": "req_jobs_p2",
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "job_id": "job_42",
+          "version": 2,
+          "goal": "Address the security review on acme/api#88",
+          "context": { "repository": "acme/api", "pull_request": 88 },
+          "state": "open",
+          "active_execution_id": "exec_42a",
+          "execution_count": 1,
+          "child_job_count": 0,
+          "created_at": "2026-10-19T21:30:01Z",
+          "updated_at": "2026-10-19T21:30:02Z"
+        }
+      ],
+      "next_cursor": "eyJ0IjoiMjAyNi0xMC0xOVQyMTozMDowMVoiLCJpZCI6ImpvYl80MiJ9"
+    }
+  }
+}

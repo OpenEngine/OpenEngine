@@ -1,0 +1,5 @@
+{
+  "message": "ResumeJobCommand",
+  "subject": "oe.v1.ge.control.jobs.job_42.resume",
+  "payload": { "command_id": "cmd_resume_42", "causal_path": ["cmd_resume_42"], "payload": {} }
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Jobs",
+  "description": "A job is a unit of requested work with a goal. It owns zero or more graph executions over its life, at most one active at a time in this release. Job state is separate from execution state: cancelling an execution does not by itself end the job.",
+  "$defs": {
+    "job_state": {
+      "description": "open: may progress (an execution is active, or the job holds waiting for one). paused: no new scheduling. completed / failed: the latest execution ended so, and no execution is active; steering with `if_completed: follow_up` reopens the job with a new execution. cancelled: permanently stopped by `jobs.cancel`; never resumed.",
+      "type": "string",
+      "enum": ["open", "paused", "completed", "failed", "cancelled"]
+    },
+    "job_scope": {
+      "description": "Which jobs a job control affects. Descendants are included only when named explicitly.",
+      "type": "string",
+      "enum": ["job", "job_and_descendants"],
+      "default": "job"
+    },
+    "goal": {
+      "description": "What the job is for, in plain language.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "context": {
+      "description": "Caller-supplied, non-secret context for the job, such as the originating issue or pull request. At most 64 keys.",
+      "type": "object",
+      "maxProperties": 64
+    },
+    "job": {
+      "description": "Snapshot of a job.",
+      "type": "object",
+      "required": [
+        "job_id",
+        "version",
+        "goal",
+        "state",
+        "active_execution_id",
+        "execution_count",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
+        "goal": { "$ref": "#/$defs/goal" },
+        "context": { "$ref": "#/$defs/context" },
+        "parent_job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "loop_id": {
+          "description": "The loop that created the job, if any.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id"
+        },
+        "state": { "$ref": "#/$defs/job_state" },
+        "active_execution_id": {
+          "description": "The execution currently running, paused or awaiting approval; null when none is.",
+          "anyOf": [
+            { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+            { "type": "null" }
+          ]
+        },
+        "execution_count": { "type": "integer", "minimum": 0 },
+        "child_job_count": { "type": "integer", "minimum": 0 },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "updated_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "ended_at": {
+          "description": "When the job entered completed, failed or cancelled.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        }
+      }
+    }
+  }
+}

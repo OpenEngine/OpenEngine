@@ -1,0 +1,20 @@
+{
+  "summary": "The follow-up steer succeeded: the job was reopened with execution exec_42b. Operation status is not job status.",
+  "message": "GetOperationResponse",
+  "in_reply_to": "oe.v1.ge.query.operations.op_steer_42.get",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "operation": {
+        "operation_id": "op_steer_42",
+        "command_id": "cmd_steer_42",
+        "operation": "jobs.steer",
+        "status": "succeeded",
+        "resources": { "job_id": "job_42", "execution_id": "exec_42b" },
+        "created_at": "2026-10-20T08:00:00Z",
+        "updated_at": "2026-10-20T08:00:01Z",
+        "result": { "disposition": "follow_up", "execution_id": "exec_42b" }
+      }
+    }
+  }
+}

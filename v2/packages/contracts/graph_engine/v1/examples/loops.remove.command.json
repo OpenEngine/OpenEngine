@@ -1,0 +1,9 @@
+{
+  "message": "RemoveLoopCommand",
+  "subject": "oe.v1.ge.control.loops.loop_nightly.remove",
+  "payload": {
+    "command_id": "cmd_removeloop",
+    "causal_path": ["cmd_removeloop"],
+    "payload": { "reason": "Quiet week" }
+  }
+}

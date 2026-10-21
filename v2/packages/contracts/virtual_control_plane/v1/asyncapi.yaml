@@ -1,0 +1,1352 @@
+asyncapi: 3.1.0
+id: urn:openengine:v2:virtual-control-plane
+info:
+  title: OpenEngine Virtual Control Plane (vcp)
+  version: 1.0.0-draft.1
+  description: |
+    The Virtual Control Plane manages workspaces (where agents work), the
+    compute runtimes behind them, and the agent sessions and task attempts
+    inside them. This document describes the NATS interface **VCP serves**: the
+    commands and queries it answers and the events it publishes.
+
+    > **Contract only.** These subjects are a defined API, not an
+    > implemented one. No VCP handler answers them yet; see the package
+    > README's *Implementation status*.
+
+    ## Versions
+    - AsyncAPI format: `3.1.0` (the `asyncapi` field).
+    - Contract release: `info.version`, semver. Minor releases only add.
+    - Subject namespace: `v1` in `oe.v1.vcp.…`. It
+      changes only for an incompatible release, which is served side by side.
+
+    ## Request/reply
+    Control and query subjects use native NATS request/reply: the reply goes
+    to the request's reply inbox, and payloads carry no `replyTo`. Every
+    reply is a typed response, including rejections.
+
+    - **Control** (`oe.v1.vcp.control.…`): `accepted` means the command is
+      durably recorded with an operation; it does not mean it is done.
+      Completion is reported by the operation query
+      (`oe.v1.vcp.query.operations.{operation_id}.get`) and by the lifecycle
+      event that carries the command's `operation` reference.
+    - **Query** (`oe.v1.vcp.query.…`): read-only, creates no operation.
+    - A request that times out has an **unknown** outcome. Retry with the
+      same `command_id`.
+
+    ## Idempotency
+    A retry with the same `command_id` and identical subject, payload,
+    `expected_version` and `causal_path` returns the original response and
+    operation ID. The same `command_id` with anything else is rejected with
+    `COMMAND_ID_CONFLICT`. Command IDs are remembered for at least **7 days**.
+    Non-retryable rejections are remembered and replayed; retryable ones
+    (`UNAVAILABLE`) are not.
+
+    ## Identity
+    The acting identity comes from the authenticated NATS connection (or a
+    verified delegation), never from a payload field.
+
+    ## Identities and states
+    - `workspace_id` is stable for the workspace's whole life.
+    - `runtime_id` names one compute runtime; `runtime_generation` counts
+      them. Every restoration creates a new runtime and generation.
+    - `session_id` names an agent conversation; `attempt_id` one task attempt
+      started by `execute`.
+    - Workspace lifecycle state (`provisioning` … `destroyed`, `failed`) is
+      separate from attempt state (`starting` … `cancelled`). A failed task
+      never fails its workspace.
+
+    ## Restoration
+    `ensure`, `execute` and `steer` restore a suspended workspace themselves
+    when `restore` is `allow` (the default) and the provider can restore it;
+    with `forbid` they are rejected with `INVALID_STATE` instead. Capabilities
+    are reported explicitly by `capabilities.get`; a request needing one a
+    provider lacks is rejected with `UNSUPPORTED_CAPABILITY`, never
+    approximated.
+
+    ## Cancellation and destruction
+    They are different operations:
+    - **cancel** stops one task attempt (`attempt_id` is required). The
+      workspace, its runtime and its sessions remain. The attempt ends
+      `cancelled` (`task.cancelled`), or keeps its own outcome if it finished
+      first.
+    - **destroy** disposes of the workspace and its compute under an explicit
+      `retention` policy for artifacts and checkpoints. It is rejected with
+      `INVALID_STATE` while any attempt is active and never cancels work
+      implicitly. To destroy a busy workspace: `cancel`, wait for
+      `task.cancelled`, then `destroy`.
+
+    ## Suspension
+    **suspend** releases compute and keeps restoration state. It requires the
+    provider's `suspend` capability. With `if_active: reject` (default) it is
+    refused while an attempt is active; `checkpoint_and_cancel` checkpoints,
+    cancels active attempts (each reported by `task.cancelled`), then
+    suspends, and is only accepted when the provider can checkpoint.
+
+    ## Runtime approvals
+    Runtime approvals are raised by an agent runner and owned by VCP (GE
+    workflow approvals are separate). Each is bound to a workspace, session,
+    attempt and runtime generation, and keeps the runner's own approval
+    handle so the decision can be delivered. A decision must restate that
+    binding. A decision for an approval that is already decided, expired,
+    bound to an older runtime generation, or bound differently is rejected
+    with `STALE_APPROVAL`. Pending approvals that cannot be carried safely
+    across a restoration expire (`approval.expired`) rather than being
+    delivered to a runtime that never asked.
+
+    ## Failures
+    Workspace failure (`workspace.failed`), task failure (`task.failed`) and
+    operation failure (an operation with status `failed`) are separate facts.
+
+    ## Out of scope
+    Workspace-daemon wire contracts and subjects are not part of this
+    contract.
+  license:
+    name: Apache-2.0
+defaultContentType: application/json
+servers:
+  local:
+    host: localhost:4222
+    protocol: nats
+    description: The NATS server `oe up` starts.
+channels:
+  workspacesCreate:
+    address: oe.v1.vcp.control.workspaces.create
+    title: Create a workspace
+    messages:
+      CreateWorkspaceCommand: { $ref: '#/components/messages/CreateWorkspaceCommand' }
+  workspaceEnsure:
+    address: oe.v1.vcp.control.workspaces.{workspace_id}.ensure
+    title: Ensure a workspace is available
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      EnsureWorkspaceCommand: { $ref: '#/components/messages/EnsureWorkspaceCommand' }
+  workspaceExecute:
+    address: oe.v1.vcp.control.workspaces.{workspace_id}.execute
+    title: Execute a task
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ExecuteCommand: { $ref: '#/components/messages/ExecuteCommand' }
+  workspaceSteer:
+    address: oe.v1.vcp.control.workspaces.{workspace_id}.steer
+    title: Steer a session
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      SteerCommand: { $ref: '#/components/messages/SteerCommand' }
+  workspaceCancel:
+    address: oe.v1.vcp.control.workspaces.{workspace_id}.cancel
+    title: Cancel a task attempt
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      CancelCommand: { $ref: '#/components/messages/CancelCommand' }
+  workspaceCheckpoint:
+    address: oe.v1.vcp.control.workspaces.{workspace_id}.checkpoint
+    title: Checkpoint a workspace
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      CheckpointCommand: { $ref: '#/components/messages/CheckpointCommand' }
+  workspaceSuspend:
+    address: oe.v1.vcp.control.workspaces.{workspace_id}.suspend
+    title: Suspend a workspace
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      SuspendCommand: { $ref: '#/components/messages/SuspendCommand' }
+  workspaceDestroy:
+    address: oe.v1.vcp.control.workspaces.{workspace_id}.destroy
+    title: Destroy a workspace
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      DestroyCommand: { $ref: '#/components/messages/DestroyCommand' }
+  approvalDecide:
+    address: oe.v1.vcp.control.approvals.{approval_id}.decide
+    title: Decide a runtime approval
+    parameters:
+      approval_id: { $ref: '#/components/parameters/approval_id' }
+    messages:
+      DecideApprovalCommand: { $ref: '#/components/messages/DecideApprovalCommand' }
+  capabilitiesGet:
+    address: oe.v1.vcp.query.capabilities.get
+    title: Get provider capabilities
+    messages:
+      GetCapabilitiesQuery: { $ref: '#/components/messages/GetCapabilitiesQuery' }
+  workspacesList:
+    address: oe.v1.vcp.query.workspaces.list
+    title: List workspaces
+    messages:
+      ListWorkspacesQuery: { $ref: '#/components/messages/ListWorkspacesQuery' }
+  workspaceGet:
+    address: oe.v1.vcp.query.workspaces.{workspace_id}.get
+    title: Get a workspace
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      GetWorkspaceQuery: { $ref: '#/components/messages/GetWorkspaceQuery' }
+  workspaceSessionsList:
+    address: oe.v1.vcp.query.workspaces.{workspace_id}.sessions.list
+    title: List a workspace's sessions
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ListSessionsQuery: { $ref: '#/components/messages/ListSessionsQuery' }
+  workspaceApprovalsList:
+    address: oe.v1.vcp.query.workspaces.{workspace_id}.approvals.list
+    title: List a workspace's runtime approvals
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ListApprovalsQuery: { $ref: '#/components/messages/ListApprovalsQuery' }
+  workspaceArtifactsList:
+    address: oe.v1.vcp.query.workspaces.{workspace_id}.artifacts.list
+    title: List a workspace's artifacts
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ListArtifactsQuery: { $ref: '#/components/messages/ListArtifactsQuery' }
+  sessionGet:
+    address: oe.v1.vcp.query.sessions.{session_id}.get
+    title: Get a session
+    parameters:
+      session_id: { $ref: '#/components/parameters/session_id' }
+    messages:
+      GetSessionQuery: { $ref: '#/components/messages/GetSessionQuery' }
+  sessionEventsList:
+    address: oe.v1.vcp.query.sessions.{session_id}.events.list
+    title: List a session's history
+    parameters:
+      session_id: { $ref: '#/components/parameters/session_id' }
+    messages:
+      ListSessionEventsQuery: { $ref: '#/components/messages/ListSessionEventsQuery' }
+  operationGet:
+    address: oe.v1.vcp.query.operations.{operation_id}.get
+    title: Get an operation
+    parameters:
+      operation_id: { $ref: '#/components/parameters/operation_id' }
+    messages:
+      GetOperationQuery: { $ref: '#/components/messages/GetOperationQuery' }
+  replyInbox:
+    address: null
+    title: NATS reply inbox
+    description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
+    messages:
+      CreateWorkspaceResponse: { $ref: '#/components/messages/CreateWorkspaceResponse' }
+      EnsureWorkspaceResponse: { $ref: '#/components/messages/EnsureWorkspaceResponse' }
+      ExecuteResponse: { $ref: '#/components/messages/ExecuteResponse' }
+      SteerResponse: { $ref: '#/components/messages/SteerResponse' }
+      CancelResponse: { $ref: '#/components/messages/CancelResponse' }
+      CheckpointResponse: { $ref: '#/components/messages/CheckpointResponse' }
+      SuspendResponse: { $ref: '#/components/messages/SuspendResponse' }
+      DestroyResponse: { $ref: '#/components/messages/DestroyResponse' }
+      DecideApprovalResponse: { $ref: '#/components/messages/DecideApprovalResponse' }
+      GetCapabilitiesResponse: { $ref: '#/components/messages/GetCapabilitiesResponse' }
+      ListWorkspacesResponse: { $ref: '#/components/messages/ListWorkspacesResponse' }
+      GetWorkspaceResponse: { $ref: '#/components/messages/GetWorkspaceResponse' }
+      ListSessionsResponse: { $ref: '#/components/messages/ListSessionsResponse' }
+      ListApprovalsResponse: { $ref: '#/components/messages/ListApprovalsResponse' }
+      ListArtifactsResponse: { $ref: '#/components/messages/ListArtifactsResponse' }
+      GetSessionResponse: { $ref: '#/components/messages/GetSessionResponse' }
+      ListSessionEventsResponse: { $ref: '#/components/messages/ListSessionEventsResponse' }
+      GetOperationResponse: { $ref: '#/components/messages/GetOperationResponse' }
+  workspaceProvisioningEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.workspace.provisioning
+    title: workspace.provisioning
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      WorkspaceProvisioning: { $ref: '#/components/messages/WorkspaceProvisioning' }
+  workspaceReadyEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.workspace.ready
+    title: workspace.ready
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      WorkspaceReady: { $ref: '#/components/messages/WorkspaceReady' }
+  workspaceRestoredEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.workspace.restored
+    title: workspace.restored
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      WorkspaceRestored: { $ref: '#/components/messages/WorkspaceRestored' }
+  workspaceCheckpointedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.workspace.checkpointed
+    title: workspace.checkpointed
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      WorkspaceCheckpointed: { $ref: '#/components/messages/WorkspaceCheckpointed' }
+  workspaceSuspendedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.workspace.suspended
+    title: workspace.suspended
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      WorkspaceSuspended: { $ref: '#/components/messages/WorkspaceSuspended' }
+  workspaceDestroyedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.workspace.destroyed
+    title: workspace.destroyed
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      WorkspaceDestroyed: { $ref: '#/components/messages/WorkspaceDestroyed' }
+  workspaceFailedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.workspace.failed
+    title: workspace.failed
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      WorkspaceFailed: { $ref: '#/components/messages/WorkspaceFailed' }
+  taskStartedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.task.started
+    title: task.started
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      TaskStarted: { $ref: '#/components/messages/TaskStarted' }
+  taskCompletedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.task.completed
+    title: task.completed
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      TaskCompleted: { $ref: '#/components/messages/TaskCompleted' }
+  taskFailedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.task.failed
+    title: task.failed
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      TaskFailed: { $ref: '#/components/messages/TaskFailed' }
+  taskCancelledEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.task.cancelled
+    title: task.cancelled
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      TaskCancelled: { $ref: '#/components/messages/TaskCancelled' }
+  approvalRequestedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.approval.requested
+    title: approval.requested
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ApprovalRequested: { $ref: '#/components/messages/ApprovalRequested' }
+  approvalResolvedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.approval.resolved
+    title: approval.resolved
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ApprovalResolved: { $ref: '#/components/messages/ApprovalResolved' }
+  approvalExpiredEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.approval.expired
+    title: approval.expired
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ApprovalExpired: { $ref: '#/components/messages/ApprovalExpired' }
+  steeringAppliedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.steering.applied
+    title: steering.applied
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      SteeringApplied: { $ref: '#/components/messages/SteeringApplied' }
+  steeringFailedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.steering.failed
+    title: steering.failed
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      SteeringFailed: { $ref: '#/components/messages/SteeringFailed' }
+  conversationMessageEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.conversation.message
+    title: conversation.message
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ConversationMessage: { $ref: '#/components/messages/ConversationMessage' }
+  usageReportedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.usage.reported
+    title: usage.reported
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      UsageReported: { $ref: '#/components/messages/UsageReported' }
+  artifactCreatedEvents:
+    address: oe.v1.vcp.events.workspaces.{workspace_id}.artifact.created
+    title: artifact.created
+    parameters:
+      workspace_id: { $ref: '#/components/parameters/workspace_id' }
+    messages:
+      ArtifactCreated: { $ref: '#/components/messages/ArtifactCreated' }
+operations:
+  createWorkspace:
+    action: receive
+    title: Create a workspace
+    summary: Allocate a stable workspace identity and provision the requested provider, resources, tools
+      and context.
+    description: Accepted once recorded; `resource_id` is the new workspace ID. Rejected with `UNSUPPORTED_CAPABILITY`
+      when the provider lacks a required capability. Completes with `workspace.ready` (or `workspace.failed`).
+    channel: { $ref: '#/channels/workspacesCreate' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/CreateWorkspaceResponse'
+  ensureWorkspace:
+    action: receive
+    title: Ensure a workspace is available
+    summary: Make compute available, restoring a suspended workspace when permitted and supported.
+    description: Completes with `workspace.restored` or immediately when already ready.
+    channel: { $ref: '#/channels/workspaceEnsure' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/EnsureWorkspaceResponse'
+  executeTask:
+    action: receive
+    title: Execute a task
+    summary: Start a task attempt with an agent configuration and session policy; restores compute internally
+      when permitted.
+    description: '`resource_id` is the new attempt ID. The operation succeeds when the attempt starts
+      (`task.started`); the attempt''s outcome is reported by `task.completed`, `task.failed` or `task.cancelled`.'
+    channel: { $ref: '#/channels/workspaceExecute' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/ExecuteResponse'
+  steerSession:
+    action: receive
+    title: Steer a session
+    summary: Deliver a message to a named session; restores compute when permitted.
+    description: Completes with `steering.applied` or `steering.failed`.
+    channel: { $ref: '#/channels/workspaceSteer' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/SteerResponse'
+  cancelAttempt:
+    action: receive
+    title: Cancel a task attempt
+    summary: Stop one task attempt (`attempt_id` required). The workspace is retained.
+    description: Completes with `task.cancelled`, or with the attempt's own outcome if it ended first.
+      Never destroys anything.
+    channel: { $ref: '#/channels/workspaceCancel' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/CancelResponse'
+  checkpointWorkspace:
+    action: receive
+    title: Checkpoint a workspace
+    summary: Capture supported restoration state.
+    description: Rejected with `UNSUPPORTED_CAPABILITY` when the provider cannot checkpoint. Completes
+      with `workspace.checkpointed`.
+    channel: { $ref: '#/channels/workspaceCheckpoint' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/CheckpointResponse'
+  suspendWorkspace:
+    action: receive
+    title: Suspend a workspace
+    summary: Release compute while retaining restoration state.
+    description: Rejected with `INVALID_STATE` while an attempt is active unless `if_active` is `checkpoint_and_cancel`;
+      with `UNSUPPORTED_CAPABILITY` when the provider cannot suspend. Completes with `workspace.suspended`.
+    channel: { $ref: '#/channels/workspaceSuspend' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/SuspendResponse'
+  destroyWorkspace:
+    action: receive
+    title: Destroy a workspace
+    summary: Dispose of the workspace and its compute under an explicit retention policy.
+    description: 'Rejected with `INVALID_STATE` while any attempt is active: cancel and wait for `task.cancelled`
+      first. Completes with `workspace.destroyed`.'
+    channel: { $ref: '#/channels/workspaceDestroy' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/DestroyResponse'
+  decideApproval:
+    action: receive
+    title: Decide a runtime approval
+    summary: Resolve a runtime approval bound to a workspace, session, attempt and runtime generation.
+    description: Rejected with `STALE_APPROVAL` when the approval is decided, expired, bound to an older
+      runtime generation, or bound differently. Completes with `approval.resolved`.
+    channel: { $ref: '#/channels/approvalDecide' }
+    tags:
+    - name: control
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/DecideApprovalResponse'
+  getCapabilities:
+    action: receive
+    title: Get provider capabilities
+    summary: Report each provider's isolation, checkpoint, suspend and restore capabilities, limits and
+      tools.
+    channel: { $ref: '#/channels/capabilitiesGet' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/GetCapabilitiesResponse'
+  listWorkspaces:
+    action: receive
+    title: List workspaces
+    summary: Page through workspaces by state, provider and job.
+    channel: { $ref: '#/channels/workspacesList' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/ListWorkspacesResponse'
+  getWorkspace:
+    action: receive
+    title: Get a workspace
+    summary: Return one workspace's lifecycle state, runtime and active attempts.
+    channel: { $ref: '#/channels/workspaceGet' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/GetWorkspaceResponse'
+  listSessions:
+    action: receive
+    title: List a workspace's sessions
+    summary: Page through the sessions of one workspace, each with its recent attempts.
+    channel: { $ref: '#/channels/workspaceSessionsList' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/ListSessionsResponse'
+  listApprovals:
+    action: receive
+    title: List a workspace's runtime approvals
+    summary: Page through runtime approvals of one workspace.
+    channel: { $ref: '#/channels/workspaceApprovalsList' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/ListApprovalsResponse'
+  listArtifacts:
+    action: receive
+    title: List a workspace's artifacts
+    summary: Page through artifacts produced in one workspace.
+    channel: { $ref: '#/channels/workspaceArtifactsList' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/ListArtifactsResponse'
+  getSession:
+    action: receive
+    title: Get a session
+    summary: Return one session with its recent attempts.
+    channel: { $ref: '#/channels/sessionGet' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/GetSessionResponse'
+  listSessionEvents:
+    action: receive
+    title: List a session's history
+    summary: Page through a session's messages, tool calls, steering and usage in sequence order.
+    channel: { $ref: '#/channels/sessionEventsList' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/ListSessionEventsResponse'
+  getOperation:
+    action: receive
+    title: Get an operation
+    summary: Return a VCP operation's status and typed result or error.
+    channel: { $ref: '#/channels/operationGet' }
+    tags:
+    - name: query
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages:
+      - $ref: '#/channels/replyInbox/messages/GetOperationResponse'
+  publishWorkspaceProvisioning:
+    action: send
+    title: workspace.provisioning
+    summary: Provisioning of the first runtime began.
+    channel: { $ref: '#/channels/workspaceProvisioningEvents' }
+    tags:
+    - name: event
+  publishWorkspaceReady:
+    action: send
+    title: workspace.ready
+    summary: A runtime is running and the workspace can take work.
+    channel: { $ref: '#/channels/workspaceReadyEvents' }
+    tags:
+    - name: event
+  publishWorkspaceRestored:
+    action: send
+    title: workspace.restored
+    summary: A suspended workspace received a new runtime generation.
+    channel: { $ref: '#/channels/workspaceRestoredEvents' }
+    tags:
+    - name: event
+  publishWorkspaceCheckpointed:
+    action: send
+    title: workspace.checkpointed
+    summary: Restoration state was captured.
+    channel: { $ref: '#/channels/workspaceCheckpointedEvents' }
+    tags:
+    - name: event
+  publishWorkspaceSuspended:
+    action: send
+    title: workspace.suspended
+    summary: Compute was released; restoration state kept.
+    channel: { $ref: '#/channels/workspaceSuspendedEvents' }
+    tags:
+    - name: event
+  publishWorkspaceDestroyed:
+    action: send
+    title: workspace.destroyed
+    summary: The workspace and its compute were disposed of.
+    channel: { $ref: '#/channels/workspaceDestroyedEvents' }
+    tags:
+    - name: event
+  publishWorkspaceFailed:
+    action: send
+    title: workspace.failed
+    summary: The environment failed. Not a task failure.
+    channel: { $ref: '#/channels/workspaceFailedEvents' }
+    tags:
+    - name: event
+  publishTaskStarted:
+    action: send
+    title: task.started
+    summary: A task attempt started; completes its execute operation.
+    channel: { $ref: '#/channels/taskStartedEvents' }
+    tags:
+    - name: event
+  publishTaskCompleted:
+    action: send
+    title: task.completed
+    summary: A task attempt finished successfully.
+    channel: { $ref: '#/channels/taskCompletedEvents' }
+    tags:
+    - name: event
+  publishTaskFailed:
+    action: send
+    title: task.failed
+    summary: A task attempt failed. The workspace stays usable.
+    channel: { $ref: '#/channels/taskFailedEvents' }
+    tags:
+    - name: event
+  publishTaskCancelled:
+    action: send
+    title: task.cancelled
+    summary: A task attempt was cancelled. The workspace stays.
+    channel: { $ref: '#/channels/taskCancelledEvents' }
+    tags:
+    - name: event
+  publishApprovalRequested:
+    action: send
+    title: approval.requested
+    summary: An agent runner asked for approval.
+    channel: { $ref: '#/channels/approvalRequestedEvents' }
+    tags:
+    - name: event
+  publishApprovalResolved:
+    action: send
+    title: approval.resolved
+    summary: A runtime approval was decided and delivered.
+    channel: { $ref: '#/channels/approvalResolvedEvents' }
+    tags:
+    - name: event
+  publishApprovalExpired:
+    action: send
+    title: approval.expired
+    summary: A runtime approval can no longer be decided.
+    channel: { $ref: '#/channels/approvalExpiredEvents' }
+    tags:
+    - name: event
+  publishSteeringApplied:
+    action: send
+    title: steering.applied
+    summary: A steering message reached its session.
+    channel: { $ref: '#/channels/steeringAppliedEvents' }
+    tags:
+    - name: event
+  publishSteeringFailed:
+    action: send
+    title: steering.failed
+    summary: A steering message could not be delivered.
+    channel: { $ref: '#/channels/steeringFailedEvents' }
+    tags:
+    - name: event
+  publishConversationMessage:
+    action: send
+    title: conversation.message
+    summary: A message was added to a session's conversation.
+    channel: { $ref: '#/channels/conversationMessageEvents' }
+    tags:
+    - name: event
+  publishUsageReported:
+    action: send
+    title: usage.reported
+    summary: Token and cost usage for a period of a session.
+    channel: { $ref: '#/channels/usageReportedEvents' }
+    tags:
+    - name: event
+  publishArtifactCreated:
+    action: send
+    title: artifact.created
+    summary: A workspace produced an artifact.
+    channel: { $ref: '#/channels/artifactCreatedEvents' }
+    tags:
+    - name: event
+components:
+  parameters:
+    workspace_id:
+      description: Workspace ID, a single subject token `ws_…`.
+      x-oe-identifier: workspace_id
+    approval_id:
+      description: Runtime approval ID, a single subject token `rtappr_…`.
+      x-oe-identifier: runtime_approval_id
+    session_id:
+      description: Session ID, a single subject token `session_…`.
+      x-oe-identifier: session_id
+    operation_id:
+      description: Operation ID, a single subject token `op_…`.
+      x-oe-identifier: operation_id
+  messageTraits:
+    eventHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ../../common/v1/event.schema.json#/$defs/headers }
+  messages:
+    CreateWorkspaceCommand:
+      name: CreateWorkspaceCommand
+      title: Create a workspace command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/create_workspace_command }
+      examples:
+      - name: create
+        summary: GE provisions a workspace for a step attempt of job_88. The path extends the job's ancestry.
+        payload: { $ref: ./examples/workspaces.create.command.json#/payload }
+    CreateWorkspaceResponse:
+      name: CreateWorkspaceResponse
+      title: Create a workspace response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/workspace_command_response }
+      examples:
+      - name: accepted
+        summary: 'Accepted: workspace ID allocated, provisioning continues.'
+        payload: { $ref: ./examples/workspaces.create.response.accepted.json#/payload }
+      - name: rejected-unsupported
+        summary: 'Rejected: the requested provider lacks a required capability.'
+        payload: { $ref: ./examples/workspaces.create.response.unsupported.json#/payload }
+    EnsureWorkspaceCommand:
+      name: EnsureWorkspaceCommand
+      title: Ensure a workspace is available command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/ensure_workspace_command }
+      examples:
+      - name: ensure
+        payload: { $ref: ./examples/workspaces.ensure.command.json#/payload }
+    EnsureWorkspaceResponse:
+      name: EnsureWorkspaceResponse
+      title: Ensure a workspace is available response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/workspace_command_response }
+      examples:
+      - name: accepted
+        payload: { $ref: ./examples/workspaces.ensure.response.json#/payload }
+    ExecuteCommand:
+      name: ExecuteCommand
+      title: Execute a task command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/execute_command }
+      examples:
+      - name: execute-branch-a
+        summary: One of two sibling commands GE sends for parallel steps; both paths share the prefix
+          [gh-conn_acme_gh-dlv_88, cmd_submit_88].
+        payload: { $ref: ./examples/workspaces.execute.command.json#/payload }
+      - name: execute-branch-b
+        summary: The sibling branch, in another workspace.
+        payload: { $ref: ./examples/workspaces.execute.command.branch-b.json#/payload }
+      - name: execute-retry
+        summary: 'Identical retry after a timeout: same command ID, path and payload. VCP replies with
+          the original response and operation; no second attempt starts.'
+        payload: { $ref: ./examples/workspaces.execute.command.retry.json#/payload }
+    ExecuteResponse:
+      name: ExecuteResponse
+      title: Execute a task response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/attempt_command_response }
+      examples:
+      - name: accepted
+        summary: Accepted; `resource_id` is the new attempt. The original and the retry receive this same
+          response.
+        payload: { $ref: ./examples/workspaces.execute.response.accepted.json#/payload }
+    SteerCommand:
+      name: SteerCommand
+      title: Steer a session command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/steer_command }
+      examples:
+      - name: steer
+        summary: GE relays a job-level steer to the session doing the work.
+        payload: { $ref: ./examples/workspaces.steer.command.json#/payload }
+    SteerResponse:
+      name: SteerResponse
+      title: Steer a session response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/session_command_response }
+      examples:
+      - name: accepted
+        payload: { $ref: ./examples/workspaces.steer.response.json#/payload }
+    CancelCommand:
+      name: CancelCommand
+      title: Cancel a task attempt command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/cancel_command }
+      examples:
+      - name: cancel
+        summary: 'Step 2: cancel the attempt. The workspace is kept.'
+        payload: { $ref: ./examples/workspaces.cancel.command.json#/payload }
+    CancelResponse:
+      name: CancelResponse
+      title: Cancel a task attempt response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/attempt_command_response }
+      examples:
+      - name: accepted
+        payload: { $ref: ./examples/workspaces.cancel.response.json#/payload }
+    CheckpointCommand:
+      name: CheckpointCommand
+      title: Checkpoint a workspace command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/checkpoint_command }
+      examples:
+      - name: checkpoint
+        payload: { $ref: ./examples/workspaces.checkpoint.command.json#/payload }
+    CheckpointResponse:
+      name: CheckpointResponse
+      title: Checkpoint a workspace response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/workspace_command_response }
+      examples:
+      - name: accepted
+        payload: { $ref: ./examples/workspaces.checkpoint.response.json#/payload }
+    SuspendCommand:
+      name: SuspendCommand
+      title: Suspend a workspace command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/suspend_command }
+      examples:
+      - name: suspend
+        summary: Suspend a workspace on the `process` provider.
+        payload: { $ref: ./examples/workspaces.suspend.command.json#/payload }
+    SuspendResponse:
+      name: SuspendResponse
+      title: Suspend a workspace response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/workspace_command_response }
+      examples:
+      - name: rejected-unsupported
+        summary: 'Rejected: the provider has no suspend capability.'
+        payload: { $ref: ./examples/workspaces.suspend.response.unsupported.json#/payload }
+    DestroyCommand:
+      name: DestroyCommand
+      title: Destroy a workspace command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/destroy_command }
+      examples:
+      - name: destroy-while-active
+        summary: 'Step 1 of cancel-then-destroy: destroy while attempt_a2 is still running.'
+        payload: { $ref: ./examples/workspaces.destroy.command.active.json#/payload }
+      - name: destroy
+        summary: 'Step 4: destroy after task.cancelled arrived. A new command ID, since the first destroy
+          was rejected.'
+        payload: { $ref: ./examples/workspaces.destroy.command.json#/payload }
+    DestroyResponse:
+      name: DestroyResponse
+      title: Destroy a workspace response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/workspace_command_response }
+      examples:
+      - name: rejected-active-attempt
+        summary: 'Rejected: destruction never cancels work implicitly.'
+        payload: { $ref: ./examples/workspaces.destroy.response.invalid-state.json#/payload }
+      - name: accepted
+        payload: { $ref: ./examples/workspaces.destroy.response.accepted.json#/payload }
+    DecideApprovalCommand:
+      name: DecideApprovalCommand
+      title: Decide a runtime approval command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/decide_approval_command }
+      examples:
+      - name: approve
+        summary: A person approves a pending runtime approval from the web UI; the root is the UI interaction.
+        payload: { $ref: ./examples/approvals.decide.command.json#/payload }
+      - name: approve-stale
+        summary: A decision for an approval raised on runtime generation 1, sent after the workspace was
+          restored onto generation 2.
+        payload: { $ref: ./examples/approvals.decide.command.stale.json#/payload }
+    DecideApprovalResponse:
+      name: DecideApprovalResponse
+      title: Decide a runtime approval response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/approval_command_response }
+      examples:
+      - name: accepted
+        payload: { $ref: ./examples/approvals.decide.response.accepted.json#/payload }
+      - name: rejected-stale
+        summary: 'Rejected: stale approval target.'
+        payload: { $ref: ./examples/approvals.decide.response.stale.json#/payload }
+    GetCapabilitiesQuery:
+      name: GetCapabilitiesQuery
+      title: Get provider capabilities query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_capabilities_query }
+      examples:
+      - name: all-providers
+        payload: { $ref: ./examples/capabilities.get.query.json#/payload }
+    GetCapabilitiesResponse:
+      name: GetCapabilitiesResponse
+      title: Get provider capabilities response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_capabilities_response }
+      examples:
+      - name: providers
+        payload: { $ref: ./examples/capabilities.get.response.json#/payload }
+    ListWorkspacesQuery:
+      name: ListWorkspacesQuery
+      title: List workspaces query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_workspaces_query }
+      examples:
+      - name: second-page
+        summary: Second page of job_88's live workspaces, using the cursor the first page returned for
+          the same filters.
+        payload: { $ref: ./examples/workspaces.list.query.json#/payload }
+    ListWorkspacesResponse:
+      name: ListWorkspacesResponse
+      title: List workspaces response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_workspaces_response }
+      examples:
+      - name: page
+        summary: 'One item and a cursor: more pages follow.'
+        payload: { $ref: ./examples/workspaces.list.response.json#/payload }
+    GetWorkspaceQuery:
+      name: GetWorkspaceQuery
+      title: Get a workspace query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_workspace_query }
+      examples:
+      - name: get
+        payload: { $ref: ./examples/workspaces.get.query.json#/payload }
+    GetWorkspaceResponse:
+      name: GetWorkspaceResponse
+      title: Get a workspace response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_workspace_response }
+      examples:
+      - name: ready-with-active-attempt
+        payload: { $ref: ./examples/workspaces.get.response.json#/payload }
+      - name: not-found
+        payload: { $ref: ./examples/workspaces.get.response.not-found.json#/payload }
+    ListSessionsQuery:
+      name: ListSessionsQuery
+      title: List a workspace's sessions query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_sessions_query }
+      examples:
+      - name: open-sessions
+        payload: { $ref: ./examples/workspaces.sessions.list.query.json#/payload }
+    ListSessionsResponse:
+      name: ListSessionsResponse
+      title: List a workspace's sessions response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_sessions_response }
+      examples:
+      - name: page
+        payload: { $ref: ./examples/workspaces.sessions.list.response.json#/payload }
+    ListApprovalsQuery:
+      name: ListApprovalsQuery
+      title: List a workspace's runtime approvals query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_approvals_query }
+      examples:
+      - name: session-approvals
+        payload: { $ref: ./examples/workspaces.approvals.list.query.json#/payload }
+    ListApprovalsResponse:
+      name: ListApprovalsResponse
+      title: List a workspace's runtime approvals response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_approvals_response }
+      examples:
+      - name: page
+        summary: A pending approval on generation 2 and an expired one from generation 1.
+        payload: { $ref: ./examples/workspaces.approvals.list.response.json#/payload }
+    ListArtifactsQuery:
+      name: ListArtifactsQuery
+      title: List a workspace's artifacts query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_artifacts_query }
+      examples:
+      - name: attempt-patches
+        payload: { $ref: ./examples/workspaces.artifacts.list.query.json#/payload }
+    ListArtifactsResponse:
+      name: ListArtifactsResponse
+      title: List a workspace's artifacts response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_artifacts_response }
+      examples:
+      - name: page
+        payload: { $ref: ./examples/workspaces.artifacts.list.response.json#/payload }
+    GetSessionQuery:
+      name: GetSessionQuery
+      title: Get a session query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_session_query }
+      examples:
+      - name: get
+        payload: { $ref: ./examples/sessions.get.query.json#/payload }
+    GetSessionResponse:
+      name: GetSessionResponse
+      title: Get a session response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_session_response }
+      examples:
+      - name: active
+        payload: { $ref: ./examples/sessions.get.response.json#/payload }
+    ListSessionEventsQuery:
+      name: ListSessionEventsQuery
+      title: List a session's history query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_session_events_query }
+      examples:
+      - name: first-page
+        payload: { $ref: ./examples/sessions.events.list.query.json#/payload }
+    ListSessionEventsResponse:
+      name: ListSessionEventsResponse
+      title: List a session's history response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/list_session_events_response }
+      examples:
+      - name: page
+        payload: { $ref: ./examples/sessions.events.list.response.json#/payload }
+    GetOperationQuery:
+      name: GetOperationQuery
+      title: Get an operation query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_operation_query }
+      examples:
+      - name: get
+        payload: { $ref: ./examples/operations.get.query.json#/payload }
+    GetOperationResponse:
+      name: GetOperationResponse
+      title: Get an operation response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/queries.schema.json#/$defs/get_operation_response }
+      examples:
+      - name: execute-succeeded
+        summary: The execute operation succeeded when the attempt started; the attempt's own outcome is
+          reported by task.* events.
+        payload: { $ref: ./examples/operations.get.response.json#/payload }
+      - name: ensure-failed
+        summary: 'A failed operation: the ensure could not restore compute. The workspace stays suspended,
+          not failed.'
+        payload: { $ref: ./examples/operations.get.response.failed.json#/payload }
+    WorkspaceProvisioning:
+      name: WorkspaceProvisioning
+      title: workspace.provisioning
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_provisioning_event }
+      examples:
+      - name: provisioning
+        payload: { $ref: ./examples/workspace.provisioning.event.json#/payload }
+    WorkspaceReady:
+      name: WorkspaceReady
+      title: workspace.ready
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_ready_event }
+      examples:
+      - name: ready
+        summary: Completes the create operation.
+        payload: { $ref: ./examples/workspace.ready.event.json#/payload }
+    WorkspaceRestored:
+      name: WorkspaceRestored
+      title: workspace.restored
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_restored_event }
+      examples:
+      - name: restored
+        summary: Restored internally by an execute (cmd_exec_a2); a new runtime generation, same workspace.
+        payload: { $ref: ./examples/workspace.restored.event.json#/payload }
+    WorkspaceCheckpointed:
+      name: WorkspaceCheckpointed
+      title: workspace.checkpointed
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_checkpointed_event }
+      examples:
+      - name: checkpointed
+        payload: { $ref: ./examples/workspace.checkpointed.event.json#/payload }
+    WorkspaceSuspended:
+      name: WorkspaceSuspended
+      title: workspace.suspended
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_suspended_event }
+      examples:
+      - name: suspended
+        summary: Compute released; restoration state kept.
+        payload: { $ref: ./examples/workspace.suspended.event.json#/payload }
+    WorkspaceDestroyed:
+      name: WorkspaceDestroyed
+      title: workspace.destroyed
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_destroyed_event }
+      examples:
+      - name: destroyed
+        summary: Step 5 of cancel-then-destroy.
+        payload: { $ref: ./examples/workspace.destroyed.event.json#/payload }
+    WorkspaceFailed:
+      name: WorkspaceFailed
+      title: workspace.failed
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_failed_event }
+      examples:
+      - name: failed
+        summary: Detected by VCP, not caused by a command, so the event is a root.
+        payload: { $ref: ./examples/workspace.failed.event.json#/payload }
+    TaskStarted:
+      name: TaskStarted
+      title: task.started
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/task_started_event }
+      examples:
+      - name: started-branch-a
+        summary: 'Parallel branch A: path [root, cmd_submit_88, cmd_exec_a, evt_start_a].'
+        payload: { $ref: ./examples/task.started.event.json#/payload }
+      - name: started-branch-b
+        summary: 'Parallel branch B: a sibling path sharing the prefix [root, cmd_submit_88].'
+        payload: { $ref: ./examples/task.started.event.branch-b.json#/payload }
+    TaskCompleted:
+      name: TaskCompleted
+      title: task.completed
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/task_completed_event }
+      examples:
+      - name: completed
+        payload: { $ref: ./examples/task.completed.event.json#/payload }
+    TaskFailed:
+      name: TaskFailed
+      title: task.failed
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/task_failed_event }
+      examples:
+      - name: failed
+        summary: The attempt failed; workspace ws_b1 stays ready.
+        payload: { $ref: ./examples/task.failed.event.json#/payload }
+    TaskCancelled:
+      name: TaskCancelled
+      title: task.cancelled
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/task_cancelled_event }
+      examples:
+      - name: cancelled
+        summary: 'Step 3 of cancel-then-destroy: the attempt stopped; the workspace is still ready.'
+        payload: { $ref: ./examples/task.cancelled.event.json#/payload }
+    ApprovalRequested:
+      name: ApprovalRequested
+      title: approval.requested
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/approval_requested_event }
+      examples:
+      - name: requested
+        payload: { $ref: ./examples/approval.requested.event.json#/payload }
+    ApprovalResolved:
+      name: ApprovalResolved
+      title: approval.resolved
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/approval_resolved_event }
+      examples:
+      - name: resolved
+        payload: { $ref: ./examples/approval.resolved.event.json#/payload }
+    ApprovalExpired:
+      name: ApprovalExpired
+      title: approval.expired
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/approval_expired_event }
+      examples:
+      - name: expired
+        summary: Restoration onto generation 2 could not carry the pending approval across, so it expired
+          rather than being left undecidable.
+        payload: { $ref: ./examples/approval.expired.event.json#/payload }
+    SteeringApplied:
+      name: SteeringApplied
+      title: steering.applied
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/steering_applied_event }
+      examples:
+      - name: applied
+        payload: { $ref: ./examples/steering.applied.event.json#/payload }
+    SteeringFailed:
+      name: SteeringFailed
+      title: steering.failed
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/steering_failed_event }
+      examples:
+      - name: failed
+        payload: { $ref: ./examples/steering.failed.event.json#/payload }
+    ConversationMessage:
+      name: ConversationMessage
+      title: conversation.message
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/conversation_message_event }
+      examples:
+      - name: agent-message
+        payload: { $ref: ./examples/conversation.message.event.json#/payload }
+    UsageReported:
+      name: UsageReported
+      title: usage.reported
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/usage_reported_event }
+      examples:
+      - name: attempt-usage
+        payload: { $ref: ./examples/usage.reported.event.json#/payload }
+    ArtifactCreated:
+      name: ArtifactCreated
+      title: artifact.created
+      traits:
+      - $ref: '#/components/messageTraits/eventHeaders'
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ./schemas/events.schema.json#/$defs/artifact_created_event }
+      examples:
+      - name: patch
+        payload: { $ref: ./examples/artifact.created.event.json#/payload }

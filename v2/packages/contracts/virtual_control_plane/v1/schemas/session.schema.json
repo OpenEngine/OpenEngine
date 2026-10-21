@@ -1,0 +1,208 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Sessions and attempts",
+  "description": "A session is an agent conversation inside a workspace. Each `execute` starts one task attempt in a new or continued session; `cancel` stops exactly one attempt.",
+  "$defs": {
+    "agent": {
+      "type": "object",
+      "required": ["runner"],
+      "additionalProperties": false,
+      "properties": {
+        "runner": {
+          "description": "Agent runner, such as `claude` or `codex`.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+        },
+        "model": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "settings": {
+          "type": "object",
+          "maxProperties": 64,
+          "description": "Runner-specific, non-secret settings."
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["instruction"],
+      "additionalProperties": false,
+      "properties": {
+        "instruction": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "inputs": {
+          "type": "object",
+          "maxProperties": 64,
+          "description": "Named inputs for the task."
+        }
+      }
+    },
+    "session_selection": {
+      "description": "new: start a fresh session. continue: run the task in an existing session of this workspace, keeping its conversation.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": { "mode": { "const": "new" } }
+        },
+        {
+          "type": "object",
+          "required": ["mode", "session_id"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "continue" },
+            "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" }
+          }
+        }
+      ]
+    },
+    "session_state": {
+      "description": "active: an attempt is running. idle: no attempt running; can be steered or continued. closed: can take no more work (for example its runtime generation ended and the runner cannot resume it).",
+      "type": "string",
+      "enum": ["active", "idle", "closed"]
+    },
+    "attempt_state": {
+      "description": "Task state of one attempt, independent of the workspace's lifecycle state.",
+      "type": "string",
+      "enum": ["starting", "running", "completed", "failed", "cancelling", "cancelled"]
+    },
+    "attempt_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "result_ref": {
+          "description": "Artifact holding the full result, when there is one.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/artifact_id"
+        },
+        "artifact_ids": {
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/artifact_id" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "required": ["attempt_id", "session_id", "workspace_id", "runtime_generation", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "state": { "$ref": "#/$defs/attempt_state" },
+        "instruction": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "started_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "ended_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "result": { "$ref": "#/$defs/attempt_result" },
+        "error": {
+          "$ref": "../../../common/v1/error.schema.json",
+          "description": "Why the attempt failed. A failed attempt leaves the workspace usable."
+        },
+        "usage": { "$ref": "#/$defs/usage" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "workspace_id",
+        "runtime_generation",
+        "agent",
+        "state",
+        "attempts",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "runtime_generation": {
+          "description": "Generation the session last ran on.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "agent": { "$ref": "#/$defs/agent" },
+        "state": { "$ref": "#/$defs/session_state" },
+        "attempts": {
+          "description": "The session's most recent attempts, newest first, at most 20.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/attempt" },
+          "maxItems": 20
+        },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "updated_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "required": ["input_tokens", "output_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cache_read_tokens": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "session_event": {
+      "description": "One entry of a session's history. `sequence` increases by one per entry within the session.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["sequence", "occurred_at", "kind", "message_id", "role", "text"],
+          "additionalProperties": false,
+          "properties": {
+            "sequence": { "type": "integer", "minimum": 1 },
+            "occurred_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+            "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+            "kind": { "const": "message" },
+            "message_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/message_id" },
+            "role": { "type": "string", "enum": ["user", "agent", "system"] },
+            "text": { "type": "string", "minLength": 0, "maxLength": 262144 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["sequence", "occurred_at", "kind", "tool", "status"],
+          "additionalProperties": false,
+          "properties": {
+            "sequence": { "type": "integer", "minimum": 1 },
+            "occurred_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+            "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+            "kind": { "const": "tool_call" },
+            "tool": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "status": { "type": "string", "enum": ["started", "succeeded", "failed", "denied"] },
+            "summary": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["sequence", "occurred_at", "kind", "message", "status"],
+          "additionalProperties": false,
+          "properties": {
+            "sequence": { "type": "integer", "minimum": 1 },
+            "occurred_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+            "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+            "kind": { "const": "steering" },
+            "message": { "type": "string", "minLength": 1, "maxLength": 65536 },
+            "status": { "type": "string", "enum": ["applied", "failed"] },
+            "operation_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/operation_id" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["sequence", "occurred_at", "kind", "usage"],
+          "additionalProperties": false,
+          "properties": {
+            "sequence": { "type": "integer", "minimum": 1 },
+            "occurred_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+            "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+            "kind": { "const": "usage" },
+            "usage": { "$ref": "#/$defs/usage" }
+          }
+        }
+      ]
+    }
+  }
+}

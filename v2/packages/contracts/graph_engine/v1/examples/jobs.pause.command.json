@@ -1,0 +1,11 @@
+{
+  "summary": "Pause scheduling; running reviewers finish.",
+  "message": "PauseJobCommand",
+  "subject": "oe.v1.ge.control.jobs.job_42.pause",
+  "payload": {
+    "command_id": "cmd_pause_42",
+    "causal_path": ["cmd_pause_42"],
+    "expected_version": 4,
+    "payload": { "reason": "Waiting on a dependency release" }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "summary": "Restored internally by an execute (cmd_exec_a2); a new runtime generation, same workspace.",
+  "message": "WorkspaceRestored",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.workspace.restored",
+  "headers": { "Nats-Msg-Id": "evt_rest_a" },
+  "payload": {
+    "event_id": "evt_rest_a",
+    "event_type": "workspace.restored",
+    "occurred_at": "2026-10-19T22:04:50Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_exec_a2", "evt_rest_a"],
+    "resources": { "workspace_id": "ws_a1", "runtime_id": "rt_a1g2" },
+    "resource_version": 5,
+    "payload": {
+      "runtime_generation": 2,
+      "previous_runtime_generation": 1,
+      "from_checkpoint": "ckpt_a1_1"
+    }
+  }
+}

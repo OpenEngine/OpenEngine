@@ -1,0 +1,15 @@
+{
+  "summary": "Identical retry after a timeout: same command ID, path and payload. VCP replies with the original response and operation; no second attempt starts.",
+  "message": "ExecuteCommand",
+  "subject": "oe.v1.vcp.control.workspaces.ws_a1.execute",
+  "payload": {
+    "command_id": "cmd_exec_a",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_exec_a"],
+    "payload": {
+      "agent": { "runner": "claude", "model": "claude-opus-5-5" },
+      "task": { "instruction": "Address the security review on acme/api#412." },
+      "session": { "mode": "new" },
+      "restore": "allow"
+    }
+  }
+}

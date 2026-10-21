@@ -1,0 +1,38 @@
+{
+  "message": "GetWorkspaceResponse",
+  "in_reply_to": "oe.v1.vcp.query.workspaces.ws_a1.get",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "workspace": {
+        "workspace_id": "ws_a1",
+        "version": 5,
+        "provider": "smolvm",
+        "state": "ready",
+        "runtime": {
+          "runtime_id": "rt_a1g2",
+          "generation": 2,
+          "state": "running",
+          "started_at": "2026-10-19T21:31:10Z"
+        },
+        "resources": { "cpu_millis": 2000, "memory_mib": 4096, "disk_gib": 20 },
+        "tools": ["git", "terminal"],
+        "required_capabilities": ["checkpoint", "isolation_microvm"],
+        "labels": {
+          "job_id": "job_88",
+          "execution_id": "exec_88a",
+          "step_attempt_id": "stepa_88_impl_1"
+        },
+        "active_attempt_ids": ["attempt_a2"],
+        "created_at": "2026-10-19T21:31:00Z",
+        "updated_at": "2026-10-19T21:31:12Z",
+        "latest_checkpoint": {
+          "checkpoint_id": "ckpt_a1_1",
+          "runtime_generation": 1,
+          "label": "before-refactor",
+          "created_at": "2026-10-19T21:50:00Z"
+        }
+      }
+    }
+  }
+}

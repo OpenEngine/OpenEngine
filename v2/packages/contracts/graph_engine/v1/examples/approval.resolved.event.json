@@ -1,0 +1,38 @@
+{
+  "message": "ApprovalResolved",
+  "subject": "oe.v1.ge.events.jobs.job_42.approval.resolved",
+  "headers": { "Nats-Msg-Id": "evt_42_approved" },
+  "payload": {
+    "event_id": "evt_42_approved",
+    "event_type": "approval.resolved",
+    "occurred_at": "2026-10-19T23:04:00Z",
+    "producer": "ge",
+    "causal_path": ["cmd_decide_ship", "evt_42_approved"],
+    "resources": {
+      "job_id": "job_42",
+      "execution_id": "exec_42a",
+      "step_instance_id": "stepi_42_ship",
+      "approval_id": "wfappr_ship42"
+    },
+    "resource_version": 17,
+    "payload": {
+      "operation": { "operation_id": "op_decide_ship", "command_id": "cmd_decide_ship" },
+      "approval": {
+        "approval_id": "wfappr_ship42",
+        "job_id": "job_42",
+        "execution_id": "exec_42a",
+        "step_instance_id": "stepi_42_ship",
+        "node_id": "ship",
+        "state": "approved",
+        "prompt": "Ship this change?",
+        "requested_at": "2026-10-19T22:58:00Z",
+        "expires_at": "2026-10-22T22:58:00Z",
+        "decision": {
+          "decision": "approve",
+          "comment": "LGTM",
+          "decided_at": "2026-10-19T23:04:00Z"
+        }
+      }
+    }
+  }
+}

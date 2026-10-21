@@ -1,0 +1,15 @@
+{
+  "summary": "Rejected: the job already has an active execution, and a job runs at most one at a time.",
+  "message": "RunGraphResponse",
+  "in_reply_to": "oe.v1.ge.control.graphs.graph_review.run",
+  "payload": {
+    "command_id": "cmd_run_42",
+    "status": "rejected",
+    "error": {
+      "code": "INVALID_STATE",
+      "message": "job_42 already has an active execution exec_42a.",
+      "retryable": true,
+      "details": { "resource_type": "job", "resource_id": "job_42", "current_state": "open" }
+    }
+  }
+}

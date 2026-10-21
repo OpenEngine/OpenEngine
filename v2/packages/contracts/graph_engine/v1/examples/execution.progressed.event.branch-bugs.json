@@ -1,0 +1,30 @@
+{
+  "summary": "Parallel branch 2: a sibling path of branch 1.",
+  "message": "ExecutionProgressed",
+  "subject": "oe.v1.ge.events.jobs.job_42.execution.progressed",
+  "headers": { "Nats-Msg-Id": "evt_42_bugs_entered" },
+  "payload": {
+    "event_id": "evt_42_bugs_entered",
+    "event_type": "execution.progressed",
+    "occurred_at": "2026-10-19T22:05:00Z",
+    "producer": "ge",
+    "causal_path": [
+      "gh-conn_acme_gh-dlv_4411",
+      "cmd_submit_42",
+      "evt_exec42a_started",
+      "evt_42_impl_done",
+      "evt_42_bugs_entered"
+    ],
+    "resources": {
+      "job_id": "job_42",
+      "execution_id": "exec_42a",
+      "step_instance_id": "stepi_42_bugs"
+    },
+    "resource_version": 8,
+    "payload": {
+      "node_id": "reviewers_bugs",
+      "step_status": "running",
+      "entered_from": ["stepi_42_impl"]
+    }
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Graph executions",
+  "description": "Graph executions and the records GE keeps under them: graph execution → step instance → step attempt → workspace. GE evaluates each attempt's task result against the graph's transitions and gates and records the transition it took. A join that waits on several branches records every dependency here; messages carry only one primary causal path.",
+  "$defs": {
+    "node_id": {
+      "description": "A node of the graph, as the graph source names it.",
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+    },
+    "execution_status": {
+      "description": "pending: created, not yet scheduled. running: steps are being scheduled. awaiting_approval: blocked on a workflow approval. paused: no new steps scheduled; active tasks may still finish. succeeded / failed / cancelled: terminal.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "awaiting_approval",
+        "paused",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "step_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "awaiting_approval",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "skipped"
+      ]
+    },
+    "attempt_status": { "type": "string", "enum": ["running", "succeeded", "failed", "cancelled"] },
+    "workspace_ref": {
+      "description": "The VCP workspace (and, when known, runtime generation, session and task attempt) a step attempt used.",
+      "type": "object",
+      "required": ["workspace_id"],
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "attempt_id": {
+          "description": "The VCP task attempt that ran this step attempt.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id"
+        }
+      }
+    },
+    "evaluation": {
+      "description": "GE's evaluation of a step attempt's task result.",
+      "type": "object",
+      "required": ["task_status", "verdict"],
+      "additionalProperties": false,
+      "properties": {
+        "task_status": {
+          "description": "What the task reported.",
+          "type": "string",
+          "enum": ["completed", "failed", "cancelled"]
+        },
+        "result_ref": {
+          "description": "Artifact holding the task's result, when it produced one.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/artifact_id"
+        },
+        "verdict": {
+          "description": "GE's judgement of the result against the node's outputs and gates.",
+          "type": "string",
+          "enum": ["pass", "fail", "retry"]
+        },
+        "gate": {
+          "description": "The gate or output rule that decided the verdict, when one did.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "transition": {
+      "description": "The transition GE took after a step instance finished.",
+      "type": "object",
+      "required": ["to", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/node_id" },
+          "uniqueItems": true,
+          "description": "Nodes entered next; empty at the end of the graph."
+        },
+        "kind": { "type": "string", "enum": ["edge", "route", "fan_out", "join", "end"] },
+        "route": {
+          "description": "The route condition that matched, for `route`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    },
+    "step_attempt": {
+      "description": "One try at a step instance.",
+      "type": "object",
+      "required": ["step_attempt_id", "number", "status", "started_at"],
+      "additionalProperties": false,
+      "properties": {
+        "step_attempt_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id"
+        },
+        "number": { "type": "integer", "minimum": 1 },
+        "status": { "$ref": "#/$defs/attempt_status" },
+        "workspace": { "$ref": "#/$defs/workspace_ref" },
+        "evaluation": { "$ref": "#/$defs/evaluation" },
+        "started_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "ended_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "step_instance": {
+      "description": "One entry into a node within an execution.",
+      "type": "object",
+      "required": [
+        "step_instance_id",
+        "execution_id",
+        "node_id",
+        "status",
+        "entered_from",
+        "attempts",
+        "entered_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "step_instance_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+        },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "node_id": { "$ref": "#/$defs/node_id" },
+        "status": { "$ref": "#/$defs/step_status" },
+        "entered_from": {
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id" },
+          "uniqueItems": true,
+          "description": "Every step instance this one depended on. More than one at a join (fan-in)."
+        },
+        "attempts": { "type": "array", "items": { "$ref": "#/$defs/step_attempt" } },
+        "approval_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+        },
+        "transition": { "$ref": "#/$defs/transition" },
+        "entered_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "ended_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "execution": {
+      "description": "Snapshot of a graph execution. `error` is present only when `failed`.",
+      "type": "object",
+      "required": [
+        "execution_id",
+        "job_id",
+        "graph",
+        "inputs",
+        "status",
+        "active_step_instance_ids",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "graph": { "$ref": "graph.schema.json#/$defs/graph_ref" },
+        "inputs": {
+          "description": "Values for the graph's declared `inputs`, by name. Validated against the revision's input declarations at acceptance.",
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "null", "array", "object"]
+          }
+        },
+        "status": { "$ref": "#/$defs/execution_status" },
+        "active_step_instance_ids": {
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id" },
+          "uniqueItems": true
+        },
+        "error": { "$ref": "../../../common/v1/error.schema.json" },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "updated_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "started_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "ended_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "failed" } } },
+          "then": { "required": ["error"] },
+          "else": { "not": { "required": ["error"] } }
+        }
+      ]
+    },
+    "job_workspace": {
+      "description": "A workspace a job used, with the step attempt that used it.",
+      "type": "object",
+      "required": [
+        "workspace",
+        "execution_id",
+        "step_instance_id",
+        "step_attempt_id",
+        "first_used_at",
+        "last_used_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workspace": { "$ref": "#/$defs/workspace_ref" },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "step_instance_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+        },
+        "step_attempt_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id"
+        },
+        "first_used_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "last_used_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    }
+  }
+}

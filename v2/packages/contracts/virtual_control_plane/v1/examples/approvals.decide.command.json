@@ -1,0 +1,17 @@
+{
+  "summary": "A person approves a pending runtime approval from the web UI; the root is the UI interaction.",
+  "message": "DecideApprovalCommand",
+  "subject": "oe.v1.vcp.control.approvals.rtappr_a2.decide",
+  "payload": {
+    "command_id": "cmd_decide_a2",
+    "causal_path": ["web-sess_77", "cmd_decide_a2"],
+    "payload": {
+      "decision": "approve",
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1",
+      "runtime_generation": 2,
+      "comment": "OK to push"
+    }
+  }
+}

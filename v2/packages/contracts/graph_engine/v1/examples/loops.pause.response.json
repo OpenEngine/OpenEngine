@@ -1,0 +1,10 @@
+{
+  "message": "PauseLoopResponse",
+  "in_reply_to": "oe.v1.ge.control.loops.loop_nightly.pause",
+  "payload": {
+    "command_id": "cmd_pauseloop",
+    "status": "accepted",
+    "operation_id": "op_pauseloop",
+    "resource_id": "loop_nightly"
+  }
+}

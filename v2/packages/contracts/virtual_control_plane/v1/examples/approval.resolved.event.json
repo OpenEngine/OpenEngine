@@ -1,0 +1,24 @@
+{
+  "message": "ApprovalResolved",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.approval.resolved",
+  "headers": { "Nats-Msg-Id": "evt_appr_res_a2" },
+  "payload": {
+    "event_id": "evt_appr_res_a2",
+    "event_type": "approval.resolved",
+    "occurred_at": "2026-10-19T22:07:00Z",
+    "producer": "vcp",
+    "causal_path": ["web-sess_77", "cmd_decide_a2", "evt_appr_res_a2"],
+    "resources": {
+      "workspace_id": "ws_a1",
+      "session_id": "session_a1",
+      "attempt_id": "attempt_a1",
+      "approval_id": "rtappr_a2"
+    },
+    "payload": {
+      "operation": { "operation_id": "op_decide_a2", "command_id": "cmd_decide_a2" },
+      "decision": "approve",
+      "runtime_generation": 2,
+      "comment": "OK to push"
+    }
+  }
+}

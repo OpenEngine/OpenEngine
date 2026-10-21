@@ -1,0 +1,21 @@
+{
+  "message": "GetExecutionResponse",
+  "in_reply_to": "oe.v1.ge.query.executions.exec_42a.get",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "execution": {
+        "execution_id": "exec_42a",
+        "job_id": "job_42",
+        "graph": { "graph_id": "graph_review", "revision": 3 },
+        "inputs": { "instruction": "Address the security review" },
+        "status": "succeeded",
+        "active_step_instance_ids": [],
+        "created_at": "2026-10-19T21:30:02Z",
+        "updated_at": "2026-10-19T23:05:00Z",
+        "started_at": "2026-10-19T21:30:02Z",
+        "ended_at": "2026-10-19T23:05:00Z"
+      }
+    }
+  }
+}

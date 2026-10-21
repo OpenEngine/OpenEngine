@@ -1,0 +1,5 @@
+{
+  "message": "ListJobApprovalsQuery",
+  "subject": "oe.v1.ge.query.jobs.job_42.approvals.list",
+  "payload": { "params": { "state": ["requested"] } }
+}

@@ -1,0 +1,5 @@
+{
+  "message": "GetJobQuery",
+  "subject": "oe.v1.ge.query.jobs.job_42.get",
+  "payload": { "params": {} }
+}
