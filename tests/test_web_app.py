@@ -134,6 +134,7 @@ def test_repository_choices_reach_the_web_config(
     tmp_path, monkeypatch, *, async_client
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / "engine.toml"
     path.write_text('[repos]\n"OpenEngine/OpenEngine" = "~/code/OpenEngine"\nn8n = "code/n8n"\n')
@@ -160,6 +161,7 @@ def test_the_application_can_be_built_from_configuration_alone(
     when `main` assembles it would leave `engine-dev` reloading into nothing.
     """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
 
     monkeypatch.delenv("ENGINE_CONFIG", raising=False)
     app = build_app()
@@ -1839,7 +1841,13 @@ def test_creating_a_work_order_starts_the_graph(async_client, workflow_app) -> N
     that was recorded and never started would look identical from here.
     """
     store = WebStores()
-    app, runtime = _graph_app(store, _review_graph(), workflow_app=workflow_app)
+    # Keep the agent waiting so the snapshot contains only its initial inputs,
+    # regardless of how many times HTTP authentication yields to background tasks.
+    graph = ScriptedGraph(
+        GraphId("implementation-review-codex"), "Implementation review (codex)",
+        (ScriptedNode(NodeId("implementation"), (AwaitSteering(),)),),
+    )
+    app, runtime = _graph_app(store, graph, workflow_app=workflow_app)
 
     async def scenario():
         async with async_client(app, base_url="http://localhost") as client:
@@ -3121,9 +3129,11 @@ def test_dependent_graph_workorder_resolves_its_runner_policy_when_it_starts(
                 assert scheduled.inputs["implementation_runner"] == ROUND_ROBIN
 
                 await store.seed_run(replace(prerequisite, phase=RunPhase.SUCCEEDED))
-                started = await client.post(f"/api/runs/{dependent}/start")
-                assert started.status_code == 200, started.text
-                snapshot = await runtime.snapshot(dependent)
+                # The dependency watcher starts eligible work in the background.
+                # Wait for that start instead of racing it with a manual start.
+                async with asyncio.timeout(5):
+                    while (snapshot := await runtime.snapshot(dependent)) is None or "inputs" not in snapshot.values:
+                        await asyncio.sleep(0.01)
                 return snapshot.values["inputs"]["implementation_runner"]
 
     assert asyncio.run(scenario()) == "codex"
