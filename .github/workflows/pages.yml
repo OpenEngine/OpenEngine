@@ -12,6 +12,7 @@ on:
     branches: [main]
     paths: &site_paths
       - "site/**"
+      - "v2/packages/contracts/**"
       - "e2e/**"
       - "scripts/install.sh"
       - "scripts/generate_cli_docs.py"
@@ -83,6 +84,20 @@ jobs:
       # Served as https://openengine.cc/install.sh for `curl ... | sh`.
       - name: Publish the installer
         run: cp scripts/install.sh site/static/install.sh
+
+      - name: Regenerate contract references
+        run: |
+          uv run --project v2 --frozen python v2/packages/contracts/tooling/reference.py
+          git diff --exit-code -- 'v2/packages/contracts/*/v1/reference.html'
+
+      - name: Publish contract references
+        run: |
+          for reference in v2/packages/contracts/*/v1/reference.html; do
+            service=$(basename "$(dirname "$(dirname "$reference")")")
+            destination="site/static/contracts/$service/v1"
+            mkdir -p "$destination"
+            cp "$reference" "$destination/index.html"
+          done
 
       - name: Build
         working-directory: site

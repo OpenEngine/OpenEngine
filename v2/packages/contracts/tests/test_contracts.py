@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 import reference
 import validate
+import yaml
 from validate import CONTRACTS, SERVICES, load_contract, validate_message
 
 STREAMS = CONTRACTS.parent.parent / "infra" / "nats" / "streams"
@@ -155,6 +156,22 @@ def test_checked_in_reference_is_current(service: str) -> None:
     assert path.exists() and path.read_text() == reference.page(service), (
         f"{path.relative_to(CONTRACTS)} is stale: run `uv run python packages/contracts/tooling/reference.py`"
     )
+
+
+def test_pages_builds_on_contract_changes() -> None:
+    root = CONTRACTS.parents[2]
+    workflow = yaml.safe_load((root / ".github/workflows/pages.yml").read_text())
+    # PyYAML's YAML 1.1 loader interprets the bare `on` key as True.
+    triggers = workflow[True]
+    for event in ("push", "pull_request"):
+        assert "v2/packages/contracts/**" in triggers[event]["paths"]
+
+
+@pytest.mark.parametrize("service", reference.NAMES)
+def test_published_contract_links(service: str) -> None:
+    url = f"https://openengine.cc/contracts/{service}/v1/"
+    for path in (CONTRACTS.parents[1] / "ARCHITECTURE.md", CONTRACTS / "README.md"):
+        assert f"]({url})" in path.read_text(), path
 
 
 # Malformed variants of valid CXN examples. Each must be rejected.

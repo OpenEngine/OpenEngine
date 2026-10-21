@@ -3,3 +3,5 @@ build/
 .docusaurus/
 .cache-loader/
 
+# Contract references copied by the Pages workflow.
+/static/contracts/
