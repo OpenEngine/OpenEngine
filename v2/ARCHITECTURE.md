@@ -8,7 +8,7 @@ OpenEngine is split into three services:
 They communicate via NATS and the contracts between each service are stored in [packages/contracts](packages/contracts/README.md). The references are republished to the site whenever a contract changes, along with the [Graph Engine resources](https://openengine.cc/contracts/graph_engine/v1/resources/) (`Graph`, `Loop` and `Tool`) people write.
 
 ## Architecture diagram
-Each service with its NATS subjects (control, query and events, and the streams that keep them) and its tables, the apps and integrations that connect to them, and how VCP runs workspaces. It is drawn from the contracts, the migrations and `infra/nats/streams` by [`architecture.py`](packages/contracts/tooling/architecture.py) and redrawn by the v2 schema workflow whenever any of them change ([Mermaid source](docs/architecture.mermaid)).
+Each service with its NATS subjects (control, query and events) and its tables, the apps and integrations that connect to them, and how VCP runs workspaces. It is drawn from the contracts, the migrations and `infra/nats/streams` by [`architecture.py`](packages/contracts/tooling/architecture.py).
 
 ![OpenEngine V2 architecture](docs/architecture.svg)
 
