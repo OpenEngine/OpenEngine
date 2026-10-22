@@ -34,9 +34,9 @@ Back on this computer, tell OpenEngine about the Mac mini, and the name of the p
 
 OpenEngine saves the Mac mini under the name `mac-mini`, and remembers `MAC_MINI_TOKEN`: the name of a setting in your terminal, called an environment variable, that `engine` reads the token from each time it talks to the Mac mini. The token itself is never saved in OpenEngine's list of computers.
 
-If you already added the Mac mini without a token, run the same command: it saves the Mac mini again, this time with `MAC_MINI_TOKEN`.
+If you already added the Mac mini without a token, type `engine backend add mac-mini https://mac-mini.local:4364 --token-env MAC_MINI_TOKEN --replace` instead: it updates the saved Mac mini to use `MAC_MINI_TOKEN`.
 
-![screenshot](./test2doc-097e8b67e9d6.png)
+![screenshot](./test2doc-b8b8c870d363.png)
 
 Before giving this computer the token, see what happens without it. Type `engine backends list --check` and press Enter.
 

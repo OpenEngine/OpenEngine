@@ -130,10 +130,16 @@ To keep using commands on the Mac mini itself, also type \`export ENGINE_SERVICE
 
 OpenEngine saves the Mac mini under the name \`mac-mini\`, and remembers \`MAC_MINI_TOKEN\`: the name of a setting in your terminal, called an environment variable, that \`engine\` reads the token from each time it talks to the Mac mini. The token itself is never saved in OpenEngine's list of computers.
 
-If you already added the Mac mini without a token, run the same command: it saves the Mac mini again, this time with \`MAC_MINI_TOKEN\`.`,
+If you already added the Mac mini without a token, type \`engine backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN --replace\` instead: it updates the saved Mac mini to use \`MAC_MINI_TOKEN\`.`,
           async () => {
             await terminal.run(`engine backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN`)
             expect(macMini(engine)).toMatchObject({ token_env: "MAC_MINI_TOKEN" })
+            await test.step("[nodoc] Add token authentication to an existing backend", async () => {
+              await terminal.run(`engine backend add mac-mini https://${MAC_MINI} --replace`)
+              expect(macMini(engine)?.token_env).toBe("")
+              await terminal.run(`engine backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN --replace`)
+              expect(macMini(engine)).toMatchObject({ token_env: "MAC_MINI_TOKEN" })
+            })
             await show(await terminal.row(/^mac-mini\s+https:/), "The Mac mini is saved as mac-mini")
           },
         )
