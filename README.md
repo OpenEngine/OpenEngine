@@ -9,7 +9,7 @@
 [![Docs](https://img.shields.io/badge/docs-openengine.cc-blue)](https://openengine.cc/docs/)
 [![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
 
-Coding agents are fast. The hard part is making their output trustworthy every time, not just when you are watching. OpenEngine is an open-source software factory: you write your lifecycle once as a graph (implement, wait for CI, fan out adversarial reviewers, rerank the findings, fix, open the PR), and `engine go` runs every change through it. Add a security reviewer to the graph once and it checks every change from then on.
+Coding agents are fast. The hard part is making their output trustworthy every time, not just when you are watching. OpenEngine is an open-source software factory: you write your lifecycle once as a graph (implement, wait for CI, fan out adversarial reviewers, rerank the findings, fix, open the PR), and `oe go` runs every change through it. Add a security reviewer to the graph once and it checks every change from then on.
 
 ![OpenEngine lifecycle graph: implement, run CI, review in parallel, rerank, and open a pull request](docs/images/oe_land.png)
 
@@ -31,28 +31,21 @@ Prefer not to install? `npx @openengine.cc/engine@latest go "..."` works too. Th
 
 **Review and fix pull requests you already have.**
 ```bash
-engine go review https://github.com/OWNER/REPO/pull/123   # post findings on a PR
-engine go fix https://github.com/OWNER/REPO/pull/123      # address its unresolved review threads
+oe go review https://github.com/OWNER/REPO/pull/123   # post findings on a PR
+oe go fix https://github.com/OWNER/REPO/pull/123      # address its unresolved review threads
 ```
 
 **Write your own graph** in YAML or Python and bind it to a verb. Graphs are versioned, so a change to the process is as reviewable as a change to the code.
-```bash
-engine graphs                                   # list available graphs
-engine graph add my-graph.yaml                  # register your own
-engine graph run my-graph "add my widget"       # run it with an instruction
+```bashoe graphs                                   # list available graphsoe graph add my-graph.yaml                  # register your ownoe graph run my-graph "add my widget"       # run it with an instruction
 ```
 The [example graphs](docs/examples/graphs) include TDD, dead-code removal, and the [security review](docs/examples/graphs/security-review.yaml) that OpenEngine runs on itself every day.
 
 **Steer a run while it works.**
-```bash
-engine run watch <run-id>
-engine node steer <execution-id> "use the existing date helper instead"
+```bashoe run watch <run-id>oe node steer <execution-id> "use the existing date helper instead"
 ```
 
 **Put a graph on a schedule** with loops: QA sweeps, dependency upkeep, nightly security review. Each loop has limits on spend and pull requests, so it cannot run away with your budget.
-```bash
-engine loop add qa-sweep --every 1d --max-spend 20 --max-prs 5
-engine loops                                    # status, spend and PRs per loop
+```bashoe loop add qa-sweep --every 1d --max-spend 20 --max-prs 5oe loops                                    # status, spend and PRs per loop
 ```
 
 **Start work from where you already are.** Mention OpenEngine in a Slack thread or a PR comment to start, steer, or approve a run. See [integrations](https://openengine.cc/docs/integrations/).
