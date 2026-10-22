@@ -16,6 +16,7 @@ from engine.runtime import (
     load_engine_config,
     parse_engine_config,
 )
+from engine.runtime.config import DEFAULT_MODEL_TIERS, merge_model_tiers
 
 
 @pytest.fixture(autouse=True)
@@ -1196,3 +1197,54 @@ def test_web_check_reports_a_work_order_workflow_that_names_nothing(
     else:
         assert not seen
         assert f"work_orders.workflow is '{workflow}'" in capsys.readouterr().err
+
+
+def test_runner_path_and_model_tiers_parse(monkeypatch) -> None:
+    monkeypatch.setenv("HOME", "/home/operator")
+
+    config = parse_engine_config({
+        "runners": {
+            "codex": {
+                "path": "~/.local/bin/codex",
+                "models": {"cheapest": "", "default": "gpt-5", "elevated": "gpt-5-pro"},
+            },
+        },
+    })
+
+    assert config.runner_paths == {"codex": "/home/operator/.local/bin/codex"}
+    assert config.model_tiers == {"codex": {"cheapest": "", "default": "gpt-5", "elevated": "gpt-5-pro"}}
+
+
+def test_no_runners_table_leaves_runners_to_their_defaults() -> None:
+    config = parse_engine_config({})
+
+    assert config.runner_paths == {}
+    assert merge_model_tiers(config.model_tiers) == DEFAULT_MODEL_TIERS
+
+
+def test_configured_tiers_merge_over_the_defaults() -> None:
+    config = parse_engine_config({
+        "runners": {"claude": {"models": {"elevated": "claude-opus-9"}}, "qwen": {"models": {"default": "qwen3"}}},
+    })
+
+    tiers = merge_model_tiers(config.model_tiers)
+
+    assert tiers["claude"] == {"cheapest": "haiku", "default": "sonnet", "elevated": "claude-opus-9"}
+    assert tiers["codex"] == DEFAULT_MODEL_TIERS["codex"]
+    assert tiers["qwen"] == {"default": "qwen3"}
+
+
+@pytest.mark.parametrize(
+    ("runner", "message"),
+    [
+        ({"path": ""}, "runners.codex.path must not be blank"),
+        ({"path": "  "}, "runners.codex.path must not be blank"),
+        ({"path": 7}, "runners.codex.path must be a string"),
+        ({"path": "bin/codex"}, "runners.codex.path must be absolute or start with ~: 'bin/codex'"),
+        ({"binary": "/opt/codex"}, "unknown key in runners.codex: binary"),
+        ({"models": {"default": "  "}}, "runners.codex.models.default must not be blank"),
+    ],
+)
+def test_runner_settings_reject_bad_values(runner: dict[str, object], message: str) -> None:
+    with pytest.raises(EngineConfigError, match=message):
+        parse_engine_config({"runners": {"codex": runner}})
