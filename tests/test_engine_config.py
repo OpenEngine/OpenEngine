@@ -1240,6 +1240,7 @@ def test_configured_tiers_merge_over_the_defaults() -> None:
         ({"path": ""}, "runners.codex.path must not be blank"),
         ({"path": "  "}, "runners.codex.path must not be blank"),
         ({"path": 7}, "runners.codex.path must be a string"),
+        ({"path": "bin/codex"}, "runners.codex.path must be absolute or start with ~: 'bin/codex'"),
         ({"binary": "/opt/codex"}, "unknown key in runners.codex: binary"),
         ({"models": {"default": "  "}}, "runners.codex.models.default must not be blank"),
     ],

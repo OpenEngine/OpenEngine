@@ -643,9 +643,14 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         settings = _table(settings, f"runners.{runner}")
         _reject_unknown(settings, {"models", "path"}, f"runners.{runner}")
         if "path" in settings:
-            runner_paths[runner] = str(
-                Path(_nonblank_string(settings["path"], f"runners.{runner}.path")).expanduser()
-            )
+            # A relative path would resolve against whatever directory the
+            # agent starts in, which may be an untrusted checkout.
+            path = Path(_nonblank_string(settings["path"], f"runners.{runner}.path")).expanduser()
+            if not path.is_absolute():
+                raise EngineConfigError(
+                    f"runners.{runner}.path must be absolute or start with ~: {settings['path']!r}"
+                )
+            runner_paths[runner] = str(path)
         model_tiers[runner] = {
             tier: _optional_nonblank_string(model, f"runners.{runner}.models.{tier}")
             for tier, model in _table(settings.get("models", {}), f"runners.{runner}.models").items()

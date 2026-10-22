@@ -46,7 +46,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langgraph_acp import (
     ACPAgentProvider,
@@ -934,9 +934,9 @@ def agent_providers(
 ) -> tuple[CodexACPProvider, ClaudeACPProvider, OpenCodeACPProvider]:
     """The agents Engine ships with, configured from `config`."""
     return (
-        CodexACPProvider(env=installed_codex_env(config)),
-        ClaudeACPProvider(),
-        OpenCodeACPProvider(),
+        cast(CodexACPProvider, agent_provider(config, "codex")),
+        cast(ClaudeACPProvider, agent_provider(config, "claude")),
+        cast(OpenCodeACPProvider, agent_provider(config, "opencode")),
     )
 
 
