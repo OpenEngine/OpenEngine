@@ -135,16 +135,13 @@ class GitHubOAuthTransport:
         """Send one request, naming the request when the network fails it."""
         kwargs = options or {}
         try:
-            async with (
-                httpx.AsyncClient(follow_redirects=True) if follow_redirects
-                else httpx.AsyncClient()
-            ) as client:
+            async with httpx.AsyncClient(follow_redirects=follow_redirects) as client:
                 return await client.request(
                     method, url, headers=self._headers(token), **kwargs  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
                 )
         except httpx.TransportError as error:
             raise GitHubConnectionError(
-                f"GitHub API {method} {path} failed: {error or type(error).__name__}"
+                f"GitHub API {method} {path} failed: {str(error) or type(error).__name__}"
             ) from error
 
     async def _refresh_after_unauthorized(

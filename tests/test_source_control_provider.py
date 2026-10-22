@@ -252,6 +252,9 @@ def test_oauth_transport_refreshes_once_after_401_and_retries(
     authorizations: list[str] = []
 
     class Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
         async def __aenter__(self):
             return self
 
@@ -290,6 +293,9 @@ def test_oauth_transport_does_not_retry_a_second_401(
     ]
 
     class Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
         async def __aenter__(self):
             return self
 
@@ -330,6 +336,22 @@ def test_oauth_network_failure_names_the_request(monkeypatch, download) -> None:
     assert isinstance(raised.value, ConnectionError)
     assert str(raised.value) == f"GitHub API GET {path} failed: [Errno 8] nodename nor servname provided"
 
+
+
+def test_oauth_network_failure_without_text_names_the_error_type(monkeypatch) -> None:
+    from engine.adapters.source_control.github.transports import GitHubConnectionError
+
+    def respond(request):
+        raise httpx.ConnectTimeout("", request=request)
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    with pytest.raises(GitHubConnectionError) as raised:
+        asyncio.run(GitHubOAuthTransport("token").request("GET", "/user"))
+    assert str(raised.value) == "GitHub API GET /user failed: ConnectTimeout"
 
 def test_github_adapter_keeps_a_network_failure_retryable(monkeypatch) -> None:
     from engine.adapters.source_control.github import (
@@ -624,7 +646,7 @@ def test_resolve_review_thread_oauth_graphql(monkeypatch, api_url, expected):
         requests.append(request)
         return httpx.Response(200, json={"data": {"resolveReviewThread": {"thread": {"id": "PRRT_1", "isResolved": True}}}})
     client = httpx.AsyncClient
-    monkeypatch.setattr("engine.adapters.source_control.github.transports.httpx.AsyncClient", lambda: client(transport=httpx.MockTransport(respond)))
+    monkeypatch.setattr("engine.adapters.source_control.github.transports.httpx.AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
     source = GitHubSourceControl("test-token", api_url=api_url)
     source._review_thread_by_id = AsyncMock(return_value=(Discussion("alice", "Fix it", "", comment_id=1, thread_id="PRRT_1", is_resolved=False), []))
     assert asyncio.run(source.resolve_review_thread("https://github.com/acme/api/pull/7", "PRRT_1"))
