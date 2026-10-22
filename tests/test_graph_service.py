@@ -958,9 +958,13 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
 @pytest.mark.parametrize("mode,customized", [(None, False), ("fix", False), ("review", False),
                                            ("fix", True), ("review", True)])
 def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
-    tmp_path: Path, mode: str | None, customized: bool, *, workflow_app
+    tmp_path: Path, mode: str | None, customized: bool, *, workflow_app, monkeypatch
 ) -> None:
     """`engine-web` mounts the service at /api/v1 and starts runs as WorkOrders."""
+    from unittest.mock import AsyncMock
+    from langgraph_acp.readiness import AgentReadiness
+    # This test replaces execution with a lambda; no real agent is involved.
+    monkeypatch.setattr(GraphService, "agent_readiness", AsyncMock(return_value=AgentReadiness(True)))
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from engine.adapters.state_store.memory import InMemoryStateStore
     from web_fakes import ConcurrentRunner
@@ -1190,8 +1194,10 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                         assert selected.status_code == 201, selected.text
                         snapshot = await runtime.snapshot(RunId(selected.json()["runId"]))
                         assert snapshot.values["inputs"]["implementation_runner"] == "qwen"
-                    monkeypatch.setattr("engine.apps.web.onboarding.agent_available",
-                                        lambda *args, **kwargs: False)
+                    from unittest.mock import AsyncMock
+                    from langgraph_acp.readiness import AgentReadiness
+                    monkeypatch.setattr(GraphService, "agent_readiness",
+                                        AsyncMock(return_value=AgentReadiness(False, "not signed in")))
                     registered = await client.post("/api/v1/graphs", json={
                         "project": "default", "format": "python", "source": starters.source(),
                     })
@@ -1715,4 +1721,55 @@ def test_compiled_yaml_terminal_accepts_json_outputs(tmp_path, monkeypatch, incl
                 assert type(state[name]) is type(value)
             assert ("note" in state) == include_optional
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('only_agent', ['codex', 'claude', 'opencode'])
+def test_default_workflow_can_use_one_ready_agent_for_both_stages(tmp_path, only_agent):
+    from engine.graph_runtime.inputs import ROUND_ROBIN, choose_runners
+    from engine.runtime.workflows import load_workflow_file
+
+    path = tmp_path / 'starter.py'
+    path.write_text(starters.source())
+    graph = load_workflow_file(path)[0]
+    inputs = {item.name: item.default for item in graph.inputs}
+    assert inputs['implementation_runner'] == inputs['review_runner'] == ROUND_ROBIN
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            service._registry.register(StdioACPProvider(name=only_agent, command=[sys.executable, str(AGENT)]))
+            service._builtin_agents = service._registry.names
+            ready = await service.ready_runner_choices(graph.inputs, inputs)
+            picked = choose_runners(graph.inputs, inputs, usage=dict, turns={}, available=ready)
+            assert picked['implementation_runner'] == picked['review_runner'] == only_agent
+    asyncio.run(scenario())
+
+
+def test_invalid_model_is_excluded_from_auto_selection_but_explicit_choice_fails(tmp_path):
+    from engine.graph_runtime.inputs import ROUND_ROBIN, WorkflowInput, choose_runners
+    from langgraph_acp import ACPAgentRegistry
+
+    fake = Path(__file__).parents[1] / 'langgraph-acp/tests/fake_agent.py'
+    reason = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."
+    failure = json.dumps({'type': 'error', 'status': 400,
+                          'error': {'type': 'invalid_request_error', 'message': reason}})
+    declarations = tuple(WorkflowInput(name, name, ROUND_ROBIN, choices=('codex', 'claude', ROUND_ROBIN))
+                         for name in ('implementation_runner', 'review_runner'))
+    inputs = {item.name: item.default for item in declarations}
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            service._registry = ACPAgentRegistry([
+                StdioACPProvider(name='codex', command=[sys.executable, str(fake)], env={'FAKE_AGENT_RESPONSE': failure}),
+                StdioACPProvider(name='claude', command=[sys.executable, str(fake)]),
+            ])
+            service._builtin_agents = service._registry.names
+            ready = await service.ready_runner_choices(declarations, inputs)
+            chosen = choose_runners(declarations, inputs, usage=dict, turns={}, available=ready)
+            assert chosen == dict.fromkeys(inputs, 'claude')
+            with pytest.raises(ValueError, match='not supported when using Codex'):
+                await service.ready_runner_choices(declarations, {**inputs, 'implementation_runner': 'codex'})
+            service._registry.unregister('claude')
+            with pytest.raises(ValueError, match='Readiness checks:.*not supported when using Codex'):
+                await service.ready_runner_choices(declarations, inputs)
     asyncio.run(scenario())

@@ -249,8 +249,8 @@ def _workflow(builder: Any, name: str, runner: str, *inputs: WorkflowInput) -> G
         'review': 'Review an existing change, consolidate findings and report its impact.',
         'fix': 'Address unresolved review threads on an existing change.',
     }[name], inputs=(WorkflowInput('instruction', 'Instruction'), mode_input(),
-        WorkflowInput('implementation_runner', 'Implementation runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude')))),
-        WorkflowInput('review_runner', 'Review runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude')))), *inputs))
+        WorkflowInput('implementation_runner', 'Implementation runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude', 'opencode', 'round-robin', 'least-utilized')))),
+        WorkflowInput('review_runner', 'Review runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude', 'opencode', 'round-robin', 'least-utilized')))), *inputs))
 
 
 def implement(components: Components) -> GraphWorkflow:

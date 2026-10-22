@@ -4,13 +4,11 @@ The Codex CLI does not speak ACP itself; `@agentclientprotocol/codex-acp` is the
 adapter that does, and running it through `npx` is what makes
 `ACPNode(agent="codex")` work without a global install of anything.
 
-**The adapter brings its own Codex.** It depends on `@openai/codex` and drives
-that as `codex app-server`, so the `codex` on the operator's `PATH` is not what
-answers here: the pinned adapter (`CODEX_ACP_VERSION`) resolves its own
-`@openai/codex` dependency whatever is installed, and the ACP compatibility
-workflow records which one in its step summary. `CODEX_PATH` is how the adapter
-is told to run a specific binary instead, and it needs no support from this
-package -- `env` reaches it:
+The provider prefers the installed `codex` on the effective PATH, so discovery
+and execution use the same version and account configuration. It sets the
+adapter's `CODEX_PATH` to that executable. An explicit `CODEX_PATH` in the
+provider environment or host environment takes precedence. If no installed
+Codex is found, the pinned adapter's bundled `@openai/codex` is the fallback.
 
     CodexACPProvider(env={"CODEX_PATH": "/usr/local/bin/codex"})
 
@@ -34,6 +32,9 @@ The adapter's `DEFAULT_AUTH_REQUEST` makes it authenticate on demand instead:
 """
 
 import os
+import shutil
+import asyncio
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -78,11 +79,49 @@ class CodexACPProvider:
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", launch_command(self.command))
 
+    def launch_environment(self) -> dict[str, str]:
+        """Use the same Codex installation that backend discovery checks.
+
+        An explicit CODEX_PATH wins. Keep the adapter's bundled binary as a
+        fallback for installations which only installed the ACP adapter.
+        """
+        env = dict(self.env or {})
+        if not env.get("CODEX_PATH") and not os.environ.get("CODEX_PATH"):
+            binary = shutil.which("codex", path=env.get("PATH", os.environ.get("PATH")))
+            if binary:
+                env["CODEX_PATH"] = os.path.abspath(binary)
+        return env
+
+    async def runtime_description(self) -> str:
+        """Identify the effective binary in startup errors without reading auth."""
+        env = {**os.environ, **self.launch_environment()}
+        binary = env.get("CODEX_PATH")
+        if not binary:
+            return f"codex-acp {CODEX_ACP_VERSION}, adapter-bundled Codex"
+        process = None
+        try:
+            async with asyncio.timeout(3):
+                process = await asyncio.create_subprocess_exec(
+                    binary, "--version", stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL, env=env,
+                )
+                output, _ = await process.communicate()
+                version = re.search(rb"codex-cli [0-9][0-9A-Za-z.+-]*", output)
+                if version:
+                    return f"{binary} ({version[0].decode()})"
+        except (OSError, TimeoutError):
+            pass
+        finally:
+            if process is not None and process.returncode is None:
+                process.kill()
+                await process.wait()
+        return binary
+
     async def connect(self) -> ACPClient:
         return await StdioACPProvider(
             name=self.name,
             command=self.command,
-            env=self.env,
+            env=self.launch_environment(),
             cwd=self.cwd,
             permissions=self.permissions,
             elicitations=self.elicitations,

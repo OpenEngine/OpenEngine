@@ -32,10 +32,12 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qsl, urlsplit
 
 import yaml
+from langgraph_acp.readiness import AgentReadiness, AgentReadinessCache, missing_runtime
+from langgraph_acp._json import JSONValue
 from engine.runtime.repositories import RepositoryRegistry
 from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
 from engine.graph_runtime import (
@@ -51,10 +53,10 @@ from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime
 from engine.ports import WorkspaceProvider
-from langgraph_acp import ACPAgentRegistry
+from langgraph_acp import ACPAgentRegistry, ACPAgentNotFoundError
 
 from engine.graph_runtime import GraphId
-from engine.graph_runtime.inputs import RUNNER_POLICIES, resolve_inputs
+from engine.graph_runtime.inputs import RUNNER_POLICIES, WorkflowInput, choose_runners, resolve_inputs
 from engine.graph_runtime.topology import GraphTopology
 from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig, PullRequestsConfig
 from engine.runtime.workflows import WorkflowLoadError, load_workflow_file
@@ -238,6 +240,7 @@ class GraphService:
         self.store = GraphServiceStore(database)
         self._workspace_provider = workspace_provider
         self._registry = registry
+        self._readiness = AgentReadinessCache()
         self._start = start or self._start_directly
         self._session_config = session_config
         self._pull_requests = pull_requests
@@ -305,6 +308,7 @@ class GraphService:
             self._scheduler = asyncio.create_task(self._schedule())
 
     async def aclose(self) -> None:
+        await self._readiness.aclose()
         if self._scheduler is not None:
             self._scheduler.cancel()
             await asyncio.gather(self._scheduler, return_exceptions=True)
@@ -398,6 +402,54 @@ class GraphService:
         self._added_agents.offer(
             provider, session_model(row) if row.model else "", row.context_limit,
         )
+
+    async def agent_readiness(self, name: str, *, automatic: bool = False) -> AgentReadiness:
+        """Probe the same provider and model the registered workflow will use."""
+        try:
+            provider = self._registry.resolve(name)
+        except ACPAgentNotFoundError as error:
+            return AgentReadiness(False, str(error))
+        if automatic and name in self._builtin_agents and (missing := missing_runtime(provider)):
+            return AgentReadiness(False, missing)
+        config = dict(self._session_config or {})
+        if model := self._added_agents.models.get(name):
+            config["model"] = model
+        return await self._readiness.check(provider, cast(Mapping[str, JSONValue], config))
+
+    async def ready_runner_choices(
+        self, declarations: tuple[WorkflowInput, ...], inputs: Mapping[str, str],
+    ) -> tuple[str, ...]:
+        """Select only usable providers; explicit choices fail without fallback."""
+        offered = {agent["name"] for agent in self.agents_json()}
+        runner_inputs = [item for item in declarations if
+                         any(choice in offered for choice in item.choices)
+                         or item.name in ("implementation_runner", "review_runner", "runner", "agent")]
+        requested = set()
+        for item in runner_inputs:
+            value = inputs.get(item.name, item.default)
+            requested.update(
+                (choice for choice in item.choices if choice not in RUNNER_POLICIES)
+                if value in RUNNER_POLICIES else (value,) if value else ()
+            )
+        names = sorted(requested)
+        explicit = {inputs.get(item.name, item.default) for item in runner_inputs} - set(RUNNER_POLICIES)
+        readiness = await asyncio.gather(*(
+            self.agent_readiness(name, automatic=name not in explicit) for name in names
+        ))
+        available = tuple(name for name, result in zip(names, readiness) if result.ready)
+        reasons = {name: result.reason for name, result in zip(names, readiness) if not result.ready}
+        for item in runner_inputs:
+            chosen = inputs.get(item.name, item.default)
+            if chosen not in RUNNER_POLICIES and chosen in reasons:
+                raise ValueError(f"agent {chosen!r} is not ready: {reasons[chosen]}. "
+                                 "Check that agent's login, configured model and adapter on the backend; "
+                                 "an explicitly selected agent is never replaced automatically.")
+        try:
+            choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
+        except ValueError as error:
+            details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
+            raise ValueError(f"{error}. Readiness checks: {details}") from error
+        return available
 
     # --- sessions -----------------------------------------------------------
 

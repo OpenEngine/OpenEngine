@@ -87,7 +87,7 @@ from engine.ports import ApprovalHandler, WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from langgraph_acp import ACPAgentRegistry
-from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
+from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider, OpenCodeACPProvider
 
 
 # ---------------------------------------------------------------------------
@@ -120,21 +120,14 @@ FIX = "fix"
 #: The creation inputs naming the change a run started in review looks at.
 REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
-#: Codex and Claude, reached through their ACP adapters, and any agent added
+#: Codex, Claude and OpenCode, reached through ACP, and any agent added
 #: with `oe agent add`.  `agent_registry` is what routes an agent's
 #: permission request back to the run that raised it.
-AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider()]))
+AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]))
 
-#: Model identifiers per runner.  The default tier handles most facets; the
-#: elevated tier handles security, where missing something costs more.
-#:
-#: Claude reviewers are sonnet-sized by default, opus-sized for security.
-#: Tier aliases intentionally track the current Claude model of each size.
-#: Codex reviewers are terra-sized by default, sol-sized for security.
-REVIEW_MODELS: dict[str, dict[str, str]] = {
-    "claude": {"default": "sonnet", "elevated": "opus"},
-    "codex": {"default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
-}
+#: Built-in review sessions inherit the provider's account-compatible model.
+#: Separate sessions provide independent review even with one installed agent.
+BUILTIN_RUNNERS = frozenset(("claude", "codex", "opencode"))
 
 
 # ---------------------------------------------------------------------------
@@ -153,11 +146,7 @@ class _RunnerInput:
     def _for_runner(self, runner: str) -> ACPNode:
         node = cast(ACPNode, self)
         config = node.session_config
-        if isinstance(self, ReviewNode) and runner in REVIEW_MODELS:
-            facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
-            model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
-            config = _with_model(config, model)
-        elif runner not in REVIEW_MODELS:
+        if runner not in BUILTIN_RUNNERS:
             # An added agent asks for its own model, as it does from the CLI.
             added = node.registry.model(runner) if isinstance(node.registry, WithAddedAgents) else ""
             config = _with_model(config, added)
@@ -449,9 +438,7 @@ def pipeline(
     # ---- review fan-out: one node per facet, run in parallel ----------------
 
     reviewer = _cross_reviewer(runner)
-    models = REVIEW_MODELS[reviewer]
     for facet in REVIEW_FACETS:
-        model = models["elevated"] if facet.elevated else models["default"]
         node_name = _review_node_name(facet.id)
         builder.add_node(
             node_name,
@@ -485,7 +472,7 @@ def pipeline(
                 graph_node_description=(
                     f"Reviews the change for {facet.name.lower()}."
                 ),
-                session_config=_with_model(session_config, model),
+                session_config=session_config,
             ),
         )
 
@@ -638,7 +625,7 @@ def pipeline(
 DEFAULT_RUNNER = "round-robin"
 DEFAULT_REVIEW_RUNNER = "round-robin"
 RUNNER_CHOICES = tuple(dict.fromkeys(
-    runner for runner in ("codex", "claude", DEFAULT_RUNNER)
+    runner for runner in ("codex", "claude", "opencode", DEFAULT_RUNNER)
     if runner not in (LEAST_UTILIZED, ROUND_ROBIN)
 ))
 #: What the runner dropdowns offer: a runner, or a policy that picks one per run.

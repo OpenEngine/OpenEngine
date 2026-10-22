@@ -97,6 +97,7 @@ SESSION_CONFIG_OPTIONS = ("mode", "model")
 #: filling the table in -- tool completion, message completion -- is the
 #: streaming ticket's work.
 _UPDATE_EVENTS: Mapping[str, ACPEventType] = {
+    "error": ACPEventType.ERROR,
     "agent_message_chunk": ACPEventType.MESSAGE_DELTA,
     "agent_thought_chunk": ACPEventType.THOUGHT_DELTA,
     "tool_call": ACPEventType.TOOL_STARTED,
@@ -601,16 +602,36 @@ class StdioACPSession:
         once the agent has finished, which is far too late to be watching.
         """
         blocks = _content_blocks(prompt)
+        diagnostic = ""
+        used_tools = False
         stream = self._client.open_stream(self._session_id)
         turn = asyncio.create_task(self._run(blocks, stream))
         try:
             while True:
                 item = await stream.get()
                 if isinstance(item, ACPEvent):
+                    if item.type == ACPEventType.ERROR:
+                        raise ACPSessionError(
+                            str(item.data.get("message") or item.data.get("error") or "agent reported an error"),
+                            agent=self._client.agent, session_id=self._session_id,
+                            operation="session/prompt",
+                        )
+                    if item.type == ACPEventType.TOOL_STARTED:
+                        used_tools = True
+                    if item.type == ACPEventType.MESSAGE_DELTA:
+                        content = item.data.get("content")
+                        text = content.get("text") if isinstance(content, Mapping) else None
+                        if isinstance(text, str):
+                            diagnostic = (diagnostic + text)[-8192:]
                     yield item
                     continue
                 if item.error is not None:
                     raise item.error
+                if not used_tools and (failure := provider_error(diagnostic)):
+                    raise ACPSessionError(
+                        failure, agent=self._client.agent,
+                        session_id=self._session_id, operation="session/prompt",
+                    )
                 yield self._client.event(
                     self._session_id, ACPEventType.PROMPT_COMPLETED, item.result
                 )
@@ -651,6 +672,35 @@ class StdioACPSession:
             stream.put_nowait(
                 _Completion(result=as_mapping(result, field="the session/prompt result"))
             )
+
+
+def provider_error(text: str) -> str | None:
+    """Recognize a provider error envelope, not ordinary task narration.
+
+    Some Codex adapter versions return these as text followed by end_turn.
+    Inspect only the final nonblank line, optionally preceded by diagnostics.
+    A model explaining an error or returning a normal JSON object is not one.
+    """
+    lines = text.strip().splitlines()
+    if not lines:
+        return None
+    try:
+        value = json.loads(lines[-1])
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get("type") != "error":
+        return None
+    status = value.get("status")
+    if not isinstance(status, int) or not 400 <= status <= 599:
+        return None
+    error = value.get("error")
+    if not isinstance(error, dict) or error.get("type") not in {
+        "invalid_request_error", "authentication_error", "permission_error",
+        "rate_limit_error", "api_error", "not_found_error",
+    }:
+        return None
+    message = error.get("message")
+    return _capped(message) if isinstance(message, str) and message else None
 
 
 def _capped(detail: str) -> str:
