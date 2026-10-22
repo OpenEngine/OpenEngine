@@ -41,6 +41,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -934,6 +935,43 @@ def agent_provider(config: EngineConfig, agent: str, /, **overrides: Any) -> ACP
     raise ValueError(f"unknown agent {agent!r}; expected one of: codex, claude, opencode")
 
 
+#: What each built-in agent's provider launches when it is given no binary.
+_ADAPTER_COMMANDS = {
+    "codex": CODEX_ACP_COMMAND, "claude": CLAUDE_ACP_COMMAND, "opencode": OPENCODE_ACP_COMMAND,
+}
+
+
+def runner_binary(config: EngineConfig, agent: str) -> tuple[str, str]:
+    """The binary `agent_provider` runs for `agent`, and the version it reports.
+
+    With no binary of its own, the agent is the npm package npx launches, at
+    the version the adapter pins: e.g. Claude Code bundled with claude-agent-acp.
+    """
+    path = config.runner_paths.get(agent, "")
+    if agent == "codex":
+        path = installed_codex(path=path) or ""
+    if path:
+        return path, binary_version(path)
+    package = next((part for part in _ADAPTER_COMMANDS.get(agent, ()) if "@" in part[1:]), "")
+    name, _, version = package.rpartition("@")
+    return (f"npx {name}", version) if name else ("", "")
+
+
+@functools.cache
+def binary_version(path: str) -> str:
+    """What `path --version` reports, or empty if it will not say."""
+    if not path:
+        return ""
+    try:
+        result = subprocess.run(
+            (path, "--version"), capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = (result.stdout or result.stderr).strip().splitlines()
+    return lines[0].strip() if result.returncode == 0 and lines else ""
+
+
 def agent_providers(
     config: EngineConfig,
 ) -> tuple[CodexACPProvider, ClaudeACPProvider, OpenCodeACPProvider]:
@@ -1169,7 +1207,9 @@ __all__ = [
     "claude_acp_runner",
     "claude_session_config",
     "codex_acp_runner",
+    "binary_version",
     "installed_codex",
     "opencode_acp_runner",
+    "runner_binary",
     "render_prompt",
 ]

@@ -748,6 +748,26 @@ def test_each_session_agent_is_told_engines_shell_rules_in_its_own_terms() -> No
 # --- agents -------------------------------------------------------------------
 
 
+def test_each_service_supplies_its_own_model_tiers_to_workflow_agents(tmp_path: Path) -> None:
+    """Python graphs read the tiers of the service serving them, not a process-wide table."""
+    from engine.graph_runtime_langgraph import AddedAgents, agent_registry, with_added_agents
+
+    async def scenario() -> None:
+        first, second = AddedAgents(), AddedAgents()
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        async with graph_service(tmp_path / "a", added_agents=first,
+                                 model_tiers={"stub": {"default": "fast"}}):
+            async with graph_service(tmp_path / "b", added_agents=second,
+                                     model_tiers={"stub": {"default": "slow"}}):
+                registry = agent_registry([StdioACPProvider(name="stub", command=["true"])])
+                assert with_added_agents(registry, first).model("stub", "default") == "fast"
+                assert with_added_agents(registry, second).model("stub", "default") == "slow"
+                assert first.model_tiers["claude"]["elevated"] == "opus"
+
+    asyncio.run(scenario())
+
+
 def test_an_added_agent_runs_graphs_and_outlives_the_daemon(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:

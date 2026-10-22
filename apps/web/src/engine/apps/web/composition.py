@@ -46,6 +46,7 @@ from engine.adapters.agent_runner.acp import (
     claude_session_config,
     codex_acp_runner,
     opencode_acp_runner,
+    runner_binary,
 )
 from engine.adapters.communications.slack import (
     SlackCommunications,
@@ -417,6 +418,7 @@ def build_graph_service(
             registry=builtin_agents(config),
             agent_factory=partial(added_agent, config=config),
             added_agents=ADDED_AGENTS,
+            runner_binary=partial(runner_binary, config),
             start=start,
             session_config=claude_session_config_for(settings),
             default_repository=default_repository,

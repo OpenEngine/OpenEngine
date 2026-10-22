@@ -51,14 +51,14 @@ from engine.graph_runtime.control import CANCELLED
 from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
-from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime
+from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime, configure_model_tiers
 from engine.ports import WorkspaceProvider
 from langgraph_acp import ACPAgentRegistry, ACPAgentNotFoundError
 
 from engine.graph_runtime import GraphId
 from engine.graph_runtime.inputs import RUNNER_POLICIES, WorkflowInput, choose_runners, resolve_inputs
 from engine.graph_runtime.topology import GraphTopology
-from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig, PullRequestsConfig
+from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig, PullRequestsConfig, merge_model_tiers
 from engine.runtime.workflows import WorkflowLoadError, load_workflow_file
 
 from engine.graph_service.compile import compile_graph
@@ -228,6 +228,7 @@ class GraphService:
         allow_python: bool = True,
         agent_factory: AgentFactory | None = None,
         added_agents: AddedAgents | None = None,
+        runner_binary: Callable[[str], tuple[str, str]] | None = None,
         session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
         approval_policy: ApprovalConfig | None = None,
         pull_requests: PullRequestsConfig = PullRequestsConfig(),
@@ -255,10 +256,14 @@ class GraphService:
         self._model_tiers = model_tiers
         self._allow_python = allow_python
         self._agent_factory = agent_factory
+        #: A built-in runner's binary and its version; empty for the adapter's own.
+        self._runner_binary = runner_binary or (lambda _name: ("", ""))
         #: Added agents and their models, offered to workflow files too when this
         #: process runs any. Compiled graphs hold its `models` dict, not a copy,
         #: so a model changed here reaches graphs registered before the change.
         self._added_agents = added_agents if added_agents is not None else AddedAgents()
+        # The tiers this service's workflow files ask for, supplied with its agents.
+        configure_model_tiers(merge_model_tiers(model_tiers), self._added_agents)
         #: What the registry held before any added agent: these cannot be replaced or removed.
         self._builtin_agents = tuple(registry.names)
         self._sessions = Sessions()
@@ -337,7 +342,13 @@ class GraphService:
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
             }
         if name in self._builtin_agents:
-            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+            path, version = self._runner_binary(name)
+            return {
+                "name": name, "kind": name, "model": "", "url": "", "builtin": True,
+                "path": path, "version": version,
+                # A blank tier is the agent's own default, e.g. `~/.codex/config.toml`.
+                "models": merge_model_tiers(self._model_tiers).get(name, {}),
+            }
         raise NotFound(f"no agent named {name!r}", agent=name)
 
     async def add_agent(
@@ -420,7 +431,7 @@ class GraphService:
         self, declarations: tuple[WorkflowInput, ...], inputs: Mapping[str, str],
     ) -> tuple[str, ...]:
         """Select only usable providers; explicit choices fail without fallback."""
-        offered = {agent["name"] for agent in self.agents_json()}
+        offered = set(self._registry.names)
         runner_inputs = [item for item in declarations if
                          any(choice in offered for choice in item.choices)
                          or item.name in ("implementation_runner", "review_runner", "runner", "agent")]

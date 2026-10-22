@@ -36,10 +36,11 @@ from typing import Annotated, Any, overload
 from engine.graph_runtime import GraphCompilationError, GraphId
 from engine.graph_runtime.inputs import WorkflowInput
 from engine.ports import SourceControl
-from engine.graph_runtime_langgraph.acp import answer_permission
+from engine.graph_runtime_langgraph.acp import ACPNode, answer_permission
 from engine.graph_runtime_langgraph.graphs import LangGraphDefinition, unwrapped
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
 from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore
+from engine.graph_runtime_langgraph.terminal_mcp import TerminalMcpServer
 from langgraph_acp import ACPAgentProvider, ACPAgentRegistry, default_registry
 
 #: LangGraph's checkpoints, and the runtime's own records. Two files because
@@ -265,6 +266,9 @@ class AddedAgents(ACPAgentRegistry):
         self.models: dict[str, str] = {}
         self.context_limits: dict[str, int] = {}
         """Each agent's context window in tokens, where it was given one."""
+        self.model_tiers: dict[str, dict[str, str]] = {}
+        """Each built-in runner's model per tier, as the graph service configures
+        them from `[runners.<name>.models]`. Empty: every tier is the agent's own default."""
 
     def offer(
         self, provider: ACPAgentProvider, model: str = "", context_limit: int = 0,
@@ -308,9 +312,43 @@ class WithAddedAgents(ACPAgentRegistry):
     def __contains__(self, name: object) -> bool:
         return super().__contains__(name) or name in self.added
 
-    def model(self, name: str) -> str:
-        """The model an added agent's sessions ask for; empty for the workflow's own."""
-        return "" if super().__contains__(name) else self.added.models.get(name, "")
+    def model(self, name: str, tier: str = "") -> str:
+        """The model `name`'s sessions ask for at `tier`; empty leaves the agent's own.
+
+        An added agent asks for its own model whatever the tier. A built-in one
+        asks for what the serving graph service's `[runners.<name>.models]`
+        names for `tier`, read when the session starts, so a restart with new
+        tiers reaches registered graphs.
+        """
+        if not super().__contains__(name):
+            return self.added.models.get(name, "")
+        return self.added.model_tiers.get(name, {}).get(tier, "") if tier else ""
+
+    def session_config(
+        self, name: str, tier: str, base: Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
+        """`base` with the model `name` asks for at `tier`.
+
+        An added agent with no model of its own drops `base`'s, as it would
+        from the CLI; a built-in tier left blank keeps `base` as it is.
+        """
+        model = self.model(name, tier)
+        if model:
+            return {**(base or {}), "model": model}
+        if super().__contains__(name) or not base or "model" not in base:
+            return base
+        return {key: value for key, value in base.items() if key != "model"}
+
+
+#: The model tiers a graph step may ask for: most steps run at `default`,
+#: security review at `elevated` and naming at `cheapest`.
+DEFAULT_TIER, ELEVATED_TIER, CHEAPEST_TIER = "default", "elevated", "cheapest"
+
+def configure_model_tiers(
+    tiers: Mapping[str, Mapping[str, str]], added: AddedAgents = ADDED_AGENTS,
+) -> None:
+    """Make `tiers` (`[runners.<name>.models]`) what agents reading `added` ask for from now on."""
+    added.model_tiers = {runner: dict(models) for runner, models in tiers.items()}
 
 
 def with_added_agents(
@@ -329,6 +367,27 @@ def configured_agents(added: AddedAgents = ADDED_AGENTS) -> WithAddedAgents:
     """
     registry = default_registry()
     return with_added_agents(agent_registry(map(registry.resolve, registry.names)), added)
+
+
+def on_runner(node: ACPNode, runner: str, tier: str = DEFAULT_TIER) -> ACPNode:
+    """`node` run by `runner` on its `tier` model, its MCP identity following.
+
+    What a workflow file's `_for_runner` returns, so a step names a tier and
+    the registry the runtime supplies picks the model when the step runs.
+    """
+    registry = node.registry
+    return replace(
+        node,
+        agent=runner,
+        session_config=(
+            registry.session_config(runner, tier, node.session_config)
+            if isinstance(registry, WithAddedAgents) else node.session_config
+        ),
+        mcp_server_bindings=tuple(
+            replace(binding, agent_id=runner) if isinstance(binding, TerminalMcpServer) else binding
+            for binding in node.mcp_server_bindings
+        ),
+    )
 
 
 def added_agent_inputs(workflow: GraphWorkflow) -> frozenset[str]:

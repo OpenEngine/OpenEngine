@@ -58,6 +58,14 @@ def _default_agents_are_not_inherited(monkeypatch):
     monkeypatch.setattr(langgraph_acp.agent, "_DEFAULT", langgraph_acp.agent._DEFAULT)
 
 
+@pytest.fixture(autouse=True)
+def _model_tiers_are_not_inherited(monkeypatch):
+    """Undo the model tiers a test's daemon startup configured for workflow agents."""
+    from engine.graph_runtime_langgraph import workflows
+
+    monkeypatch.setattr(workflows.ADDED_AGENTS, "model_tiers", workflows.ADDED_AGENTS.model_tiers)
+
+
 @pytest.fixture
 def sqlite_store(tmp_path):
     """Create independent stores, or reopen an explicit path; close all at teardown."""

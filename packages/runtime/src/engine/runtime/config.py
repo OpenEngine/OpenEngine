@@ -31,6 +31,7 @@ REPO_MODES = tuple(str(mode) for mode in ForgeMode)
 DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
     "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
     "codex": {"cheapest": "", "default": "", "elevated": ""},
+    "opencode": {"cheapest": "", "default": "", "elevated": ""},
 }
 
 

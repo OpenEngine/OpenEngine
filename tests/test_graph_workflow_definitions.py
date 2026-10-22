@@ -816,6 +816,31 @@ def test_an_added_agent_runs_any_stage_on_its_own_model(model, expected) -> None
     assert not (claude.session_config or {}).get("model")
 
 
+def test_stages_ask_for_their_tier_as_configured_when_they_run() -> None:
+    """A graph built before the tiers changed asks for the new models: a restart is enough."""
+    from engine.graph_runtime_langgraph import configure_model_tiers
+
+    module = definition_module()
+    nodes = nodes_of(module.graph_for("codex").builder)
+
+    def model(name: str, runner: str = "codex") -> object:
+        return (nodes[name]._for_runner(runner).session_config or {}).get("model")
+
+    configure_model_tiers({
+        "codex": {"cheapest": "codex-mini", "default": "codex-main", "elevated": "codex-max"},
+        "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
+    })
+    assert [model(name) for name in ("naming", "implementation", "review-security", "review-bugs", "impact-analysis")] == [
+        "codex-mini", "codex-main", "codex-max", "codex-main", "codex-main",
+    ]
+    assert model("review-security", "claude") == "opus"
+
+    configure_model_tiers({"codex": {"cheapest": "", "default": "codex-next", "elevated": ""}})
+    assert model("implementation") == "codex-next"
+    # A blank tier leaves the agent to its own default, e.g. `~/.codex/config.toml`.
+    assert model("review-security") is None and model("naming") is None
+
+
 def test_an_added_implementer_is_reviewed_by_claude() -> None:
     module = definition_module()
     nodes = nodes_of(module.pipeline("qwen"))

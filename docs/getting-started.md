@@ -151,7 +151,7 @@ oe verb set review my-review
 
 Here `my-review` must already be registered. The CLI checks its input contract:
 `go` needs `instruction`; other verbs need `pr_url` or `ref`. See
-[writing your own graph](#5-next-steps) below.
+[writing your own graph](#6-next-steps) below.
 
 ## 3. A shared daemon
 
@@ -214,7 +214,29 @@ oe daemon start
 For a shared backend, its administrator changes the configuration and restarts
 the service on the daemon's machine.
 
-## 5. Next steps
+## 5. Agents and models
+
+Each agent a graph step can run, `codex`, `claude` and `opencode`, is
+configured under `[runners.NAME]` in `engine.toml`: the binary it runs and the
+model for each tier. Steps ask for a tier rather than a model: most run at
+`default`, security review at `elevated`, and naming a run at `cheapest`.
+
+```toml
+[runners.codex]
+path = "/usr/local/bin/codex"   # optional; default: CODEX_PATH, then codex on PATH
+models = { cheapest = "", default = "", elevated = "" }
+
+[runners.claude]
+models = { cheapest = "haiku", default = "sonnet", elevated = "opus" }
+```
+
+A blank or missing tier leaves the agent to its own default; for Codex, the
+`model` in `~/.codex/config.toml`. Steps read the tiers when they start, so
+restarting the daemon after an edit is enough, including for runs of graphs
+registered earlier. `oe agents` shows each agent's binary, its version and its
+model per tier, marking those left to the agent's default.
+
+## 6. Next steps
 
 Write your own graph using the current
 [`oe graph spec` reference](https://openengine.cc/docs/cli-specs/#engine-graph-spec),

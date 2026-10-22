@@ -46,11 +46,14 @@ from engine.adapters.workspace_provider.git_worktree import (
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
     WorkflowInput,
+    CHEAPEST_TIER,
+    DEFAULT_TIER,
+    ELEVATED_TIER,
     State,
     TerminalMcpServer,
-    WithAddedAgents,
     configured_agents,
     graph_workflow,
+    on_runner,
 )
 from engine.graph_runtime_langgraph.components import (
     ACPNode,
@@ -119,12 +122,9 @@ FIX = "fix"
 REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
 #: Codex, Claude and OpenCode as `engine.toml` configures them, reached
-#: through ACP, and any agent added with `oe agent add`.
+#: through ACP, and any agent added with `oe agent add`. Steps name a model
+#: tier; these resolve it from `[runners.<name>.models]` when the step runs.
 AGENTS = configured_agents()
-
-#: Built-in review sessions inherit the provider's account-compatible model.
-#: Separate sessions provide independent review even with one installed agent.
-BUILTIN_RUNNERS = frozenset(("claude", "codex", "opencode"))
 
 
 # ---------------------------------------------------------------------------
@@ -136,27 +136,16 @@ BUILTIN_RUNNERS = frozenset(("claude", "codex", "opencode"))
 # ---------------------------------------------------------------------------
 
 class _RunnerInput:
-    """Resolve the stage's runner per invocation, including its MCP identity."""
+    """Resolve the stage's runner per invocation, its model tier and MCP identity."""
 
     graph_node_runner_input = "implementation_runner"
+    model_tier = DEFAULT_TIER
 
     def _for_runner(self, runner: str) -> ACPNode:
-        node = cast(ACPNode, self)
-        config = node.session_config
-        if runner not in BUILTIN_RUNNERS:
-            # An added agent asks for its own model, as it does from the CLI.
-            added = node.registry.model(runner) if isinstance(node.registry, WithAddedAgents) else ""
-            config = _with_model(config, added)
-        return replace(
-            node,
-            agent=runner,
-            session_config=config,
-            mcp_server_bindings=tuple(
-                replace(binding, agent_id=runner)
-                if isinstance(binding, TerminalMcpServer) else binding
-                for binding in node.mcp_server_bindings
-            ),
-        )
+        return on_runner(cast(ACPNode, self), runner, self._model_tier())
+
+    def _model_tier(self) -> str:
+        return self.model_tier
 
 
 class InputImplementationNode(_RunnerInput, ACPNode):
@@ -164,7 +153,7 @@ class InputImplementationNode(_RunnerInput, ACPNode):
 
 
 class InputNameNode(_RunnerInput, NameNode):
-    pass
+    model_tier = CHEAPEST_TIER
 
 
 class InputImpactAnalysisNode(_RunnerInput, ACPNode):
@@ -184,6 +173,9 @@ def _validate_impact_analysis(event: StepCompleted) -> None:
 
 class InputReviewNode(_RunnerInput, ReviewNode):
     graph_node_runner_input = "review_runner"
+
+    def _model_tier(self) -> str:
+        return ELEVATED_TIER if self.facet == "security" else DEFAULT_TIER
 
 
 class _RerankerTools(TerminalMcpServer):
@@ -217,18 +209,6 @@ class InputRerankerNode(_RunnerInput, RerankerNode):
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
         update = await super().__call__(state)
         return {**update, "review_rounds": state.get("review_rounds", 0) + 1}
-
-
-def _with_model(
-    base: Mapping[str, Any] | None, model: str
-) -> dict[str, object]:
-    """Merge a model override into the caller's session config; none leaves the agent's own."""
-    merged = dict(base or {})
-    if model:
-        merged["model"] = model
-    else:
-        merged.pop("model", None)
-    return merged
 
 
 def _cross_reviewer(runner: str) -> str:

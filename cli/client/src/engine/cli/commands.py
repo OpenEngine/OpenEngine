@@ -752,6 +752,9 @@ def agents_list(arguments: argparse.Namespace) -> int:
     agents = client.get("/agents")["agents"]
     if not arguments.json:
         _table(agents, _AGENT_COLUMNS)
+        for agent in agents:
+            if agent.get("models") is not None:
+                print("\n" + _runner_detail(agent))
     else:
         _print({"agents": agents})
     return EXIT_OK
@@ -1011,7 +1014,19 @@ def _backend_line(body: dict[str, Any]) -> str:
 
 def _agent_line(body: dict[str, Any]) -> str:
     detail = " ".join(part for part in (body.get("model") or "", body.get("url") or "", _agent_limit(body)) if part)
-    return f"{body['name']}  {body['kind']}{'  ' + detail if detail else ''}{'  (built in)' if body.get('builtin') else ''}"
+    line = f"{body['name']}  {body['kind']}{'  ' + detail if detail else ''}{'  (built in)' if body.get('builtin') else ''}"
+    return line if body.get("models") is None else f"{line}\n{_runner_detail(body)}"
+
+
+def _runner_detail(body: dict[str, Any]) -> str:
+    """A built-in agent's binary and version, and its model for each tier."""
+    binary = body.get("path") or "the adapter's bundled binary"
+    version = f" ({body['version']})" if body.get("version") else ""
+    models = body.get("models") or {}
+    width = max((len(tier) for tier in models), default=0)
+    return "\n".join([f"{body['name']}  {binary}{version}", *(
+        f"  {tier.ljust(width)}  {model or '(agent default)'}" for tier, model in sorted(models.items())
+    )])
 
 
 def _agent_limit(body: dict[str, Any]) -> str:
