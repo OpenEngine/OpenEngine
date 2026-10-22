@@ -127,6 +127,10 @@ The loop record shows its pinned version, cadence, inputs, budget, active run an
 
 It works too. Our agent produces security issues daily and we're experimenting with allowing it to automatically produce fixes.
 
+![Open GitHub issues carrying the security label, including findings filed by the security-review loop](/img/blog/security-review-issues.png)
+
+The security-labeled repair queue on October 22, including issues filed by the loop.
+
 
 ```bash
 uv run engine loop pause security-review --backend mini \

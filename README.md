@@ -11,7 +11,7 @@
 
 Coding agents are fast. The hard part is making their output trustworthy every time, not just when you are watching. OpenEngine is an open-source software factory: you write your lifecycle once as a graph (implement, wait for CI, fan out adversarial reviewers, rerank the findings, fix, open the PR), and `engine go` runs every change through it. Add a security reviewer to the graph once and it checks every change from then on.
 
-![OpenEngine running the default graph](docs/images/oe_land.png)
+![OpenEngine lifecycle graph: implement, run CI, review in parallel, rerank, and open a pull request](docs/images/oe_land.png)
 
 ## Try it in two minutes
 
