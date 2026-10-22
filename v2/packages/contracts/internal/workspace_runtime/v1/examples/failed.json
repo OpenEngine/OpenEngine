@@ -1,0 +1,39 @@
+{
+  "definition": "failed",
+  "subject": "oe.internal.v1.vcp.runtimes.rt_demo.updates",
+  "payload": {
+    "event_id": "rte_failed",
+    "kind": "attempt.failed",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1,
+      "session_id": "session_demo",
+      "attempt_id": "attempt_demo"
+    },
+    "boot_id": "boot_1",
+    "sequence": 5,
+    "occurred_at": "2026-10-22T12:00:00Z",
+    "payload": {
+      "error": {
+        "code": "PROVIDER_ERROR",
+        "message": "Agent exited unsuccessfully",
+        "retryable": false
+      },
+      "reason": "executor_failed"
+    },
+    "termination": "exited",
+    "execution": {
+      "command_id": "rtc_execute",
+      "cause": {
+        "operation": {
+          "operation_id": "op_execute",
+          "command_id": "cmd_execute"
+        },
+        "causal_path": [
+          "cmd_execute"
+        ]
+      }
+    }
+  }
+}

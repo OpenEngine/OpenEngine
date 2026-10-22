@@ -16,22 +16,27 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 
 ## Implementation status
 
-**These are contracts, not implementations.** As of this release:
+VCP workspace lifecycle and task execution are implemented; the remaining
+surfaces are contracts for subsequent work. See the [VCP service guide](../../services/virtual_control_plane/README.md).
 
 | Defined here | Implemented |
 | -- | -- |
-| Control and query subjects (`oe.v1.…`) with typed requests and replies | No service answers them. No handlers exist. |
-| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.events.toolinvocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
-| Operation, job, execution, workspace, session and approval models | No persistence or state machine implements them. |
+| Control and query subjects (`oe.v1.…`) with typed requests and replies | VCP answers create/ensure/execute/cancel/destroy, supported steering, capabilities, workspace and session get/list, session events and operation get. Other surfaces are pending; executor limitations are documented in the service guide. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.events.toolinvocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes workspace, task, conversation, usage and steering events through its outbox. |
+| Operation, job, execution, workspace, session and approval models | VCP persists workspace lifecycle, sessions, attempts, operations, command receipts, runtime ownership and outgoing events. Other models are pending. |
 | Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
 
-This work creates no consumers or broker permissions. The tool service adds
-one stream, `tools-events`, and declares one queue group, `tool-workers`, for
+The public contracts create no consumers or broker permissions. The tool service
+adds one stream, `tools-events`, and declares one queue group, `tool-workers`, for
 the execution workers on `oe.v1.tools.invoke.*.*`. The other event streams
-capture `oe.v1.{svc}.events.>`, so events share the `oe.v1` namespace. Workspace-daemon contracts and
-provider ingress/egress payloads (`cxn.ingress.>`, `cxn.egress.>`) are out of
-scope.
+capture `oe.v1.{svc}.events.>`, so events share the `oe.v1` namespace.
+
+The separate [internal runtime contract](internal/workspace_runtime/v1/README.md)
+defines the implemented VCP/daemon execution, cancellation, steering, inspection
+and update protocol. See the VCP service guide for supported executors and
+runtime provisioning. Provider ingress/egress payloads (`cxn.ingress.>`,
+`cxn.egress.>`) remain out of scope.
 
 ## Layout
 

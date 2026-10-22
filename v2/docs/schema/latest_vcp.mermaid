@@ -1,5 +1,5 @@
 ---
-title: vcp at 720d08e24193 (green added, red removed, amber changed)
+title: vcp at fccebf44b080 (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -11,11 +11,90 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    workspaces["workspaces (ADDED)"] {
-        VARCHAR(36) id PK "ADDED; not null"
-        VARCHAR(32) provider "ADDED; not null"
-        VARCHAR(32) status "ADDED; not null"
-        DATETIME created_at "ADDED; not null"
-        DATETIME updated_at "ADDED; not null"
+    attempt_bindings["attempt_bindings"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class workspaces added
+    attempts["attempts"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    command_receipts["command_receipts"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    cursors["cursors"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    daemon_attempts["daemon_attempts (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_attempts added
+    daemon_commands["daemon_commands (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_commands added
+    daemon_meta["daemon_meta (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_meta added
+    daemon_sessions["daemon_sessions (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_sessions added
+    daemon_updates["daemon_updates (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_updates added
+    operations["operations"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    outbox["outbox"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    runtime_outbox["runtime_outbox"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    runtime_ownership["runtime_ownership"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    runtime_status["runtime_status (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class runtime_status added
+    runtime_updates["runtime_updates (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class runtime_updates added
+    session_history["session_history (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class session_history added
+    sessions["sessions"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    workspace_records["workspace_records"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    workspaces["workspaces"] {
+        VARCHAR(36) id PK "not null"
+        VARCHAR(32) provider "not null"
+        VARCHAR(32) status "not null"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+    }

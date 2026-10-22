@@ -11,7 +11,7 @@ import { Parser, fromFile } from "@asyncapi/parser";
 
 const contracts = dirname(dirname(fileURLToPath(import.meta.url)));
 const only = process.argv[2];
-const services = readdirSync(contracts)
+const services = [...readdirSync(contracts), "internal/workspace_runtime"]
   .filter((name) => existsSync(join(contracts, name, "v1", "asyncapi.yaml")))
   .filter((name) => !only || name === only)
   .sort();

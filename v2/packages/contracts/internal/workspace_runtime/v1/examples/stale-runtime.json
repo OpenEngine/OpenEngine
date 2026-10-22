@@ -1,0 +1,20 @@
+{
+  "definition": "command_ack",
+  "in_reply_to": "oe.internal.v1.runtime.runtimes.rt_demo.execute",
+  "payload": {
+    "command_id": "rtc_execute",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1,
+      "session_id": "session_demo",
+      "attempt_id": "attempt_demo"
+    },
+    "status": "rejected",
+    "error": {
+      "code": "STALE_RUNTIME",
+      "message": "Runtime generation no longer authorized",
+      "retryable": false
+    }
+  }
+}

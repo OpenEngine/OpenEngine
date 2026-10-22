@@ -397,6 +397,12 @@ requires-dist = [
 name = "openengine-supervisor"
 version = "0.0.0"
 source = { editable = "apps/supervisor" }
+dependencies = [
+    { name = "openengine-virtual-control-plane" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "openengine-virtual-control-plane", editable = "services/virtual_control_plane" }]
 
 [[package]]
 name = "openengine-tool-service"
@@ -414,11 +420,17 @@ name = "openengine-virtual-control-plane"
 version = "0.0.0"
 source = { editable = "services/virtual_control_plane" }
 dependencies = [
+    { name = "jsonschema" },
+    { name = "nats-py" },
     { name = "openengine-persistence" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "openengine-persistence", editable = "packages/persistence" }]
+requires-dist = [
+    { name = "jsonschema", specifier = ">=4.23" },
+    { name = "nats-py", specifier = ">=2.9" },
+    { name = "openengine-persistence", editable = "packages/persistence" },
+]
 
 [[package]]
 name = "packaging"
