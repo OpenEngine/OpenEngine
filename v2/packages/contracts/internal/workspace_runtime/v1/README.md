@@ -1,8 +1,8 @@
 # Workspace runtime protocol v1
 
 This is the **internal contract**, not an implementation. It covers the next
-execution milestone: execute, agent progress/outcome, cancellation and recovery.
-Steering is reserved for a later slice. Approvals,
+execution milestone: execute, agent progress/outcome, cancellation, bound
+active-attempt steering and recovery. Idle steering, approvals,
 checkpoints and suspension are excluded. The public
 [VCP contract](../../../virtual_control_plane/v1/asyncapi.yaml) is unchanged.
 `asyncapi.yaml` is written from VCP's perspective; `messages.schema.json` is the
@@ -15,6 +15,7 @@ wire authority and this document specifies stateful rules. Release:
 | -- | -- | -- |
 | `oe.internal.v1.runtime.runtimes.{runtime_id}.execute` | VCP → daemon | execute → command_ack |
 | `oe.internal.v1.runtime.runtimes.{runtime_id}.cancel` | VCP → daemon | cancel → command_ack |
+| `oe.internal.v1.runtime.runtimes.{runtime_id}.steer` | VCP → daemon | steer → command_ack |
 | `oe.internal.v1.runtime.runtimes.{runtime_id}.inspect` | VCP → daemon | inspect → inspect_response |
 | `oe.internal.v1.vcp.runtimes.{runtime_id}.updates` | daemon → VCP | update → update_ack |
 
@@ -60,7 +61,7 @@ attempt. Retries preserve the entire cause and all identities.
 
 Envelope identities and arbitrary headers are claims, not authentication.
 Provision each daemon with a separate NATS credential scoped to its runtime:
-subscribe to its execute/cancel/inspect subjects **and** its own reply-inbox
+subscribe to its execute/cancel/steer/inspect subjects **and** its own reply-inbox
 prefix `_INBOX.oe.runtime.{runtime_id}.>`; publish to its own updates subject,
 with restricted native response permissions for replies to incoming commands.
 Response permissions permit publishing replies, not subscribing to inboxes.
@@ -83,6 +84,7 @@ permissions: {
   subscribe: { allow: [
     "oe.internal.v1.runtime.runtimes.rt_demo.execute",
     "oe.internal.v1.runtime.runtimes.rt_demo.cancel",
+    "oe.internal.v1.runtime.runtimes.rt_demo.steer",
     "oe.internal.v1.runtime.runtimes.rt_demo.inspect",
     "_INBOX.oe.runtime.rt_demo.>"
   ] }
@@ -320,18 +322,50 @@ error reply. Stateful validation (credentials, session ownership, generation
 registry, journal sequences and executor termination) must run in the services;
 the schema validator does not establish these facts.
 
-## Reserved steering
+## Bound steering
 
-`oe.internal.v1.runtime.runtimes.{runtime_id}.steer` and update kinds
-`steering.applied` / `steering.failed` are reserved, with no send operation or
-accepted wire schema in this release. Do not publish them or grant daemon steer
-permissions yet. A later contract slice will define active and idle session
-steering, durable acknowledgement and application semantics. Public VCP steering
-responsibilities remain unchanged.
+Public steer targets a session, not an arbitrary attempt. The public contract
+permits an idle session's next turn or an active session's mid-attempt message.
+This runtime revision supports only the latter. VCP accepts only a ready owned
+runtime, current-generation active session and exactly one running attempt.
+Starting/cancelling/closed states are rejected with INVALID_STATE; idle steering
+and runners without support are rejected with UNSUPPORTED_CAPABILITY. Suspended
+restoration remains unsupported. No attempt is created or implicitly replaced.
+
+The optional runtime.ready steering_executors lists runners supporting this
+revision; absent means none. The command subject is
+oe.internal.v1.runtime.runtimes.{runtime_id}.steer, with steer / command_ack
+request/reply. Grant the daemon subscription to that exact runtime subject,
+alongside execute/cancel/inspect; existing update and inbox permissions apply.
+Steer carries its own command ID/cause, the original execute identity, exact
+attempt binding and message. These remain immutable across retries.
+
+A command ACK means intent is journaled, never that the message was applied.
+The executor must atomically commit its steering effect and a stable
+steering.applied update in the daemon journal, or publish steering.failed
+with a public error. This transactional capability is intentionally narrower
+than an arbitrary network RPC. External adapters must establish durable
+idempotency, bound-turn targeting and outcome recovery before advertising it.
+Do not retry an uncertain external effect or reinterpret it as a new turn.
+
+Application rechecks the exact attempt and running state. Completion/cancellation
+winning the journal transaction prevents application. Applied updates precede
+the corresponding attempt terminal update. VCP resolves remaining pending
+steers as failed when that terminal update commits, including undelivered
+commands; subsequent failed delivery reports are consumed without duplicating
+events/history. An applied report after that resolution is a conflict.
+
+Restart replays journaled pending commands. Existing executor recovery fences
+interrupted attempts, so their pending steers fail without relaunching.
+Applied effects/outcomes survive restart together. VCP atomically records the
+operation outcome, public steering event and one session history entry.
+Both applied and failed messages are recorded with their operation ID.
 
 ## Design provenance
 
-Adapted only from the protocol and validation evidence in PR #1045 at
-`891491c936e7078e8f10619566185d6150b942c7`, for issue #1116. Shared VCP types
-and the single `openengine.cc/v1alpha1` resource API group from #1043 remain
-authoritative. No public contract, handler or persistence behavior is changed.
+Adapted from the protocol and validation evidence in PR #1045 at
+`891491c936e7078e8f10619566185d6150b942c7`, for issue #1116, with bound
+active-attempt steering and per-attempt `attempt_sequence` folded in from that
+same PR's full revision. Shared VCP types and the single
+`openengine.cc/v1alpha1` resource API group from #1043 remain authoritative.
+No public contract, handler or persistence behavior is changed.

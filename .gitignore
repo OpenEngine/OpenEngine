@@ -30,3 +30,9 @@ playwright-report/
 .env.*
 /engine.local.toml
 .engine/
+
+# JetBrains IDE project files
+.idea/
+*.iml
+*.ipr
+*.iws

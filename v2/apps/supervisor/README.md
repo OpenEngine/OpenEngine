@@ -17,3 +17,12 @@ release for this platform, checks it against the checksum in
 `processes/nats.py`, and caches it under `$XDG_CACHE_HOME/openengine`. To bump
 NATS, change `NATS_VERSION` and replace `ARCHIVE_SHA256` with the matching lines
 from that release's `SHA256SUMS`.
+
+## Virtual Control Plane
+
+`oe up` always starts VCP after every other service; set `OE_VCP_SMOLVM_IMAGE`
+first to register the smolvm provider, or leave it unset to start with no
+providers configured. VCP readiness is recorded in supervisor status. Shutdown
+retains workspace VMs; explicit VCP destroy commands remove them. See
+[the VCP service guide](../../services/virtual_control_plane/README.md) for the
+local-account trust boundary, persistence and provider prerequisites.

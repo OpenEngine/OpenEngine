@@ -16,22 +16,27 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 
 ## Implementation status
 
-**These are contracts, not implementations.** As of this release:
+The VCP workspace-lifecycle milestone is implemented; the remaining surfaces
+are contracts for subsequent work. See the [VCP service guide](../../services/virtual_control_plane/README.md).
 
 | Defined here | Implemented |
 | -- | -- |
-| Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.control.graphs.apply`, `oe.v1.ge.query.graphs.list`, `oe.v1.ge.query.graphs.{graph_id}.get` and `oe.v1.ge.query.operations.{operation_id}.get`, and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
-| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
-| Operation, job, execution, workspace, session and approval models | GE records `graphs.apply` operations, graph revisions and command receipts, each scoped to a project (`default` unless a request names one; a project name grants no authorization by itself). Nothing else implements them. |
+| Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.control.graphs.apply`, `oe.v1.ge.query.graphs.list`, `oe.v1.ge.query.graphs.{graph_id}.get` and `oe.v1.ge.query.operations.{operation_id}.get`, and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). VCP answers create/ensure/destroy, capabilities, workspace get/list and operation get. Other surfaces are pending. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes provisioning, ready, destroyed and workspace failure events through its outbox; nothing else publishes to them yet. |
+| Operation, job, execution, workspace, session and approval models | GE records `graphs.apply` operations, graph revisions and command receipts, each scoped to a project (`default` unless a request names one; a project name grants no authorization by itself). VCP persists workspace lifecycle, operations, command receipts, runtime ownership and outgoing events. Other models are pending. |
 | Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
 
-This work creates no consumers or broker permissions. The tool service adds
-one stream, `tools-events`, and declares one queue group, `tool-workers`, for
-the execution workers on `oe.v1.tools.invoke.*.*`. The other event streams
-capture `oe.v1.{svc}.events.>`, so events share the `oe.v1` namespace. Workspace-daemon contracts and
-provider ingress/egress payloads (`cxn.ingress.>`, `cxn.egress.>`) are out of
-scope.
+This work creates no streams, consumers, queue groups or broker permissions
+beyond the tool service's one stream, `tools-events`, and one queue group,
+`tool-workers`, for the execution workers on `oe.v1.tools.invoke.*.*`. The
+other event streams capture `oe.v1.{svc}.events.>`, so events share the
+`oe.v1` namespace; `oe migrate` applies that as a config update. The separate
+[internal runtime contract](internal/workspace_runtime/v1/README.md) defines
+VCP/daemon execution, cancellation and bound steering; its implementation is
+the [VCP service guide](../../services/virtual_control_plane/README.md).
+Workspace-daemon contracts and provider ingress/egress payloads
+(`cxn.ingress.>`, `cxn.egress.>`) remain out of scope.
 
 ## Layout
 
