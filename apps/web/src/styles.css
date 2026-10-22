@@ -457,6 +457,12 @@ ul, ol { padding: 0; list-style: none; }
   line-height: 1.1;
   letter-spacing: -.035em;
   overflow-wrap: anywhere;
+  /* Clamp to about 3 lines, as done for .detail-title h1 in #930 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .panel-head .lede { font-size: 15px; }
 
