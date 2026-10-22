@@ -653,7 +653,7 @@ async def test_unavailable_model_fails_instead_of_using_the_default() -> None:
 
 
 @asyncio_test
-async def test_structured_provider_error_is_not_a_successful_turn(tmp_path):
+async def test_structured_provider_error_is_not_a_successful_turn(tmp_path: Path) -> None:
     message = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."
     response = json.dumps({'type': 'error', 'status': 400,
                            'error': {'type': 'invalid_request_error', 'message': message}})
@@ -671,7 +671,7 @@ async def test_structured_provider_error_is_not_a_successful_turn(tmp_path):
 
 
 @asyncio_test
-async def test_ordinary_json_response_is_not_a_provider_failure():
+async def test_ordinary_json_response_is_not_a_provider_failure() -> None:
     agent = replace(fake_agent(), env={'FAKE_AGENT_RESPONSE': '{"name":"Fix error handling"}'})
     client = await agent.connect()
     try:

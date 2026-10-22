@@ -1560,6 +1560,9 @@ class _RegisteredGraphs:
             raise NotFound(f"no graph named {name!r}")
         return SimpleNamespace(), SimpleNamespace(version_id=str(self.workflow.graph_id))
 
+    async def ready_runner_choices(self, declarations, inputs):
+        return None
+
     def added_agents(self):
         return ()
 

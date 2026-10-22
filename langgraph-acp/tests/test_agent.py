@@ -7,6 +7,8 @@ anything that knows what Codex is.
 """
 
 import os
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -142,29 +144,26 @@ def test_providers_compare_by_value() -> None:
     assert CodexACPProvider() != CodexACPProvider(name="other")
 
 
-def test_codex_adapter_uses_the_installed_binary(monkeypatch):
-    from langgraph_acp.providers import codex
+def test_codex_adapter_uses_the_installed_binary(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('CODEX_PATH', raising=False)
-    monkeypatch.setattr(codex.shutil, 'which', lambda *args, **kwargs: '/installed/bin/codex')
+    monkeypatch.setattr(shutil, 'which', lambda *args, **kwargs: '/installed/bin/codex')
     assert CodexACPProvider().launch_environment()['CODEX_PATH'] == '/installed/bin/codex'
 
 
-def test_codex_explicit_binary_takes_precedence(monkeypatch):
-    from langgraph_acp.providers import codex
+def test_codex_explicit_binary_takes_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('CODEX_PATH', '/environment/codex')
-    monkeypatch.setattr(codex.shutil, 'which', lambda *args, **kwargs: '/installed/codex')
+    monkeypatch.setattr(shutil, 'which', lambda *args, **kwargs: '/installed/codex')
     assert 'CODEX_PATH' not in CodexACPProvider().launch_environment()
     assert CodexACPProvider(env={'CODEX_PATH': '/configured/codex'}).launch_environment()['CODEX_PATH'] == '/configured/codex'
 
 
-def test_adapter_only_installation_keeps_bundled_codex(monkeypatch):
-    from langgraph_acp.providers import codex
+def test_adapter_only_installation_keeps_bundled_codex(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('CODEX_PATH', raising=False)
-    monkeypatch.setattr(codex.shutil, 'which', lambda *args, **kwargs: None)
+    monkeypatch.setattr(shutil, 'which', lambda *args, **kwargs: None)
     assert 'CODEX_PATH' not in CodexACPProvider().launch_environment()
 
 
-def test_codex_diagnostic_identifies_the_effective_runtime(tmp_path):
+def test_codex_diagnostic_identifies_the_effective_runtime(tmp_path: Path) -> None:
     import asyncio
     import sys
     binary = tmp_path / 'codex'
