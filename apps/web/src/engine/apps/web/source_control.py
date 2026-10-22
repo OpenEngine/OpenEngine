@@ -208,7 +208,7 @@ class RoutingSourceControl:
         """Follow the forge of the workspace's `origin`, not one global choice."""
         assert self._workspace_provider is not None
         root = await self._workspace_provider.root_path(workspace_id)
-        host = _host(await _origin_url(root))
+        host = _remote_host(await _origin_url(root))
         gitlab_origin = self._preferences.gitlab_origin() or _DEFAULT_GITLAB_ORIGIN
         provider: SourceControlProvider | None
         if host in self._github_hosts:
@@ -418,15 +418,30 @@ class RoutingSourceControl:
 
 
 def _host(location: str) -> str:
-    """The lowercase host of a URL, scp-style remote or bare authority."""
+    """The lowercase host of a configured URL or bare authority."""
     location = location.strip()
     if "://" not in location:
-        # `git@github.com:owner/repo.git` and `alias.example:8443` alike.
-        location = "ssh://" + location.replace(":", "/", 1) if "@" in location else f"https://{location}"
+        location = f"https://{location}"
     try:
         return (urlsplit(location).hostname or "").lower()
     except ValueError:
         return ""
+
+
+def _remote_host(remote: str) -> str:
+    """The lowercase host of a Git remote, or empty for a local path.
+
+    Git reads `[user@]host:path` as scp-style only when no `/` comes before
+    the first `:`; anything else without a scheme, such as `../repo`, is a
+    path on this machine.
+    """
+    remote = remote.strip()
+    if "://" in remote:
+        return _host(remote)
+    authority, colon, _ = remote.partition(":")
+    if not colon or "/" in authority:
+        return ""
+    return _host(authority.rpartition("@")[2])
 
 
 async def _origin_url(root_path: str) -> str:

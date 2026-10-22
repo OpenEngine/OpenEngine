@@ -815,3 +815,20 @@ def test_workspace_on_an_unknown_forge_is_not_sent_to_github(
         asyncio.run(router.publish(WorkspaceId("workspace"), "agent/fix"))
     for provider in providers.values():
         assert not provider.mock_calls
+
+
+@pytest.mark.parametrize("remote", ["../repo", "./repo", "/srv/git/repo.git", "file:///srv/git/repo.git"])
+def test_workspace_with_a_local_remote_keeps_the_saved_choice(tmp_path, git_repo, monkeypatch, remote):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("a local remote needs no GitHub detection"),
+    )
+    router, providers = _forge_router(tmp_path, git_repo, remote)
+
+    asyncio.run(router.publish(WorkspaceId("workspace"), "agent/fix"))
+
+    providers["gitlab-oauth"].publish.assert_awaited_once()
+    assert not providers["gh-cli"].mock_calls
+    assert not providers["github-oauth"].mock_calls
