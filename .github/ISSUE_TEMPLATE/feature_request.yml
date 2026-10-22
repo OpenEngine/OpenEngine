@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest something OpenEngine should do.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The workflow or situation, in your own words. What is slow, missing, or awkward today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen
+      description: A sketch is fine. A CLI invocation, a graph snippet, or a sentence.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have considered

@@ -1,256 +1,80 @@
 # OpenEngine
 
+**Define your software development lifecycle as a graph. Run every change through it on the Claude Code and Codex subscriptions you already have. Get back a reviewed pull request.**
+
+[![GitHub stars](https://img.shields.io/github/stars/OpenEngine/OpenEngine?style=flat&logo=github&label=stars)](https://github.com/OpenEngine/OpenEngine/stargazers)
+[![npm](https://img.shields.io/npm/v/%40openengine.cc%2Fengine?logo=npm&label=npm)](https://www.npmjs.com/package/@openengine.cc/engine)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Coverage baseline: 85.12%](https://img.shields.io/badge/coverage%20baseline-85.12%25-brightgreen)](https://github.com/OpenEngine/OpenEngine/actions/workflows/tests.yml)
-[![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
 [![Docs](https://img.shields.io/badge/docs-openengine.cc-blue)](https://openengine.cc/docs/)
+[![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
 
-OpenEngine is a graph execution engine that meets you where you work.
+Coding agents are fast. The hard part is making their output trustworthy every time, not just when you are watching. OpenEngine is an open-source software factory: you write your lifecycle once as a graph (implement, wait for CI, fan out adversarial reviewers, rerank the findings, fix, open the PR), and `oe go` runs every change through it. Add a security reviewer to the graph once and it checks every change from then on.
 
-New here? [Start with `oe go`](docs/getting-started.md): make a local change,
-connect GitHub, and take it through review to a pull request.
+![OpenEngine lifecycle graph: implement, run CI, review in parallel, rerank, and open a pull request](docs/images/oe_land.png)
 
-![](docs/images/oe_land.png)
+## Try it in two minutes
 
-We give you an out-of-the-box configuration to get you up and running. The out-of-the-box graph lives [here](./workflows/implementation_review_graph.py) and looks like this:
-```
-Implement -> Pool of Reviewers -> Reranking (Reduces noise) ->  Safe change 
-```
-## Getting started
-
-Install the CLI, then run it from inside any git repository:
+You need macOS or Linux, Git, Node.js 20.19+, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) logged in on this machine.
 
 ```bash
 npm i -g @openengine.cc/engine
 cd your-repo
 oe go "add a dark mode toggle to the settings page"
 ```
-Or try it without installing:
-```
-npx @openengine.cc/engine@latest go "add a dark mode toggle to the settings page"
-```
-If you installed earlier with the curl installer, npm will refuse to overwrite its `~/.local/bin/engine` launcher. Run `npm i -g --force @openengine.cc/engine` once to replace it.
-`oe go` runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. It follows the run live in your terminal. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
 
-Stuck, or just want to say hello? Join us on [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
+That runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. You follow the run live in your terminal and can steer it mid-flight. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
 
-## Basics
+Prefer not to install? `npx @openengine.cc/engine@latest go "..."` works too. The [getting started guide](https://openengine.cc/docs/getting-started/) walks through your first local run, connecting GitHub, and reviewing and fixing existing pull requests.
 
-### Graphs
+## What you can do with it
 
-A graph is a workflow of agent and code steps. Use the built-in ones, or write your own (YAML or Python) to automate the tedious parts of your development process.
-```
-oe graphs                                   # list available graphs
-oe go review <pr-url>                       # review an existing pull request
-oe go fix <pr-url>                          # address its unresolved review comments
-oe graph add my-graph.yaml                  # register your own graph
-oe graph run my-graph "add my widget"       # run any graph with an instruction
-```
-### Steering
-
-Runs are steerable while they work. Watch one, then redirect a node mid-flight:
-```
-oe run watch <run-id>
-oe node steer <execution-id> "use the existing date helper instead"
-```
-### Loops
-
-Loops run a graph on a schedule: QA sweeps, pentesting, dependency upkeep, or anything else you'd want done every day. Each loop has limits, so it can't run away with your budget.
-```
-oe loop add qa-sweep --every 1d --max-spend 20 --max-prs 5
-oe loops                                    # status, spend and PRs per loop
-```
-### From source
-
-To do work on OpenEngine. Requires [uv](https://docs.astral.sh/uv/), Python 3.11+, and Node.js 20.19+.
-
-First, clone the repo:
+**Review and fix pull requests you already have.**
 ```bash
-cd OpenEngine
-uv sync --all-packages  # install all workspace packages, editable
-npm --prefix apps/web install
-npm --prefix apps/web run build
-```
-Then, run it by pointing it at your directory:
-```bash
-uv run \
-  --project /path/to/openengine \
-  --directory /path/to/your/project \
-  --all-packages \
-  engine-web
-```
-Or install the checked-out commit as your `oe`, in place of a release,
-exactly as the one-line installer would. It is labeled with the commit, such as
-`1.2.0-ffdb7cd`, and takes the installer's options:
-```bash
-scripts/install-local.sh
-```
-The production service defaults to `http://127.0.0.1:4364`. Verify its identity
-and readiness after startup:
-```bash
-curl --fail http://127.0.0.1:4364/api/health
-# {"service":"openengine","version":"0.0.0","ready":true,"api_version":1}
-```
-`version` is the installed `engine-web` package version. Health returns HTTP 503
-until startup completes, if the configured graph runtime cannot open, or during
-shutdown; otherwise it returns HTTP 200. This public endpoint requires no browser
-login and does not check external provider credentials.
-
-## Terminal commands
-
-The binary is `oe` (also installed as `openengine`). Run it with no arguments to list its commands:
-
-- `oe daemon` runs the local service in the background; see
-  [Background service](docs/releases.md#background-service).
-- `oe connect gh|github|gitlab|slack` connects the selected backend's shared
-  source control or Slack; `oe connections` shows them and
-  `oe disconnect` undoes one.
-- `oe agent add|get|remove|signin` and `oe agents` manage the agents
-  graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
-  such as `oe agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
-  Give an agent on a model server its context window with `--context` (and
-  optionally `--output`) so opencode compacts its history before prompts
-  outgrow it. For Ollama, set `PARAMETER num_ctx` in the Modelfile and
-  `--context` to the same value: Ollama's OpenAI-compatible endpoint neither
-  reports nor enforces `num_ctx`, so without the limit every step prefills the
-  whole history.
-- `oe agent claude`, `oe agent codex` and `oe agent opencode`
-  start a run whose implementation node is that CLI in this terminal: the
-  daemon checks the repository out into a fresh workspace and gives the agent
-  the same `git_subcommand` and `open_pull_request` tools an implementation
-  node gets (`[sessions] tools` in `engine.toml` changes which). The run ends
-  when the CLI exits. Arguments after `--` go to the CLI.
-- `oe graph`, `oe run`, `oe loop`, `oe node` and their list
-  forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
-  graphs; `oe backend` chooses which daemon they talk to. See
-  [cli/README.md](cli/README.md).
-
-While working on OpenEngine itself, run the development server instead:
-```bash
-uv run engine-dev
+oe go review https://github.com/OWNER/REPO/pull/123   # post findings on a PR
+oe go fix https://github.com/OWNER/REPO/pull/123      # address its unresolved review threads
 ```
 
-## engine.toml
-The main configuration file for OpenEngine. It's defined [here](./engine.toml).
-While we use sensible defaults, if you need to configure engine, point it at a new 
-`engine.toml` file.
+**Write your own graph** in YAML or Python and bind it to a verb. Graphs are versioned, so a change to the process is as reviewable as a change to the code.
+```bashoe graphs                                   # list available graphsoe graph add my-graph.yaml                  # register your ownoe graph run my-graph "add my widget"       # run it with an instruction
 ```
-uv run \
-  --project /path/to/openengine \
-  --directory /path/to/your/project \
-  --all-packages \
-  engine-web \
-  --config /path/to/engine.toml
+The [example graphs](docs/examples/graphs) include TDD, dead-code removal, and the [security review](docs/examples/graphs/security-review.yaml) that OpenEngine runs on itself every day.
+
+**Steer a run while it works.**
+```bashoe run watch <run-id>oe node steer <execution-id> "use the existing date helper instead"
 ```
 
-SQLite and PostgreSQL have independent Alembic histories. The PostgreSQL
-history is currently a placeholder; the SQLite state store upgrades its
-database on startup and can also be upgraded explicitly:
-
-```bash
-DATABASE_URL=sqlite:///conversations.sqlite3 uv run engine-migrate ## you shouldn't have to run this, happens automatically on startup
+**Put a graph on a schedule** with loops: QA sweeps, dependency upkeep, nightly security review. Each loop has limits on spend and pull requests, so it cannot run away with your budget.
+```bashoe loop add qa-sweep --every 1d --max-spend 20 --max-prs 5oe loops                                    # status, spend and PRs per loop
 ```
 
-## GitHub connection
+**Start work from where you already are.** Mention OpenEngine in a Slack thread or a PR comment to start, steer, or approve a run. See [integrations](https://openengine.cc/docs/integrations/).
 
-OpenEngine connects to GitHub to open pull requests and post review comments. The easiest method is to use the gh cli. 
-The connection is set up once per machine through the Settings panel (gear icon
-at the bottom of the sidebar).
+## How it works
 
-### One-time setup: register an OAuth App
+A **graph** is a sequence of agent and code steps with typed inputs and outputs. A **run** is one execution of a graph, managed by a local background **daemon** (`engine daemon`). Agents are the coding CLIs you already use: the built-in `claude`, `codex`, and `opencode`, plus any you add, including local models through Ollama or any OpenAI-compatible server. Review steps can require a different agent than the one that wrote the code, which is what makes the review adversarial.
 
-You need to create one GitHub OAuth App for your team. Each colleague then
-pastes the client ID into their own Settings panel — no secrets are shared and
-no server configuration is required beyond the step below.
-
-1. Go to **github.com → Settings → Developer settings → OAuth Apps → New OAuth App**
-2. Fill in the form (device flow does not use the callback URL, but GitHub
-   requires one):
-   - **Application name:** `OpenEngine`
-   - **Homepage URL:** `http://localhost:4364`
-   - **Authorization callback URL:** `http://localhost:4364`
-3. Click **Register application**
-4. On the app page, check **Enable Device Flow** and click **Update application**
-5. Copy the **Client ID** (looks like `Ov23liXXXXXXXXXX`)
-
-### Connecting
-
-1. Open the Settings panel (gear icon in the sidebar)
-2. Paste the Client ID into the field and click **Save**
-3. Click **Connect GitHub**
-4. The panel shows a short code and a link to **github.com/login/device**
-5. Open that link, enter the code, click **Authorize**
-6. The panel switches to **Connected** automatically
-
-The OAuth token set is stored in the OS keychain (macOS Keychain, Secret
-Service on Linux, Windows Credential Manager). When GitHub issues expiring
-tokens, OpenEngine refreshes them automatically after an authorization failure
-and retries the interrupted GitHub request once. Each colleague repeats steps
-1–6 once with the same client ID.
-
-## GitLab connection
-
-OpenEngine can also connect to GitLab through OAuth. GitLab.com and each
-self-managed instance have separate OAuth applications and credentials, so
-create an application on the instance you intend to use.
-
-### One-time setup: register an OAuth application
-
-1. In GitLab, open **Avatar → Edit profile → Access → Applications**, then
-   select **Add new application**.
-2. Fill in the application:
-   - **Name:** `OpenEngine`
-   - **Redirect URI:** `http://localhost:7171/auth/redirect` (the device flow
-     does not use it, but GitLab may require a value when registering the app)
-   - **Scopes:** `api`
-   - **Confidential:** leave unchecked
-   - **Allowed grant types:** enable `device_code`
-3. Save the application and copy its **Application ID**. Do not put the Client
-   Secret into OpenEngine; the device flow uses only the Application ID.
-
-### Connecting
-
-1. Open the Settings panel and select **GitLab OAuth**.
-2. Enter the instance URL. For GitLab.com, use `https://gitlab.com` — not a
-   group or project URL.
-3. Paste the Application ID and select **Save GitLab client ID**.
-4. Select **Connect GitLab**. Open the displayed GitLab link and enter the
-   device code displayed in OpenEngine. A phone is not required; the browser
-   can be on the same computer.
-5. GitLab confirms authorization and OpenEngine switches to **Connected**
-   after its next poll.
-
-The token pair is stored in the OS keychain per GitLab instance. OpenEngine
-refreshes an expired access token once after an authorization failure, persists
-the rotated credential pair, and retries the interrupted API request once.
-
-For self-managed GitLab, device authorization requires GitLab 17.9 or later
-and a public OAuth application with the `device_code` grant enabled. See
-[GitLab's OAuth documentation](https://docs.gitlab.com/api/oauth2/) for
-instance-specific configuration.
-
-### Environment variable fallback
-
-If you deploy OpenEngine on a server where no keychain is available, set the
-client ID and a pre-generated token as environment variables instead:
-
-```toml
-# engine.toml
-github_client_id = "Ov23liXXXXXXXXXX"
-github_token     = "ghp_XXXXXXXXXXXX"
+The default graph that builds OpenEngine itself:
 ```
-
-Or via environment variables:
-
-```bash
-GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-web
+implement -> CI -> [security, bugs, performance, conciseness, dryness] -> rerank -> impact -> human review
 ```
+Findings go back for one fix-and-review round before a human sees the PR. The source is [`workflows/implementation_review_graph.py`](./workflows/implementation_review_graph.py); the full architecture is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
-To receive comments and merges from GitHub, see the
-[GitHub webhooks guide](docs/github-webhooks.md).
-Add a local checkout with `oe repo add .`, or clone a GitHub/GitLab project with `oe repo add https://github.com/owner/repo`.
-It checks prerequisites, clones the repository, saves configuration, and makes
-it available immediately without restarting. The web UI's **Add repository**
-action and MCP's `onboard_repository` tool provide the same onboarding.
-See [repository onboarding](docs/repository-onboarding.md) for options and the
-manual configuration reference.
+## Learn more
+
+- [Docs](https://openengine.cc/docs/) — getting started, graphs, loops, CLI reference, integrations
+- [Blog](https://openengine.cc/blog/) — how we use OpenEngine, benchmarks, and what the loops find
+- [CLI reference](cli/README.md) — every `engine` command
+- [Connecting GitHub and GitLab](docs/forge-connections.md) — OAuth setup, webhooks, and server deployments
+- [Developing OpenEngine](docs/development.md) — running from source, the dev server, configuration, and migrations
+- [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/OpenEngine/OpenEngine/releases)
+
+## Community
+
+Questions, ideas, or a graph you are proud of? Join us on [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ) or open a [discussion](https://github.com/OpenEngine/OpenEngine/issues). Contributions are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) explains how the repository is organized and how to get a change merged. Issues labeled [`good first issue`](https://github.com/OpenEngine/OpenEngine/labels/good%20first%20issue) are a good place to start.
+
+If OpenEngine is useful to you, a star on GitHub helps other people find it.
+
+## License
+
+[Apache-2.0](LICENSE).

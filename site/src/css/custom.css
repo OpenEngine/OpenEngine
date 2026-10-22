@@ -95,6 +95,8 @@ body { -webkit-font-smoothing: antialiased; }
 }
 .navbar-cta.navbar__link:hover { color: #fff; background: var(--oe-flame-deep); }
 .navbar-cta svg { display: none; }
+.navbar-github.navbar__link::before { content: '\2605\00a0'; }
+.navbar-github svg { display: none; }
 .navbar .clean-btn { color: var(--oe-night-muted); }
 .navbar__toggle { color: var(--oe-night-ink); }
 
