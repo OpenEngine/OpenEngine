@@ -1,4 +1,4 @@
-"""`engine backend|graph|loop|node` from the terminal side.
+"""`oe backend|graph|loop|node` from the terminal side.
 
 The backend is replaced by a recording `urlopen`, because what is under test
 here is the client: which backend it picks, what it sends, and that a write is
@@ -173,12 +173,12 @@ def test_a_failed_run_names_the_signin_command_for_its_backend(monkeypatch, caps
     failed = {
         **RUN, "status": "failed", "terminal": True,
         "failure": {"error": "Authentication required", "node": "work", "authRequired": {
-            "runner": "claude", "command": "engine agent signin claude", "message": "",
+            "runner": "claude", "command": "oe agent signin claude", "message": "",
         }},
     }
     serve(monkeypatch, failed)
     assert main(["run", "get", "run-1"]) == 1
-    assert "engine agent signin claude --backend mini" in capsys.readouterr().err
+    assert "oe agent signin claude --backend mini" in capsys.readouterr().err
 
 
 def test_an_invalid_manifest_lists_each_problem(tmp_path, monkeypatch, capsys) -> None:
@@ -253,7 +253,7 @@ def test_runner_signin_still_works_and_names_its_replacement(monkeypatch, capsys
     assert main(["runner", "signin", "codex"]) == 0
     captured = capsys.readouterr()
     assert "ssh -t mac-mini.local codex login" in captured.out
-    assert "engine agent signin codex" in captured.err
+    assert "oe agent signin codex" in captured.err
 
 
 def test_an_added_agent_signs_in_as_its_kind(monkeypatch, capsys) -> None:
@@ -430,7 +430,7 @@ def test_onboard_submits_and_polls_daemon(monkeypatch, capsys):
     assert backend.requests[0]["url"].endswith("/api/repositories/onboard")
     assert backend.requests[0]["body"] == {"repository": "https://github.com/owner/repo", "mode": "disconnected", "path": "/code/repo", "trusted": None}
     assert backend.requests[1]["url"].endswith("/api/repositories/onboard/job1")
-    assert "Next: engine go review --project owner/repo --repo /code/repo" in capsys.readouterr().out
+    assert "Next: oe go review --project owner/repo --repo /code/repo" in capsys.readouterr().out
 
 
 def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
@@ -443,9 +443,9 @@ def test_onboard_no_url_reuses_current_github_checkout(monkeypatch):
 
 
 def test_onboard_reports_fix(monkeypatch, capsys):
-    serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "engine agent signin codex"}]})
+    serve(monkeypatch, {"status": "failed", "message": "Preflight failed", "problems": [{"message": "No agent", "fix": "oe agent signin codex"}]})
     assert main(["repo", "add", "owner/repo", "--mode", "connected"]) == 1
-    assert "engine agent signin codex" in capsys.readouterr().err
+    assert "oe agent signin codex" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("stdin_tty,stdout_tty,flags,watched", [
@@ -489,7 +489,7 @@ def test_watch_outcome(monkeypatch, capsys, outcome, code):
     monkeypatch.setattr(live.Watch, "follow", lambda self: (RUN, outcome))
     assert main(["run", "watch", "run-1"]) == code
     if outcome == "detached":
-        assert "engine run watch run-1 --backend mini" in capsys.readouterr().out
+        assert "oe run watch run-1 --backend mini" in capsys.readouterr().out
 
 
 def test_pretty_run_lists_approvals_and_ui(monkeypatch, capsys):
@@ -527,7 +527,7 @@ def test_pretty_approval_escapes_terminal_controls(monkeypatch, capsys):
 
 def test_local_run_sends_override_and_pretty_output_starts_with_mode(monkeypatch, capsys):
     context = {"mode": "disconnected", "reason": "explicitly requested local execution",
-               "summary": "disconnected · local branch only (run engine connect github to publish)"}
+               "summary": "disconnected · local branch only (run oe connect github to publish)"}
     recorded = serve(monkeypatch, {**RUN, "forgeContext": context})
     assert main(["graph", "run", "pair", "do it", "--repo", "o/r", "--local", "--pretty"]) == 0
     assert recorded.requests[0]["body"]["inputs"] == {"mode": "disconnected"}
@@ -602,7 +602,7 @@ def test_go_review_disconnected_shows_local_banner(monkeypatch, capsys, tmp_path
     from engine.cli import repository
     monkeypatch.setattr(repository, 'current', lambda: repository.Repository(tmp_path, 'o/r', 'topic', False))
     context = {'mode': 'disconnected',
-               'summary': 'disconnected · local branch only (run engine connect github to publish)'}
+               'summary': 'disconnected · local branch only (run oe connect github to publish)'}
     recorded = serve_go(monkeypatch, {**RUN, 'forgeContext': context}, repo=str(tmp_path),
                         graph='review', target={'ref': 'topic', 'mode': 'disconnected'})
     assert main(['go', 'review', *([target] if target else [])]) == 0
@@ -725,7 +725,7 @@ def test_workspace_hint_preserves_explicit_backend(monkeypatch, capsys, outcome)
     hint = next(line for line in capsys.readouterr().out.splitlines()
                 if line.startswith("Workspace details: "))
     assert shlex.split(hint.removeprefix("Workspace details: ")) == [
-        "engine", "run", "get", "run-1", "--backend", "remote-machine",
+        "oe", "run", "get", "run-1", "--backend", "remote-machine",
     ]
 
 
@@ -772,7 +772,7 @@ def test_onboarding_without_review_backend_does_not_suggest_invalid_command(monk
     serve(monkeypatch, {'status': 'complete', 'message': 'Repository onboarded', 'repository': 'owner/repo', 'path': '/code/repo'})
     assert main(['repo', 'add', 'owner/repo', '--backend', 'onboarding']) == 0
     output = capsys.readouterr().out
-    assert 'Next: engine go' not in output
+    assert 'Next: oe go' not in output
     assert '--review-backend' in output
 
 

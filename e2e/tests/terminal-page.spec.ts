@@ -73,11 +73,11 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(await page.evaluate(() => window.__term!.lastOutputAt)).toBeGreaterThan(0)
   })
 
-  test("draws engine --help legibly in the bundled font, the same way every time", async ({ page }) => {
+  test("draws oe --help legibly in the bundled font, the same way every time", async ({ page }) => {
     await openTerminal(page, { cmd: engineBin, args: ["--help"], cols: 100, rows: 48 })
     await page.waitForFunction(() => window.__term!.exited)
     expect(await page.evaluate(() => document.fonts.check('14px "JetBrains Mono"'))).toBe(true)
-    await expect(page.locator(".xterm-rows")).toContainText("usage: engine")
+    await expect(page.locator(".xterm-rows")).toContainText("usage: oe")
     const frame = page.locator("#terminal")
     const first = await frame.screenshot()
     const second = await frame.screenshot()

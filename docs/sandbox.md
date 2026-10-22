@@ -54,23 +54,23 @@ boundary**. It rejects image selection and egress restrictions, including an
 empty allowlist. `None` means unrestricted egress. Labels are metadata only.
 `smolvm` selects the microVM adapter. It requires SmolVM 1.25.2 or newer and
 an explicit guest image; unavailable hosts fail rather than falling back to
-host execution. `engine doctor` (also `engine daemon doctor`) reports platform,
+host execution. `oe doctor` (also `oe daemon doctor`) reports platform,
 KVM access and binary/version availability. Missing SmolVM is a warning with
 the default process backend and an error when the VM backend is selected.
 
 Select the local sandbox backend with the CLI:
 
 ```sh
-engine vm list                    # List backends; * marks the configured one
-engine vm use process             # Use local subprocesses (default)
-engine vm use smolvm --image /absolute/path/to/openengine-sandbox.tar
+oe vm list                    # List backends; * marks the configured one
+oe vm use process             # Use local subprocesses (default)
+oe vm use smolvm --image /absolute/path/to/openengine-sandbox.tar
 ```
 
-`engine vm` still shows the configured backend, and `engine vm process` /
-`engine vm smolvm` remain selection shorthands. In `engine vm list`, `*` marks the
+`oe vm` still shows the configured backend, and `oe vm process` /
+`oe vm smolvm` remain selection shorthands. In `oe vm list`, `*` marks the
 configured selection, which a running service loads after restart.
 
-`engine vm` uses `ENGINE_CONFIG` or the installed user's configuration. Add
+`oe vm` uses `ENGINE_CONFIG` or the installed user's configuration. Add
 `--config /path/to/engine.toml` to select another file and `--json` for structured
 output. Selection updates only the sandbox settings, preserving other settings,
 comments and file permissions. Switching to SmolVM requires a readable, nonempty
@@ -82,7 +82,7 @@ image path resolves against the current directory and is saved as an absolute pa
 Switching back to `process` keeps the image setting for later reuse and requires
 no SmolVM installation. Failed checks leave configuration unchanged.
 
-Restart running services after changing the backend (`engine daemon restart` for
+Restart running services after changing the backend (`oe daemon restart` for
 the managed local service). The command selects the sandbox capability; it does
 not move existing agent or LangGraph node execution into VMs. That routing is
 follow-up work in #674. Local subprocesses remain the default.

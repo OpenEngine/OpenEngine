@@ -1525,7 +1525,7 @@ def test_assigning_issue_to_engine_starts_workorder(
 class _RegisteredGraphs:
     """The graph service as the webhook paths ask it: which registered graph a name is.
 
-    Holds `workflow` under each of `names`, as `engine graph add` would have
+    Holds `workflow` under each of `names`, as `oe graph add` would have
     registered it, and nothing else.
     """
 
@@ -1574,7 +1574,7 @@ class _RegisteredGraphs:
 
 
 def _registered_graph(*inputs):
-    """A graph registered with `engine graph add`, its id the version id the service gives it."""
+    """A graph registered with `oe graph add`, its id the version id the service gives it."""
     from engine.graph_runtime_langgraph import State, graph_workflow
     from langgraph.graph import END, START, StateGraph
 

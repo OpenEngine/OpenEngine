@@ -19,16 +19,16 @@ graph.yaml ──parse/validate/compile──┘                     (register a
   express — computed prompts, custom routers, `Send` fan-out, custom node
   classes. It is exactly what `workflows/*.py` already is (a module exporting
   `workflow`, built with `graph_workflow`), so
-  `engine graph add workflows/implementation_review_graph.py` just works.
+  `oe graph add workflows/implementation_review_graph.py` just works.
 
 There is one registry, one version history and one `exec` for both. A
 version records which format it came from and keeps its source verbatim,
-which is what `engine graph get` returns.
+which is what `oe graph get` returns.
 
 ## Python files
 
 ```bash
-engine graph add ./my_graph.py
+oe graph add ./my_graph.py
 ```
 
 The file is uploaded as source and loaded on the backend by the same loader
@@ -51,7 +51,7 @@ kind: Graph
 name: spec-tdd-review
 description: Spec it, test it first, implement, wait for CI, then review.
 
-inputs:                         # creation fields; `engine graph exec` fills instruction
+inputs:                         # creation fields; `oe graph exec` fills instruction
   instruction: {required: true, description: The change to make}
 
 plan:
@@ -151,7 +151,7 @@ graph should be Python.
 
 ## Backends
 
-A graph is backend-neutral. `engine graph add|exec --backend NAME` sends it to
+A graph is backend-neutral. `oe graph add|exec --backend NAME` sends it to
 that backend's daemon, which validates it against its own runners and
 components, builds the `GraphWorkflow`, and registers it on its
 `LangGraphRuntime` under an immutable version id. Runners (`claude`, `codex`)
@@ -183,4 +183,4 @@ as the default flow, `${ }` placeholders, `flow` with `route` (so loops and
 branches), `facets`, `outputs`, `human`, `ci`, and the `apiVersion/kind`
 header. The registry gains a `format` and `source` per version. Starter graphs
 (`review`, `implement-review`, `spec-implement-review`) are written in it, and
-`engine repo add` and interactive `graph exec` land on top.
+`oe repo add` and interactive `graph exec` land on top.

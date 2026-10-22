@@ -1,4 +1,4 @@
-"""`engine connect`."""
+"""`oe connect`."""
 
 from __future__ import annotations
 

@@ -381,7 +381,7 @@ def test_agent_pr_uses_only_the_gh_cli_login(
 def test_agent_pr_under_github_oauth_uses_the_connected_token_read_once(
     tmp_path, monkeypatch, *, github_auth_app, client
 ):
-    """The token `engine connect github` saved opens the PR, with no second keychain read."""
+    """The token `oe connect github` saved opens the PR, with no second keychain read."""
     from engine.apps.web.composition import Settings, build_capabilities
     from engine.apps.web.source_control import SourceControlPreferences
 

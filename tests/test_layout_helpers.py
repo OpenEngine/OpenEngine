@@ -77,7 +77,7 @@ def test_absolute_imports_are_collected(tmp_path: Path) -> None:
         # From a module: level 1 is its own package.
         ("engine/runtime/dispatcher.py", "from . import capabilities", "engine.runtime"),
         ("engine/runtime/dispatcher.py", "from .capabilities import C", "engine.runtime.capabilities"),
-        # Level 2 climbs to `engine` -- the escape that used to slip through.
+        # Level 2 climbs to `oe` -- the escape that used to slip through.
         (
             "engine/runtime/dispatcher.py",
             "from ..adapters.source_control.github import G",

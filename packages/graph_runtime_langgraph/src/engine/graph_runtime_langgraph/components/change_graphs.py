@@ -92,7 +92,7 @@ async def review_threads(state: Mapping[str, Any]) -> dict[str, object]:
     threads = json.loads(inputs.get('review_threads') or '[]')
     target = change_request(pr_url(state))
     if target and forge_mode(inputs) is ForgeMode.DISCONNECTED and not inputs.get('review_threads'):
-        message = 'unresolved threads are unavailable; supply -i review_threads=JSON or run engine connect github'
+        message = 'unresolved threads are unavailable; supply -i review_threads=JSON or run oe connect github'
         raise ValueError(message)
     if target and forge_mode(inputs) is ForgeMode.CONNECTED:
         source = current_execution().runtime.source_control

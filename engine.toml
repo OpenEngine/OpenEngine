@@ -83,7 +83,7 @@ deny = [
   "gh pr create **",
 ]
 
-# What `engine agent claude|codex|opencode` sessions are served, as an implementation node's
+# What `oe agent claude|codex|opencode` sessions are served, as an implementation node's
 # `tools`. These are the defaults.
 # [sessions]
 # tools = ["git_subcommand", "open_pull_request"]

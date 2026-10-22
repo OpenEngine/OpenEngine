@@ -109,9 +109,10 @@ jobs:
           cd npm/engine
           npm pack --pack-destination "$RUNNER_TEMP"
           npm install --global --prefix "$RUNNER_TEMP/npm-global" "$RUNNER_TEMP"/openengine.cc-engine-*.tgz
-          "$RUNNER_TEMP/npm-global/bin/engine" --help
-          "$RUNNER_TEMP/npm-global/bin/engine" daemon setup
-          "$RUNNER_TEMP/npm-global/bin/engine" daemon stop
+          "$RUNNER_TEMP/npm-global/bin/oe" --help
+          "$RUNNER_TEMP/npm-global/bin/openengine" --help
+          "$RUNNER_TEMP/npm-global/bin/oe" daemon setup
+          "$RUNNER_TEMP/npm-global/bin/oe" daemon stop
       - name: Install and start OpenEngine
         env:
           OPENENGINE_RELEASE_URL: file://${{ runner.temp }}/release
@@ -120,21 +121,21 @@ jobs:
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
-          [ ! -e "$HOME/.local/bin/openengine" ]
-          command -v engine
+          command -v openengine
+          command -v oe
           status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4364/api/health)
-          [ "$status" = 200 ] || { engine daemon logs; exit 1; }
+          [ "$status" = 200 ] || { oe daemon logs; exit 1; }
       # Setup again (as an upgrade would), then the background service's
       # status and a graceful stop that leaves nothing answering.
-      - name: engine daemon setup, status and stop
+      - name: oe daemon setup, status and stop
         run: |
           set -eu
           export PATH="$HOME/.local/bin:$PATH"
-          engine daemon setup || { engine daemon logs; exit 1; }
-          engine daemon status
-          engine daemon doctor || true
-          engine daemon stop
-          if engine daemon status; then exit 1; fi
+          oe daemon setup || { oe daemon logs; exit 1; }
+          oe daemon status
+          oe daemon doctor || true
+          oe daemon stop
+          if oe daemon status; then exit 1; fi
           if curl --silent --output /dev/null http://127.0.0.1:4364/api/health; then exit 1; fi
       - name: Running it again keeps the config
         env:

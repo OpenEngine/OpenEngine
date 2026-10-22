@@ -1,7 +1,7 @@
 // Driving a real terminal from a spec: `terminal` is an interactive shell on
 // the terminal page, and `Terminal.open` starts any other command there.
 //
-//   const { output } = await terminal.run("engine graphs list")
+//   const { output } = await terminal.run("oe graphs list")
 //   await screenshot(testInfo, await terminal.row(/fix-flaky-test/), { annotation: { text: "..." } })
 
 import { test as base, expect, type Locator, type Page } from "@playwright/test"
@@ -36,7 +36,7 @@ export class Terminal {
 
   /**
    * Open the terminal page on a new session, and size the page to the terminal.
-   * `engine` on the session's PATH is always this checkout's.
+   * `oe` on the session's PATH is always this checkout's.
    */
   static async open(page: Page, session: TerminalSession = {}): Promise<Terminal> {
     session = {

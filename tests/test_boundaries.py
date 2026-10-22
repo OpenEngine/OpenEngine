@@ -51,7 +51,7 @@ def _ids(packages: tuple[Package, ...]) -> list[str]:
     ids=_ids(tuple(p for p in PACKAGES if p.layer in NO_THIRD_PARTY_LAYERS)),
 )
 def test_declares_no_third_party_dependencies(package: Package) -> None:
-    """`domain` and `engine` may depend on workspace siblings and nothing else."""
+    """`domain` and `oe` may depend on workspace siblings and nothing else."""
     external = [
         dep for dep in package.declared_dependencies if dep.split()[0] not in WORKSPACE_DISTS
     ]

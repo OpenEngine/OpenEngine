@@ -74,7 +74,7 @@ class Client:
                 if error.code == 401 and self.api_prefix == "/api" and path.startswith("/repositories/onboard"):
                     raise RequestFailed(
                         "repository onboarding requires a browser session or a separate ENGINE_ONBOARDING_TOKEN; "
-                        "configure it on the daemon and use `engine backend add --token-env ENGINE_ONBOARDING_TOKEN`",
+                        "configure it on the daemon and use `oe backend add --token-env ENGINE_ONBOARDING_TOKEN`",
                         status=401,
                     ) from None
                 raise _refusal(self.backend, error) from None
@@ -103,7 +103,7 @@ def _refusal(backend: Backend, error: HTTPError) -> RequestFailed:
     message = str(payload.get("error") or f"HTTP {error.code}")
     if error.code == 401:
         variable = backend.token_env or "ENGINE_SERVICE_TOKEN"
-        message = f"backend {backend.name} requires a token; set {variable} (see `engine backend add --token-env`)"
+        message = f"backend {backend.name} requires a token; set {variable} (see `oe backend add --token-env`)"
     elif error.code == 404 and not payload:
         message = f"backend {backend.name} does not serve the graph API; upgrade its daemon"
     elif error.code == 503 and "graph" in message:

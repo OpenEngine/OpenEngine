@@ -6,9 +6,9 @@ import { test, expect, startEngine } from "../fixtures/engine.ts"
 
 const EXAMPLE_GRAPH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../docs/examples/graphs/dead-code.yaml")
 
-test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
+test.describe("oe daemon fixture", { tag: ["@skip-docs"] }, () => {
   test("serves the CLI as `local`, so specs type plain engine commands", async ({ engine, terminal }) => {
-    const { output } = await terminal.run("engine backends list --check")
+    const { output } = await terminal.run("oe backends list --check")
     expect(output).toMatch(new RegExp(`\\*\\s+local\\s+${engine.url.replace(/[.]/g, "\\.")}\\s.*\\bup\\b`))
   })
 
@@ -26,8 +26,8 @@ test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
   })
 
   test("registers and lists graphs through the CLI", async ({ terminal }) => {
-    await terminal.run(`engine graph add ${EXAMPLE_GRAPH}`)
-    expect((await terminal.run("engine graphs list")).output).toMatch(/^dead-code\s+1\s/m)
+    await terminal.run(`oe graph add ${EXAMPLE_GRAPH}`)
+    expect((await terminal.run("oe graphs list")).output).toMatch(/^dead-code\s+1\s/m)
   })
 
   test.describe("with another computer", () => {
@@ -36,15 +36,15 @@ test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
     test("reaches a second daemon at the address a spec names", async ({ engine, anotherComputer, terminal }) => {
       expect(anotherComputer!.url).not.toBe(engine.url)
       expect(anotherComputer!.root).not.toBe(engine.root)
-      await terminal.run("engine backend add mac-mini http://mac-mini.local:4364")
-      const { output } = await terminal.run("engine backends list --check")
+      await terminal.run("oe backend add mac-mini http://mac-mini.local:4364")
+      const { output } = await terminal.run("oe backends list --check")
       expect(output).toMatch(/^\*\s+local\s.*\bup\b/m)
       expect(output).toMatch(/^\s+mac-mini\s+http:\/\/mac-mini\.local:4364\s.*\bup\b/m)
     })
 
     test("reaches no other address through it", async ({ terminal }) => {
-      await terminal.run("engine backend add elsewhere http://elsewhere.local:4364")
-      expect((await terminal.run("engine backends list --check")).output).toMatch(/^\s+elsewhere\s.*\bdown\b/m)
+      await terminal.run("oe backend add elsewhere http://elsewhere.local:4364")
+      expect((await terminal.run("oe backends list --check")).output).toMatch(/^\s+elsewhere\s.*\bdown\b/m)
     })
   })
 
@@ -79,9 +79,9 @@ test.describe("engine daemon fixture", { tag: ["@skip-docs"] }, () => {
       const terminal = await Terminal.open(page, { cwd: engine.repository, env: engine.env })
       const graph = path.join(engine.root, "hello.yaml")
       writeFileSync(graph, "apiVersion: openengine.cc/v1\nkind: Graph\nname: hello\nimplementation:\n  greet:\n    agent: claude\n    prompt: Say hello.\n")
-      await terminal.run(`engine graph add ${graph}`)
-      await terminal.run("engine repo untrust")
-      await terminal.run('engine graph run hello "Say hello" --wait')
+      await terminal.run(`oe graph add ${graph}`)
+      await terminal.run("oe repo untrust")
+      await terminal.run('oe graph run hello "Say hello" --wait')
       expect(ours().length).toBeGreaterThan(0)
     } finally {
       await engine.stop()

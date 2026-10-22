@@ -1,6 +1,6 @@
 # Writing the guides
 
-The guides on the site are user guides to the `engine` command. Each one is
+The guides on the site are user guides to the `oe` command. Each one is
 generated from a spec in `tests/` (see the README), so these rules apply to
 the spec: its describe titles, step titles and annotations are the page.
 
@@ -14,11 +14,11 @@ to. They came to get one thing done.
 ## A guide
 
 - **One task per guide**, the way the reader would say it: "Run your first
-  graph", not "engine graph run". The title is that task.
+  graph", not "oe graph run". The title is that task.
 - **Start with why.** Before the first command, say in one to three plain
   sentences what this lets them do and when they'd want it.
 - **One action per step.** A step's title tells the reader what to do
-  ("Type `engine graphs list` and press Enter."), and the text after it says
+  ("Type `oe graphs list` and press Enter."), and the text after it says
   what they'll see. Then show it.
 - **Show what success looks like.** Every command they run gets a screenshot,
   with the part that matters highlighted and a label saying what it means in
@@ -49,7 +49,7 @@ Use these explanations, in these words or close to them.
 | Word | Say |
 | --- | --- |
 | OpenEngine | A tool that has AI coding agents work on your code, step by step, in the way you lay out. |
-| `engine` | The command you type in a terminal to use OpenEngine. |
+| `oe` | The command you type in a terminal to use OpenEngine. |
 | agent | An AI coding assistant, such as Claude Code, that reads and changes code for you. |
 | graph | A recipe for a piece of work: its steps, which agent does each one, and in what order. |
 | run | One time a graph is carried out, from its first step to its last. |

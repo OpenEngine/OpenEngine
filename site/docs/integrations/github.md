@@ -52,9 +52,9 @@ URL, connected mode, publishing enabled, and CI no worse than pending or
 neutral. Failed CI blocks approval. Engine skips self-approval with a visible
 reason. It never merges the PR.
 
-`engine go review <PR>` keeps its output local by default. To publish and
+`oe go review <PR>` keeps its output local by default. To publish and
 explicitly enable Green approval:
 
 ```bash
-engine go review <PR> -i publish=true -i auto_approve_green=true
+oe go review <PR> -i publish=true -i auto_approve_green=true
 ```

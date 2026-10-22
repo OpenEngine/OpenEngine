@@ -33,12 +33,12 @@ it("submits the URL and mode, polls, then selects the new checkout in the WorkOr
 
 it("shows a preflight fix and permits a retry", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
-    status: "failed", message: "Preflight failed", problems: [{ code: "agent", message: "No agent signed in", fix: "engine agent signin codex" }],
+    status: "failed", message: "Preflight failed", problems: [{ code: "agent", message: "No agent signed in", fix: "oe agent signin codex" }],
   }) }));
   render(<AddRepository onComplete={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("Repository URL or local path"), { target: { value: "owner/repo" } });
   fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("engine agent signin codex");
+  expect(await screen.findByRole("alert")).toHaveTextContent("oe agent signin codex");
   expect(screen.getByRole("button", { name: "Add repository" })).toBeEnabled();
 });
 

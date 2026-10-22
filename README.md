@@ -20,7 +20,7 @@ You need macOS or Linux, Git, Node.js 20.19+, and [Claude Code](https://docs.ant
 ```bash
 npm i -g @openengine.cc/engine
 cd your-repo
-engine go "add a dark mode toggle to the settings page"
+oe go "add a dark mode toggle to the settings page"
 ```
 
 That runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. You follow the run live in your terminal and can steer it mid-flight. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.

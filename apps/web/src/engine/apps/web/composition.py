@@ -198,7 +198,7 @@ def build_capabilities(
     """Wire every port to its concrete implementation."""
     workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
     # GH CLI acts as the host's `gh auth` login. GitHub OAuth acts as the
-    # device-flow token `engine connect github` (or Settings) saved, from the
+    # device-flow token `oe connect github` (or Settings) saved, from the
     # store the web interface shares so the keychain is read once. Browser
     # login identifies the UI user and never reaches here; neither does
     # GITHUB_TOKEN.
@@ -433,7 +433,7 @@ def build_graph_service(
 
 
 def added_agent(row: AgentRow) -> object:
-    """The provider an agent added with `engine agent add` runs as, answering permissions like the built-ins."""
+    """The provider an agent added with `oe agent add` runs as, answering permissions like the built-ins."""
     if row.kind == "claude":
         provider: object = ClaudeACPProvider(name=row.name)
     elif row.kind == "codex":

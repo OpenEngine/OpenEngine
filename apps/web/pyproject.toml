@@ -20,7 +20,7 @@ dependencies = [
     "engine-graph-runtime",
     "engine-graph-runtime-langgraph",
     # Registered graphs, loops and node steering under `/api/v1`, for the
-    # `engine graph|loop|node` commands.
+    # `oe graph|loop|node` commands.
     "engine-graph-service",
     # One adapter per capability, named <capability>-<vendor>: what is needed
     # first, who provides it second. SQLite gives chat durable conversations

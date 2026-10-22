@@ -1,4 +1,4 @@
-'''Start a change with engine go "INSTRUCTION", or manage graphs, runs and backends.'''
+'''Start a change with oe go "INSTRUCTION", or manage graphs, runs and backends.'''
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ EXIT_OK = 0
 OUTPUT = """\
 output:
   List operations print a table; add --json for JSON,
-  such as `engine run list --json`.
-  engine go follows live on a TTY; use --wait --json for scripts.
+  such as `oe run list --json`.
+  oe go follows live on a TTY; use --wait --json for scripts.
   Other commands print readable lines; add --json for JSON.
 """
 
@@ -26,7 +26,7 @@ class AllCommandsHelp(argparse.Action):
 
 def parser(*, all_commands: bool = False) -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
-        prog="engine", description=__doc__, epilog=OUTPUT, formatter_class=argparse.RawDescriptionHelpFormatter,
+        prog="oe", description=__doc__, epilog=OUTPUT, formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False,
     )
     result.add_argument("-h", "--help", "--all", action=AllCommandsHelp, nargs=0, help="show all commands and exit")

@@ -1,4 +1,4 @@
-"""The `engine` command's top level."""
+"""The `oe` command's top level."""
 
 from __future__ import annotations
 
@@ -87,5 +87,5 @@ def test_go_help_includes_instruction_and_fix_examples(capsys):
         cli.main(["go", "--help"])
     assert exited.value.code == 0
     usage = capsys.readouterr().out
-    assert 'engine go "add a widget"' in usage
-    assert "engine go fix https://github.com/OpenEngine/OpenEngine/pull/855" in usage
+    assert 'oe go "add a widget"' in usage
+    assert "oe go fix https://github.com/OpenEngine/OpenEngine/pull/855" in usage

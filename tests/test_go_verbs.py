@@ -114,7 +114,7 @@ def test_disconnected_detached_head_needs_branch(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('details,mode,error', [
-    ({'private': True}, 'disconnected', 'run engine connect github'),
+    ({'private': True}, 'disconnected', 'run oe connect github'),
     ({'exists': False}, 'connected', 'no such branch or PR; to give an instruction, quote it'),
 ])
 def test_target_refusals(monkeypatch, details, mode, error):

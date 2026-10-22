@@ -114,7 +114,7 @@ def load_workflow_file(
     """Import one workflow definition file and return what it exports.
 
     The same rules as a workflow directory, for one file: what a backend does
-    with a Python graph uploaded through `engine graph add`.
+    with a Python graph uploaded through `oe graph add`.
     """
     path = Path(path).resolve()
     module_name = "_openengine_workflow_" + sha256(str(path).encode()).hexdigest()[:16]
