@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 
 from engine.domain import ForgeMode, WorkState, WorkspaceId, forge_mode
@@ -26,6 +26,7 @@ class _Waiter:
     """One `CICheck` waiting on one pull request's CI."""
 
     repository: str
+    number: int
     #: The head the latest status read was for; ``None`` until the first read,
     #: so a delivery that lands during it is not missed for want of a SHA.
     ref: str | None = None
@@ -39,8 +40,8 @@ _WAITERS: set[_Waiter] = set()
 
 
 @contextlib.contextmanager
-def _waiting(repository: str) -> Iterator[_Waiter]:
-    waiter = _Waiter(repository.lower())
+def _waiting(repository: str, number: int) -> Iterator[_Waiter]:
+    waiter = _Waiter(repository.lower(), number)
     _WAITERS.add(waiter)
     try:
         yield waiter
@@ -48,8 +49,14 @@ def _waiting(repository: str) -> Iterator[_Waiter]:
         _WAITERS.discard(waiter)
 
 
-def wake_ci(repository: str, sha: str) -> int:
-    """Wake every `CICheck` waiting on `sha` in `repository`; how many it woke.
+def wake_ci(repository: str, sha: str, pull_requests: Collection[int] = ()) -> int:
+    """Wake every `CICheck` `sha` may concern in `repository`; how many it woke.
+
+    That is a waiter on `sha` itself, or on one of `pull_requests`, the pull
+    requests the delivery says `sha` heads: after a push, CI arrives for a
+    head the waiter has not read yet. A delivery that names no pull request,
+    as a ``status`` never does, may be such a head too, so it wakes every
+    waiter in the repository.
 
     Only a nudge to read CI again: the verdict still comes from
     ``list_pipeline_status``, never from whatever delivery called this.
@@ -57,7 +64,9 @@ def wake_ci(repository: str, sha: str) -> int:
     repository, sha = repository.lower(), sha.lower()
     woken = 0
     for waiter in _WAITERS:
-        if waiter.repository == repository and waiter.ref in (None, sha):
+        if waiter.repository == repository and (
+            waiter.ref in (None, sha) or not pull_requests or waiter.number in pull_requests
+        ):
             waiter.woken.set()
             woken += 1
     return woken
@@ -68,7 +77,7 @@ class CICheck:
     """Wait for the PR's current revision until all reported CI has settled.
 
     CI is read once on starting, so CI that settled first is not waited on,
-    then again whenever `wake_ci` reports a delivery for the PR's head, and
+    then again whenever `wake_ci` reports a delivery that may concern the PR, and
     otherwise every ``poll_interval`` seconds: deliveries are not guaranteed,
     and a deployment without a reachable webhook has only the poll.
 
@@ -112,7 +121,7 @@ class CICheck:
         number = found.number
         await execution.say(f"Waiting for CI on {url}.")
         async with asyncio.timeout(self.timeout):
-            with _waiting(found.project) as waiter:
+            with _waiting(found.project, number) as waiter:
                 while True:
                     # Cleared before reading, so a delivery during the read
                     # wakes the next wait rather than being lost.

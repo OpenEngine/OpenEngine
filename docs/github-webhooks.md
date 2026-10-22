@@ -261,13 +261,16 @@ for the web UI.
 A run's `ci` step waits for its pull request's CI to settle. It reads CI once
 when it starts, so CI that finished first is not waited on, and again whenever
 a `check_suite` or `check_run` completes, or a commit `status` leaves
-`pending`, on the pull request's head commit. A delivery only says to look
+`pending`, on the pull request's head commit. That includes a commit pushed
+since it last read CI: a check names the pull requests its commit heads, and a
+commit `status`, which names none, wakes every step waiting in that
+repository. A delivery only says to look
 again: the verdict always comes from reading the pull request's required
 checks through the API, since one delivery may not cover every check, and
 several apps mean several suites for one commit.
 
 The route hands the delivery to whichever steps in this process are waiting on
-that repository and commit. A delivery nobody is waiting on, or from a
+that repository and commit or pull request. A delivery nobody is waiting on, or from a
 repository this deployment does not answer, is acknowledged and ignored. The
 waiting steps are held in memory only while they wait.
 

@@ -4228,7 +4228,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         handle_assignment=github_create_workorder,
         handle_review_request=github_review_pull_request,
         # A CI step waits in this process, so its wake-up is a call, not a run lookup.
-        handle_ci=lambda ci: wake_ci(ci.repository, ci.sha),
+        handle_ci=lambda ci: wake_ci(ci.repository, ci.sha, ci.pull_requests),
         activity=github_activity,
     )
 

@@ -108,6 +108,9 @@ class GithubCI:
     repository: str
     sha: str
     event: str
+    #: The pull requests GitHub says the commit heads. Empty for a ``status``,
+    #: and for a check on a fork's branch, where GitHub does not say.
+    pull_requests: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -402,19 +405,25 @@ def ci_from_payload(event: str, payload: Mapping[str, object]) -> GithubCI | Non
     """
     if event not in CI_EVENTS:
         return None
+    pull_requests: tuple[int, ...] = ()
     if event == "status":
         sha, settled = payload.get("sha"), payload.get("state") != "pending"
     else:
         subject = payload.get(event)
         sha = subject.get("head_sha") if isinstance(subject, dict) else None
         settled = payload.get("action") == "completed"
+        listed = subject.get("pull_requests") if isinstance(subject, dict) else None
+        pull_requests = tuple(
+            pr["number"] for pr in listed or ()
+            if isinstance(pr, dict) and isinstance(pr.get("number"), int)
+        ) if isinstance(listed, list) else ()
     repository = payload.get("repository")
     full_name = repository.get("full_name") if isinstance(repository, dict) else None
     if not settled or not isinstance(sha, str) or not sha:
         return None
     if not isinstance(full_name, str) or not full_name:
         return None
-    return GithubCI(repository=full_name, sha=sha, event=event)
+    return GithubCI(repository=full_name, sha=sha, event=event, pull_requests=pull_requests)
 
 
 _Delivery = GithubComment | GithubMerge | GithubAssignment | GithubReviewRequest
@@ -537,7 +546,7 @@ class GithubIngress:
         if (
             _asks_for_self_login(event, payload)
             and self._authenticated_login is not None
-            and repository.lower() in self._repositories
+            and self._answers(repository)
         ):
             try:
                 # Leave time to acknowledge within GitHub's ten-second deadline.
@@ -557,6 +566,10 @@ class GithubIngress:
             ) else 503
         )
 
+    def _answers(self, repository: str) -> bool:
+        """Whether `repository` is one this deployment is configured to answer."""
+        return repository.lower() in self._repositories
+
     def accept(
         self, event: str, payload: Mapping[str, object], *, self_login: str = "",
         delivery_id: str = "",
@@ -569,7 +582,7 @@ class GithubIngress:
         """
         repository = payload.get("repository")
         name = repository.get("full_name") if isinstance(repository, dict) else None
-        if self._repositories and isinstance(name, str) and name.lower() not in self._repositories:
+        if self._repositories and isinstance(name, str) and not self._answers(name):
             log.info("ignored delivery from %s: this deployment answers %s", name, sorted(self._repositories))
             return True
         if _asks_for_self_login(event, payload) and not self_login:
@@ -584,7 +597,7 @@ class GithubIngress:
             # Handled here rather than queued: waking a waiting step is
             # instant, and behind a concierge turn it would arrive late. Never
             # refused either, since a missed one only costs the fallback poll.
-            if ci.repository.lower() not in self._repositories or self._handle_ci is None:
+            if not self._answers(ci.repository) or self._handle_ci is None:
                 log.info("ignored GitHub %s delivery %s for %s@%s: not a configured repository",
                          event, delivery_id or "-", ci.repository, ci.sha)
                 return True
@@ -664,7 +677,7 @@ class GithubIngress:
                 "a GitHub %s was delivered but no target repository is configured", subject
             )
             return False
-        if delivery.repository.lower() not in self._repositories:
+        if not self._answers(delivery.repository):
             # A shared App secret authenticates deliveries from other repos too.
             # Ignore them before queueing or remembering their identities.
             log.info("ignored %s: this deployment answers %s", named, sorted(self._repositories))

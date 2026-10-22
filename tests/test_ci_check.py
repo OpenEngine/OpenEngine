@@ -246,7 +246,7 @@ def test_a_delivery_wakes_the_wait_before_the_fallback_poll(execution):
         while source.list_pipeline_status.await_count < 1:
             await asyncio.sleep(0)
         await asyncio.sleep(0)
-        assert wake_ci("owner/repo", "other") == 0
+        assert wake_ci("owner/repo", "other", (99,)) == 0
         assert wake_ci("other/repo", "abc") == 0
         assert wake_ci("Owner/Repo", "ABC") == 1
         return await task
@@ -267,3 +267,20 @@ def test_ci_settled_before_the_step_started_is_read_at_once(execution):
     execution.runtime.source_control.list_pipeline_status.return_value = status()
     result = asyncio.run(CICheck(poll_interval=3600, timeout=1)(STATE))["ci_check"]
     assert result["passed"] is True
+
+
+@pytest.mark.parametrize("pull_requests", [(42,), ()])
+def test_ci_on_a_newly_pushed_head_wakes_the_wait(execution, pull_requests):
+    source = execution.runtime.source_control
+    source.list_pipeline_status.side_effect = [status("in_progress", None, ref="old"), status(ref="new")]
+
+    async def run():
+        task = asyncio.create_task(CICheck(poll_interval=3600, timeout=5)(STATE))
+        while source.list_pipeline_status.await_count < 1:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert wake_ci("owner/repo", "new", pull_requests) == 1
+        return await task
+
+    result = asyncio.run(run())["ci_check"]
+    assert result["passed"] is True and result["ref"] == "new"

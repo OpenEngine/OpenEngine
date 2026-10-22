@@ -1050,6 +1050,13 @@ def test_settled_ci_wakes_its_commit(event, payload) -> None:
     assert [(ci.repository, ci.sha) for ci in woken] == [("Acme/API", "abc")]
 
 
+def test_a_check_names_the_pull_requests_its_commit_heads() -> None:
+    payload = {"action": "completed", "repository": {"full_name": "acme/api"},
+               "check_suite": {"head_sha": "abc", "pull_requests": [{"number": 7}, {"url": "x"}]}}
+    ci = ci_from_payload("check_suite", payload)
+    assert ci is not None and ci.pull_requests == (7,)
+
+
 @pytest.mark.parametrize(("event", "payload"), [
     ("check_suite", {"action": "requested", "check_suite": {"head_sha": "abc"}}),
     ("check_run", {"action": "created", "check_run": {"head_sha": "abc"}}),
