@@ -685,6 +685,7 @@ export function GraphConversationPage({
     run?.activeExecutions.some((execution) => execution.nodeId === nodeId),
   );
   const quiet = useQuietSeconds(nodeEvents.at(-1)?.sequence, working);
+  const heading = workOrderName || "WorkOrder";
   const canSteer = working || Boolean(
     graphId && topology?.graphId === graphId &&
     topology.nodes.some((node) => node.nodeId === nodeId && node.alwaysOpen),
@@ -789,7 +790,7 @@ export function GraphConversationPage({
         <div id={headerDetailsId} className="graph-header-details" data-expanded={headerExpanded}>
           <div className="panel-head-copy">
             <p className="eyebrow">{phaseLabel(nodeId)}</p>
-            <h1 title={workOrderName || "WorkOrder"}>{workOrderName || "WorkOrder"}</h1>
+            <h1 title={heading}>{heading}</h1>
             <p className="lede">
               {working
                 ? "This node's agent is working. What you send reaches the turn it is in the middle of."

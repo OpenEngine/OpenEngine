@@ -451,20 +451,23 @@ ul, ol { padding: 0; list-style: none; }
 .panel-head-graph { grid-template-columns: minmax(240px, 1fr) minmax(300px, 412px); }
 .panel-head-controls { display: grid; grid-column: -2 / -1; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: start; gap: 12px; min-width: 0; }
 .panel-head-copy { display: grid; gap: 10px; min-width: 0; }
+.panel-head h1,
+.detail-title h1 {
+  /* A very long name stops at three lines so it cannot push the page's
+     content off screen; the full name stays on the heading's title attribute. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
 .panel-head h1 {
   font-size: clamp(24px, 2.4vw, 33px);
   font-weight: 800;
   line-height: 1.1;
   letter-spacing: -.035em;
   overflow-wrap: anywhere;
-  /* A very long name stops at three lines so it cannot push the chat off
-     screen; the full name stays on the heading's title attribute. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
   max-height: calc(3 * 1.1em);
-  overflow: hidden;
 }
 .panel-head .lede { font-size: 15px; }
 
@@ -991,14 +994,7 @@ select:disabled { cursor: default; }
   line-height: 1.02;
   letter-spacing: -.04em;
   overflow-wrap: anywhere;
-  /* A very long name stops at three lines so it cannot push the run's details
-     off screen; the full name stays on the heading's title attribute. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
   max-height: calc(3 * 1.02em);
-  overflow: hidden;
 }
 .back-link { color: var(--muted); font: 500 12px/1 var(--mono); letter-spacing: .1em; text-decoration: none; text-transform: uppercase; }
 .back-link:hover { color: var(--flame); }
