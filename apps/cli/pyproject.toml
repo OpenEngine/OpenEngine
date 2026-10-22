@@ -8,6 +8,7 @@ dependencies = ["engine-runtime", "engine-graph-cli", "platformdirs>=4", "tomlki
 [project.scripts]
 engine = "engine.apps.cli.__main__:main"
 oe = "engine.apps.cli.__main__:main"
+openengine = "engine.apps.cli.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -27,7 +27,7 @@ Usage: install.sh [--version X.Y.Z] [--prefix DIR] [--no-start] [--no-shim]
   --version X.Y.Z  install this release instead of the latest
   --prefix DIR     install under DIR (default: \$XDG_DATA_HOME/openengine)
   --no-start       do not start OpenEngine after installing
-  --no-shim        do not write the oe launcher (npm provides its own)
+  --no-shim        do not write the oe and openengine launchers (npm provides its own)
 EOF
 }
 
@@ -93,6 +93,7 @@ cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/openengine
 bin_dir=${XDG_BIN_HOME:-$HOME/.local/bin}
 config="$config_dir/engine.toml"
 engine_shim="$bin_dir/oe"
+openengine_shim="$bin_dir/openengine"
 
 mkdir -p "$prefix/bin" "$prefix/versions"
 prefix=$(cd "$prefix" && pwd -P)
@@ -185,7 +186,7 @@ ln -sfn "versions/$release" "$prefix/current"
 
 # The shim: single-quoted paths, with any quote in them closed and escaped.
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-# `oe` is the terminal client; `oe daemon` manages the web service.
+# `oe` (or `openengine`) is the terminal client; `oe daemon` manages the web service.
 write_shim() {
   if [ -e "$1" ] && ! grep -q '^# Written by the OpenEngine installer' "$1"; then
     die "$1 exists and was not written by this installer; move it aside and rerun"
@@ -203,6 +204,7 @@ EOF
 if [ "$shim" = 1 ]; then
   mkdir -p "$bin_dir"
   write_shim "$engine_shim" engine
+  write_shim "$openengine_shim" engine
 fi
 
 # The state directory holds conversations, graph state and logs: owner-only,
@@ -256,4 +258,4 @@ if [ "$start" = 1 ]; then
 fi
 
 
-printf '\ninstalled! run `oe`\n'
+printf '\ninstalled! run `oe` or `openengine`\n'
