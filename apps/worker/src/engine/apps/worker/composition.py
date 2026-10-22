@@ -68,7 +68,9 @@ def build_capabilities(settings: Settings) -> Capabilities:
             host_aliases=settings.engine_config.github.host_aliases
         ),
         agent_runner=codex_acp_runner(
-            sandbox="read-only", attribution=settings.engine_config.attribution
+            sandbox="read-only",
+            attribution=settings.engine_config.attribution,
+            config=settings.engine_config,
         ),
         communications=BuzzCommunications(settings.buzz_base_url, settings.buzz_api_token),
         workspace_provider=workspace_provider,

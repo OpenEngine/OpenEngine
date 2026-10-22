@@ -905,12 +905,6 @@ def installed_codex(env: Mapping[str, str] | None = None, *, path: str = "") -> 
     )
 
 
-def installed_codex_env(config: EngineConfig | None = None) -> dict[str, str] | None:
-    """The environment that points a bare `CodexACPProvider` at `installed_codex`."""
-    codex = installed_codex(path=(config or EngineConfig()).runner_paths.get("codex", ""))
-    return {"CODEX_PATH": codex} if codex else None
-
-
 def agent_provider(config: EngineConfig, agent: str, /, **overrides: Any) -> ACPAgentProvider:
     """The provider for `agent` (`codex`, `claude` or `opencode`).
 
@@ -920,7 +914,8 @@ def agent_provider(config: EngineConfig, agent: str, /, **overrides: Any) -> ACP
     over that.
     """
     if agent == "codex":
-        env = {**(installed_codex_env(config) or {}), **(overrides.pop("env", None) or {})}
+        codex = installed_codex(path=config.runner_paths.get("codex", ""))
+        env = {**({"CODEX_PATH": codex} if codex else {}), **(overrides.pop("env", None) or {})}
         return CodexACPProvider(env=env or None, **overrides)
     if agent == "claude":
         return ClaudeACPProvider(**overrides)
@@ -950,13 +945,15 @@ def codex_acp_runner(
     workspace_provider: WorkspaceProvider | None = None,
     attribution: bool = True,
     env: Mapping[str, str] | None = None,
+    config: EngineConfig | None = None,
 ) -> ACPAgentRunner:
     """Codex, through codex-acp, in the sandbox Engine names.
 
     codex-acp cannot be asked for a sandbox, so it is handed a Codex that
     enforces one: `CODEX_PATH` names `codex_policy`, which pins every turn to
-    `sandbox` with `on-request` approval. The operator's own `CODEX_PATH`, if
-    any, is the Codex that runs underneath. Attribution reaches Codex as
+    `sandbox` with `on-request` approval. The Codex `installed_codex` resolves
+    -- `[runners.codex].path` from `config` first -- is the one that runs
+    underneath. Attribution reaches Codex as
     `developer_instructions` in `CODEX_CONFIG`, which codex-acp reads from its
     environment rather than from the protocol.
     """
@@ -968,7 +965,8 @@ def codex_acp_runner(
         "CODEX_PATH": _codex_policy_launcher(),
         SANDBOX_VARIABLE: sandbox,
     }
-    codex_path = installed_codex(env)
+    config = config or EngineConfig()
+    codex_path = installed_codex(env, path=config.runner_paths.get("codex", ""))
     if codex_path:
         codex_env[CODEX_PATH_VARIABLE] = codex_path
     if not attribution:
@@ -976,7 +974,7 @@ def codex_acp_runner(
             {"developer_instructions": NO_ATTRIBUTION_INSTRUCTIONS}
         )
     return ACPAgentRunner(
-        CodexACPProvider(command=command, env=codex_env),
+        agent_provider(config, "codex", command=command, env=codex_env),
         working_directory=working_directory,
         model=model,
         timeout_seconds=timeout_seconds,
@@ -1152,7 +1150,6 @@ __all__ = [
     "claude_session_config",
     "codex_acp_runner",
     "installed_codex",
-    "installed_codex_env",
     "opencode_acp_runner",
     "render_prompt",
 ]

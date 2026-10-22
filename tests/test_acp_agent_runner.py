@@ -31,7 +31,6 @@ from engine.adapters.agent_runner.acp import (
     agent_providers,
     claude_acp_runner,
     codex_acp_runner,
-    installed_codex_env,
     opencode_acp_runner,
 )
 from engine.apps.web.composition import added_agent
@@ -406,14 +405,14 @@ def test_a_bare_codex_provider_is_pointed_at_the_installed_cli(tmp_path, monkeyp
     """Without it, codex-acp runs the Codex it bundles, which may not know the configured model."""
     installed = _install_codex(tmp_path, monkeypatch)
 
-    assert installed_codex_env() == {"CODEX_PATH": str(installed)}
+    assert agent_provider(EngineConfig(), "codex").env == {"CODEX_PATH": str(installed)}
 
 
 def test_the_operator_s_codex_path_wins_over_the_one_on_path(tmp_path, monkeypatch) -> None:
     _install_codex(tmp_path, monkeypatch)
     monkeypatch.setenv("CODEX_PATH", "/opt/codex")
 
-    assert installed_codex_env() == {"CODEX_PATH": "/opt/codex"}
+    assert agent_provider(EngineConfig(), "codex").env == {"CODEX_PATH": "/opt/codex"}
 
 
 def test_codex_acp_keeps_its_bundled_cli_when_none_is_installed(tmp_path, monkeypatch) -> None:
@@ -421,7 +420,7 @@ def test_codex_acp_keeps_its_bundled_cli_when_none_is_installed(tmp_path, monkey
     monkeypatch.delenv("ENGINE_CODEX_PATH", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
 
-    assert installed_codex_env() is None
+    assert agent_provider(EngineConfig(), "codex").env is None
 
 
 def test_the_configured_codex_path_wins_over_the_environment(tmp_path, monkeypatch) -> None:
@@ -433,7 +432,6 @@ def test_the_configured_codex_path_wins_over_the_environment(tmp_path, monkeypat
     codex, _, _ = agent_providers(config)
 
     assert codex.env == {"CODEX_PATH": "/configured/codex"}
-    assert installed_codex_env(config) == {"CODEX_PATH": "/configured/codex"}
 
 
 @pytest.mark.parametrize(

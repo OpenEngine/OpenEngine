@@ -86,8 +86,7 @@ from engine.graph_runtime_langgraph.executions import NodeExecution
 from engine.ports import ApprovalHandler, WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
-from langgraph_acp import ACPAgentRegistry
-from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider, OpenCodeACPProvider
+from langgraph_acp import ACPAgentRegistry, default_registry
 
 
 # ---------------------------------------------------------------------------
@@ -120,10 +119,11 @@ FIX = "fix"
 #: The creation inputs naming the change a run started in review looks at.
 REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
-#: Codex, Claude and OpenCode, reached through ACP, and any agent added
-#: with `oe agent add`.  `agent_registry` is what routes an agent's
-#: permission request back to the run that raised it.
-AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]))
+#: Codex, Claude and OpenCode as `engine.toml` configures them, reached
+#: through ACP, and any agent added with `oe agent add`.  The serving process
+#: installs the configured ones as `default_registry()`; `agent_registry` is
+#: what routes an agent's permission request back to the run that raised it.
+AGENTS = with_added_agents(agent_registry(map(default_registry().resolve, default_registry().names)))
 
 #: Built-in review sessions inherit the provider's account-compatible model.
 #: Separate sessions provide independent review even with one installed agent.
