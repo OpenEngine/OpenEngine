@@ -13,6 +13,14 @@ const MAC_MINI_TOKEN = randomBytes(32).toString("hex")
 /** A token the Mac mini doesn't know, such as an old one. */
 const OLD_TOKEN = randomBytes(32).toString("hex")
 
+/**
+ * Testing gap: anotherComputerToken preconfigures the remote daemon; this test
+ * does not execute the reader's .env edit, daemon restart, or local CLI setup.
+ * Manual check on the token-protected host: with ENGINE_SERVICE_TOKEN unset in
+ * the shell, `engine graph list` must report that a token is required. Export
+ * ENGINE_SERVICE_TOKEN with the value from .env and rerun: it must succeed.
+ * Repeat in a new terminal after adding the export to ~/.zshrc.
+ */
 test.use({
   terminalSession: { cols: 120, rows: 30 },
   anotherComputerAt: MAC_MINI,
@@ -112,7 +120,9 @@ You'll see a long line of letters and numbers. That's your token. Keep it secret
 ENGINE_SERVICE_TOKEN=your-token
 \`\`\`
 
-Save the file. Then restart OpenEngine there so it reads the token: type \`engine daemon stop\`, press Enter, then type \`engine daemon start\` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.`,
+Save the file. Then restart OpenEngine there so it reads the token: type \`engine daemon stop\`, press Enter, then type \`engine daemon start\` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.
+
+To keep using commands on the Mac mini itself, also type \`export ENGINE_SERVICE_TOKEN=\` followed by the same token in its terminal and press Enter. The daemon reads its token from \`.env\`, but commands in your terminal read it from the shell environment. Add that export line to \`~/.zshrc\` on the Mac mini if you want it in new terminal windows too.`,
         )
 
         await step(
