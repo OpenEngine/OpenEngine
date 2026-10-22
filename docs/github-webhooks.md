@@ -1,14 +1,15 @@
 # GitHub webhooks
 
-Engine reads comments, issue assignments, and merges from GitHub over a signed
-webhook. Comments and assignments request work; merges accept it. The route only exists once something is wired to act on a delivery, so
+Engine reads comments, issue assignments, merges, and CI results from GitHub
+over a signed webhook. Comments and assignments request work; merges accept it;
+CI results wake a run waiting on CI. The route only exists once something is wired to act on a delivery, so
 configure the webhook after that is in place: an endpoint that accepted
 deliveries it could never act on would collect failures until GitHub disabled
 the hook.
 
 Point a GitHub app or a repository webhook at `<public_url>/api/github/events`, subscribe it to the
-`issue_comment`, `pull_request_review_comment`, `issues`, and `pull_request` events, and
-give it a secret.
+`issue_comment`, `pull_request_review_comment`, `issues`, `pull_request`,
+`check_suite`, `check_run`, and `status` events, and give it a secret.
 
 ## Naming the repositories
 
@@ -254,6 +255,29 @@ does not skip that step. The run still reaches its review and it is shown as
 usual; the merge that already answered it is recorded as soon as it does. The
 merge is held in memory until then, so a restart in between leaves the review
 for the web UI.
+
+## Waking the CI step
+
+A run's `ci` step waits for its pull request's CI to settle. It reads CI once
+when it starts, so CI that finished first is not waited on, and again whenever
+a `check_suite` or `check_run` completes, or a commit `status` leaves
+`pending`, on the pull request's head commit. That includes a commit pushed
+since it last read CI: a check names the pull requests its commit heads, and a
+commit `status`, which names none, wakes every step waiting in that
+repository. A delivery only says to look
+again: the verdict always comes from reading the pull request's required
+checks through the API, since one delivery may not cover every check, and
+several apps mean several suites for one commit.
+
+The route hands the delivery to whichever steps in this process are waiting on
+that repository and commit or pull request. A delivery nobody is waiting on, or from a
+repository this deployment does not answer, is acknowledged and ignored. The
+waiting steps are held in memory only while they wait.
+
+Without these events, because the webhook is not subscribed to them, a
+delivery was dropped, the process restarted, or there is no reachable
+`public_url`, the step still reads CI every five minutes until it settles or
+the step's hour runs out. A missed delivery costs at most that interval.
 
 ## Reading the log
 

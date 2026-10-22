@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from engine.graph_runtime_langgraph.components import CICheck
+from engine.graph_runtime_langgraph.components import CICheck, wake_ci
 from engine.runtime.change_requests import change_request
 from engine.ports import PipelineStatus, StatusCheck
 from test_graph_workflow_definitions import definition_module, nodes_of
@@ -235,3 +235,52 @@ def test_a_disconnected_run_skips_ci_without_asking_the_forge(execution):
     assert result["passed"] is True and result["skipped"] is True
     execution.runtime.source_control.list_pipeline_status.assert_not_awaited()
     execution.say.assert_awaited_once()
+
+
+def test_a_delivery_wakes_the_wait_before_the_fallback_poll(execution):
+    source = execution.runtime.source_control
+    source.list_pipeline_status.side_effect = [status("in_progress", None, ref="abc"), status(ref="abc")]
+
+    async def run():
+        task = asyncio.create_task(CICheck(poll_interval=3600, timeout=5)(STATE))
+        while source.list_pipeline_status.await_count < 1:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert wake_ci("owner/repo", "other", (99,)) == 0
+        assert wake_ci("other/repo", "abc") == 0
+        assert wake_ci("Owner/Repo", "ABC") == 1
+        return await task
+
+    result = asyncio.run(run())["ci_check"]
+    assert result["passed"] is True
+    assert source.list_pipeline_status.await_count == 2
+    assert wake_ci("owner/repo", "abc") == 0  # the waiter is gone once it returns
+
+
+def test_without_deliveries_the_fallback_poll_finishes(execution):
+    source = execution.runtime.source_control
+    source.list_pipeline_status.side_effect = [status("queued", None), status()]
+    assert asyncio.run(CICheck(poll_interval=0.01)(STATE))["ci_check"]["passed"] is True
+
+
+def test_ci_settled_before_the_step_started_is_read_at_once(execution):
+    execution.runtime.source_control.list_pipeline_status.return_value = status()
+    result = asyncio.run(CICheck(poll_interval=3600, timeout=1)(STATE))["ci_check"]
+    assert result["passed"] is True
+
+
+@pytest.mark.parametrize("pull_requests", [(42,), ()])
+def test_ci_on_a_newly_pushed_head_wakes_the_wait(execution, pull_requests):
+    source = execution.runtime.source_control
+    source.list_pipeline_status.side_effect = [status("in_progress", None, ref="old"), status(ref="new")]
+
+    async def run():
+        task = asyncio.create_task(CICheck(poll_interval=3600, timeout=5)(STATE))
+        while source.list_pipeline_status.await_count < 1:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert wake_ci("owner/repo", "new", pull_requests) == 1
+        return await task
+
+    result = asyncio.run(run())["ci_check"]
+    assert result["passed"] is True and result["ref"] == "new"

@@ -152,6 +152,7 @@ from engine.graph_service.service import DEFAULT_PROJECT, ServiceError
 from engine.graph_service.store import GraphRow, VersionRow
 from engine.graph_service import create_app as create_graph_service_app
 from engine.graph_runtime.usage import usage_rollup
+from engine.graph_runtime_langgraph.components.ci_check import wake_ci
 from engine.graph_runtime_langgraph.components.human_review import (
     TOOL_NAME as HUMAN_REVIEW_TOOL,
 )
@@ -4240,6 +4241,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         handle_merge=github_merge_approves_workorder,
         handle_assignment=github_create_workorder,
         handle_review_request=github_review_pull_request,
+        # A CI step waits in this process, so its wake-up is a call, not a run lookup.
+        handle_ci=lambda ci: wake_ci(ci.repository, ci.sha, ci.pull_requests),
         activity=github_activity,
     )
 
