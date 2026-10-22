@@ -782,3 +782,13 @@ def test_review_backend_rejects_onboarding_credentials_before_submit(monkeypatch
     assert main(['repo', 'add', 'owner/repo', '--review-backend', 'onboarding']) == 2
     assert 'must use service credentials' in capsys.readouterr().err
     assert recorded.requests == []
+
+
+@pytest.mark.parametrize("token", ["", "wrong-token"])
+def test_backend_check_explains_missing_or_rejected_token(monkeypatch, token):
+    monkeypatch.setenv("MINI_TOKEN", token)
+    serve(monkeypatch, HTTPError("http://mini/api/v1/graphs", 401, "", {}, io.BytesIO(b"{}")))
+    client = http.Client(backends.Backend("mini", "http://mini", token_env="MINI_TOKEN"))
+    message = "refused the token in MINI_TOKEN" if token else "requires a token; set MINI_TOKEN"
+    with pytest.raises(http.RequestFailed, match=message):
+        client.get("/graphs")

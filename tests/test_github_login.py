@@ -1191,3 +1191,21 @@ def test_separate_onboarding_token_scope(method, path, allowed):
         assert client.request(method, path, headers={'Authorization': f'Bearer {SERVICE_TOKEN}'}).status_code == 401
     token = SERVICE_TOKEN
     assert client.request(method, path, headers={'Authorization': f'Bearer {token}'}).status_code == (200 if path in ['/api/runs', '/api/v1/graphs'] else 401)
+
+
+@pytest.mark.parametrize("path", ["/api/v1/graphs", "/api/data", "/graph/api/data"])
+def test_token_protects_api_without_github_login_and_rotates(path):
+    from starlette.responses import JSONResponse
+
+    token = ""
+    login = GitHubLogin(None, service_token=lambda: token)
+    app = Starlette(routes=[Route(path, lambda _r: JSONResponse({"ok": True}))])
+    client = TestClient(login.middleware(app))
+    assert client.get(path).status_code == 200
+    token = SERVICE_TOKEN
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get(path, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}).status_code == 200
+    token = "new-token-" * 4
+    assert client.get(path, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}).status_code == 401
+    assert client.get(path, headers={"Authorization": f"Bearer {token}"}).status_code == 200
