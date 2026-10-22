@@ -1,6 +1,6 @@
 """Registered graphs, runs, loops and node steering, served by the engine daemon.
 
-What `engine graph`, `engine loop` and `engine node` talk to. The daemon owns
+What `oe graph`, `oe loop` and `oe node` talk to. The daemon owns
 the one LangGraph runtime; this package registers graphs on it, starts runs of
 them through the daemon's own WorkOrder path, schedules loops, and steers node
 executions -- every agent node a langgraph-acp session.

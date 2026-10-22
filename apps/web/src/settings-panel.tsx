@@ -542,7 +542,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             GitHub CLI login (<code>gh auth status</code>), or the GitHub OAuth
             connection made{" "}
             {agentsUseConnection ? "here or " : "on the server "}
-            with <code>engine connect github</code>.{" "}
+            with <code>oe connect github</code>.{" "}
             {agentsUseConnection
               ? "Signing in to OpenEngine only identifies you."
               : "The connection below is only yours, and agents do not act as it."}

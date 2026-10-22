@@ -6,7 +6,7 @@
 
 OpenEngine is a graph execution engine that meets you where you work.
 
-New here? [Start with `engine go`](docs/getting-started.md): make a local change,
+New here? [Start with `oe go`](docs/getting-started.md): make a local change,
 connect GitHub, and take it through review to a pull request.
 
 ![](docs/images/oe_land.png)
@@ -22,14 +22,14 @@ Install the CLI, then run it from inside any git repository:
 ```bash
 npm i -g @openengine.cc/engine
 cd your-repo
-engine go "add a dark mode toggle to the settings page"
+oe go "add a dark mode toggle to the settings page"
 ```
 Or try it without installing:
 ```
 npx @openengine.cc/engine@latest go "add a dark mode toggle to the settings page"
 ```
 If you installed earlier with the curl installer, npm will refuse to overwrite its `~/.local/bin/engine` launcher. Run `npm i -g --force @openengine.cc/engine` once to replace it.
-`engine go` runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. It follows the run live in your terminal. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
+`oe go` runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. It follows the run live in your terminal. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
 
 Stuck, or just want to say hello? Join us on [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ).
 
@@ -39,25 +39,25 @@ Stuck, or just want to say hello? Join us on [Slack](https://join.slack.com/t/op
 
 A graph is a workflow of agent and code steps. Use the built-in ones, or write your own (YAML or Python) to automate the tedious parts of your development process.
 ```
-engine graphs                                   # list available graphs
-engine go review <pr-url>                       # review an existing pull request
-engine go fix <pr-url>                          # address its unresolved review comments
-engine graph add my-graph.yaml                  # register your own graph
-engine graph run my-graph "add my widget"       # run any graph with an instruction
+oe graphs                                   # list available graphs
+oe go review <pr-url>                       # review an existing pull request
+oe go fix <pr-url>                          # address its unresolved review comments
+oe graph add my-graph.yaml                  # register your own graph
+oe graph run my-graph "add my widget"       # run any graph with an instruction
 ```
 ### Steering
 
 Runs are steerable while they work. Watch one, then redirect a node mid-flight:
 ```
-engine run watch <run-id>
-engine node steer <execution-id> "use the existing date helper instead"
+oe run watch <run-id>
+oe node steer <execution-id> "use the existing date helper instead"
 ```
 ### Loops
 
 Loops run a graph on a schedule: QA sweeps, pentesting, dependency upkeep, or anything else you'd want done every day. Each loop has limits, so it can't run away with your budget.
 ```
-engine loop add qa-sweep --every 1d --max-spend 20 --max-prs 5
-engine loops                                    # status, spend and PRs per loop
+oe loop add qa-sweep --every 1d --max-spend 20 --max-prs 5
+oe loops                                    # status, spend and PRs per loop
 ```
 ### From source
 
@@ -78,7 +78,7 @@ uv run \
   --all-packages \
   engine-web
 ```
-Or install the checked-out commit as your `engine`, in place of a release,
+Or install the checked-out commit as your `oe`, in place of a release,
 exactly as the one-line installer would. It is labeled with the commit, such as
 `1.2.0-ffdb7cd`, and takes the installer's options:
 ```bash
@@ -97,31 +97,31 @@ login and does not check external provider credentials.
 
 ## Terminal commands
 
-The binary is `engine`. Run it with no arguments to list its commands:
+The binary is `oe` (also installed as `openengine`). Run it with no arguments to list its commands:
 
-- `engine daemon` runs the local service in the background; see
+- `oe daemon` runs the local service in the background; see
   [Background service](docs/releases.md#background-service).
-- `engine connect gh|github|gitlab|slack` connects the selected backend's shared
-  source control or Slack; `engine connections` shows them and
-  `engine disconnect` undoes one.
-- `engine agent add|get|remove|signin` and `engine agents` manage the agents
+- `oe connect gh|github|gitlab|slack` connects the selected backend's shared
+  source control or Slack; `oe connections` shows them and
+  `oe disconnect` undoes one.
+- `oe agent add|get|remove|signin` and `oe agents` manage the agents
   graphs name: the built-in `claude`, `codex` and `opencode`, and any you add,
-  such as `engine agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
+  such as `oe agent add opencode --name qwen --model qwen3-coder --url http://gpu.local:8000/v1`.
   Give an agent on a model server its context window with `--context` (and
   optionally `--output`) so opencode compacts its history before prompts
   outgrow it. For Ollama, set `PARAMETER num_ctx` in the Modelfile and
   `--context` to the same value: Ollama's OpenAI-compatible endpoint neither
   reports nor enforces `num_ctx`, so without the limit every step prefills the
   whole history.
-- `engine agent claude`, `engine agent codex` and `engine agent opencode`
+- `oe agent claude`, `oe agent codex` and `oe agent opencode`
   start a run whose implementation node is that CLI in this terminal: the
   daemon checks the repository out into a fresh workspace and gives the agent
   the same `git_subcommand` and `open_pull_request` tools an implementation
   node gets (`[sessions] tools` in `engine.toml` changes which). The run ends
   when the CLI exits. Arguments after `--` go to the CLI.
-- `engine graph`, `engine run`, `engine loop`, `engine node` and their list
+- `oe graph`, `oe run`, `oe loop`, `oe node` and their list
   forms (`graphs`, `loops`, `nodes`) register, execute, schedule and steer
-  graphs; `engine backend` chooses which daemon they talk to. See
+  graphs; `oe backend` chooses which daemon they talk to. See
   [cli/README.md](cli/README.md).
 
 While working on OpenEngine itself, run the development server instead:
@@ -248,7 +248,7 @@ GITHUB_CLIENT_ID=Ov23liXXXXXXXXXX GITHUB_TOKEN=ghp_XXXXXXXXXXXX uv run engine-we
 For browser-based login setup, see the [GitHub login guide](docs/github-login.md).
 To receive comments and merges from GitHub, see the
 [GitHub webhooks guide](docs/github-webhooks.md).
-Add a local checkout with `engine repo add .`, or clone a GitHub/GitLab project with `engine repo add https://github.com/owner/repo`.
+Add a local checkout with `oe repo add .`, or clone a GitHub/GitLab project with `oe repo add https://github.com/owner/repo`.
 It checks prerequisites, clones the repository, saves configuration, and makes
 it available immediately without restarting. The web UI's **Add repository**
 action and MCP's `onboard_repository` tool provide the same onboarding.

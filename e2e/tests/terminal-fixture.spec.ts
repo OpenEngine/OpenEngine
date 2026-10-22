@@ -16,7 +16,7 @@ test.describe("terminal fixture", { tag: ["@skip-docs"] }, () => {
 
   test("runs this checkout's engine, whatever else is installed", async ({ terminal }) => {
     const version = execFileSync(engineBin, ["--version"], { encoding: "utf8" }).trim()
-    expect((await terminal.run("engine --version")).output).toBe(version)
+    expect((await terminal.run("oe --version")).output).toBe(version)
   })
 
   test("keeps long output lines whole even when the terminal wraps them", async ({ terminal }) => {

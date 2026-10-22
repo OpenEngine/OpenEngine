@@ -253,7 +253,7 @@ def agent_registry(providers: Iterable[Any]) -> ACPAgentRegistry:
 
 
 class AddedAgents(ACPAgentRegistry):
-    """Agents added with `engine agent add`, and the model each one's sessions ask for.
+    """Agents added with `oe agent add`, and the model each one's sessions ask for.
 
     Filled by the process serving them -- the graph service -- and read by
     workflow files through `with_added_agents`, so a workflow written for the
@@ -316,7 +316,7 @@ class WithAddedAgents(ACPAgentRegistry):
 def with_added_agents(
     registry: ACPAgentRegistry, added: AddedAgents = ADDED_AGENTS
 ) -> WithAddedAgents:
-    """`registry`'s agents, also resolving the agents added with `engine agent add`."""
+    """`registry`'s agents, also resolving the agents added with `oe agent add`."""
     return WithAddedAgents((registry.resolve(name) for name in registry.names), added)
 
 

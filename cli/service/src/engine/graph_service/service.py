@@ -315,7 +315,7 @@ class GraphService:
         return tuple(self._registry.names)
 
     def added_agents(self) -> tuple[str, ...]:
-        """The runners `engine agent add` offers, beyond the built-in ones."""
+        """The runners `oe agent add` offers, beyond the built-in ones."""
         return self._added_agents.names
 
     # --- agents -------------------------------------------------------------
@@ -1676,10 +1676,10 @@ def auth_required(error: str, runner: str) -> dict[str, str] | None:
     target = runner or "<runner>"
     return {
         "runner": runner or "",
-        "command": f"engine agent signin {target}",
+        "command": f"oe agent signin {target}",
         "message": (
             f"agent {target} is not signed in on this backend; run "
-            f"`engine agent signin {target}` and retry"
+            f"`oe agent signin {target}` and retry"
         ),
     }
 

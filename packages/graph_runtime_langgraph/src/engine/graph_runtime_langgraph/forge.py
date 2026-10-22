@@ -54,6 +54,6 @@ async def resolve_forge_context(
     summary = (
         f"connected · {project} · will open a PR and post review comments"
         if mode == "connected" else
-        "disconnected · local branch only (run engine connect github to publish)"
+        "disconnected · local branch only (run oe connect github to publish)"
     )
     return {"mode": mode, "reason": reason, "repository": project or repository, "summary": summary}

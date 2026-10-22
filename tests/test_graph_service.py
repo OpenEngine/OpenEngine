@@ -362,7 +362,7 @@ def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: 
             failed = await settled(service, run["runId"])
             assert failed["status"] == "failed"
             assert failed["failure"]["node"] == "work"
-            assert failed["failure"]["authRequired"]["command"] == "engine agent signin stub"
+            assert failed["failure"]["authRequired"]["command"] == "oe agent signin stub"
 
     asyncio.run(scenario())
 
@@ -386,7 +386,7 @@ def test_a_node_names_the_runner_it_chose_before_it_finishes(tmp_path: Path) -> 
             )
             failed = await settled(service, run["runId"])
             assert failed["status"] == "failed"
-            assert failed["failure"]["authRequired"]["command"] == "engine agent signin qwen"
+            assert failed["failure"]["authRequired"]["command"] == "oe agent signin qwen"
             assert {node["node"]: node["runner"] for node in failed["nodes"]}["work"] == "qwen"
 
     asyncio.run(scenario())
@@ -670,7 +670,7 @@ def test_a_loop_pauses_when_its_runner_needs_signing_in(tmp_path: Path) -> None:
             await service.tick()
             await settled(service, (await service.loop_json(loop["loopId"]))["activeRunId"])
             loop = await paused(service, loop["loopId"])
-            assert "engine agent signin stub" in loop["pauseReason"]
+            assert "oe agent signin stub" in loop["pauseReason"]
 
     asyncio.run(scenario())
 
@@ -1201,7 +1201,7 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                         "instruction": "Implement the task",
                     })
                     assert refused.status_code == 400, refused.text
-                    assert "engine agent signin" in refused.text
+                    assert "oe agent signin" in refused.text
                     saved = await client.put("/api/loops/settings", json={
                         "activeHours": {"start": "00:00", "end": "00:00"}, "maxPrs": 1, "maxDailySpend": 0,
                         "runnerStrategy": "manual", "implementationRunner": "qwen", "reviewRunner": "test",

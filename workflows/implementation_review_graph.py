@@ -121,7 +121,7 @@ FIX = "fix"
 REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
 #: Codex and Claude, reached through their ACP adapters, and any agent added
-#: with `engine agent add`.  `agent_registry` is what routes an agent's
+#: with `oe agent add`.  `agent_registry` is what routes an agent's
 #: permission request back to the run that raised it.
 AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider()]))
 
@@ -633,7 +633,7 @@ def pipeline(
 
 
 #: Runner choices for the implementation and review stages.  An agent added
-#: with `engine agent add` is offered beside these by the process serving it,
+#: with `oe agent add` is offered beside these by the process serving it,
 #: and joins the policies when installed and signed in on the backend.
 DEFAULT_RUNNER = "round-robin"
 DEFAULT_REVIEW_RUNNER = "round-robin"

@@ -1152,7 +1152,7 @@ def test_legacy_connected_repository_mode_remains_supported(caplog):
 
 @pytest.mark.parametrize("project,workflow,accepted", [
     (None, "tdd-guide", False),
-    # `engine graph add` with no project, or the repository's own project.
+    # `oe graph add` with no project, or the repository's own project.
     ("default", "tdd-guide", True),
     ("acme/api", "tdd-guide", True),
     # Another project's graph is not this repository's, by name...
@@ -1165,7 +1165,7 @@ def test_legacy_connected_repository_mode_remains_supported(caplog):
 def test_web_check_reports_a_work_order_workflow_that_names_nothing(
     tmp_path, monkeypatch, capsys, project, workflow, accepted,
 ):
-    """`work_orders.workflow` names a workflow or a graph registered with `engine graph add`.
+    """`work_orders.workflow` names a workflow or a graph registered with `oe graph add`.
 
     One that names neither, for the repositories webhooks start work in, is
     refused at startup, with the name, rather than when the first assignment
