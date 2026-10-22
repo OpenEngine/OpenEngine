@@ -4,7 +4,7 @@ import langgraph_acp.agent
 import pytest
 from langgraph_acp import default_registry
 
-from engine.adapters.agent_runner.acp import agent_provider
+from engine.adapters.agent_runner.acp import agent_provider, runner_binary
 from engine.apps.control_server.composition import Settings as ControlServerSettings
 from engine.apps.control_server.composition import build_capabilities as build_control_server
 from engine.apps.web import __main__ as web_main
@@ -43,6 +43,20 @@ def _config(stub: str) -> EngineConfig:
 
 def test_the_graph_service_registry_runs_the_configured_codex(stub) -> None:
     assert builtin_agents(_config(stub)).resolve("codex").env == {"CODEX_PATH": stub}
+
+
+def test_runner_binary_names_the_configured_binary_or_the_pinned_package(stub, monkeypatch) -> None:
+    from langgraph_acp.providers.claude import CLAUDE_ACP_VERSION
+    from langgraph_acp.providers.opencode import OPENCODE_VERSION
+
+    monkeypatch.setattr("engine.adapters.agent_runner.acp.binary_version", lambda path: f"{path} 1.0")
+    config = EngineConfig(runner_paths={"codex": stub, "claude": "/opt/claude"})
+    assert runner_binary(config, "codex") == (stub, f"{stub} 1.0")
+    assert runner_binary(config, "claude") == ("/opt/claude", "/opt/claude 1.0")
+    assert runner_binary(EngineConfig(), "claude") == (
+        "npx @agentclientprotocol/claude-agent-acp", CLAUDE_ACP_VERSION,
+    )
+    assert runner_binary(EngineConfig(), "opencode") == ("npx opencode-ai", OPENCODE_VERSION)
 
 
 def test_an_added_codex_agent_runs_the_configured_codex(stub) -> None:

@@ -63,7 +63,7 @@ def _model_tiers_are_not_inherited(monkeypatch):
     """Undo the model tiers a test's daemon startup configured for workflow agents."""
     from engine.graph_runtime_langgraph import workflows
 
-    monkeypatch.setattr(workflows, "MODEL_TIERS", workflows.MODEL_TIERS)
+    monkeypatch.setattr(workflows.ADDED_AGENTS, "model_tiers", workflows.ADDED_AGENTS.model_tiers)
 
 
 @pytest.fixture

@@ -266,6 +266,9 @@ class AddedAgents(ACPAgentRegistry):
         self.models: dict[str, str] = {}
         self.context_limits: dict[str, int] = {}
         """Each agent's context window in tokens, where it was given one."""
+        self.model_tiers: dict[str, dict[str, str]] = {}
+        """Each built-in runner's model per tier, as the graph service configures
+        them from `[runners.<name>.models]`. Empty: every tier is the agent's own default."""
 
     def offer(
         self, provider: ACPAgentProvider, model: str = "", context_limit: int = 0,
@@ -313,12 +316,13 @@ class WithAddedAgents(ACPAgentRegistry):
         """The model `name`'s sessions ask for at `tier`; empty leaves the agent's own.
 
         An added agent asks for its own model whatever the tier. A built-in one
-        asks for what `[runners.<name>.models]` names for `tier`, read when the
-        session starts, so a restart with new tiers reaches registered graphs.
+        asks for what the serving graph service's `[runners.<name>.models]`
+        names for `tier`, read when the session starts, so a restart with new
+        tiers reaches registered graphs.
         """
         if not super().__contains__(name):
             return self.added.models.get(name, "")
-        return MODEL_TIERS.get(name, {}).get(tier, "") if tier else ""
+        return self.added.model_tiers.get(name, {}).get(tier, "") if tier else ""
 
     def session_config(
         self, name: str, tier: str, base: Mapping[str, object] | None,
@@ -340,16 +344,11 @@ class WithAddedAgents(ACPAgentRegistry):
 #: security review at `elevated` and naming at `cheapest`.
 DEFAULT_TIER, ELEVATED_TIER, CHEAPEST_TIER = "default", "elevated", "cheapest"
 
-#: Each built-in runner's model per tier, as the serving process configures
-#: them with `configure_model_tiers`. Empty until then: every tier is the
-#: agent's own default.
-MODEL_TIERS: dict[str, dict[str, str]] = {}
-
-
-def configure_model_tiers(tiers: Mapping[str, Mapping[str, str]]) -> None:
-    """Make `tiers` (`[runners.<name>.models]`) what workflow agents ask for from now on."""
-    global MODEL_TIERS
-    MODEL_TIERS = {runner: dict(models) for runner, models in tiers.items()}
+def configure_model_tiers(
+    tiers: Mapping[str, Mapping[str, str]], added: AddedAgents = ADDED_AGENTS,
+) -> None:
+    """Make `tiers` (`[runners.<name>.models]`) what agents reading `added` ask for from now on."""
+    added.model_tiers = {runner: dict(models) for runner, models in tiers.items()}
 
 
 def with_added_agents(

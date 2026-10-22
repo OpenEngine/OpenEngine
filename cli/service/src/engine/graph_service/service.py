@@ -51,7 +51,7 @@ from engine.graph_runtime.control import CANCELLED
 from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
-from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime
+from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime, configure_model_tiers
 from engine.ports import WorkspaceProvider
 from langgraph_acp import ACPAgentRegistry, ACPAgentNotFoundError
 
@@ -262,6 +262,8 @@ class GraphService:
         #: process runs any. Compiled graphs hold its `models` dict, not a copy,
         #: so a model changed here reaches graphs registered before the change.
         self._added_agents = added_agents if added_agents is not None else AddedAgents()
+        # The tiers this service's workflow files ask for, supplied with its agents.
+        configure_model_tiers(merge_model_tiers(model_tiers), self._added_agents)
         #: What the registry held before any added agent: these cannot be replaced or removed.
         self._builtin_agents = tuple(registry.names)
         self._sessions = Sessions()

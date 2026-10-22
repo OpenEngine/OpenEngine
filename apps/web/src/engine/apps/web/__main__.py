@@ -42,7 +42,7 @@ from engine.apps.web.repositories import ensure_repository_checkouts
 from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
-from engine.graph_runtime_langgraph.workflows import RUNS, configure_model_tiers
+from engine.graph_runtime_langgraph.workflows import RUNS
 from engine.graph_service.service import ServiceError, resolve_graph
 from engine.graph_service.store import GraphServiceStore
 from engine.apps.web.source_control import SourceControlPreferences, gh_cli_status
@@ -55,7 +55,6 @@ from engine.runtime import (
     load_workflow_catalog,
     WorkflowLoadError,
 )
-from engine.runtime.config import merge_model_tiers
 from engine.runtime.repositories import RepositoryRegistry
 
 #: Vite's production output, served by the same process as the API.
@@ -369,9 +368,6 @@ def read_configuration(
     # A node given no registry, and the starter graphs loaded below, run the
     # configured agents rather than langgraph-acp's bare built-ins.
     configure_default_registry(builtin_agents(loaded.config))
-    # And the model each step's tier names, read when the step starts, so a
-    # registered graph follows `[runners.<name>.models]` across a restart.
-    configure_model_tiers(merge_model_tiers(loaded.config.model_tiers))
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(
