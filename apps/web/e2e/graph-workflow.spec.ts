@@ -21,6 +21,7 @@ import path from "node:path";
 import type { Page } from "@playwright/test";
 
 import { expect, shot, test, type Script, type ScriptStep } from "./harness";
+import { expectChatOnScreen, expectClampedHeading, LONG_NAME } from "./long-names";
 
 /** What the workflow dropdown calls the graph. */
 const WORKFLOW = "Implementation review rerank";
@@ -487,6 +488,62 @@ test("an agent waiting on permission is answered in its conversation", async ({
   await card.getByRole("button", { name: "Approve" }).click();
 
   await expect(page.getByText(STEERED)).toBeVisible({ timeout: 60_000 });
+});
+
+/** `ASKING_SCRIPT`, for a run that ends up named by its whole prompt: what a
+ *  run started from an issue brief or a plain instruction is called when its
+ *  naming turn gives nothing back. Asking, so the node holds its turn and the
+ *  page offers the composer that has to stay on screen. */
+const UNNAMED_SCRIPT: Script = {
+  scenarios: ASKING_SCRIPT.scenarios.map((scenario) =>
+    scenario.when === NAMING_REQUEST
+      ? { when: NAMING_REQUEST, steps: [{ type: "say", text: "No name comes to mind." }] }
+      : scenario,
+  ),
+};
+
+/** Wait until the implementation node is asking, then open its conversation. */
+async function openLongNamedConversation(page: Page, repository: string): Promise<void> {
+  expect(LONG_NAME.length).toBeGreaterThan(500);
+  const runUrl = await create(page, repository, LONG_NAME);
+  await expect
+    .poll(async () => (await graphRun(page, runUrl)).pendingApprovals?.length ?? 0, {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await openConversation(page, runUrl);
+  await expect(page.locator(".approval-pending")).toContainText(`echo hello > ${GREETING}`);
+}
+
+test("a long WorkOrder name leaves a node's chat on screen on desktop", async ({
+  page,
+  engine,
+}, testInfo) => {
+  engine.script(UNNAMED_SCRIPT);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await openLongNamedConversation(page, engine.repository);
+
+  await expectClampedHeading(page, LONG_NAME);
+  await expectChatOnScreen(page);
+  await shot(page, testInfo, "7 a long name, on a desk");
+});
+
+test("a long WorkOrder name leaves a node's chat on screen on mobile", async ({
+  page,
+  engine,
+}, testInfo) => {
+  engine.script(UNNAMED_SCRIPT);
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await openLongNamedConversation(page, engine.repository);
+
+  // A phone folds the header away until it is asked for, so the chat is what
+  // it opens on; asked for, the name in it is held to the same few lines.
+  await expectChatOnScreen(page);
+  await page.getByRole("button", { name: "Expand header" }).click();
+  await expectClampedHeading(page, LONG_NAME);
+  await shot(page, testInfo, "8 a long name, on a phone");
 });
 
 test("a graph agent responds when steered during an executing turn", async ({

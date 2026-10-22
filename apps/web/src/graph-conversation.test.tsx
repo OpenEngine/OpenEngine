@@ -898,6 +898,20 @@ describe("GraphConversationPage", () => {
     ).toHaveAttribute("href", `/runs/${runId}`);
   });
 
+  it("keeps a long WorkOrder name whole on the heading it clamps", async () => {
+    // A run started from an issue brief or a plain instruction is named by
+    // it, and those run to hundreds of characters. The heading is cut to a few
+    // lines on screen, so the title attribute is where the rest is read.
+    const name = `Investigate why ${"the conversation header grows ".repeat(19)}`.trim();
+    expect(name.length).toBeGreaterThan(500);
+    serve([]);
+    render(<GraphConversationPage runId={runId} nodeId={NODE} workOrderName={name} />);
+    await act(async () => {});
+
+    const heading = screen.getByRole("heading", { level: 1, name });
+    expect(heading).toHaveAttribute("title", name);
+  });
+
   it("names a conversation by its run and its node", () => {
     expect(graphConversationId("run-1", NODE)).toBe("graph--run-1--implementation");
   });
