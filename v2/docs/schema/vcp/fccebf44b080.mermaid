@@ -1,0 +1,101 @@
+---
+title: vcp at fccebf44b080 (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% REMOVED tables/columns are tombstones, absent from this revision's schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    attempt_bindings["attempt_bindings<br/>An attempt's immutable binding to the internal execute command the daemon accepted."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    attempts["attempts<br/>One execution attempt of a session, from acceptance through its terminal outcome."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    command_receipts["command_receipts<br/>Public command idempotency: a retry with the same command ID returns the original receipt."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    cursors["cursors<br/>Durable, opaque keyset positions bound to the filters a paginated query was issued with."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    daemon_attempts["daemon_attempts<br/>The daemon's durable record of one attempt's execution state and per-attempt sequence. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_attempts added
+    daemon_commands["daemon_commands<br/>The daemon's durable inbox of accepted commands, keyed by their command ID. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_commands added
+    daemon_meta["daemon_meta<br/>The daemon journal's own metadata: boot ID, event sequence and readiness. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_meta added
+    daemon_sessions["daemon_sessions<br/>The daemon's durable session-to-executor mapping, for session continuation. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_sessions added
+    daemon_updates["daemon_updates<br/>The daemon's durable outbox of updates pending VCP's acknowledgement. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class daemon_updates added
+    operations["operations<br/>The durable record of each accepted command's progress, returned by operations.{operation_id}.get."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    outbox["outbox<br/>Public events accepted atomically with their causing state change, pending publication."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    runtime_outbox["runtime_outbox<br/>Internal runtime commands (execute, cancel, steer) pending delivery to the daemon."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    runtime_ownership["runtime_ownership<br/>Which runtime currently owns a workspace, and at which generation."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    runtime_status["runtime_status<br/>A runtime's last known readiness, registered executors and steering support. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class runtime_status added
+    runtime_updates["runtime_updates<br/>Durable identity/digest of each internal runtime update, so a duplicate is detected, not reapplied. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class runtime_updates added
+    session_history["session_history<br/>The durable, ordered log of a session: messages, steering and status changes. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class session_history added
+    sessions["sessions<br/>One conversation with an agent inside a workspace, and its current attempt binding."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    workspace_records["workspace_records<br/>The durable workspace lifecycle projection: state, runtime binding and version."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    workspaces["workspaces<br/>A place an agent does its work, on whichever provider supplied it."] {
+        VARCHAR(36) id PK "not null"
+        VARCHAR(32) provider "not null"
+        VARCHAR(32) status "not null"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+        JSON locator "nullable"
+    }

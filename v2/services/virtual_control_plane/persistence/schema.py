@@ -28,11 +28,31 @@ workspaces = sa.Table(
 # Durable documents are deliberately separate from the original prototype
 # workspace table. Indexed identities and transaction boundaries are stable;
 # document bodies are the application snapshots, not SQLAlchemy domain objects.
+DOCUMENT_COMMENTS = {
+    'workspace_records': "The durable workspace lifecycle projection: state, runtime binding and version.",
+    'command_receipts': 'Public command idempotency: a retry with the same command ID returns the original receipt.',
+    'operations': "The durable record of each accepted command's progress, returned by operations.{operation_id}.get.",
+    'runtime_ownership': 'Which runtime currently owns a workspace, and at which generation.',
+    'outbox': 'Public events accepted atomically with their causing state change, pending publication.',
+    'cursors': 'Durable, opaque keyset positions bound to the filters a paginated query was issued with.',
+    'sessions': 'One conversation with an agent inside a workspace, and its current attempt binding.',
+    'attempts': 'One execution attempt of a session, from acceptance through its terminal outcome.',
+    'attempt_bindings': "An attempt's immutable binding to the internal execute command the daemon accepted.",
+    'runtime_outbox': 'Internal runtime commands (execute, cancel, steer) pending delivery to the daemon.',
+    'runtime_updates': 'Durable identity/digest of each internal runtime update, so a duplicate is detected, not reapplied.',
+    'runtime_status': "A runtime's last known readiness, registered executors and steering support.",
+    'session_history': 'The durable, ordered log of a session: messages, steering and status changes.',
+    'daemon_meta': "The daemon journal's own metadata: boot ID, event sequence and readiness.",
+    'daemon_commands': "The daemon's durable inbox of accepted commands, keyed by their command ID.",
+    'daemon_attempts': "The daemon's durable record of one attempt's execution state and per-attempt sequence.",
+    'daemon_sessions': "The daemon's durable session-to-executor mapping, for session continuation.",
+    'daemon_updates': "The daemon's durable outbox of updates pending VCP's acknowledgement.",
+}
 documents = {}
-for name in ('workspace_records', 'command_receipts', 'operations', 'runtime_ownership', 'outbox', 'cursors',
-             'sessions', 'attempts', 'attempt_bindings', 'runtime_outbox', 'runtime_updates', 'runtime_status', 'session_history', 'daemon_meta', 'daemon_commands', 'daemon_attempts', 'daemon_sessions', 'daemon_updates'):
+for name, comment in DOCUMENT_COMMENTS.items():
     documents[name] = sa.Table(
         name, metadata,
         sa.Column('key', sa.String(128), primary_key=True),
         sa.Column('body', sa.JSON(), nullable=False),
+        comment=comment,
     )

@@ -90,6 +90,42 @@ flowchart LR
         vcp_events["NATS events → stream vcp-events<br/><b>oe.v1.vcp.events.workspaces.{workspace_id}.</b><br/>workspace.provisioning<br/>workspace.ready<br/>workspace.restored<br/>workspace.checkpointed<br/>workspace.suspended<br/>workspace.destroyed<br/>workspace.failed<br/>task.started<br/>task.completed<br/>task.failed<br/>task.cancelled<br/>approval.requested<br/>approval.resolved<br/>approval.expired<br/>steering.applied<br/>steering.failed<br/>conversation.message<br/>usage.reported<br/>artifact.created"]
         class vcp_events subjects
         subgraph vcp_db["database vcp"]
+            vcp_t_attempt_bindings[("attempt_bindings<br/>An attempt's immutable binding to the internal execute command the daemon accepted.")]
+            class vcp_t_attempt_bindings table
+            vcp_t_attempts[("attempts<br/>One execution attempt of a session, from acceptance through its terminal outcome.")]
+            class vcp_t_attempts table
+            vcp_t_command_receipts[("command_receipts<br/>Public command idempotency: a retry with the same command ID returns the original receipt.")]
+            class vcp_t_command_receipts table
+            vcp_t_cursors[("cursors<br/>Durable, opaque keyset positions bound to the filters a paginated query was issued with.")]
+            class vcp_t_cursors table
+            vcp_t_daemon_attempts[("daemon_attempts<br/>The daemon's durable record of one attempt's execution state and per-attempt sequence.")]
+            class vcp_t_daemon_attempts table
+            vcp_t_daemon_commands[("daemon_commands<br/>The daemon's durable inbox of accepted commands, keyed by their command ID.")]
+            class vcp_t_daemon_commands table
+            vcp_t_daemon_meta[("daemon_meta<br/>The daemon journal's own metadata: boot ID, event sequence and readiness.")]
+            class vcp_t_daemon_meta table
+            vcp_t_daemon_sessions[("daemon_sessions<br/>The daemon's durable session-to-executor mapping, for session continuation.")]
+            class vcp_t_daemon_sessions table
+            vcp_t_daemon_updates[("daemon_updates<br/>The daemon's durable outbox of updates pending VCP's acknowledgement.")]
+            class vcp_t_daemon_updates table
+            vcp_t_operations[("operations<br/>The durable record of each accepted command's progress, returned by operations.{operation_id}.get.")]
+            class vcp_t_operations table
+            vcp_t_outbox[("outbox<br/>Public events accepted atomically with their causing state change, pending publication.")]
+            class vcp_t_outbox table
+            vcp_t_runtime_outbox[("runtime_outbox<br/>Internal runtime commands (execute, cancel, steer) pending delivery to the daemon.")]
+            class vcp_t_runtime_outbox table
+            vcp_t_runtime_ownership[("runtime_ownership<br/>Which runtime currently owns a workspace, and at which generation.")]
+            class vcp_t_runtime_ownership table
+            vcp_t_runtime_status[("runtime_status<br/>A runtime's last known readiness, registered executors and steering support.")]
+            class vcp_t_runtime_status table
+            vcp_t_runtime_updates[("runtime_updates<br/>Durable identity/digest of each internal runtime update, so a duplicate is detected, not reapplied.")]
+            class vcp_t_runtime_updates table
+            vcp_t_session_history[("session_history<br/>The durable, ordered log of a session: messages, steering and status changes.")]
+            class vcp_t_session_history table
+            vcp_t_sessions[("sessions<br/>One conversation with an agent inside a workspace, and its current attempt binding.")]
+            class vcp_t_sessions table
+            vcp_t_workspace_records[("workspace_records<br/>The durable workspace lifecycle projection: state, runtime binding and version.")]
+            class vcp_t_workspace_records table
             vcp_t_workspaces[("workspaces<br/>A place an agent does its work, on whichever provider supplied it.")]
             class vcp_t_workspaces table
         end

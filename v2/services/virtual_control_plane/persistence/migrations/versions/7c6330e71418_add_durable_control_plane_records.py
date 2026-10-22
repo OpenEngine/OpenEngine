@@ -1,7 +1,7 @@
 """add durable control plane records
 
 Revision ID: 7c6330e71418
-Revises: 720d08e24193
+Revises: d8f92154b5f7
 Create Date: 2026-10-22 16:40:05.348937
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = '7c6330e71418'
-down_revision: Union[str, Sequence[str], None] = '720d08e24193'
+down_revision: Union[str, Sequence[str], None] = 'd8f92154b5f7'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
