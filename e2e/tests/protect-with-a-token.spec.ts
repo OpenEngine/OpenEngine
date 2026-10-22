@@ -17,7 +17,7 @@ const OLD_TOKEN = randomBytes(32).toString("hex")
  * Testing gap: anotherComputerToken preconfigures the remote daemon; this test
  * does not execute the reader's .env edit, daemon restart, or local CLI setup.
  * Manual check on the token-protected host: with ENGINE_SERVICE_TOKEN unset in
- * the shell, `engine graph list` must report that a token is required. Export
+ * the shell, `oe graph list` must report that a token is required. Export
  * ENGINE_SERVICE_TOKEN with the value from .env and rerun: it must succeed.
  * Repeat in a new terminal after adding the export to ~/.zshrc.
  */
@@ -33,7 +33,7 @@ function macMini(engine: Engine) {
   return file.backends?.["mac-mini"] as { url: string; token_env?: string } | undefined
 }
 
-/** The Mac mini's row of `engine backends list --check`. */
+/** The Mac mini's row of `oe backends list --check`. */
 function macMiniRow(output: string) {
   return output.split("\n").find((line) => /^\s+mac-mini\s/.test(line)) ?? ""
 }
@@ -71,7 +71,7 @@ test.describe(anotherComputerCategory, () => {
           })
         }
         const clear = () => test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
-        const check = async () => macMiniRow((await terminal.run("engine backends list --check")).output)
+        const check = async () => macMiniRow((await terminal.run("oe backends list --check")).output)
 
         await test.step("[nodoc] The Mac mini answers only to its own token", async () => {
           const ask = (token?: string) =>
@@ -104,7 +104,7 @@ test.describe(anotherComputerCategory, () => {
         await step(
           `OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. When it runs on another computer, such as a Mac mini, anyone who can reach that computer's address could use it: start agents on your code, or change what it's set up to do. A **token** stops that. It's a long secret, like a password, that you set on the other computer. OpenEngine there then only answers commands that come with it.
 
-This guide shows how to set a token on the Mac mini, give it to the \`engine\` command on this computer, and what you'll see if the token is missing or wrong. Each computer OpenEngine runs on is called a **backend**. You'll need OpenEngine already running on the Mac mini, and an address that reaches it from here: in this example, \`https://${MAC_MINI}\`. [Use OpenEngine on Another Computer](test2doc-use-openengine-on-another-computer.mdx) shows how to set that up.`,
+This guide shows how to set a token on the Mac mini, give it to the \`oe\` command on this computer, and what you'll see if the token is missing or wrong. Each computer OpenEngine runs on is called a **backend**. You'll need OpenEngine already running on the Mac mini, and an address that reaches it from here: in this example, \`https://${MAC_MINI}\`. [Use OpenEngine on Another Computer](test2doc-use-openengine-on-another-computer.mdx) shows how to set that up.`,
         )
 
         await step(
@@ -120,24 +120,24 @@ You'll see a long line of letters and numbers. That's your token. Keep it secret
 ENGINE_SERVICE_TOKEN=your-token
 \`\`\`
 
-Save the file. Then restart OpenEngine there so it reads the token: type \`engine daemon stop\`, press Enter, then type \`engine daemon start\` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.
+Save the file. Then restart OpenEngine there so it reads the token: type \`oe daemon stop\`, press Enter, then type \`oe daemon start\` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.
 
 To keep using commands on the Mac mini itself, also type \`export ENGINE_SERVICE_TOKEN=\` followed by the same token in its terminal and press Enter. The daemon reads its token from \`.env\`, but commands in your terminal read it from the shell environment. Add that export line to \`~/.zshrc\` on the Mac mini if you want it in new terminal windows too.`,
         )
 
         await step(
-          `Back on this computer, tell OpenEngine about the Mac mini, and the name of the place where you'll keep its token. Type \`engine backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN\` and press Enter.
+          `Back on this computer, tell OpenEngine about the Mac mini, and the name of the place where you'll keep its token. Type \`oe backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN\` and press Enter.
 
-OpenEngine saves the Mac mini under the name \`mac-mini\`, and remembers \`MAC_MINI_TOKEN\`: the name of a setting in your terminal, called an environment variable, that \`engine\` reads the token from each time it talks to the Mac mini. The token itself is never saved in OpenEngine's list of computers.
+OpenEngine saves the Mac mini under the name \`mac-mini\`, and remembers \`MAC_MINI_TOKEN\`: the name of a setting in your terminal, called an environment variable, that \`oe\` reads the token from each time it talks to the Mac mini. The token itself is never saved in OpenEngine's list of computers.
 
-If you already added the Mac mini without a token, type \`engine backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN --replace\` instead: it updates the saved Mac mini to use \`MAC_MINI_TOKEN\`.`,
+If you already added the Mac mini without a token, type \`oe backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN --replace\` instead: it updates the saved Mac mini to use \`MAC_MINI_TOKEN\`.`,
           async () => {
-            await terminal.run(`engine backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN`)
+            await terminal.run(`oe backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN`)
             expect(macMini(engine)).toMatchObject({ token_env: "MAC_MINI_TOKEN" })
             await test.step("[nodoc] Add token authentication to an existing backend", async () => {
-              await terminal.run(`engine backend add mac-mini https://${MAC_MINI} --replace`)
+              await terminal.run(`oe backend add mac-mini https://${MAC_MINI} --replace`)
               expect(macMini(engine)?.token_env).toBe("")
-              await terminal.run(`engine backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN --replace`)
+              await terminal.run(`oe backend add mac-mini https://${MAC_MINI} --token-env MAC_MINI_TOKEN --replace`)
               expect(macMini(engine)).toMatchObject({ token_env: "MAC_MINI_TOKEN" })
             })
             await show(await terminal.row(/^mac-mini\s+https:/), "The Mac mini is saved as mac-mini")
@@ -147,7 +147,7 @@ If you already added the Mac mini without a token, type \`engine backend add mac
         await clear()
 
         await step(
-          `Before giving this computer the token, see what happens without it. Type \`engine backends list --check\` and press Enter.
+          `Before giving this computer the token, see what happens without it. Type \`oe backends list --check\` and press Enter.
 
 Beside the Mac mini you'll see *down*, and that it *requires a token*: OpenEngine reached it, but the Mac mini turned the command away because no token came with it. It names \`MAC_MINI_TOKEN\`, the place it looked for one. If you ever see this, give this computer the token, as in the next step.`,
           async () => {
@@ -171,7 +171,7 @@ Nothing appears; that's expected. This keeps the token for this terminal window 
         await clear()
 
         await step(
-          `Type \`engine backends list --check\` and press Enter again.
+          `Type \`oe backends list --check\` and press Enter again.
 
 This time you'll see *up* beside the Mac mini: it accepted the token, and your commands can use it.`,
           async () => {
@@ -184,7 +184,7 @@ This time you'll see *up* beside the Mac mini: it accepted the token, and your c
         await clear()
 
         await step(
-          `A token that doesn't match the one on the Mac mini is turned away too: say you made a new token there and this computer still has the old one. To see what that looks like, type \`export MAC_MINI_TOKEN=\` followed by an old or mistyped token, press Enter, and then type \`engine backends list --check\` and press Enter.
+          `A token that doesn't match the one on the Mac mini is turned away too: say you made a new token there and this computer still has the old one. To see what that looks like, type \`export MAC_MINI_TOKEN=\` followed by an old or mistyped token, press Enter, and then type \`oe backends list --check\` and press Enter.
 
 Beside the Mac mini you'll see *down*, and that it *refused the token in MAC_MINI_TOKEN*: a token came with the command, but not the one the Mac mini has.`,
           async () => {
@@ -202,7 +202,7 @@ Beside the Mac mini you'll see *down*, and that it *refused the token in MAC_MIN
         await step(
           `To fix it, copy the token from the Mac mini again: it's the line starting \`ENGINE_SERVICE_TOKEN=\` in \`~/.config/openengine/.env\` there. On this computer, type \`export MAC_MINI_TOKEN=\`, paste it straight after the \`=\`, and press Enter. If you also added it to \`~/.zshrc\`, change it there too.
 
-Then type \`engine backends list --check\` and press Enter. You'll see *up* beside the Mac mini again.`,
+Then type \`oe backends list --check\` and press Enter. You'll see *up* beside the Mac mini again.`,
           async () => {
             await terminal.run(`export MAC_MINI_TOKEN=${MAC_MINI_TOKEN}`)
             await terminal.run("clear")
