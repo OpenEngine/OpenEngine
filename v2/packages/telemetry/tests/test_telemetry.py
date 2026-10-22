@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
+import re
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -89,6 +91,7 @@ def test_json_lines_carry_the_open_telemetry_fields_and_the_current_trace() -> N
     assert inside["severity_text"] == "WARN"
     assert inside["severity_number"] == 13
     assert inside["service.name"] == "openengine-ge"
+    assert inside["process.pid"] == os.getpid()
     assert inside["scope"] == "graph_engine.jobs"
     assert inside["timestamp"].endswith("Z")
     assert inside["trace_id"] == trace.format_trace_id(span.get_span_context().trace_id)
@@ -128,7 +131,9 @@ def test_render_turns_json_lines_into_console_lines_and_passes_other_text_throug
 
     rendered = render(text)
     assert rendered.endswith("\n")
-    assert "INFO  connection_bus: applied connection_id=conn_acme_gh" in rendered
+    assert re.fullmatch(
+        rf"\[{os.getpid()}\] \d{{4}}/\d\d/\d\d \d\d:\d\d:\d\d\.\d{{6}} \[INF\] cxn: applied connection_id=conn_acme_gh\n", rendered
+    )
     assert "code." not in rendered
     assert render("[1234] 2026/10/22 nats-server: Server is ready\n") == "[1234] 2026/10/22 nats-server: Server is ready\n"
 

@@ -9,6 +9,7 @@ batched to it over OTLP/HTTP.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import uuid
 from collections.abc import Sequence
@@ -89,7 +90,12 @@ def configure(
     stream = stream or sys.stderr
     name = service_name(service)
     # Our service name wins over OTEL_SERVICE_NAME, which every process inherits alike.
-    attributes = {"service.name": name, "service.namespace": NAMESPACE, "service.instance.id": str(uuid.uuid4())}
+    attributes: dict[str, str | int] = {
+        "service.name": name,
+        "service.namespace": NAMESPACE,
+        "service.instance.id": str(uuid.uuid4()),
+        "process.pid": os.getpid(),
+    }
     if version:
         attributes["service.version"] = version
     resource = Resource.create(attributes)

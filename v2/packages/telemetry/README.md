@@ -20,7 +20,8 @@ Every process always does two things:
   data model's field names (`timestamp`, `severity_text`, `severity_number`,
   `body`, `service.name`, `scope`, `trace_id`, `span_id`, `attributes`).
   Under `oe up` they land in the supervisor's log, which `oe logs` prints in
-  console form (`oe logs --json` prints them as written). Any log shipper
+  nats-server's layout, `[pid] date time [INF] service: body key=value… trace_id=…`,
+  so NATS's lines and ours read as one log (`oe logs --json` prints them as written). Any log shipper
   (Vector, Fluent Bit, the Datadog agent, Promtail) can read them as they are.
 - **Spans**, so every log line inside one carries its trace ID even when
   nothing is exported.

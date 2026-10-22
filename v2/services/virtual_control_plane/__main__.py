@@ -26,7 +26,7 @@ def main() -> int:
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stopped.set())
     with telemetry.tracer(__name__).start_as_current_span("vcp boot"):
-        log.info("starting", extra={"process.pid": os.getpid()})
+        log.info("starting")
         config = DatabaseConfig.from_environment()
         database = PERSISTENCE.database(config)
         log.info(

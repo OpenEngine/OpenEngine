@@ -4,12 +4,15 @@ Both outputs share one translation, so a JSON line carries the same fields as
 its OTLP record, named after the OpenTelemetry log data model:
 
     {"timestamp": "2026-10-22T14:03:07.120394Z", "severity_text": "INFO", "severity_number": 9,
-     "body": "connection applied", "service.name": "openengine-cxn", "scope": "connection_bus.handlers",
+     "body": "connection applied", "service.name": "openengine-cxn", "process.pid": 73110, "scope": "connection_bus.handlers",
      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "span_id": "00f067aa0ba902b7",
      "attributes": {"connection_id": "conn_acme_gh", "code.function.name": "apply", ...}}
 
 `trace_id` and `span_id` are the span current when the record was logged, and
 are left out outside a span. Anything passed with `extra=` becomes an attribute.
+
+For a person they are rendered in nats-server's layout, so the two read as one
+log: `[pid] date local-time [INF] service: body key=value… trace_id=…`.
 """
 
 from __future__ import annotations
@@ -34,6 +37,8 @@ _SEVERITY_NUMBER = {
     logging.CRITICAL: SeverityNumber.FATAL,
 }
 _RESERVED = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {"message", "asctime"}
+# nats-server's level tags, by OpenTelemetry severity number range (TRACE 1-4, DEBUG 5-8, …).
+_LEVEL_TAGS = ("TRC", "DBG", "INF", "WRN", "ERR", "FTL")
 # The exporters' own records; sending them over OTLP could loop when the endpoint is failing.
 _EXPORTER_LOGGERS = ("opentelemetry", "urllib3", "requests")
 
@@ -70,6 +75,7 @@ def fields(record: logging.LogRecord, service: str) -> dict[str, Any]:
         "severity_number": severity_number(record.levelno).value,
         "body": record.getMessage(),
         "service.name": service,
+        "process.pid": record.process,
         "scope": record.name,
     }
     context = trace.get_current_span().get_span_context()
@@ -89,16 +95,36 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(fields(record, self.service), default=str)
 
 
+def _local_time(timestamp: Any) -> str:
+    try:
+        when = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return str(timestamp)
+    return when.strftime("%Y/%m/%d %H:%M:%S.%f")
+
+
+def _level_tag(line: dict[str, Any]) -> str:
+    number = line.get("severity_number")
+    if isinstance(number, int) and 1 <= number <= 24:
+        return _LEVEL_TAGS[(number - 1) // 4]
+    return str(line.get("severity_text", ""))[:3].upper()
+
+
 def console(line: dict[str, Any]) -> str:
-    """One JSON line's fields for a person: time, severity, scope, body, its attributes and trace."""
-    when = str(line.get("timestamp", ""))
-    clock = when[11:23] if len(when) >= 23 else when
+    """One JSON line's fields in nats-server's layout: pid, local time, level, service, body, attributes, trace."""
     extras = {
         key: value
         for key, value in (line.get("attributes") or {}).items()
         if not key.startswith(("code.", "exception."))
     }
-    parts = [clock, f"{line.get('severity_text', ''):<5}", f"{line.get('scope', '')}:", str(line.get("body", ""))]
+    service = str(line.get("service.name", "")).removeprefix("openengine-")
+    parts = [
+        f"[{line.get('process.pid', '')}]",
+        _local_time(line.get("timestamp", "")),
+        f"[{_level_tag(line)}]",
+        f"{service}:",
+        str(line.get("body", "")),
+    ]
     parts += [f"{key}={value}" for key, value in extras.items()]
     if trace_id := line.get("trace_id"):
         parts.append(f"trace_id={trace_id}")
