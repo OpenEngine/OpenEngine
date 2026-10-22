@@ -55,6 +55,8 @@ def isolated(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ENGINE_CLI_CONFIG", str(tmp_path / "cli.json"))
     monkeypatch.delenv(backends.SELECTED_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.delenv("ENGINE_SERVICE_TOKEN", raising=False)
+    # Never the real ~/.config/openengine/.env, which may hold real tokens.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setattr(http.time, "sleep", lambda _seconds: None)
 
 
@@ -112,6 +114,35 @@ def test_every_command_goes_to_the_selected_backend_with_its_token(monkeypatch, 
     assert first["url"] == "http://mini:4364/api/v1/graphs?project=team"
     assert first["authorization"] == "Bearer secret"
     assert second["url"].startswith("http://127.0.0.1:4364/api/v1/graphs")
+
+
+def _token_file(tmp_path: Path, text: str) -> Path:
+    """The `.env` beside this computer's engine.toml, owner-only as the guide says."""
+    secrets = tmp_path / "config" / "openengine" / ".env"
+    secrets.parent.mkdir(parents=True, exist_ok=True)
+    secrets.write_text(text)
+    secrets.chmod(0o600)
+    return secrets
+
+
+@pytest.mark.parametrize(("token_env", "variable"), [("MINI_TOKEN", "MINI_TOKEN"), ("", "ENGINE_SERVICE_TOKEN")])
+def test_a_backend_token_can_be_kept_in_the_openengine_env_file(tmp_path, monkeypatch, token_env, variable) -> None:
+    """A token kept in ~/.config/openengine/.env is never typed into the shell, so never lands in its history."""
+    _token_file(tmp_path, f"# tokens for other computers\n{variable}=from-file\n")
+    monkeypatch.delenv(variable, raising=False)
+    backends.add("mini", "http://mini:4364", token_env=token_env, use=True)
+    recorded = serve(monkeypatch, {"graphs": []})
+    assert main(["graphs", "list"]) == 0
+    assert recorded.requests[0]["authorization"] == "Bearer from-file"
+
+
+def test_the_environment_wins_over_the_openengine_env_file(tmp_path, monkeypatch) -> None:
+    _token_file(tmp_path, "MINI_TOKEN=from-file\n")
+    monkeypatch.setenv("MINI_TOKEN", "from-shell")
+    backends.add("mini", "http://mini:4364", token_env="MINI_TOKEN", use=True)
+    recorded = serve(monkeypatch, {"graphs": []})
+    assert main(["graphs", "list"]) == 0
+    assert recorded.requests[0]["authorization"] == "Bearer from-shell"
 
 
 def test_graph_run_retries_a_dropped_connection_under_the_same_key(monkeypatch, capsys) -> None:
