@@ -15,21 +15,22 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 
 ## Implementation status
 
-**These are contracts, not implementations.** As of this release:
+The VCP workspace-lifecycle milestone is implemented; the remaining surfaces
+are contracts for subsequent work. See the [VCP service guide](../../services/virtual_control_plane/README.md).
 
 | Defined here | Implemented |
 | -- | -- |
-| Control and query subjects (`oe.v1.…`) with typed requests and replies | No service answers them. No handlers exist. |
-| Event subjects and payloads (`oe.v1.{svc}.events.…`) | The `cxn-events`, `ge-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
-| Operation, job, execution, workspace, session and approval models | No persistence or state machine implements them. |
+| Control and query subjects (`oe.v1.…`) with typed requests and replies | VCP answers create/ensure/destroy, capabilities, workspace get/list and operation get. Other surfaces are pending. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`) | The `cxn-events`, `ge-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes provisioning, ready, destroyed and workspace failure events through its outbox. |
+| Operation, job, execution, workspace, session and approval models | VCP persists workspace lifecycle, operations, command receipts, runtime ownership and outgoing events. Other models are pending. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
 
 This work creates no streams, consumers, queue groups or broker
 permissions. It changes only the subject filter of the three existing event
 streams, from `{svc}.events.>` to `oe.v1.{svc}.events.>`, so events share the
-`oe.v1` namespace; `oe migrate` applies that as a config update. Workspace-daemon contracts and
-provider ingress/egress payloads (`cxn.ingress.>`, `cxn.egress.>`) are out of
-scope.
+`oe.v1` namespace; `oe migrate` applies that as a config update. The separate [internal runtime contract](internal/workspace_runtime/v1/README.md) now
+defines VCP/daemon execution and cancellation; its implementation is pending.
+Provider ingress/egress payloads (`cxn.ingress.>`, `cxn.egress.>`) remain out of scope.
 
 ## Layout
 

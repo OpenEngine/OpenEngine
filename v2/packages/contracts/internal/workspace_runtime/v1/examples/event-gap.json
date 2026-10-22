@@ -1,0 +1,20 @@
+{
+  "definition": "update_ack",
+  "in_reply_to": "oe.internal.v1.vcp.runtimes.rt_demo.updates",
+  "payload": {
+    "event_id": "rte_completed",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1
+    },
+    "sequence": 4,
+    "status": "rejected",
+    "expected_sequence": 3,
+    "error": {
+      "code": "EVENT_GAP",
+      "message": "Replay sequence 3 first",
+      "retryable": true
+    }
+  }
+}

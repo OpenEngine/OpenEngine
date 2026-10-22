@@ -1,0 +1,172 @@
+asyncapi: 3.1.0
+id: urn:openengine:internal:workspace-runtime:v1
+info:
+  title: VCP to workspace runtime (internal)
+  version: 1.0.0-draft.1
+  description: Contract only. See README.md for normative delivery, identity, fencing,
+    recovery and public-event mappings. Written from the VCP perspective.
+  license:
+    name: Apache-2.0
+defaultContentType: application/json
+servers:
+  local:
+    host: localhost:4222
+    protocol: nats
+channels:
+  execute:
+    address: oe.internal.v1.runtime.runtimes.{runtime_id}.execute
+    parameters:
+      runtime_id:
+        description: Runtime identity; must equal target.runtime_id.
+    messages:
+      Execute:
+        $ref: '#/components/messages/Execute'
+  cancel:
+    address: oe.internal.v1.runtime.runtimes.{runtime_id}.cancel
+    parameters:
+      runtime_id:
+        description: Runtime identity; must equal target.runtime_id.
+    messages:
+      Cancel:
+        $ref: '#/components/messages/Cancel'
+  steer:
+    address: oe.internal.v1.runtime.runtimes.{runtime_id}.steer
+    parameters:
+      runtime_id:
+        description: Runtime identity; must equal target.runtime_id.
+    messages:
+      Steer:
+        $ref: '#/components/messages/Steer'
+  inspect:
+    address: oe.internal.v1.runtime.runtimes.{runtime_id}.inspect
+    parameters:
+      runtime_id:
+        description: Runtime identity; must equal target.runtime_id.
+    messages:
+      Inspect:
+        $ref: '#/components/messages/Inspect'
+  updates:
+    address: oe.internal.v1.vcp.runtimes.{runtime_id}.updates
+    parameters:
+      runtime_id:
+        description: Runtime identity; must equal target.runtime_id.
+    messages:
+      Update:
+        $ref: '#/components/messages/Update'
+  replies:
+    address: null
+    description: Native NATS reply inbox; never a payload field.
+    messages:
+      CommandAck:
+        $ref: '#/components/messages/CommandAck'
+      InspectResponse:
+        $ref: '#/components/messages/InspectResponse'
+      UpdateAck:
+        $ref: '#/components/messages/UpdateAck'
+operations:
+  execute:
+    action: send
+    channel:
+      $ref: '#/channels/execute'
+    messages:
+    - $ref: '#/channels/execute/messages/Execute'
+    reply:
+      channel:
+        $ref: '#/channels/replies'
+      messages:
+      - $ref: '#/channels/replies/messages/CommandAck'
+  cancel:
+    action: send
+    channel:
+      $ref: '#/channels/cancel'
+    messages:
+    - $ref: '#/channels/cancel/messages/Cancel'
+    reply:
+      channel:
+        $ref: '#/channels/replies'
+      messages:
+      - $ref: '#/channels/replies/messages/CommandAck'
+  steer:
+    action: send
+    channel:
+      $ref: '#/channels/steer'
+    messages:
+    - $ref: '#/channels/steer/messages/Steer'
+    reply:
+      channel:
+        $ref: '#/channels/replies'
+      messages:
+      - $ref: '#/channels/replies/messages/CommandAck'
+  inspect:
+    action: send
+    channel:
+      $ref: '#/channels/inspect'
+    messages:
+    - $ref: '#/channels/inspect/messages/Inspect'
+    reply:
+      channel:
+        $ref: '#/channels/replies'
+      messages:
+      - $ref: '#/channels/replies/messages/InspectResponse'
+  updates:
+    action: receive
+    channel:
+      $ref: '#/channels/updates'
+    messages:
+    - $ref: '#/channels/updates/messages/Update'
+    reply:
+      channel:
+        $ref: '#/channels/replies'
+      messages:
+      - $ref: '#/channels/replies/messages/UpdateAck'
+components:
+  messages:
+    Execute:
+      name: Execute
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/execute
+    Cancel:
+      name: Cancel
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/cancel
+    Inspect:
+      name: Inspect
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/inspect
+    Update:
+      name: Update
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/update
+    CommandAck:
+      name: CommandAck
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/command_ack
+    InspectResponse:
+      name: InspectResponse
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/inspect_response
+    UpdateAck:
+      name: UpdateAck
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/update_ack
+
+    Steer:
+      name: Steer
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/steer

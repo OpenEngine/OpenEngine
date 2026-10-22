@@ -1,0 +1,15 @@
+{
+  "definition": "inspect",
+  "subject": "oe.internal.v1.runtime.runtimes.rt_demo.inspect",
+  "payload": {
+    "request_id": "inspect_1",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1
+    },
+    "attempt_ids": [
+      "attempt_demo"
+    ]
+  }
+}
