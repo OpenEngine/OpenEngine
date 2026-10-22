@@ -232,7 +232,7 @@ else
 fi
 
 if [ "$shim" = 1 ]; then
-  say "installed OpenEngine $release: $engine_shim"
+  say "installed OpenEngine $release: $engine_shim and $openengine_shim"
   case ":$PATH:" in
     *":$bin_dir:"*) ;;
     *) warn "$bin_dir is not on PATH; add it to your shell profile to run oe" ;;

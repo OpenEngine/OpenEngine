@@ -80,7 +80,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     go = commands.add_parser(
         "go", parents=[scoped], help="make a change with the default graph and follow it live",
         description="Follows live on a TTY. With --json, prints JSON and sends the mode banner to stderr.",
-        epilog='examples:\n  engine go "add a widget"\n  engine go fix https://github.com/OpenEngine/OpenEngine/pull/855',
+        epilog='examples:\n  oe go "add a widget"\n  oe go fix https://github.com/OpenEngine/OpenEngine/pull/855',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     go.add_argument("words", nargs="*", metavar="VERB/TARGET/INSTRUCTION", help="instruction, or a verb and change target")
