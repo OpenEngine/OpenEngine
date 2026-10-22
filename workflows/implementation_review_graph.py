@@ -38,6 +38,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, cast
 
+from engine.adapters.agent_runner.acp import installed_codex_env
 from engine.adapters.workspace_provider.git_worktree import (
     DEFAULT_BRANCH_REF,
     DEFAULT_ROOT_DIRECTORY,
@@ -123,7 +124,7 @@ REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BR
 #: Codex, Claude and OpenCode, reached through ACP, and any agent added
 #: with `oe agent add`.  `agent_registry` is what routes an agent's
 #: permission request back to the run that raised it.
-AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider(), OpenCodeACPProvider()]))
+AGENTS = with_added_agents(agent_registry([CodexACPProvider(env=installed_codex_env()), ClaudeACPProvider(), OpenCodeACPProvider()]))
 
 #: Built-in review sessions inherit the provider's account-compatible model.
 #: Separate sessions provide independent review even with one installed agent.

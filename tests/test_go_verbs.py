@@ -320,6 +320,20 @@ def test_packaged_default_graph_is_regular_file_matching_workflow():
     assert resource.read_bytes() == (root / 'workflows/implementation_review_graph.py').read_bytes()
 
 
+@pytest.mark.parametrize('name', ['default', 'review', 'fix'])
+def test_starter_graphs_run_the_installed_codex(name, tmp_path, monkeypatch):
+    """A bare provider runs codex-acp's bundled Codex, which may not know the configured model."""
+    import importlib.util
+    from importlib.resources import files
+    monkeypatch.setenv('CODEX_PATH', '/opt/codex')
+    path = tmp_path / f'{name}_graph.py'
+    path.write_text(files('engine.cli.starters').joinpath(f'{name}_graph.py.txt').read_text(encoding='utf-8'))
+    spec = importlib.util.spec_from_file_location(f'_{name}_starter_graph', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.AGENTS.resolve('codex').env == {'CODEX_PATH': '/opt/codex'}
+
+
 def test_default_verb_graphs_are_independent():
     assert starters.VERBS == {'go': 'implementation-review-rerank', 'review': 'review', 'fix': 'fix'}
 
