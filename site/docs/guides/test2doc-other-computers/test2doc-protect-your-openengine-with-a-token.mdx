@@ -11,7 +11,7 @@ slug: /guides/other-computers/protect-with-a-token
 
 OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. When it runs on another computer, such as a Mac mini, anyone who can reach that computer's address could use it: start agents on your code, or change what it's set up to do. A **token** stops that. It's a long secret, like a password, that you set on the other computer. OpenEngine there then only answers commands that come with it.
 
-This guide shows how to set a token on the Mac mini, give it to the `engine` command on this computer, and what you'll see if the token is missing or wrong. Each computer OpenEngine runs on is called a **backend**. You'll need OpenEngine already running on the Mac mini, and an address that reaches it from here: in this example, `https://mac-mini.local:4364`. [Use OpenEngine on Another Computer](test2doc-use-openengine-on-another-computer.mdx) shows how to set that up.
+This guide shows how to set a token on the Mac mini, give it to the `oe` command on this computer, and what you'll see if the token is missing or wrong. Each computer OpenEngine runs on is called a **backend**. You'll need OpenEngine already running on the Mac mini, and an address that reaches it from here: in this example, `https://mac-mini.local:4364`. [Use OpenEngine on Another Computer](test2doc-use-openengine-on-another-computer.mdx) shows how to set that up.
 
 
 On the Mac mini, make a token. In a terminal there, type `openssl rand -hex 32` and press Enter.
@@ -25,47 +25,47 @@ Still on the Mac mini, give the token to OpenEngine. Open the file `~/.config/op
 ENGINE_SERVICE_TOKEN=your-token
 ```
 
-Save the file. Then restart OpenEngine there so it reads the token: type `engine daemon stop`, press Enter, then type `engine daemon start` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.
+Save the file. Then restart OpenEngine there so it reads the token: type `oe daemon stop`, press Enter, then type `oe daemon start` and press Enter. From now on, OpenEngine on the Mac mini answers only commands that come with this token. If you open its web page in a browser, enter the same token on the sign-in screen.
 
 To keep using commands on the Mac mini itself, also type `export ENGINE_SERVICE_TOKEN=` followed by the same token in its terminal and press Enter. The daemon reads its token from `.env`, but commands in your terminal read it from the shell environment. Add that export line to `~/.zshrc` on the Mac mini if you want it in new terminal windows too.
 
 
-Back on this computer, tell OpenEngine about the Mac mini, and the name of the place where you'll keep its token. Type `engine backend add mac-mini https://mac-mini.local:4364 --token-env MAC_MINI_TOKEN` and press Enter.
+Back on this computer, tell OpenEngine about the Mac mini, and the name of the place where you'll keep its token. Type `oe backend add mac-mini https://mac-mini.local:4364 --token-env MAC_MINI_TOKEN` and press Enter.
 
-OpenEngine saves the Mac mini under the name `mac-mini`, and remembers `MAC_MINI_TOKEN`: the name of a setting in your terminal, called an environment variable, that `engine` reads the token from each time it talks to the Mac mini. The token itself is never saved in OpenEngine's list of computers.
+OpenEngine saves the Mac mini under the name `mac-mini`, and remembers `MAC_MINI_TOKEN`: the name of a setting in your terminal, called an environment variable, that `oe` reads the token from each time it talks to the Mac mini. The token itself is never saved in OpenEngine's list of computers.
 
-If you already added the Mac mini without a token, type `engine backend add mac-mini https://mac-mini.local:4364 --token-env MAC_MINI_TOKEN --replace` instead: it updates the saved Mac mini to use `MAC_MINI_TOKEN`.
+If you already added the Mac mini without a token, type `oe backend add mac-mini https://mac-mini.local:4364 --token-env MAC_MINI_TOKEN --replace` instead: it updates the saved Mac mini to use `MAC_MINI_TOKEN`.
 
-![screenshot](./test2doc-b8b8c870d363.png)
+![screenshot](./test2doc-46cdeb6fdabf.png)
 
-Before giving this computer the token, see what happens without it. Type `engine backends list --check` and press Enter.
+Before giving this computer the token, see what happens without it. Type `oe backends list --check` and press Enter.
 
 Beside the Mac mini you'll see *down*, and that it *requires a token*: OpenEngine reached it, but the Mac mini turned the command away because no token came with it. It names `MAC_MINI_TOKEN`, the place it looked for one. If you ever see this, give this computer the token, as in the next step.
 
-![screenshot](./test2doc-8d87a880c3e3.png)
+![screenshot](./test2doc-664fc4f99e43.png)
 
 Give this computer the token. Type `export MAC_MINI_TOKEN=`, paste the token you made on the Mac mini straight after the `=`, and press Enter.
 
 Nothing appears; that's expected. This keeps the token for this terminal window only. To keep it for every new window, add the same line to the file `~/.zshrc` on this computer, then open a new terminal window.
 
 
-Type `engine backends list --check` and press Enter again.
+Type `oe backends list --check` and press Enter again.
 
 This time you'll see *up* beside the Mac mini: it accepted the token, and your commands can use it.
 
-![screenshot](./test2doc-ebe0ef98d463.png)
+![screenshot](./test2doc-3bbc3db29908.png)
 
-A token that doesn't match the one on the Mac mini is turned away too: say you made a new token there and this computer still has the old one. To see what that looks like, type `export MAC_MINI_TOKEN=` followed by an old or mistyped token, press Enter, and then type `engine backends list --check` and press Enter.
+A token that doesn't match the one on the Mac mini is turned away too: say you made a new token there and this computer still has the old one. To see what that looks like, type `export MAC_MINI_TOKEN=` followed by an old or mistyped token, press Enter, and then type `oe backends list --check` and press Enter.
 
 Beside the Mac mini you'll see *down*, and that it *refused the token in MAC_MINI_TOKEN*: a token came with the command, but not the one the Mac mini has.
 
-![screenshot](./test2doc-0bd41670a1c5.png)
+![screenshot](./test2doc-9f8c0e7078f1.png)
 
 To fix it, copy the token from the Mac mini again: it's the line starting `ENGINE_SERVICE_TOKEN=` in `~/.config/openengine/.env` there. On this computer, type `export MAC_MINI_TOKEN=`, paste it straight after the `=`, and press Enter. If you also added it to `~/.zshrc`, change it there too.
 
-Then type `engine backends list --check` and press Enter. You'll see *up* beside the Mac mini again.
+Then type `oe backends list --check` and press Enter. You'll see *up* beside the Mac mini again.
 
-![screenshot](./test2doc-9c86e34bfb61.png)
+![screenshot](./test2doc-3e866d68b084.png)
 
 Next, switch your commands to the Mac mini and save a graph there: see [Use OpenEngine on Another Computer](test2doc-use-openengine-on-another-computer.mdx).
 
