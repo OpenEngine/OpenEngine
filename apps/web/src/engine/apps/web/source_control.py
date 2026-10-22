@@ -179,9 +179,13 @@ class RoutingSourceControl:
         return selected, self._providers[selected]
 
     async def _github_provider(
-        self, selected: SourceControlProvider
+        self, selected: SourceControlProvider, *, require_oauth: bool = True
     ) -> SourceControlProvider | None:
-        """The saved GitHub choice, or detection without saving a choice."""
+        """The saved GitHub choice, or detection without saving a choice.
+
+        With `require_oauth` false, detection falls back to GitHub OAuth even
+        when no OAuth connection is known, leaving that provider to report it.
+        """
         if selected != "gitlab-oauth":
             return selected
         # Detection shells out to the GitHub CLI, so it runs off the event
@@ -190,7 +194,11 @@ class RoutingSourceControl:
         status = await asyncio.to_thread(gh_cli_status)
         if status.installed and status.authenticated:
             return "gh-cli"
-        if self._github_oauth_connected is None or self._github_oauth_connected():
+        if (
+            not require_oauth
+            or self._github_oauth_connected is None
+            or self._github_oauth_connected()
+        ):
             return "github-oauth"
         return None
 
@@ -207,8 +215,8 @@ class RoutingSourceControl:
             provider = await self._github_provider(selected)
         elif host and host == _host(gitlab_origin):
             provider = "gitlab-oauth" if "gitlab-oauth" in self._providers else None
-        elif host and selected == "gitlab-oauth":
-            # An unrecognised host is never handed to the configured GitLab.
+        elif host:
+            # An unrecognised forge is never handed to GitHub or GitLab.
             provider = None
         else:
             provider = selected
@@ -233,8 +241,8 @@ class RoutingSourceControl:
         elif provider == "gitlab-oauth" and urlsplit(pr_url).hostname == "github.com":
             # Webhook targets are independent of the workspace provider choice.
             # Use the normal GitHub credential detection without saving a choice.
-            status = await asyncio.to_thread(gh_cli_status)
-            provider = "gh-cli" if status.installed and status.authenticated else "github-oauth"
+            provider = await self._github_provider(provider, require_oauth=False)
+            assert provider is not None
             source_control = self._providers[provider]
         try:
             return await operation(source_control)

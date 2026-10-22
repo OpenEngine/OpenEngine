@@ -792,3 +792,26 @@ def test_workspace_on_gitlab_still_uses_gitlab(tmp_path, git_repo, monkeypatch):
     providers["gitlab-oauth"].list_pipeline_status.assert_awaited_once()
     assert not providers["gh-cli"].mock_calls
     assert not providers["github-oauth"].mock_calls
+
+
+@pytest.mark.parametrize("selected", ["gh-cli", "github-oauth"])
+def test_workspace_on_an_unknown_forge_is_not_sent_to_github(
+    tmp_path, git_repo, monkeypatch, selected,
+):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("an unknown forge needs no GitHub detection"),
+    )
+    router, providers = _forge_router(
+        tmp_path, git_repo, "https://forge.example/owner/repo.git"
+    )
+    SourceControlPreferences(tmp_path / "settings.json").set(selected)
+
+    with pytest.raises(
+        RuntimeError, match=r"^workspace remote forge\.example does not match"
+    ):
+        asyncio.run(router.publish(WorkspaceId("workspace"), "agent/fix"))
+    for provider in providers.values():
+        assert not provider.mock_calls
