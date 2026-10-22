@@ -3,7 +3,7 @@ name = "openengine-tool-service"
 version = "0.0.0"
 description = "Keeps the tools agents may call, who may call them, and a durable record of every call."
 requires-python = ">=3.11"
-dependencies = ["openengine-persistence"]
+dependencies = ["openengine-persistence", "openengine-telemetry"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,3 +19,4 @@ dev-mode-dirs = [".."]
 
 [tool.uv.sources]
 openengine-persistence = { workspace = true }
+openengine-telemetry = { workspace = true }

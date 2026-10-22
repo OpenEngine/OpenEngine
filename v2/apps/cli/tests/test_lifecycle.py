@@ -74,6 +74,11 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     logs = oe("logs")
     assert "Server is ready" in logs.stdout
     assert str(tmp_path / "state" / "openengine" / "nats") in logs.stdout
+    assert f"openengine.supervisor.supervisor: ready, NATS on nats://127.0.0.1:{port}" in logs.stdout
+    raw = oe("logs", "--json")
+    ready = next(json.loads(line) for line in raw.stdout.splitlines() if '"ready, NATS on' in line)
+    assert ready["service.name"] == "openengine-supervisor"
+    assert ready["severity_text"] == "INFO"
 
     down = oe("down")
     assert down.returncode == 0

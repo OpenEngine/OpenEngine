@@ -292,6 +292,14 @@ MALFORMED = {
     "event path not ending in event_id": (EVENT, set_path("payload", "causal_path", ["cmd_01JAX9CFG"])),
     "event without Nats-Msg-Id": (EVENT, drop("headers", "Nats-Msg-Id")),
     "event Nats-Msg-Id differs from event_id": (EVENT, set_path("headers", "Nats-Msg-Id", "evt_other")),
+    "event traceparent in upper case": (
+        EVENT,
+        set_path("headers", "traceparent", "00-4BF92F3577B34DA6A3CE929D0E0E4736-B7AD6B7169203331-01"),
+    ),
+    "command traceparent without a parent span": (
+        COMMAND,
+        set_path("headers", "traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-01"),
+    ),
     "event of the wrong type for its message": (EVENT, set_path("payload", "event_type", "connection.disabled")),
     "event from another producer": (EVENT, set_path("payload", "producer", "ge")),
     "event without resources": (EVENT, drop("payload", "resources")),

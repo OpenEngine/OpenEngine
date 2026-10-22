@@ -232,6 +232,16 @@ resource is versioned, and a typed `payload`.
   cancelled; workspace failure, task failure and operation failure are
   separate events with separate meanings.
 
+### Trace context
+
+Every command, query and event may carry the W3C Trace Context headers
+`traceparent` and `tracestate`
+([`types.schema.json#/$defs/trace_headers`](common/v1/types.schema.json)), through
+the `commandHeaders`, `queryHeaders` and `eventHeaders` message traits. A
+receiver continues the sender's trace from them, and starts a new one when a
+message carries none. Replies carry none; they belong to the requester's span.
+[`openengine-telemetry`](../telemetry/README.md) writes and reads them.
+
 ### Errors
 
 [`error.schema.json`](common/v1/error.schema.json): `code`, `message`,

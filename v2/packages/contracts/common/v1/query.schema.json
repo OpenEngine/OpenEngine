@@ -11,5 +11,11 @@
       "type": "object",
       "description": "Typed filters, selectors and pagination. `{}` when the query takes none."
     }
+  },
+  "$defs": {
+    "headers": {
+      "description": "NATS headers a query may carry: the sender's trace context.",
+      "$ref": "types.schema.json#/$defs/trace_headers"
+    }
   }
 }

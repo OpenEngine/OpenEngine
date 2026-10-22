@@ -3,7 +3,7 @@ name = "openengine-virtual-control-plane"
 version = "0.0.0"
 description = "Manages the lifecycle of agents and the workspaces they work in."
 requires-python = ">=3.11"
-dependencies = ["openengine-persistence"]
+dependencies = ["openengine-persistence", "openengine-telemetry"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,3 +19,4 @@ dev-mode-dirs = [".."]
 
 [tool.uv.sources]
 openengine-persistence = { workspace = true }
+openengine-telemetry = { workspace = true }

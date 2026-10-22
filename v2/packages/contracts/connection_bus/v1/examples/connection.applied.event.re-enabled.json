@@ -2,7 +2,8 @@
   "message": "ConnectionApplied",
   "subject": "oe.v1.cxn.events.connections.conn_acme_gh.connection.applied",
   "headers": {
-    "Nats-Msg-Id": "evt_01JAX9CFGD"
+    "Nats-Msg-Id": "evt_01JAX9CFGD",
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-b7ad6b7169203331-01"
   },
   "payload": {
     "event_id": "evt_01JAX9CFGD",

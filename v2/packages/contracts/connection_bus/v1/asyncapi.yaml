@@ -258,11 +258,20 @@ components:
       headers:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: '../../common/v1/event.schema.json#/$defs/headers' }
+    commandHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/command.schema.json#/$defs/headers' }
+    queryHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/query.schema.json#/$defs/headers' }
 
   messages:
     ApplyConnectionCommand:
       name: ApplyConnectionCommand
       title: Apply connection command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/apply_connection_command' }
@@ -291,6 +300,7 @@ components:
     DisableConnectionCommand:
       name: DisableConnectionCommand
       title: Disable connection command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/disable_connection_command' }
@@ -309,6 +319,7 @@ components:
     DeleteConnectionCommand:
       name: DeleteConnectionCommand
       title: Delete connection command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/delete_connection_command' }
@@ -328,6 +339,7 @@ components:
     ListConnectionsQuery:
       name: ListConnectionsQuery
       title: List connections query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_connections_query' }
@@ -346,6 +358,7 @@ components:
     GetConnectionQuery:
       name: GetConnectionQuery
       title: Get connection query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/get_connection_query' }

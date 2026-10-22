@@ -22,6 +22,7 @@ integration_tests/ # tests which cross the NATS service boundary
 packages/
   contracts/ # where the contracts between services live
   persistence/ # the database layer services share; one setting picks SQLite or Postgres
+  telemetry/ # logging and tracing every process shares; one OTLP endpoint sets the destination
 services/ # where the services themselves live
   connection_bus/
   graph_engine/
@@ -47,6 +48,8 @@ All services contain a persistence directory which holds all of that service's d
 | tool_service | `tools` | tools, tool_grants, tool_invocations, tool_invocation_attempts |
 | virtual_control_plane | `vcp` | workspaces |
 
+Every process logs and traces through [packages/telemetry](packages/telemetry/README.md): JSON lines on stderr, which `oe logs` prints, and, with `OTEL_EXPORTER_OTLP_ENDPOINT` set, OTLP to any collector or backend. Trace context crosses NATS in `traceparent` headers.
+
 
 
 TODO:
@@ -58,4 +61,4 @@ TODO:
 - [ ] Write shared NATS client
 - [ ] Construct e2e testing environment
 - [ ] Port graph engine
-- [ ] Global logging/monitoring
+- [x] Global logging and tracing

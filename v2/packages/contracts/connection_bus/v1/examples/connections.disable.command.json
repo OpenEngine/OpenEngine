@@ -2,6 +2,9 @@
   "summary": "Disable while a credential is investigated, holding accepted deliveries until re-enabled.",
   "message": "DisableConnectionCommand",
   "subject": "oe.v1.cxn.control.connections.conn_acme_gh.disable",
+  "headers": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  },
   "payload": {
     "command_id": "cmd_01JAX8DIS",
     "causal_path": ["cmd_01JAX8DIS"],

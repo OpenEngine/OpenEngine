@@ -6,6 +6,7 @@ started after NATS and stopped before it.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -22,6 +23,8 @@ READY_TIMEOUT_SECONDS = 30.0
 WATCH_SECONDS = 0.5
 EXIT_OK = 0
 EXIT_FAILED = 1
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -75,14 +78,14 @@ def run(settings: Settings) -> int:
         )
         processes = [ProcessState("nats", children["nats"].pid, f"nats://{settings.host}:{settings.nats_port}")]
         write_state(path, SupervisorState(pid=pid, status=Status.READY, processes=processes))
-        print(f"supervisor: ready, NATS on nats://{settings.host}:{settings.nats_port}", flush=True)
+        log.info("ready, NATS on nats://%s:%d", settings.host, settings.nats_port)
         _watch(children, shutdown)
     except (nats.NatsError, NotReady, ProcessExited) as error:
-        print(f"supervisor: {error}", flush=True)
+        log.exception("failed; stopping")
         write_state(path, SupervisorState(pid=pid, status=Status.FAILED, error=str(error)))
         return EXIT_FAILED
     finally:
         stop_all(list(children.values()))
     path.unlink(missing_ok=True)
-    print("supervisor: stopped", flush=True)
+    log.info("stopped")
     return EXIT_OK

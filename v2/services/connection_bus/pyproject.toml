@@ -3,7 +3,7 @@ name = "openengine-connection-bus"
 version = "0.0.0"
 description = "Resolves incoming webhook events into new or existing jobs."
 requires-python = ">=3.11"
-dependencies = ["openengine-persistence"]
+dependencies = ["openengine-persistence", "openengine-telemetry"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,3 +19,4 @@ dev-mode-dirs = [".."]
 
 [tool.uv.sources]
 openengine-persistence = { workspace = true }
+openengine-telemetry = { workspace = true }

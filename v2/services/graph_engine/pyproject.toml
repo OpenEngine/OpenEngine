@@ -3,7 +3,7 @@ name = "openengine-graph-engine"
 version = "0.0.0"
 description = "Decides which steps need to execute and when."
 requires-python = ">=3.11"
-dependencies = ["openengine-persistence"]
+dependencies = ["openengine-persistence", "openengine-telemetry"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,3 +19,4 @@ dev-mode-dirs = [".."]
 
 [tool.uv.sources]
 openengine-persistence = { workspace = true }
+openengine-telemetry = { workspace = true }
