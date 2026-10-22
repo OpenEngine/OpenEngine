@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
-from dataclasses import dataclass
+import contextlib
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 
 from engine.domain import ForgeMode, WorkState, WorkspaceId, forge_mode
 from engine.graph_runtime_langgraph.executions import current_execution
@@ -20,9 +21,56 @@ _TERMINAL = {
 _PASSING = {"success", "skipped", "neutral"}
 
 
+@dataclass(eq=False, slots=True)
+class _Waiter:
+    """One `CICheck` waiting on one pull request's CI."""
+
+    repository: str
+    #: The head the latest status read was for; ``None`` until the first read,
+    #: so a delivery that lands during it is not missed for want of a SHA.
+    ref: str | None = None
+    woken: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+#: Every `CICheck` waiting right now. In memory, and only as long as each one
+#: waits, so it is bounded by the runs at their CI step; a restart forgets it
+#: and the fallback poll covers what it would have caught.
+_WAITERS: set[_Waiter] = set()
+
+
+@contextlib.contextmanager
+def _waiting(repository: str) -> Iterator[_Waiter]:
+    waiter = _Waiter(repository.lower())
+    _WAITERS.add(waiter)
+    try:
+        yield waiter
+    finally:
+        _WAITERS.discard(waiter)
+
+
+def wake_ci(repository: str, sha: str) -> int:
+    """Wake every `CICheck` waiting on `sha` in `repository`; how many it woke.
+
+    Only a nudge to read CI again: the verdict still comes from
+    ``list_pipeline_status``, never from whatever delivery called this.
+    """
+    repository, sha = repository.lower(), sha.lower()
+    woken = 0
+    for waiter in _WAITERS:
+        if waiter.repository == repository and waiter.ref in (None, sha):
+            waiter.woken.set()
+            woken += 1
+    return woken
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CICheck:
-    """Poll the PR's current revision until all reported CI has settled.
+    """Wait for the PR's current revision until all reported CI has settled.
+
+    CI is read once on starting, so CI that settled first is not waited on,
+    then again whenever `wake_ci` reports a delivery for the PR's head, and
+    otherwise every ``poll_interval`` seconds: deliveries are not guaranteed,
+    and a deployment without a reachable webhook has only the poll.
 
     Reads ``pr_url`` and ``workspaceId`` from upstream nodes. Required gates
     must all settle; a confirmed absence of requirements passes immediately.
@@ -32,7 +80,7 @@ class CICheck:
     """
 
     source_control: SourceControl | None = None
-    poll_interval: float = 15
+    poll_interval: float = 300
     timeout: float = 3600
     output_key: str = "ci_check"
     graph_node_name: str = "CI check"
@@ -64,39 +112,45 @@ class CICheck:
         number = found.number
         await execution.say(f"Waiting for CI on {url}.")
         async with asyncio.timeout(self.timeout):
-            while True:
-                status = await source_control.list_pipeline_status(
-                    WorkspaceId(workspace), change_request_number=number,
-                )
-                known_requirements = status.required_checks is not None
-                jobs = (
-                    status.required_checks if known_requirements
-                    else (*status.checks, *status.pipelines)
-                )
-                # GitHub supplies a conclusion; GitLab uses terminal statuses.
-                if (known_requirements or jobs) and all(
-                    job.status.lower() in _TERMINAL for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
-                ):
-                    failed = [
-                        job for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
-                        if (job.conclusion or job.status).lower()
-                        not in _PASSING
-                    ]
-                    details = "\n".join(
-                        f"- {job.name}: {job.conclusion or job.status} "
-                        f"{getattr(job, 'details_url', getattr(job, 'url', ''))}"
-                        for job in failed
+            with _waiting(found.project) as waiter:
+                while True:
+                    # Cleared before reading, so a delivery during the read
+                    # wakes the next wait rather than being lost.
+                    waiter.woken.clear()
+                    status = await source_control.list_pipeline_status(
+                        WorkspaceId(workspace), change_request_number=number,
                     )
-                    summary = (
-                        f"CI failed for {url} at {status.ref}:\n{details}"
-                        if failed else f"CI passed for {url} at {status.ref}."
+                    waiter.ref = status.ref.lower()
+                    known_requirements = status.required_checks is not None
+                    jobs = (
+                        status.required_checks if known_requirements
+                        else (*status.checks, *status.pipelines)
                     )
-                    await execution.say(summary)
-                    return {self.output_key: {
-                        "passed": not failed, "pr_url": url,
-                        "ref": status.ref, "summary": summary,
-                    }}
-                await asyncio.sleep(self.poll_interval)
+                    # GitHub supplies a conclusion; GitLab uses terminal statuses.
+                    if (known_requirements or jobs) and all(
+                        job.status.lower() in _TERMINAL for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
+                    ):
+                        failed = [
+                            job for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
+                            if (job.conclusion or job.status).lower()
+                            not in _PASSING
+                        ]
+                        details = "\n".join(
+                            f"- {job.name}: {job.conclusion or job.status} "
+                            f"{getattr(job, 'details_url', getattr(job, 'url', ''))}"
+                            for job in failed
+                        )
+                        summary = (
+                            f"CI failed for {url} at {status.ref}:\n{details}"
+                            if failed else f"CI passed for {url} at {status.ref}."
+                        )
+                        await execution.say(summary)
+                        return {self.output_key: {
+                            "passed": not failed, "pr_url": url,
+                            "ref": status.ref, "summary": summary,
+                        }}
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(waiter.woken.wait(), self.poll_interval)
 
 
-__all__ = ["CICheck"]
+__all__ = ["CICheck", "wake_ci"]
