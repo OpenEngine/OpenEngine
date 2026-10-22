@@ -1,0 +1,11 @@
+{
+  "message": "ListToolsQuery",
+  "subject": "oe.v1.tools.list",
+  "payload": {
+    "params": {
+      "namespace": "default",
+      "labelSelector": "provider=github",
+      "limit": 20
+    }
+  }
+}

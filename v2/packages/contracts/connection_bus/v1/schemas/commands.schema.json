@@ -3,45 +3,19 @@
   "title": "Connection Bus commands",
   "description": "Requests and responses of `oe.v1.cxn.control.…`. The connection named in the subject is the target; payloads do not repeat it.",
   "$defs": {
-    "add_connection_command": {
+    "apply_connection_command": {
       "allOf": [
         { "$ref": "../../../common/v1/command.schema.json" },
-        { "properties": { "payload": { "$ref": "#/$defs/add_connection_payload" } } }
+        { "properties": { "payload": { "$ref": "#/$defs/apply_connection_payload" } } }
       ]
     },
-    "add_connection_payload": {
+    "apply_connection_payload": {
+      "description": "Create or update the connection named by `connection.metadata.name`. An update cannot change `spec.provider` or `spec.externalAccount`. A deleted connection's name can be applied again; it creates a new connection with a new ID.",
       "type": "object",
-      "required": ["provider", "external_account", "credential_ref", "scope"],
+      "required": ["connection"],
       "additionalProperties": false,
       "properties": {
-        "provider": { "$ref": "connection.schema.json#/$defs/provider" },
-        "display_name": {
-          "description": "Defaults to the external account's name, or its ID.",
-          "$ref": "connection.schema.json#/$defs/display_name"
-        },
-        "external_account": { "$ref": "connection.schema.json#/$defs/external_account" },
-        "credential_ref": { "$ref": "connection.schema.json#/$defs/credential_ref" },
-        "scope": { "$ref": "connection.schema.json#/$defs/scope" },
-        "settings": { "$ref": "connection.schema.json#/$defs/settings", "default": {} }
-      }
-    },
-    "configure_connection_command": {
-      "allOf": [
-        { "$ref": "../../../common/v1/command.schema.json" },
-        { "properties": { "payload": { "$ref": "#/$defs/configure_connection_payload" } } }
-      ]
-    },
-    "configure_connection_payload": {
-      "description": "Fields to replace; omitted fields are unchanged. `enabled: true` re-enables a disabled connection (and resumes held deliveries); disabling goes through `disable`. A deleted connection rejects with INVALID_STATE.",
-      "type": "object",
-      "minProperties": 1,
-      "additionalProperties": false,
-      "properties": {
-        "display_name": { "$ref": "connection.schema.json#/$defs/display_name" },
-        "credential_ref": { "$ref": "connection.schema.json#/$defs/credential_ref" },
-        "scope": { "$ref": "connection.schema.json#/$defs/scope" },
-        "settings": { "$ref": "connection.schema.json#/$defs/settings" },
-        "enabled": { "const": true }
+        "connection": { "$ref": "../resources/connection.schema.yaml" }
       }
     },
     "disable_connection_command": {
@@ -75,7 +49,7 @@
       }
     },
     "connection_command_response": {
-      "description": "Reply to every CXN command. `resource_id` is the connection ID; `add` allocates it at acceptance.",
+      "description": "Reply to every CXN command. `resource_id` is the connection ID; `apply` allocates it at acceptance for a new name.",
       "allOf": [
         { "$ref": "../../../common/v1/command-response.schema.json" },
         {

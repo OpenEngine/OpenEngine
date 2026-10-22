@@ -17,15 +17,14 @@ STREAMS = CONTRACTS.parent.parent / "infra" / "nats" / "streams"
 # The subjects the V2 work order lists, per service. Events are checked separately.
 REQUEST_SUBJECTS = {
     "connection_bus": {
-        "oe.v1.cxn.control.connections.add",
-        "oe.v1.cxn.control.connections.{connection_id}.configure",
+        "oe.v1.cxn.control.connections.apply",
         "oe.v1.cxn.control.connections.{connection_id}.disable",
         "oe.v1.cxn.control.connections.{connection_id}.delete",
         "oe.v1.cxn.query.connections.list",
         "oe.v1.cxn.query.connections.{connection_id}.get",
     },
     "graph_engine": {
-        "oe.v1.ge.control.graphs.add",
+        "oe.v1.ge.control.graphs.apply",
         "oe.v1.ge.control.graphs.{graph_id}.run",
         "oe.v1.ge.control.jobs.submit",
         "oe.v1.ge.control.jobs.{job_id}.steer",
@@ -33,8 +32,7 @@ REQUEST_SUBJECTS = {
         "oe.v1.ge.control.jobs.{job_id}.resume",
         "oe.v1.ge.control.jobs.{job_id}.cancel",
         "oe.v1.ge.control.approvals.{approval_id}.decide",
-        "oe.v1.ge.control.loops.add",
-        "oe.v1.ge.control.loops.{loop_id}.configure",
+        "oe.v1.ge.control.loops.apply",
         "oe.v1.ge.control.loops.{loop_id}.pause",
         "oe.v1.ge.control.loops.{loop_id}.resume",
         "oe.v1.ge.control.loops.{loop_id}.remove",
@@ -51,8 +49,22 @@ REQUEST_SUBJECTS = {
         "oe.v1.ge.query.loops.{loop_id}.get",
         "oe.v1.ge.query.operations.{operation_id}.get",
     },
+    "tool_service": {
+        "oe.v1.tools.apply",
+        "oe.v1.tools.get",
+        "oe.v1.tools.list",
+        "oe.v1.tools.delete",
+        "oe.v1.tools.invoke.{namespace}.{name}",
+        "oe.v1.toolgrants.apply",
+        "oe.v1.toolgrants.get",
+        "oe.v1.toolgrants.list",
+        "oe.v1.toolgrants.delete",
+        "oe.v1.toolinvocations.get",
+        "oe.v1.toolinvocations.list",
+        "oe.v1.toolinvocations.cancel",
+    },
     "virtual_control_plane": {
-        "oe.v1.vcp.control.workspaces.create",
+        "oe.v1.vcp.control.workspaces.apply",
         "oe.v1.vcp.control.workspaces.{workspace_id}.ensure",
         "oe.v1.vcp.control.workspaces.{workspace_id}.execute",
         "oe.v1.vcp.control.workspaces.{workspace_id}.steer",
@@ -72,7 +84,21 @@ REQUEST_SUBJECTS = {
         "oe.v1.vcp.query.operations.{operation_id}.get",
     },
 }
-SHORT = {"connection_bus": "cxn", "graph_engine": "ge", "virtual_control_plane": "vcp"}
+SHORT = {"connection_bus": "cxn", "graph_engine": "ge", "tool_service": "tools", "virtual_control_plane": "vcp"}
+# Where each service's subjects live: `oe.v1.{short}.` unless listed here.
+NAMESPACES = {
+    "tool_service": ("oe.v1.tools.", "oe.v1.toolgrants.", "oe.v1.toolinvocations.", "oe.v1.events.toolinvocations."),
+}
+
+
+def namespaces(service: str) -> tuple[str, ...]:
+    return NAMESPACES.get(service, (f"oe.v1.{SHORT[service]}.",))
+
+
+def is_event(address: str) -> bool:
+    """Event subjects: `oe.v1.{short}.events.…`, or `oe.v1.events.…` for the tool service."""
+    tokens = address.split(".")
+    return tokens[2] == "events" or tokens[3] == "events"
 
 
 def addresses(service: str) -> set[str]:
@@ -117,8 +143,7 @@ def test_finds_every_service_contract() -> None:
 
 @pytest.mark.parametrize("service", SERVICES)
 def test_defines_exactly_the_listed_request_subjects(service: str) -> None:
-    prefixes = (f"oe.v1.{SHORT[service]}.control.", f"oe.v1.{SHORT[service]}.query.")
-    assert {address for address in addresses(service) if address.startswith(prefixes)} == REQUEST_SUBJECTS[service]
+    assert {address for address in addresses(service) if not is_event(address)} == REQUEST_SUBJECTS[service]
 
 
 @pytest.mark.parametrize("service", SERVICES)
@@ -133,10 +158,10 @@ def test_every_request_operation_replies_with_its_own_response(service: str) -> 
 def test_events_land_in_their_stream_and_requests_in_none(service: str) -> None:
     streams = {path.stem: json.loads(path.read_text())["subjects"] for path in STREAMS.glob("*.json")}
     for address in addresses(service):
-        assert address.startswith(f"oe.v1.{SHORT[service]}."), address
+        assert address.startswith(namespaces(service)), address
         concrete = ".".join("x" if token.startswith("{") else token for token in address.split("."))
         captured = [name for name, filters in streams.items() if any(nats_matches(f, concrete) for f in filters)]
-        if address.startswith(f"oe.v1.{SHORT[service]}.events."):
+        if is_event(address):
             assert captured == [f"{SHORT[service]}-events"], address
         else:
             assert captured == [], f"{address} is request/reply but a stream captures it"
@@ -144,7 +169,7 @@ def test_events_land_in_their_stream_and_requests_in_none(service: str) -> None:
 
 def test_no_streams_or_consumers_are_added() -> None:
     assert sorted(path.name for path in STREAMS.glob("*.json")) == [
-        "cxn-egress.json", "cxn-events.json", "cxn-ingress.json", "ge-events.json", "vcp-events.json",
+        "cxn-egress.json", "cxn-events.json", "cxn-ingress.json", "ge-events.json", "tools-events.json", "vcp-events.json",
     ]
     consumers = STREAMS.parent / "consumers"
     assert [path.name for path in consumers.iterdir()] == ["README.md"]
@@ -176,9 +201,9 @@ def test_published_contract_links(service: str) -> None:
 
 # Malformed variants of valid CXN examples. Each must be rejected.
 
-COMMAND = example("connection_bus", "connections.configure.command.json")
-RESPONSE = example("connection_bus", "connections.add.response.accepted.json")
-EVENT = example("connection_bus", "connection.configured.event.json")
+COMMAND = example("connection_bus", "connections.disable.command.json")
+RESPONSE = example("connection_bus", "connections.apply.response.accepted.json")
+EVENT = example("connection_bus", "connection.applied.event.re-enabled.json")
 QUERY_RESPONSE = example("connection_bus", "connections.get.response.json")
 
 
@@ -216,22 +241,22 @@ MALFORMED = {
     "command without payload": (COMMAND, drop("payload", "payload")),
     "causal path not ending in command_id": (COMMAND, set_path("payload", "causal_path", ["cmd_other"])),
     "empty causal path": (COMMAND, set_path("payload", "causal_path", [])),
-    "causal path with a repeat": (COMMAND, set_path("payload", "causal_path", ["cmd_01JAX9CFG", "cmd_01JAX9CFG"])),
+    "causal path with a repeat": (COMMAND, set_path("payload", "causal_path", ["cmd_01JAX8DIS", "cmd_01JAX8DIS"])),
     "causal path over 32 elements": (
         COMMAND,
-        set_path("payload", "causal_path", [f"cmd_{n}" for n in range(32)] + ["cmd_01JAX9CFG"]),
+        set_path("payload", "causal_path", [f"cmd_{n}" for n in range(32)] + ["cmd_01JAX8DIS"]),
     ),
-    "causal path element with a dot": (COMMAND, set_path("payload", "causal_path", ["gh.123", "cmd_01JAX9CFG"])),
+    "causal path element with a dot": (COMMAND, set_path("payload", "causal_path", ["gh.123", "cmd_01JAX8DIS"])),
     "unknown envelope field": (COMMAND, set_path("payload", "replyTo", "_INBOX.x")),
     "actor in the payload": (COMMAND, set_path("payload", "payload", "actor", "alice")),
     "deadline not in UTC": (COMMAND, set_path("payload", "deadline_at", "2026-10-19T23:30:00+02:00")),
     "expected_version zero": (COMMAND, set_path("payload", "expected_version", 0)),
-    "empty configure payload": (COMMAND, set_path("payload", "payload", {})),
-    "subject token with a dot": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.conn_a.b.configure")),
-    "subject token wildcard": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.*.configure")),
-    "subject token full wildcard": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.>.configure")),
-    "subject token of the wrong type": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.job_1.configure")),
-    "subject on another service": (COMMAND, set_path("subject", "oe.v1.ge.control.connections.conn_a.configure")),
+    "unknown disable field": (COMMAND, set_path("payload", "payload", "enabled", True)),
+    "subject token with a dot": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.conn_a.b.disable")),
+    "subject token wildcard": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.*.disable")),
+    "subject token full wildcard": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.>.disable")),
+    "subject token of the wrong type": (COMMAND, set_path("subject", "oe.v1.cxn.control.connections.job_1.disable")),
+    "subject on another service": (COMMAND, set_path("subject", "oe.v1.ge.control.connections.conn_a.disable")),
     "accepted without operation_id": (RESPONSE, drop("payload", "operation_id")),
     "accepted with an error": (
         RESPONSE,
@@ -241,8 +266,8 @@ MALFORMED = {
     "unknown status": (RESPONSE, set_path("payload", "status", "done")),
     "response to another operation": (RESPONSE, set_path("in_reply_to", "oe.v1.cxn.control.connections.conn_a.delete")),
     "response with a bad request subject token": (
-        example("connection_bus", "connections.configure.response.version-conflict.json"),
-        set_path("in_reply_to", "oe.v1.cxn.control.connections.bad*.configure"),
+        example("connection_bus", "connections.delete.response.invalid-state.json"),
+        set_path("in_reply_to", "oe.v1.cxn.control.connections.bad*.delete"),
     ),
     "invalid argument marked retryable": (
         QUERY_RESPONSE,
@@ -253,21 +278,21 @@ MALFORMED = {
         set_path("payload", "error", {"code": "INTERNAL", "message": "x", "retryable": True}),
     ),
     "version conflict without details": (
-        example("connection_bus", "connections.configure.response.version-conflict.json"),
+        example("connection_bus", "connections.apply.response.version-conflict.json"),
         drop("payload", "error", "details"),
     ),
     "event subject names another connection": (
         EVENT,
-        set_path("subject", "oe.v1.cxn.events.connections.conn_other.connection.configured"),
+        set_path("subject", "oe.v1.cxn.events.connections.conn_other.connection.applied"),
     ),
     "event subject names another type": (
         EVENT,
-        set_path("subject", "oe.v1.cxn.events.connections.conn_acme_gh.connection.added"),
+        set_path("subject", "oe.v1.cxn.events.connections.conn_acme_gh.connection.disabled"),
     ),
     "event path not ending in event_id": (EVENT, set_path("payload", "causal_path", ["cmd_01JAX9CFG"])),
     "event without Nats-Msg-Id": (EVENT, drop("headers", "Nats-Msg-Id")),
     "event Nats-Msg-Id differs from event_id": (EVENT, set_path("headers", "Nats-Msg-Id", "evt_other")),
-    "event of the wrong type for its message": (EVENT, set_path("payload", "event_type", "connection.added")),
+    "event of the wrong type for its message": (EVENT, set_path("payload", "event_type", "connection.disabled")),
     "event from another producer": (EVENT, set_path("payload", "producer", "ge")),
     "event without resources": (EVENT, drop("payload", "resources")),
     "event missing its resource version": (EVENT, drop("payload", "resource_version")),
@@ -291,7 +316,7 @@ def test_the_unmutated_bases_are_valid() -> None:
 
 
 def test_a_causal_path_of_exactly_32_elements_is_allowed() -> None:
-    case = mutated(COMMAND, set_path("payload", "causal_path", [f"cmd_{n}" for n in range(31)] + ["cmd_01JAX9CFG"]))
+    case = mutated(COMMAND, set_path("payload", "causal_path", [f"cmd_{n}" for n in range(31)] + ["cmd_01JAX8DIS"]))
     assert errors_for("connection_bus", case) == []
 
 

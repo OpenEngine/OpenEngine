@@ -1,6 +1,6 @@
 """CI runs the root `e2e/` Playwright suite on pull requests (issue #833).
 
-The suite drives the `engine` CLI through node-pty, a WebSocket and xterm.
+The suite drives the `oe` CLI through node-pty, a WebSocket and xterm.
 It is a different suite from `apps/web/e2e`, which the `browser` job in
 `tests.yml` already runs, so these checks look for a job that works in
 `e2e/` itself, in whichever workflow file it lives.

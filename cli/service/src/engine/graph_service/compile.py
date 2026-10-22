@@ -46,6 +46,7 @@ from engine.graph_runtime_langgraph.acp import TerminalEvent
 from engine.graph_runtime_langgraph.components import ACPNode, CICheck, NameNode, TriageNode, checkout
 from engine.graph_runtime_langgraph.components.findings import parse_findings
 from engine.ports import WorkspaceProvider
+from engine.runtime.config import DEFAULT_MODEL_TIERS, merge_model_tiers
 from engine.runtime.step_results import InvalidStepResultError
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry
@@ -63,12 +64,7 @@ from engine.graph_service.language import (
     RunnerRule,
 )
 
-#: What `model: default`, `model: elevated` and `model: cheapest` mean when a
-#: backend says nothing. `cheapest` is what a graph's naming turn uses.
-DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
-    "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
-    "codex": {"cheapest": "gpt-5.6-terra", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
-}
+#: The tier a graph's naming turn uses.
 NAMING_TIER = "cheapest"
 #: The only tools a Claude naming turn has: the ACP adapter's `READ_ONLY_TOOLS`,
 #: which this package may not import.
@@ -117,10 +113,7 @@ def compile_graph(
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
-    tiers = {
-        runner: {**DEFAULT_MODEL_TIERS.get(runner, {}), **models}
-        for runner, models in {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}.items()
-    }
+    tiers = merge_model_tiers(model_tiers)
     runners = tuple(registry.names)
     models = {} if agent_models is None else agent_models
     context_limits = {} if agent_context_limits is None else agent_context_limits

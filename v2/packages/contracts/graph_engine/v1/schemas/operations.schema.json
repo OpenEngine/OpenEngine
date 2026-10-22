@@ -11,7 +11,7 @@
           "properties": {
             "operation": {
               "enum": [
-                "graphs.add",
+                "graphs.apply",
                 "graphs.run",
                 "jobs.submit",
                 "jobs.steer",
@@ -19,8 +19,7 @@
                 "jobs.resume",
                 "jobs.cancel",
                 "approvals.decide",
-                "loops.add",
-                "loops.configure",
+                "loops.apply",
                 "loops.pause",
                 "loops.resume",
                 "loops.remove"
@@ -29,8 +28,8 @@
           }
         },
         {
-          "if": { "properties": { "operation": { "const": "graphs.add" } } },
-          "then": { "properties": { "result": { "$ref": "#/$defs/graphs_add_result" } } }
+          "if": { "properties": { "operation": { "const": "graphs.apply" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/graphs_apply_result" } } }
         },
         {
           "if": { "properties": { "operation": { "const": "graphs.run" } } },
@@ -61,12 +60,8 @@
           "then": { "properties": { "result": { "$ref": "#/$defs/approvals_decide_result" } } }
         },
         {
-          "if": { "properties": { "operation": { "const": "loops.add" } } },
-          "then": { "properties": { "result": { "$ref": "#/$defs/loops_add_result" } } }
-        },
-        {
-          "if": { "properties": { "operation": { "const": "loops.configure" } } },
-          "then": { "properties": { "result": { "$ref": "#/$defs/loops_configure_result" } } }
+          "if": { "properties": { "operation": { "const": "loops.apply" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/loops_apply_result" } } }
         },
         {
           "if": { "properties": { "operation": { "const": "loops.pause" } } },
@@ -82,7 +77,7 @@
         }
       ]
     },
-    "graphs_add_result": {
+    "graphs_apply_result": {
       "type": "object",
       "required": ["graph", "created"],
       "additionalProperties": false,
@@ -90,7 +85,7 @@
         "graph": { "$ref": "graph.schema.json#/$defs/graph_ref" },
         "created": {
           "type": "boolean",
-          "description": "False when identical source matched an existing revision."
+          "description": "False when an unchanged definition matched an existing revision."
         }
       }
     },
@@ -176,22 +171,14 @@
         "state": { "type": "string", "enum": ["approved", "rejected"] }
       }
     },
-    "loops_add_result": {
+    "loops_apply_result": {
       "type": "object",
-      "required": ["loop_id", "version"],
+      "required": ["loop_id", "version", "created"],
       "additionalProperties": false,
       "properties": {
         "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
-        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" }
-      }
-    },
-    "loops_configure_result": {
-      "type": "object",
-      "required": ["loop_id", "version"],
-      "additionalProperties": false,
-      "properties": {
-        "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
-        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" }
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
+        "created": { "type": "boolean", "description": "True when the apply created the loop, false when it updated one." }
       }
     },
     "loops_pause_result": {

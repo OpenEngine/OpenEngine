@@ -1,12 +1,13 @@
 # OpenEngine V2 service contracts
 
-The NATS interfaces of the three V2 services, as AsyncAPI documents and
+The NATS interfaces of the four V2 services, as AsyncAPI documents and
 JSON Schemas:
 
 | Service | Shorthand | Document | Reference |
 | -- | -- | -- | -- |
 | Connection Bus | `cxn` | [`connection_bus/v1/asyncapi.yaml`](connection_bus/v1/asyncapi.yaml) | [`connection_bus/v1/reference.html`](connection_bus/v1/reference.html) ([view](https://openengine.cc/contracts/connection_bus/v1/)) |
 | Graph Engine | `ge` | [`graph_engine/v1/asyncapi.yaml`](graph_engine/v1/asyncapi.yaml) | [`graph_engine/v1/reference.html`](graph_engine/v1/reference.html) ([view](https://openengine.cc/contracts/graph_engine/v1/)) |
+| Tool Service | `tools` | [`tool_service/v1/asyncapi.yaml`](tool_service/v1/asyncapi.yaml) | [`tool_service/v1/reference.html`](tool_service/v1/reference.html) ([view](https://openengine.cc/contracts/tool_service/v1/)) |
 | Virtual Control Plane | `vcp` | [`virtual_control_plane/v1/asyncapi.yaml`](virtual_control_plane/v1/asyncapi.yaml) | [`virtual_control_plane/v1/reference.html`](virtual_control_plane/v1/reference.html) ([view](https://openengine.cc/contracts/virtual_control_plane/v1/)) |
 
 Each document is written from its service's point of view: the requests it
@@ -15,22 +16,27 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 
 ## Implementation status
 
-The VCP workspace-lifecycle milestone is implemented; the remaining surfaces
-are contracts for subsequent work. See the [VCP service guide](../../services/virtual_control_plane/README.md).
+VCP workspace lifecycle and task execution are implemented; the remaining
+surfaces are contracts for subsequent work. See the [VCP service guide](../../services/virtual_control_plane/README.md).
 
 | Defined here | Implemented |
 | -- | -- |
-| Control and query subjects (`oe.v1.…`) with typed requests and replies | VCP answers create/ensure/destroy, capabilities, workspace get/list and operation get. Other surfaces are pending. |
-| Event subjects and payloads (`oe.v1.{svc}.events.…`) | The `cxn-events`, `ge-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes provisioning, ready, destroyed and workspace failure events through its outbox. |
-| Operation, job, execution, workspace, session and approval models | VCP persists workspace lifecycle, operations, command receipts, runtime ownership and outgoing events. Other models are pending. |
+| Control and query subjects (`oe.v1.…`) with typed requests and replies | VCP answers create/ensure/execute/cancel/destroy, supported steering, capabilities, workspace and session get/list, session events and operation get. Other surfaces are pending; executor limitations are documented in the service guide. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.events.toolinvocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes workspace, task, conversation, usage and steering events through its outbox. |
+| Operation, job, execution, workspace, session and approval models | VCP persists workspace lifecycle, sessions, attempts, operations, command receipts, runtime ownership and outgoing events. Other models are pending. |
+| Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
 
-This work creates no streams, consumers, queue groups or broker
-permissions. It changes only the subject filter of the three existing event
-streams, from `{svc}.events.>` to `oe.v1.{svc}.events.>`, so events share the
-`oe.v1` namespace; `oe migrate` applies that as a config update. The separate [internal runtime contract](internal/workspace_runtime/v1/README.md) now
-defines VCP/daemon execution and cancellation; its implementation is pending.
-Provider ingress/egress payloads (`cxn.ingress.>`, `cxn.egress.>`) remain out of scope.
+The public contracts create no consumers or broker permissions. The tool service
+adds one stream, `tools-events`, and declares one queue group, `tool-workers`, for
+the execution workers on `oe.v1.tools.invoke.*.*`. The other event streams
+capture `oe.v1.{svc}.events.>`, so events share the `oe.v1` namespace.
+
+The separate [internal runtime contract](internal/workspace_runtime/v1/README.md)
+defines the implemented VCP/daemon execution, cancellation, steering, inspection
+and update protocol. See the VCP service guide for supported executors and
+runtime provisioning. Provider ingress/egress payloads (`cxn.ingress.>`,
+`cxn.egress.>`) remain out of scope.
 
 ## Layout
 
@@ -41,11 +47,12 @@ common/v1/                 envelopes and types every service shares
   query.schema.json          query-response.schema.json
   event.schema.json          error.schema.json
   pagination.schema.json     operation.schema.json
+  meta.schema.yaml           metadata every resource shares
 {service}/v1/
   asyncapi.yaml            the service's channels, operations and messages
   schemas/                 typed payloads, grouped with $defs
   examples/                one JSON file per example message
-graph_engine/v1/resources/  the Graph, Loop and Tool resources people write
+  resources/               the resources people write, where the service has any
 tests/                     pytest suite run with the rest of v2
 tooling/                   pinned AsyncAPI parser, validate.py and reference.py
 ```
@@ -55,28 +62,42 @@ accepts), referenced from AsyncAPI as
 `application/schema+json;version=draft-07`. Service schemas compose the
 common envelopes with `allOf` and never copy them.
 
-## Graph Engine resources
+## Resources
 
-`Graph`, `Loop` and `Tool` are the documents people write for the Graph
-Engine, in Kubernetes style: `apiVersion: openengine.cc/v2alpha1`, `kind`,
-`metadata` and `spec`, camelCase fields, lists of named objects, and unions
-written as exactly one of several keys. Each kind is defined once, as a JSON
-Schema in YAML under
-[`graph_engine/v1/resources/`](graph_engine/v1/resources), with examples in
-`resources/examples/`. Those files are the single source of truth:
+The documents people write are Kubernetes-style resources: `apiVersion`,
+`kind`, `metadata` and `spec` (and `status`, where the service reports one),
+camelCase fields, lists of named objects, and unions written as exactly one of
+several keys. They are created and changed by **applying** them: a new name
+creates the resource, a known one updates it.
 
-- `tooling/resources.py` validates resources against them
+| Service | Kinds | apiVersion | Applied with |
+| -- | -- | -- | -- |
+| Connection Bus | `Connection` | `openengine.cc/v2alpha1` | `connections.apply` |
+| Graph Engine | `Graph`, `Loop` | `openengine.cc/v2alpha1` | `graphs.apply`, `loops.apply` |
+| Tool Service | `Tool`, `ToolGrant`, `ToolInvocation` | `tools.openengine.cc/v1alpha1` | `tools.apply`; `toolgrants.apply` by GE from a Graph step's `agent.tools`; invocations are created by `tools.invoke` |
+| Virtual Control Plane | `Workspace` | `openengine.cc/v2alpha1` | `workspaces.apply` |
+
+Each kind is defined once, as a JSON Schema in YAML under
+`{service}/v1/resources/`, sharing `common/v1/meta.schema.yaml`, with examples
+in `resources/examples/`. Those files are the single source of truth:
+
+- the apply commands' payloads `$ref` them, so the contract validates the
+  resource a command carries;
+- `tooling/resources.py` validates resource files against them
   (`validate_resource`, `validate_text`), reporting every problem with its
   path, such as `spec.plan[0].agent.prompt`;
-- the same script generates
-  [`resources/reference.html`](graph_engine/v1/resources/reference.html)
-  ([view](https://openengine.cc/contracts/graph_engine/v1/resources/)), a
-  static page of every kind, type, field and example. A test fails when it is
-  stale.
+- the same script generates each service's `resources/reference.html`
+  ([Connection Bus](https://openengine.cc/contracts/connection_bus/v1/resources/),
+  [Graph Engine](https://openengine.cc/contracts/graph_engine/v1/resources/),
+  [Tool Service](https://openengine.cc/contracts/tool_service/v1/resources/),
+  [Virtual Control Plane](https://openengine.cc/contracts/virtual_control_plane/v1/resources/)),
+  a static page of every kind, type, field and example. A test fails when one
+  is stale.
 
-The schemas check structure. Rules that span fields, such as unique step
-names, `flow` naming steps that exist, reachability and expression syntax, are
-the Graph Engine's to check when a resource is added.
+The schemas check structure. Rules that span fields or resources, such as
+unique step names, `flow` naming steps that exist, a Tool's connection
+existing or an adapter supporting a `recovery`, are the owning service's to
+check when a resource is applied.
 
 ## Versions
 
@@ -96,6 +117,14 @@ Three versions are tracked separately:
 | Query | `oe.v1.{svc}.query.{resource}[.{id}].{view}` | NATS request/reply |
 | Event | `oe.v1.{svc}.events.{partition}.{id}.{event_type}` | JetStream publish to the `{svc}-events` stream |
 
+The tool service follows its own subject layout, which separates resource
+management from execution: `oe.v1.tools.{apply,get,list,delete}`,
+`oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.toolgrants.…`,
+`oe.v1.toolinvocations.…`, and events on
+`oe.v1.events.toolinvocations.{namespace}.{invocation_id}.{event}` in the
+`tools-events` stream. Its namespaces and names are subject tokens of
+lower-case letters, digits and `-` (`resource_name` in `types.schema.json`).
+
 Replies use NATS's native reply subject; no payload carries `replyTo`.
 
 Each `{svc}-events` stream captures `oe.v1.{svc}.events.>`. Control and
@@ -106,8 +135,9 @@ Every `{…_id}` in a subject is a single subject token (letters, digits, `_`,
 `-`; no `.`, `*`, `>` or spaces) with its type's prefix (`conn_`, `job_`,
 `ws_`, …), defined in [`types.schema.json`](common/v1/types.schema.json). A
 service answers a malformed token with `INVALID_ARGUMENT`. When an ID appears
-in both the subject and the body, they must agree. An event's subject ends
-with the tokens of its `event_type`.
+in both the subject and the body, they must agree. An event's `event_type`
+ends with the tokens its subject has after the last ID: the whole name
+(`….{job_id}.job.created`) or its fact (`….{invocation_id}.blocked-auth`).
 
 ## Messages
 
@@ -266,7 +296,7 @@ carried out.
 The [Pages workflow](../../../.github/workflows/pages.yml) regenerates and
 checks the references against the checked-in pages, then publishes them to
 `https://openengine.cc/contracts/{service}/v1/` on every contract change to main,
-and the resource reference to `https://openengine.cc/contracts/graph_engine/v1/resources/`.
+and each resource reference to `https://openengine.cc/contracts/{service}/v1/resources/`.
 Every schema file is published at its own path too, so a schema's relative
 `$ref`s resolve against the site, as in
 `https://openengine.cc/contracts/graph_engine/v1/resources/graph.schema.yaml`.
@@ -285,8 +315,8 @@ cd v2
 uv run python packages/contracts/tooling/validate.py              # examples, subjects, cross-field rules
 uv run python packages/contracts/tooling/reference.py             # regenerate {service}/v1/reference.html
 uv run python packages/contracts/tooling/reference.py --bundle    # also write dist/{service}/asyncapi.json
-uv run python packages/contracts/tooling/resources.py            # regenerate graph_engine/v1/resources/reference.html
-uv run python packages/contracts/tooling/resources.py check F..  # validate Graph, Loop and Tool files
+uv run python packages/contracts/tooling/resources.py            # regenerate {service}/v1/resources/reference.html
+uv run python packages/contracts/tooling/resources.py check F..  # validate resource files
 uv run pytest packages/contracts/tests                            # all of the above, plus malformed variants
 ```
 

@@ -20,8 +20,7 @@ from engine.domain import (
     WorkOrderSpec,
 )
 from langgraph_acp import ACPNode, ACPResult
-from langgraph_acp.agent import ACPAgentRegistry
-from langgraph_acp.providers import CodexACPProvider
+from langgraph_acp.agent import ACPAgentProvider, ACPAgentRegistry
 
 ScopingNode = Callable[[str], Awaitable[ACPResult]]
 
@@ -172,26 +171,17 @@ class MilestoneScoper:
         )
 
 
-def codex_milestone_scoper(
+def milestone_scoper(
+    provider: ACPAgentProvider,
     *,
-    binary_path: str,
     working_directory: str,
     timeout_seconds: float | None,
-    model: str = "",
 ) -> MilestoneScoper:
-    """Build milestone scoping from the installation's Codex settings."""
-    environment = {"CODEX_PATH": binary_path}
-    if model:
-        environment["CODEX_CONFIG"] = json.dumps({"model": model})
-    registry = ACPAgentRegistry(
-        (
-            CodexACPProvider(env=environment, cwd=working_directory),
-        )
-    )
+    """Build milestone scoping on `provider`, as the installation configured it."""
     return MilestoneScoper(
         Scoper(
-            agent="codex",
-            registry=registry,
+            agent=provider.name,
+            registry=ACPAgentRegistry((provider,)),
             working_directory=working_directory,
             timeout_seconds=timeout_seconds,
         )
@@ -210,4 +200,4 @@ async def scope(
     )
 
 
-__all__ = ["MilestoneScoper", "Scoper", "codex_milestone_scoper", "scope"]
+__all__ = ["MilestoneScoper", "Scoper", "milestone_scoper", "scope"]

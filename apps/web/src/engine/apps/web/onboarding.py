@@ -132,7 +132,7 @@ def preflight() -> tuple[list[dict[str, str]], str | None]:
         problems.append({"code": "git", "message": "git is not installed", "fix": "Install git: brew install git (macOS) or sudo apt install git (Debian/Ubuntu)"})
     agent = signed_in_agent()
     if agent is None:
-        problems.append({"code": "agent", "message": "No agent is signed in on the daemon account", "fix": "Run engine agent signin claude, engine agent signin codex, or engine agent signin opencode as the daemon account"})
+        problems.append({"code": "agent", "message": "No agent is signed in on the daemon account", "fix": "Run oe agent signin claude, oe agent signin codex, or oe agent signin opencode as the daemon account"})
     return problems, agent
 
 

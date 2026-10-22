@@ -41,7 +41,7 @@ _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 # The one route a service credential may reach: the MCP gateway creating work
 # orders. Everything else still requires a browser session.
 _SERVICE_ROUTE = ("POST", "/api/runs")
-#: The graph API `engine graph|loop|node` speak, which a remote CLI reaches with
+#: The graph API `oe graph|loop|node` speak, which a remote CLI reaches with
 #: the same service credential. Operator-level, like the credential itself.
 _SERVICE_PREFIX = "/api/v1/"
 # How often a response still streaming asks whether its user may keep it, so an

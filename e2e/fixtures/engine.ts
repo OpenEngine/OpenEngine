@@ -154,7 +154,7 @@ export type Engine = {
   stop(): Promise<void>
 }
 
-/** `engine-web` beside the `engine` the guides drive, so both come from the same install. */
+/** `engine-web` beside the `oe` the guides drive, so both come from the same install. */
 function engineWebBin() {
   return process.env.ENGINE_WEB_BIN ?? path.join(path.dirname(engineBin), "engine-web")
 }

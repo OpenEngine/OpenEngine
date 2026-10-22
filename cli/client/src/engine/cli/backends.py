@@ -5,9 +5,9 @@ plus what a command should assume there: the project names resolve in, the
 repository a run checks out when none is given, and which environment variable
 holds the bearer token. The token itself is never written to the file.
 
-    engine backend add mini http://mac-mini.local:4364 --token-env MINI_ENGINE_TOKEN --use
-    engine backends list
-    engine graph run triage "..." --backend local
+    oe backend add mini http://mac-mini.local:4364 --token-env MINI_ENGINE_TOKEN --use
+    oe backends list
+    oe graph run triage "..." --backend local
 
 With nothing configured there is one backend, `local`, at the daemon's default
 address, so a fresh install works without any of this.
@@ -77,7 +77,7 @@ class Backends:
     def get(self, name: str) -> Backend:
         found = self.all().get(name)
         if found is None:
-            raise BackendError(f"no backend named {name!r}; see `engine backends list`")
+            raise BackendError(f"no backend named {name!r}; see `oe backends list`")
         return found
 
     def selected(self, override: str | None = None) -> Backend:

@@ -100,7 +100,7 @@ def test_no_available_runner_refuses_with_signin_hint():
     import pytest
 
     for policy in (ROUND_ROBIN, LEAST_UTILIZED):
-        with pytest.raises(ValueError, match="engine agent signin"):
+        with pytest.raises(ValueError, match="oe agent signin"):
             choose_runners(DECLARED, {"implementation_runner": policy},
                            usage=dict, turns={}, available=())
 

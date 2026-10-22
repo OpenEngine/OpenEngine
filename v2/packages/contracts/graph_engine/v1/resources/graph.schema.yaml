@@ -13,12 +13,12 @@ required: [apiVersion, kind, metadata, spec]
 additionalProperties: false
 properties:
   apiVersion:
-    $ref: meta.schema.yaml#/$defs/api_version
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/core_api_version
   kind:
     type: string
     const: Graph
   metadata:
-    $ref: meta.schema.yaml#/$defs/object_meta
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/object_meta
   spec:
     $ref: '#/$defs/graph_spec'
 $defs:
@@ -33,7 +33,7 @@ $defs:
       - {required: [review]}
     properties:
       description:
-        $ref: meta.schema.yaml#/$defs/description
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/description
       inputs:
         description: Values a run is given, read as `${inputs.NAME}`. Names are unique.
         type: array
@@ -66,9 +66,9 @@ $defs:
     additionalProperties: false
     properties:
       name:
-        $ref: meta.schema.yaml#/$defs/identifier
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       description:
-        $ref: meta.schema.yaml#/$defs/description
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/description
       required:
         description: Whether a run must supply the value. A required input has no `default`.
         type: boolean
@@ -98,7 +98,7 @@ $defs:
         default: origin/HEAD
       ref:
         description: The ref to check out, usually from an input, such as `${inputs.base}`. Empty means `baseRef`.
-        $ref: meta.schema.yaml#/$defs/template
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/template
   naming:
     title: Naming
     description: >-
@@ -113,7 +113,7 @@ $defs:
         $ref: '#/$defs/runner'
       model:
         description: A model tier, a model, or a template. Empty means the runner's `cheapest` tier.
-        $ref: meta.schema.yaml#/$defs/template
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/template
   stage:
     type: array
     items:
@@ -133,14 +133,14 @@ $defs:
     properties:
       name:
         description: The step's name, used in `flow`, in `outputs.NAME` and in `visits.NAME`.
-        $ref: meta.schema.yaml#/$defs/identifier
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       displayName:
         description: How the step is shown to people, such as `Open pull request`. Defaults to `name`.
         type: string
         minLength: 1
         maxLength: 120
       description:
-        $ref: meta.schema.yaml#/$defs/description
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/description
       agent:
         $ref: '#/$defs/agent_step'
       human:
@@ -162,18 +162,23 @@ $defs:
         description: >-
           A model tier (`cheapest`, `default`, `elevated`), a model, or a
           template. Empty means the runner's `default` tier.
-        $ref: meta.schema.yaml#/$defs/template
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/template
       prompt:
         description: What the agent is asked to do.
         allOf:
-          - $ref: meta.schema.yaml#/$defs/template
+          - $ref: ../../../common/v1/meta.schema.yaml#/$defs/template
           - minLength: 1
       tools:
-        description: Names of the `Tool` resources the agent may call.
+        description: >-
+          The tools the agent may call, each as `namespace.name`. Listing a
+          tool is the grant: once a step attempt has its workspace, and before
+          the attempt is sent to run there, the Graph Engine applies a
+          `ToolGrant` for each tool to that attempt in that workspace. It
+          deletes them when the attempt ends. The step can call nothing else.
         type: array
         uniqueItems: true
         items:
-          $ref: meta.schema.yaml#/$defs/name
+          $ref: ../../../common/v1/meta.schema.yaml#/$defs/tool_ref
       outputs:
         description: The structured result the agent must report. Names are unique.
         type: array
@@ -215,21 +220,21 @@ $defs:
       name:
         description: A runner, such as `claude`, or a template such as `${inputs.runner}`.
         allOf:
-          - $ref: meta.schema.yaml#/$defs/template
+          - $ref: ../../../common/v1/meta.schema.yaml#/$defs/template
           - minLength: 1
       sameAs:
         description: The runner that last ran this step, so a session's work continues in the same runner.
-        $ref: meta.schema.yaml#/$defs/identifier
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       differentFrom:
         description: Any runner other than the one that last ran this step, for a second model's view.
-        $ref: meta.schema.yaml#/$defs/identifier
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       choices:
         description: With `differentFrom`, the runners to pick from.
         type: array
         minItems: 1
         uniqueItems: true
         items:
-          $ref: meta.schema.yaml#/$defs/name
+          $ref: ../../../common/v1/meta.schema.yaml#/$defs/name
   output:
     title: Output
     description: One field of an agent step's structured result.
@@ -238,7 +243,7 @@ $defs:
     additionalProperties: false
     properties:
       name:
-        $ref: meta.schema.yaml#/$defs/identifier
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       type:
         description: >-
           The value's type. `findings` is a list of review findings, each with
@@ -247,7 +252,7 @@ $defs:
         enum: [string, number, integer, boolean, list, object, findings]
         default: string
       description:
-        $ref: meta.schema.yaml#/$defs/description
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/description
       required:
         description: Whether the agent must report the field.
         type: boolean
@@ -274,7 +279,7 @@ $defs:
     properties:
       name:
         description: The facet's name, read as `item.facet.id`.
-        $ref: meta.schema.yaml#/$defs/identifier
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       displayName:
         description: How the facet is shown, read as `item.facet.name`. Defaults to the built-in facet's or to `name`.
         type: string
@@ -286,7 +291,7 @@ $defs:
         minLength: 1
       model:
         description: A model tier, a model or a template for this run, overriding the step's `model`.
-        $ref: meta.schema.yaml#/$defs/template
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/template
   human_step:
     title: HumanStep
     description: Waits for a person to approve or reject, with an optional note. The step's output is `{decision, note}`.
@@ -297,14 +302,14 @@ $defs:
       prompt:
         description: What the person is asked to decide.
         allOf:
-          - $ref: meta.schema.yaml#/$defs/template
+          - $ref: ../../../common/v1/meta.schema.yaml#/$defs/template
           - minLength: 1
       choose:
         description: >-
           An expression naming findings, such as `outputs.reranker.findings`.
           The person then picks which to act on, and the step's output is the
           findings they picked.
-        $ref: meta.schema.yaml#/$defs/expression
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/expression
   ci_step:
     title: CIStep
     description: >-
@@ -333,14 +338,14 @@ $defs:
         minItems: 1
         uniqueItems: true
         items:
-          $ref: meta.schema.yaml#/$defs/identifier
+          $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       to:
         description: Steps to go to unconditionally, in parallel, or `end`.
         type: array
         minItems: 1
         uniqueItems: true
         items:
-          $ref: meta.schema.yaml#/$defs/identifier
+          $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
       route:
         description: >-
           A conditional edge. Branches are tried in order and the first whose
@@ -358,7 +363,7 @@ $defs:
     properties:
       when:
         description: The condition, such as `outputs.ci.passed == false && visits.implement < 4`. Omitted means always.
-        $ref: meta.schema.yaml#/$defs/expression
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/expression
       to:
         description: The step to go to, or `end`.
-        $ref: meta.schema.yaml#/$defs/identifier
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier

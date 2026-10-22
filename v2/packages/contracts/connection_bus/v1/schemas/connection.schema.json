@@ -8,6 +8,7 @@
       "type": "object",
       "required": [
         "connection_id",
+        "name",
         "version",
         "provider",
         "display_name",
@@ -23,6 +24,10 @@
       "additionalProperties": false,
       "properties": {
         "connection_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/connection_id" },
+        "name": {
+          "description": "The Connection resource's `metadata.name`, unique among connections that are not deleted.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+        },
         "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
         "provider": { "$ref": "#/$defs/provider" },
         "display_name": { "$ref": "#/$defs/display_name" },

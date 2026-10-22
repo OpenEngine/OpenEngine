@@ -75,9 +75,9 @@ kind of workflow may be named, and the name is resolved in this order:
 1. A Python workflow from `[workflows] directory`, by its id. A deployment that
    already names one keeps it, even when a graph of the same name is also
    registered.
-2. A graph registered with `engine graph add`, by name (or `name@N`): first in
+2. A graph registered with `oe graph add`, by name (or `name@N`): first in
    the project named after the repository the work is for, such as `acme/api`,
-   then in the `default` project, where `engine graph add` puts a graph when no
+   then in the `default` project, where `oe graph add` puts a graph when no
    project is named. A graph registered only in some other project is not used
    for this repository; name it by its graph or version id (`g-...`, `gv-...`)
    to run it anyway.
@@ -87,7 +87,7 @@ kind of workflow may be named, and the name is resolved in this order:
 workflow = "tdd-guide"
 ```
 
-A registered graph is started on the same path `engine graph run` takes in the
+A registered graph is started on the same path `oe graph run` takes in the
 daemon, and is given what the webhook knows as the inputs it declares:
 `instruction` is the task (for an assignment, the issue's title, body and URL)
 and, for an assignment, `issue` is the issue's number. A mention on a pull

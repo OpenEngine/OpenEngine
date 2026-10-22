@@ -522,13 +522,14 @@
         }
       ]
     },
-    "loop_added_event": {
+    "loop_applied_event": {
+      "description": "A loop was created or updated by `loops.apply`. Affects future triggers only.",
       "allOf": [
         { "$ref": "../../../common/v1/event.schema.json" },
         {
           "required": ["resource_version"],
           "properties": {
-            "event_type": { "const": "loop.added" },
+            "event_type": { "const": "loop.applied" },
             "producer": { "const": "ge" },
             "resources": {
               "type": "object",
@@ -540,44 +541,14 @@
             },
             "payload": {
               "type": "object",
-              "required": ["operation", "loop"],
+              "required": ["operation", "loop", "created"],
               "additionalProperties": false,
               "properties": {
                 "operation": {
                   "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
                 },
-                "loop": { "$ref": "loop.schema.json#/$defs/loop" }
-              }
-            }
-          }
-        }
-      ]
-    },
-    "loop_configured_event": {
-      "allOf": [
-        { "$ref": "../../../common/v1/event.schema.json" },
-        {
-          "required": ["resource_version"],
-          "properties": {
-            "event_type": { "const": "loop.configured" },
-            "producer": { "const": "ge" },
-            "resources": {
-              "type": "object",
-              "required": ["loop_id"],
-              "additionalProperties": false,
-              "properties": {
-                "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" }
-              }
-            },
-            "payload": {
-              "type": "object",
-              "required": ["operation", "loop"],
-              "additionalProperties": false,
-              "properties": {
-                "operation": {
-                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
-                },
-                "loop": { "$ref": "loop.schema.json#/$defs/loop" }
+                "loop": { "$ref": "loop.schema.json#/$defs/loop" },
+                "created": { "type": "boolean", "description": "True for a new loop, false for an update." }
               }
             }
           }

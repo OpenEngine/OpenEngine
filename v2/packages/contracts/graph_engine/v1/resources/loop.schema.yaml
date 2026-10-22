@@ -9,12 +9,12 @@ required: [apiVersion, kind, metadata, spec]
 additionalProperties: false
 properties:
   apiVersion:
-    $ref: meta.schema.yaml#/$defs/api_version
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/core_api_version
   kind:
     type: string
     const: Loop
   metadata:
-    $ref: meta.schema.yaml#/$defs/object_meta
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/object_meta
   spec:
     $ref: '#/$defs/loop_spec'
 $defs:
@@ -49,7 +49,7 @@ $defs:
     properties:
       name:
         description: The `Graph`'s `metadata.name`.
-        $ref: meta.schema.yaml#/$defs/name
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/name
       revision:
         description: Pins a revision. Omitted means the latest revision each time the schedule fires.
         type: integer
@@ -67,7 +67,7 @@ $defs:
       interval:
         description: A fixed interval between runs, such as `1h`.
         allOf:
-          - $ref: meta.schema.yaml#/$defs/duration
+          - $ref: ../../../common/v1/meta.schema.yaml#/$defs/duration
           - x-oe-seconds: {minimum: 60, maximum: 31536000}
       cron:
         description: A five-field cron expression, such as `0 9 * * 1-5`.
@@ -112,10 +112,10 @@ $defs:
         description: Non-secret context for each job, such as a milestone. At most 64 keys.
         $ref: ../schemas/job.schema.json#/$defs/context
       inputs:
-        description: Values for the graph's `inputs`, by name, checked against the graph when the loop is added.
+        description: Values for the graph's `inputs`, by name, checked against the graph when the loop is applied.
         type: object
         maxProperties: 64
         propertyNames:
-          $ref: meta.schema.yaml#/$defs/identifier
+          $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
         additionalProperties:
           type: string

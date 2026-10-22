@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 
-/** The `engine` CLI the guides drive: `ENGINE_BIN`, else the repository's uv environment. */
-export const engineBin = process.env.ENGINE_BIN ?? path.join(repoRoot, ".venv/bin/engine")
+/** The `oe` CLI the guides drive: `ENGINE_BIN`, else the repository's uv environment. */
+export const engineBin = process.env.ENGINE_BIN ?? path.join(repoRoot, ".venv/bin/oe")
 
 /**
- * A directory holding only `engine`, linked to `engineBin`, to put first on a
- * session's PATH: guides type plain `engine` and must get this checkout's,
+ * A directory holding only `oe`, linked to `engineBin`, to put first on a
+ * session's PATH: guides type plain `oe` and must get this checkout's,
  * not one installed elsewhere, without the rest of the virtualenv shadowing
  * the host's tools. One per engine binary, so repeated calls reuse it.
  */
@@ -22,6 +22,6 @@ export function engineBinDir(): string {
   // atomically, so parallel workers never see the link missing or collide.
   const temporary = path.join(dir, `.engine-${process.pid}-${Date.now()}`)
   symlinkSync(engineBin, temporary)
-  renameSync(temporary, path.join(dir, "engine"))
+  renameSync(temporary, path.join(dir, "oe"))
   return dir
 }

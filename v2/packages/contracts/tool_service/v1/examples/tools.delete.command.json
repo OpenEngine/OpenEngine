@@ -1,0 +1,14 @@
+{
+  "message": "DeleteToolCommand",
+  "subject": "oe.v1.tools.delete",
+  "payload": {
+    "command_id": "cmd_tools_delete_1",
+    "causal_path": [
+      "cmd_tools_delete_1"
+    ],
+    "payload": {
+      "namespace": "default",
+      "name": "github-issue-comment"
+    }
+  }
+}

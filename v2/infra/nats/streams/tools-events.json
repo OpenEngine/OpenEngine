@@ -1,0 +1,14 @@
+{
+  "name": "tools-events",
+  "description": "What the tool service has done with each tool invocation, for any service to follow.",
+  "subjects": [
+    "oe.v1.events.toolinvocations.>"
+  ],
+  "retention": "limits",
+  "storage": "file",
+  "discard": "new",
+  "max_age": 604800000000000,
+  "max_bytes": 1073741824,
+  "duplicate_window": 120000000000,
+  "num_replicas": 1
+}

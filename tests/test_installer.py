@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerTests(unittest.TestCase):
-    def test_engine_is_the_only_installed_launcher(self):
+    def test_oe_and_openengine_are_the_only_installed_launchers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prefix = root / "release with ' quotes"
@@ -50,18 +50,19 @@ class InstallerTests(unittest.TestCase):
                 "UV_VERSION": "0.0.0",
             }
             environment.pop("ENGINE_CONFIG", None)
-            # A second install must preserve the same single launcher.
+            # A second install must preserve the same two launchers.
             for _ in range(2):
                 installed = subprocess.run(
                     ["sh", str(ROOT / "scripts/install.sh"), "--prefix", str(prefix), "--no-start"],
                     env=environment, capture_output=True, text=True,
                 )
                 self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
-                result = subprocess.run(
-                    [str(bin_dir / "engine"), "argument with spaces", "--json"],
-                    env=environment, check=True, capture_output=True, text=True,
-                )
-                assert result.stdout.splitlines() == [
-                    str(root / "config/openengine/engine.toml"), "argument with spaces", "--json",
-                ]
-                self.assertEqual([path.name for path in bin_dir.iterdir()], ["engine"])
+                for launcher in ("oe", "openengine"):
+                    result = subprocess.run(
+                        [str(bin_dir / launcher), "argument with spaces", "--json"],
+                        env=environment, check=True, capture_output=True, text=True,
+                    )
+                    assert result.stdout.splitlines() == [
+                        str(root / "config/openengine/engine.toml"), "argument with spaces", "--json",
+                    ]
+                self.assertEqual(sorted(path.name for path in bin_dir.iterdir()), ["oe", "openengine"])

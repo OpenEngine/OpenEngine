@@ -55,6 +55,13 @@ info:
       separate from attempt state (`starting` … `cancelled`). A failed task
       never fails its workspace.
 
+    ## Apply
+    Workspaces are created by applying a Workspace resource (`kind:
+    Workspace`, `apiVersion: openengine.cc/v2alpha1`; see `resources/`),
+    keyed by its `metadata.name`. The Graph Engine chooses the name before
+    the workspace runs anything, so tool grants can refer to it. VCP
+    allocates the `ws_…` ID that every subject and event uses.
+
     ## Restoration
     `ensure`, `execute` and `steer` restore a suspended workspace themselves
     when `restore` is `allow` (the default) and the provider can restore it;
@@ -109,11 +116,11 @@ servers:
     protocol: nats
     description: The NATS server `oe up` starts.
 channels:
-  workspacesCreate:
-    address: oe.v1.vcp.control.workspaces.create
-    title: Create a workspace
+  workspacesApply:
+    address: oe.v1.vcp.control.workspaces.apply
+    title: Apply a workspace
     messages:
-      CreateWorkspaceCommand: { $ref: '#/components/messages/CreateWorkspaceCommand' }
+      ApplyWorkspaceCommand: { $ref: '#/components/messages/ApplyWorkspaceCommand' }
   workspaceEnsure:
     address: oe.v1.vcp.control.workspaces.{workspace_id}.ensure
     title: Ensure a workspace is available
@@ -234,7 +241,7 @@ channels:
     title: NATS reply inbox
     description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
     messages:
-      CreateWorkspaceResponse: { $ref: '#/components/messages/CreateWorkspaceResponse' }
+      ApplyWorkspaceResponse: { $ref: '#/components/messages/ApplyWorkspaceResponse' }
       EnsureWorkspaceResponse: { $ref: '#/components/messages/EnsureWorkspaceResponse' }
       ExecuteResponse: { $ref: '#/components/messages/ExecuteResponse' }
       SteerResponse: { $ref: '#/components/messages/SteerResponse' }
@@ -386,20 +393,21 @@ channels:
     messages:
       ArtifactCreated: { $ref: '#/components/messages/ArtifactCreated' }
 operations:
-  createWorkspace:
+  applyWorkspace:
     action: receive
-    title: Create a workspace
-    summary: Allocate a stable workspace identity and provision the requested provider, resources, tools
-      and context.
-    description: Accepted once recorded; `resource_id` is the new workspace ID. Rejected with `UNSUPPORTED_CAPABILITY`
-      when the provider lacks a required capability. Completes with `workspace.ready` (or `workspace.failed`).
-    channel: { $ref: '#/channels/workspacesCreate' }
+    title: Apply a workspace
+    summary: Create or update a workspace from a Workspace resource, by its `metadata.name`.
+    description: Accepted once recorded; `resource_id` is the workspace ID, allocated when the name is new.
+      Rejected with `UNSUPPORTED_CAPABILITY` when the provider lacks a required capability, and with `INVALID_ARGUMENT`
+      when an update changes `provider`, `resources` or `requiredCapabilities`. A new workspace completes with
+      `workspace.ready` (or `workspace.failed`).
+    channel: { $ref: '#/channels/workspacesApply' }
     tags:
     - name: control
     reply:
       channel: { $ref: '#/channels/replyInbox' }
       messages:
-      - $ref: '#/channels/replyInbox/messages/CreateWorkspaceResponse'
+      - $ref: '#/channels/replyInbox/messages/ApplyWorkspaceResponse'
   ensureWorkspace:
     action: receive
     title: Ensure a workspace is available
@@ -756,29 +764,29 @@ components:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ../../common/v1/event.schema.json#/$defs/headers }
   messages:
-    CreateWorkspaceCommand:
-      name: CreateWorkspaceCommand
-      title: Create a workspace command
+    ApplyWorkspaceCommand:
+      name: ApplyWorkspaceCommand
+      title: Apply a workspace command
       payload:
         schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: ./schemas/commands.schema.json#/$defs/create_workspace_command }
+        schema: { $ref: ./schemas/commands.schema.json#/$defs/apply_workspace_command }
       examples:
-      - name: create
-        summary: GE provisions a workspace for a step attempt of job_88. The path extends the job's ancestry.
-        payload: { $ref: ./examples/workspaces.create.command.json#/payload }
-    CreateWorkspaceResponse:
-      name: CreateWorkspaceResponse
-      title: Create a workspace response
+      - name: apply
+        summary: GE applies a named workspace for a step attempt of job_88. The path extends the job's ancestry.
+        payload: { $ref: ./examples/workspaces.apply.command.json#/payload }
+    ApplyWorkspaceResponse:
+      name: ApplyWorkspaceResponse
+      title: Apply a workspace response
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/workspace_command_response }
       examples:
       - name: accepted
         summary: 'Accepted: workspace ID allocated, provisioning continues.'
-        payload: { $ref: ./examples/workspaces.create.response.accepted.json#/payload }
+        payload: { $ref: ./examples/workspaces.apply.response.accepted.json#/payload }
       - name: rejected-unsupported
         summary: 'Rejected: the requested provider lacks a required capability.'
-        payload: { $ref: ./examples/workspaces.create.response.unsupported.json#/payload }
+        payload: { $ref: ./examples/workspaces.apply.response.unsupported.json#/payload }
     EnsureWorkspaceCommand:
       name: EnsureWorkspaceCommand
       title: Ensure a workspace is available command
@@ -1149,7 +1157,7 @@ components:
         schema: { $ref: ./schemas/events.schema.json#/$defs/workspace_ready_event }
       examples:
       - name: ready
-        summary: Completes the create operation.
+        summary: Completes the apply operation.
         payload: { $ref: ./examples/workspace.ready.event.json#/payload }
     WorkspaceRestored:
       name: WorkspaceRestored

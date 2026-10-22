@@ -1,0 +1,18 @@
+{
+  "message": "InvokeToolCommand",
+  "subject": "oe.v1.tools.invoke.default.github-issue-comment",
+  "payload": {
+    "command_id": "cmd_tools_invoke_1",
+    "causal_path": [
+      "cmd_tools_invoke_1"
+    ],
+    "payload": {
+      "invocationId": "ti-123",
+      "stepAttemptId": "stepa_88_review_1",
+      "arguments": {
+        "issueNumber": 42,
+        "body": "Review complete."
+      }
+    }
+  }
+}

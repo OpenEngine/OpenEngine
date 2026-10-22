@@ -1,0 +1,42 @@
+{
+  "message": "ToolInvocationFailed",
+  "subject": "oe.v1.events.toolinvocations.default.ti-123.failed",
+  "headers": {
+    "Nats-Msg-Id": "evt_ti123_failed"
+  },
+  "payload": {
+    "event_id": "evt_ti123_failed",
+    "event_type": "toolinvocation.failed",
+    "occurred_at": "2026-10-21T15:05:03Z",
+    "producer": "tools",
+    "causal_path": [
+      "cmd_tools_invoke_1",
+      "evt_ti123_failed"
+    ],
+    "resources": {
+      "invocation_id": "ti-123"
+    },
+    "payload": {
+      "namespace": "default",
+      "invocation": {
+        "name": "ti-123",
+        "uid": "invocation-uid-123"
+      },
+      "toolRef": {
+        "name": "github-issue-comment",
+        "uid": "tool-uid-123",
+        "generation": 1
+      },
+      "workspaceRef": {
+        "name": "review-job-88"
+      },
+      "stepAttemptId": "stepa_88_review_1",
+      "phase": "Failed",
+      "attemptCount": 3,
+      "error": {
+        "code": "ProviderError",
+        "message": "GitHub returned 422: issue is locked."
+      }
+    }
+  }
+}

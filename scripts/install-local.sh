@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build OpenEngine from this checkout and install it the way the one-line
-# installer does, replacing whichever version `engine` runs now:
+# installer does, replacing whichever version `oe` runs now:
 #
 #   scripts/install-local.sh
 #   scripts/install-local.sh --no-start

@@ -20,7 +20,6 @@ from engine.github_concierge.github_egress import tool_permission as github_tool
 from engine.slack_concierge import SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
 from langgraph_acp.agent import ACPAgentProvider
-from langgraph_acp.providers import CodexACPProvider
 
 import asyncio
 import functools
@@ -98,7 +97,7 @@ from engine.apps.web.utilization import (
     UtilizationService,
     utilization_json,
 )
-from engine.adapters.agent_runner.acp import installed_codex_env
+from engine.adapters.agent_runner.acp import agent_provider
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCommunications,
@@ -129,7 +128,7 @@ from engine.domain import (
     WorkflowId,
     WorkspaceId,
 )
-from engine.runtime.config import PullRequestsConfig
+from engine.runtime.config import EngineConfig, PullRequestsConfig
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, RUNNER_POLICIES, WorkflowInput, choose_runners, offer_runners, resolve_inputs,
 )
@@ -1002,7 +1001,7 @@ class _GraphSurface:
     service_app: Starlette | None = None
 
     def added_agents(self) -> tuple[str, ...]:
-        """The agents `engine agent add` offers: workflow runners, not chat runners."""
+        """The agents `oe agent add` offers: workflow runners, not chat runners."""
         return self.service.added_agents() if self.service is not None else ()
 
     def declared_inputs(self, graph: GraphWorkflow) -> tuple[WorkflowInput, ...]:
@@ -1031,7 +1030,7 @@ class _GraphSurface:
         return offered.get(reference)
 
     def registered_workflow(self, project: str, name: str) -> GraphWorkflow | None:
-        """The graph `engine graph add` registered as `name`, for work in `project`.
+        """The graph `oe graph add` registered as `name`, for work in `project`.
 
         See `work_order_graph` for where the name is looked up. `None` when
         nothing is registered there by that name.
@@ -1050,7 +1049,7 @@ def work_order_graph(
     """The registered graph version `work_orders.workflow` names for work in `project`.
 
     A name is looked up in `project` -- the repository the work is for -- and
-    then in the deployment's own default project, where `engine graph add`
+    then in the deployment's own default project, where `oe graph add`
     puts a graph when no project is named; never in some other project, whose
     graphs were not written for this repository. A graph or version id names
     one graph wherever it is, so it is how a deployment deliberately reaches
@@ -1073,8 +1072,8 @@ def _started_inputs(
 ) -> dict[str, str]:
     """A work order's inputs, with what it was started from filled in for a registered graph.
 
-    A graph registered with `engine graph add` takes its task as an
-    `instruction` input, as `engine graph run` gives it one, and may work an
+    A graph registered with `oe graph add` takes its task as an
+    `instruction` input, as `oe graph run` gives it one, and may work an
     `issue` by number; each is filled in only where the graph declares it. A
     workflow from `[workflows] directory` gets what it always got.
     """
@@ -1154,6 +1153,33 @@ def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None
     return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
+async def _ready_runner_choices(
+    service: GraphService | None, declarations: tuple[WorkflowInput, ...], inputs: Mapping[str, str],
+) -> tuple[str, ...] | None:
+    """Preflight real service providers, preserving support for embedded graphs."""
+    if service is not None:
+        return await service.ready_runner_choices(declarations, inputs)
+    if not any(value in RUNNER_POLICIES for value in inputs.values()):
+        return None
+    from engine.apps.web.onboarding import agent_available
+
+    agents = [
+        {"name": name, "kind": name, "model": "", "url": ""}
+        for name in dict.fromkeys(
+            choice for item in declarations for choice in item.choices
+            if choice not in RUNNER_POLICIES
+        )
+    ]
+    ready = await asyncio.gather(*(
+        asyncio.to_thread(agent_available, agent["kind"], model=agent["model"], url=agent["url"])
+        for agent in agents
+    ))
+    available = tuple(agent["name"] for agent, usable in zip(agents, ready) if usable)
+    # Validate before saving even a dependent run, without advancing rotation.
+    choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
+    return available
+
+
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -1194,8 +1220,13 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     utilization: UtilizationService | None = None,
     concierge_provider: ACPAgentProvider | None = None,
     graph_service: Callable[[Any, StartRun], GraphService] | None = None,
+    agent_config: EngineConfig = EngineConfig(),
 ) -> Starlette:
-    """Build the web application around already-composed capabilities."""
+    """Build the web application around already-composed capabilities.
+
+    `agent_config` configures the agents the loops and concierges run,
+    unless `loop_provider` or `concierge_provider` names one.
+    """
     if workflow_catalog is None:
         loaded_config = load_engine_config()
         catalog = (
@@ -1447,7 +1478,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             dependencies_changed.set()
 
     async def open_graph_service(runtime: GraphRuntime, opened: AsyncExitStack) -> None:
-        """Serve `/api/v1`, for `engine graph|loop|node`, on this engine.
+        """Serve `/api/v1`, for `oe graph|loop|node`, on this engine.
 
         Contained like the engine itself: a failure here takes registered
         graphs and loops offline and leaves everything else serving.
@@ -2000,24 +2031,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if (mode := await repository_mode(repository)) is not None:
             inputs = {**inputs, MODE_INPUT: str(mode)}
         declarations = surface.declared_inputs(graph)
-        available = None
-        if any(value in RUNNER_POLICIES for value in inputs.values()):
-            from engine.apps.web.onboarding import agent_available
-
-            agents = surface.service.agents_json() if surface.service is not None else [
-                {"name": name, "kind": name, "model": "", "url": ""}
-                for name in dict.fromkeys(
-                    choice for item in declarations for choice in item.choices
-                    if choice not in RUNNER_POLICIES
-                )
-            ]
-            ready = await asyncio.gather(*(
-                asyncio.to_thread(agent_available, agent["kind"], model=agent["model"], url=agent["url"])
-                for agent in agents
-            ))
-            available = tuple(agent["name"] for agent, usable in zip(agents, ready) if usable)
-            # Validate before saving even a dependent run, without advancing rotation.
-            choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
+        available = await _ready_runner_choices(surface.service, declarations, inputs)
 
         async def runner_usage() -> dict[str, float]:
             # Scraped here rather than trusting the cache, which otherwise only
@@ -2768,7 +2782,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             {
                 "connected": connected,
                 "clientIdConfigured": bool(_effective_client_id(_request)),
-                # Agents act as the host's `engine connect github` connection.
+                # Agents act as the host's `oe connect github` connection.
                 # With sign-in on, the one made here is the user's own and is
                 # not it.
                 "agentsUseConnection": not github_login.configured,
@@ -2913,7 +2927,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             same_repository=lambda one, other: same_repository(one, other),
             may_act=loop_may_act,
         ),
-        loop_provider or CodexACPProvider(permissions=loop_tool_permission, env=installed_codex_env()),
+        loop_provider or agent_provider(agent_config, "codex", permissions=loop_tool_permission),
     )
     loop_runs: set[asyncio.Task[None]] = set()
 
@@ -3520,7 +3534,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         return concierge_result(state)
 
     slack_concierge = SlackConcierge(
-        provider=concierge_provider or CodexACPProvider(permissions=tool_permission, env=installed_codex_env()),
+        provider=concierge_provider or agent_provider(agent_config, "codex", permissions=tool_permission),
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
         turn_finished=concierge_turn_finished,
@@ -3829,7 +3843,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         )
 
     github_concierge = GithubConcierge(
-        provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission, env=installed_codex_env()),
+        provider=concierge_provider or agent_provider(agent_config, "codex", permissions=github_tool_permission),
         continue_workorder=github_continue_workorder, reply=github_reply, react=github_react,
     )
 
@@ -4281,7 +4295,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         catalog, because a mention that resolved to a workflow this process
         could not start would be accepted and then go nowhere. A configured
         name is a Python workflow first, so a deployment that already named
-        one keeps it, and otherwise a graph registered with `engine graph add`
+        one keeps it, and otherwise a graph registered with `oe graph add`
         for work in `project`, the repository the work is for.
         """
         offered = offered_graphs()
@@ -4549,7 +4563,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),
         # Registered graphs, runs of them, loops and node steering, for the
-        # `engine graph|loop|node` commands.
+        # `oe graph|loop|node` commands.
         Mount("/api/v1", app=graph_service_surface),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),

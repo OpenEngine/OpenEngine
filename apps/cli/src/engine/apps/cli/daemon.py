@@ -1,6 +1,6 @@
 """Run the local OpenEngine web service in the background for the current user.
 
-`engine daemon setup` records where node, npx, git and the agent CLIs live,
+`oe daemon setup` records where node, npx, git and the agent CLIs live,
 then registers a per-user LaunchAgent on macOS or a systemd user unit on
 Linux. Where neither can be used, the service is a detached process tracked by
 a pidfile. Either way the service is `engine-web` alone, bound to loopback,
@@ -266,7 +266,7 @@ def _healing_notice(check: NodeCheck, *, verbose: bool = False) -> str:
     manager = check.shim_manager or "your version manager"
     restore = f"run {command}" if command else f"set a global Node 20.19+ default in {manager}"
     notice = (f"degraded: using {check.tools['node']}; project Node pins are ignored until you "
-              f"{restore}, then engine daemon setup")
+              f"{restore}, then oe daemon setup")
     if verbose:
         notice += ("; healing is a fallback; the global default applies only where no project selects Node. "
                    "Run setup from a shell with the manager on PATH to restore project switching.")
@@ -286,7 +286,7 @@ def detect_tools() -> dict[str, str]:
     if problem:
         detail = _healing_notice(check) if check.healed else NODE_HELP
         notice = detail if check.healed else f"{problem}; {detail}"
-        print(f"engine daemon: {notice}", file=sys.stderr)
+        print(f"oe daemon: {notice}", file=sys.stderr)
     return tools
 
 
@@ -354,7 +354,7 @@ def render_launch_agent(spec: ServiceSpec) -> bytes:
         "StandardOutPath": spec.log,
         "StandardErrorPath": spec.log,
         "RunAtLoad": True,
-        # Restart after a crash, but not after a clean `engine daemon stop`.
+        # Restart after a crash, but not after a clean `oe daemon stop`.
         "KeepAlive": {"SuccessfulExit": False},
         "ProcessType": "Interactive",
         "ExitTimeOut": int(STOP_TIMEOUT_SECONDS),
@@ -742,7 +742,7 @@ def _detail_for(state: DaemonState, body: dict[str, Any] | None, url: str, error
 
 
 def check_health(url: str, timeout: float = 2.0) -> tuple[DaemonState, dict[str, Any] | None, str]:
-    """Read the `/api/health` envelope; the one parser `engine` and `engine daemon` share.
+    """Read the `/api/health` envelope; the one parser `oe` and `oe daemon` share.
 
     The state is `ready`, `starting`, `incompatible` (an OpenEngine with another
     API version), `foreign` (another program holds the port) or `down`.
@@ -760,7 +760,7 @@ def check_health(url: str, timeout: float = 2.0) -> tuple[DaemonState, dict[str,
             raw = None
         body = _parse_health(raw)
         state = derive_state(error.code, body)
-        # Another program's error body is not ours to report: `engine daemon
+        # Another program's error body is not ours to report: `oe daemon
         # status` would print its `version` as OpenEngine's.
         reported = None if state is DaemonState.FOREIGN else body
         return state, reported, _detail_for(state, body, url, error, error.code)
@@ -803,10 +803,10 @@ def start_service() -> tuple[str, dict[str, Any] | None, str]:
                 backend.stop()
                 backend.install(spec)
                 write_record(Record(backend.name, spec))
-                print(f"engine daemon: {_healing_notice(check)}", file=sys.stderr)
+                print(f"oe daemon: {_healing_notice(check)}", file=sys.stderr)
             elif problem:
                 detail = _healing_notice(check) if check.healed else NODE_HELP
-                print(f"engine daemon: {detail}" if check.healed else f"engine daemon: warning: {problem}; {detail}", file=sys.stderr)
+                print(f"oe daemon: {detail}" if check.healed else f"oe daemon: warning: {problem}; {detail}", file=sys.stderr)
             rotate_log(Path(spec.log))
             backend.start(spec)
         state, body = wait_for(spec.url, {DaemonState.READY, DaemonState.FOREIGN}, START_TIMEOUT_SECONDS, backend)
@@ -821,7 +821,7 @@ def stop_service() -> str:
         backend.stop()
         state, _body = wait_for(spec.url, {DaemonState.DOWN, DaemonState.FOREIGN}, STOP_TIMEOUT_SECONDS)
         if state in {DaemonState.READY, DaemonState.STARTING}:
-            raise RuntimeError(f"OpenEngine is still answering at {spec.url}; it may not be managed by engine daemon")
+            raise RuntimeError(f"OpenEngine is still answering at {spec.url}; it may not be managed by oe daemon")
         return spec.url
 
 
@@ -831,7 +831,7 @@ def open_browser(url: str) -> None:
 
 
 def _fail(error: Exception) -> int:
-    print(f"engine daemon: {error}", file=sys.stderr)
+    print(f"oe daemon: {error}", file=sys.stderr)
     return EXIT_FAILED
 
 
@@ -862,14 +862,14 @@ def command_setup(arguments: argparse.Namespace) -> int:
             if state == DaemonState.FOREIGN:
                 raise RuntimeError(f"another program is using {spec.url}; free port {spec.port} or change [server] port in {spec.config}")
             if state != DaemonState.DOWN:
-                print(f"engine daemon: an OpenEngine not started by engine daemon is already at {spec.url}; "
-                      "stop it and run engine daemon start to use the service", file=sys.stderr)
+                print(f"oe daemon: an OpenEngine not started by oe daemon is already at {spec.url}; "
+                      "stop it and run oe daemon start to use the service", file=sys.stderr)
             else:
                 rotate_log(Path(spec.log))
                 try:
                     backend.start(spec)
                 except RuntimeError as error:
-                    print(f"engine daemon: {error}; running a detached process instead", file=sys.stderr)
+                    print(f"oe daemon: {error}; running a detached process instead", file=sys.stderr)
                     # Otherwise the OS would start a second, untracked copy at login.
                     backend.uninstall()
                     backend = ProcessBackend()
@@ -880,7 +880,7 @@ def command_setup(arguments: argparse.Namespace) -> int:
     print(f"Registered OpenEngine with {backend.name}; logs go to {spec.log}")
     for name in TOOLS:
         print(f"  {name}: {spec.tools.get(name, 'not found')}")
-    # Unlike `engine daemon open`, first boot leaves the browser alone.
+    # Unlike `oe daemon open`, first boot leaves the browser alone.
     result = command_start(arguments)
     if result != EXIT_OK:
         # Leave nothing restarting in the background after a failed setup.
@@ -949,7 +949,7 @@ def tail(file: BinaryIO, count: int, block: int = 64 * 1024) -> list[bytes]:
 def command_logs(arguments: argparse.Namespace) -> int:
     path = log_path()
     if not path.is_file():
-        print(f"engine daemon: no log at {path} yet", file=sys.stderr)
+        print(f"oe daemon: no log at {path} yet", file=sys.stderr)
         return EXIT_FAILED
     with path.open("rb") as file:
         for line in tail(file, arguments.lines):
@@ -1001,7 +1001,7 @@ def _claude_login_finding(spec: ServiceSpec) -> Finding:
     fix = f"run claude /login with CLAUDE_CONFIG_DIR={shlex.quote(directory)}"
     executable = spec.tools.get("claude") or shutil.which("claude", path=environment["PATH"])
     if executable is None:
-        return Finding("claude login", "warn", f"claude not on service PATH; rerun engine daemon setup; {fix}")
+        return Finding("claude login", "warn", f"claude not on service PATH; rerun oe daemon setup; {fix}")
     try:
         result = subprocess.run(
             [executable, "auth", "status"], env=environment,
@@ -1044,14 +1044,14 @@ def diagnose() -> list[Finding]:
         path = recorded.get(name) or found.get(name)
         if name == "node" and problem:
             if check.healed:
-                findings.append(Finding(name, "warn", f"{problem}; engine daemon start will use {healed['node']}; {_healing_notice(check, verbose=True)}"))
+                findings.append(Finding(name, "warn", f"{problem}; oe daemon start will use {healed['node']}; {_healing_notice(check, verbose=True)}"))
             else:
                 findings.append(Finding(name, "error", f"{problem}; {NODE_HELP}"))
         elif path:
-            note = "" if record is None or name in recorded else " (on PATH, but not recorded; rerun engine daemon setup)"
+            note = "" if record is None or name in recorded else " (on PATH, but not recorded; rerun oe daemon setup)"
             findings.append(Finding(name, "ok", path + note))
         elif name in REQUIRED_TOOLS:
-            findings.append(Finding(name, "warn", f"{name} not found; install it and rerun engine daemon setup"))
+            findings.append(Finding(name, "warn", f"{name} not found; install it and rerun oe daemon setup"))
         else:
             findings.append(Finding(name, "warn", f"{name} not found; optional, needed only to run that agent"))
     if port is not None and ("claude" in recorded or "claude" in found):
@@ -1091,7 +1091,7 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     daemon.add_argument("--no-browser", action="store_true", help="start without opening a browser")
     actions = daemon.add_subparsers(dest="daemon_command")
     opening = actions.add_parser("open", help="start the service if needed and open it in a browser")
-    # SUPPRESS keeps `engine daemon --no-browser open` from being reset here.
+    # SUPPRESS keeps `oe daemon --no-browser open` from being reset here.
     opening.add_argument("--no-browser", action="store_true", default=argparse.SUPPRESS, help="do not open a browser")
     setup = actions.add_parser("setup", help="register the service to run at login, then start it")
     # Setup never opens a browser; the flag stays accepted for older installers.

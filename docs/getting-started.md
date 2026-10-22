@@ -1,7 +1,7 @@
-# Getting started with engine go
+# Getting started with oe go
 
 OpenEngine turns an instruction into a change, runs it through implementation
-and review, and gives you commits or a pull request. Start with `engine go`
+and review, and gives you commits or a pull request. Start with `oe go`
 from a repository you already have checked out; you do not need to write a graph.
 A **graph** is the sequence of steps that does the work. A **run** is one
 execution of that graph, managed by a background **daemon**.
@@ -9,34 +9,54 @@ execution of that graph, managed by a background **daemon**.
 ## 1. Install and first run (disconnected)
 
 On macOS or Linux, install Git, Node.js 20.19+, and a supported coding CLI
-(Codex or Claude).
+(Codex, Claude, or OpenCode).
 ```sh
 npm i -g @openengine.cc/engine
 cd your-repo
-engine --version
+oe --version
 ```
 
-The installer puts `engine` in `~/.local/bin` and starts the local daemon at
-`http://127.0.0.1:4364`. Check the service and available agents:
+The first `engine` command installs a pinned OpenEngine release under
+`~/.local/share/openengine` and starts the local daemon at
+`http://127.0.0.1:4364`. (The alternative
+[curl installer](https://openengine.cc/docs/) also puts an `engine` launcher in
+`~/.local/bin`.) Check the service and available agents:
 
 ```sh
-engine daemon status
-engine daemon doctor
-engine agents
+oe daemon status
+oe daemon doctor
+oe agents
 ```
 
 Agents use the coding CLIs' logins on the daemon's machine. If needed, sign in
 the agent you installed (choose one):
 
 ```sh
-engine agent signin codex
-engine agent signin claude
+oe agent signin codex
+oe agent signin claude
+oe agent signin opencode
 ```
+
+You only need one working coding agent. On the selected backend, `go` checks
+its actual ACP adapter and configured model before starting the run. Automatic
+selection uses only agents that can complete a short, tool-free readiness
+request; the result is cached for up to a minute. This request uses the
+provider's normal quota. Implementation and review
+can use separate sessions of the same agent. Built-in reviewers inherit that
+agent's configured or recommended model rather than requiring another model
+or another vendor's login. OpenCode is also included when available.
+
+An explicit `--agent` selection is never silently replaced. If its login or
+model fails, the command reports that provider's error before starting work.
+For Codex, OpenEngine prefers the installed `codex` binary, honors an explicit
+`CODEX_PATH`, and uses the adapter's bundled version only when no installed
+binary is available. Update the Codex installation on the backend if a model
+is newer than the client it is running.
 
 Open a terminal inside your project's Git checkout and give it a small task:
 
 ```sh
-engine go "Add a regression test for empty input in the parser and fix the bug"
+oe go "Add a regression test for empty input in the parser and fix the bug"
 ```
 
 Without a forge connection, the run is **disconnected**: changes and findings
@@ -44,7 +64,7 @@ stay local. If GitHub is already connected, add `--local` to deliberately
 try this mode:
 
 ```sh
-engine go --local "Add a regression test for empty input in the parser and fix the bug"
+oe go --local "Add a regression test for empty input in the parser and fix the bug"
 ```
 
 When the run starts, a mode banner names the selected graph, mode, target, and
@@ -64,7 +84,7 @@ The same prompt also offers cancel or keep watching. Copy the run ID from the
 view and reattach later:
 
 ```sh
-engine run watch RUN_ID
+oe run watch RUN_ID
 ```
 
 Replace `RUN_ID` with that ID. A successful editing run leaves a **local branch
@@ -85,8 +105,8 @@ For everyday work, connect GitHub on the selected daemon and follow the
 authorization instructions it prints:
 
 ```sh
-engine connect github
-engine go "Add a regression test for empty input in the parser and fix the bug"
+oe connect github
+oe go "Add a regression test for empty input in the parser and fix the bug"
 ```
 
 The banner now says `connected` and `will open a pull request`. OpenEngine
@@ -98,9 +118,9 @@ To review an existing change, use a PR URL, a quoted PR number in the current
 repository, or a branch. These are alternatives:
 
 ```sh
-engine go review https://github.com/OWNER/REPO/pull/123
-engine go review '#123'
-engine go review feature/parser-empty-input
+oe go review https://github.com/OWNER/REPO/pull/123
+oe go review '#123'
+oe go review feature/parser-empty-input
 ```
 
 `review` examines the change and reports findings. With a connected PR target,
@@ -110,7 +130,7 @@ the run results. Quote `#123` so your shell does not treat it as a comment.
 To address unresolved review threads on a PR:
 
 ```sh
-engine go fix https://github.com/OWNER/REPO/pull/123
+oe go fix https://github.com/OWNER/REPO/pull/123
 ```
 
 `fix` makes and pushes fixes to that PR's branch and replies to the review
@@ -118,15 +138,15 @@ threads. Replace the example URL or number with your own PR.
 
 The word after `go` is a verb only when it is a configured verb and its target
 resolves to a change. Multiword prose such as
-`engine go review the auth module` remains an instruction when `the` is not a
+`oe go review the auth module` remains an instruction when `the` is not a
 resolvable target. An explicit PR target or a lone misspelled target produces
 an error instead of silently becoming an instruction.
 
 Inspect your project's bindings, or bind a verb to your own registered graph:
 
 ```sh
-engine verbs
-engine verb set review my-review
+oe verbs
+oe verb set review my-review
 ```
 
 Here `my-review` must already be registered. The CLI checks its input contract:
@@ -140,19 +160,19 @@ give you the URL and bearer token. Set the token in an environment variable in
 your shell, such as `ENGINE_TEAM_TOKEN`, then substitute your URL below:
 
 ```sh
-engine backend add team https://engine.example.com --token-env ENGINE_TEAM_TOKEN
-engine backends list --check
-engine backend use team
+oe backend add team https://engine.example.com --token-env ENGINE_TEAM_TOKEN
+oe backends list --check
+oe backend use team
 ```
 
-The general form is `engine backend add NAME URL --token-env VAR`. The backend
-configuration stores the variable's name, not its token. `engine backend use`
+The general form is `oe backend add NAME URL --token-env VAR`. The backend
+configuration stores the variable's name, not its token. `oe backend use`
 selects the default; `--backend NAME` selects one for an individual command:
 
 ```sh
-engine go --backend team "Add a regression test for empty input in the parser and fix the bug"
-engine run watch RUN_ID --backend team
-engine run get RUN_ID --pretty --backend team
+oe go --backend team "Add a regression test for empty input in the parser and fix the bug"
+oe run watch RUN_ID --backend team
+oe run get RUN_ID --pretty --backend team
 ```
 
 The shared daemon needs its own agent logins, forge connection, and access to
@@ -187,8 +207,8 @@ and [rule precedence](https://github.com/OpenEngine/OpenEngine/blob/main/package
 Restart the daemon after saving:
 
 ```sh
-engine daemon stop
-engine daemon start
+oe daemon stop
+oe daemon start
 ```
 
 For a shared backend, its administrator changes the configuration and restarts
@@ -197,24 +217,24 @@ the service on the daemon's machine.
 ## 5. Next steps
 
 Write your own graph using the current
-[`engine graph spec` reference](https://openengine.cc/docs/cli-specs/#engine-graph-spec),
+[`oe graph spec` reference](https://openengine.cc/docs/cli-specs/#engine-graph-spec),
 then register your file:
 
 ```sh
-engine graph spec
-engine graph add my-review.yaml
+oe graph spec
+oe graph add my-review.yaml
 ```
 
 For recurring work, register a maintenance graph and create a loop with limits:
 
 ```sh
-engine loop spec
-engine loop add my-maintenance --every 6h --instruction "Find and fix one flaky test" --max-spend 10 --max-prs 3
+oe loop spec
+oe loop add my-maintenance --every 6h --instruction "Find and fix one flaky test" --max-spend 10 --max-prs 3
 ```
 
 `my-maintenance` is your registered graph's name. The first run is due
 immediately. `--max-prs` pauses after that many new PRs; `--max-spend` caps
 reported USD usage and stops the active run at the cap. Unpriced subscription
 usage cannot be enforced as a dollar budget. Limits accumulate across runs;
-see the [`engine loop spec` reference](https://openengine.cc/docs/cli-specs/#engine-loop-spec)
+see the [`oe loop spec` reference](https://openengine.cc/docs/cli-specs/#engine-loop-spec)
 for scheduling and lifecycle details.

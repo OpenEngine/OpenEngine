@@ -9,7 +9,7 @@ picks the backend for all of them:
 | `OE_POSTGRES_URL` | | Postgres is a stub: selecting it fails on first use |
 
 Each service's data is isolated. On SQLite it gets its own file (`cxn.sqlite3`,
-`ge.sqlite3`, `vcp.sqlite3`); on Postgres the services share one database and
+`ge.sqlite3`, `tools.sqlite3`, `vcp.sqlite3`); on Postgres the services share one database and
 each gets a schema named after it, holding its tables and its Alembic version
 table. Table definitions name no schema, so the same code runs on both.
 

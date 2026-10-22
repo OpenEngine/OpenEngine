@@ -1,4 +1,4 @@
-"""`engine daemon`: the service definitions it writes and its start/stop/status lifecycle."""
+"""`oe daemon`: the service definitions it writes and its start/stop/status lifecycle."""
 
 from __future__ import annotations
 
@@ -590,7 +590,7 @@ def test_doctor_probes_node(home, monkeypatch, capsys, recorded, healable):
     nodes = [check for check in json.loads(capsys.readouterr().out)['checks'] if check['name'] == 'node']
     assert len(nodes) == 1
     assert nodes[0]['level'] == ('warn' if healable else 'error')
-    assert ('engine daemon start will use /real/bin/node' if healable else daemon.NODE_HELP) in nodes[0]['detail']
+    assert ('oe daemon start will use /real/bin/node' if healable else daemon.NODE_HELP) in nodes[0]['detail']
     if healable:
         assert 'degraded' in nodes[0]['detail']
         assert 'project Node pins are ignored until you' in nodes[0]['detail']
@@ -639,7 +639,7 @@ def test_healed_doctor_retains_degraded_state(home, monkeypatch, manager, comman
     assert "degraded" in node.detail
     assert "project Node pins are ignored until you" in node.detail
     assert command in node.detail
-    assert "engine daemon setup" in node.detail
+    assert "oe daemon setup" in node.detail
 
 
 def test_working_shim_keeps_project_switching(home, monkeypatch):
@@ -748,7 +748,7 @@ def test_healing_uses_newest_working_install_and_provenance(home, monkeypatch, m
         assert f"set a global Node 20.19+ default in {manager}" in notice
         assert "mise use" not in notice and "asdf set" not in notice and "nvm alias" not in notice
     assert "\n" not in notice
-    assert notice.endswith(", then engine daemon setup")
+    assert notice.endswith(", then oe daemon setup")
     assert "global default applies only" not in notice
     assert "global default applies only" in daemon._healing_notice(check, verbose=True)
 

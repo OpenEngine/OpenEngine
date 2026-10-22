@@ -1,0 +1,78 @@
+{
+  "message": "GetToolResponse",
+  "in_reply_to": "oe.v1.tools.get",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "tool": {
+        "apiVersion": "tools.openengine.cc/v1alpha1",
+        "kind": "Tool",
+        "metadata": {
+          "name": "github-issue-comment",
+          "namespace": "default",
+          "labels": {
+            "provider": "github"
+          },
+          "uid": "tool-uid-123",
+          "generation": 1,
+          "creationTimestamp": "2026-10-21T15:00:00Z"
+        },
+        "spec": {
+          "description": "Add a comment to an issue in the OpenEngine repository.",
+          "connectionRef": {
+            "name": "github-openengine"
+          },
+          "executor": {
+            "adapter": "nango",
+            "operation": "github-issue-comment"
+          },
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "issueNumber",
+              "body"
+            ],
+            "properties": {
+              "issueNumber": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "outputSchema": {
+            "type": "object",
+            "required": [
+              "commentId",
+              "url"
+            ],
+            "properties": {
+              "commentId": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          "configuration": {
+            "repository": "spiralsoft/openengine"
+          },
+          "execution": {
+            "timeoutSeconds": 60,
+            "recovery": "reconcile",
+            "maxAttempts": 3
+          }
+        },
+        "status": {
+          "phase": "Ready",
+          "observedGeneration": 1
+        }
+      }
+    }
+  }
+}

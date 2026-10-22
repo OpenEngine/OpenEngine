@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tool Service commands",
+  "description": "Requests and responses of the tool service's control subjects: `oe.v1.tools.apply`, `oe.v1.tools.delete`, `oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.toolgrants.apply`, `oe.v1.toolgrants.delete` and `oe.v1.toolinvocations.cancel`. Payload fields are camelCase, like the resources they carry.",
+  "$defs": {
+    "resource_key": {
+      "description": "A namespaced resource, by namespace and name.",
+      "type": "object",
+      "required": ["namespace", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "name": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" }
+      }
+    },
+    "apply_tool_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/apply_tool_payload" } } }
+      ]
+    },
+    "apply_tool_payload": {
+      "description": "Create or update the Tool named by `tool.metadata.namespace` and `tool.metadata.name`. The adapter validates `executor`, `configuration` and `execution` before the command is accepted; a configuration it cannot honour, including an unsupported `recovery`, is rejected with INVALID_ARGUMENT. A changed `spec` increments `metadata.generation`; invocations already accepted keep the definition they resolved.",
+      "type": "object",
+      "required": ["tool"],
+      "additionalProperties": false,
+      "properties": { "tool": { "$ref": "../resources/tool.schema.yaml" } }
+    },
+    "delete_tool_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/delete_tool_payload" } } }
+      ]
+    },
+    "delete_tool_payload": {
+      "description": "Delete a Tool. New invocations of it are refused; accepted ones keep the definition they resolved but are dispatched only while their grants still allow them. A Tool created later under the same name has a new `uid`, and no existing grant covers it.",
+      "$ref": "#/$defs/resource_key"
+    },
+    "invoke_tool_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/invoke_tool_payload" } } }
+      ]
+    },
+    "invoke_tool_payload": {
+      "description": "Call the Tool the subject names. The workspace comes from the caller's verified credentials, never from the payload. Rejected with NOT_FOUND for an unknown tool, INVALID_STATE when it is not Ready, PERMISSION_DENIED without an active grant for the workspace or step, and INVALID_ARGUMENT when `arguments` fail the tool's `inputSchema` or the grant's constraints. Accepted means a ToolInvocation named `invocationId` was recorded.",
+      "type": "object",
+      "required": ["invocationId", "stepAttemptId", "arguments"],
+      "additionalProperties": false,
+      "properties": {
+        "invocationId": {
+          "description": "The caller's name for the invocation, unique in the namespace; it becomes the ToolInvocation's `metadata.name`.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name"
+        },
+        "stepAttemptId": { "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id" },
+        "arguments": { "type": "object", "description": "Checked against the tool's `inputSchema`." }
+      }
+    },
+    "apply_tool_grant_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/apply_tool_grant_payload" } } }
+      ]
+    },
+    "apply_tool_grant_payload": {
+      "description": "Create or update a ToolGrant. Only trusted control-plane callers may, usually the Graph Engine applying a Graph step's `agent.tools`; anyone else is rejected with PERMISSION_DENIED. Rejected with NOT_FOUND when the tool does not exist, INVALID_ARGUMENT when the adapter rejects `constraints`, and PERMISSION_DENIED when a step's grant would exceed what the control plane allows its workspace. The grant is bound to the tool's current `uid`.",
+      "type": "object",
+      "required": ["grant"],
+      "additionalProperties": false,
+      "properties": { "grant": { "$ref": "../resources/toolgrant.schema.yaml" } }
+    },
+    "delete_tool_grant_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/delete_tool_grant_payload" } } }
+      ]
+    },
+    "delete_tool_grant_payload": {
+      "description": "Revoke a ToolGrant. Only trusted control-plane callers may. Invocations it allowed that have not been dispatched are refused when they are rechecked.",
+      "$ref": "#/$defs/resource_key"
+    },
+    "cancel_tool_invocation_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/cancel_tool_invocation_payload" } } }
+      ]
+    },
+    "cancel_tool_invocation_payload": {
+      "description": "Cancel an invocation, by namespace and `invocationId`. One not yet dispatched ends `Cancelled`; a running attempt is asked to stop, and if its effect cannot be determined the invocation ends `OutcomeUnknown` instead. A finished invocation is rejected with INVALID_STATE. Completes with `toolinvocation.cancelled`.",
+      "$ref": "#/$defs/resource_key"
+    },
+    "tool_command_response": {
+      "description": "Reply to every tool service command. `resource_id` is the `uid` of the resource the command created or affects: the Tool, the ToolGrant or the ToolInvocation.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/meta.schema.yaml#/$defs/uid" }
+          }
+        }
+      ]
+    }
+  }
+}

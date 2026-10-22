@@ -16,9 +16,9 @@
   "properties": {
     "event_id": { "$ref": "types.schema.json#/$defs/event_id" },
     "event_type": {
-      "description": "Dotted `{family}.{fact}` name; the schema discriminator. The subject ends with the same tokens.",
+      "description": "Dotted `{family}.{fact}` name; the schema discriminator. The tokens after the subject's last resource ID end it: the whole name (`…{job_id}.job.created`) or its fact (`…{invocation_id}.blocked-auth`).",
       "type": "string",
-      "pattern": "^[a-z][a-z_]*(\\.[a-z][a-z_]*)+$"
+      "pattern": "^[a-z][a-z_-]*(\\.[a-z][a-z_-]*)+$"
     },
     "occurred_at": { "$ref": "types.schema.json#/$defs/utc_timestamp" },
     "producer": { "$ref": "types.schema.json#/$defs/producer" },

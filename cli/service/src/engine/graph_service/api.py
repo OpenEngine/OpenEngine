@@ -1,4 +1,4 @@
-"""The `/api/v1` HTTP surface (mounted there by the daemon) `engine graph`, `loop` and `node` commands speak.
+"""The `/api/v1` HTTP surface (mounted there by the daemon) `oe graph`, `loop` and `node` commands speak.
 
     GET  /graphs                      registered graphs in a project
     POST /graphs                      register {format: yaml|python, source} (a new version if it changed)

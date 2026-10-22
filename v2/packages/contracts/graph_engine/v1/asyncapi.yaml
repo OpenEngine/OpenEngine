@@ -68,13 +68,24 @@ info:
     - GE evaluates each step attempt's task result against the graph's outputs,
       gates and transitions, and keeps the chain execution → step instance →
       step attempt → workspace.
+    - **Workspaces and tool grants.** GE applies a step attempt's Workspace
+      (`oe.v1.vcp.control.workspaces.apply`) under a name it chooses. A
+      step's `agent.tools` are its only tools: once the attempt has its
+      workspace, and before it is sent to run there, GE applies a `ToolGrant`
+      (`oe.v1.toolgrants.apply`) for each listed tool to that attempt
+      (`stepAttemptId`) in that workspace (`workspaceRef`), and deletes them
+      when the attempt ends. Starting such a step needs the tool service.
     - **Workflow approvals** belong to GE. A decision names the execution and
       step instance it was made for; a decision for an approval that is no
       longer pending there is rejected with `STALE_APPROVAL`.
     - **Loops** create jobs on a schedule. Pausing or removing a loop affects
       future triggers only and never cancels existing jobs.
-    - Graphs are written in the existing OpenEngine graph language
-      (`cli/GRAPH_LANGUAGE.md`, YAML or Python). Revisions are immutable.
+    - **Apply.** Graphs and loops are created and changed by applying their
+      resources (`kind: Graph`, `kind: Loop`, `apiVersion:
+      openengine.cc/v2alpha1`; see `resources/`), Kubernetes-style: a new name
+      creates the resource, a known one updates it, and an unchanged one is a
+      no-op. A Python LangGraph module can be applied as a graph instead.
+      Graph revisions are immutable.
 
     ## Causal paths
     Parallel branches publish sibling paths; at a join the path follows one
@@ -97,11 +108,11 @@ servers:
     description: The NATS server `oe up` starts.
 
 channels:
-  graphsAdd:
-    address: oe.v1.ge.control.graphs.add
-    title: Add a graph revision
+  graphsApply:
+    address: oe.v1.ge.control.graphs.apply
+    title: Apply a graph
     messages:
-      AddGraphCommand: { $ref: '#/components/messages/AddGraphCommand' }
+      ApplyGraphCommand: { $ref: '#/components/messages/ApplyGraphCommand' }
   graphRun:
     address: oe.v1.ge.control.graphs.{graph_id}.run
     title: Run a graph
@@ -149,18 +160,11 @@ channels:
       approval_id: { $ref: '#/components/parameters/approval_id' }
     messages:
       DecideApprovalCommand: { $ref: '#/components/messages/DecideApprovalCommand' }
-  loopsAdd:
-    address: oe.v1.ge.control.loops.add
-    title: Add a loop
+  loopsApply:
+    address: oe.v1.ge.control.loops.apply
+    title: Apply a loop
     messages:
-      AddLoopCommand: { $ref: '#/components/messages/AddLoopCommand' }
-  loopConfigure:
-    address: oe.v1.ge.control.loops.{loop_id}.configure
-    title: Configure a loop
-    parameters:
-      loop_id: { $ref: '#/components/parameters/loop_id' }
-    messages:
-      ConfigureLoopCommand: { $ref: '#/components/messages/ConfigureLoopCommand' }
+      ApplyLoopCommand: { $ref: '#/components/messages/ApplyLoopCommand' }
   loopPause:
     address: oe.v1.ge.control.loops.{loop_id}.pause
     title: Pause a loop
@@ -265,7 +269,7 @@ channels:
     title: NATS reply inbox
     description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
     messages:
-      AddGraphResponse: { $ref: '#/components/messages/AddGraphResponse' }
+      ApplyGraphResponse: { $ref: '#/components/messages/ApplyGraphResponse' }
       RunGraphResponse: { $ref: '#/components/messages/RunGraphResponse' }
       SubmitJobResponse: { $ref: '#/components/messages/SubmitJobResponse' }
       SteerJobResponse: { $ref: '#/components/messages/SteerJobResponse' }
@@ -273,8 +277,7 @@ channels:
       ResumeJobResponse: { $ref: '#/components/messages/ResumeJobResponse' }
       CancelJobResponse: { $ref: '#/components/messages/CancelJobResponse' }
       DecideApprovalResponse: { $ref: '#/components/messages/DecideApprovalResponse' }
-      AddLoopResponse: { $ref: '#/components/messages/AddLoopResponse' }
-      ConfigureLoopResponse: { $ref: '#/components/messages/ConfigureLoopResponse' }
+      ApplyLoopResponse: { $ref: '#/components/messages/ApplyLoopResponse' }
       PauseLoopResponse: { $ref: '#/components/messages/PauseLoopResponse' }
       ResumeLoopResponse: { $ref: '#/components/messages/ResumeLoopResponse' }
       RemoveLoopResponse: { $ref: '#/components/messages/RemoveLoopResponse' }
@@ -389,20 +392,13 @@ channels:
       job_id: { $ref: '#/components/parameters/job_id' }
     messages:
       ApprovalResolved: { $ref: '#/components/messages/ApprovalResolved' }
-  loopAddedEvents:
-    address: oe.v1.ge.events.loops.{loop_id}.loop.added
-    title: loop.added
+  loopAppliedEvents:
+    address: oe.v1.ge.events.loops.{loop_id}.loop.applied
+    title: loop.applied
     parameters:
       loop_id: { $ref: '#/components/parameters/loop_id' }
     messages:
-      LoopAdded: { $ref: '#/components/messages/LoopAdded' }
-  loopConfiguredEvents:
-    address: oe.v1.ge.events.loops.{loop_id}.loop.configured
-    title: loop.configured
-    parameters:
-      loop_id: { $ref: '#/components/parameters/loop_id' }
-    messages:
-      LoopConfigured: { $ref: '#/components/messages/LoopConfigured' }
+      LoopApplied: { $ref: '#/components/messages/LoopApplied' }
   loopPausedEvents:
     address: oe.v1.ge.events.loops.{loop_id}.loop.paused
     title: loop.paused
@@ -426,16 +422,16 @@ channels:
       LoopRemoved: { $ref: '#/components/messages/LoopRemoved' }
 
 operations:
-  addGraph:
+  applyGraph:
     action: receive
-    title: Add a graph revision
-    summary: "Register an immutable graph revision in the existing OpenEngine graph language."
-    description: "Accepted once recorded; `resource_id` is the graph ID. The operation result names the revision (or the existing one, for identical source)."
-    channel: { $ref: '#/channels/graphsAdd' }
+    title: Apply a graph
+    summary: "Create or update a graph from a Graph resource, adding an immutable revision when it changed."
+    description: "Accepted once validated and recorded; `resource_id` is the graph ID. The operation result names the revision (or the existing one, for an unchanged graph)."
+    channel: { $ref: '#/channels/graphsApply' }
     tags: [{ name: control }]
     reply:
       channel: { $ref: '#/channels/replyInbox' }
-      messages: [{ $ref: '#/channels/replyInbox/messages/AddGraphResponse' }]
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyGraphResponse' }]
   runGraph:
     action: receive
     title: Run a graph
@@ -506,31 +502,21 @@ operations:
     reply:
       channel: { $ref: '#/channels/replyInbox' }
       messages: [{ $ref: '#/channels/replyInbox/messages/DecideApprovalResponse' }]
-  addLoop:
+  applyLoop:
     action: receive
-    title: Add a loop
-    summary: "Create a loop: graph reference, trigger, concurrency limit and job template."
-    description: "Completes with `loop.added`."
-    channel: { $ref: '#/channels/loopsAdd' }
+    title: Apply a loop
+    summary: "Create or update a loop from a Loop resource: graph reference, schedule, concurrency and job template."
+    description: "Changes apply to future triggers only. Completes with `loop.applied`."
+    channel: { $ref: '#/channels/loopsApply' }
     tags: [{ name: control }]
     reply:
       channel: { $ref: '#/channels/replyInbox' }
-      messages: [{ $ref: '#/channels/replyInbox/messages/AddLoopResponse' }]
-  configureLoop:
-    action: receive
-    title: Configure a loop
-    summary: "Replace loop fields for future scheduling."
-    description: "Completes with `loop.configured`."
-    channel: { $ref: '#/channels/loopConfigure' }
-    tags: [{ name: control }]
-    reply:
-      channel: { $ref: '#/channels/replyInbox' }
-      messages: [{ $ref: '#/channels/replyInbox/messages/ConfigureLoopResponse' }]
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyLoopResponse' }]
   pauseLoop:
     action: receive
     title: Pause a loop
     summary: "Stop future triggers."
-    description: "Existing jobs are not cancelled. Completes with `loop.paused`."
+    description: "Existing jobs are not cancelled. Sets the loop's `spec.suspend`, so a later apply decides again. Completes with `loop.paused`."
     channel: { $ref: '#/channels/loopPause' }
     tags: [{ name: control }]
     reply:
@@ -540,7 +526,7 @@ operations:
     action: receive
     title: Resume a loop
     summary: "Restart future triggers."
-    description: "Missed triggers are not replayed. Completes with `loop.resumed`."
+    description: "Missed triggers are not replayed. Clears the loop's `spec.suspend`. Completes with `loop.resumed`."
     channel: { $ref: '#/channels/loopResume' }
     tags: [{ name: control }]
     reply:
@@ -735,15 +721,10 @@ operations:
     title: approval.resolved
     channel: { $ref: '#/channels/approvalResolvedEvents' }
     tags: [{ name: event }]
-  publishLoopAdded:
+  publishLoopApplied:
     action: send
-    title: loop.added
-    channel: { $ref: '#/channels/loopAddedEvents' }
-    tags: [{ name: event }]
-  publishLoopConfigured:
-    action: send
-    title: loop.configured
-    channel: { $ref: '#/channels/loopConfiguredEvents' }
+    title: loop.applied
+    channel: { $ref: '#/channels/loopAppliedEvents' }
     tags: [{ name: event }]
   publishLoopPaused:
     action: send
@@ -789,25 +770,25 @@ components:
         schema: { $ref: '../../common/v1/event.schema.json#/$defs/headers' }
 
   messages:
-    AddGraphCommand:
-      name: AddGraphCommand
-      title: Add a graph revision command
+    ApplyGraphCommand:
+      name: ApplyGraphCommand
+      title: Apply a graph command
       payload:
         schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/commands.schema.json#/$defs/add_graph_command' }
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_graph_command' }
       examples:
-        - name: graphs.add.command
-          summary: "Register a YAML graph in the existing graph language. Identical source under the same name returns the existing revision."
-          payload: { $ref: './examples/graphs.add.command.json#/payload' }
-    AddGraphResponse:
-      name: AddGraphResponse
-      title: Add a graph revision response
+        - name: graphs.apply.command
+          summary: "Apply a Graph resource. Applying it again unchanged returns the existing revision."
+          payload: { $ref: './examples/graphs.apply.command.json#/payload' }
+    ApplyGraphResponse:
+      name: ApplyGraphResponse
+      title: Apply a graph response
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/graph_command_response' }
       examples:
-        - name: graphs.add.response
-          payload: { $ref: './examples/graphs.add.response.json#/payload' }
+        - name: graphs.apply.response
+          payload: { $ref: './examples/graphs.apply.response.json#/payload' }
     RunGraphCommand:
       name: RunGraphCommand
       title: Run a graph command
@@ -948,43 +929,27 @@ components:
           payload: { $ref: './examples/approvals.decide.response.stale.json#/payload' }
         - name: approvals.decide.response
           payload: { $ref: './examples/approvals.decide.response.json#/payload' }
-    AddLoopCommand:
-      name: AddLoopCommand
-      title: Add a loop command
+    ApplyLoopCommand:
+      name: ApplyLoopCommand
+      title: Apply a loop command
       payload:
         schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/commands.schema.json#/$defs/add_loop_command' }
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_loop_command' }
       examples:
-        - name: loops.add.command
-          payload: { $ref: './examples/loops.add.command.json#/payload' }
-    AddLoopResponse:
-      name: AddLoopResponse
-      title: Add a loop response
-      payload:
-        schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/commands.schema.json#/$defs/loop_command_response' }
-      examples:
-        - name: loops.add.response
-          payload: { $ref: './examples/loops.add.response.json#/payload' }
-    ConfigureLoopCommand:
-      name: ConfigureLoopCommand
-      title: Configure a loop command
-      payload:
-        schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/commands.schema.json#/$defs/configure_loop_command' }
-      examples:
-        - name: loops.configure.command
-          payload: { $ref: './examples/loops.configure.command.json#/payload' }
-    ConfigureLoopResponse:
-      name: ConfigureLoopResponse
-      title: Configure a loop response
+        - name: loops.apply.command
+          payload: { $ref: './examples/loops.apply.command.json#/payload' }
+    ApplyLoopResponse:
+      name: ApplyLoopResponse
+      title: Apply a loop response
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/loop_command_response' }
       examples:
-        - name: loops.configure.response.version-conflict
+        - name: loops.apply.response
+          payload: { $ref: './examples/loops.apply.response.json#/payload' }
+        - name: loops.apply.response.version-conflict
           summary: "Rejected: the loop was changed after it was read."
-          payload: { $ref: './examples/loops.configure.response.version-conflict.json#/payload' }
+          payload: { $ref: './examples/loops.apply.response.version-conflict.json#/payload' }
     PauseLoopCommand:
       name: PauseLoopCommand
       title: Pause a loop command
@@ -1413,26 +1378,16 @@ components:
       examples:
         - name: approval.resolved.event
           payload: { $ref: './examples/approval.resolved.event.json#/payload' }
-    LoopAdded:
-      name: LoopAdded
-      title: loop.added
+    LoopApplied:
+      name: LoopApplied
+      title: loop.applied
       traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/events.schema.json#/$defs/loop_added_event' }
+        schema: { $ref: './schemas/events.schema.json#/$defs/loop_applied_event' }
       examples:
-        - name: loop.added.event
-          payload: { $ref: './examples/loop.added.event.json#/payload' }
-    LoopConfigured:
-      name: LoopConfigured
-      title: loop.configured
-      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
-      payload:
-        schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/events.schema.json#/$defs/loop_configured_event' }
-      examples:
-        - name: loop.configured.event
-          payload: { $ref: './examples/loop.configured.event.json#/payload' }
+        - name: loop.applied.event
+          payload: { $ref: './examples/loop.applied.event.json#/payload' }
     LoopPaused:
       name: LoopPaused
       title: loop.paused

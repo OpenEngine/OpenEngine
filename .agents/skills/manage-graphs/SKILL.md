@@ -1,6 +1,6 @@
 ---
 name: manage-graphs
-description: Write, register, run, schedule and debug OpenEngine graphs with the `engine` CLI. Use when asked to add or change a graph, run one, set up or adjust a loop, check on a run or loop, steer a node, or work out why a graph will not register or a run failed.
+description: Write, register, run, schedule and debug OpenEngine graphs with the `oe` CLI. Use when asked to add or change a graph, run one, set up or adjust a loop, check on a run or loop, steer a node, or work out why a graph will not register or a run failed.
 ---
 
 # Managing OpenEngine graphs
@@ -8,10 +8,10 @@ description: Write, register, run, schedule and debug OpenEngine graphs with the
 Start with the project's default graph:
 
 ```bash
-uv run engine go "add a new doc for the out-of-the-box experience" --wait
-uv run engine go "implement the feature" --spec --wait
-uv run engine go review feature/my-change -i adversarial=true --wait
-uv run engine go "update docs" --local --repo OWNER/REPO --backend mini --wait --json
+uv run oe go "add a new doc for the out-of-the-box experience" --wait
+uv run oe go "implement the feature" --spec --wait
+uv run oe go review feature/my-change -i adversarial=true --wait
+uv run oe go "update docs" --local --repo OWNER/REPO --backend mini --wait --json
 ```
 
 `go` registers the built-in default graph on first use, chooses the current checkout
@@ -23,11 +23,11 @@ The default bindings are `go → implementation-review-rerank`, `review → revi
 and `fix → fix`. Use `go review PR_OR_BRANCH` for findings and an impact rating,
 `go fix PR_OR_BRANCH` for unresolved review threads, `--spec` to plan first, and
 `-i KEY=VALUE` for runner inputs and `adversarial=true`. The old four starter
-names are deprecated aliases for one release. `engine verbs` shows project
-bindings; `engine verb set review NAME` selects a replacement declaring `pr_url`
+names are deprecated aliases for one release. `oe verbs` shows project
+bindings; `oe verb set review NAME` selects a replacement declaring `pr_url`
 or `ref`. The `go` binding requires a declared `instruction` input.
 
-Graphs, runs and loops live on a daemon (a *backend*). The `engine` CLI talks
+Graphs, runs and loops live on a daemon (a *backend*). The `oe` CLI talks
 to it over HTTP; it never runs a graph itself. Inside this repository, run the
 CLI as `uv run engine ...`.
 
@@ -38,8 +38,8 @@ reference. Read them before writing or editing a graph, rather than copying
 an older example (the YAML in `cli/README.md` predates the current language):
 
 ```bash
-uv run engine graph spec    # YAML and Python graph language
-uv run engine loop spec     # cadence, limits, lifecycle
+uv run oe graph spec    # YAML and Python graph language
+uv run oe loop spec     # cadence, limits, lifecycle
 ```
 
 Both work offline. Unknown fields are rejected, so a field the spec does not
@@ -48,7 +48,7 @@ list will not work.
 ## Pick the backend
 
 ```bash
-uv run engine backends list --check
+uv run oe backends list --check
 ```
 
 `local` (`http://127.0.0.1:4364`) always exists. Use `--backend NAME` for a
@@ -70,15 +70,15 @@ Start from `apiVersion: openengine.cc/v1`, `kind: Graph`, a `name` matching
   runner from the one whose work it checks.
 - Declare every input the prompts use. `instruction` is built in.
 - Add a `loop` section (`every`, `instruction`) when the graph is meant to
-  recur, so `engine loop add` needs no flags.
+  recur, so `oe loop add` needs no flags.
 - Put example graphs in `docs/examples/graphs/`; a test parses each one.
 
 ## Register and inspect
 
 ```bash
-uv run engine graph add path/to/graph.yaml
-uv run engine graphs list
-uv run engine graph get NAME        # also NAME@VERSION, g-..., gv-...
+uv run oe graph add path/to/graph.yaml
+uv run oe graphs list
+uv run oe graph get NAME        # also NAME@VERSION, g-..., gv-...
 ```
 
 Versions are immutable. Registering a changed file adds a version;
@@ -88,9 +88,9 @@ problem at once with its path; fix them all and register again.
 ## Run once
 
 ```bash
-uv run engine graph run NAME "instruction" --repo OWNER/REPO -i KEY=VALUE --wait
-uv run engine run get RUN_ID
-uv run engine runs --graph NAME --status failed
+uv run oe graph run NAME "instruction" --repo OWNER/REPO -i KEY=VALUE --wait
+uv run oe run get RUN_ID
+uv run oe runs --graph NAME --status failed
 ```
 
 Always use `--wait` for agent invocations: it polls non-interactively and exits
@@ -102,25 +102,25 @@ with the same `--idempotency-key` to avoid starting a second run.
 failure. To follow or correct a node while it works:
 
 ```bash
-uv run engine nodes list --run RUN_ID
-uv run engine node get EXECUTION_ID
-uv run engine node steer EXECUTION_ID "use the existing retry helper" --wait
+uv run oe nodes list --run RUN_ID
+uv run oe node get EXECUTION_ID
+uv run oe node steer EXECUTION_ID "use the existing retry helper" --wait
 ```
 
 Steering is a message into the turn the agent is in, not a retry or an
 approval. A run stopped on an approval or a human step is answered in the web
 UI; `run get` lists approval IDs, nodes, commands and the UI URL.
-People can also use `engine run watch RUN_ID` to answer approvals inline;
+People can also use `oe run watch RUN_ID` to answer approvals inline;
 agents should keep using non-interactive `--wait`.
 
 ## Run on a schedule
 
 ```bash
-uv run engine loop add NAME --max-spend 20 --max-prs 5   # --every/--instruction override the graph's loop
-uv run engine loops list
-uv run engine loop get NAME
-uv run engine loop pause NAME --reason "release freeze"
-uv run engine loop resume NAME --max-spend 40
+uv run oe loop add NAME --max-spend 20 --max-prs 5   # --every/--instruction override the graph's loop
+uv run oe loops list
+uv run oe loop get NAME
+uv run oe loop pause NAME --reason "release freeze"
+uv run oe loop resume NAME --max-spend 40
 ```
 
 - Always set `--max-spend`, and `--max-prs` for a graph that opens pull
@@ -137,10 +137,10 @@ uv run engine loop resume NAME --max-spend 40
 
 | Symptom | Check |
 | --- | --- |
-| Registration refused | The listed paths against `engine graph spec`: unknown fields, undeclared inputs, outputs not yet available, unreachable steps. |
-| Run failed: agent not signed in | `uv run engine agent signin AGENT` on the backend's host; `engine agents` lists what exists. |
-| Run failed otherwise | `failure` in `engine run get RUN_ID`, then the node's own result with `engine node get`. |
-| Loop paused | `pauseReason` and spend in `engine loop get NAME`. |
+| Registration refused | The listed paths against `oe graph spec`: unknown fields, undeclared inputs, outputs not yet available, unreachable steps. |
+| Run failed: agent not signed in | `uv run oe agent signin AGENT` on the backend's host; `oe agents` lists what exists. |
+| Run failed otherwise | `failure` in `oe run get RUN_ID`, then the node's own result with `oe node get`. |
+| Loop paused | `pauseReason` and spend in `oe loop get NAME`. |
 | Run or graph version not found | The version may no longer load (for example an older `apiVersion`). Register the graph again under the current `apiVersion` and start new runs or loops from it. |
 
 ## Do not

@@ -288,7 +288,7 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
 
 def test_default_checkout_is_under_daemon_home(tmp_path, monkeypatch):
     monkeypatch.setattr(onboard.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(onboard, 'preflight', lambda: ([{'code': 'agent', 'message': 'sign in', 'fix': 'engine agent signin codex'}], None))
+    monkeypatch.setattr(onboard, 'preflight', lambda: ([{'code': 'agent', 'message': 'sign in', 'fix': 'oe agent signin codex'}], None))
     service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), None, AsyncMock())
 
     async def run():

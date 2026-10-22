@@ -1,0 +1,10 @@
+{
+  "message": "ApplyLoopResponse",
+  "in_reply_to": "oe.v1.ge.control.loops.apply",
+  "payload": {
+    "command_id": "cmd_applyloop",
+    "status": "accepted",
+    "operation_id": "op_applyloop",
+    "resource_id": "loop_nightly"
+  }
+}

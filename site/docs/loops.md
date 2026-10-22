@@ -10,9 +10,9 @@ Use one for recurring work: fix a flaky test every six hours, triage new issues 
 ## Add a loop
 
 ```bash
-engine loop add fix-flaky-test --every 6h --max-prs 5 --max-spend 20
-engine loops list
-engine loop get fix-flaky-test
+oe loop add fix-flaky-test --every 6h --max-prs 5 --max-spend 20
+oe loops list
+oe loop get fix-flaky-test
 ```
 
 The instruction and cadence come from the graph's `loop` section, and `--instruction` and `--every` override them:
@@ -38,17 +38,17 @@ A loop needs both an instruction and a cadence; neither is invented. Cadences ar
 | `--max-prs N` | Pull requests the loop's runs *open*, not updates to existing ones. Reaching it pauses the loop; the run that opened the last one may finish. |
 | `--max-spend USD` | Agent usage reported by each node's session, or tokens priced at list rates. The active run reserves the remaining budget and is cancelled as soon as spend reaches the cap. |
 
-Spend excludes CI, hosting and subscription-billed usage, which agents report without a price. When any usage is unpriced, `engine loop get` shows `spendEnforceable: false`, and the cap is not presented as enforceable.
+Spend excludes CI, hosting and subscription-billed usage, which agents report without a price. When any usage is unpriced, `oe loop get` shows `spendEnforceable: false`, and the cap is not presented as enforceable.
 
-A loop also pauses when a run fails because a runner needs signing in. Fix it with `engine agent signin AGENT`.
+A loop also pauses when a run fails because a runner needs signing in. Fix it with `oe agent signin AGENT`.
 
 ## Pause and resume
 
 ```bash
-engine loop pause fix-flaky-test --reason "release freeze"
-engine loop resume fix-flaky-test --max-spend 40
+oe loop pause fix-flaky-test --reason "release freeze"
+oe loop resume fix-flaky-test --max-spend 40
 ```
 
 Pausing stops new runs; it does not cancel the active one. Resuming is refused while a limit is still reached, so pass a higher `--max-prs` or `--max-spend`.
 
-See runs a loop started with `engine runs --loop fix-flaky-test`. The [loop specification](cli-specs.md#engine-loop-spec) has the full rules, and `engine loop spec` prints it offline. Every command is in the [CLI reference](cli-reference.md).
+See runs a loop started with `oe runs --loop fix-flaky-test`. The [loop specification](cli-specs.md#engine-loop-spec) has the full rules, and `oe loop spec` prints it offline. Every command is in the [CLI reference](cli-reference.md).

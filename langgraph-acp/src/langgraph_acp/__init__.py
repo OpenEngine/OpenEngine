@@ -46,6 +46,7 @@ from langgraph_acp.agent import (
     ACPAgentProvider,
     ACPAgentRegistry,
     StdioACPProvider,
+    configure_default_registry,
     default_registry,
 )
 from langgraph_acp.client import PROTOCOL_VERSION, ACPCapabilities, ACPClient
@@ -133,6 +134,7 @@ __all__ = [
     "StdioACPProvider",
     "UnsupportedOption",
     "allow_mcp_tools",
+    "configure_default_registry",
     "default_registry",
     "deny_permission",
     "resume_continuation",

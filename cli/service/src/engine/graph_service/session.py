@@ -1,6 +1,6 @@
 """Interactive sessions: a person's own agent CLI as a graph run's implementation node.
 
-`engine agent claude|codex|opencode` starts a run of one built-in graph: the workspace node
+`oe agent claude|codex|opencode` starts a run of one built-in graph: the workspace node
 every graph has, then a node that does what an implementation node does --
 binds the run's repository tools to the checkout -- and hands them to a CLI
 the person drives in their own terminal, instead of opening an ACP session.

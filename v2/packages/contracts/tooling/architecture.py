@@ -39,13 +39,36 @@ GROUPS = ("control", "query", "events")
 
 
 def subjects(service: str) -> dict[str, list[str]]:
-    """The service's subject templates by group, in the order its document lists them."""
+    """The service's subject templates by group, from its operations' `control`, `query` or `event` tag."""
+    document = load_contract(service).document
     grouped: dict[str, list[str]] = {group: [] for group in GROUPS}
-    for channel in load_contract(service).document["channels"].values():
-        address = channel.get("address")
-        if address:
-            grouped[address.split(".")[3]].append(address)
+    for operation in document["operations"].values():
+        address = document["channels"][operation["channel"]["$ref"].rsplit("/", 1)[-1]]["address"]
+        group = {"event": "events"}.get(operation["tags"][0]["name"], operation["tags"][0]["name"])
+        if address not in grouped[group]:
+            grouped[group].append(address)
     return grouped
+
+
+def _prefix(addresses: Sequence[str]) -> str:
+    """The subject tokens every address starts with, ending in a `.`."""
+    common = addresses[0].split(".")[:-1]
+    for address in addresses[1:]:
+        tokens = address.split(".")
+        while tokens[: len(common)] != common:
+            common.pop()
+    return ".".join(common) + "."
+
+
+def _captures(pattern: str, subject: str) -> bool:
+    """Whether a NATS stream subject filter captures a subject template."""
+    tokens = subject.split(".")
+    for index, part in enumerate(pattern.split(".")):
+        if part == ">":
+            return len(tokens) > index
+        if index >= len(tokens) or part not in ("*", tokens[index]):
+            return False
+    return len(pattern.split(".")) == len(tokens)
 
 
 def streams() -> list[tuple[str, list[str]]]:
@@ -128,19 +151,23 @@ def diagram() -> str:
     for service in SERVICES:
         name, short = NAMES[service]
         grouped = subjects(service)
+        drawn: set[str] = set()
         lines.append(f'    subgraph {short}["{name} ({short})"]')
         for group in GROUPS:
             if not grouped[group]:
                 continue
-            prefix = f"oe.v1.{short}.{group}."
-            stream = next((s for s, patterns in all_streams if f"oe.v1.{short}.{group}.>" in patterns), None)
+            prefix = _prefix(grouped[group])
+            stream = next(
+                (s for s, patterns in all_streams if any(_captures(p, grouped[group][0]) for p in patterns)), None
+            )
+            drawn.add(stream or "")
             heading = [f"NATS {group}{f' → stream {stream}' if stream else ''}"]
             node = f"{short}_{group}"
             lines.append(f"        {node}[{_label(*heading, *_subject_lines(prefix, grouped[group]))}]")
             lines.append(f"        class {node} subjects")
         # Streams the contracts do not cover, such as provider traffic.
         for stream, patterns in all_streams:
-            if stream.startswith(f"{short}-") and not any(p.startswith(f"oe.v1.{short}.") for p in patterns):
+            if stream.startswith(f"{short}-") and stream not in drawn:
                 node = stream.replace("-", "_")
                 lines.append(f"        {node}[({_label(f'stream {stream}', *patterns)})]")
                 lines.append(f"        class {node} stream")
@@ -190,6 +217,11 @@ def diagram() -> str:
         '    vcp_events -. "workspace and task events" .-> ge',
         '    vcp -- "provision, suspend, restore" --> provider',
         '    vcp -- "execute, steer, cancel" --> daemon',
+        # Undirected from the tool service, so it ranks beside VCP rather than after the runtime.
+        '    tools_control --- |"← invoke tools"| sessions',
+        '    ge -- "tool grants" --> tools_control',
+        # Undirected from cxn, so cxn stays left of the tool service; the label gives the direction.
+        '    cxn_query --- |"read by tools"| tools',
     ]
     return "\n".join(lines) + "\n"
 

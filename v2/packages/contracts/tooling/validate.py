@@ -9,8 +9,9 @@ prove:
   token of the identifier type the parameter declares (`x-oe-identifier`),
   and an ID that appears in both the subject and the body agrees;
 - a causal path ends with the command's or event's own ID;
-- an event's subject ends with its `event_type` and its `Nats-Msg-Id` header
-  equals its `event_id`;
+- an event's `event_type` ends with the tokens its subject has after the last
+  resource ID (all of it, or its fact), and its `Nats-Msg-Id` header equals
+  its `event_id`;
 - a response names a request subject whose operation replies with it;
 - every message has an example, and every example validates.
 
@@ -168,6 +169,13 @@ def match_subject(template: str, subject: str) -> dict[str, str] | None:
     return values
 
 
+def _literal_tail(template: str) -> list[str]:
+    """The tokens after the template's last `{parameter}`."""
+    tokens = template.split(".")
+    last = max((i for i, token in enumerate(tokens) if token.startswith("{")), default=-1)
+    return tokens[last + 1:]
+
+
 def _subject_errors(message: Message, template: str, subject: str, label: str) -> list[str]:
     values = match_subject(template, subject)
     if values is None:
@@ -225,8 +233,9 @@ def validate_message(
                     if mentioned != value:
                         errors.append(f"{pointer} is {mentioned!r} but the subject names {value!r}")
             event_type = body.get("event_type")
-            if isinstance(event_type, str) and not subject.endswith("." + event_type):
-                errors.append(f"subject {subject!r} does not end with event_type {event_type!r}")
+            tail = ".".join(_literal_tail(message.address))
+            if isinstance(event_type, str) and event_type != tail and not event_type.endswith("." + tail):
+                errors.append(f"event_type {event_type!r} does not match the subject's {tail!r}")
         if "event_id" in body:
             if (headers or {}).get("Nats-Msg-Id") != body["event_id"]:
                 errors.append("the Nats-Msg-Id header must equal event_id")

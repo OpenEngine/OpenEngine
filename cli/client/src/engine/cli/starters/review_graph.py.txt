@@ -2,13 +2,12 @@
 from engine.adapters.workspace_provider.git_worktree import (
     DEFAULT_ROOT_DIRECTORY, GitWorktreeWorkspaceProvider,
 )
-from engine.graph_runtime_langgraph import agent_registry, with_added_agents
+from engine.graph_runtime_langgraph import configured_agents
 from engine.graph_runtime_langgraph.components.change_graphs import Components, review
-from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
 
-DEFAULT_RUNNER = "codex"
+DEFAULT_RUNNER = "round-robin"
 RUNNERS = (DEFAULT_RUNNER,)
-AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider()]))
+AGENTS = configured_agents()
 
 
 def graph_for(runner=DEFAULT_RUNNER, *, workspace_provider=None, agents=AGENTS, session_config=None):
