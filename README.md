@@ -36,23 +36,30 @@ oe go fix https://github.com/OWNER/REPO/pull/123      # address its unresolved r
 ```
 
 **Write your own graph** in YAML or Python and bind it to a verb. Graphs are versioned, so a change to the process is as reviewable as a change to the code.
-```bashoe graphs                                   # list available graphsoe graph add my-graph.yaml                  # register your ownoe graph run my-graph "add my widget"       # run it with an instruction
+```bash
+oe graphs                                   # list available graphs
+oe graph add my-graph.yaml                  # register your own
+oe graph run my-graph "add my widget"       # run it with an instruction
 ```
 The [example graphs](docs/examples/graphs) include TDD, dead-code removal, and the [security review](docs/examples/graphs/security-review.yaml) that OpenEngine runs on itself every day.
 
 **Steer a run while it works.**
-```bashoe run watch <run-id>oe node steer <execution-id> "use the existing date helper instead"
+```bash
+oe run watch <run-id>
+oe node steer <execution-id> "use the existing date helper instead"
 ```
 
 **Put a graph on a schedule** with loops: QA sweeps, dependency upkeep, nightly security review. Each loop has limits on spend and pull requests, so it cannot run away with your budget.
-```bashoe loop add qa-sweep --every 1d --max-spend 20 --max-prs 5oe loops                                    # status, spend and PRs per loop
+```bash
+oe loop add qa-sweep --every 1d --max-spend 20 --max-prs 5
+oe loops                                    # status, spend and PRs per loop
 ```
 
 **Start work from where you already are.** Mention OpenEngine in a Slack thread or a PR comment to start, steer, or approve a run. See [integrations](https://openengine.cc/docs/integrations/).
 
 ## How it works
 
-A **graph** is a sequence of agent and code steps with typed inputs and outputs. A **run** is one execution of a graph, managed by a local background **daemon** (`engine daemon`). Agents are the coding CLIs you already use: the built-in `claude`, `codex`, and `opencode`, plus any you add, including local models through Ollama or any OpenAI-compatible server. Review steps can require a different agent than the one that wrote the code, which is what makes the review adversarial.
+A **graph** is a sequence of agent and code steps with typed inputs and outputs. A **run** is one execution of a graph, managed by a local background **daemon** (`oe daemon`). Agents are the coding CLIs you already use: the built-in `claude`, `codex`, and `opencode`, plus any you add, including local models through Ollama or any OpenAI-compatible server. Review steps can require a different agent than the one that wrote the code, which is what makes the review adversarial.
 
 The default graph that builds OpenEngine itself:
 ```
@@ -64,7 +71,7 @@ Findings go back for one fix-and-review round before a human sees the PR. The so
 
 - [Docs](https://openengine.cc/docs/) — getting started, graphs, loops, CLI reference, integrations
 - [Blog](https://openengine.cc/blog/) — how we use OpenEngine, benchmarks, and what the loops find
-- [CLI reference](cli/README.md) — every `engine` command
+- [CLI reference](cli/README.md) — every `oe` command
 - [Connecting GitHub and GitLab](docs/forge-connections.md) — OAuth setup, webhooks, and server deployments
 - [Developing OpenEngine](docs/development.md) — running from source, the dev server, configuration, and migrations
 - [CHANGELOG](CHANGELOG.md) and [releases](https://github.com/OpenEngine/OpenEngine/releases)

@@ -6,8 +6,7 @@ tags: [openengine, graphs, loops, security]
 ---
 
 Agent capabilities are outstripping human abilities to keep up with security vulnerabilities and patching. In order to keep up,
-agents must be continuously penetration testing all software for vulnerabilities. Using OpenEngine, we set a budget and a 
-and instruct agents to continuously penetration test our software in a loop.
+agents must be continuously penetration testing all software for vulnerabilities. Using OpenEngine, we set a budget and instruct agents to continuously penetration test our software in a loop.
 
 One agent investigates the public API surface. A different agent tries to disprove its findings with isolated reproductions. The final step turns confirmed findings into scoped GitHub issues that an engineer can pick up and rectify.
 
@@ -66,7 +65,7 @@ Every new issue must contain:
 - Independent validation commands and their results.
 - A proposed fix scope, explicit non-goals, acceptance checkboxes and regression test cases.
 
-The graph asks for a title such as `fix(security): enforce repository ownership on artifact reads`. That is an example of the format, not a claim that this vulnerability exists.
+The graph asks for a title such as `fix(security): enforce repository ownership on artifact reads`.
 
 It also checks the repository's security policy before publishing. Secrets, personal data and deployment identifiers do not belong in an issue body. If policy requires private disclosure, the detailed draft stays in the run output and publishing is reported as blocked.
 
@@ -75,22 +74,22 @@ It also checks the repository's security policy before publishing. Secrets, pers
 In our deployment, we have a Mac mini running 24/7. It acts as our loop runner. The Mac mini already runs an OpenEngine backend named `mini`. The CLI can register and schedule work there while the laptop remains the client. Verify the available runners and read the language the installed version supports:
 
 ```bash
-uv run engine backends list --check
-uv run engine graph spec
-uv run engine loop spec
+oe backends list --check
+oe graph spec
+oe loop spec
 ```
 
 From an OpenEngine checkout, register the complete graph:
 
 ```bash
-uv run engine graph add docs/examples/graphs/security-review.yaml \
+oe graph add docs/examples/graphs/security-review.yaml \
   --backend mini --project default
 ```
 
 Registration returns an immutable graph version. On our deployment, the final definition registered as version 2. Pin that version when adding the loop:
 
 ```bash
-uv run engine loop add security-review@2 \
+oe loop add security-review@2 \
   --backend mini --project default \
   --repo OpenEngine/OpenEngine \
   --max-spend 25 \
@@ -104,12 +103,12 @@ The $25 limit counts cumulative reported agent usage for the loop's lifetime. It
 ## Check execution, not just registration
 
 ```bash
-% uv run engine loops list
+% oe loops list
 NAME                        GRAPH               STATE   EVERY  NEXT                       ACTIVE RUN        PRS  SPEND         PAUSED BECAUSE
 security-review             security-review v2  paused  1d     -                          run-ff061969507d  0/∞  $0.01/$25.00  Redeploying validator on Claude Opus 4.8
 security-review-claude-4-8  security-review v3  active  1d     2026-10-22T22:49:18+00:00  run-6f9faf091579  0/∞  $3.95/$25.00  -
 
-% uv run engine run watch run-6f9faf091579
+% oe run watch run-6f9faf091579
 security-review v3 · run-c94a844b2267 · running · 0:04
 
   ⠴ Plan ─── – Implement ─── ○ Review
@@ -133,11 +132,11 @@ The security-labeled repair queue on October 22, including issues filed by the l
 
 
 ```bash
-uv run engine loop pause security-review --backend mini \
+oe loop pause security-review --backend mini \
   --reason "Review the current repair queue"
 ```
 
-Pausing does not cancel an active run. Resume with `engine loop resume security-review --backend mini`; if the spending limit has been reached, supply a higher approved limit with `--max-spend`. Permanent shutdown uses `engine loop stop`, which also cancels the active run.
+Pausing does not cancel an active run. Resume with `oe loop resume security-review --backend mini`; if the spending limit has been reached, supply a higher approved limit with `--max-spend`. Permanent shutdown uses `oe loop stop`, which also cancels the active run.
 
 Graph updates do not silently change this loop. Register a new version, pause the old loop, and add the new version under another loop name. That keeps the review procedure attached to each run auditable.
 

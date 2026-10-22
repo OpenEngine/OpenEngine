@@ -18,16 +18,16 @@ logged in on this machine, run:
 ```sh
 npm i -g @openengine.cc/engine
 cd your-repo
-engine go "add a dark mode toggle to the settings page"
+oe go "add a dark mode toggle to the settings page"
 ```
 
-The first `engine` command installs a pinned OpenEngine release under
+The first `oe` command installs a pinned OpenEngine release under
 `~/.local/share/openengine` and starts the local daemon at
-[http://127.0.0.1:4364](http://127.0.0.1:4364). `engine go` runs the default
+[http://127.0.0.1:4364](http://127.0.0.1:4364). `oe go` runs the default
 graph against the checkout you are in and follows it live.
 
-Without npm, the one-line installer does the same and also puts an `engine`
-launcher in `~/.local/bin` (add it to your `PATH` if `engine` is not found):
+Without npm, the one-line installer does the same and also puts an `oe`
+launcher in `~/.local/bin` (add it to your `PATH` if `oe` is not found):
 
 ```sh
 curl -LsSf https://openengine.cc/install.sh | sh
@@ -37,7 +37,7 @@ Use one method or the other: npm will not overwrite a launcher the curl
 installer created, so if you switch to npm later, run
 `npm i -g --force @openengine.cc/engine` once.
 
-Run `engine daemon` to reopen the daemon, `engine daemon doctor` to diagnose
+Run `oe daemon` to reopen the daemon, `oe daemon doctor` to diagnose
 problems, and reinstall (either way) to upgrade.
 
 ## Concepts
@@ -83,4 +83,4 @@ is `[onboarding] directory` or `~/code`, followed by the repository's final name
 Local paths and clone destinations belong to the selected daemon; with a local
 backend, relative paths resolve from your current directory. Connected mode is
 the default; use `--mode disconnected` for local-only work. Trust can be set with
-`--trust` or `--no-trust`. `oe repo add` replaces `engine onboard`.
+`--trust` or `--no-trust`. `oe repo add` replaces `oe onboard`.
