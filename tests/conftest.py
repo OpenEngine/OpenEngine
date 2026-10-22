@@ -50,6 +50,14 @@ def _engine_config_is_not_inherited(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
 
+@pytest.fixture(autouse=True)
+def _default_agents_are_not_inherited(monkeypatch):
+    """Undo the agents a test's daemon startup installed as `default_registry()`."""
+    import langgraph_acp.agent
+
+    monkeypatch.setattr(langgraph_acp.agent, "_DEFAULT", langgraph_acp.agent._DEFAULT)
+
+
 @pytest.fixture
 def sqlite_store(tmp_path):
     """Create independent stores, or reopen an explicit path; close all at teardown."""

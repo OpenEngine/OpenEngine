@@ -184,6 +184,10 @@ def default_registry() -> ACPAgentRegistry:
     The built-in providers are imported here rather than at module scope: this
     module defines the abstraction they implement, and importing them at the top
     would make the abstraction depend on its instances.
+
+    An application that configures its agents -- which binary each runs --
+    installs them with `configure_default_registry` before any node runs, so
+    this never falls back to the bare built-ins behind its back.
     """
     global _DEFAULT
     if _DEFAULT is None:
@@ -197,9 +201,16 @@ def default_registry() -> ACPAgentRegistry:
     return _DEFAULT
 
 
+def configure_default_registry(registry: ACPAgentRegistry) -> None:
+    """Make `registry` what `default_registry` returns from now on."""
+    global _DEFAULT
+    _DEFAULT = registry
+
+
 __all__ = [
     "ACPAgentProvider",
     "ACPAgentRegistry",
     "StdioACPProvider",
+    "configure_default_registry",
     "default_registry",
 ]

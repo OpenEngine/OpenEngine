@@ -20,7 +20,6 @@ from engine.github_concierge.github_egress import tool_permission as github_tool
 from engine.slack_concierge import SlackConcierge, SlackIngress
 from engine.slack_concierge.slack_egress import tool_permission
 from langgraph_acp.agent import ACPAgentProvider
-from langgraph_acp.providers import CodexACPProvider
 
 import asyncio
 import functools
@@ -98,7 +97,7 @@ from engine.apps.web.utilization import (
     UtilizationService,
     utilization_json,
 )
-from engine.adapters.agent_runner.acp import installed_codex_env
+from engine.adapters.agent_runner.acp import agent_provider
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCommunications,
@@ -129,7 +128,7 @@ from engine.domain import (
     WorkflowId,
     WorkspaceId,
 )
-from engine.runtime.config import PullRequestsConfig
+from engine.runtime.config import EngineConfig, PullRequestsConfig
 from engine.graph_runtime.inputs import (
     LEAST_UTILIZED, RUNNER_POLICIES, WorkflowInput, choose_runners, offer_runners, resolve_inputs,
 )
@@ -1221,8 +1220,13 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     utilization: UtilizationService | None = None,
     concierge_provider: ACPAgentProvider | None = None,
     graph_service: Callable[[Any, StartRun], GraphService] | None = None,
+    agent_config: EngineConfig = EngineConfig(),
 ) -> Starlette:
-    """Build the web application around already-composed capabilities."""
+    """Build the web application around already-composed capabilities.
+
+    `agent_config` configures the agents the loops and concierges run,
+    unless `loop_provider` or `concierge_provider` names one.
+    """
     if workflow_catalog is None:
         loaded_config = load_engine_config()
         catalog = (
@@ -2923,7 +2927,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             same_repository=lambda one, other: same_repository(one, other),
             may_act=loop_may_act,
         ),
-        loop_provider or CodexACPProvider(permissions=loop_tool_permission, env=installed_codex_env()),
+        loop_provider or agent_provider(agent_config, "codex", permissions=loop_tool_permission),
     )
     loop_runs: set[asyncio.Task[None]] = set()
 
@@ -3530,7 +3534,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         return concierge_result(state)
 
     slack_concierge = SlackConcierge(
-        provider=concierge_provider or CodexACPProvider(permissions=tool_permission, env=installed_codex_env()),
+        provider=concierge_provider or agent_provider(agent_config, "codex", permissions=tool_permission),
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=work_orders.repository,
         turn_finished=concierge_turn_finished,
@@ -3839,7 +3843,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         )
 
     github_concierge = GithubConcierge(
-        provider=concierge_provider or CodexACPProvider(permissions=github_tool_permission, env=installed_codex_env()),
+        provider=concierge_provider or agent_provider(agent_config, "codex", permissions=github_tool_permission),
         continue_workorder=github_continue_workorder, reply=github_reply, react=github_react,
     )
 

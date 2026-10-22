@@ -25,26 +25,26 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
+from langgraph_acp import ACPAgentRegistry
 from langgraph_acp.providers import (
     CLAUDE_ACP_COMMAND,
     CODEX_ACP_COMMAND,
     OPENCODE_ACP_COMMAND,
-    ClaudeACPProvider,
-    CodexACPProvider,
-    OpenCodeACPProvider,
 )
 
 from engine.runtime.repositories import RepositoryRegistry
 from engine.adapters.agent_runner.acp import (
     READ_ONLY_TOOLS,
+    agent_provider,
+    agent_providers,
     allowed_tools_for,
     claude_acp_runner,
     claude_session_config,
     codex_acp_runner,
-    installed_codex_env,
     opencode_acp_runner,
 )
 from engine.adapters.communications.slack import (
@@ -313,6 +313,7 @@ def build_capabilities(
             model=settings.codex_model,
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
+            config=settings.engine_config,
         ),
         communications=build_communications(settings, slack_credential_store),
         workspace_provider=workspace_provider,
@@ -413,10 +414,8 @@ def build_graph_service(
             runtime,
             Path(settings.graph_state_directory) / RUNS,
             workspace_provider=GitWorktreeWorkspaceProvider(settings.workspace_root),
-            registry=agent_registry(
-                [CodexACPProvider(env=installed_codex_env()), ClaudeACPProvider(), OpenCodeACPProvider()]
-            ),
-            agent_factory=added_agent,
+            registry=builtin_agents(config),
+            agent_factory=partial(added_agent, config=config),
             added_agents=ADDED_AGENTS,
             start=start,
             session_config=claude_session_config_for(settings),
@@ -432,17 +431,19 @@ def build_graph_service(
     return build
 
 
-def added_agent(row: AgentRow) -> object:
+def builtin_agents(config: EngineConfig) -> ACPAgentRegistry:
+    """The agents Engine ships with, configured from `config`, answering permissions through the run."""
+    return agent_registry(agent_providers(config))
+
+
+def added_agent(row: AgentRow, config: EngineConfig | None = None) -> object:
     """The provider an agent added with `oe agent add` runs as, answering permissions like the built-ins."""
-    if row.kind == "claude":
-        provider: object = ClaudeACPProvider(name=row.name)
-    elif row.kind == "codex":
-        provider = CodexACPProvider(name=row.name, env=installed_codex_env())
-    else:
-        config = opencode_config(row)
-        env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)} if config else None
-        provider = OpenCodeACPProvider(name=row.name, env=env)
-    return replace(provider, permissions=answer_permission)
+    config = config or EngineConfig()
+    if row.kind in ("claude", "codex"):
+        return agent_provider(config, row.kind, name=row.name, permissions=answer_permission)
+    settings = opencode_config(row)
+    env = {"OPENCODE_CONFIG_CONTENT": json.dumps(settings)} if settings else None
+    return agent_provider(config, "opencode", name=row.name, env=env, permissions=answer_permission)
 
 
 def claude_session_config_for(settings: Settings) -> dict[str, object] | None:
@@ -492,6 +493,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             model=settings.codex_model,
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
+            config=settings.engine_config,
         ),
         "claude": claude_acp_runner(
             command=settings.claude_acp_command,
@@ -502,6 +504,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             attribution=settings.engine_config.attribution,
             output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
+            config=settings.engine_config,
         ),
         "opencode": _opencode_runner(settings, workspace_provider, read_only=False),
     }
@@ -518,6 +521,7 @@ def _opencode_runner(
         model=settings.opencode_model,
         attribution=settings.engine_config.attribution,
         workspace_provider=workspace_provider,
+        config=settings.engine_config,
     )
 
 
@@ -550,6 +554,7 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             model=settings.codex_model,
             attribution=settings.engine_config.attribution,
             workspace_provider=workspace_provider,
+            config=settings.engine_config,
         ),
         "claude": claude_acp_runner(
             command=settings.claude_acp_command,
@@ -561,6 +566,7 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             attribution=settings.engine_config.attribution,
             output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
+            config=settings.engine_config,
         ),
         "opencode": _opencode_runner(settings, workspace_provider, read_only=True),
     }
