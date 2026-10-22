@@ -83,6 +83,42 @@ flowchart LR
         vcp_events["NATS events → stream vcp-events<br/><b>oe.v1.vcp.events.workspaces.{workspace_id}.</b><br/>workspace.provisioning<br/>workspace.ready<br/>workspace.restored<br/>workspace.checkpointed<br/>workspace.suspended<br/>workspace.destroyed<br/>workspace.failed<br/>task.started<br/>task.completed<br/>task.failed<br/>task.cancelled<br/>approval.requested<br/>approval.resolved<br/>approval.expired<br/>steering.applied<br/>steering.failed<br/>conversation.message<br/>usage.reported<br/>artifact.created"]
         class vcp_events subjects
         subgraph vcp_db["database vcp"]
+            vcp_t_attempt_bindings[("attempt_bindings")]
+            class vcp_t_attempt_bindings table
+            vcp_t_attempts[("attempts")]
+            class vcp_t_attempts table
+            vcp_t_command_receipts[("command_receipts")]
+            class vcp_t_command_receipts table
+            vcp_t_cursors[("cursors")]
+            class vcp_t_cursors table
+            vcp_t_daemon_attempts[("daemon_attempts")]
+            class vcp_t_daemon_attempts table
+            vcp_t_daemon_commands[("daemon_commands")]
+            class vcp_t_daemon_commands table
+            vcp_t_daemon_meta[("daemon_meta")]
+            class vcp_t_daemon_meta table
+            vcp_t_daemon_sessions[("daemon_sessions")]
+            class vcp_t_daemon_sessions table
+            vcp_t_daemon_updates[("daemon_updates")]
+            class vcp_t_daemon_updates table
+            vcp_t_operations[("operations")]
+            class vcp_t_operations table
+            vcp_t_outbox[("outbox")]
+            class vcp_t_outbox table
+            vcp_t_runtime_outbox[("runtime_outbox")]
+            class vcp_t_runtime_outbox table
+            vcp_t_runtime_ownership[("runtime_ownership")]
+            class vcp_t_runtime_ownership table
+            vcp_t_runtime_status[("runtime_status")]
+            class vcp_t_runtime_status table
+            vcp_t_runtime_updates[("runtime_updates")]
+            class vcp_t_runtime_updates table
+            vcp_t_session_history[("session_history")]
+            class vcp_t_session_history table
+            vcp_t_sessions[("sessions")]
+            class vcp_t_sessions table
+            vcp_t_workspace_records[("workspace_records")]
+            class vcp_t_workspace_records table
             vcp_t_workspaces[("workspaces")]
             class vcp_t_workspaces table
         end
