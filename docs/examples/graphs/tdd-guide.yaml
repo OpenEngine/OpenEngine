@@ -34,6 +34,10 @@ inputs:
     description: "The runner that reviews the change: the review panel, security reproduction and impact analysis"
     default: claude
     choices: [claude, codex, opencode]
+  reranker:
+    description: "The runner that consolidates the review panel's findings and posts them on the pull request. It is a judgment call that must carry each finding's agent and facet through unchanged, so a stronger model than the implementer is the safer choice"
+    default: claude
+    choices: [claude, codex, opencode, qwen, bazzite, coder]
 
 # Names the run after the issue it picks, on the runner's cheapest model.
 naming:
@@ -307,7 +311,7 @@ review:
 
   reranker:
     name: Consolidate
-    agent: {same: implement}
+    agent: ${inputs.reranker}
     tools: [view_change_request, add_comment]
     prompt: |
       ${size(outputs.reviewers)} reviewers examined the same change, each from one
