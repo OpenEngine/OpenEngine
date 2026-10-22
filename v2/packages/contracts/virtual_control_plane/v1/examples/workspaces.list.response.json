@@ -9,6 +9,7 @@
       "items": [
         {
           "workspace_id": "ws_a1",
+          "name": "review-job-88",
           "version": 2,
           "provider": "smolvm",
           "state": "ready",
@@ -18,9 +19,19 @@
             "state": "running",
             "started_at": "2026-10-19T21:31:10Z"
           },
-          "resources": { "cpu_millis": 2000, "memory_mib": 4096, "disk_gib": 20 },
-          "tools": ["git", "terminal"],
-          "required_capabilities": ["checkpoint", "isolation_microvm"],
+          "resources": {
+            "cpu_millis": 2000,
+            "memory_mib": 4096,
+            "disk_gib": 20
+          },
+          "tools": [
+            "git",
+            "terminal"
+          ],
+          "required_capabilities": [
+            "checkpoint",
+            "isolation_microvm"
+          ],
           "labels": {
             "job_id": "job_88",
             "execution_id": "exec_88a",

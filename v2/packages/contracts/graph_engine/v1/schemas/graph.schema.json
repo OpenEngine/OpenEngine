@@ -1,19 +1,19 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Graphs",
-  "description": "Registered graphs and their immutable revisions. A graph is written in the existing OpenEngine graph language (`cli/GRAPH_LANGUAGE.md`): a YAML document (`apiVersion: openengine.cc/v1`, `kind: Graph`) or a Python LangGraph module exporting `workflow`. GE keeps the source verbatim; this contract defines no new DSL.",
+  "description": "Registered graphs and their immutable revisions. A graph is applied as a Graph resource (`apiVersion: openengine.cc/v2alpha1`, `kind: Graph`; see `resources/graph.schema.yaml`) or as a Python LangGraph module exporting `workflow`. GE keeps what was applied verbatim.",
   "$defs": {
     "graph_name": {
       "description": "Registry name of a graph, unique per GE instance.",
       "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
     },
     "graph_format": {
-      "description": "Source format. `python` executes on the backend and may be refused with UNSUPPORTED_CAPABILITY where Python graphs are disabled.",
+      "description": "How the revision was applied. `resource`: a Graph resource, kept as the JSON that was applied. `python`: a Python LangGraph module, which executes on the backend and may be refused with UNSUPPORTED_CAPABILITY where Python graphs are disabled.",
       "type": "string",
-      "enum": ["yaml", "python"]
+      "enum": ["resource", "python"]
     },
     "graph_source": {
-      "description": "The graph definition, verbatim. At most 1 MiB.",
+      "description": "What was applied, verbatim: the Graph resource as JSON, or the Python source. At most 1 MiB.",
       "type": "string",
       "minLength": 1,
       "maxLength": 1048576

@@ -1,0 +1,144 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Tool
+description: >-
+  An invocable capability bound to one Connection. Agents call it on
+  `oe.v1.tools.invoke.{namespace}.{name}`; the connection, the adapter
+  operation and the trusted `configuration` are fixed here, so nothing an
+  agent sends can choose another connection or override them. Applying
+  validates the definition with its adapter and rejects a configuration the
+  adapter cannot honour, including a `recovery` it does not implement.
+  Calling a tool also needs a `ToolGrant`.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/tools_api_version
+  kind:
+    type: string
+    const: Tool
+  metadata:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/namespaced_object_meta
+  spec:
+    $ref: '#/$defs/tool_spec'
+  status:
+    $ref: '#/$defs/tool_status'
+$defs:
+  tool_spec:
+    title: ToolSpec
+    description: What the tool does, through which connection and adapter, and how it runs.
+    type: object
+    required: [description, connectionRef, executor, inputSchema]
+    additionalProperties: false
+    properties:
+      description:
+        description: What the tool does and when to use it, as the agent reads it.
+        type: string
+        minLength: 1
+        maxLength: 4000
+      connectionRef:
+        $ref: '#/$defs/connection_ref'
+      executor:
+        $ref: '#/$defs/executor'
+      inputSchema:
+        description: >-
+          A JSON Schema object for the agent's `arguments`. A call whose
+          arguments do not validate is refused before anything runs.
+        $ref: '#/$defs/object_schema'
+      outputSchema:
+        description: A JSON Schema object for the result. Omitted means the result is not checked.
+        $ref: '#/$defs/object_schema'
+      configuration:
+        description: >-
+          Trusted settings for the adapter, such as `repository`, validated by
+          the adapter when the tool is applied. Arguments can never override
+          them.
+        type: object
+        maxProperties: 64
+        default: {}
+      execution:
+        $ref: '#/$defs/execution'
+  connection_ref:
+    title: ConnectionRef
+    description: The Connection the tool acts through. Connections are not namespaced.
+    type: object
+    required: [name]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/name
+  executor:
+    title: Executor
+    description: Which adapter runs the tool, and which of its operations.
+    type: object
+    required: [adapter, operation]
+    additionalProperties: false
+    properties:
+      adapter:
+        description: The adapter, such as `nango`. An unknown adapter is rejected.
+        $ref: ../../../common/v1/types.schema.json#/$defs/slug
+      operation:
+        description: The adapter's operation, such as `github-issue-comment`.
+        type: string
+        minLength: 1
+        maxLength: 128
+  object_schema:
+    title: ObjectSchema
+    description: A JSON Schema (draft-07) whose `type` is `object`.
+    type: object
+    required: [type]
+    properties:
+      type:
+        type: string
+        const: object
+  execution:
+    title: Execution
+    description: How long an attempt may run, and what happens when one is interrupted.
+    type: object
+    additionalProperties: false
+    properties:
+      timeoutSeconds:
+        description: How long one attempt may run before it is treated as interrupted.
+        type: integer
+        minimum: 1
+        maximum: 3600
+        default: 60
+      recovery:
+        description: >-
+          What happens after an interrupted attempt, whose external effect is
+          unknown. `retry-safe`: repeat it, within `maxAttempts`.
+          `provider-idempotent`: repeat it with the same provider idempotency
+          key. `reconcile`: find out from the provider whether it took effect
+          before retrying. `manual`: record `OutcomeUnknown` for a person to
+          resolve. The adapter must implement the value chosen.
+        type: string
+        enum: [retry-safe, provider-idempotent, reconcile, manual]
+        default: manual
+      maxAttempts:
+        description: The most attempts one invocation may make, the first included.
+        type: integer
+        minimum: 1
+        maximum: 10
+        default: 1
+  tool_status:
+    title: ToolStatus
+    description: Set by the service; ignored on apply.
+    type: object
+    required: [phase, observedGeneration]
+    additionalProperties: false
+    properties:
+      phase:
+        description: >-
+          `Ready`: it can be invoked. `Unavailable`: its connection is
+          disabled or deleted, or its adapter is missing; invocations are
+          refused until it is Ready again.
+        type: string
+        enum: [Ready, Unavailable]
+      observedGeneration:
+        description: The `metadata.generation` this status describes.
+        type: integer
+        minimum: 1
+      message:
+        description: Why the tool is not Ready.
+        type: string
+        maxLength: 2048

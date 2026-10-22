@@ -1,0 +1,139 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Workspace
+description: >-
+  A stable place where agents work, provisioned on a provider. The Graph
+  Engine applies one when a step needs it, under a name it chooses, so that
+  tool grants can name the workspace before it runs anything. Applying under
+  a new name creates the workspace, allocates its `ws_…` ID and provisions
+  its first runtime; applying an unchanged workspace changes nothing. The
+  name is a DNS label because grants refer to workspaces by it.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/core_api_version
+  kind:
+    type: string
+    const: Workspace
+  metadata:
+    allOf:
+      - $ref: ../../../common/v1/meta.schema.yaml#/$defs/object_meta
+      - properties:
+          name:
+            $ref: ../../../common/v1/meta.schema.yaml#/$defs/dns_label
+  spec:
+    $ref: '#/$defs/workspace_spec'
+$defs:
+  workspace_spec:
+    title: WorkspaceSpec
+    description: >-
+      What the workspace runs on and is provisioned with. `provider`,
+      `resources` and `requiredCapabilities` cannot change once it exists
+      (`INVALID_ARGUMENT`; destroy it and apply again). Changes to `tools`
+      and `context` take effect on its next runtime.
+    type: object
+    required: [provider]
+    additionalProperties: false
+    properties:
+      provider:
+        description: The provider that supplies its compute, such as `process`, `smolvm` or `kubernetes`.
+        $ref: ../../../common/v1/types.schema.json#/$defs/slug
+      resources:
+        $ref: '#/$defs/resources'
+      tools:
+        description: Tools made available to agents in the workspace, such as `git` or `terminal`.
+        type: array
+        uniqueItems: true
+        default: []
+        items:
+          $ref: ../../../common/v1/types.schema.json#/$defs/slug
+      context:
+        $ref: '#/$defs/context'
+      requiredCapabilities:
+        description: Provider capabilities the workspace needs. A provider lacking one is rejected with `UNSUPPORTED_CAPABILITY`.
+        type: array
+        uniqueItems: true
+        default: []
+        items:
+          type: string
+          enum: [checkpoint, suspend, restore_same_host, restore_any_host, isolation_container, isolation_microvm, isolation_vm]
+      owner:
+        $ref: '#/$defs/owner'
+  resources:
+    title: Resources
+    description: Requested compute. Omitted fields take the provider's defaults.
+    type: object
+    additionalProperties: false
+    properties:
+      cpuMillis:
+        type: integer
+        minimum: 1
+      memoryMib:
+        type: integer
+        minimum: 1
+      diskGib:
+        type: integer
+        minimum: 1
+  context:
+    title: Context
+    description: What the workspace is provisioned with.
+    type: object
+    additionalProperties: false
+    properties:
+      repositories:
+        type: array
+        maxItems: 20
+        items:
+          $ref: '#/$defs/repository'
+      instructions:
+        description: Standing instructions placed in the workspace for every agent.
+        type: string
+        minLength: 1
+        maxLength: 65536
+      files:
+        type: array
+        maxItems: 100
+        items:
+          $ref: '#/$defs/context_file'
+  repository:
+    title: Repository
+    type: object
+    required: [url]
+    additionalProperties: false
+    properties:
+      url:
+        type: string
+        minLength: 1
+        maxLength: 2048
+      ref:
+        description: Branch, tag or commit to check out. Defaults to the repository's default branch.
+        type: string
+        minLength: 1
+        maxLength: 256
+  context_file:
+    title: ContextFile
+    type: object
+    required: [path, content]
+    additionalProperties: false
+    properties:
+      path:
+        description: Path relative to the workspace root.
+        type: string
+        minLength: 1
+        maxLength: 1024
+      content:
+        type: string
+        maxLength: 262144
+  owner:
+    title: Owner
+    description: The Graph Engine records the workspace serves. VCP stores and filters on them but does not interpret them.
+    type: object
+    additionalProperties: false
+    properties:
+      jobId:
+        $ref: ../../../common/v1/types.schema.json#/$defs/job_id
+      executionId:
+        $ref: ../../../common/v1/types.schema.json#/$defs/execution_id
+      stepAttemptId:
+        $ref: ../../../common/v1/types.schema.json#/$defs/step_attempt_id

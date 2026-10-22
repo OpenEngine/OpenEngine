@@ -29,11 +29,11 @@ flowchart LR
     nats[("NATS server")]
     class nats stream
     subgraph cxn["Connection Bus (cxn)"]
-        cxn_control["NATS control<br/><b>oe.v1.cxn.control.</b><br/>connections.add<br/>connections.{connection_id}.configure<br/>connections.{connection_id}.disable<br/>connections.{connection_id}.delete"]
+        cxn_control["NATS control<br/><b>oe.v1.cxn.control.connections.</b><br/>apply<br/>{connection_id}.disable<br/>{connection_id}.delete"]
         class cxn_control subjects
-        cxn_query["NATS query<br/><b>oe.v1.cxn.query.</b><br/>connections.list<br/>connections.{connection_id}.get"]
+        cxn_query["NATS query<br/><b>oe.v1.cxn.query.connections.</b><br/>list<br/>{connection_id}.get"]
         class cxn_query subjects
-        cxn_events["NATS events → stream cxn-events<br/><b>oe.v1.cxn.events.</b><br/>connections.{connection_id}.connection.added<br/>connections.{connection_id}.connection.configured<br/>connections.{connection_id}.connection.disabled<br/>connections.{connection_id}.connection.deleted<br/>connections.{connection_id}.connection.degraded<br/>connections.{connection_id}.connection.recovered"]
+        cxn_events["NATS events → stream cxn-events<br/><b>oe.v1.cxn.events.connections.{connection_id}.connection.</b><br/>applied<br/>disabled<br/>deleted<br/>degraded<br/>recovered"]
         class cxn_events subjects
         cxn_egress[("stream cxn-egress<br/>cxn.egress.>")]
         class cxn_egress stream
@@ -45,23 +45,42 @@ flowchart LR
         end
     end
     subgraph ge["Graph Engine (ge)"]
-        ge_control["NATS control<br/><b>oe.v1.ge.control.</b><br/>graphs.add<br/>graphs.{graph_id}.run<br/>jobs.submit<br/>jobs.{job_id}.steer<br/>jobs.{job_id}.pause<br/>jobs.{job_id}.resume<br/>jobs.{job_id}.cancel<br/>approvals.{approval_id}.decide<br/>loops.add<br/>loops.{loop_id}.configure<br/>loops.{loop_id}.pause<br/>loops.{loop_id}.resume<br/>loops.{loop_id}.remove"]
+        ge_control["NATS control<br/><b>oe.v1.ge.control.</b><br/>graphs.apply<br/>graphs.{graph_id}.run<br/>jobs.submit<br/>jobs.{job_id}.steer<br/>jobs.{job_id}.pause<br/>jobs.{job_id}.resume<br/>jobs.{job_id}.cancel<br/>approvals.{approval_id}.decide<br/>loops.apply<br/>loops.{loop_id}.pause<br/>loops.{loop_id}.resume<br/>loops.{loop_id}.remove"]
         class ge_control subjects
         ge_query["NATS query<br/><b>oe.v1.ge.query.</b><br/>graphs.list<br/>graphs.{graph_id}.get<br/>jobs.list<br/>jobs.{job_id}.get<br/>jobs.{job_id}.executions.list<br/>jobs.{job_id}.workspaces.list<br/>jobs.{job_id}.approvals.list<br/>executions.{execution_id}.get<br/>executions.{execution_id}.steps.list<br/>loops.list<br/>loops.{loop_id}.get<br/>operations.{operation_id}.get"]
         class ge_query subjects
-        ge_events["NATS events → stream ge-events<br/><b>oe.v1.ge.events.</b><br/>jobs.{job_id}.job.created<br/>jobs.{job_id}.job.completed<br/>jobs.{job_id}.job.failed<br/>jobs.{job_id}.job.cancelled<br/>jobs.{job_id}.execution.started<br/>jobs.{job_id}.execution.progressed<br/>jobs.{job_id}.execution.awaiting_approval<br/>jobs.{job_id}.execution.paused<br/>jobs.{job_id}.execution.resumed<br/>jobs.{job_id}.execution.completed<br/>jobs.{job_id}.execution.failed<br/>jobs.{job_id}.execution.cancelled<br/>jobs.{job_id}.approval.requested<br/>jobs.{job_id}.approval.resolved<br/>loops.{loop_id}.loop.added<br/>loops.{loop_id}.loop.configured<br/>loops.{loop_id}.loop.paused<br/>loops.{loop_id}.loop.resumed<br/>loops.{loop_id}.loop.removed"]
+        ge_events["NATS events → stream ge-events<br/><b>oe.v1.ge.events.</b><br/>jobs.{job_id}.job.created<br/>jobs.{job_id}.job.completed<br/>jobs.{job_id}.job.failed<br/>jobs.{job_id}.job.cancelled<br/>jobs.{job_id}.execution.started<br/>jobs.{job_id}.execution.progressed<br/>jobs.{job_id}.execution.awaiting_approval<br/>jobs.{job_id}.execution.paused<br/>jobs.{job_id}.execution.resumed<br/>jobs.{job_id}.execution.completed<br/>jobs.{job_id}.execution.failed<br/>jobs.{job_id}.execution.cancelled<br/>jobs.{job_id}.approval.requested<br/>jobs.{job_id}.approval.resolved<br/>loops.{loop_id}.loop.applied<br/>loops.{loop_id}.loop.paused<br/>loops.{loop_id}.loop.resumed<br/>loops.{loop_id}.loop.removed"]
         class ge_events subjects
         subgraph ge_db["database ge"]
             ge_t_graphs[("graphs")]
             class ge_t_graphs table
         end
     end
+    subgraph tools["Tool Service (tools)"]
+        tools_control["NATS control<br/><b>oe.v1.</b><br/>tools.apply<br/>tools.delete<br/>tools.invoke.{namespace}.{name}<br/>toolgrants.apply<br/>toolgrants.delete<br/>toolinvocations.cancel"]
+        class tools_control subjects
+        tools_query["NATS query<br/><b>oe.v1.</b><br/>tools.get<br/>tools.list<br/>toolgrants.get<br/>toolgrants.list<br/>toolinvocations.get<br/>toolinvocations.list"]
+        class tools_query subjects
+        tools_events["NATS events → stream tools-events<br/><b>oe.v1.events.toolinvocations.{namespace}.{invocation_id}.</b><br/>accepted<br/>running<br/>succeeded<br/>failed<br/>blocked-auth<br/>outcome-unknown<br/>cancelled"]
+        class tools_events subjects
+        subgraph tools_db["database tools"]
+            tools_t_tool_grants[("tool_grants")]
+            class tools_t_tool_grants table
+            tools_t_tool_invocation_attempts[("tool_invocation_attempts")]
+            class tools_t_tool_invocation_attempts table
+            tools_t_tool_invocations[("tool_invocations")]
+            class tools_t_tool_invocations table
+            tools_t_tools[("tools")]
+            class tools_t_tools table
+            tools_t_tool_invocations --- tools_t_tool_invocation_attempts
+        end
+    end
     subgraph vcp["Virtual Control Plane (vcp)"]
-        vcp_control["NATS control<br/><b>oe.v1.vcp.control.</b><br/>workspaces.create<br/>workspaces.{workspace_id}.ensure<br/>workspaces.{workspace_id}.execute<br/>workspaces.{workspace_id}.steer<br/>workspaces.{workspace_id}.cancel<br/>workspaces.{workspace_id}.checkpoint<br/>workspaces.{workspace_id}.suspend<br/>workspaces.{workspace_id}.destroy<br/>approvals.{approval_id}.decide"]
+        vcp_control["NATS control<br/><b>oe.v1.vcp.control.</b><br/>workspaces.apply<br/>workspaces.{workspace_id}.ensure<br/>workspaces.{workspace_id}.execute<br/>workspaces.{workspace_id}.steer<br/>workspaces.{workspace_id}.cancel<br/>workspaces.{workspace_id}.checkpoint<br/>workspaces.{workspace_id}.suspend<br/>workspaces.{workspace_id}.destroy<br/>approvals.{approval_id}.decide"]
         class vcp_control subjects
         vcp_query["NATS query<br/><b>oe.v1.vcp.query.</b><br/>capabilities.get<br/>workspaces.list<br/>workspaces.{workspace_id}.get<br/>workspaces.{workspace_id}.sessions.list<br/>workspaces.{workspace_id}.approvals.list<br/>workspaces.{workspace_id}.artifacts.list<br/>sessions.{session_id}.get<br/>sessions.{session_id}.events.list<br/>operations.{operation_id}.get"]
         class vcp_query subjects
-        vcp_events["NATS events → stream vcp-events<br/><b>oe.v1.vcp.events.</b><br/>workspaces.{workspace_id}.workspace.provisioning<br/>workspaces.{workspace_id}.workspace.ready<br/>workspaces.{workspace_id}.workspace.restored<br/>workspaces.{workspace_id}.workspace.checkpointed<br/>workspaces.{workspace_id}.workspace.suspended<br/>workspaces.{workspace_id}.workspace.destroyed<br/>workspaces.{workspace_id}.workspace.failed<br/>workspaces.{workspace_id}.task.started<br/>workspaces.{workspace_id}.task.completed<br/>workspaces.{workspace_id}.task.failed<br/>workspaces.{workspace_id}.task.cancelled<br/>workspaces.{workspace_id}.approval.requested<br/>workspaces.{workspace_id}.approval.resolved<br/>workspaces.{workspace_id}.approval.expired<br/>workspaces.{workspace_id}.steering.applied<br/>workspaces.{workspace_id}.steering.failed<br/>workspaces.{workspace_id}.conversation.message<br/>workspaces.{workspace_id}.usage.reported<br/>workspaces.{workspace_id}.artifact.created"]
+        vcp_events["NATS events → stream vcp-events<br/><b>oe.v1.vcp.events.workspaces.{workspace_id}.</b><br/>workspace.provisioning<br/>workspace.ready<br/>workspace.restored<br/>workspace.checkpointed<br/>workspace.suspended<br/>workspace.destroyed<br/>workspace.failed<br/>task.started<br/>task.completed<br/>task.failed<br/>task.cancelled<br/>approval.requested<br/>approval.resolved<br/>approval.expired<br/>steering.applied<br/>steering.failed<br/>conversation.message<br/>usage.reported<br/>artifact.created"]
         class vcp_events subjects
         subgraph vcp_db["database vcp"]
             vcp_t_workspaces[("workspaces")]
@@ -98,3 +117,6 @@ flowchart LR
     vcp_events -. "workspace and task events" .-> ge
     vcp -- "provision, suspend, restore" --> provider
     vcp -- "execute, steer, cancel" --> daemon
+    tools_control --- |"← invoke tools"| sessions
+    ge -- "tool grants" --> tools_control
+    cxn_query --- |"read by tools"| tools

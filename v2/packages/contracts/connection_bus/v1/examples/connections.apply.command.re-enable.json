@@ -1,0 +1,46 @@
+{
+  "summary": "Re-enable a disabled connection and rotate its credential, guarded by the version last read.",
+  "message": "ApplyConnectionCommand",
+  "subject": "oe.v1.cxn.control.connections.apply",
+  "payload": {
+    "command_id": "cmd_01JAX9CFG",
+    "causal_path": [
+      "cmd_01JAX9CFG"
+    ],
+    "expected_version": 3,
+    "payload": {
+      "connection": {
+        "apiVersion": "openengine.cc/v2alpha1",
+        "kind": "Connection",
+        "metadata": {
+          "name": "acme-github"
+        },
+        "spec": {
+          "provider": "github",
+          "displayName": "Acme GitHub",
+          "externalAccount": {
+            "kind": "Installation",
+            "id": "55012231",
+            "name": "acme"
+          },
+          "credentialRef": {
+            "store": "vault",
+            "key": "openengine/github/acme-app",
+            "version": "7"
+          },
+          "scope": {
+            "mode": "Selected",
+            "resources": [
+              "acme/api",
+              "acme/web"
+            ]
+          },
+          "settings": {
+            "default_branch": "main"
+          },
+          "disabled": false
+        }
+      }
+    }
+  }
+}

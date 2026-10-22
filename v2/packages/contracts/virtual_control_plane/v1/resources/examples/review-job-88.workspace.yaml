@@ -1,0 +1,21 @@
+apiVersion: openengine.cc/v2alpha1
+kind: Workspace
+metadata:
+  name: review-job-88
+spec:
+  provider: smolvm
+  resources:
+    cpuMillis: 2000
+    memoryMib: 4096
+    diskGib: 20
+  tools: [git, terminal]
+  context:
+    repositories:
+      - url: https://github.com/acme/api
+        ref: main
+    instructions: Follow the repository's CONTRIBUTING.md.
+  requiredCapabilities: [checkpoint, isolation_microvm]
+  owner:
+    jobId: job_88
+    executionId: exec_88a
+    stepAttemptId: stepa_88_impl_1

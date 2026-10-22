@@ -48,6 +48,13 @@ info:
     prefix names (`conn_…`). A malformed token is answered with
     `INVALID_ARGUMENT` naming `subject.{parameter}`.
 
+    ## Apply
+    Connections are created and changed by applying a Connection resource
+    (`kind: Connection`, `apiVersion: openengine.cc/v2alpha1`; see
+    `resources/`), Kubernetes-style, keyed by its `metadata.name`: a new name
+    creates the connection and allocates its `conn_…` ID, a known one updates
+    it. Tools name the connection they act through by that name.
+
     ## In-flight work
     - **disable** stops new ingress and egress. Deliveries already accepted
       are drained (`in_flight: drain`, default) or held until the connection
@@ -73,18 +80,11 @@ servers:
     description: The NATS server `oe up` starts.
 
 channels:
-  connectionsAdd:
-    address: oe.v1.cxn.control.connections.add
-    title: Add a connection
+  connectionsApply:
+    address: oe.v1.cxn.control.connections.apply
+    title: Apply a connection
     messages:
-      AddConnectionCommand: { $ref: '#/components/messages/AddConnectionCommand' }
-  connectionConfigure:
-    address: oe.v1.cxn.control.connections.{connection_id}.configure
-    title: Configure a connection
-    parameters:
-      connection_id: { $ref: '#/components/parameters/connection_id' }
-    messages:
-      ConfigureConnectionCommand: { $ref: '#/components/messages/ConfigureConnectionCommand' }
+      ApplyConnectionCommand: { $ref: '#/components/messages/ApplyConnectionCommand' }
   connectionDisable:
     address: oe.v1.cxn.control.connections.{connection_id}.disable
     title: Disable a connection
@@ -116,27 +116,19 @@ channels:
     title: NATS reply inbox
     description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
     messages:
-      AddConnectionResponse: { $ref: '#/components/messages/AddConnectionResponse' }
-      ConfigureConnectionResponse: { $ref: '#/components/messages/ConfigureConnectionResponse' }
+      ApplyConnectionResponse: { $ref: '#/components/messages/ApplyConnectionResponse' }
       DisableConnectionResponse: { $ref: '#/components/messages/DisableConnectionResponse' }
       DeleteConnectionResponse: { $ref: '#/components/messages/DeleteConnectionResponse' }
       ListConnectionsResponse: { $ref: '#/components/messages/ListConnectionsResponse' }
       GetConnectionResponse: { $ref: '#/components/messages/GetConnectionResponse' }
 
-  connectionAddedEvents:
-    address: oe.v1.cxn.events.connections.{connection_id}.connection.added
-    title: Connection added
+  connectionAppliedEvents:
+    address: oe.v1.cxn.events.connections.{connection_id}.connection.applied
+    title: Connection applied
     parameters:
       connection_id: { $ref: '#/components/parameters/connection_id' }
     messages:
-      ConnectionAdded: { $ref: '#/components/messages/ConnectionAdded' }
-  connectionConfiguredEvents:
-    address: oe.v1.cxn.events.connections.{connection_id}.connection.configured
-    title: Connection configured
-    parameters:
-      connection_id: { $ref: '#/components/parameters/connection_id' }
-    messages:
-      ConnectionConfigured: { $ref: '#/components/messages/ConnectionConfigured' }
+      ConnectionApplied: { $ref: '#/components/messages/ConnectionApplied' }
   connectionDisabledEvents:
     address: oe.v1.cxn.events.connections.{connection_id}.connection.disabled
     title: Connection disabled
@@ -167,31 +159,22 @@ channels:
       ConnectionRecovered: { $ref: '#/components/messages/ConnectionRecovered' }
 
 operations:
-  addConnection:
+  applyConnection:
     action: receive
-    title: Add a connection
-    summary: Create a connection from a provider, external account, credential reference and scope.
+    title: Apply a connection
+    summary: Create or update a connection from a Connection resource, by its `metadata.name`.
     description: |
-      Accepted once the connection is recorded; `resource_id` is the new
-      connection ID. Completes with `connection.added`.
-    channel: { $ref: '#/channels/connectionsAdd' }
+      Accepted once the connection is validated and recorded; `resource_id` is
+      its connection ID, allocated when the name is new. An update cannot
+      change `provider` or `externalAccount` (`INVALID_ARGUMENT`); a stale
+      `expected_version` is rejected with `VERSION_CONFLICT`. Setting
+      `spec.disabled` back to false re-enables a disabled connection. Completes
+      with `connection.applied`.
+    channel: { $ref: '#/channels/connectionsApply' }
     tags: [{ name: control }]
     reply:
       channel: { $ref: '#/channels/replyInbox' }
-      messages: [{ $ref: '#/channels/replyInbox/messages/AddConnectionResponse' }]
-  configureConnection:
-    action: receive
-    title: Configure a connection
-    summary: Replace configuration fields, or re-enable a disabled connection with `enabled true`.
-    description: |
-      Rejected with `INVALID_STATE` for a deleted connection and
-      `VERSION_CONFLICT` when `expected_version` is stale. Completes with
-      `connection.configured`.
-    channel: { $ref: '#/channels/connectionConfigure' }
-    tags: [{ name: control }]
-    reply:
-      channel: { $ref: '#/channels/replyInbox' }
-      messages: [{ $ref: '#/channels/replyInbox/messages/ConfigureConnectionResponse' }]
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyConnectionResponse' }]
   disableConnection:
     action: receive
     title: Disable a connection
@@ -236,15 +219,10 @@ operations:
       channel: { $ref: '#/channels/replyInbox' }
       messages: [{ $ref: '#/channels/replyInbox/messages/GetConnectionResponse' }]
 
-  publishConnectionAdded:
+  publishConnectionApplied:
     action: send
-    title: Connection added
-    channel: { $ref: '#/channels/connectionAddedEvents' }
-    tags: [{ name: event }]
-  publishConnectionConfigured:
-    action: send
-    title: Connection configured
-    channel: { $ref: '#/channels/connectionConfiguredEvents' }
+    title: Connection applied
+    channel: { $ref: '#/channels/connectionAppliedEvents' }
     tags: [{ name: event }]
   publishConnectionDisabled:
     action: send
@@ -282,48 +260,34 @@ components:
         schema: { $ref: '../../common/v1/event.schema.json#/$defs/headers' }
 
   messages:
-    AddConnectionCommand:
-      name: AddConnectionCommand
-      title: Add connection command
+    ApplyConnectionCommand:
+      name: ApplyConnectionCommand
+      title: Apply connection command
       payload:
         schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/commands.schema.json#/$defs/add_connection_command' }
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_connection_command' }
       examples:
-        - name: add-github
-          payload: { $ref: './examples/connections.add.command.json#/payload' }
-        - name: add-retry
+        - name: apply-github
+          payload: { $ref: './examples/connections.apply.command.json#/payload' }
+        - name: apply-retry
           summary: An identical retry after a timeout. Same command ID and path; receives the original response.
-          payload: { $ref: './examples/connections.add.command.retry.json#/payload' }
-    AddConnectionResponse:
-      name: AddConnectionResponse
-      title: Add connection response
+          payload: { $ref: './examples/connections.apply.command.retry.json#/payload' }
+        - name: re-enable
+          payload: { $ref: './examples/connections.apply.command.re-enable.json#/payload' }
+    ApplyConnectionResponse:
+      name: ApplyConnectionResponse
+      title: Apply connection response
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/connection_command_response' }
       examples:
         - name: accepted
-          payload: { $ref: './examples/connections.add.response.accepted.json#/payload' }
+          payload: { $ref: './examples/connections.apply.response.accepted.json#/payload' }
         - name: rejected-conflict
           summary: The command ID was reused with a different payload.
-          payload: { $ref: './examples/connections.add.response.command-id-conflict.json#/payload' }
-    ConfigureConnectionCommand:
-      name: ConfigureConnectionCommand
-      title: Configure connection command
-      payload:
-        schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/commands.schema.json#/$defs/configure_connection_command' }
-      examples:
-        - name: re-enable
-          payload: { $ref: './examples/connections.configure.command.json#/payload' }
-    ConfigureConnectionResponse:
-      name: ConfigureConnectionResponse
-      title: Configure connection response
-      payload:
-        schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/commands.schema.json#/$defs/connection_command_response' }
-      examples:
+          payload: { $ref: './examples/connections.apply.response.command-id-conflict.json#/payload' }
         - name: rejected-version-conflict
-          payload: { $ref: './examples/connections.configure.response.version-conflict.json#/payload' }
+          payload: { $ref: './examples/connections.apply.response.version-conflict.json#/payload' }
     DisableConnectionCommand:
       name: DisableConnectionCommand
       title: Disable connection command
@@ -400,26 +364,18 @@ components:
         - name: not-found
           payload: { $ref: './examples/connections.get.response.not-found.json#/payload' }
 
-    ConnectionAdded:
-      name: ConnectionAdded
-      title: connection.added
+    ConnectionApplied:
+      name: ConnectionApplied
+      title: connection.applied
       traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/events.schema.json#/$defs/connection_added_event' }
+        schema: { $ref: './schemas/events.schema.json#/$defs/connection_applied_event' }
       examples:
-        - name: added
-          payload: { $ref: './examples/connection.added.event.json#/payload' }
-    ConnectionConfigured:
-      name: ConnectionConfigured
-      title: connection.configured
-      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
-      payload:
-        schemaFormat: application/schema+json;version=draft-07
-        schema: { $ref: './schemas/events.schema.json#/$defs/connection_configured_event' }
-      examples:
+        - name: created
+          payload: { $ref: './examples/connection.applied.event.json#/payload' }
         - name: re-enabled
-          payload: { $ref: './examples/connection.configured.event.json#/payload' }
+          payload: { $ref: './examples/connection.applied.event.re-enabled.json#/payload' }
     ConnectionDisabled:
       name: ConnectionDisabled
       title: connection.disabled

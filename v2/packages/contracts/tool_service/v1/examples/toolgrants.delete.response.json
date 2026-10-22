@@ -1,0 +1,10 @@
+{
+  "message": "DeleteToolGrantResponse",
+  "in_reply_to": "oe.v1.toolgrants.delete",
+  "payload": {
+    "command_id": "cmd_toolgrants_delete_1",
+    "status": "accepted",
+    "operation_id": "op_toolgrants_delete_1",
+    "resource_id": "grant-uid-123"
+  }
+}

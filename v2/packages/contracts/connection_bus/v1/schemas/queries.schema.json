@@ -14,6 +14,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "name": {
+          "description": "Only the connection with this `metadata.name`, which is how tools refer to it.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+        },
         "provider": { "$ref": "connection.schema.json#/$defs/provider" },
         "state": {
           "type": "array",

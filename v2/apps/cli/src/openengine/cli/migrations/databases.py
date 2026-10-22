@@ -14,13 +14,14 @@ from alembic.util import CommandError
 from connection_bus.persistence import PERSISTENCE as CONNECTION_BUS
 from graph_engine.persistence import PERSISTENCE as GRAPH_ENGINE
 from sqlalchemy.exc import SQLAlchemyError
+from tool_service.persistence import PERSISTENCE as TOOL_SERVICE
 from virtual_control_plane.persistence import PERSISTENCE as VIRTUAL_CONTROL_PLANE
 
 from openengine.cli.migrations import MigrationError
 from openengine.persistence import BackendNotImplemented, ConfigError, DatabaseConfig, ServicePersistence
 from openengine.persistence.migrations import Upgrade
 
-SERVICES: Sequence[ServicePersistence[Any]] = (CONNECTION_BUS, GRAPH_ENGINE, VIRTUAL_CONTROL_PLANE)
+SERVICES: Sequence[ServicePersistence[Any]] = (CONNECTION_BUS, GRAPH_ENGINE, TOOL_SERVICE, VIRTUAL_CONTROL_PLANE)
 
 
 class Outcome(StrEnum):

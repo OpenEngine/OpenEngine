@@ -8,12 +8,22 @@
       "items": [
         {
           "connection_id": "conn_acme_gh_legacy",
+          "name": "acme-gh-legacy",
           "version": 9,
           "provider": "github",
           "display_name": "Acme GitHub (legacy)",
-          "external_account": { "kind": "organization", "id": "1182", "name": "acme" },
-          "credential_ref": { "store": "vault", "key": "openengine/github/acme-legacy" },
-          "scope": { "mode": "all" },
+          "external_account": {
+            "kind": "organization",
+            "id": "1182",
+            "name": "acme"
+          },
+          "credential_ref": {
+            "store": "vault",
+            "key": "openengine/github/acme-legacy"
+          },
+          "scope": {
+            "mode": "all"
+          },
           "settings": {},
           "state": "active",
           "health": {

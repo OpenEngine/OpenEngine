@@ -3,22 +3,30 @@
   "title": "Graph Engine commands",
   "description": "Requests and responses of `oe.v1.ge.control.…`. The resource named in the subject is the target; payloads do not repeat it.",
   "$defs": {
-    "add_graph_command": {
+    "apply_graph_command": {
       "allOf": [
         { "$ref": "../../../common/v1/command.schema.json" },
-        { "properties": { "payload": { "$ref": "#/$defs/add_graph_payload" } } }
+        { "properties": { "payload": { "$ref": "#/$defs/apply_graph_payload" } } }
       ]
     },
-    "add_graph_payload": {
-      "description": "Register an immutable revision. A new name creates the graph at revision 1; a known name with changed source adds the next revision; identical source returns the existing revision unchanged. Invalid source is rejected with INVALID_ARGUMENT listing every problem.",
+    "apply_graph_payload": {
+      "description": "Create or update a graph by name. `graph` is a Graph resource, named by its `metadata.name`; `python` is a Python LangGraph module exporting `workflow`. A new name creates the graph at revision 1, a changed definition adds the next revision, and an unchanged one returns the existing revision. Invalid input is rejected with INVALID_ARGUMENT listing every problem.",
       "type": "object",
-      "required": ["name", "format", "source"],
       "additionalProperties": false,
+      "oneOf": [{ "required": ["graph"] }, { "required": ["python"] }],
       "properties": {
-        "name": { "$ref": "graph.schema.json#/$defs/graph_name" },
-        "format": { "$ref": "graph.schema.json#/$defs/graph_format" },
-        "source": { "$ref": "graph.schema.json#/$defs/graph_source" },
-        "description": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        "graph": { "$ref": "../resources/graph.schema.yaml" },
+        "python": {
+          "description": "Executes on the backend; refused with UNSUPPORTED_CAPABILITY where Python graphs are disabled.",
+          "type": "object",
+          "required": ["name", "source"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "graph.schema.json#/$defs/graph_name" },
+            "source": { "$ref": "graph.schema.json#/$defs/graph_source" },
+            "description": { "type": "string", "minLength": 1, "maxLength": 2000 }
+          }
+        }
       }
     },
     "run_graph_command": {
@@ -255,47 +263,20 @@
         }
       }
     },
-    "add_loop_command": {
+    "apply_loop_command": {
       "allOf": [
         { "$ref": "../../../common/v1/command.schema.json" },
-        { "properties": { "payload": { "$ref": "#/$defs/add_loop_payload" } } }
+        { "properties": { "payload": { "$ref": "#/$defs/apply_loop_payload" } } }
       ]
     },
-    "add_loop_payload": {
-      "description": "Create an active loop.",
+    "apply_loop_payload": {
+      "description": "Create or update a loop by its `metadata.name`. `spec.graphRef` must name a registered graph (NOT_FOUND otherwise) and `spec.jobTemplate.inputs` must fit its inputs (INVALID_ARGUMENT otherwise). `spec.suspend: true` stores the loop paused. Changes apply to future triggers only. `expected_version` guards an update.",
       "type": "object",
-      "required": ["name", "graph", "trigger", "job_template"],
+      "required": ["loop"],
       "additionalProperties": false,
       "properties": {
-        "name": { "$ref": "loop.schema.json#/$defs/loop_name" },
-        "graph": { "$ref": "loop.schema.json#/$defs/loop_graph" },
-        "trigger": { "$ref": "loop.schema.json#/$defs/trigger" },
-        "concurrency": { "$ref": "loop.schema.json#/$defs/concurrency" },
-        "job_template": { "$ref": "loop.schema.json#/$defs/job_template" },
-        "starts_at": {
-          "description": "First time the loop may fire; defaults to acceptance.",
-          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
-        }
+        "loop": { "$ref": "../resources/loop.schema.yaml" }
       }
-    },
-    "configure_loop_command": {
-      "allOf": [
-        { "$ref": "../../../common/v1/command.schema.json" },
-        { "properties": { "payload": { "$ref": "#/$defs/configure_loop_payload" } } }
-      ]
-    },
-    "configure_loop_payload": {
-      "description": "Replace the given fields. Applies to future triggers only. A removed loop rejects with INVALID_STATE.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "graph": { "$ref": "loop.schema.json#/$defs/loop_graph" },
-        "trigger": { "$ref": "loop.schema.json#/$defs/trigger" },
-        "concurrency": { "$ref": "loop.schema.json#/$defs/concurrency" },
-        "job_template": { "$ref": "loop.schema.json#/$defs/job_template" },
-        "starts_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
-      },
-      "minProperties": 1
     },
     "pause_loop_command": {
       "allOf": [
@@ -322,7 +303,7 @@
       "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 2000 } }
     },
     "graph_command_response": {
-      "description": "Reply to `graphs.add`; `resource_id` is the graph ID.",
+      "description": "Reply to `graphs.apply`; `resource_id` is the graph ID.",
       "allOf": [
         { "$ref": "../../../common/v1/command-response.schema.json" },
         {
@@ -357,7 +338,7 @@
       ]
     },
     "loop_command_response": {
-      "description": "Reply to loop controls; `resource_id` is the loop ID.",
+      "description": "Reply to `loops.apply` and loop controls; `resource_id` is the loop ID.",
       "allOf": [
         { "$ref": "../../../common/v1/command-response.schema.json" },
         {

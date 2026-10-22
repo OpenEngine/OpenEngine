@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 import reference
 import resources
-from resources import EXAMPLES, KINDS, load_documents, validate_resource, validate_text
+from resources import GROUPS, KINDS, group_of, load_documents, validate_resource, validate_text
 
-EXAMPLE_FILES = sorted(EXAMPLES.glob("*.yaml"))
+EXAMPLE_FILES = sorted(path for group in GROUPS for path in group.examples.glob("*.yaml"))
 
 
 def _example(kind: str) -> dict[str, Any]:
@@ -30,18 +30,27 @@ def test_every_kind_has_an_example(kind: str) -> None:
     assert _example(kind)["kind"] == kind
 
 
-def test_checked_in_reference_is_current() -> None:
-    path = resources.reference_path()
-    assert path.exists() and path.read_text() == resources.page(), (
-        "resources/reference.html is stale: run `uv run python packages/contracts/tooling/resources.py`"
+@pytest.mark.parametrize("group", GROUPS, ids=lambda group: group.service)
+def test_checked_in_reference_is_current(group: resources.Group) -> None:
+    path = resources.reference_path(group)
+    assert path.exists() and path.read_text() == resources.page(group), (
+        f"{group.service}/v1/resources/reference.html is stale: run `uv run python packages/contracts/tooling/resources.py`"
     )
 
 
-def test_reference_documents_every_kind_and_example() -> None:
-    page = resources.page()
-    for kind in KINDS:
+@pytest.mark.parametrize("group", GROUPS, ids=lambda group: group.service)
+def test_reference_documents_every_kind_and_example(group: resources.Group) -> None:
+    page = resources.page(group)
+    for kind in group.kinds:
         assert f'id="{kind.lower()}"' in page
-    assert "implement-review" in page and "weekday-issues" in page and "open_pull_request" in page
+        assert f"<code>kind: {kind}</code>" in page
+    assert f"<code>apiVersion: {group.api_version}</code>" in page
+
+
+def test_every_service_contract_has_its_resources() -> None:
+    assert {group.service for group in GROUPS} <= set(reference.NAMES)
+    assert group_of("Connection").service == "connection_bus"
+    assert group_of("ToolGrant").api_version == "tools.openengine.cc/v1alpha1"
 
 
 def _problems(document: dict[str, Any]) -> list[str]:
@@ -49,9 +58,14 @@ def _problems(document: dict[str, Any]) -> list[str]:
 
 
 def test_unknown_kind_and_version_are_refused() -> None:
-    assert _problems({**_example("Tool"), "kind": "Widget"}) == ["kind: must be one of Graph, Loop, Tool"]
+    assert _problems({**_example("Graph"), "kind": "Widget"}) == [
+        "kind: must be one of Connection, Graph, Loop, Workspace for openengine.cc/v2alpha1"
+    ]
+    assert _problems({**_example("Graph"), "kind": "Tool"}) == [
+        "kind: must be one of Connection, Graph, Loop, Workspace for openengine.cc/v2alpha1"
+    ]
     assert _problems({**_example("Tool"), "apiVersion": "openengine.cc/v1"}) == [
-        "apiVersion: must be openengine.cc/v2alpha1"
+        "apiVersion: must be one of openengine.cc/v2alpha1, tools.openengine.cc/v1alpha1"
     ]
 
 
@@ -102,25 +116,54 @@ def test_unquoted_timestamps_stay_text() -> None:
     assert loop == {"startsAt": "2026-11-02T08:00:00Z"}
 
 
-def test_tool_handler_and_schemas() -> None:
+def test_tool_schemas_are_objects_and_recovery_is_known() -> None:
     tool = _example("Tool")
-    tool["spec"]["handler"] = {"builtin": {"name": "x"}, "exec": {"command": ["true"]}}
     tool["spec"]["inputSchema"] = {"type": "string"}
+    tool["spec"]["execution"]["recovery"] = "hope"
     assert _problems(tool) == [
-        "spec.handler: set exactly one of builtin, exec, mcp",
+        "spec.execution.recovery: 'hope' is not one of ['retry-safe', 'provider-idempotent', 'reconcile', 'manual']",
         "spec.inputSchema.type: 'object' was expected",
     ]
 
 
-def test_exec_working_dir_stays_in_the_workspace() -> None:
+def test_tool_names_are_subject_tokens() -> None:
+    for name in ("github.issue", "github_issue", "Github", "-github", "github-"):
+        tool = _example("Tool")
+        tool["metadata"]["name"] = name
+        assert _problems(tool), name
     tool = _example("Tool")
-    for directory in ("/etc", "../up", "a/../../b"):
-        tool["spec"]["handler"] = {"exec": {"command": ["true"], "workingDir": directory}}
-        assert _problems(tool), directory
+    del tool["metadata"]["namespace"]
+    assert _problems(tool) == ["metadata: 'namespace' is a required property"]
+
+
+def test_a_grant_names_a_workspace() -> None:
+    grant = _example("ToolGrant")
+    del grant["spec"]["subject"]["workspaceRef"]
+    assert _problems(grant) == ["spec.subject: 'workspaceRef' is a required property"]
+
+
+def test_an_invocation_pins_its_tool() -> None:
+    invocation = _example("ToolInvocation")
+    del invocation["spec"]["toolRef"]["uid"]
+    invocation["status"]["phase"] = "Done"
+    assert _problems(invocation) == [
+        "spec.toolRef: 'uid' is a required property",
+        "status.phase: 'Done' is not one of ['Accepted', 'Running', 'Succeeded', 'Failed', 'BlockedAuth', 'OutcomeUnknown', 'Cancelled']",
+    ]
+
+
+def test_connection_scope_lists_resources_only_when_selected() -> None:
+    connection = _example("Connection")
+    connection["spec"]["scope"] = {"mode": "All", "resources": ["a/b"]}
+    assert _problems(connection)
+    connection["spec"]["scope"] = {"mode": "Selected"}
+    assert _problems(connection)
+    connection["spec"]["scope"] = {"mode": "All"}
+    assert _problems(connection) == []
 
 
 def test_problems_in_a_multi_document_file_name_the_document() -> None:
-    text = "apiVersion: openengine.cc/v2alpha1\nkind: Tool\n---\nkind: Loop\n"
+    text = "apiVersion: openengine.cc/v2alpha1\nkind: Graph\n---\nkind: Loop\n"
     assert [str(problem) for problem in validate_text(text)][0].startswith("[0]")
     assert [str(problem) for problem in validate_text("a: [")][0].startswith("(document): not YAML")
 
@@ -142,5 +185,6 @@ def test_site_reference_links_every_contract_and_kind() -> None:
         for text in (sidebar, overview):
             assert f"pathname:///contracts/{service}/v1/'" in text or f"pathname:///contracts/{service}/v1/)" in text
     for kind in KINDS:
-        assert f"pathname:///contracts/graph_engine/v1/resources/#{kind.lower()}'" in sidebar
-        assert f"pathname:///contracts/graph_engine/v1/resources/{kind.lower()}.schema.yaml" in overview
+        service = group_of(kind).service
+        assert f"pathname:///contracts/{service}/v1/resources/#{kind.lower()}'" in sidebar
+        assert f"pathname:///contracts/{service}/v1/resources/{kind.lower()}.schema.yaml" in overview

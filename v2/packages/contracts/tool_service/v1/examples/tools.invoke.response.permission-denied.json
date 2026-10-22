@@ -1,0 +1,17 @@
+{
+  "summary": "Rejected: no active grant covers the caller's workspace and step for this tool.",
+  "message": "InvokeToolResponse",
+  "in_reply_to": "oe.v1.tools.invoke.default.github-issue-comment",
+  "payload": {
+    "command_id": "cmd_tools_invoke_2",
+    "status": "rejected",
+    "error": {
+      "code": "PERMISSION_DENIED",
+      "message": "No active ToolGrant lets workspace review-job-88 call github-issue-comment.",
+      "retryable": false,
+      "details": {
+        "permission": "tools.invoke.default.github-issue-comment"
+      }
+    }
+  }
+}

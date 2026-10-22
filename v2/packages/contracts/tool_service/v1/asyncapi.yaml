@@ -1,0 +1,705 @@
+asyncapi: 3.1.0
+id: urn:openengine:v2:tool-service
+info:
+  title: OpenEngine Tool Service (tools)
+  version: 1.0.0-draft.1
+  description: |
+    The Tool Service keeps the tools agents may call, who may call them, and a
+    durable record of every call. This document describes the NATS interface
+    **the tool service serves**: the commands and queries it answers and the
+    events it publishes.
+
+    > **Contract only.** These subjects are a defined API, not an
+    > implemented one. No handler answers them yet; see the package README's
+    > *Implementation status*.
+
+    ## Versions
+    - AsyncAPI format: `3.1.0` (the `asyncapi` field).
+    - Contract release: `info.version`, semver. Minor releases only add.
+    - Subject namespace: `v1` in `oe.v1.…`. It changes only for an
+      incompatible release, which is served side by side.
+
+    ## Subjects
+    Resource management is separate from execution:
+
+    | Subject | Request | Reply |
+    | -- | -- | -- |
+    | `oe.v1.tools.apply` | Tool resource | accepted once validated and stored |
+    | `oe.v1.tools.get` | namespace and name | Tool |
+    | `oe.v1.tools.list` | namespace, optional label selector | tools the caller may see |
+    | `oe.v1.tools.delete` | namespace and name | deletion result |
+    | `oe.v1.tools.invoke.{namespace}.{name}` | invocation ID, step, arguments | invocation accepted |
+    | `oe.v1.toolgrants.apply` | ToolGrant resource | accepted once stored |
+    | `oe.v1.toolgrants.get` | namespace and name | ToolGrant |
+    | `oe.v1.toolgrants.list` | namespace and filters | grants |
+    | `oe.v1.toolgrants.delete` | namespace and name | revocation result |
+    | `oe.v1.toolinvocations.get` | namespace and invocation ID | invocation, with its result |
+    | `oe.v1.toolinvocations.list` | namespace, workspace and step filters | invocations |
+    | `oe.v1.toolinvocations.cancel` | namespace and invocation ID | cancellation accepted |
+
+    Execution workers answer `oe.v1.tools.invoke.*.*` as one queue group,
+    `tool-workers`. Lifecycle events are published on
+    `oe.v1.events.toolinvocations.{namespace}.{invocation_id}.{event}` and
+    captured by the `tools-events` stream.
+
+    Commands use the shared command envelope and queries the shared query
+    envelope; payload fields are camelCase, like the resources they carry.
+    `accepted` means durably recorded; the tool service has no operation
+    query, so events and `get` report what happened.
+
+    ## Names
+    A namespace and a resource name each occupy one subject token:
+    lower-case letters, digits and `-`, with no `.` or wildcards, such as
+    `oe.v1.tools.invoke.default.github-issue-comment`. A namespace groups
+    resources; naming alone does not isolate tenants.
+
+    ## Tools
+    Each Tool is a capability bound to one Connection, so an agent never
+    picks the connection, and the adapter's trusted `configuration` cannot be
+    overridden by arguments. Applying a Tool asks its adapter to validate it
+    and rejects a `recovery` the adapter does not implement.
+
+    ## Grants
+    - Only trusted control-plane callers may apply or delete grants. The
+      Graph Engine is the usual one: a Graph step's `agent.tools` lists the
+      tools (`namespace.name`) it may call. Once a step attempt has its
+      workspace, and before the attempt is sent to run there, the Graph
+      Engine applies a grant for each tool to that attempt in that
+      workspace; it deletes them when the attempt ends.
+    - Grants and invocations name the workspace by its Workspace name
+      (`workspaceRef`) and the step attempt by the Graph Engine's ID
+      (`stepAttemptId`, `stepa_…`).
+
+    ## Availability
+    The Graph Engine applies grants before every step that lists tools, and
+    agents invoke tools while steps run, so the tool service is on the
+    critical path of graph execution and must be highly available.
+    - A grant without `stepAttemptId` covers the whole workspace; a step's
+      grant never exceeds the workspace's control-plane permission ceiling.
+    - `constraints` are typed and validated by the tool's adapter.
+    - A missing, expired or deleted grant denies a call. Grants are checked
+      when a call is accepted and again just before every dispatch.
+    - Discovery (`get`, `list`) and invocation results enforce the caller's
+      authorization too.
+
+    ## Invocations
+    The service derives the tool from the subject and the workspace from the
+    caller's verified credentials, then creates the ToolInvocation itself.
+    Clients cannot apply one, so they cannot forge its identity or
+    authorization. The resolved tool definition is stored with it, so
+    changing the Tool cannot change accepted work. Deleting and recreating a
+    Tool or a ToolGrant under the same name gives it a new `uid`; nothing
+    carries over through name reuse.
+
+    Events carry references and a status summary. Results are read only
+    through `oe.v1.toolinvocations.get`, which checks the reader may see them.
+
+    ## Identity
+    The acting identity comes from the authenticated NATS connection (or a
+    verified delegation), never from a payload field.
+  license:
+    name: Apache-2.0
+defaultContentType: application/json
+
+servers:
+  local:
+    host: localhost:4222
+    protocol: nats
+    description: The NATS server `oe up` starts.
+
+channels:
+  toolsApply:
+    address: oe.v1.tools.apply
+    title: Apply a tool
+    messages:
+      ApplyToolCommand: { $ref: '#/components/messages/ApplyToolCommand' }
+  toolsDelete:
+    address: oe.v1.tools.delete
+    title: Delete a tool
+    messages:
+      DeleteToolCommand: { $ref: '#/components/messages/DeleteToolCommand' }
+  toolInvoke:
+    address: oe.v1.tools.invoke.{namespace}.{name}
+    title: Invoke a tool
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      name: { $ref: '#/components/parameters/name' }
+    messages:
+      InvokeToolCommand: { $ref: '#/components/messages/InvokeToolCommand' }
+  toolGrantsApply:
+    address: oe.v1.toolgrants.apply
+    title: Apply a tool grant
+    messages:
+      ApplyToolGrantCommand: { $ref: '#/components/messages/ApplyToolGrantCommand' }
+  toolGrantsDelete:
+    address: oe.v1.toolgrants.delete
+    title: Revoke a tool grant
+    messages:
+      DeleteToolGrantCommand: { $ref: '#/components/messages/DeleteToolGrantCommand' }
+  toolInvocationsCancel:
+    address: oe.v1.toolinvocations.cancel
+    title: Cancel a tool invocation
+    messages:
+      CancelToolInvocationCommand: { $ref: '#/components/messages/CancelToolInvocationCommand' }
+  toolsGet:
+    address: oe.v1.tools.get
+    title: Get a tool
+    messages:
+      GetToolQuery: { $ref: '#/components/messages/GetToolQuery' }
+  toolsList:
+    address: oe.v1.tools.list
+    title: List tools
+    messages:
+      ListToolsQuery: { $ref: '#/components/messages/ListToolsQuery' }
+  toolGrantsGet:
+    address: oe.v1.toolgrants.get
+    title: Get a tool grant
+    messages:
+      GetToolGrantQuery: { $ref: '#/components/messages/GetToolGrantQuery' }
+  toolGrantsList:
+    address: oe.v1.toolgrants.list
+    title: List tool grants
+    messages:
+      ListToolGrantsQuery: { $ref: '#/components/messages/ListToolGrantsQuery' }
+  toolInvocationsGet:
+    address: oe.v1.toolinvocations.get
+    title: Get a tool invocation
+    messages:
+      GetToolInvocationQuery: { $ref: '#/components/messages/GetToolInvocationQuery' }
+  toolInvocationsList:
+    address: oe.v1.toolinvocations.list
+    title: List tool invocations
+    messages:
+      ListToolInvocationsQuery: { $ref: '#/components/messages/ListToolInvocationsQuery' }
+  replyInbox:
+    address: null
+    title: NATS reply inbox
+    description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
+    messages:
+      ApplyToolResponse: { $ref: '#/components/messages/ApplyToolResponse' }
+      DeleteToolResponse: { $ref: '#/components/messages/DeleteToolResponse' }
+      InvokeToolResponse: { $ref: '#/components/messages/InvokeToolResponse' }
+      ApplyToolGrantResponse: { $ref: '#/components/messages/ApplyToolGrantResponse' }
+      DeleteToolGrantResponse: { $ref: '#/components/messages/DeleteToolGrantResponse' }
+      CancelToolInvocationResponse: { $ref: '#/components/messages/CancelToolInvocationResponse' }
+      GetToolResponse: { $ref: '#/components/messages/GetToolResponse' }
+      ListToolsResponse: { $ref: '#/components/messages/ListToolsResponse' }
+      GetToolGrantResponse: { $ref: '#/components/messages/GetToolGrantResponse' }
+      ListToolGrantsResponse: { $ref: '#/components/messages/ListToolGrantsResponse' }
+      GetToolInvocationResponse: { $ref: '#/components/messages/GetToolInvocationResponse' }
+      ListToolInvocationsResponse: { $ref: '#/components/messages/ListToolInvocationsResponse' }
+  invocationAcceptedEvents:
+    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.accepted
+    title: toolinvocation.accepted
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      invocation_id: { $ref: '#/components/parameters/invocation_id' }
+    messages:
+      ToolInvocationAccepted: { $ref: '#/components/messages/ToolInvocationAccepted' }
+  invocationRunningEvents:
+    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.running
+    title: toolinvocation.running
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      invocation_id: { $ref: '#/components/parameters/invocation_id' }
+    messages:
+      ToolInvocationRunning: { $ref: '#/components/messages/ToolInvocationRunning' }
+  invocationSucceededEvents:
+    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.succeeded
+    title: toolinvocation.succeeded
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      invocation_id: { $ref: '#/components/parameters/invocation_id' }
+    messages:
+      ToolInvocationSucceeded: { $ref: '#/components/messages/ToolInvocationSucceeded' }
+  invocationFailedEvents:
+    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.failed
+    title: toolinvocation.failed
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      invocation_id: { $ref: '#/components/parameters/invocation_id' }
+    messages:
+      ToolInvocationFailed: { $ref: '#/components/messages/ToolInvocationFailed' }
+  invocationBlockedAuthEvents:
+    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.blocked-auth
+    title: toolinvocation.blocked-auth
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      invocation_id: { $ref: '#/components/parameters/invocation_id' }
+    messages:
+      ToolInvocationBlockedAuth: { $ref: '#/components/messages/ToolInvocationBlockedAuth' }
+  invocationOutcomeUnknownEvents:
+    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.outcome-unknown
+    title: toolinvocation.outcome-unknown
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      invocation_id: { $ref: '#/components/parameters/invocation_id' }
+    messages:
+      ToolInvocationOutcomeUnknown: { $ref: '#/components/messages/ToolInvocationOutcomeUnknown' }
+  invocationCancelledEvents:
+    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.cancelled
+    title: toolinvocation.cancelled
+    parameters:
+      namespace: { $ref: '#/components/parameters/namespace' }
+      invocation_id: { $ref: '#/components/parameters/invocation_id' }
+    messages:
+      ToolInvocationCancelled: { $ref: '#/components/messages/ToolInvocationCancelled' }
+
+operations:
+  applyTool:
+    action: receive
+    title: Apply a tool
+    summary: "Create or update a Tool after its adapter validates it."
+    description: "Accepted once validated and stored; `resource_id` is the tool's `uid`. Read the stored tool with `tools.get`."
+    channel: { $ref: '#/channels/toolsApply' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyToolResponse' }]
+  deleteTool:
+    action: receive
+    title: Delete a tool
+    summary: "Delete a Tool by namespace and name."
+    description: "Accepted once the tool is deleted; `resource_id` is its `uid`."
+    channel: { $ref: '#/channels/toolsDelete' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/DeleteToolResponse' }]
+  invokeTool:
+    action: receive
+    title: Invoke a tool
+    summary: "Call a tool: record a ToolInvocation and dispatch it to an execution worker."
+    description: "Execution workers answer this subject as one queue group, `tool-workers`, so each call is handled once. Accepted means the invocation was recorded and authorized; `resource_id` is its `uid`. Progress and completion are `toolinvocation.*` events; the result is read with `toolinvocations.get`."
+    channel: { $ref: '#/channels/toolInvoke' }
+    tags: [{ name: control }]
+    bindings:
+      nats:
+        queue: tool-workers
+        bindingVersion: '0.1.0'
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/InvokeToolResponse' }]
+  applyToolGrant:
+    action: receive
+    title: Apply a tool grant
+    summary: "Create or update a ToolGrant. Trusted control-plane callers only."
+    description: "Accepted once validated and stored; `resource_id` is the grant's `uid`."
+    channel: { $ref: '#/channels/toolGrantsApply' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyToolGrantResponse' }]
+  deleteToolGrant:
+    action: receive
+    title: Revoke a tool grant
+    summary: "Revoke a ToolGrant. Trusted control-plane callers only."
+    description: "Accepted once the grant is deleted; `resource_id` is its `uid`."
+    channel: { $ref: '#/channels/toolGrantsDelete' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/DeleteToolGrantResponse' }]
+  cancelToolInvocation:
+    action: receive
+    title: Cancel a tool invocation
+    summary: "Cancel an invocation by namespace and invocation ID."
+    description: "Completes with `toolinvocation.cancelled`, or `toolinvocation.outcome-unknown` when a running attempt's effect cannot be determined."
+    channel: { $ref: '#/channels/toolInvocationsCancel' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/CancelToolInvocationResponse' }]
+  getTool:
+    action: receive
+    title: Get a tool
+    channel: { $ref: '#/channels/toolsGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetToolResponse' }]
+  listTools:
+    action: receive
+    title: List tools
+    channel: { $ref: '#/channels/toolsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListToolsResponse' }]
+  getToolGrant:
+    action: receive
+    title: Get a tool grant
+    channel: { $ref: '#/channels/toolGrantsGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetToolGrantResponse' }]
+  listToolGrants:
+    action: receive
+    title: List tool grants
+    channel: { $ref: '#/channels/toolGrantsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListToolGrantsResponse' }]
+  getToolInvocation:
+    action: receive
+    title: Get a tool invocation
+    channel: { $ref: '#/channels/toolInvocationsGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetToolInvocationResponse' }]
+  listToolInvocations:
+    action: receive
+    title: List tool invocations
+    channel: { $ref: '#/channels/toolInvocationsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListToolInvocationsResponse' }]
+  publishToolInvocationAccepted:
+    action: send
+    title: toolinvocation.accepted
+    channel: { $ref: '#/channels/invocationAcceptedEvents' }
+    tags: [{ name: event }]
+  publishToolInvocationRunning:
+    action: send
+    title: toolinvocation.running
+    channel: { $ref: '#/channels/invocationRunningEvents' }
+    tags: [{ name: event }]
+  publishToolInvocationSucceeded:
+    action: send
+    title: toolinvocation.succeeded
+    channel: { $ref: '#/channels/invocationSucceededEvents' }
+    tags: [{ name: event }]
+  publishToolInvocationFailed:
+    action: send
+    title: toolinvocation.failed
+    channel: { $ref: '#/channels/invocationFailedEvents' }
+    tags: [{ name: event }]
+  publishToolInvocationBlockedAuth:
+    action: send
+    title: toolinvocation.blocked-auth
+    channel: { $ref: '#/channels/invocationBlockedAuthEvents' }
+    tags: [{ name: event }]
+  publishToolInvocationOutcomeUnknown:
+    action: send
+    title: toolinvocation.outcome-unknown
+    channel: { $ref: '#/channels/invocationOutcomeUnknownEvents' }
+    tags: [{ name: event }]
+  publishToolInvocationCancelled:
+    action: send
+    title: toolinvocation.cancelled
+    channel: { $ref: '#/channels/invocationCancelledEvents' }
+    tags: [{ name: event }]
+
+components:
+  parameters:
+    namespace:
+      description: A namespace, one subject token of lower-case letters, digits and `-`.
+      x-oe-identifier: resource_name
+    name:
+      description: A tool's name, one subject token of lower-case letters, digits and `-`.
+      x-oe-identifier: resource_name
+    invocation_id:
+      description: An invocation's `invocationId`, its ToolInvocation's name.
+      x-oe-identifier: resource_name
+
+  messageTraits:
+    eventHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/event.schema.json#/$defs/headers' }
+
+  messages:
+    ApplyToolCommand:
+      name: ApplyToolCommand
+      title: Apply a tool command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_tool_command' }
+      examples:
+        - name: tools.apply.command
+          payload: { $ref: './examples/tools.apply.command.json#/payload' }
+    ApplyToolResponse:
+      name: ApplyToolResponse
+      title: Apply a tool response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/tools.apply.response.json#/payload' }
+        - name: invalid-argument
+          payload: { $ref: './examples/tools.apply.response.invalid-argument.json#/payload' }
+    DeleteToolCommand:
+      name: DeleteToolCommand
+      title: Delete a tool command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/delete_tool_command' }
+      examples:
+        - name: tools.delete.command
+          payload: { $ref: './examples/tools.delete.command.json#/payload' }
+    DeleteToolResponse:
+      name: DeleteToolResponse
+      title: Delete a tool response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/tools.delete.response.json#/payload' }
+    InvokeToolCommand:
+      name: InvokeToolCommand
+      title: Invoke a tool command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/invoke_tool_command' }
+      examples:
+        - name: tools.invoke.command
+          payload: { $ref: './examples/tools.invoke.command.json#/payload' }
+    InvokeToolResponse:
+      name: InvokeToolResponse
+      title: Invoke a tool response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/tools.invoke.response.json#/payload' }
+        - name: permission-denied
+          payload: { $ref: './examples/tools.invoke.response.permission-denied.json#/payload' }
+    ApplyToolGrantCommand:
+      name: ApplyToolGrantCommand
+      title: Apply a tool grant command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_tool_grant_command' }
+      examples:
+        - name: toolgrants.apply.command
+          payload: { $ref: './examples/toolgrants.apply.command.json#/payload' }
+    ApplyToolGrantResponse:
+      name: ApplyToolGrantResponse
+      title: Apply a tool grant response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/toolgrants.apply.response.json#/payload' }
+    DeleteToolGrantCommand:
+      name: DeleteToolGrantCommand
+      title: Revoke a tool grant command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/delete_tool_grant_command' }
+      examples:
+        - name: toolgrants.delete.command
+          payload: { $ref: './examples/toolgrants.delete.command.json#/payload' }
+    DeleteToolGrantResponse:
+      name: DeleteToolGrantResponse
+      title: Revoke a tool grant response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/toolgrants.delete.response.json#/payload' }
+    CancelToolInvocationCommand:
+      name: CancelToolInvocationCommand
+      title: Cancel a tool invocation command
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/cancel_tool_invocation_command' }
+      examples:
+        - name: toolinvocations.cancel.command
+          payload: { $ref: './examples/toolinvocations.cancel.command.json#/payload' }
+    CancelToolInvocationResponse:
+      name: CancelToolInvocationResponse
+      title: Cancel a tool invocation response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/toolinvocations.cancel.response.json#/payload' }
+    GetToolQuery:
+      name: GetToolQuery
+      title: Get a tool query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_tool_query' }
+      examples:
+        - name: tools.get.query
+          payload: { $ref: './examples/tools.get.query.json#/payload' }
+    GetToolResponse:
+      name: GetToolResponse
+      title: Get a tool response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_tool_response' }
+      examples:
+        - name: ok
+          payload: { $ref: './examples/tools.get.response.json#/payload' }
+    ListToolsQuery:
+      name: ListToolsQuery
+      title: List tools query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_tools_query' }
+      examples:
+        - name: tools.list.query
+          payload: { $ref: './examples/tools.list.query.json#/payload' }
+    ListToolsResponse:
+      name: ListToolsResponse
+      title: List tools response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_tools_response' }
+      examples:
+        - name: ok
+          payload: { $ref: './examples/tools.list.response.json#/payload' }
+    GetToolGrantQuery:
+      name: GetToolGrantQuery
+      title: Get a tool grant query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_tool_grant_query' }
+      examples:
+        - name: toolgrants.get.query
+          payload: { $ref: './examples/toolgrants.get.query.json#/payload' }
+    GetToolGrantResponse:
+      name: GetToolGrantResponse
+      title: Get a tool grant response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_tool_grant_response' }
+      examples:
+        - name: ok
+          payload: { $ref: './examples/toolgrants.get.response.json#/payload' }
+    ListToolGrantsQuery:
+      name: ListToolGrantsQuery
+      title: List tool grants query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_tool_grants_query' }
+      examples:
+        - name: toolgrants.list.query
+          payload: { $ref: './examples/toolgrants.list.query.json#/payload' }
+    ListToolGrantsResponse:
+      name: ListToolGrantsResponse
+      title: List tool grants response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_tool_grants_response' }
+      examples:
+        - name: ok
+          payload: { $ref: './examples/toolgrants.list.response.json#/payload' }
+    GetToolInvocationQuery:
+      name: GetToolInvocationQuery
+      title: Get a tool invocation query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_tool_invocation_query' }
+      examples:
+        - name: toolinvocations.get.query
+          payload: { $ref: './examples/toolinvocations.get.query.json#/payload' }
+    GetToolInvocationResponse:
+      name: GetToolInvocationResponse
+      title: Get a tool invocation response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_tool_invocation_response' }
+      examples:
+        - name: ok
+          payload: { $ref: './examples/toolinvocations.get.response.json#/payload' }
+    ListToolInvocationsQuery:
+      name: ListToolInvocationsQuery
+      title: List tool invocations query
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_tool_invocations_query' }
+      examples:
+        - name: toolinvocations.list.query
+          payload: { $ref: './examples/toolinvocations.list.query.json#/payload' }
+    ListToolInvocationsResponse:
+      name: ListToolInvocationsResponse
+      title: List tool invocations response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_tool_invocations_response' }
+      examples:
+        - name: ok
+          payload: { $ref: './examples/toolinvocations.list.response.json#/payload' }
+    ToolInvocationAccepted:
+      name: ToolInvocationAccepted
+      title: toolinvocation.accepted
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/invocation_accepted_event' }
+      examples:
+        - name: toolinvocation.accepted.event
+          payload: { $ref: './examples/toolinvocation.accepted.event.json#/payload' }
+    ToolInvocationRunning:
+      name: ToolInvocationRunning
+      title: toolinvocation.running
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/invocation_running_event' }
+      examples:
+        - name: toolinvocation.running.event
+          payload: { $ref: './examples/toolinvocation.running.event.json#/payload' }
+    ToolInvocationSucceeded:
+      name: ToolInvocationSucceeded
+      title: toolinvocation.succeeded
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/invocation_succeeded_event' }
+      examples:
+        - name: toolinvocation.succeeded.event
+          payload: { $ref: './examples/toolinvocation.succeeded.event.json#/payload' }
+    ToolInvocationFailed:
+      name: ToolInvocationFailed
+      title: toolinvocation.failed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/invocation_failed_event' }
+      examples:
+        - name: toolinvocation.failed.event
+          payload: { $ref: './examples/toolinvocation.failed.event.json#/payload' }
+    ToolInvocationBlockedAuth:
+      name: ToolInvocationBlockedAuth
+      title: toolinvocation.blocked-auth
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/invocation_blocked_auth_event' }
+      examples:
+        - name: toolinvocation.blocked-auth.event
+          payload: { $ref: './examples/toolinvocation.blocked-auth.event.json#/payload' }
+    ToolInvocationOutcomeUnknown:
+      name: ToolInvocationOutcomeUnknown
+      title: toolinvocation.outcome-unknown
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/invocation_outcome_unknown_event' }
+      examples:
+        - name: toolinvocation.outcome-unknown.event
+          payload: { $ref: './examples/toolinvocation.outcome-unknown.event.json#/payload' }
+    ToolInvocationCancelled:
+      name: ToolInvocationCancelled
+      title: toolinvocation.cancelled
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/invocation_cancelled_event' }
+      examples:
+        - name: toolinvocation.cancelled.event
+          payload: { $ref: './examples/toolinvocation.cancelled.event.json#/payload' }

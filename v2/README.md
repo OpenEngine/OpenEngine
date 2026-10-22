@@ -1,10 +1,11 @@
 # OpenEngine V2
 
-OpenEngine V2 is a grounds-up rewrite of OpenEngine in a service-oriented architecture. It's split into three services:
+OpenEngine V2 is a grounds-up rewrite of OpenEngine in a service-oriented architecture. It's split into four services:
 | Service Name | Shorthand | Description |
 | -- | -- | --|
 | Connection Bus | cxn | The way that external integrations communicate with OpenEngine. |
 | Graph Engine | ge | The component that decides which steps need to execute and when. |
+| Tool Service | tools | The tools agents may call, who may call them, and a durable record of every call. |
 | Virtual Control Plane | vcp | The controller of which workspaces + agents are active. |
 
 The repo is structured as follows
@@ -43,6 +44,7 @@ All services contain a persistence directory which holds all of that service's d
 | -- | -- | -- |
 | connection_bus | `cxn` | connections |
 | graph_engine | `ge` | graphs |
+| tool_service | `tools` | tools, tool_grants, tool_invocations, tool_invocation_attempts |
 | virtual_control_plane | `vcp` | workspaces |
 
 

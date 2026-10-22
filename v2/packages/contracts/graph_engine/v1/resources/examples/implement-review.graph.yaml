@@ -25,7 +25,7 @@ spec:
       agent:
         runner: {name: "${inputs.runner}"}
         steeringPolicy: AlwaysOpen
-        tools: [git_subcommand]
+        tools: [default.git-subcommand]
         prompt: |
           ${inputs.instruction}
 
@@ -35,7 +35,7 @@ spec:
       displayName: Open pull request
       agent:
         runner: {sameAs: implement}
-        tools: [git_subcommand, open_pull_request]
+        tools: [default.git-subcommand, default.open-pull-request]
         prompt: Push this checkout's commits to a new agent/ branch and open a pull request against ${inputs.base}.
         outputs:
           - {name: pr_url, type: string, required: true, description: the pull request's URL}

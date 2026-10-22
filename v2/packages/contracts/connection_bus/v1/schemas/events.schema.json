@@ -11,48 +11,27 @@
         "connection_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/connection_id" }
       }
     },
-    "connection_added_event": {
+    "connection_applied_event": {
+      "description": "A connection was created or updated by `connections.apply`.",
       "allOf": [
         { "$ref": "../../../common/v1/event.schema.json" },
         {
           "required": ["resource_version"],
           "properties": {
-            "event_type": { "const": "connection.added" },
+            "event_type": { "const": "connection.applied" },
             "producer": { "const": "cxn" },
             "resources": { "$ref": "#/$defs/connection_resources" },
             "payload": {
               "type": "object",
-              "required": ["operation", "connection"],
+              "required": ["operation", "created", "changed", "re_enabled", "connection"],
               "additionalProperties": false,
               "properties": {
                 "operation": {
                   "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
                 },
-                "connection": { "$ref": "connection.schema.json#/$defs/connection" }
-              }
-            }
-          }
-        }
-      ]
-    },
-    "connection_configured_event": {
-      "allOf": [
-        { "$ref": "../../../common/v1/event.schema.json" },
-        {
-          "required": ["resource_version"],
-          "properties": {
-            "event_type": { "const": "connection.configured" },
-            "producer": { "const": "cxn" },
-            "resources": { "$ref": "#/$defs/connection_resources" },
-            "payload": {
-              "type": "object",
-              "required": ["operation", "changed", "re_enabled", "connection"],
-              "additionalProperties": false,
-              "properties": {
-                "operation": {
-                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
-                },
+                "created": { "type": "boolean", "description": "True for a new connection, false for an update." },
                 "changed": {
+                  "description": "For an update, the fields it changed; empty for a new connection.",
                   "type": "array",
                   "uniqueItems": true,
                   "items": {
@@ -60,7 +39,7 @@
                     "enum": ["display_name", "credential_ref", "scope", "settings", "state"]
                   }
                 },
-                "re_enabled": { "type": "boolean" },
+                "re_enabled": { "type": "boolean", "description": "True when the apply re-enabled a disabled connection." },
                 "connection": { "$ref": "connection.schema.json#/$defs/connection" }
               }
             }

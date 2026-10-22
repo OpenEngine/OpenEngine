@@ -1,0 +1,42 @@
+{
+  "message": "ToolInvocationAccepted",
+  "subject": "oe.v1.events.toolinvocations.default.ti-123.accepted",
+  "headers": {
+    "Nats-Msg-Id": "evt_ti123_accepted"
+  },
+  "payload": {
+    "event_id": "evt_ti123_accepted",
+    "event_type": "toolinvocation.accepted",
+    "occurred_at": "2026-10-21T15:05:00Z",
+    "producer": "tools",
+    "causal_path": [
+      "cmd_tools_invoke_1",
+      "evt_ti123_accepted"
+    ],
+    "resources": {
+      "invocation_id": "ti-123"
+    },
+    "payload": {
+      "operation": {
+        "operation_id": "op_tools_invoke_1",
+        "command_id": "cmd_tools_invoke_1"
+      },
+      "namespace": "default",
+      "invocation": {
+        "name": "ti-123",
+        "uid": "invocation-uid-123"
+      },
+      "toolRef": {
+        "name": "github-issue-comment",
+        "uid": "tool-uid-123",
+        "generation": 1
+      },
+      "workspaceRef": {
+        "name": "review-job-88"
+      },
+      "stepAttemptId": "stepa_88_review_1",
+      "phase": "Accepted",
+      "attemptCount": 0
+    }
+  }
+}

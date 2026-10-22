@@ -1,0 +1,18 @@
+{
+  "summary": "Rejected: the requested provider lacks a required capability.",
+  "message": "ApplyWorkspaceResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.apply",
+  "payload": {
+    "command_id": "cmd_create_p",
+    "status": "rejected",
+    "error": {
+      "code": "UNSUPPORTED_CAPABILITY",
+      "message": "Provider process cannot checkpoint.",
+      "retryable": false,
+      "details": {
+        "capability": "checkpoint",
+        "provider": "process"
+      }
+    }
+  }
+}

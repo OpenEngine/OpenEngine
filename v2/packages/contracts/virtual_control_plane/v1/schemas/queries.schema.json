@@ -51,6 +51,10 @@
                   "minItems": 1,
                   "uniqueItems": true
                 },
+                "name": {
+                  "description": "Only the workspace with this `metadata.name`, which is how tool grants refer to it.",
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name"
+                },
                 "provider": { "$ref": "workspace.schema.json#/$defs/provider" },
                 "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
                 "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
