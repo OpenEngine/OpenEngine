@@ -24,6 +24,7 @@ from dotenv import dotenv_values
 from langgraph_acp import configure_default_registry
 from starlette.applications import Starlette
 
+from engine.adapters.agent_runner.acp import CLAUDE_EXECUTABLE_VARIABLE
 from engine.apps.web.api import create_app, work_order_graph
 from engine.apps.web.composition import (
     Settings,
@@ -358,9 +359,12 @@ def read_configuration(
         os.environ["GIT_SSH_COMMAND"] = shlex.join([
             "ssh", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
         ])
-    # And for Codex: open-verify, which cannot read engine.toml, starts it too.
+    # And for Codex and Claude: open-verify, which cannot read engine.toml,
+    # starts them too, and reads the variables their adapters do.
     if (codex := loaded.config.runner_paths.get("codex")) is not None:
         os.environ["CODEX_PATH"] = codex
+    if (claude := loaded.config.runner_paths.get("claude")) is not None:
+        os.environ[CLAUDE_EXECUTABLE_VARIABLE] = claude
     # A node given no registry, and the starter graphs loaded below, run the
     # configured agents rather than langgraph-acp's bare built-ins.
     configure_default_registry(builtin_agents(loaded.config))

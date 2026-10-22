@@ -504,6 +504,7 @@ def build_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             attribution=settings.engine_config.attribution,
             output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
+            config=settings.engine_config,
         ),
         "opencode": _opencode_runner(settings, workspace_provider, read_only=False),
     }
@@ -520,6 +521,7 @@ def _opencode_runner(
         model=settings.opencode_model,
         attribution=settings.engine_config.attribution,
         workspace_provider=workspace_provider,
+        config=settings.engine_config,
     )
 
 
@@ -564,6 +566,7 @@ def build_read_only_runners(settings: Settings) -> Mapping[str, AgentRunner]:
             attribution=settings.engine_config.attribution,
             output_style=settings.engine_config.claude.output_style,
             workspace_provider=workspace_provider,
+            config=settings.engine_config,
         ),
         "opencode": _opencode_runner(settings, workspace_provider, read_only=True),
     }

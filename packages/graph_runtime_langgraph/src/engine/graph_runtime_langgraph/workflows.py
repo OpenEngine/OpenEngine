@@ -40,7 +40,7 @@ from engine.graph_runtime_langgraph.acp import answer_permission
 from engine.graph_runtime_langgraph.graphs import LangGraphDefinition, unwrapped
 from engine.graph_runtime_langgraph.runtime import LangGraphRuntime
 from engine.graph_runtime_langgraph.store import SqliteGraphRuntimeStore
-from langgraph_acp import ACPAgentProvider, ACPAgentRegistry
+from langgraph_acp import ACPAgentProvider, ACPAgentRegistry, default_registry
 
 #: LangGraph's checkpoints, and the runtime's own records. Two files because
 #: they answer to two different owners: one is Pregel's idea of where a run
@@ -318,6 +318,17 @@ def with_added_agents(
 ) -> WithAddedAgents:
     """`registry`'s agents, also resolving the agents added with `oe agent add`."""
     return WithAddedAgents((registry.resolve(name) for name in registry.names), added)
+
+
+def configured_agents(added: AddedAgents = ADDED_AGENTS) -> WithAddedAgents:
+    """Codex, Claude and OpenCode as `engine.toml` configures them, and `added`.
+
+    The serving process installs the configured agents as `default_registry()`
+    at startup; `agent_registry` routes their permission requests to the run.
+    What a workflow file names as its agents, so it never builds a provider.
+    """
+    registry = default_registry()
+    return with_added_agents(agent_registry(map(registry.resolve, registry.names)), added)
 
 
 def added_agent_inputs(workflow: GraphWorkflow) -> frozenset[str]:

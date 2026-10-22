@@ -119,6 +119,9 @@ CODEX_AGENT_MODE = "read-only"
 #: The Codex sandbox names `codex_acp_runner` accepts.
 CODEX_SANDBOXES = tuple(SANDBOX_POLICIES)
 
+#: The Claude Code binary claude-agent-acp runs, in place of the one it bundles.
+CLAUDE_EXECUTABLE_VARIABLE = "CLAUDE_CODE_EXECUTABLE"
+
 NO_ATTRIBUTION_INSTRUCTIONS = (
     "Do not add AI attribution to commits or pull requests, including "
     "Co-authored-by trailers or generated-by notices. Keep any "
@@ -909,18 +912,25 @@ def agent_provider(config: EngineConfig, agent: str, /, **overrides: Any) -> ACP
     """The provider for `agent` (`codex`, `claude` or `opencode`).
 
     `overrides` reach the provider's constructor, for a caller that needs its
-    own `permissions` or `name`. Codex runs the binary `installed_codex`
-    resolves, with `[runners.codex].path` first; an `env` override is laid
-    over that.
+    own `permissions` or `name`. `[runners.<agent>].path` names the binary:
+    Codex runs the one `installed_codex` resolves, with the path first; Claude's
+    adapter runs it as `CLAUDE_CODE_EXECUTABLE`; OpenCode is started as
+    `<path> acp` unless a `command` override names something else. An `env`
+    override is laid over these.
     """
+    path = config.runner_paths.get(agent, "")
+    env = dict(overrides.pop("env", None) or {})
     if agent == "codex":
-        codex = installed_codex(path=config.runner_paths.get("codex", ""))
-        env = {**({"CODEX_PATH": codex} if codex else {}), **(overrides.pop("env", None) or {})}
+        codex = installed_codex(path=path)
+        env = {**({"CODEX_PATH": codex} if codex else {}), **env}
         return CodexACPProvider(env=env or None, **overrides)
     if agent == "claude":
-        return ClaudeACPProvider(**overrides)
+        env = {**({CLAUDE_EXECUTABLE_VARIABLE: path} if path else {}), **env}
+        return ClaudeACPProvider(env=env or None, **overrides)
     if agent == "opencode":
-        return OpenCodeACPProvider(**overrides)
+        if path and tuple(overrides.get("command", OPENCODE_ACP_COMMAND)) == OPENCODE_ACP_COMMAND:
+            overrides["command"] = (path, "acp")
+        return OpenCodeACPProvider(env=env or None, **overrides)
     raise ValueError(f"unknown agent {agent!r}; expected one of: codex, claude, opencode")
 
 
@@ -1018,6 +1028,7 @@ def claude_acp_runner(
     attribution: bool = True,
     output_style: ResponseStyle | None = None,
     env: Mapping[str, str] | None = None,
+    config: EngineConfig | None = None,
 ) -> ACPAgentRunner:
     """Claude Code, through claude-agent-acp, with Engine's tool settings.
 
@@ -1030,6 +1041,8 @@ def claude_acp_runner(
     The session is pinned to Claude's `default` permission mode. The adapter
     otherwise starts in whatever mode the operator's own Claude settings name,
     and one like `auto` approves requests without them ever reaching Engine.
+
+    The Claude Code underneath is `[runners.claude].path` from `config`, when set.
     """
     base = claude_session_config(attribution=attribution, output_style=output_style)
     options: dict[str, Any] = dict((base or {}).get("claudeCode", {}).get("options", {}))
@@ -1037,7 +1050,7 @@ def claude_acp_runner(
     if tools is not None:
         options["tools"] = list(tools)
     return ACPAgentRunner(
-        ClaudeACPProvider(command=command, env=env),
+        agent_provider(config or EngineConfig(), "claude", command=command, env=env),
         working_directory=working_directory,
         model=model,
         timeout_seconds=timeout_seconds,
@@ -1061,6 +1074,7 @@ def opencode_acp_runner(
     workspace_provider: WorkspaceProvider | None = None,
     attribution: bool = True,
     env: Mapping[str, str] | None = None,
+    config: EngineConfig | None = None,
 ) -> ACPAgentRunner:
     """OpenCode, through `opencode acp`, asking before it does anything but read.
 
@@ -1079,6 +1093,9 @@ def opencode_acp_runner(
 
     Attribution reaches OpenCode as an instructions file, the only way it
     takes instructions from configuration.
+
+    `[runners.opencode].path` from `config`, when set, replaces the pinned
+    `npx` command, as long as `command` is left at that default.
     """
     unasked = "deny" if read_only else "ask"
     permission = {
@@ -1095,20 +1112,22 @@ def opencode_acp_runner(
         "list": "allow",
         "external_directory": unasked,
     }
-    config: dict[str, Any] = {
+    opencode_config: dict[str, Any] = {
         "permission": permission,
         "agent": {
             name: {"permission": permission} for name in OPENCODE_SESSION_AGENTS
         },
     }
     if not attribution:
-        config["instructions"] = [_no_attribution_instructions()]
+        opencode_config["instructions"] = [_no_attribution_instructions()]
     return ACPAgentRunner(
-        OpenCodeACPProvider(
+        agent_provider(
+            config or EngineConfig(),
+            "opencode",
             command=command,
             env={
                 **(env or {}),
-                "OPENCODE_CONFIG_CONTENT": json.dumps(config),
+                "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
                 "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
             },
         ),
@@ -1135,6 +1154,7 @@ def _no_attribution_instructions() -> str:
 
 __all__ = [
     "ACP_PERMISSION_TRANSLATOR",
+    "CLAUDE_EXECUTABLE_VARIABLE",
     "CODEX_AGENT_MODE",
     "CODEX_SANDBOXES",
     "READ_ONLY_TOOLS",

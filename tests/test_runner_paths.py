@@ -1,4 +1,4 @@
-"""`[runners.codex].path` reaches every place Engine starts Codex."""
+"""`[runners.<agent>].path` reaches every place Engine starts that agent."""
 
 import langgraph_acp.agent
 import pytest
@@ -122,3 +122,37 @@ def test_startup_configures_the_default_registry_starters_and_open_verify(stub, 
     assert default_registry().resolve("codex").env == {"CODEX_PATH": stub}
     assert namespace["AGENTS"].resolve("codex").env == {"CODEX_PATH": stub}  # type: ignore[attr-defined]
     assert web_main.os.environ["CODEX_PATH"] == stub
+
+
+def _paths(tmp_path) -> EngineConfig:
+    return EngineConfig(runner_paths={"claude": str(tmp_path / "claude"), "opencode": str(tmp_path / "opencode")})
+
+
+def test_the_factory_runs_the_configured_claude_and_opencode(tmp_path) -> None:
+    config = _paths(tmp_path)
+
+    assert agent_provider(config, "claude").env == {"CLAUDE_CODE_EXECUTABLE": str(tmp_path / "claude")}
+    assert agent_provider(config, "opencode").command == (str(tmp_path / "opencode"), "acp")
+    assert agent_provider(config, "opencode", command=("fake",)).command == ("fake",)
+
+
+def test_the_web_runners_run_the_configured_claude_and_opencode(tmp_path) -> None:
+    settings = Settings(sqlite_path=str(tmp_path / "c.sqlite3"), engine_config=_paths(tmp_path))
+
+    for runners in (build_runners(settings), build_read_only_runners(settings)):
+        assert runners["claude"].provider.env["CLAUDE_CODE_EXECUTABLE"] == str(tmp_path / "claude")
+        assert runners["opencode"].provider.command == (str(tmp_path / "opencode"), "acp")
+        assert "OPENCODE_CONFIG_CONTENT" in runners["opencode"].provider.env
+
+
+def test_startup_exports_the_configured_claude_for_open_verify(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_CODE_EXECUTABLE", raising=False)
+    monkeypatch.setattr(langgraph_acp.agent, "_DEFAULT", None)
+    claude = tmp_path / "claude"
+    config = tmp_path / "engine.toml"
+    config.write_text(f'[runners.claude]\npath = "{claude}"\n')
+
+    web_main.read_configuration(config)
+
+    assert web_main.os.environ["CLAUDE_CODE_EXECUTABLE"] == str(claude)
+    assert default_registry().resolve("claude").env == {"CLAUDE_CODE_EXECUTABLE": str(claude)}
