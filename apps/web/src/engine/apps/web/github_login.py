@@ -148,6 +148,8 @@ class GitHubLogin:
         self.service_token = service_token
         self.onboarding_token = onboarding_token
         self._signing_key = secrets.token_bytes(32)
+        # Active token cookies are per browser and revocable on logout.
+        self._token_sessions: dict[str, int] = {}
 
     def routes(self) -> list[Route]:
         return [
@@ -355,10 +357,11 @@ class GitHubLogin:
     def _token_session(self, request: Request) -> bool:
         token = self.request_token(request)
         value = request.cookies.get("engine_token_session", "")
-        expires, _, signature = value.partition(".")
-        return (valid_service_token(token) and len(expires) <= 12 and expires.isascii() and expires.isdigit()
+        expires, _, rest = value.partition(".")
+        session_id, _, signature = rest.partition(".")
+        return (value in self._token_sessions and valid_service_token(token) and len(expires) <= 12 and expires.isascii() and expires.isdigit()
                 and int(expires) > time.time()
-                and secrets.compare_digest(signature.encode(), self._sign(f"token:{token}:{expires}").encode()))
+                and secrets.compare_digest(signature.encode(), self._sign(f"token:{token}:{expires}:{session_id}").encode()))
 
     async def token_login(self, request: Request) -> Response:
         if self.configured:
@@ -374,8 +377,12 @@ class GitHubLogin:
         if not isinstance(supplied, str) or not valid_service_token(token) or not secrets.compare_digest(supplied.encode(), token.encode()):
             return JSONResponse({"error": "Token not accepted"}, 401, headers=_HEADERS)
         expires = str(int(time.time()) + _SESSION_TTL)
+        self._token_sessions = {value: end for value, end in self._token_sessions.items() if end > time.time()}
+        session_id = secrets.token_urlsafe(32)
+        value = f"{expires}.{session_id}.{self._sign(f'token:{token}:{expires}:{session_id}')}"
+        self._token_sessions[value] = int(expires)
         response = JSONResponse({"ok": True}, headers=_HEADERS)
-        response.set_cookie("engine_token_session", f"{expires}.{self._sign(f'token:{token}:{expires}')}",
+        response.set_cookie("engine_token_session", value,
                             max_age=_SESSION_TTL, httponly=True, samesite="strict",
                             secure=request.url.scheme == "https")
         return response
@@ -570,6 +577,7 @@ class GitHubLogin:
 
     async def logout(self, request: Request) -> Response:
         if not self.configured:
+            self._token_sessions.pop(request.cookies.get("engine_token_session", ""), None)
             response = JSONResponse({"ok": True}, headers=_HEADERS)
             response.delete_cookie("engine_token_session", path="/")
             return response

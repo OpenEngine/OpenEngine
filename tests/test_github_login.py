@@ -1299,3 +1299,27 @@ def test_protected_request_reads_service_token_once():
     reads.clear()
     assert client.get('/api/data', headers={'Authorization': f'Bearer {SERVICE_TOKEN}'}).status_code == 200
     assert len(reads) == 1
+
+
+def test_token_logout_revokes_copied_cookie_without_revoking_other_browser():
+    from starlette.responses import JSONResponse
+
+    login = GitHubLogin(None, service_token=lambda: SERVICE_TOKEN)
+    app = login.middleware(Starlette(routes=[
+        *login.routes(), Route('/api/data', lambda _r: JSONResponse({'ok': True})),
+    ]))
+    first = TestClient(app, base_url='https://engine.test')
+    second = TestClient(app, base_url='https://engine.test')
+    replay = TestClient(app, base_url='https://engine.test')
+    for client in (first, second):
+        assert client.post('/api/auth/token', json={'token': SERVICE_TOKEN}).status_code == 200
+    copied = first.cookies['engine_token_session']
+    replay.cookies.set('engine_token_session', copied)
+    assert replay.get('/api/data').status_code == 200
+    assert first.post('/api/auth/github/logout').status_code == 200
+    assert replay.get('/api/data').status_code == 401
+    assert replay.get('/api/auth/github/status').json()['authenticated'] is False
+    assert second.get('/api/data').status_code == 200
+    assert first.post('/api/auth/token', json={'token': SERVICE_TOKEN}).status_code == 200
+    assert first.get('/api/data').status_code == 200
+    assert replay.get('/api/data').status_code == 401
