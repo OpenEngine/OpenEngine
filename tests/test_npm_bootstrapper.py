@@ -140,8 +140,8 @@ esac
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.assertTrue((self.target / '.installed').is_file())
         self.assertIn('fixture:', first.stdout)
-        # npm owns the engine launcher; the installer must not write its own.
-        self.assertFalse((self.home / '.local/bin/engine').exists())
+        # npm owns the oe launcher; the installer must not write its own.
+        self.assertFalse((self.home / '.local/bin/oe').exists())
         self.assertTrue(first.stdout.rstrip().endswith(':go --help'))
         shutil.rmtree(release)
         second = self.run_engine('go')

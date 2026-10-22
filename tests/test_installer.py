@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallerTests(unittest.TestCase):
-    def test_engine_is_the_only_installed_launcher(self):
+    def test_oe_is_the_only_installed_launcher(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prefix = root / "release with ' quotes"
@@ -58,10 +58,10 @@ class InstallerTests(unittest.TestCase):
                 )
                 self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
                 result = subprocess.run(
-                    [str(bin_dir / "engine"), "argument with spaces", "--json"],
+                    [str(bin_dir / "oe"), "argument with spaces", "--json"],
                     env=environment, check=True, capture_output=True, text=True,
                 )
                 assert result.stdout.splitlines() == [
                     str(root / "config/openengine/engine.toml"), "argument with spaces", "--json",
                 ]
-                self.assertEqual([path.name for path in bin_dir.iterdir()], ["engine"])
+                self.assertEqual([path.name for path in bin_dir.iterdir()], ["oe"])

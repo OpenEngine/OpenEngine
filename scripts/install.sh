@@ -27,7 +27,7 @@ Usage: install.sh [--version X.Y.Z] [--prefix DIR] [--no-start] [--no-shim]
   --version X.Y.Z  install this release instead of the latest
   --prefix DIR     install under DIR (default: \$XDG_DATA_HOME/openengine)
   --no-start       do not start OpenEngine after installing
-  --no-shim        do not write the engine launcher (npm provides its own)
+  --no-shim        do not write the oe launcher (npm provides its own)
 EOF
 }
 
@@ -92,7 +92,7 @@ state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/openengine
 cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/openengine
 bin_dir=${XDG_BIN_HOME:-$HOME/.local/bin}
 config="$config_dir/engine.toml"
-engine_shim="$bin_dir/engine"
+engine_shim="$bin_dir/oe"
 
 mkdir -p "$prefix/bin" "$prefix/versions"
 prefix=$(cd "$prefix" && pwd -P)
@@ -185,7 +185,7 @@ ln -sfn "versions/$release" "$prefix/current"
 
 # The shim: single-quoted paths, with any quote in them closed and escaped.
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-# `engine` is the terminal client; `engine daemon` manages the web service.
+# `oe` is the terminal client; `oe daemon` manages the web service.
 write_shim() {
   if [ -e "$1" ] && ! grep -q '^# Written by the OpenEngine installer' "$1"; then
     die "$1 exists and was not written by this installer; move it aside and rerun"
@@ -233,7 +233,7 @@ if [ "$shim" = 1 ]; then
   say "installed OpenEngine $release: $engine_shim"
   case ":$PATH:" in
     *":$bin_dir:"*) ;;
-    *) warn "$bin_dir is not on PATH; add it to your shell profile to run engine" ;;
+    *) warn "$bin_dir is not on PATH; add it to your shell profile to run oe" ;;
   esac
 else
   say "installed OpenEngine $release: $target"
@@ -256,4 +256,4 @@ if [ "$start" = 1 ]; then
 fi
 
 
-printf '\ninstalled! run `engine`\n'
+printf '\ninstalled! run `oe`\n'

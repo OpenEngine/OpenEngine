@@ -9,7 +9,7 @@
     "directory": "npm/engine"
   },
   "bin": {
-    "engine": "bin/engine.js"
+    "oe": "bin/engine.js"
   },
   "engines": {
     "node": ">=18"
