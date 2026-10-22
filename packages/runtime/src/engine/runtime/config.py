@@ -58,7 +58,7 @@ class WorkflowsConfig:
 
 @dataclass(frozen=True, slots=True)
 class OnboardingConfig:
-    """Where `engine repo add` clones a repository when no path is given.
+    """Where `oe repo add` clones a repository when no path is given.
 
     `directory`, when set, replaces the daemon home's `code` subdirectory, so
     a deployment that keeps checkouts elsewhere need not pass `--path` on every
@@ -68,13 +68,13 @@ class OnboardingConfig:
     directory: str = ""
 
 
-#: What `engine agent claude|codex|opencode` serves when `[sessions] tools` says nothing: an implementation node's tools.
+#: What `oe agent claude|codex|opencode` serves when `[sessions] tools` says nothing: an implementation node's tools.
 DEFAULT_SESSION_TOOLS: tuple[str, ...] = ("git_subcommand", "open_pull_request")
 
 
 @dataclass(frozen=True, slots=True)
 class SessionsConfig:
-    """`[sessions]`: what an interactive `engine agent claude|codex|opencode` session is given."""
+    """`[sessions]`: what an interactive `oe agent claude|codex|opencode` session is given."""
 
     tools: tuple[str, ...] = DEFAULT_SESSION_TOOLS
     """The repository tools its agent reaches through Engine, as an implementation node's `tools`."""
@@ -82,7 +82,7 @@ class SessionsConfig:
 
 @dataclass(frozen=True, slots=True)
 class GraphsConfig:
-    """How this backend treats graphs registered through `engine graph add`."""
+    """How this backend treats graphs registered through `oe graph add`."""
 
     allow_python: bool = True
     """Whether a Python graph may be uploaded. Python runs with the daemon's
@@ -290,7 +290,7 @@ class EngineConfig:
     repo_modes: Mapping[str, str] = field(default_factory=dict)
     """`[repos]` names mapped to the mode their WorkOrders run in.
 
-    Written by `engine repo add`. A repository named `disconnected` here has every
+    Written by `oe repo add`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
     repository_trust: Mapping[str, bool] = field(default_factory=dict)

@@ -13,9 +13,9 @@ const test = base.extend({
 
 test.use({ anotherComputerAt: MAC_MINI })
 
-/** `engine backends list --check --json`, prefixed with `env`, and the other computer's health. */
+/** `oe backends list --check --json`, prefixed with `env`, and the other computer's health. */
 async function macMiniHealth(terminal: { run(command: string): Promise<{ output: string }> }, env = "") {
-  const { output } = await terminal.run(`${env}engine backends list --check --json`)
+  const { output } = await terminal.run(`${env}oe backends list --check --json`)
   const { backends } = JSON.parse(output) as { backends: { name: string; health: string }[] }
   return backends.find((backend) => backend.name === "mac-mini")?.health
 }
@@ -23,7 +23,7 @@ async function macMiniHealth(terminal: { run(command: string): Promise<{ output:
 test.describe("another computer over https", { tag: ["@skip-docs"] }, () => {
   test("is refused on its certificate unless the run's certificate is trusted", async ({ terminal }) => {
     expect((await terminal.run("echo ${SSL_CERT_FILE-unset}")).output).toBe("unset")
-    await terminal.run(`engine backend add mac-mini https://${MAC_MINI}`)
+    await terminal.run(`oe backend add mac-mini https://${MAC_MINI}`)
 
     const untrusted = await macMiniHealth(terminal)
     expect(untrusted).toMatch(new RegExp(`^down: cannot reach backend mac-mini at https://${MAC_MINI_PATTERN}: `))

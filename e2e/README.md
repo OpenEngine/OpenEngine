@@ -1,6 +1,6 @@
 # e2e
 
-End-to-end tests for the `engine` CLI, driven through a real terminal in a
+End-to-end tests for the `oe` CLI, driven through a real terminal in a
 browser. The same specs become the site's Guides.
 
 ```sh
@@ -56,7 +56,7 @@ technical; `WRITING.md` says how, with a glossary every page uses.
 
 A spec under `tests/` whose describe blocks use `withDocCategory` and
 `withDocMeta` becomes a page. Every `test.step` title is a sentence the reader
-follows ("Run `engine graphs list`."). Setup and cleanup go in `[nodoc]`
+follows ("Run `oe graphs list`."). Setup and cleanup go in `[nodoc]`
 steps. Put each category in `tests/docCategories.ts`. Specs that test the
 harness itself are tagged `@skip-docs`.
 

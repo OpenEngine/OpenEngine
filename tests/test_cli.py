@@ -1,4 +1,4 @@
-"""The `engine` command's top level."""
+"""The `oe` command's top level."""
 
 from __future__ import annotations
 

@@ -27,7 +27,7 @@ def _openengine(**overrides) -> bytes:
 def test_daemon_state_is_a_str_enum_of_the_five_states():
     assert issubclass(daemon.DaemonState, StrEnum)
     assert {state.value for state in daemon.DaemonState} == STATE_NAMES
-    # Values stay the strings `engine daemon status --json` already prints.
+    # Values stay the strings `oe daemon status --json` already prints.
     assert daemon.DaemonState.READY == "ready"
     assert daemon.DaemonState.STARTING == "starting"
     assert daemon.DaemonState.INCOMPATIBLE == "incompatible"
@@ -109,7 +109,7 @@ def test_check_health_reports_no_body_for_another_programs_http_error(health_ser
 
     state, body, detail = daemon.check_health(url)
 
-    # `engine daemon status` prints the body's `version`; a foreign one is not OpenEngine's.
+    # `oe daemon status` prints the body's `version`; a foreign one is not OpenEngine's.
     assert state is daemon.DaemonState.FOREIGN
     assert body is None
     assert detail == f"server returned HTTP {status}"

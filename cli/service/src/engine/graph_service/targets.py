@@ -13,9 +13,9 @@ from engine.graph_service.service import NotFound, ServiceError
 NO_TARGET = 'no such branch or PR; to give an instruction, quote it'
 NO_BRANCH = 'no current branch; switch to a branch or pass one explicitly'
 NO_REPOSITORY = 'no repository: run in a checkout or pass --repo or a full PR URL'
-CONNECT = 'cannot read this repository while disconnected; run engine connect github'
+CONNECT = 'cannot read this repository while disconnected; run oe connect github'
 FORK_FIX = 'cannot fix a fork PR or a PR with an unavailable head repository; check out the fork and fix it there'
-PRIVATE = 'private repository requires a forge connection; run engine connect github'
+PRIVATE = 'private repository requires a forge connection; run oe connect github'
 OUTSIDE_REPOSITORY = 'PR target is outside the configured repository'
 
 if TYPE_CHECKING:

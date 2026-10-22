@@ -69,17 +69,17 @@ This guide shows how to write a graph, save it, find it again, and what happens 
         )
 
         await step(
-          `Every graph file follows the same layout. To see it, with an example, type \`engine graph spec | head -n 30\` and press Enter. \`engine graph spec\` describes everything a graph file can say, which is long; \`| head -n 30\` shows only its first 30 lines, where the example is.
+          `Every graph file follows the same layout. To see it, with an example, type \`oe graph spec | head -n 30\` and press Enter. \`oe graph spec\` describes everything a graph file can say, which is long; \`| head -n 30\` shows only its first 30 lines, where the example is.
 
 You'll see a short example graph. It has more in it than a first graph needs: the next step shows the few lines yours needs. This works even when OpenEngine isn't running, so you can write a graph anywhere.`,
           async () => {
-            const { output } = await terminal.run("engine graph spec | head -n 30")
+            const { output } = await terminal.run("oe graph spec | head -n 30")
             expect(output).toContain("apiVersion: openengine.cc/v1")
             await show(await terminal.rows(/^apiVersion: openengine\.cc\/v1$/, /^\s+prompt: "Review/), "An example graph")
           },
         )
 
-        await test.step("[nodoc] engine graph spec needs no backend", async () => {
+        await test.step("[nodoc] oe graph spec needs no backend", async () => {
           // A backend nothing answers at: the spec must still print.
           const directory = mkdtempSync(path.join(os.tmpdir(), "engine-e2e-nobackend-"))
           try {
@@ -112,13 +112,13 @@ Keep the spaces at the start of each line as they are: they show which lines bel
         )
 
         await step(
-          `Save the graph to OpenEngine. Open a terminal in your project's folder, the one containing \`describe-project.yaml\`. Keep using that folder for the commands below. Type \`engine graph add describe-project.yaml\` and press Enter.
+          `Save the graph to OpenEngine. Open a terminal in your project's folder, the one containing \`describe-project.yaml\`. Keep using that folder for the commands below. Type \`oe graph add describe-project.yaml\` and press Enter.
 
 The screen says *registered*, OpenEngine's word for saved, then the graph's name and \`v1\`: this is its first version. The labels in brackets are how OpenEngine tells graphs and their versions apart; you can leave them alone.
 
 If you see *cannot reach backend*, the command can't reach OpenEngine's background program. A **backend** is a computer where that program runs: this one, or another one such as a Mac mini. If you're using this computer, follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then try saving again. If OpenEngine finds a mistake in the file, it lists what's wrong and where in the file; fix it and run the command again.`,
           async () => {
-            await terminal.run("engine graph add describe-project.yaml")
+            await terminal.run("oe graph add describe-project.yaml")
             expect(await versions(engine, "describe-project")).toEqual([1])
             await show(await terminal.row(/^registered describe-project v1\s/), "Your graph is saved, as version 1")
           },
@@ -127,11 +127,11 @@ If you see *cannot reach backend*, the command can't reach OpenEngine's backgrou
         await clear()
 
         await step(
-          `Later, to find the graphs you've saved, type \`engine graphs list\` and press Enter.
+          `Later, to find the graphs you've saved, type \`oe graphs list\` and press Enter.
 
 You'll see one row for each graph, with its name and latest version. You can leave the other columns alone.`,
           async () => {
-            const { output } = await terminal.run("engine graphs list")
+            const { output } = await terminal.run("oe graphs list")
             expect(output).toMatch(/^describe-project\s+1\s/m)
             await show(await terminal.row(/^describe-project\s+1\s/), "The graph you saved")
           },
@@ -140,11 +140,11 @@ You'll see one row for each graph, with its name and latest version. You can lea
         await clear()
 
         await step(
-          `To see what a saved graph says, type \`engine graph get describe-project\` and press Enter.
+          `To see what a saved graph says, type \`oe graph get describe-project\` and press Enter.
 
 You'll see the graph's name and version, the versions OpenEngine has of it, and then the file exactly as you saved it.`,
           async () => {
-            const { output } = await terminal.run("engine graph get describe-project")
+            const { output } = await terminal.run("oe graph get describe-project")
             expect(output).toContain("prompt: Read README.md and reply with one sentence")
             expect(output).not.toMatch(/^\s*[{[]/m)
             await show(await terminal.rows(/^apiVersion:/, /^\s+prompt:/), "The graph as you saved it")
@@ -154,12 +154,12 @@ You'll see the graph's name and version, the versions OpenEngine has of it, and 
         await clear()
 
         await step(
-          `Now change the graph. In \`describe-project.yaml\`, change *one sentence* in the prompt to *two sentences*, and save the file. Then type \`engine graph add describe-project.yaml\` and press Enter again.
+          `Now change the graph. In \`describe-project.yaml\`, change *one sentence* in the prompt to *two sentences*, and save the file. Then type \`oe graph add describe-project.yaml\` and press Enter again.
 
 This time the screen says \`v2\`: OpenEngine saved your change as a new version. It keeps the old one too, so a change never overwrites what you had.`,
           async () => {
             writeFileSync(file, CHANGED)
-            await terminal.run("engine graph add describe-project.yaml")
+            await terminal.run("oe graph add describe-project.yaml")
             expect(await versions(engine, "describe-project")).toEqual([1, 2])
             await show(await terminal.row(/^registered describe-project v2\s/), "Your change is saved as version 2")
           },
@@ -168,11 +168,11 @@ This time the screen says \`v2\`: OpenEngine saved your change as a new version.
         await clear()
 
         await step(
-          `Type \`engine graph get describe-project\` and press Enter.
+          `Type \`oe graph get describe-project\` and press Enter.
 
 The line starting *versions* lists both versions, and below it is the file as it is now, with *two sentences*. When you use a graph by its name, OpenEngine uses its latest version.`,
           async () => {
-            const { output } = await terminal.run("engine graph get describe-project")
+            const { output } = await terminal.run("oe graph get describe-project")
             expect(output).toContain("two sentences")
             await show(await terminal.row(/^versions: v1 .*, v2 /), "Both versions are kept", "right")
           },
@@ -181,11 +181,11 @@ The line starting *versions* lists both versions, and below it is the file as it
         await clear()
 
         await step(
-          `If you save a graph again without changing it, nothing new is made. Type \`engine graph add describe-project.yaml\` and press Enter once more, without touching the file.
+          `If you save a graph again without changing it, nothing new is made. Type \`oe graph add describe-project.yaml\` and press Enter once more, without touching the file.
 
 The screen says *unchanged* and \`v2\`: OpenEngine already has this exact graph, so it keeps the version it had. You can save as often as you like; only a real change makes a new version.`,
           async () => {
-            await terminal.run("engine graph add describe-project.yaml")
+            await terminal.run("oe graph add describe-project.yaml")
             expect(await versions(engine, "describe-project")).toEqual([1, 2])
             await show(await terminal.row(/^unchanged describe-project v2\s/), "Nothing changed, so no new version")
           },

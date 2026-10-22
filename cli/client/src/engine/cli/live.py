@@ -11,7 +11,7 @@
       ┃ ⚙ Read tests/test_retry.py
 
 Redrawn in place from the run's state on the backend, so nothing is lost by
-detaching: Ctrl-C offers to detach or cancel, and `engine run watch` picks the
+detaching: Ctrl-C offers to detach or cancel, and `oe run watch` picks the
 view back up. A question an agent stops on is asked here, inline.
 """
 
@@ -324,7 +324,7 @@ def summary(run: dict[str, Any], backend: str) -> list[str]:
             lines += ["", f"── {node_id} " + "─" * 20, str(result).strip()]
     workspace = run.get("workspace") or {}
     if workspace.get("path"):
-        command = shlex.join(["engine", "run", "get", run["runId"], "--backend", backend])
+        command = shlex.join(["oe", "run", "get", run["runId"], "--backend", backend])
         lines += ["", f"Workspace details: {command}"]
     cost = (run.get("usage") or {}).get("costUsd")
     if cost is not None:

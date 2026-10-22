@@ -142,7 +142,7 @@ def check_work_order_workflow(settings: Settings, catalog: WorkflowCatalog | Non
         return
     raise EngineConfigError(
         f"work_orders.workflow is {name!r}, which is neither a workflow in [workflows] directory "
-        "nor a graph registered with `engine graph add`"
+        "nor a graph registered with `oe graph add`"
         + (f" for {', '.join(missing)}" if any(missing) else "")
     )
 
@@ -381,7 +381,7 @@ def compose_app(
     github_login_config = _github_login_config(loaded, registry)
     _require_login_off_loopback(settings, github_login_config)
     # One cached store for Settings and agent actions alike, so the token
-    # `engine connect github` saved is used without reading the keychain again.
+    # `oe connect github` saved is used without reading the keychain again.
     credential_store = GitHubCredentialStore(cached=True)
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(

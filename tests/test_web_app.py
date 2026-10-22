@@ -4082,7 +4082,7 @@ def test_policy_submission_checks_backend_availability(available, expected_statu
                     snapshot = await runtime.snapshot(RunId(response.json()["runId"]))
                     assert snapshot.values["inputs"]["implementation_runner"] == "claude"
                 else:
-                    assert "engine agent signin" in response.text
+                    assert "oe agent signin" in response.text
                     assert not runtime._runs
 
 @pytest.mark.parametrize('explicit,expected', [(None, 'true'), ('false', 'false'), ('true', 'true')])

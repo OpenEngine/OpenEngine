@@ -57,13 +57,13 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     test.skip(engine.agentMode !== "real", "only real agents run a model")
     test.setTimeout(600_000)
     expect(engine.daemonEnv.ANTHROPIC_MODEL).toBe(claudeModel())
-    await terminal.run("engine repo untrust")
+    await terminal.run("oe repo untrust")
     for (const [name, model] of [["untiered", undefined], ["tier-default", "default"], ["tier-elevated", "elevated"]] as const) {
       const graph = path.join(engine.root, `${name}.yaml`)
       writeFileSync(graph, helloWith(name, model))
-      await terminal.run(`engine graph add ${graph}`)
+      await terminal.run(`oe graph add ${graph}`)
       // stderr carries the "started" line; stdout is the finished run alone.
-      const { output } = await terminal.run(`engine graph run ${name} "Say hello" --wait --json 2>/dev/null`, { timeout: 180_000 })
+      const { output } = await terminal.run(`oe graph run ${name} "Say hello" --wait --json 2>/dev/null`, { timeout: 180_000 })
       const detail = JSON.parse(output)
       expect(detail.status, `${name} ran to completion`).toBe("completed")
       expect(transcriptModels(detail.workspace.path), `the models that answered ${name}`).toEqual([claudeModel()])
@@ -80,11 +80,11 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     engine.script({ scenarios: [{ steps: [{ type: "say", text: "Hello, and welcome to OpenEngine." }] }] })
     const graph = path.join(engine.root, "hello.yaml")
     writeFileSync(graph, HELLO)
-    await terminal.run(`engine graph add ${graph}`)
-    await terminal.run("engine repo untrust")
-    await terminal.run('engine graph run hello "Say hello" --wait', { timeout: 280_000 })
+    await terminal.run(`oe graph add ${graph}`)
+    await terminal.run("oe repo untrust")
+    await terminal.run('oe graph run hello "Say hello" --wait', { timeout: 280_000 })
     // State, never wording: the same assertion holds for a scripted agent and a real one.
-    expect((await terminal.run("engine runs list")).output).toMatch(/^run-\w+\s.*\shello v1\s+completed\s/m)
+    expect((await terminal.run("oe runs list")).output).toMatch(/^run-\w+\s.*\shello v1\s+completed\s/m)
   })
 
   test("the stub says what its script says", async ({ engine, terminal }) => {
@@ -92,9 +92,9 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     engine.script({ scenarios: [{ steps: [{ type: "say", text: "Scripted greeting 4c1e." }] }] })
     const graph = path.join(engine.root, "hello.yaml")
     writeFileSync(graph, HELLO)
-    await terminal.run(`engine graph add ${graph}`)
-    await terminal.run("engine repo untrust")
-    const { output } = await terminal.run('engine graph run hello "Say hello" --wait')
+    await terminal.run(`oe graph add ${graph}`)
+    await terminal.run("oe repo untrust")
+    const { output } = await terminal.run('oe graph run hello "Say hello" --wait')
     expect(output).toContain("Scripted greeting 4c1e.")
   })
 
@@ -103,11 +103,11 @@ test.describe("agent mode", { tag: ["@skip-docs"] }, () => {
     expect((await terminal.run("pwd -P")).output).toBe(repository)
     const graph = path.join(engine.root, "hello.yaml")
     writeFileSync(graph, HELLO)
-    await terminal.run(`engine graph add ${graph}`)
-    await terminal.run("engine repo untrust")
-    await terminal.run('engine graph run hello "Say hello" --wait', { timeout: 280_000 })
-    const run = JSON.parse((await terminal.run("engine runs list --json")).output).runs[0]
-    const { output } = await terminal.run(`engine run get ${run.runId} --json`)
+    await terminal.run(`oe graph add ${graph}`)
+    await terminal.run("oe repo untrust")
+    await terminal.run('oe graph run hello "Say hello" --wait', { timeout: 280_000 })
+    const run = JSON.parse((await terminal.run("oe runs list --json")).output).runs[0]
+    const { output } = await terminal.run(`oe run get ${run.runId} --json`)
     const workspace = JSON.parse(output).workspace.path
     expect(readFileSync(path.join(workspace, ".git"), "utf8")).toContain(`${repository}/.git/worktrees/`)
   })

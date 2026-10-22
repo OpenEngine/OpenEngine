@@ -1,4 +1,4 @@
-"""`engine agent claude|codex|opencode`: an agent CLI as the implementation node of a run.
+"""`oe agent claude|codex|opencode`: an agent CLI as the implementation node of a run.
 
 The daemon starts a run of its built-in session graph: it checks the
 repository out into a workspace of its own, then binds the run's repository
@@ -49,7 +49,7 @@ DEFAULT_INSTRUCTIONS = "You are working in an OpenEngine workspace."
 
 @dataclass(frozen=True, slots=True)
 class Agent:
-    """A CLI `engine agent <name>` can hand the terminal to."""
+    """A CLI `oe agent <name>` can hand the terminal to."""
 
     name: str
     title: str
@@ -59,7 +59,7 @@ class Agent:
 
 
 def add_parser(agent_actions: argparse._SubParsersAction) -> None:
-    """Add `claude`, `codex` and `opencode` to `engine agent`, beside the actions that manage a backend's agents."""
+    """Add `claude`, `codex` and `opencode` to `oe agent`, beside the actions that manage a backend's agents."""
     for agent in AGENTS.values():
         parser = agent_actions.add_parser(
             agent.name,
@@ -79,20 +79,20 @@ def add_parser(agent_actions: argparse._SubParsersAction) -> None:
 def main(arguments: argparse.Namespace) -> int:
     agent = AGENTS[arguments.action]
     if shutil.which(agent.name) is None:
-        print(f"engine: {agent.name} is not installed; see {agent.install}", file=sys.stderr)
+        print(f"oe: {agent.name} is not installed; see {agent.install}", file=sys.stderr)
         return EXIT_FAILED
     try:
         backend = backends.load().selected(arguments.backend)
         if not backend.is_local:
             raise RuntimeError(
                 f"backend {backend.name} is not on this machine; a session's workspace and tools "
-                f"live with its daemon, so run engine agent {agent.name} there"
+                f"live with its daemon, so run oe agent {agent.name} there"
             )
         connect.ensure_ready(backend)
         client = Client(backend)
         session = start(client, agent.name, arguments)
     except (BackendError, RequestFailed, RuntimeError, ValueError) as error:
-        print(f"engine: {error}", file=sys.stderr)
+        print(f"oe: {error}", file=sys.stderr)
         return EXIT_FAILED
     workspace = session["workspace"]
     print(f"Run {session['runId']}: workspace {workspace['path']} on {workspace['ref']}", file=sys.stderr)
@@ -106,10 +106,10 @@ def main(arguments: argparse.Namespace) -> int:
         try:
             client.post(f"/sessions/{quote(session['sessionId'])}/end", {})
         except RequestFailed as error:
-            print(f"engine: could not end the session: {error}", file=sys.stderr)
+            print(f"oe: could not end the session: {error}", file=sys.stderr)
     print(
         f"Session ended. The work is on {workspace['ref']} at {workspace['path']}; "
-        f"see `engine run get {session['runId']}`.",
+        f"see `oe run get {session['runId']}`.",
         file=sys.stderr,
     )
     return status

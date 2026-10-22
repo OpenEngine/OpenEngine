@@ -1002,7 +1002,7 @@ class _GraphSurface:
     service_app: Starlette | None = None
 
     def added_agents(self) -> tuple[str, ...]:
-        """The agents `engine agent add` offers: workflow runners, not chat runners."""
+        """The agents `oe agent add` offers: workflow runners, not chat runners."""
         return self.service.added_agents() if self.service is not None else ()
 
     def declared_inputs(self, graph: GraphWorkflow) -> tuple[WorkflowInput, ...]:
@@ -1031,7 +1031,7 @@ class _GraphSurface:
         return offered.get(reference)
 
     def registered_workflow(self, project: str, name: str) -> GraphWorkflow | None:
-        """The graph `engine graph add` registered as `name`, for work in `project`.
+        """The graph `oe graph add` registered as `name`, for work in `project`.
 
         See `work_order_graph` for where the name is looked up. `None` when
         nothing is registered there by that name.
@@ -1050,7 +1050,7 @@ def work_order_graph(
     """The registered graph version `work_orders.workflow` names for work in `project`.
 
     A name is looked up in `project` -- the repository the work is for -- and
-    then in the deployment's own default project, where `engine graph add`
+    then in the deployment's own default project, where `oe graph add`
     puts a graph when no project is named; never in some other project, whose
     graphs were not written for this repository. A graph or version id names
     one graph wherever it is, so it is how a deployment deliberately reaches
@@ -1073,8 +1073,8 @@ def _started_inputs(
 ) -> dict[str, str]:
     """A work order's inputs, with what it was started from filled in for a registered graph.
 
-    A graph registered with `engine graph add` takes its task as an
-    `instruction` input, as `engine graph run` gives it one, and may work an
+    A graph registered with `oe graph add` takes its task as an
+    `instruction` input, as `oe graph run` gives it one, and may work an
     `issue` by number; each is filled in only where the graph declares it. A
     workflow from `[workflows] directory` gets what it always got.
     """
@@ -1447,7 +1447,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             dependencies_changed.set()
 
     async def open_graph_service(runtime: GraphRuntime, opened: AsyncExitStack) -> None:
-        """Serve `/api/v1`, for `engine graph|loop|node`, on this engine.
+        """Serve `/api/v1`, for `oe graph|loop|node`, on this engine.
 
         Contained like the engine itself: a failure here takes registered
         graphs and loops offline and leaves everything else serving.
@@ -2768,7 +2768,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             {
                 "connected": connected,
                 "clientIdConfigured": bool(_effective_client_id(_request)),
-                # Agents act as the host's `engine connect github` connection.
+                # Agents act as the host's `oe connect github` connection.
                 # With sign-in on, the one made here is the user's own and is
                 # not it.
                 "agentsUseConnection": not github_login.configured,
@@ -4281,7 +4281,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         catalog, because a mention that resolved to a workflow this process
         could not start would be accepted and then go nowhere. A configured
         name is a Python workflow first, so a deployment that already named
-        one keeps it, and otherwise a graph registered with `engine graph add`
+        one keeps it, and otherwise a graph registered with `oe graph add`
         for work in `project`, the repository the work is for.
         """
         offered = offered_graphs()
@@ -4549,7 +4549,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         # them rather than by this file.
         Mount(GRAPH_PREFIX, app=graph_surface),
         # Registered graphs, runs of them, loops and node steering, for the
-        # `engine graph|loop|node` commands.
+        # `oe graph|loop|node` commands.
         Mount("/api/v1", app=graph_service_surface),
         Route("/api/threads", list_threads),
         Route("/api/threads", create_thread, methods=["POST"]),

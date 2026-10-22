@@ -1,4 +1,4 @@
-"""`engine agent claude|codex|opencode` from the terminal side: the daemon is a recording stand-in, the CLI is stubbed."""
+"""`oe agent claude|codex|opencode` from the terminal side: the daemon is a recording stand-in, the CLI is stubbed."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def test_claude_runs_in_the_runs_workspace_with_its_tools_and_ends_the_node(repo
     assert settings == READY["settings"]
     assert command[command.index("--append-system-prompt") + 1] == READY["instructions"]
     assert command[-2:] == ["--model", "opus"]
-    assert "engine run get run-1" in capsys.readouterr().err
+    assert "oe run get run-1" in capsys.readouterr().err
 
 
 def test_the_node_is_ended_even_when_claude_cannot_start(repository, monkeypatch):

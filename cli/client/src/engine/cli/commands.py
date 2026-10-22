@@ -1,7 +1,7 @@
-"""`engine backend|graph|graphs|run|runs|loop|loops|node|nodes|agent|agents|runner`.
+"""`oe backend|graph|graphs|run|runs|loop|loops|node|nodes|agent|agents|runner`.
 
 Backend commands speak to one backend -- `--backend`, else `ENGINE_BACKEND`, else
-the one `engine backend use` chose -- and print readable lines, or a table for
+the one `oe backend use` chose -- and print readable lines, or a table for
 list commands, unless `--json` asks for JSON. Errors go to stderr; the exit status is 0 on success,
 1 on a refusal or a failed run, and 2 on a usage mistake.
 `graph spec` and `loop spec` print local Markdown specifications offline.
@@ -33,7 +33,7 @@ COMMANDS = frozenset({
     "backend", "backends", "graph", "graphs", "run", "runs", "loop", "loops", "node", "nodes", "agent", "agents",
     "runner", "repo", "go", "verb", "verbs",
 })
-#: Commands omitted from the bare `engine` menu.
+#: Commands omitted from the bare `oe` menu.
 HIDDEN = frozenset({"runner", "verb", "verbs", "backends", "graphs", "runs", "loops", "nodes", "agents", "connections"})
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -60,10 +60,10 @@ def add_list_alias(commands: argparse._SubParsersAction, name: str, listing: arg
 
 
 def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAction:
-    """Add these commands to the `engine` parser.
+    """Add these commands to the `oe` parser.
 
-    Answers `engine agent`'s actions, so the terminal app can add the ones that
-    run here rather than on a backend, such as `engine agent claude`, `codex` and `opencode`.
+    Answers `oe agent`'s actions, so the terminal app can add the ones that
+    run here rather than on a backend, such as `oe agent claude`, `codex` and `opencode`.
     """
     # Readable output is the default; `--pretty` is still accepted so older scripts keep working.
     readable = argparse.ArgumentParser(add_help=False)
@@ -256,7 +256,7 @@ def add_parsers(commands: argparse._SubParsersAction) -> argparse._SubParsersAct
     agents.add_argument("--backend", metavar="NAME")
     add_list_alias(commands, "agent", agents)
 
-    # `engine runner signin` before agents had their own command; kept for one release.
+    # `oe runner signin` before agents had their own command; kept for one release.
     runner = commands.add_parser("runner", help="legacy agent sign-in command")
     actions = runner.add_subparsers(dest="action", required=True)
     signin = actions.add_parser("signin")
@@ -272,7 +272,7 @@ def main(arguments: argparse.Namespace) -> int:
         return handler(arguments)
     except (BackendError, RequestFailed, _UsageError, OSError) as error:
         if isinstance(error, _UsageError):
-            print(f"engine: {error}", file=sys.stderr)
+            print(f"oe: {error}", file=sys.stderr)
             return EXIT_USAGE
         _report(error)
         return EXIT_FAILED
@@ -313,7 +313,7 @@ def onboard_repository(arguments: argparse.Namespace) -> int:
                 print("For a review command, repeat repo add with --review-backend NAME, "
                       "using a backend for this daemon configured with its service token.")
                 return EXIT_OK
-            command = ["engine", "go", "review", "--project", state["repository"],
+            command = ["oe", "go", "review", "--project", state["repository"],
                        "--repo", state["path"], "--backend", review_backend.name, "--input", "ref=HEAD"]
             print(f"Next: {shlex.join(command)}")
             return EXIT_OK
@@ -511,7 +511,7 @@ def graph_run(arguments: argparse.Namespace) -> int:
     inputs = _inputs(arguments.input)
     graph = arguments.graph
     if arguments.command != "go" and graph in starters.ALIASES:
-        print(f"engine: {graph} is deprecated; use engine go instead (alias kept for one release)", file=sys.stderr)
+        print(f"oe: {graph} is deprecated; use oe go instead (alias kept for one release)", file=sys.stderr)
         graph, defaults = starters.ALIASES[graph]
         inputs = {**defaults, **inputs}
         _ensure_graph(client, _project(arguments, backend), graph)
@@ -605,7 +605,7 @@ def run_watch(arguments: argparse.Namespace) -> int:
 def _watch_run(client: Client, run_id: str, backend: Backend) -> int:
     run, outcome = live.Watch(client, run_id).follow()
     if outcome == "detached":
-        command = shlex.join(["engine", "run", "watch", run_id, "--backend", backend.name])
+        command = shlex.join(["oe", "run", "watch", run_id, "--backend", backend.name])
         print(live.safe_text(f"Detached. Reattach with: {command}"))
         return EXIT_OK
     for line in live.summary(run, backend.name):
@@ -793,7 +793,7 @@ def agent_signin(arguments: argparse.Namespace) -> int:
         )
         return EXIT_OK
     if shutil.which(command[0]) is None:
-        print(f"engine: {command[0]} is not installed here; install it, then run `engine daemon setup`",
+        print(f"oe: {command[0]} is not installed here; install it, then run `oe daemon setup`",
               file=sys.stderr)
         return EXIT_FAILED
     if follow_up:
@@ -802,7 +802,7 @@ def agent_signin(arguments: argparse.Namespace) -> int:
 
 
 def runner_signin(arguments: argparse.Namespace) -> int:
-    print(f"engine: `engine runner signin` is now `engine agent signin {arguments.name}`", file=sys.stderr)
+    print(f"oe: `oe runner signin` is now `oe agent signin {arguments.name}`", file=sys.stderr)
     return agent_signin(arguments)
 
 
@@ -868,7 +868,7 @@ def _check_trust(arguments: argparse.Namespace, client: Client, repo: str) -> No
         answer = input(f"Trust {state['name']} ({state['repository']})? Agents will edit files and run commands here without asking. [y/N] ")
         client.post("/repositories/trust", {"repository": repo, "trusted": answer.strip().lower() in {"y", "yes"}})
     else:
-        print("engine: repository is untrusted; use engine repo trust to remember your choice.", file=sys.stderr)
+        print("oe: repository is untrusted; use oe repo trust to remember your choice.", file=sys.stderr)
 
 
 def repo_trust(arguments: argparse.Namespace) -> int:
@@ -920,7 +920,7 @@ def _wait_for_run(client: Client, run_id: str, timeout: float) -> dict[str, Any]
             print(f"waiting on approval {first['approvalId']} at {first['node']}: {first['reason']}",
                   file=sys.stderr)
         if deadline is not None and time.monotonic() >= deadline:
-            print(f"engine: still {run['status']} after {timeout:g}s", file=sys.stderr)
+            print(f"oe: still {run['status']} after {timeout:g}s", file=sys.stderr)
             return run
         time.sleep(WAIT_INTERVAL_SECONDS)
 
@@ -962,10 +962,10 @@ def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
         _print(run)
     failure = run.get("failure")
     if failure:
-        print(f"engine: run failed{' at ' + failure['node'] if failure.get('node') else ''}: {failure['error']}",
+        print(f"oe: run failed{' at ' + failure['node'] if failure.get('node') else ''}: {failure['error']}",
               file=sys.stderr)
         if auth:
-            print(f"engine: {auth['runner'] or 'a runner'} is not signed in; run `{auth['command']}`",
+            print(f"oe: {auth['runner'] or 'a runner'} is not signed in; run `{auth['command']}`",
                   file=sys.stderr)
     return EXIT_FAILED if _run_failed(run) else EXIT_OK
 
@@ -979,7 +979,7 @@ def _health(backend: Backend) -> str:
 
 
 def _report(error: Exception) -> None:
-    print(f"engine: {error}", file=sys.stderr)
+    print(f"oe: {error}", file=sys.stderr)
     payload = getattr(error, "payload", None) or {}
     for candidate in payload.get("candidates") or []:
         print(f"  {json.dumps(candidate)}", file=sys.stderr)

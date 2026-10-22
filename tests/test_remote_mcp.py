@@ -914,7 +914,7 @@ def test_oidc_callers_cannot_create_loops(oidc):
 @pytest.mark.parametrize("repository,mode", [("owner/repo", "disconnected"), ("/code/demo", None)])
 def test_repository_onboarding_tools_forward_inputs_and_progress(trusted, repository, mode):
     requests = []
-    state = {"id": "job1", "status": "failed", "message": "Preflight failed", "problems": [{"code": "agent", "fix": "engine agent signin codex"}]}
+    state = {"id": "job1", "status": "failed", "message": "Preflight failed", "problems": [{"code": "agent", "fix": "oe agent signin codex"}]}
 
     def upstream(request):
         requests.append(request)

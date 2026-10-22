@@ -139,8 +139,8 @@ test.describe(graphsCategory, () => {
             ],
           })
           writeFileSync(path.join(engine.repository, "describe-project.yaml"), GRAPH)
-          await terminal.run("engine graph add describe-project.yaml")
-          await terminal.run("engine repo untrust")
+          await terminal.run("oe graph add describe-project.yaml")
+          await terminal.run("oe repo untrust")
           await terminal.run("clear")
         })
 
@@ -151,11 +151,11 @@ While a run goes on, you may want to know which step it's on and how each agent 
         )
 
         await step(
-          `Start the graph without the live screen. Type \`engine graph run describe-project --no-watch\` and press Enter.
+          `Start the graph without the live screen. Type \`oe graph run describe-project --no-watch\` and press Enter.
 
-Your terminal comes straight back, and the run goes on in OpenEngine's background program. You'll see its run ID, starting with \`run-\`: copy it, because the next commands need it. You can also find it later in the **RUN ID** column of \`engine runs list\`.`,
+Your terminal comes straight back, and the run goes on in OpenEngine's background program. You'll see its run ID, starting with \`run-\`: copy it, because the next commands need it. You can also find it later in the **RUN ID** column of \`oe runs list\`.`,
           async () => {
-            const { output } = await terminal.run("engine graph run describe-project --no-watch")
+            const { output } = await terminal.run("oe graph run describe-project --no-watch")
             runId = (await onlyRun(engine)).runId
             expect(output).toContain(runId)
             await show(terminal, engine, testInfo, await terminal.row(new RegExp(runId)), "Your run has started; this is its ID")
@@ -165,11 +165,11 @@ Your terminal comes straight back, and the run goes on in OpenEngine's backgroun
         await clear(terminal)
 
         await step(
-          `Open the live screen so you can answer an agent's questions and read what it is doing. Type \`engine run watch\` followed by your run ID, and press Enter.
+          `Open the live screen so you can answer an agent's questions and read what it is doing. Type \`oe run watch\` followed by your run ID, and press Enter.
 
 If you declined repository trust in the previous guide, the read step may be waiting for permission to read README.md. The run waits until you answer; waiting longer won't move it along.`,
           async () => {
-            await terminal.type(`engine run watch ${runId}`)
+            await terminal.type(`oe run watch ${runId}`)
             await terminal.press("Enter")
             await terminal.waitForText(/^Allow\? \[y\/n\][ \t]*$/m)
             expect((await run(engine, runId)).pendingApprovals).toHaveLength(1)
@@ -219,7 +219,7 @@ Answer any further permission questions the same way if you want to allow the ac
         await clear(terminal)
 
         await step(
-          `To see which steps are running or finished, type \`engine nodes --run\` followed by your run ID, and press Enter.
+          `To see which steps are running or finished, type \`oe nodes --run\` followed by your run ID, and press Enter.
 
 You'll see one row for each step that has started so far. **NODE** is the step's name, **STATUS** says how it's going (*running* while its agent works, *completed* when it's done), and **RUNNER** is the agent doing it. **EXECUTION** is that step's own ID: copy the one for \`suggest\`, the step that's still running. You can leave the other columns alone.
 
@@ -229,7 +229,7 @@ Here \`read\` is done and \`suggest\` is working. If you see only \`read\`, the 
             await expect.poll(async () => (await node(engine, suggest!.executionId)).status).toBe("running")
             const read = await execution(engine, runId, "read")
             expect(read.status).toBe("completed")
-            const { output } = await terminal.run(`engine nodes --run ${runId}`)
+            const { output } = await terminal.run(`oe nodes --run ${runId}`)
             const row = new RegExp(`^suggest\\s+${suggest.executionId}\\s+\\d+\\s+running\\s+claude\\b`, "m")
             expect(output).toMatch(row)
             expect(output).toMatch(new RegExp(`^read\\s+${read.executionId}\\s+\\d+\\s+completed\\s+claude\\b`, "m"))
@@ -241,11 +241,11 @@ Here \`read\` is done and \`suggest\` is working. If you see only \`read\`, the 
         await clear(terminal)
 
         await step(
-          `To look at just that one step, type \`engine node get\` followed by the ID you copied, and press Enter.
+          `To look at just that one step, type \`oe node get\` followed by the ID you copied, and press Enter.
 
 You'll see the same row on its own. It's a quick way to check on one agent while it works.`,
           async () => {
-            const { output } = await terminal.run(`engine node get ${suggest!.executionId}`)
+            const { output } = await terminal.run(`oe node get ${suggest!.executionId}`)
             const row = new RegExp(`^suggest\\s+${suggest!.executionId}\\s+\\d+\\s+running\\s+claude\\b`, "m")
             expect(output).toMatch(row)
             await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "suggest is still running")
@@ -255,17 +255,17 @@ You'll see the same row on its own. It's a quick way to check on one agent while
         await clear(terminal)
 
         await step(
-          `You saw the \`suggest\` agent propose a new name for your project, and you only wanted its README's wording improved. Tell it so. Type \`engine node steer\`, the ID you copied, and your message in quotes, then press Enter:
+          `You saw the \`suggest\` agent propose a new name for your project, and you only wanted its README's wording improved. Tell it so. Type \`oe node steer\`, the ID you copied, and your message in quotes, then press Enter:
 
 \`\`\`sh
-engine node steer EXECUTION "${NUDGE}"
+oe node steer EXECUTION "${NUDGE}"
 \`\`\`
 
 Put your own step's ID where it says \`EXECUTION\`. OpenEngine takes your message and passes it to the agent as soon as it can. The reply starts with your message's own ID, then *accepted*: OpenEngine has it, and the agent will get it shortly.
 
-If you see *only a running attempt can be steered*, the step is no longer running. Check its **STATUS** with \`engine node get\`; you can only redirect an agent while it is working.`,
+If you see *only a running attempt can be steered*, the step is no longer running. Check its **STATUS** with \`oe node get\`; you can only redirect an agent while it is working.`,
           async () => {
-            const { output, exitCode } = await terminal.run(`engine node steer ${suggest!.executionId} "${NUDGE}"`)
+            const { output, exitCode } = await terminal.run(`oe node steer ${suggest!.executionId} "${NUDGE}"`)
             expect(exitCode).toBe(0)
             const sent = (await node(engine, suggest!.executionId)).steering ?? []
             expect(sent).toHaveLength(1)
@@ -279,7 +279,7 @@ If you see *only a running attempt can be steered*, the step is no longer runnin
         await clear(terminal)
 
         await step(
-          `To see whether the agent took your message on board, type \`engine node get\` and the step's ID again, and press Enter.
+          `To see whether the agent took your message on board, type \`oe node get\` and the step's ID again, and press Enter.
 
 Below the step's row there's now a list of the messages you've sent it. **STATUS** goes from *accepted* to *delivered* when the agent has your message, then to *applied* once the agent has finished acting on it. The agent carries on from where it was: the steps already done stay done.
 
@@ -287,7 +287,7 @@ If a message says *undelivered*, it never reached the agent: for example, the st
           async () => {
             await expect.poll(async () => (await node(engine, suggest!.executionId)).steering?.[0]?.status,
               { timeout: 30_000, message: "waiting for the agent to act on the message" }).toBe("applied")
-            const { output } = await terminal.run(`engine node get ${suggest!.executionId}`)
+            const { output } = await terminal.run(`oe node get ${suggest!.executionId}`)
             const { steeringId } = (await node(engine, suggest!.executionId)).steering![0]!
             expect((await node(engine, suggest!.executionId)).steering![0]!.message).toBe(NUDGE)
             const row = new RegExp(`^1\\s+${steeringId}\\s+applied\\s`, "m")
@@ -301,7 +301,7 @@ If a message says *undelivered*, it never reached the agent: for example, the st
         await clear(terminal)
 
         await step(
-          `Type \`engine runs list\` and press Enter.
+          `Type \`oe runs list\` and press Enter.
 
 There's still just the one run, and once \`suggest\` is done it says *completed*. You changed the agent's course without starting the work over.`,
           async () => {
@@ -310,7 +310,7 @@ There's still just the one run, and once \`suggest\` is done it says *completed*
             expect(await runs(engine)).toHaveLength(1)
             const after = (await nodes(engine, runId)).filter((each) => each.node === "suggest")
             expect(after.map((each) => each.executionId)).toEqual([suggest!.executionId])
-            const { output } = await terminal.run("engine runs list")
+            const { output } = await terminal.run("oe runs list")
             const row = new RegExp(`^${runId}\\s.*\\sdescribe-project v1\\s+completed\\s`)
             expect(output).toMatch(new RegExp(row.source, "m"))
             await show(terminal, engine, testInfo, await terminal.row(row), "The same run, finished")
@@ -320,13 +320,13 @@ There's still just the one run, and once \`suggest\` is done it says *completed*
 
       test("See which agents you can use", async ({ engine, terminal }, testInfo) => {
         await step(
-          `A graph names the agent that does each step, such as \`agent: claude\`. To see which agents you can name, type \`engine agents\` and press Enter.
+          `A graph names the agent that does each step, such as \`agent: claude\`. To see which agents you can name, type \`oe agents\` and press Enter.
 
-You'll see one row for each agent. **NAME** is what a graph calls it, and **KIND** is the AI coding assistant behind it. The ones marked *built in* are there from the start: \`claude\` is Claude Code, \`codex\` is Codex, and \`opencode\` is OpenCode. The **RUNNER** column of \`engine nodes\` shows these same names. To use one, its assistant must be installed and signed in on the computer the run happens on.`,
+You'll see one row for each agent. **NAME** is what a graph calls it, and **KIND** is the AI coding assistant behind it. The ones marked *built in* are there from the start: \`claude\` is Claude Code, \`codex\` is Codex, and \`opencode\` is OpenCode. The **RUNNER** column of \`oe nodes\` shows these same names. To use one, its assistant must be installed and signed in on the computer the run happens on.`,
           async () => {
             const agents = (await get<{ agents: Agent[] }>(engine, "/agents")).agents
             expect(agents.map((agent) => agent.name)).toEqual(expect.arrayContaining(["claude", "codex", "opencode"]))
-            const { output, exitCode } = await terminal.run("engine agents")
+            const { output, exitCode } = await terminal.run("oe agents")
             expect(exitCode).toBe(0)
             for (const name of ["claude", "codex", "opencode"]) {
               expect(output).toMatch(new RegExp(`^${name}\\s+${name}\\s.*built in$`, "m"))

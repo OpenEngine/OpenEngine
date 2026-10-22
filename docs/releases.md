@@ -50,22 +50,22 @@ X.Y.Z`), checks the archive against the `archive_sha256` in the published
 `release-manifest.json` before extracting it to `versions/<version>`, and
 installs it into a venv on uv's own Python 3.12 with `--require-hashes`. A
 `current` symlink points at that version; `~/.local/bin/engine` runs the
-terminal client and manages the web service through `engine daemon`.
+terminal client and manages the web service through `oe daemon`.
 `~/.config/openengine/engine.toml` is written from the bundled default,
 keeping state in `~/.local/state/openengine`, only when it does not already
 exist. The `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
 `XDG_CACHE_HOME`, and `XDG_BIN_HOME` directories are honoured, and `--prefix DIR`
-replaces the data directory. It then runs `engine daemon setup`, which starts
+replaces the data directory. It then runs `oe daemon setup`, which starts
 OpenEngine in the background and prints its URL without opening a browser;
 `--no-start` skips that. Running it again reuses an installed version and
 never touches the config or state. The release workflow runs it on clean Ubuntu
 and macOS runners against the bundle it just built (`OPENENGINE_RELEASE_URL`
-names that directory), checks `/api/health`, and then runs `engine daemon setup`,
+names that directory), checks `/api/health`, and then runs `oe daemon setup`,
 `status`, and `stop`.
 
 ## npm package
 
-`npm i -g @openengine.cc/engine` installs the `engine` launcher;
+`npm i -g @openengine.cc/engine` installs the `oe` and `openengine` launchers;
 `npx @openengine.cc/engine go` tries it without a global npm install.
 The unscoped `openengine` package on npm is an unrelated project.
 The launcher supports Node 18+ on macOS and Linux (the application and its
@@ -97,7 +97,7 @@ to full commit SHAs because the job can request an OIDC token.
 
 ## Background service
 
-`engine daemon setup` records the absolute paths of `git`, `node`, `npx`,
+`oe daemon setup` records the absolute paths of `git`, `node`, `npx`,
 `claude`, and `codex`, then registers a per-user LaunchAgent
 (`~/Library/LaunchAgents/sh.openengine.engine.plist`) on macOS or a systemd user
 unit (`~/.config/systemd/user/openengine.service`) on Linux, and starts it.
@@ -109,12 +109,12 @@ installing a new tool or version. There is one instance per user; logs go to
 `~/.local/state/openengine/logs`.
 
 ```sh
-engine daemon          # start if needed, wait for /api/health, open the browser
-engine daemon start    # start without opening a browser
-engine daemon stop     # SIGTERM, waiting for a graceful shutdown
-engine daemon status   # version, health, and URL (--json)
-engine daemon logs -f
-engine daemon doctor   # config, port, and git/node/npx/claude/codex
+oe daemon          # start if needed, wait for /api/health, open the browser
+oe daemon start    # start without opening a browser
+oe daemon stop     # SIGTERM, waiting for a graceful shutdown
+oe daemon status   # version, health, and URL (--json)
+oe daemon logs -f
+oe daemon doctor   # config, port, and git/node/npx/claude/codex
 ```
 
 ## Manual install

@@ -1,7 +1,7 @@
 # Onboarding a repository
 
-Run `engine repo add .` or `engine repo add /path/to/repo` to register an
-existing GitHub or GitLab checkout. Run `engine repo add <github-or-gitlab-url>`
+Run `oe repo add .` or `oe repo add /path/to/repo` to register an
+existing GitHub or GitLab checkout. Run `oe repo add <github-or-gitlab-url>`
 to clone and register a remote repository, preserving its HTTPS or SSH transport.
 Use `--path /absolute/checkout` to select the clone destination. Connected mode
 is the default; use `--mode disconnected` for local-only work.
@@ -20,7 +20,7 @@ MCP clients can call `onboard_repository(repository, path?, mode?)`, then poll
 `repository_onboarding_status(job_id)` using the returned `id`. All three surfaces
 use the same daemon job and display its progress and actionable failures.
 
-The daemon account needs git and a signed-in agent (`engine agent signin claude`, `codex`, or `opencode`).
+The daemon account needs git and a signed-in agent (`oe agent signin claude`, `codex`, or `opencode`).
 Cloning uses the daemon account’s existing credentials for the supplied URL.
 Existing checkouts do not require remote access. Preflight failures leave the checkout and configuration untouched. Onboarding
 never changes credentials. Existing checkouts of the same remote are reused.
@@ -33,7 +33,7 @@ in that destination and leaves automatically discovered project-local files
 untouched. It updates the running daemon immediately and
 registers the four starter graphs for the `owner/repo` project. No restart is needed.
 The repository is ready to select in the WorkOrder form; the CLI prints a
-`engine graph run review --project owner/repo --repo /checkout/path --input ref=HEAD` command.
+`oe graph run review --project owner/repo --repo /checkout/path --input ref=HEAD` command.
 
 The web daemon accepts loopback hostnames (`localhost`, `127.0.0.1`, and `::1`).
 For access through another hostname or a reverse proxy, set `public_url` in the
@@ -165,8 +165,8 @@ Set the same onboarding secret in your CLI environment, then configure a dedicat
 backend without changing the work-order backend:
 
 ```sh
-engine backend add onboarding http://localhost:4364 --token-env ENGINE_ONBOARDING_TOKEN
-engine repo add git@github.com:owner/repo.git --backend onboarding --review-backend local
+oe backend add onboarding http://localhost:4364 --token-env ENGINE_ONBOARDING_TOKEN
+oe repo add git@github.com:owner/repo.git --backend onboarding --review-backend local
 ```
 
 Use your daemon's actual URL and port. Continue using the regular backend and

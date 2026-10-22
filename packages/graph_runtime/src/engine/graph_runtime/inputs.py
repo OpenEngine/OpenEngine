@@ -129,7 +129,7 @@ def choose_runners(
         if not runners:
             raise ValueError(
                 f"no installed and signed-in runner for {item.name!r}; "
-                "install a runner and run `engine agent signin <agent>` on the backend"
+                "install a runner and run `oe agent signin <agent>` on the backend"
             )
         used = usage() if policy == LEAST_UTILIZED else {}
         if any(runner in used for runner in runners):

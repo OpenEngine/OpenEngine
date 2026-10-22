@@ -1,7 +1,7 @@
 """Generate bundled CLI specs and the site references from parser-owned definitions.
 
 The specifications use only the standard library: python3 scripts/generate_cli_docs.py
-The command reference needs the `engine` parser, so run it in the workspace
+The command reference needs the `oe` parser, so run it in the workspace
 environment (uv run python scripts/generate_cli_docs.py). Without it, the
 committed reference is kept; tests reject a stale one.
 """
@@ -146,7 +146,7 @@ def _command_sections(prefix: str, parser: argparse.ArgumentParser, depth: int) 
 
 
 def render_reference(parser: argparse.ArgumentParser | None = None) -> str:
-    """The `engine` command reference, from the parser the command itself uses."""
+    """The `oe` command reference, from the parser the command itself uses."""
     if parser is None:
         from engine.apps.cli.__main__ import parser as engine_parser
 
