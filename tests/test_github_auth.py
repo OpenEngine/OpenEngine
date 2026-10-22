@@ -321,6 +321,9 @@ def test_agent_pr_uses_only_the_gh_cli_login(
     ))
     source = capabilities.source_control
     adapter = source._providers[provider] if provider else source
+    if provider:
+        # These checkouts are stubs; forge routing is covered on its own.
+        monkeypatch.setattr(source, "_workspace_provider", None)
     monkeypatch.setattr(adapter, "_root_path", AsyncMock(return_value=str(tmp_path)))
     monkeypatch.setattr(adapter, "_repo_coords", AsyncMock(return_value=("acme", "api")))
     monkeypatch.setattr(
@@ -409,6 +412,8 @@ def test_agent_pr_under_github_oauth_uses_the_connected_token_read_once(
     )
     source = capabilities.source_control
     adapter = source._providers["github-oauth"]
+    # These checkouts are stubs; forge routing is covered on its own.
+    monkeypatch.setattr(source, "_workspace_provider", None)
     monkeypatch.setattr(adapter, "_root_path", AsyncMock(return_value=str(tmp_path)))
     monkeypatch.setattr(adapter, "_repo_coords", AsyncMock(return_value=("acme", "api")))
 
