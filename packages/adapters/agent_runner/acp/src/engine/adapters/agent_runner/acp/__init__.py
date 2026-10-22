@@ -105,6 +105,7 @@ from engine.ports.agent_runner import (
 )
 from engine.ports.permissions import PermissionTranslator
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.config import EngineConfig
 from engine.runtime.session_grants import PATH_COLLECTION_FIELDS, PATH_FIELDS
 from engine.runtime.transcript import flatten
 
@@ -884,8 +885,9 @@ def _count(usage: Mapping[str, Any], name: str) -> int:
 # --- the agents Engine ships with ------------------------------------------
 
 
-def installed_codex(env: Mapping[str, str] | None = None) -> str | None:
-    """The operator's Codex: `CODEX_PATH`, `ENGINE_CODEX_PATH`, or `codex` on `PATH`.
+def installed_codex(env: Mapping[str, str] | None = None, *, path: str = "") -> str | None:
+    """The operator's Codex: `path` (`[runners.codex].path`), `CODEX_PATH`,
+    `ENGINE_CODEX_PATH`, or `codex` on `PATH`.
 
     Resolved here, before npx prepends the adapter's bundled executables to
     `PATH`. The `@openai/codex` codex-acp bundles trails the installed CLI, and
@@ -894,7 +896,8 @@ def installed_codex(env: Mapping[str, str] | None = None) -> str | None:
     """
     env = env or {}
     return (
-        env.get("CODEX_PATH")
+        path
+        or env.get("CODEX_PATH")
         or os.environ.get("CODEX_PATH")
         or env.get(CODEX_PATH_VARIABLE)
         or os.environ.get(CODEX_PATH_VARIABLE)
@@ -902,10 +905,39 @@ def installed_codex(env: Mapping[str, str] | None = None) -> str | None:
     )
 
 
-def installed_codex_env() -> dict[str, str] | None:
+def installed_codex_env(config: EngineConfig | None = None) -> dict[str, str] | None:
     """The environment that points a bare `CodexACPProvider` at `installed_codex`."""
-    codex = installed_codex()
+    codex = installed_codex(path=(config or EngineConfig()).runner_paths.get("codex", ""))
     return {"CODEX_PATH": codex} if codex else None
+
+
+def agent_provider(config: EngineConfig, agent: str, /, **overrides: Any) -> ACPAgentProvider:
+    """The provider for `agent` (`codex`, `claude` or `opencode`).
+
+    `overrides` reach the provider's constructor, for a caller that needs its
+    own `permissions` or `name`. Codex runs the binary `installed_codex`
+    resolves, with `[runners.codex].path` first; an `env` override is laid
+    over that.
+    """
+    if agent == "codex":
+        env = {**(installed_codex_env(config) or {}), **(overrides.pop("env", None) or {})}
+        return CodexACPProvider(env=env or None, **overrides)
+    if agent == "claude":
+        return ClaudeACPProvider(**overrides)
+    if agent == "opencode":
+        return OpenCodeACPProvider(**overrides)
+    raise ValueError(f"unknown agent {agent!r}; expected one of: codex, claude, opencode")
+
+
+def agent_providers(
+    config: EngineConfig,
+) -> tuple[CodexACPProvider, ClaudeACPProvider, OpenCodeACPProvider]:
+    """The agents Engine ships with, configured from `config`."""
+    return (
+        CodexACPProvider(env=installed_codex_env(config)),
+        ClaudeACPProvider(),
+        OpenCodeACPProvider(),
+    )
 
 
 def codex_acp_runner(
@@ -1108,6 +1140,8 @@ __all__ = [
     "CODEX_AGENT_MODE",
     "CODEX_SANDBOXES",
     "READ_ONLY_TOOLS",
+    "agent_provider",
+    "agent_providers",
     "NO_ATTRIBUTION_INSTRUCTIONS",
     "ACPAgentRunner",
     "ACPExecutionError",

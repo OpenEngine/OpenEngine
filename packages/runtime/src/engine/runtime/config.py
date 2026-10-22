@@ -25,6 +25,23 @@ DEFAULT_CONFIG_TEMPLATE = Path(__file__).with_name("default-engine.toml")
 #: What a repository table's `mode` may say a repository's WorkOrders run as.
 REPO_MODES = tuple(str(mode) for mode in ForgeMode)
 """A distributable `engine.toml`: loopback only, nothing machine-specific."""
+#: What `model: default`, `model: elevated` and `model: cheapest` mean when a
+#: backend says nothing. A blank tier leaves the agent to its own default, for
+#: Codex the model `~/.codex/config.toml` names.
+DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
+    "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
+    "codex": {"cheapest": "", "default": "", "elevated": ""},
+}
+
+
+def merge_model_tiers(
+    model_tiers: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[str, dict[str, str]]:
+    """`[runners.<runner>.models]` over `DEFAULT_MODEL_TIERS`, tier by tier."""
+    return {
+        runner: {**DEFAULT_MODEL_TIERS.get(runner, {}), **models}
+        for runner, models in {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}.items()
+    }
 
 
 class EngineConfigError(ValueError):
@@ -282,8 +299,11 @@ class EngineConfig:
     """`[runners.<runner>.models]`: tier name to model, per runner.
 
     What a graph's `model: elevated` means on this backend, so graphs name a
-    tier and each backend decides which model that is.
+    tier and each backend decides which model that is. A blank tier leaves
+    the agent to its own default; `merge_model_tiers` fills in the rest.
     """
+    runner_paths: Mapping[str, str] = field(default_factory=dict)
+    """`[runners.<runner>.path]`: the agent binary a runner launches, `~` expanded."""
     attribution: bool = True
     repo_configs: Mapping[str, RepoConfig] = field(default_factory=dict)
     repos: Mapping[str, str] = field(default_factory=dict)
@@ -618,11 +638,16 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                 f"sessions.tools contains unknown tool {tool!r}; expected one of: {', '.join(REPOSITORY_TOOL_NAMES)}"
             )
     model_tiers: dict[str, dict[str, str]] = {}
+    runner_paths: dict[str, str] = {}
     for runner, settings in _table(document.get("runners", {}), "runners").items():
         settings = _table(settings, f"runners.{runner}")
-        _reject_unknown(settings, {"models"}, f"runners.{runner}")
+        _reject_unknown(settings, {"models", "path"}, f"runners.{runner}")
+        if "path" in settings:
+            runner_paths[runner] = str(
+                Path(_nonblank_string(settings["path"], f"runners.{runner}.path")).expanduser()
+            )
         model_tiers[runner] = {
-            tier: _nonblank_string(model, f"runners.{runner}.models.{tier}")
+            tier: _optional_nonblank_string(model, f"runners.{runner}.models.{tier}")
             for tier, model in _table(settings.get("models", {}), f"runners.{runner}.models").items()
         }
 
@@ -726,6 +751,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         graphs=GraphsConfig(allow_python=allow_python),
         sessions=SessionsConfig(tools=tuple(session_tools)),
         model_tiers=model_tiers,
+        runner_paths=runner_paths,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -985,6 +1011,7 @@ __all__ = [
     "ClaudeConfig",
     "DEFAULT_CONFIG_NAME",
     "DEFAULT_CONFIG_TEMPLATE",
+    "DEFAULT_MODEL_TIERS",
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
@@ -1001,5 +1028,6 @@ __all__ = [
     "WorkflowsConfig",
     "describe_loaded_config",
     "load_engine_config",
+    "merge_model_tiers",
     "parse_engine_config",
 ]
