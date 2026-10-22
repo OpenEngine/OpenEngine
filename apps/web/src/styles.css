@@ -148,7 +148,7 @@ ul, ol { padding: 0; list-style: none; }
   white-space: pre-line;
 }
 .notice-block { margin: 26px var(--gutter); }
-.notice code, .code-inline {
+.notice code, .code-inline, .markdown :not(pre) > code {
   padding: 2px 5px;
   background: #00000010;
   font: 400 .92em/1.4 var(--mono);
@@ -1156,7 +1156,38 @@ select:disabled { cursor: default; }
 }
 .step-body > header { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; justify-content: space-between; }
 .step-body h2 { margin-top: 6px; font-size: 19px; font-weight: 700; letter-spacing: -.02em; }
-.step-summary { margin-top: 14px; color: var(--ink-soft); font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+.step-summary { margin-top: 14px; color: var(--ink-soft); font-size: 15px; line-height: 1.6; }
+.markdown { overflow-wrap: anywhere; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p { margin: 0 0 10px; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+  margin: 14px 0 6px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+.markdown h1 { font-size: 16px; }
+.markdown h2 { font-size: 15px; }
+.markdown h3 { font-size: 14px; }
+.markdown h4, .markdown h5, .markdown h6 { font-size: 13px; }
+.markdown ul, .markdown ol { margin: 0 0 10px; padding-left: 22px; }
+.markdown ul { list-style: disc; }
+.markdown ol { list-style: decimal; }
+.markdown li { margin: 3px 0; }
+.markdown pre {
+  margin: 0 0 10px;
+  padding: 12px 15px;
+  overflow-x: auto;
+  /* A code block scrolls sideways instead of inheriting the soft wrap that
+     keeps a summary line inside the card. */
+  overflow-wrap: normal;
+  white-space: pre;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  font: 400 12.5px/1.55 var(--mono);
+}
+.markdown a { color: var(--flame); }
+.markdown a:hover { color: var(--flame-deep); text-decoration: underline; }
 .step-outcome { margin-top: 12px; color: var(--muted); font: 400 13px/1.4 var(--mono); }
 .step-outcome strong { color: var(--ink); }
 .step-outcome[data-changes] { color: var(--flame-deep); }
