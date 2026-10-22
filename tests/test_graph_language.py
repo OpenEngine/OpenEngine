@@ -354,7 +354,7 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
         ("publish", "same", "implement"),
         ("reviewers", "input", "reviewer"),
         ("reproduce", "input", "reviewer"),
-        ("reranker", "same", "implement"),
+        ("reranker", "input", "reranker"),
         ("impact", "input", "reviewer"),
     ]
     # Only publish opens the pull request; CI and the review find it by the URL it reports.
