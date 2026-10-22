@@ -791,8 +791,8 @@ def test_stage_runners_configure_models_and_mcp_identity(
     assert [node.agent for node in observed] == [implementation, review, review, implementation]
     for node in observed:
         assert all(binding.agent_id == node.agent for binding in node.mcp_server_bindings)
-    assert observed[1].session_config["model"] == module.REVIEW_MODELS[review]["elevated"]
-    assert observed[2].session_config["model"] == module.REVIEW_MODELS[review]["default"]
+    assert not (observed[1].session_config or {}).get("model")
+    assert not (observed[2].session_config or {}).get("model")
 
 
 @pytest.mark.parametrize(("model", "expected"), (("engine/qwen3", "engine/qwen3"), ("", None)))
@@ -811,9 +811,9 @@ def test_an_added_agent_runs_any_stage_on_its_own_model(model, expected) -> None
         assert node.agent == "qwen" and agents.resolve("qwen").name == "qwen"
         assert all(binding.agent_id == "qwen" for binding in node.mcp_server_bindings)
         assert (node.session_config or {}).get("model") == expected
-    # Codex and Claude keep their own review models beside it.
+    # Built-in agents continue to use their own configured/default model.
     claude = nodes["review-security"]._for_runner("claude")
-    assert claude.session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+    assert not (claude.session_config or {}).get("model")
 
 
 def test_an_added_implementer_is_reviewed_by_claude() -> None:
@@ -821,7 +821,7 @@ def test_an_added_implementer_is_reviewed_by_claude() -> None:
     nodes = nodes_of(module.pipeline("qwen"))
     assert nodes["implementation"].agent == "qwen"
     assert nodes["review-security"].agent == "claude"
-    assert nodes["review-security"].session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+    assert not (nodes["review-security"].session_config or {}).get("model")
     defaults = {item.name: item.default for item in module.graph_for("codex").inputs}
     assert defaults["implementation_runner"] == "codex" and defaults["review_runner"] == "round-robin"
     assert {item.name: item.default for item in module.graph_for("claude").inputs}["review_runner"] == "round-robin"

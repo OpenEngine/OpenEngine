@@ -9,7 +9,7 @@ execution of that graph, managed by a background **daemon**.
 ## 1. Install and first run (disconnected)
 
 On macOS or Linux, install Git, Node.js 20.19+, and a supported coding CLI
-(Codex or Claude).
+(Codex, Claude, or OpenCode).
 ```sh
 npm i -g @openengine.cc/engine
 cd your-repo
@@ -34,7 +34,24 @@ the agent you installed (choose one):
 ```sh
 oe agent signin codex
 oe agent signin claude
+oe agent signin opencode
 ```
+
+You only need one working coding agent. On the selected backend, `go` checks
+its actual ACP adapter and configured model before starting the run. Automatic
+selection uses only agents that can complete a short, tool-free readiness
+request; the result is cached for up to a minute. This request uses the
+provider's normal quota. Implementation and review
+can use separate sessions of the same agent. Built-in reviewers inherit that
+agent's configured or recommended model rather than requiring another model
+or another vendor's login. OpenCode is also included when available.
+
+An explicit `--agent` selection is never silently replaced. If its login or
+model fails, the command reports that provider's error before starting work.
+For Codex, OpenEngine prefers the installed `codex` binary, honors an explicit
+`CODEX_PATH`, and uses the adapter's bundled version only when no installed
+binary is available. Update the Codex installation on the backend if a model
+is newer than the client it is running.
 
 Open a terminal inside your project's Git checkout and give it a small task:
 

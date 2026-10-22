@@ -1154,6 +1154,33 @@ def _reentry_node(runtime: GraphRuntime, snapshot: RunSnapshot) -> NodeId | None
     return open_nodes[0].node_id if len(open_nodes) == 1 else None
 
 
+async def _ready_runner_choices(
+    service: GraphService | None, declarations: tuple[WorkflowInput, ...], inputs: Mapping[str, str],
+) -> tuple[str, ...] | None:
+    """Preflight real service providers, preserving support for embedded graphs."""
+    if service is not None:
+        return await service.ready_runner_choices(declarations, inputs)
+    if not any(value in RUNNER_POLICIES for value in inputs.values()):
+        return None
+    from engine.apps.web.onboarding import agent_available
+
+    agents = [
+        {"name": name, "kind": name, "model": "", "url": ""}
+        for name in dict.fromkeys(
+            choice for item in declarations for choice in item.choices
+            if choice not in RUNNER_POLICIES
+        )
+    ]
+    ready = await asyncio.gather(*(
+        asyncio.to_thread(agent_available, agent["kind"], model=agent["model"], url=agent["url"])
+        for agent in agents
+    ))
+    available = tuple(agent["name"] for agent, usable in zip(agents, ready) if usable)
+    # Validate before saving even a dependent run, without advancing rotation.
+    choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
+    return available
+
+
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -2000,24 +2027,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         if (mode := await repository_mode(repository)) is not None:
             inputs = {**inputs, MODE_INPUT: str(mode)}
         declarations = surface.declared_inputs(graph)
-        available = None
-        if any(value in RUNNER_POLICIES for value in inputs.values()):
-            from engine.apps.web.onboarding import agent_available
-
-            agents = surface.service.agents_json() if surface.service is not None else [
-                {"name": name, "kind": name, "model": "", "url": ""}
-                for name in dict.fromkeys(
-                    choice for item in declarations for choice in item.choices
-                    if choice not in RUNNER_POLICIES
-                )
-            ]
-            ready = await asyncio.gather(*(
-                asyncio.to_thread(agent_available, agent["kind"], model=agent["model"], url=agent["url"])
-                for agent in agents
-            ))
-            available = tuple(agent["name"] for agent, usable in zip(agents, ready) if usable)
-            # Validate before saving even a dependent run, without advancing rotation.
-            choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
+        available = await _ready_runner_choices(surface.service, declarations, inputs)
 
         async def runner_usage() -> dict[str, float]:
             # Scraped here rather than trusting the cache, which otherwise only

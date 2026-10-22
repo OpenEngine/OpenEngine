@@ -236,7 +236,7 @@ def test_naming_adds_a_hidden_name_node_between_the_checkout_and_the_first_step(
 
 @pytest.mark.parametrize(("naming", "options", "runner", "model"), [
     ("{agent: claude}", {}, "claude", "haiku"),
-    ("{agent: codex}", {}, "codex", "gpt-5.6-terra"),
+    ("{agent: codex}", {}, "codex", None),
     # An added agent names on its own model.
     ("{agent: qwen}", {"agent_models": {"qwen": "engine/qwen3"}}, "qwen", "engine/qwen3"),
     ("{agent: claude, model: sonnet}", {}, "claude", "sonnet"),
@@ -248,7 +248,7 @@ def test_naming_adds_a_hidden_name_node_between_the_checkout_and_the_first_step(
 def test_naming_runs_on_the_cheapest_model_unless_told_otherwise(naming, options, runner, model) -> None:
     node = _compiled_naming(naming, **options).nodes["naming"].runnable.afunc
     chosen = node._for_runner(runner)
-    assert chosen.agent == runner and chosen.session_config["model"] == model
+    assert chosen.agent == runner and (chosen.session_config or {}).get("model") == model
 
 
 def test_naming_on_claude_only_reads_whatever_mode_the_operator_set() -> None:
@@ -283,7 +283,7 @@ def test_naming_follows_the_runner_input_a_run_chooses(monkeypatch) -> None:
     monkeypatch.setattr(NameNode, "__call__", named)
     assert asyncio.run(node({"inputs": {"runner": "codex"}})) == {"name": "Fix it"}
     chosen = seen[0]._for_runner(seen[0].agent)
-    assert chosen.agent == "codex" and chosen.session_config == {"model": "gpt-5.6-terra"}
+    assert chosen.agent == "codex" and not (chosen.session_config or {}).get("model")
 
 
 @pytest.mark.parametrize(("naming", "path"), [

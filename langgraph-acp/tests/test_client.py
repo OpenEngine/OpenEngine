@@ -650,3 +650,33 @@ async def test_unavailable_model_fails_instead_of_using_the_default() -> None:
     async with connected() as client:
         with pytest.raises(ACPSessionError, match="Unknown model"):
             await client.new_session(session_config={"model": "unavailable"})
+
+
+@asyncio_test
+async def test_structured_provider_error_is_not_a_successful_turn(tmp_path):
+    message = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."
+    response = json.dumps({'type': 'error', 'status': 400,
+                           'error': {'type': 'invalid_request_error', 'message': message}})
+    log = tmp_path / 'calls'
+    agent = replace(fake_agent('--split-message', log=log),
+                    env={'FAKE_AGENT_LOG': str(log), 'FAKE_AGENT_RESPONSE': 'Warning: unknown model metadata\n\n' + response})
+    client = await agent.connect()
+    try:
+        session = await client.new_session()
+        with pytest.raises(ACPSessionError, match='not supported when using Codex'):
+            _ = [event async for event in session.prompt('Hello')]
+    finally:
+        await client.close()
+    assert sum(m.get('method') == 'session/prompt' for m in sent(log)) == 1
+
+
+@asyncio_test
+async def test_ordinary_json_response_is_not_a_provider_failure():
+    agent = replace(fake_agent(), env={'FAKE_AGENT_RESPONSE': '{"name":"Fix error handling"}'})
+    client = await agent.connect()
+    try:
+        session = await client.new_session()
+        events = [event async for event in session.prompt('Name this work')]
+        assert events[-1].type == ACPEventType.PROMPT_COMPLETED
+    finally:
+        await client.close()

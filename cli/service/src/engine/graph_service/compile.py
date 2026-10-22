@@ -67,7 +67,7 @@ from engine.graph_service.language import (
 #: backend says nothing. `cheapest` is what a graph's naming turn uses.
 DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
     "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
-    "codex": {"cheapest": "gpt-5.6-terra", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
+    "codex": {"cheapest": "", "default": "", "elevated": ""},
 }
 NAMING_TIER = "cheapest"
 #: The only tools a Claude naming turn has: the ACP adapter's `READ_ONLY_TOOLS`,
