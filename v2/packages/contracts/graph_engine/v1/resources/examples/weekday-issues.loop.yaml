@@ -1,4 +1,4 @@
-apiVersion: openengine.cc/v2alpha1
+apiVersion: openengine.cc/v1alpha1
 kind: Loop
 metadata:
   name: weekday-issues

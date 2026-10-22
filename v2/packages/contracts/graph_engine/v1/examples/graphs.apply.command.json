@@ -9,7 +9,7 @@
     ],
     "payload": {
       "graph": {
-        "apiVersion": "openengine.cc/v2alpha1",
+        "apiVersion": "openengine.cc/v1alpha1",
         "kind": "Graph",
         "metadata": {
           "name": "review"

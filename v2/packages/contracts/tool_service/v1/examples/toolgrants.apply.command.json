@@ -8,7 +8,7 @@
     ],
     "payload": {
       "grant": {
-        "apiVersion": "tools.openengine.cc/v1alpha1",
+        "apiVersion": "openengine.cc/v1alpha1",
         "kind": "ToolGrant",
         "metadata": {
           "name": "reviewer-comment-access",

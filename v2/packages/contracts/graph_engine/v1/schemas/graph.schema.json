@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Graphs",
-  "description": "Registered graphs and their immutable revisions. A graph is applied as a Graph resource (`apiVersion: openengine.cc/v2alpha1`, `kind: Graph`; see `resources/graph.schema.yaml`) or as a Python LangGraph module exporting `workflow`. GE keeps what was applied verbatim.",
+  "description": "Registered graphs and their immutable revisions. A graph is applied as a Graph resource (`apiVersion: openengine.cc/v1alpha1`, `kind: Graph`; see `resources/graph.schema.yaml`) or as a Python LangGraph module exporting `workflow`. GE keeps what was applied verbatim.",
   "$defs": {
     "graph_name": {
       "description": "Registry name of a graph, unique per GE instance.",

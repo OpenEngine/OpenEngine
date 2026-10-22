@@ -10,7 +10,7 @@
     "expected_version": 3,
     "payload": {
       "connection": {
-        "apiVersion": "openengine.cc/v2alpha1",
+        "apiVersion": "openengine.cc/v1alpha1",
         "kind": "Connection",
         "metadata": {
           "name": "acme-github"

@@ -1,4 +1,4 @@
-apiVersion: tools.openengine.cc/v1alpha1
+apiVersion: openengine.cc/v1alpha1
 kind: Tool
 metadata:
   name: github-issue-comment
@@ -41,7 +41,7 @@ status:
   phase: Ready
   observedGeneration: 1
 ---
-apiVersion: tools.openengine.cc/v1alpha1
+apiVersion: openengine.cc/v1alpha1
 kind: ToolGrant
 metadata:
   name: reviewer-comment-access
@@ -60,7 +60,7 @@ status:
   phase: Active
   toolUid: tool-uid-123
 ---
-apiVersion: tools.openengine.cc/v1alpha1
+apiVersion: openengine.cc/v1alpha1
 kind: ToolInvocation
 metadata:
   name: ti-123
