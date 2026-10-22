@@ -1,6 +1,6 @@
 # V2 is its own uv workspace, separate from V1's at the repository root.
 [tool.uv.workspace]
-members = ["apps/cli", "apps/supervisor", "packages/persistence", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane"]
+members = ["apps/cli", "apps/supervisor", "packages/persistence", "packages/telemetry", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane"]
 
 [dependency-groups]
 dev = [
@@ -8,6 +8,7 @@ dev = [
     "openengine-connection-bus",
     "openengine-graph-engine",
     "openengine-persistence",
+    "openengine-telemetry",
     "openengine-tool-service",
     "openengine-virtual-control-plane",
     "pytest>=8.0",
@@ -18,6 +19,7 @@ dev = [
 [tool.uv.sources]
 openengine-cli = { workspace = true }
 openengine-persistence = { workspace = true }
+openengine-telemetry = { workspace = true }
 openengine-connection-bus = { workspace = true }
 openengine-graph-engine = { workspace = true }
 openengine-tool-service = { workspace = true }
@@ -28,6 +30,7 @@ testpaths = [
     "apps/cli/tests",
     "apps/supervisor/tests",
     "packages/persistence/tests",
+    "packages/telemetry/tests",
     "services/connection_bus/tests",
     "services/graph_engine/tests",
     "services/tool_service/tests",

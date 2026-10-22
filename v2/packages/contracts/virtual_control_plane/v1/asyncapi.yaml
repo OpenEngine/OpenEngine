@@ -763,10 +763,20 @@ components:
       headers:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ../../common/v1/event.schema.json#/$defs/headers }
+    commandHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ../../common/v1/command.schema.json#/$defs/headers }
+    queryHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: ../../common/v1/query.schema.json#/$defs/headers }
   messages:
     ApplyWorkspaceCommand:
       name: ApplyWorkspaceCommand
       title: Apply a workspace command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/apply_workspace_command }
@@ -790,6 +800,8 @@ components:
     EnsureWorkspaceCommand:
       name: EnsureWorkspaceCommand
       title: Ensure a workspace is available command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/ensure_workspace_command }
@@ -808,6 +820,8 @@ components:
     ExecuteCommand:
       name: ExecuteCommand
       title: Execute a task command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/execute_command }
@@ -837,6 +851,8 @@ components:
     SteerCommand:
       name: SteerCommand
       title: Steer a session command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/steer_command }
@@ -856,6 +872,8 @@ components:
     CancelCommand:
       name: CancelCommand
       title: Cancel a task attempt command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/cancel_command }
@@ -875,6 +893,8 @@ components:
     CheckpointCommand:
       name: CheckpointCommand
       title: Checkpoint a workspace command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/checkpoint_command }
@@ -893,6 +913,8 @@ components:
     SuspendCommand:
       name: SuspendCommand
       title: Suspend a workspace command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/suspend_command }
@@ -913,6 +935,8 @@ components:
     DestroyCommand:
       name: DestroyCommand
       title: Destroy a workspace command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/destroy_command }
@@ -939,6 +963,8 @@ components:
     DecideApprovalCommand:
       name: DecideApprovalCommand
       title: Decide a runtime approval command
+      traits:
+      - $ref: '#/components/messageTraits/commandHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/commands.schema.json#/$defs/decide_approval_command }
@@ -965,6 +991,8 @@ components:
     GetCapabilitiesQuery:
       name: GetCapabilitiesQuery
       title: Get provider capabilities query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/get_capabilities_query }
@@ -983,6 +1011,8 @@ components:
     ListWorkspacesQuery:
       name: ListWorkspacesQuery
       title: List workspaces query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/list_workspaces_query }
@@ -1004,6 +1034,8 @@ components:
     GetWorkspaceQuery:
       name: GetWorkspaceQuery
       title: Get a workspace query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/get_workspace_query }
@@ -1024,6 +1056,8 @@ components:
     ListSessionsQuery:
       name: ListSessionsQuery
       title: List a workspace's sessions query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/list_sessions_query }
@@ -1042,6 +1076,8 @@ components:
     ListApprovalsQuery:
       name: ListApprovalsQuery
       title: List a workspace's runtime approvals query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/list_approvals_query }
@@ -1061,6 +1097,8 @@ components:
     ListArtifactsQuery:
       name: ListArtifactsQuery
       title: List a workspace's artifacts query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/list_artifacts_query }
@@ -1079,6 +1117,8 @@ components:
     GetSessionQuery:
       name: GetSessionQuery
       title: Get a session query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/get_session_query }
@@ -1097,6 +1137,8 @@ components:
     ListSessionEventsQuery:
       name: ListSessionEventsQuery
       title: List a session's history query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/list_session_events_query }
@@ -1115,6 +1157,8 @@ components:
     GetOperationQuery:
       name: GetOperationQuery
       title: Get an operation query
+      traits:
+      - $ref: '#/components/messageTraits/queryHeaders'
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: ./schemas/queries.schema.json#/$defs/get_operation_query }

@@ -4,7 +4,8 @@ The AsyncAPI CLI parses each document and resolves its references. This adds
 the rules JSON Schema cannot express and the checks only the examples can
 prove:
 
-- a message validates against the schema its AsyncAPI message names;
+- a message validates against the schema its AsyncAPI message names, and
+  its NATS headers against the schema its header trait names;
 - a subject matches its channel's address, each `{parameter}` is a single
   token of the identifier type the parameter declares (`x-oe-identifier`),
   and an ID that appears in both the subject and the body agrees;
@@ -52,6 +53,8 @@ class Message:
     """Parameter name -> identifier `$defs` name in `types.schema.json`."""
     replies_to: tuple[str, ...] = ()
     """For a reply, the address templates of the requests it answers."""
+    headers: str | None = None
+    """Absolute `file://` reference to the headers schema its trait names; None for replies."""
 
 
 @dataclass(frozen=True)
@@ -109,10 +112,15 @@ def load_contract(service: str) -> Contract:
     document = _load(path)
     base = path.parent
 
-    def schema_of(message: Mapping[str, Any]) -> str:
-        ref = message["payload"]["schema"]["$ref"]
+    def absolute(ref: str) -> str:
         file, _, pointer = ref.partition("#")
         return (base / file).resolve().as_uri() + (f"#{pointer}" if pointer else "")
+
+    def headers_of(message: Mapping[str, Any]) -> str | None:
+        for trait in message.get("traits") or ():
+            if headers := _deref(document, trait).get("headers"):
+                return absolute(headers["schema"]["$ref"])
+        return None
 
     channel_of: dict[str, tuple[str | None, dict[str, str]]] = {}
     for channel in document["channels"].values():
@@ -147,10 +155,11 @@ def load_contract(service: str) -> Contract:
         address, parameters = channel_of.get(name, (None, reply_parameters.get(name, {})))
         messages[name] = Message(
             name=name,
-            schema=schema_of(raw),
+            schema=absolute(raw["payload"]["schema"]["$ref"]),
             address=address,
             parameters=parameters,
             replies_to=tuple(replies.get(name, ())),
+            headers=headers_of(raw),
         )
     return Contract(service, path, document, messages)
 
@@ -215,6 +224,11 @@ def validate_message(
         f"{'/'.join(map(str, error.absolute_path)) or '(root)'}: {error.message}"
         for error in _validator(message.schema).iter_errors(body)
     ]
+    if headers is not None and message.headers is not None:
+        errors += [
+            f"headers/{'/'.join(map(str, error.absolute_path)) or '(root)'}: {error.message}"
+            for error in _validator(message.headers).iter_errors(headers)
+        ]
     if not isinstance(body, Mapping):
         return errors
 

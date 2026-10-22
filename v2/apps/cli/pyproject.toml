@@ -10,6 +10,7 @@ dependencies = [
     "openengine-graph-engine",
     "openengine-persistence",
     "openengine-supervisor",
+    "openengine-telemetry",
     "openengine-tool-service",
     "openengine-virtual-control-plane",
 ]
@@ -29,5 +30,6 @@ openengine-connection-bus = { workspace = true }
 openengine-graph-engine = { workspace = true }
 openengine-persistence = { workspace = true }
 openengine-supervisor = { workspace = true }
+openengine-telemetry = { workspace = true }
 openengine-tool-service = { workspace = true }
 openengine-virtual-control-plane = { workspace = true }

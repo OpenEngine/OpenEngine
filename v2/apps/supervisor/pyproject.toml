@@ -3,7 +3,7 @@ name = "openengine-supervisor"
 version = "0.0.0"
 description = "Background process that `oe up` starts to run and watch OpenEngine V2's local processes."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["openengine-telemetry"]
 
 [project.scripts]
 oe-supervisor = "openengine.supervisor.__main__:main"
@@ -14,3 +14,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openengine"]
+
+[tool.uv.sources]
+openengine-telemetry = { workspace = true }

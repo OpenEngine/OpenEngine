@@ -6,7 +6,7 @@ uv sync          # from v2/
 uv run oe up     # start the supervisor in the background; returns once it is ready
 uv run oe migrate # upgrade the services' databases, then create or update the NATS streams
 uv run oe status # what is running, and where (--json for scripts)
-uv run oe logs   # the supervisor's log, NATS included (-f to follow)
+uv run oe logs   # the supervisor's log, NATS included (-f to follow, --json for raw JSON lines)
 uv run oe down   # stop everything `oe up` started
 ```
 

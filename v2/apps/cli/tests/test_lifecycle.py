@@ -65,7 +65,7 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     assert status.returncode == 0
     state = json.loads(status.stdout)
     assert state["status"] == "ready"
-    assert [process["name"] for process in state["processes"]] == ["nats"]
+    assert [process["name"] for process in state["processes"]] == ["nats", "cxn", "ge", "tools", "vcp"]
 
     again = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port))
     assert again.returncode == 0
@@ -74,6 +74,21 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     logs = oe("logs")
     assert "Server is ready" in logs.stdout
     assert str(tmp_path / "state" / "openengine" / "nats") in logs.stdout
+    assert f"[INF] supervisor: ready, NATS on nats://127.0.0.1:{port}" in logs.stdout
+    raw = oe("logs", "--json")
+    ready = next(json.loads(line) for line in raw.stdout.splitlines() if '"ready, NATS on' in line)
+    assert ready["service.name"] == "openengine-supervisor"
+    assert ready["severity_text"] == "INFO"
+    # The services boot after the supervisor reports ready, so wait for their last boot line.
+    deadline = time.monotonic() + 15
+    while raw.stdout.count('"body": "ready"') < 4 and time.monotonic() < deadline:
+        time.sleep(0.2)
+        raw = oe("logs", "--json")
+    for service in ("cxn", "ge", "tools", "vcp"):
+        boot = [json.loads(line) for line in raw.stdout.splitlines() if f'"service.name": "openengine-{service}"' in line]
+        assert [line["body"] for line in boot][:4] == ["starting", "database configured", "nats configured", "ready"]
+        assert len({line["trace_id"] for line in boot[:4]}) == 1
+        assert boot[2]["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
 
     down = oe("down")
     assert down.returncode == 0

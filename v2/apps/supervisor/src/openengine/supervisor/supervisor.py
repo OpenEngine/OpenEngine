@@ -1,18 +1,19 @@
 """Start OpenEngine V2's local processes, wait for them, and keep them running.
 
-For now that is NATS alone. The services join `run` as they are written,
-started after NATS and stopped before it.
+NATS first, then the services, which are stopped before it. The services
+have no handlers yet; they boot, log, and wait.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from openengine.supervisor.processes import nats
+from openengine.supervisor.processes import nats, services
 from openengine.supervisor.readiness.http import NotReady, wait_until_healthy
 from openengine.supervisor.shutdown.processes import stop_all
 from openengine.supervisor.shutdown.signals import ShutdownRequest
@@ -22,6 +23,8 @@ READY_TIMEOUT_SECONDS = 30.0
 WATCH_SECONDS = 0.5
 EXIT_OK = 0
 EXIT_FAILED = 1
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -73,16 +76,20 @@ def run(settings: Settings) -> int:
             timeout=READY_TIMEOUT_SECONDS,
             cancelled=shutdown.requested,
         )
-        processes = [ProcessState("nats", children["nats"].pid, f"nats://{settings.host}:{settings.nats_port}")]
+        nats_url = f"nats://{settings.host}:{settings.nats_port}"
+        processes = [ProcessState("nats", children["nats"].pid, nats_url)]
+        for name, module in services.SERVICES:
+            children[name] = services.start(module, sys.stdout.buffer, nats_url=nats_url)
+            processes.append(ProcessState(name, children[name].pid, ""))
         write_state(path, SupervisorState(pid=pid, status=Status.READY, processes=processes))
-        print(f"supervisor: ready, NATS on nats://{settings.host}:{settings.nats_port}", flush=True)
+        log.info("ready, NATS on %s", nats_url, extra={"services": [name for name, _ in services.SERVICES]})
         _watch(children, shutdown)
     except (nats.NatsError, NotReady, ProcessExited) as error:
-        print(f"supervisor: {error}", flush=True)
+        log.exception("failed; stopping")
         write_state(path, SupervisorState(pid=pid, status=Status.FAILED, error=str(error)))
         return EXIT_FAILED
     finally:
         stop_all(list(children.values()))
     path.unlink(missing_ok=True)
-    print("supervisor: stopped", flush=True)
+    log.info("stopped")
     return EXIT_OK

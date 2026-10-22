@@ -42,7 +42,8 @@
       }
     },
     "headers": {
-      "description": "NATS headers sent with every event.",
+      "description": "NATS headers sent with every event, with the trace context of the work that published it.",
+      "allOf": [{ "$ref": "types.schema.json#/$defs/trace_headers" }],
       "type": "object",
       "required": ["Nats-Msg-Id"],
       "properties": {

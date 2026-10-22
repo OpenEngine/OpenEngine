@@ -768,11 +768,20 @@ components:
       headers:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: '../../common/v1/event.schema.json#/$defs/headers' }
+    commandHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/command.schema.json#/$defs/headers' }
+    queryHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/query.schema.json#/$defs/headers' }
 
   messages:
     ApplyGraphCommand:
       name: ApplyGraphCommand
       title: Apply a graph command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/apply_graph_command' }
@@ -792,6 +801,7 @@ components:
     RunGraphCommand:
       name: RunGraphCommand
       title: Run a graph command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/run_graph_command' }
@@ -812,6 +822,7 @@ components:
     SubmitJobCommand:
       name: SubmitJobCommand
       title: Submit a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/submit_job_command' }
@@ -835,6 +846,7 @@ components:
     SteerJobCommand:
       name: SteerJobCommand
       title: Steer a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/steer_job_command' }
@@ -854,6 +866,7 @@ components:
     PauseJobCommand:
       name: PauseJobCommand
       title: Pause a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/pause_job_command' }
@@ -873,6 +886,7 @@ components:
     ResumeJobCommand:
       name: ResumeJobCommand
       title: Resume a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/resume_job_command' }
@@ -892,6 +906,7 @@ components:
     CancelJobCommand:
       name: CancelJobCommand
       title: Cancel a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/cancel_job_command' }
@@ -911,6 +926,7 @@ components:
     DecideApprovalCommand:
       name: DecideApprovalCommand
       title: Decide a workflow approval command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/decide_approval_command' }
@@ -932,6 +948,7 @@ components:
     ApplyLoopCommand:
       name: ApplyLoopCommand
       title: Apply a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/apply_loop_command' }
@@ -953,6 +970,7 @@ components:
     PauseLoopCommand:
       name: PauseLoopCommand
       title: Pause a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/pause_loop_command' }
@@ -971,6 +989,7 @@ components:
     ResumeLoopCommand:
       name: ResumeLoopCommand
       title: Resume a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/resume_loop_command' }
@@ -989,6 +1008,7 @@ components:
     RemoveLoopCommand:
       name: RemoveLoopCommand
       title: Remove a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/commands.schema.json#/$defs/remove_loop_command' }
@@ -1007,6 +1027,7 @@ components:
     ListGraphsQuery:
       name: ListGraphsQuery
       title: List graphs query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_graphs_query' }
@@ -1025,6 +1046,7 @@ components:
     GetGraphQuery:
       name: GetGraphQuery
       title: Get a graph query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/get_graph_query' }
@@ -1043,6 +1065,7 @@ components:
     ListJobsQuery:
       name: ListJobsQuery
       title: List jobs query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_jobs_query' }
@@ -1063,6 +1086,7 @@ components:
     GetJobQuery:
       name: GetJobQuery
       title: Get a job query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/get_job_query' }
@@ -1081,6 +1105,7 @@ components:
     ListJobExecutionsQuery:
       name: ListJobExecutionsQuery
       title: List a job's executions query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_executions_query' }
@@ -1100,6 +1125,7 @@ components:
     ListJobWorkspacesQuery:
       name: ListJobWorkspacesQuery
       title: List a job's workspaces query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_workspaces_query' }
@@ -1118,6 +1144,7 @@ components:
     ListJobApprovalsQuery:
       name: ListJobApprovalsQuery
       title: List a job's approvals query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_approvals_query' }
@@ -1136,6 +1163,7 @@ components:
     GetExecutionQuery:
       name: GetExecutionQuery
       title: Get an execution query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/get_execution_query' }
@@ -1154,6 +1182,7 @@ components:
     ListExecutionStepsQuery:
       name: ListExecutionStepsQuery
       title: List an execution's steps query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_execution_steps_query' }
@@ -1173,6 +1202,7 @@ components:
     ListLoopsQuery:
       name: ListLoopsQuery
       title: List loops query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_loops_query' }
@@ -1191,6 +1221,7 @@ components:
     GetLoopQuery:
       name: GetLoopQuery
       title: Get a loop query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/get_loop_query' }
@@ -1209,6 +1240,7 @@ components:
     GetOperationQuery:
       name: GetOperationQuery
       title: Get an operation query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
       payload:
         schemaFormat: application/schema+json;version=draft-07
         schema: { $ref: './schemas/queries.schema.json#/$defs/get_operation_query' }

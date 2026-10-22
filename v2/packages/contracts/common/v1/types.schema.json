@@ -125,6 +125,24 @@
       "type": "object",
       "propertyNames": { "pattern": "^[a-z][a-z_]*_id$" },
       "additionalProperties": { "$ref": "#/$defs/token" }
+    },
+    "traceparent": {
+      "description": "W3C Trace Context `traceparent` header (`{version}-{trace-id}-{parent-id}-{trace-flags}`), lower-case hex. Names the span that sent the message, so the receiver's work joins the sender's trace.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+    },
+    "tracestate": {
+      "description": "W3C Trace Context `tracestate` header: vendor-specific trace data carried alongside `traceparent`, passed on unchanged.",
+      "type": "string",
+      "maxLength": 512
+    },
+    "trace_headers": {
+      "description": "Optional W3C Trace Context headers. Every request and event may carry them; a receiver that gets none starts a new trace.",
+      "type": "object",
+      "properties": {
+        "traceparent": { "$ref": "#/$defs/traceparent" },
+        "tracestate": { "$ref": "#/$defs/tracestate" }
+      }
     }
   }
 }

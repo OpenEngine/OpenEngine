@@ -17,5 +17,11 @@
       "$ref": "types.schema.json#/$defs/utc_timestamp"
     },
     "payload": { "type": "object", "description": "Typed inputs of the operation." }
+  },
+  "$defs": {
+    "headers": {
+      "description": "NATS headers a command may carry: the sender's trace context.",
+      "$ref": "types.schema.json#/$defs/trace_headers"
+    }
   }
 }
