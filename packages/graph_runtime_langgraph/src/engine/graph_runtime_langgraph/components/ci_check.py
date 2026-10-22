@@ -28,7 +28,10 @@ class CICheck:
     must all settle; a confirmed absence of requirements passes immediately.
     Providers without requirement discovery retain polling of reported CI. Provider errors and a
     timeout fail the node, rather than claiming CI passed or asking an agent
-    to fix an infrastructure error. Cancellation propagates through polling.
+    to fix an infrastructure error. A provider that cannot be reached
+    (``ConnectionError``) is retried on the next poll instead; if it stays
+    unreachable until the timeout, the node fails with its last error.
+    Cancellation propagates through polling.
     """
 
     source_control: SourceControl | None = None
@@ -63,40 +66,55 @@ class CICheck:
             raise ValueError("CICheck needs a pull request URL in pr_url")
         number = found.number
         await execution.say(f"Waiting for CI on {url}.")
-        async with asyncio.timeout(self.timeout):
-            while True:
-                status = await source_control.list_pipeline_status(
-                    WorkspaceId(workspace), change_request_number=number,
-                )
-                known_requirements = status.required_checks is not None
-                jobs = (
-                    status.required_checks if known_requirements
-                    else (*status.checks, *status.pipelines)
-                )
-                # GitHub supplies a conclusion; GitLab uses terminal statuses.
-                if (known_requirements or jobs) and all(
-                    job.status.lower() in _TERMINAL for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
-                ):
-                    failed = [
-                        job for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
-                        if (job.conclusion or job.status).lower()
-                        not in _PASSING
-                    ]
-                    details = "\n".join(
-                        f"- {job.name}: {job.conclusion or job.status} "
-                        f"{getattr(job, 'details_url', getattr(job, 'url', ''))}"
-                        for job in failed
+        # The last poll that could not reach the provider, if the latest did not.
+        unreachable: ConnectionError | None = None
+        try:
+            async with asyncio.timeout(self.timeout):
+                while True:
+                    try:
+                        status = await source_control.list_pipeline_status(
+                            WorkspaceId(workspace), change_request_number=number,
+                        )
+                    except ConnectionError as error:
+                        # A network blip during an hour-long wait is not a
+                        # verdict on CI; ask again at the next poll.
+                        unreachable = error
+                        await asyncio.sleep(self.poll_interval)
+                        continue
+                    unreachable = None
+                    known_requirements = status.required_checks is not None
+                    jobs = (
+                        status.required_checks if known_requirements
+                        else (*status.checks, *status.pipelines)
                     )
-                    summary = (
-                        f"CI failed for {url} at {status.ref}:\n{details}"
-                        if failed else f"CI passed for {url} at {status.ref}."
-                    )
-                    await execution.say(summary)
-                    return {self.output_key: {
-                        "passed": not failed, "pr_url": url,
-                        "ref": status.ref, "summary": summary,
-                    }}
-                await asyncio.sleep(self.poll_interval)
+                    # GitHub supplies a conclusion; GitLab uses terminal statuses.
+                    if (known_requirements or jobs) and all(
+                        job.status.lower() in _TERMINAL for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
+                    ):
+                        failed = [
+                            job for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
+                            if (job.conclusion or job.status).lower()
+                            not in _PASSING
+                        ]
+                        details = "\n".join(
+                            f"- {job.name}: {job.conclusion or job.status} "
+                            f"{getattr(job, 'details_url', getattr(job, 'url', ''))}"
+                            for job in failed
+                        )
+                        summary = (
+                            f"CI failed for {url} at {status.ref}:\n{details}"
+                            if failed else f"CI passed for {url} at {status.ref}."
+                        )
+                        await execution.say(summary)
+                        return {self.output_key: {
+                            "passed": not failed, "pr_url": url,
+                            "ref": status.ref, "summary": summary,
+                        }}
+                    await asyncio.sleep(self.poll_interval)
+        except TimeoutError:
+            if unreachable is not None:
+                raise unreachable from None
+            raise
 
 
 __all__ = ["CICheck"]

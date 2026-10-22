@@ -24,6 +24,7 @@ from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.github.transports import (
     GitHubApiTransport,
+    GitHubConnectionError,
     GitHubOAuthTransport,
     GitHubTransportError,
     normalized_authority,
@@ -55,6 +56,11 @@ from engine.runtime.git_core import (
     guard_push,
     refuse_internal_branch,
 )
+
+
+class GitHubSourceControlConnectionError(GitHubSourceControlError, ConnectionError):
+    """GitHub could not be reached; callers that poll may retry it."""
+
 
 _MAX_LOG_BYTES = 8 * 1024 * 1024
 _MAX_LOG_CHARACTERS = 48_000
@@ -868,6 +874,8 @@ class GitHubSourceControl:
         """Make one GitHub request, preserving one adapter-level error shape."""
         try:
             return await self._transport.request(method, path, **kwargs)
+        except GitHubConnectionError as error:
+            raise GitHubSourceControlConnectionError(str(error)) from error
         except GitHubTransportError as error:
             raise GitHubSourceControlError(str(error)) from error
 
@@ -899,6 +907,8 @@ class GitHubSourceControl:
     async def _download(self, path: str) -> bytes:
         try:
             content = await self._transport.download(path)
+        except GitHubConnectionError as error:
+            raise GitHubSourceControlConnectionError(str(error)) from error
         except GitHubTransportError as error:
             raise GitHubSourceControlError(str(error)) from error
         if len(content) > _MAX_LOG_BYTES:
@@ -1078,6 +1088,7 @@ __all__ = [
     "INTERNAL_BRANCH_PREFIX",
     "GitGlobalOptionError",
     "GitHubSourceControl",
+    "GitHubSourceControlConnectionError",
     "GitHubSourceControlError",
     "GitOutsideWorkspaceError",
     "InternalBranchPublicationError",

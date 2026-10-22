@@ -70,6 +70,22 @@ def test_provider_errors_and_cancellation_propagate(execution, error):
         asyncio.run(CICheck()(STATE))
 
 
+def test_unreachable_provider_is_polled_again(execution):
+    source = execution.runtime.source_control
+    source.list_pipeline_status.side_effect = [ConnectionError("DNS failed"), status()]
+    result = asyncio.run(CICheck(poll_interval=0)(STATE))["ci_check"]
+    assert result["passed"] is True
+    assert source.list_pipeline_status.await_count == 2
+
+
+def test_provider_unreachable_until_timeout_fails_with_its_error(execution):
+    source = execution.runtime.source_control
+    source.list_pipeline_status.side_effect = ConnectionError("DNS failed")
+    with pytest.raises(ConnectionError, match="DNS failed"):
+        asyncio.run(CICheck(poll_interval=0.001, timeout=0.05)(STATE))
+    assert source.list_pipeline_status.await_count > 1
+
+
 def test_no_checks_times_out_instead_of_passing(execution):
     execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus("head", (), ())
     with pytest.raises(TimeoutError):

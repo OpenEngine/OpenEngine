@@ -309,6 +309,45 @@ def test_oauth_transport_does_not_retry_a_second_401(
     refresh.assert_awaited_once_with("old")
 
 
+@pytest.mark.parametrize("download", [False, True])
+def test_oauth_network_failure_names_the_request(monkeypatch, download) -> None:
+    from engine.adapters.source_control.github.transports import GitHubConnectionError
+
+    def respond(request):
+        raise httpx.ConnectError("[Errno 8] nodename nor servname provided", request=request)
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "engine.adapters.source_control.github.transports.httpx.AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    transport = GitHubOAuthTransport("token")
+    path = "/repos/acme/api/commits/abc/check-runs"
+    call = transport.download(path) if download else transport.request("GET", path)
+    with pytest.raises(GitHubConnectionError) as raised:
+        asyncio.run(call)
+    assert isinstance(raised.value, GitHubTransportError)
+    assert isinstance(raised.value, ConnectionError)
+    assert str(raised.value) == f"GitHub API GET {path} failed: [Errno 8] nodename nor servname provided"
+
+
+def test_github_adapter_keeps_a_network_failure_retryable(monkeypatch) -> None:
+    from engine.adapters.source_control.github import (
+        GitHubSourceControl,
+        GitHubSourceControlConnectionError,
+        GitHubSourceControlError,
+    )
+    from engine.adapters.source_control.github.transports import GitHubConnectionError
+
+    transport = MagicMock()
+    transport.request = AsyncMock(side_effect=GitHubConnectionError("GitHub API GET /x failed: down"))
+    source = GitHubSourceControl("", transport=transport)
+    with pytest.raises(GitHubSourceControlConnectionError, match="GET /x failed") as raised:
+        asyncio.run(source._api("GET", "/x"))
+    assert isinstance(raised.value, GitHubSourceControlError)
+    assert isinstance(raised.value, ConnectionError)
+
+
 def test_router_identifies_the_provider_in_a_source_control_failure(
     tmp_path: Path,
 ) -> None:

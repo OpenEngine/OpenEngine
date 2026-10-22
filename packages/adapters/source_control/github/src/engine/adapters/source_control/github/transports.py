@@ -38,6 +38,10 @@ class GitHubTransportError(RuntimeError):
     """One transport could not complete a GitHub API request."""
 
 
+class GitHubConnectionError(GitHubTransportError, ConnectionError):
+    """GitHub could not be reached; the same request may succeed if retried."""
+
+
 def normalized_authority(url: str) -> str:
     """Compare hosts with their effective port; bare authorities use HTTPS."""
     parsed = urlsplit(url if "://" in url else f"https://{url}")
@@ -98,18 +102,9 @@ class GitHubOAuthTransport:
         url = (self._api_url.removesuffix("/v3") + "/graphql"
                if path == "/graphql" else f"{self._api_url}{path}")
         token = self._token
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method, url, headers=self._headers(token), **kwargs  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
-            )
+        response = await self._send(method, path, url, token, kwargs)
         if await self._refresh_after_unauthorized(response, token):
-            async with httpx.AsyncClient() as client:
-                response = await client.request(
-                    method,
-                    url,
-                    headers=self._headers(self._token),
-                    **kwargs,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
-                )
+            response = await self._send(method, path, url, self._token, kwargs)
         if response.is_error:
             raise self._request_error(method, path, response)
         if response.status_code == 204 or not response.content:
@@ -124,18 +119,33 @@ class GitHubOAuthTransport:
     async def download(self, path: str) -> bytes:
         token = self._token
         url = f"{self._api_url}{path}"
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(
-                url, headers=self._headers(token)
-            )
+        response = await self._send("GET", path, url, token, follow_redirects=True)
         if await self._refresh_after_unauthorized(response, token):
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                response = await client.get(
-                    url, headers=self._headers(self._token)
-                )
+            response = await self._send(
+                "GET", path, url, self._token, follow_redirects=True
+            )
         if response.is_error:
             raise self._request_error("GET", path, response)
         return response.content
+
+    async def _send(
+        self, method: str, path: str, url: str, token: str,
+        options: Mapping[str, object] | None = None, *, follow_redirects: bool = False,
+    ) -> httpx.Response:
+        """Send one request, naming the request when the network fails it."""
+        kwargs = options or {}
+        try:
+            async with (
+                httpx.AsyncClient(follow_redirects=True) if follow_redirects
+                else httpx.AsyncClient()
+            ) as client:
+                return await client.request(
+                    method, url, headers=self._headers(token), **kwargs  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
+                )
+        except httpx.TransportError as error:
+            raise GitHubConnectionError(
+                f"GitHub API {method} {path} failed: {error or type(error).__name__}"
+            ) from error
 
     async def _refresh_after_unauthorized(
         self, response: httpx.Response, failed_token: str
@@ -316,6 +326,7 @@ __all__ = [
     "CLI_TIMEOUT_SECONDS",
     "GitHubApiTransport",
     "GitHubCliTransport",
+    "GitHubConnectionError",
     "GitHubOAuthTransport",
     "GitHubTransportError",
 ]
