@@ -673,8 +673,12 @@ class ACPNode:
         # overrides apply only to fresh executions, after this recovery finishes.
         if stored is not None and resuming is not None:
             runner = stored.agent
-        await execution.emit(EventKind.RUNNER_SELECTED, {"runner": runner})
         node = self._for_runner(runner)
+        # The model the step asks for, recorded with its runner; none is the agent's own.
+        model = (node.session_config or {}).get("model")
+        await execution.emit(EventKind.RUNNER_SELECTED, {
+            "runner": runner, **({"model": model} if isinstance(model, str) and model else {}),
+        })
         return await node._run(state, cwd, stored, resuming)
 
     def _for_runner(self, runner: str) -> ACPNode:

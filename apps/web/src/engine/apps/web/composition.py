@@ -42,10 +42,12 @@ from engine.adapters.agent_runner.acp import (
     agent_provider,
     agent_providers,
     allowed_tools_for,
+    binary_version,
     claude_acp_runner,
     claude_session_config,
     codex_acp_runner,
     opencode_acp_runner,
+    runner_binary,
 )
 from engine.adapters.communications.slack import (
     SlackCommunications,
@@ -417,6 +419,7 @@ def build_graph_service(
             registry=builtin_agents(config),
             agent_factory=partial(added_agent, config=config),
             added_agents=ADDED_AGENTS,
+            runner_binary=partial(_runner_binary, config),
             start=start,
             session_config=claude_session_config_for(settings),
             default_repository=default_repository,
@@ -429,6 +432,12 @@ def build_graph_service(
         )
 
     return build
+
+
+def _runner_binary(config: EngineConfig, agent: str) -> tuple[str, str]:
+    """The binary a built-in agent runs, and the version it reports."""
+    path = runner_binary(config, agent)
+    return path, binary_version(path)
 
 
 def builtin_agents(config: EngineConfig) -> ACPAgentRegistry:

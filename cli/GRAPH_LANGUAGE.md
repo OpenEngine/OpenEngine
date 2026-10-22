@@ -133,9 +133,9 @@ must be reachable and able to reach `end`.
 after the checkout that gives each run a concise name from its instruction,
 as the Python graphs do. Without it a run is named after its submission. The
 turn runs on the agent's `cheapest` tier unless `model` names another tier or
-model: `haiku` for `claude`, `gpt-5.6-terra` for `codex` (set either with
-`[runners.NAME.models] cheapest = ...` in `engine.toml`), and an added agent's
-own model. The turn refuses every permission request, even on an
+model: `haiku` for `claude` and the agent's own default for `codex` (set
+either with `[runners.NAME.models] cheapest = ...` in `engine.toml`), and an
+added agent's own model. The turn refuses every permission request, even on an
 auto-approved run. On Claude it also runs in Claude's `default` mode with only
 `Read`, `Glob` and `Grep`, so it cannot act whatever mode the operator's
 Claude settings name. That still leaves what another agent's own sandbox allows:

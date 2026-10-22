@@ -41,6 +41,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -934,6 +935,27 @@ def agent_provider(config: EngineConfig, agent: str, /, **overrides: Any) -> ACP
     raise ValueError(f"unknown agent {agent!r}; expected one of: codex, claude, opencode")
 
 
+def runner_binary(config: EngineConfig, agent: str) -> str:
+    """The binary `agent_provider` runs for `agent`; empty when it is the adapter's own."""
+    path = config.runner_paths.get(agent, "")
+    return (installed_codex(path=path) or "") if agent == "codex" else path
+
+
+@functools.cache
+def binary_version(path: str) -> str:
+    """What `path --version` reports, or empty if it will not say."""
+    if not path:
+        return ""
+    try:
+        result = subprocess.run(
+            (path, "--version"), capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = (result.stdout or result.stderr).strip().splitlines()
+    return lines[0].strip() if result.returncode == 0 and lines else ""
+
+
 def agent_providers(
     config: EngineConfig,
 ) -> tuple[CodexACPProvider, ClaudeACPProvider, OpenCodeACPProvider]:
@@ -1169,7 +1191,9 @@ __all__ = [
     "claude_acp_runner",
     "claude_session_config",
     "codex_acp_runner",
+    "binary_version",
     "installed_codex",
     "opencode_acp_runner",
+    "runner_binary",
     "render_prompt",
 ]

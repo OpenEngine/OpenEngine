@@ -225,6 +225,17 @@ def test_runner_override_updates_tool_identity():
         assert all(binding.agent_id == 'claude' for binding in selected.mcp_server_bindings)
 
 
+def test_starter_stages_ask_for_their_tier(monkeypatch):
+    from engine.graph_runtime_langgraph import configure_model_tiers, configured_agents
+    configure_model_tiers({'codex': {'cheapest': 'small', 'default': 'main', 'elevated': 'large'}})
+    c = graphs.Components('codex', configured_agents(), None)
+    reviews = c.reviews()
+    naming = graphs.NamingNode(agent='codex', registry=c.agents, cwd='/tmp')
+    assert [node._for_runner('codex').session_config['model'] for node in (
+        naming, c.implementation(), reviews['review-security'], reviews['review-bugs'],
+    )] == ['small', 'main', 'large', 'main']
+
+
 def test_go_review_uses_callers_branch_on_remote_backend(monkeypatch, tmp_path):
     from engine.cli import backends, repository
     from engine.apps.cli.__main__ import main

@@ -270,6 +270,26 @@ def test_an_agent_on_a_model_server_has_nothing_to_sign_in_to(monkeypatch, capsy
     assert "nothing to sign in to" in capsys.readouterr().out
 
 
+def test_agents_show_each_runners_binary_and_tier_models(monkeypatch, capsys) -> None:
+    codex = {
+        "name": "codex", "kind": "codex", "model": "", "url": "", "builtin": True,
+        "path": "/opt/bin/codex", "version": "codex-cli 0.200.0",
+        "models": {"cheapest": "", "default": "codex-main", "elevated": ""},
+    }
+    claude = {
+        "name": "claude", "kind": "claude", "model": "", "url": "", "builtin": True, "path": "", "version": "",
+        "models": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
+    }
+    serve(monkeypatch, {"agents": [codex, claude]}, codex)
+    assert main(["agents"]) == 0
+    out = capsys.readouterr().out
+    assert "codex  /opt/bin/codex (codex-cli 0.200.0)\n" in out
+    assert "  cheapest  (agent default)\n  default   codex-main\n  elevated  (agent default)\n" in out
+    assert "claude  the adapter's bundled binary\n  cheapest  haiku\n  default   sonnet\n  elevated  opus" in out
+    assert main(["agent", "get", "codex"]) == 0
+    assert "  default   codex-main" in capsys.readouterr().out
+
+
 def test_agents_are_added_listed_and_removed_on_the_backend(monkeypatch, capsys) -> None:
     qwen = {
         "name": "qwen", "kind": "opencode", "model": "qwen3", "url": "http://gpu:8000/v1",
