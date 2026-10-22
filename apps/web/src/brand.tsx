@@ -4,6 +4,7 @@
 import type { PropsWithChildren, ReactNode } from "react";
 
 import { UTILIZATION_URL } from "./api";
+import { useTheme } from "./theme";
 
 /** The openengine V, traced from the mark. Inherits `currentColor` so it can be
  *  laid on the flame tile in the rail and on anything else that needs it. */
@@ -48,6 +49,26 @@ function GraphIcon() {
   );
 }
 
+/** Flips the panel between paper and night. Names what it switches to. */
+function ThemeToggle() {
+  const [theme, toggle] = useTheme();
+  const label = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={theme === "dark"}
+      className="rail-gear"
+      onClick={toggle}
+      title={label}
+      type="button"
+    >
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path fillRule="evenodd" d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0Zm0 1.5a6.5 6.5 0 0 0 0 13Z" />
+      </svg>
+    </button>
+  );
+}
+
 export function RailFoot({
   onSettings,
   utilizationActive = false,
@@ -74,6 +95,7 @@ export function RailFoot({
       >
         <GraphIcon />
       </a>
+      <ThemeToggle />
       {onSettings && (
         <button
           aria-label="Open settings"

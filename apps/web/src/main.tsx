@@ -24,8 +24,11 @@ import {
 import { LoopPage, NewLoopPage } from "./loops";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar } from "./sidebar";
+import { applyTheme, storedTheme } from "./theme";
 import { UtilizationPage } from "./utilization";
 import "./styles.css";
+
+applyTheme(storedTheme());
 
 function ChatPanel({
   config,

@@ -23,6 +23,7 @@
   --fill: #e7e6e3;
   --fill-hover: #dedcd7;
   --white: #ffffff;
+  --on-color: #ffffff;
   --rule: #d4d3cf;
 
   --flame: #e8452b;
@@ -51,6 +52,28 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Night for the panel too. The rail is already night and stays as it is; the
+ * panel's paper, fills and rules drop below it, and ink lifts to the rail's
+ * own. `--white` is the raised surface, so it is the lightest of the darks. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ink: #f4f3f1;
+  --ink-soft: #d0cfcb;
+  --muted: #a3a39c;
+  --faint: #85857f;
+
+  --paper: #181817;
+  --fill: #242423;
+  --fill-hover: #2e2e2c;
+  --white: #1f1f1e;
+  --rule: #353533;
+
+  --flame-wash: #3a1d17;
+
+  --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0h10L5 6z' fill='%23f4f3f1'/%3E%3C/svg%3E");
 }
 
 * { box-sizing: border-box; }
@@ -97,7 +120,7 @@ ul, ol { padding: 0; list-style: none; }
 .btn:hover:enabled, a.btn:hover { background: var(--fill); }
 .btn:disabled { cursor: default; opacity: .4; }
 .btn-primary {
-  color: var(--white);
+  color: var(--on-color);
   background: var(--flame);
   border-color: var(--flame);
 }
@@ -123,7 +146,7 @@ ul, ol { padding: 0; list-style: none; }
   white-space: nowrap;
 }
 .chip-flame { color: var(--flame); background: transparent; border-color: var(--flame); }
-.chip-ink { color: var(--white); background: var(--ink); border-color: var(--ink); }
+.chip-ink { color: var(--paper); background: var(--ink); border-color: var(--ink); }
 
 .link-flame {
   padding: 0;
@@ -182,7 +205,7 @@ ul, ol { padding: 0; list-style: none; }
   width: 40px;
   height: 40px;
   padding: 7px;
-  color: var(--white);
+  color: var(--on-color);
   background: var(--flame);
 }
 .rail-wordmark { font-size: 21px; font-weight: 800; letter-spacing: -.025em; }
@@ -226,7 +249,7 @@ ul, ol { padding: 0; list-style: none; }
   border: 1px solid transparent; cursor: pointer;
 }
 .rail-filter-toggle:hover, .rail-filter-toggle:focus-visible { border-color: var(--night-ink); }
-.rail-filter-toggle[data-active] { color: var(--white); border-color: var(--night-muted); }
+.rail-filter-toggle[data-active] { color: var(--on-color); border-color: var(--night-muted); }
 .rail-filter-options {
   --filter-opens-up: 0;
   overflow-y: auto;
@@ -257,7 +280,7 @@ ul, ol { padding: 0; list-style: none; }
 }
 .rail-head:hover { border-color: #6a6a64; }
 .rail-head:focus-visible { border-color: var(--night-ink); outline: 0; }
-.rail-section[data-open] > .rail-heading > .rail-head { color: var(--white); }
+.rail-section[data-open] > .rail-heading > .rail-head { color: var(--on-color); }
 
 .rail-note {
   display: grid;
@@ -294,7 +317,7 @@ ul, ol { padding: 0; list-style: none; }
   border-color: #6a6a64;
 }
 .rail-button-primary {
-  color: var(--white);
+  color: var(--on-color);
   background: var(--flame);
   border-color: var(--flame);
 }
@@ -858,7 +881,7 @@ select:disabled { cursor: default; }
 .segmented button:hover { background: var(--fill); }
 .segmented button[aria-pressed="true"] {
   position: relative;
-  color: var(--white);
+  color: var(--on-color);
   background: var(--flame);
   border-color: var(--flame);
   font-weight: 700;
