@@ -37,6 +37,18 @@
 .btnPrimary, .btnPrimary:hover { color: #fff; border-color: var(--oe-flame); }
 .btnPrimary { background: var(--oe-flame); }
 .btnPrimary:hover { background: var(--oe-flame-deep); border-color: var(--oe-flame-deep); }
+.install {
+  max-width: 54ch;
+  margin: 22px 0 0;
+  padding: 14px 18px;
+  font: 500 14px/1.6 var(--oe-mono);
+  color: var(--oe-ink);
+  background: var(--oe-fill);
+  border: 1px solid var(--oe-rule);
+  border-radius: 10px;
+  overflow-x: auto;
+}
+.install code { background: none; border: 0; padding: 0; }
 
 .rise { opacity: 0; transform: translateY(12px); animation: rise .7s cubic-bezier(.2, .7, .2, 1) forwards; }
 .hero > :nth-child(2) { animation-delay: .08s; }
