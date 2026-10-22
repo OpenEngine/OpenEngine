@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and discussion
+    url: https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ
+    about: Ask on Slack for help getting set up or writing a graph.
+  - name: Security vulnerability
+    url: https://github.com/OpenEngine/OpenEngine/security/advisories/new
+    about: Please report vulnerabilities privately. See SECURITY.md.

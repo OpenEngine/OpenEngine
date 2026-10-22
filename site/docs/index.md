@@ -1,10 +1,11 @@
 ---
 title: OpenEngine docs
 sidebar_label: Overview
-description: OpenEngine runs every change through a graph you define, on the coding CLIs you already pay for.
+description: OpenEngine runs every change through a graph you define, on the Claude Code and Codex subscriptions you already have.
 ---
 
-OpenEngine runs every change through a graph you define, on the coding CLIs you already pay for.
+OpenEngine runs every change through a graph you define, on the Claude Code and
+Codex subscriptions you already have, and hands you a reviewed pull request.
 
 New here? [Start with `engine go`](getting-started.md) to make your first local
 change, connect GitHub, and work through PR reviews and fixes.
@@ -15,15 +16,29 @@ On macOS or Linux, with Git and Node.js 20.19+ installed and Codex or Claude
 logged in on this machine, run:
 
 ```sh
+npm i -g @openengine.cc/engine
+cd your-repo
+engine go "add a dark mode toggle to the settings page"
+```
+
+The first `engine` command installs a pinned OpenEngine release under
+`~/.local/share/openengine` and starts the local daemon at
+[http://127.0.0.1:4364](http://127.0.0.1:4364). `engine go` runs the default
+graph against the checkout you are in and follows it live.
+
+Without npm, the one-line installer does the same and also puts an `engine`
+launcher in `~/.local/bin` (add it to your `PATH` if `engine` is not found):
+
+```sh
 curl -LsSf https://openengine.cc/install.sh | sh
 ```
 
-This installs the `engine` command in `~/.local/bin`, starts OpenEngine, and
-opens [http://127.0.0.1:4364](http://127.0.0.1:4364). If `engine` is not found
-afterwards, add `~/.local/bin` to your `PATH`.
+Use one method or the other: npm will not overwrite a launcher the curl
+installer created, so if you switch to npm later, run
+`npm i -g --force @openengine.cc/engine` once.
 
-Run `engine daemon` to reopen it, `engine daemon doctor` to diagnose problems,
-and rerun the installer to upgrade.
+Run `engine daemon` to reopen the daemon, `engine daemon doctor` to diagnose
+problems, and reinstall (either way) to upgrade.
 
 ## Concepts
 

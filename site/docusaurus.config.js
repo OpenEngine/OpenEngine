@@ -6,7 +6,7 @@ const REPO = 'https://github.com/OpenEngine/OpenEngine';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'OpenEngine',
-  tagline: 'Your Software Factory',
+  tagline: 'The open-source software factory: define your lifecycle as a graph, run every change through it on Claude Code and Codex.',
   favicon: 'favicon.svg',
   url: 'https://openengine.cc',
   baseUrl: '/',
@@ -68,7 +68,7 @@ const config = {
         items: [
           {type: 'docSidebar', sidebarId: 'docs', position: 'right', label: 'Docs'},
           {to: '/blog', position: 'right', label: 'Blog'},
-          {href: REPO, position: 'right', label: 'GitHub'},
+          {href: REPO, position: 'right', label: 'GitHub', className: 'navbar-github', 'aria-label': 'Star OpenEngine on GitHub'},
           {href: 'mailto:hello@openengine.cc', position: 'right', label: 'Contact Us', className: 'navbar-cta'},
         ],
       },

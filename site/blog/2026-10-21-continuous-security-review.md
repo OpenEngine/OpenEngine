@@ -9,6 +9,8 @@ A coding agent has access to things that matter: repositories, tools, credential
 
 We built a daily loop that asks those questions about OpenEngine itself. One agent investigates the public API surface. A different agent tries to disprove its findings with isolated reproductions. The final step turns confirmed findings into scoped GitHub issues that an engineer can pick up and rectify.
 
+The whole thing is one [graph file](https://github.com/OpenEngine/OpenEngine/blob/main/docs/examples/graphs/security-review.yaml) and one `engine loop add`. The findings land as public issues in [OpenEngine/OpenEngine](https://github.com/OpenEngine/OpenEngine/issues?q=is%3Aissue+%22openengine-security%22), so you can watch what it catches.
+
 <!-- truncate -->
 
 The result we want is a repair queue. An issue should explain the affected interface, the conditions needed to trigger the problem, the demonstrated impact, and what a fix must prove. A recurring report that nobody can act on would leave the important work unfinished.
@@ -141,3 +143,15 @@ Pausing does not cancel an active run. Resume with `engine loop resume security-
 Graph updates do not silently change this loop. Register a new version, pause the old loop, and add the new version under another loop name. That keeps the review procedure attached to each run auditable.
 
 The operational measure is the repair queue: reproducible issues with a clear scope, enough evidence to evaluate the claim, and tests that can demonstrate the fix. The run's coverage record tells us what the agents actually examined, including what they could not verify.
+
+## Run it on your own repository
+
+Nothing in the mechanics is specific to OpenEngine. Copy the graph, replace the `OpenEngine/OpenEngine` references in its prompts with your repository, and adjust the daily focus list and entry points to your own API surface. Then register it and add a loop with limits, with a `gh` login on the daemon's machine:
+
+```bash
+npm i -g @openengine.cc/engine
+engine graph add my-security-review.yaml
+engine loop add my-security-review --repo OWNER/REPO --max-spend 25 --input max_new_issues=3
+```
+
+If you try it, we would like to hear what it finds and what it gets wrong. Open an issue, join the [Slack](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ), or star the [repository](https://github.com/OpenEngine/OpenEngine) to follow the loop's results.

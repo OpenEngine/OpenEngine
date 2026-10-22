@@ -16,8 +16,11 @@ cd your-repo
 engine --version
 ```
 
-The installer puts `engine` in `~/.local/bin` and starts the local daemon at
-`http://127.0.0.1:4364`. Check the service and available agents:
+The first `engine` command installs a pinned OpenEngine release under
+`~/.local/share/openengine` and starts the local daemon at
+`http://127.0.0.1:4364`. (The alternative
+[curl installer](https://openengine.cc/docs/) also puts an `engine` launcher in
+`~/.local/bin`.) Check the service and available agents:
 
 ```sh
 engine daemon status
