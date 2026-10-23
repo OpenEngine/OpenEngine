@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from dotenv import dotenv_values
 from platformdirs import user_config_path
 
 LOCAL = "local"
@@ -47,9 +48,11 @@ class Backend:
     """What a run checks out when neither the command nor the graph says."""
 
     def token(self) -> str:
-        if self.token_env:
-            return os.environ.get(self.token_env, "")
-        return os.environ.get(TOKEN_ENVIRONMENT_VARIABLE, "")
+        """Prefer the shell, then the token saved in OpenEngine's config folder."""
+        variable = self.token_env or TOKEN_ENVIRONMENT_VARIABLE
+        if variable in os.environ:
+            return os.environ[variable]
+        return dotenv_values(user_config_path("openengine") / ".env", interpolate=False).get(variable) or ""
 
     @property
     def is_local(self) -> bool:

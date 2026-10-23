@@ -14,7 +14,7 @@ The `engine` command is what you type in a terminal to use OpenEngine. OpenEngin
 In [Save Your First Graph](./test2doc-save-your-first-graph.mdx) you saved a graph. Now you'll use it. Each time a graph is carried out, from its first step to its last, is called a **run**. While a run goes on, your terminal shows which step it's on and what the agent is saying, so you can see the work happen instead of waiting in the dark. You can also answer an agent that stops to ask you something, walk away and come back, or stop a run you no longer want.
 
 
-This guide uses a graph with two steps. In your project's folder, save this as `describe-project.yaml`, then type `engine graph add describe-project.yaml` and press Enter to save it to OpenEngine, as in the last guide:
+This guide uses a graph with two steps. In your project's folder, save this as `describe-project.yaml`, then type `oe graph add describe-project.yaml` and press Enter to save it to OpenEngine, as in the last guide:
 
 ```yaml
 apiVersion: openengine.cc/v1
@@ -32,16 +32,16 @@ implementation:
 
 `plan` and `implementation` are two of a graph's **stages**: groups of steps that happen one after another. The first stage plans the work and the second does it. Here each has one step: `read` looks at your README, then `suggest` proposes an improvement to it.
 
-![screenshot](./test2doc-9d0b1a9da57a.png)
+![screenshot](./test2doc-49e3acffc21e.png)
 
-Start the graph. Type `engine graph run describe-project` and press Enter.
+Start the graph. Type `oe graph run describe-project` and press Enter.
 
 The first time you run a graph in a folder, OpenEngine asks whether to trust it. Trusting a folder lets agents change files and run commands there without asking you first. Type `n` and press Enter: the agents will check with you before they run a command. You can change that choice later.
 
 
 If an agent asks to run a command, read the question. Type y and press Enter to allow it. Here the agent reads README.md, the file that describes your project.
 
-![screenshot](./test2doc-03f51752349d.png)
+![screenshot](./test2doc-8f32d7be00e5.png)
 
 Now watch. The screen redraws itself as the run goes on:
 
@@ -52,90 +52,90 @@ Now watch. The screen redraws itself as the run goes on:
 
 If you see *cannot reach backend*, OpenEngine's background program isn't running. A **backend** is a computer where that program runs: this one, or a remote machine. Follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then start the graph again.
 
-![screenshot](./test2doc-e346e555ab75.png)
+![screenshot](./test2doc-ef8cde72f94b.png)
 
 Keep watching until the run ends. When the last step is done, every mark turns to ✓, the top line says *completed*, and below it you'll see what the last step's agent replied.
 
 If an agent asks to run a command, read the question. To allow it, type `y` and press Enter. Answer any further questions the same way when you want to allow the requested action. Once the work is done, the run ends on its own.
 
-![screenshot](./test2doc-d07904ebc34f.png)
-![screenshot](./test2doc-a976d669265e.png)
+![screenshot](./test2doc-70bad05b1769.png)
+![screenshot](./test2doc-1c5448e3d1e2.png)
 
-To see your runs afterwards, type `engine runs list` and press Enter.
+To see your runs afterwards, type `oe runs list` and press Enter.
 
 You'll see one row for each run, newest first, with the graph it ran and its status: *completed* when it finished, *cancelled* if you stopped it, and *running* if it's still going. You can leave the other columns alone.
 
-![screenshot](./test2doc-afb2f9e62265.png)
+![screenshot](./test2doc-8294d85e76d7.png)
 
 ## Answer an agent's question
 
 
 Sometimes an agent stops and asks you something, such as whether it may run a command. The run waits for your answer, and the question appears right in the screen you're watching.
 
-Start the graph again with `engine graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
+Start the graph again with `oe graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
 
 
 When an agent asks, the screen stops redrawing and shows the question: which step is asking, and what it wants to do. Here the `read` step asks to run `ls`, a command that lists the files in a folder. The question mark in the *Graph* line shows the step waiting for you.
 
 Type `y` and press Enter to let it, or `n` to say no. If you say no, the command is not run and this run ends as failed. Start the graph again if you want to try again.
 
-![screenshot](./test2doc-aeede9cd2584.png)
+![screenshot](./test2doc-8d40fc3c8a0b.png)
 
 The run picks up where it was and goes on to the end, as before.
 
-![screenshot](./test2doc-493575825316.png)
+![screenshot](./test2doc-1c5889eee08b.png)
 
 ## Step away and come back
 
 
 A run doesn't need your terminal open. It goes on in OpenEngine's background program, so you can close the screen that shows it, do something else, and come back to it later, for example when an agent has a question for you.
 
-Start the graph with `engine graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
+Start the graph with `oe graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
 
-![screenshot](./test2doc-0b7023107f37.png)
+![screenshot](./test2doc-8859b8f2c94d.png)
 
 To step away, press Ctrl-C: hold down the Control key and press C.
 
 The screen stops and asks what you want: *d* to detach, which closes this screen and leaves the run going; *c* to cancel the run; or *w* to keep watching.
 
-![screenshot](./test2doc-7285bf419188.png)
+![screenshot](./test2doc-c26774742762.png)
 
 Type `d` and press Enter.
 
-The screen says *Detached* and gives you the command to come back with, which includes the run ID. `local` means the backend on this computer; it's there from the start. Copy it somewhere, or find the ID later in the **RUN ID** column of `engine runs list`. The run is still going, waiting for the answer to its question.
+The screen says *Detached* and gives you the command to come back with, which includes the run ID. `local` means the backend on this computer; it's there from the start. Copy it somewhere, or find the ID later in the **RUN ID** column of `oe runs list`. The run is still going, waiting for the answer to its question.
 
-![screenshot](./test2doc-f0e4301533ca.png)
+![screenshot](./test2doc-bc058daedbd8.png)
 
-To come back, type the command it gave you, `engine run watch` followed by the run ID, and press Enter.
+To come back, type the command it gave you, `oe run watch` followed by the run ID, and press Enter.
 
 The same screen comes back, showing where the run is now. Since the agent is still waiting, its question is asked again.
 
-![screenshot](./test2doc-63810921b7d6.png)
+![screenshot](./test2doc-fabac0077e12.png)
 
 Type `y` and press Enter, and the run goes on to the end.
 
-![screenshot](./test2doc-451a5765b7a8.png)
+![screenshot](./test2doc-fe37b4728043.png)
 
 ## Stop a run
 
 
-If you started the wrong graph, or no longer need what it's doing, you can stop it. Start the graph with `engine graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
+If you started the wrong graph, or no longer need what it's doing, you can stop it. Start the graph with `oe graph run describe-project`, and answer `n` if you're asked whether to trust the folder.
 
-![screenshot](./test2doc-e78867b5ccc3.png)
+![screenshot](./test2doc-8e03a0cde347.png)
 
 Read the question. Type y and press Enter to let the agent read README.md before you stop its work.
 
-![screenshot](./test2doc-9f996d4b3ee2.png)
+![screenshot](./test2doc-75472a2577da.png)
 
 While it's running, press Ctrl-C. When the screen asks what you want, type `c` and press Enter.
 
 OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run ID and *cancelled*.
 
-![screenshot](./test2doc-0d034e945939.png)
+![screenshot](./test2doc-a42b06942937.png)
 
-Type `engine runs list` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.
+Type `oe runs list` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.
 
-![screenshot](./test2doc-7bfa49af7eb3.png)
+![screenshot](./test2doc-7fb2833bae21.png)
 
 Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).
 

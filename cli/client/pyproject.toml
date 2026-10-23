@@ -4,7 +4,7 @@ version = "1.10.0"
 description = "Terminal commands for registered graphs, runs, loops, nodes and the backends that serve them."
 requires-python = ">=3.11"
 # A client: it speaks HTTP to a backend and never starts a runtime itself.
-dependencies = ["platformdirs>=4", "pyyaml>=6"]
+dependencies = ["platformdirs>=4", "python-dotenv>=1.0", "pyyaml>=6"]
 
 [build-system]
 requires = ["hatchling"]

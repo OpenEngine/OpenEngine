@@ -81,6 +81,10 @@ oe graphs list --backend mini      # one-off override; ENGINE_BACKEND also works
 the project names resolve in (`--project`), a default repository (`--repo`),
 and the *name* of the environment variable holding its bearer token — never
 the token. Without `--token-env`, `ENGINE_SERVICE_TOKEN` is sent.
+The CLI reads that variable from the process environment first, then from
+`~/.config/openengine/.env`. Keep tokens in that file using a text editor so
+they stay out of shell history, and run `chmod 600 ~/.config/openengine/.env`
+so only your account can read it.
 
 Reaching a Mac mini: `oe daemon` binds loopback only, so expose it over
 something you trust — an SSH tunnel (`ssh -NL 4365:127.0.0.1:4364 mac-mini`,

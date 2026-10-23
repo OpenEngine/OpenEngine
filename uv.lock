@@ -798,12 +798,14 @@ version = "1.10.0"
 source = { editable = "cli/client" }
 dependencies = [
     { name = "platformdirs" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "platformdirs", specifier = ">=4" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6" },
 ]
 
