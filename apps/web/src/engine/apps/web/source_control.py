@@ -266,6 +266,9 @@ class RoutingSourceControl:
             pr_url=pr_url,
         )
 
+    async def review_context(self, pr_url: str) -> str:
+        return await self._call(lambda source: source.review_context(pr_url), pr_url=pr_url)
+
     async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
         return await self._call(lambda source: source.review_thread(pr_url, comment_id), pr_url=pr_url)
 

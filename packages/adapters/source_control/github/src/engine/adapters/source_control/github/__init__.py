@@ -13,6 +13,7 @@ letting callers pass a path is what keeps the engine from ever holding one.
 from __future__ import annotations
 
 import io
+import base64
 import json
 import logging
 import os
@@ -494,6 +495,30 @@ class GitHubSourceControl:
             if not following or following == cursor:
                 raise GitHubSourceControlError("GitHub returned an invalid review thread cursor")
             cursor = following
+
+    async def review_context(self, pr_url: str) -> str:
+        """Gather review evidence at the PR head using only forge GETs."""
+        owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
+        root = f"/repos/{owner}/{repo}"
+        pull = _object(await self._api("GET", f"{root}/pulls/{number}"))
+        files = await self._paginated_objects(f"{root}/pulls/{number}/files")
+        commits = await self._paginated_objects(f"{root}/pulls/{number}/commits")
+        issues = []
+        body = _string(pull, "body")
+        for issue in dict.fromkeys(re.findall(r"(?<![\w/])#(\d+)\b", body)):
+            issues.append(await self._api("GET", f"{root}/issues/{issue}"))
+        sources = {}
+        sha = _nested_string(pull, "head", "sha")
+        for changed in files:
+            if changed.get("status") != "removed" and isinstance(changed.get("filename"), str):
+                path = quote(changed["filename"], safe="/")
+                content = _object(await self._api("GET", f"{root}/contents/{path}?ref={quote(sha, safe='')}"))
+                if content.get("encoding") == "base64":
+                    sources[changed["filename"]] = base64.b64decode(content.get("content", "")).decode("utf-8", errors="replace")
+                else:
+                    sources[changed["filename"]] = content
+        return json.dumps({"pull_request": pull, "commits": commits, "files": files,
+                           "linked_issues": issues, "source": sources})
 
     async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
         _positive_number(comment_id, "comment_id")

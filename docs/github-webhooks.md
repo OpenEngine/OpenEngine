@@ -395,3 +395,23 @@ reply.
 `[github] resolve_addressed_threads = false` leaves addressed threads open for
 reviewers to resolve themselves. The default is `true`. Disconnected runs do
 not expose review replies or resolution.
+
+## Clarification replies
+
+Review questions receive a concise answer in the original review thread;
+issue-level PR comments receive a timeline reply (GitHub has no nested issue
+comments). Explicit “just answer”, “don't make modifications”, “no changes”,
+and “question:” directives take precedence over suggestions. A question such
+as “why don't we just X?” otherwise both receives an answer and forwards the
+requested change to the work order.
+
+Answers use the PR description, commit history, file patches, changed source at
+the head revision, and issues referenced by number in the description. Missing
+evidence must be acknowledged. Better suggestions are acknowledged with an
+offer to change them, without editing for an answer-only request. The answer
+session has no MCP tools and runs in Codex's read-only sandbox in an empty
+temporary directory. It cannot start or steer implementation work, commit,
+push, or resolve threads. The provider posts the reply without changing PR state.
+Existing ingress comment-kind keys and durable acknowledgement dedupe deliveries;
+within the concierge, cached answers also prevent a reply retry from rerunning
+the investigation. GitLab review ingestion is not currently supported.

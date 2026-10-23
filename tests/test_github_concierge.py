@@ -2233,3 +2233,53 @@ def test_an_ambiguous_work_order_graph_name_is_reported_as_ambiguous():
 
     with pytest.raises(Conflict, match="ambiguous"):
         work_order_graph(resolve, "acme/api", "tdd-guide")
+
+
+@pytest.mark.parametrize('event', ['issue_comment', 'pull_request_review_comment'])
+def test_clarification_replies_without_implementation(event, github_app, client):
+    from types import SimpleNamespace
+    from langgraph_acp.events import ACPEventType
+    from test_github_ingress import _issue_comment, _signed as github_signed
+    from test_review_clarifications import EXAMPLE
+
+    answer = '1. The redirect preserves compatibility. 2. Updating callers would be better; I can do that.'
+    class AnswerSession:
+        async def prompt(self, prompt):
+            assert 'diff evidence' in prompt
+            assert EXAMPLE in prompt
+            yield SimpleNamespace(type=ACPEventType.MESSAGE_DELTA,
+                                  data={'content': {'type': 'text', 'text': answer}})
+    agent = SimpleNamespace(new_session=AsyncMock(return_value=AnswerSession()), close=AsyncMock())
+    provider = SimpleNamespace(connect=AsyncMock(return_value=agent))
+    runtime, opened = _graph_runtime()
+    app, capabilities, _ = github_app(
+        RecordingCommunications(), WorkOrdersConfig(), provider=provider,
+        github_webhook_secret=SIGNING_SECRET, graph_runtime=opened,
+    )
+    source = MagicMock()
+    source.authenticated_login = AsyncMock(return_value='OpenEngineBot')
+    source.can_write_repository = AsyncMock(return_value=True)
+    source.review_thread = AsyncMock(return_value=MagicMock(thread_id='PRRT_1'))
+    source.review_context = AsyncMock(return_value='diff evidence')
+    source.add_comment = AsyncMock()
+    source.add_reaction = AsyncMock()
+    object.__setattr__(capabilities, 'source_control', source)
+    payload = _issue_comment(123, EXAMPLE)
+    payload['issue']['pull_request'] = {}
+    if event == 'pull_request_review_comment':
+        payload['pull_request'] = payload.pop('issue')
+    body = json.dumps(payload).encode()
+    with client(app) as browser:
+        for _ in range(2):
+            assert browser.post('/api/github/events', content=body,
+                                headers=dict(github_signed(body), **{'x-github-event': event})).status_code == 200
+            browser.portal.call(app.state.github_ingress.drain)
+    source.add_comment.assert_awaited_once_with(
+        'https://github.com/acme/api/pull/7', answer,
+        in_reply_to_id=123 if event == 'pull_request_review_comment' else None,
+    )
+    assert agent.new_session.call_args.kwargs['mcp_servers'] == []
+    runtime.steer.assert_not_awaited()
+    runtime.start.assert_not_awaited()
+    for method in (source.commit_all, source.publish, source.run_git, source.request_review, source.resolve_review_thread):
+        method.assert_not_called()

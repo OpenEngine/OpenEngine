@@ -97,7 +97,7 @@ from engine.apps.web.utilization import (
     UtilizationService,
     utilization_json,
 )
-from engine.adapters.agent_runner.acp import agent_provider
+from engine.adapters.agent_runner.acp import agent_provider, codex_acp_runner
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCommunications,
@@ -1179,6 +1179,16 @@ async def _ready_runner_choices(
     # Validate before saving even a dependent run, without advancing rotation.
     choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
     return available
+
+
+async def _review_workorder_context(runtime: GraphRuntime | None, repository: str, number: int) -> str:
+    if runtime is None:
+        return ""
+    run_id = await runtime.store.run_for_pull_request(repository.lower(), number)
+    record = await runtime.store.run(run_id) if run_id is not None else None
+    if record is not None and record.metadata.prompt:
+        return "\nLinked work order request:\n" + record.metadata.prompt
+    return ""
 
 
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
@@ -3843,9 +3853,20 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             review_comment=bool(review_id),
         )
 
+    async def github_review_context(origin: RunOrigin) -> str:
+        repository = origin.channel.removeprefix("github:")
+        number = int(origin.thread_id.partition("/review/")[0])
+        context = await session.capabilities.source_control.review_context(
+            pull_request_url(repository, number)
+        )
+        context += await _review_workorder_context(surface.runtime, repository, number)
+        return context
+
     github_concierge = GithubConcierge(
         provider=concierge_provider or agent_provider(agent_config, "codex", permissions=github_tool_permission),
         continue_workorder=github_continue_workorder, reply=github_reply, react=github_react,
+        answer_provider=concierge_provider or codex_acp_runner(config=agent_config, sandbox="read-only").provider,
+        context=github_review_context,
     )
 
     posting_login: dict[str, str] = {}

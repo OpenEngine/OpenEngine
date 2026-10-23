@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Answer PR review clarification requests in-thread using a read-only session;
+  explicit answer-only directives never start implementation work.
+
 - Consolidate repository settings in `[repos."owner/name"]` tables. Slug keys
   accept webhooks by default; set `webhooks = false` to opt out.
 - Legacy `[repo_modes]`, `[trusted_repos]`, `[pull_requests.repos]`,
