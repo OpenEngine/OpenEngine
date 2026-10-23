@@ -157,3 +157,26 @@ def test_scheduled_start_reports_claim_errors(mode, failure, github_app, client,
             runtime.store.claim_pull_request.assert_not_awaited()
         else:
             runtime.cancel.assert_awaited_once_with(RunId("run-scheduled"))
+
+
+@pytest.mark.parametrize("repository,expected", [("other/private", 400), ("acme/api", 201)])
+def test_child_validates_target_without_claiming(repository, expected, github_app, client, catalog):
+    from test_github_concierge import _RegisteredGraphs
+
+    workflow = next(graph for graph in catalog.graphs if str(graph.graph_id) == "review")
+    registered = _RegisteredGraphs(workflow, names=("review",))
+    registered.run_values = lambda version_id: {"_parent_step": "review-child"}
+    runtime, opened = _graph_runtime(pr_number=99)
+    app, _, _ = github_app(
+        RecordingCommunications(), WorkOrdersConfig(), catalog, graph_runtime=opened,
+        graph_service=lambda runtime, start: registered,
+    )
+    with client(app) as browser:
+        response = browser.post("/api/runs", json={
+            "workflowId": "review", "repository": "acme/api", "prompt": "Review",
+            "inputs": {"pr_url": f"https://github.com/{repository}/pull/855"},
+        })
+        assert response.status_code == expected, response.text
+        runtime.store.claim_pull_request.assert_not_awaited()
+        if expected == 400:
+            runtime.start.assert_not_awaited()

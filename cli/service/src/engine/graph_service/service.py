@@ -48,7 +48,7 @@ from engine.graph_runtime import (
     UnknownRunError,
 )
 from engine.graph_runtime.control import CANCELLED
-from engine.graph_runtime.events import EventKind, RuntimeEvent
+from engine.graph_runtime.events import EventLog, EventKind, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
 from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime, configure_model_tiers
@@ -278,6 +278,7 @@ class GraphService:
         self._sources = Path(database).parent / "registered-graphs"
         self._loaded: dict[str, Loaded] = {}
         self._lock = asyncio.Lock()
+        self._child_events = EventLog(runtime.store)
         self._scheduler: asyncio.Task[None] | None = None
         self._background: set[asyncio.Task[Any]] = set()
 
@@ -1115,11 +1116,20 @@ class GraphService:
         spend, complete, estimated = 0.0, True, False
         pull_requests: set[tuple[str, int]] = set()
         runs = 0
+        children: dict[str, list[str]] = {}
+        for record in await self.runtime.store.runs():
+            children.setdefault(str(record.metadata.parent_run_id or ""), []).append(str(record.run_id))
+        counted: set[str] = set()
         for _tick, run_id in self.store.loop_runs(row.loop_id):
             if not run_id:
                 continue
             runs += 1
-            for descendant in await self._run_tree(run_id):
+            descendants = [run_id]
+            for descendant in descendants:
+                if descendant in counted:
+                    continue
+                counted.add(descendant)
+                descendants.extend(children.get(descendant, ()))
                 total = usage_rollup(self.runtime.store.events_since(RunId(descendant))).total
                 if total.cost_usd is not None:
                     spend += total.cost_usd
@@ -1223,6 +1233,7 @@ class GraphService:
 
     async def observe(self, event: RuntimeEvent) -> None:
         """Keep executions, steering and loop budgets current from the run feed."""
+        await self._child_events.append(event)
         try:
             await self._observe(event)
         except Exception:
@@ -1426,33 +1437,37 @@ class GraphService:
             "workspace", "workspaceRef", "workspaceId", "branch", "pr_url", "coAuthor", "issue", "_graph_versions",
         ) if key in state}
         request = replace(request, values={**inherited, "_parent_step": node.id}, parent_run_id=execution.run_id)
-        starting = asyncio.create_task(self._start_version(version, request))
+        # RUN_STARTED persists the calling step alongside parent metadata. On
+        # checkpoint replay, reconnect even if the child already completed.
         child_id = None
+        for record in await self.runtime.store.runs():
+            if record.metadata.parent_run_id != execution.run_id:
+                continue
+            starts = self.runtime.store.events_since(record.run_id, kind=EventKind.RUN_STARTED)
+            if any(event.payload.get("values", {}).get("_parent_step") == node.id for event in starts):
+                child_id = record.run_id
+                break
+        starting = None
         try:
-            child_id = await asyncio.shield(starting)
-            await execution.say(f"Child run {child_id} ({node.graph})")
-            while True:
-                child = await self.run_json(str(child_id))
-                if child["terminal"]:
-                    if child["status"] != "completed":
-                        failure = (child.get("failure") or {}).get("error") or child["status"]
-                        raise RuntimeError(f"child run {child_id} ({node.graph}) failed: {failure}")
-                    return (child.get("output") or {}).get("value", {})
-                await asyncio.sleep(0.05)
-        finally:
             if child_id is None:
+                starting = asyncio.create_task(self._start_version(version, request))
+                child_id = await asyncio.shield(starting)
+            await execution.say(f"Child run {child_id} ({node.graph})")
+            async for event in self._child_events.stream(child_id):
+                if event.kind in (EventKind.RUN_FINISHED, EventKind.RUN_FAILED):
+                    break
+            child = await self.run_json(str(child_id))
+            if child["status"] != "completed":
+                failure = (child.get("failure") or {}).get("error") or child["status"]
+                raise RuntimeError(f"child run {child_id} ({node.graph}) failed: {failure}")
+            return (child.get("output") or {}).get("value", {})
+        finally:
+            if child_id is None and starting is not None:
                 child_id = await starting
-            snapshot = await self.runtime.snapshot(child_id)
-            if snapshot and snapshot.status not in TERMINAL_RUN_STATUSES:
-                await self.runtime.cancel(child_id)
-
-    async def _run_tree(self, run_id: str) -> list[str]:
-        records = await self.runtime.store.runs()
-        found = [run_id]
-        for parent in found:
-            found.extend(str(row.run_id) for row in records if str(row.metadata.parent_run_id or "") == parent
-                         and str(row.run_id) not in found)
-        return found
+            if child_id is not None:
+                snapshot = await self.runtime.snapshot(child_id)
+                if snapshot and snapshot.status not in TERMINAL_RUN_STATUSES:
+                    await self.runtime.cancel(child_id)
 
     async def _root_run(self, run_id: str) -> str:
         while (record := await self.runtime.store.run(RunId(run_id))) and record.metadata.parent_run_id:

@@ -2028,8 +2028,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             initial_values = surface.service.run_values(str(graph.graph_id))
         claim_target = (surface.service.claims_pull_request(str(graph.graph_id))
                         if surface.service is not None else graph.graph_id in ("fix", "review"))
-        claim_target = claim_target and not (initial_values or {}).get("_parent_step")
         validate_started_pull_request(claim_target, inputs, run_project(repository))
+        claim_target = claim_target and not (initial_values or {}).get("_parent_step")
         if requester is None and scheduled is not None:
             requester = scheduled.requester
         if 'auto_approve_green' in inputs and not inputs['auto_approve_green']:

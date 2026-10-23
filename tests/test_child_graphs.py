@@ -243,3 +243,78 @@ review:
             await service.decide(child["runId"], child["pendingApprovals"][0]["approvalId"], "accept")
             assert (await settled(service, run["runId"]))["status"] == "completed"
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_replayed_step_reconnects_to_persisted_child_without_polling(tmp_path, monkeypatch, cancel):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    async def agent(self, state):
+        return {self.state_key: {"findings": []}}
+
+    monkeypatch.setattr(GraphAgentNode, "__call__", agent)
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            await service.add_graph("project", source=CHILD)
+            await service.add_graph("project", source=parent())
+            run, _ = await service.submit_run(project="project", graph="parent", instruction="review")
+            run = await settled(service, run["runId"])
+            parent_id = run["runId"]
+            child_id = run["childRuns"][0]["runId"]
+            version_id = run["versionId"]
+            state = dict((await service.runtime.snapshot(RunId(parent_id))).values)
+        # Fresh service and event log: only persisted linkage can identify the child.
+        async with graph_service(tmp_path) as service:
+            execution = SimpleNamespace(run_id=RunId(parent_id), say=AsyncMock())
+            monkeypatch.setattr("engine.graph_runtime_langgraph.current_execution", lambda: execution)
+            start = AsyncMock(side_effect=AssertionError("replay started another child"))
+            monkeypatch.setattr(service, "_start_version", start)
+            full_result = AsyncMock(wraps=service.run_json)
+            monkeypatch.setattr(service, "run_json", full_result)
+            node = service._loaded[version_id].spec.node("call")
+            if cancel:
+                # Simulate an unfinished restored child by withholding its terminal events.
+                original = service.runtime.store.events_since
+                from engine.graph_runtime.events import EventKind
+                def events(run_id, cursor=0, *, kind=None):
+                    return tuple(event for event in original(run_id, cursor, kind=kind)
+                                 if event.kind not in (EventKind.RUN_FINISHED, EventKind.RUN_FAILED))
+                monkeypatch.setattr(service.runtime.store, "events_since", events)
+                from engine.graph_runtime import RunStatus
+                monkeypatch.setattr(service.runtime, "snapshot", AsyncMock(
+                    return_value=SimpleNamespace(status=RunStatus.RUNNING),
+                ))
+                cancel_child = AsyncMock()
+                monkeypatch.setattr(service.runtime, "cancel", cancel_child)
+                task = asyncio.create_task(service._invoke_graph(version_id, node, state))
+                await asyncio.sleep(0.15)
+                assert not task.done()
+                full_result.assert_not_awaited()
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                cancel_child.assert_awaited_once_with(RunId(child_id))
+            else:
+                assert await service._invoke_graph(version_id, node, state) == {"findings": []}
+                full_result.assert_awaited_once_with(child_id)
+            start.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_accounting_loads_run_records_once(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            await service.add_graph("project", source=CHILD)
+            loop = await service.add_loop(project="project", graph="child", instruction="review",
+                                          inputs={"context": "inspect"}, every="1h")
+            monkeypatch.setattr(service.store, "loop_runs", lambda _: [(str(i), f"run-{i}") for i in range(100)])
+            records = AsyncMock(wraps=service.runtime.store.runs)
+            monkeypatch.setattr(service.runtime.store, "runs", records)
+            accounting = await service.accounting(service.store.loop(loop["loopId"]))
+            assert accounting.runs == 100
+            records.assert_awaited_once()
+    asyncio.run(scenario())
