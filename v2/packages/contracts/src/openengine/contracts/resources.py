@@ -179,11 +179,18 @@ def validate_resource(document: Any, kind: str | None = None) -> list[Problem]:
         problems.append(Problem("kind", f"is a {found}, not a {kind}" if found in KINDS else f"must be {kind}"))
     elif found not in KINDS:
         problems.append(Problem("kind", f"must be one of {', '.join(sorted(KINDS))}"))
-    if problems:
+    if found not in KINDS or (kind and found != kind):
         return problems
     kind = found
     errors = sorted(_validator(kind).iter_errors(document), key=lambda error: list(map(str, error.absolute_path)))
-    return [Problem(_path(iter(error.absolute_path)), _message(error)) for error in errors]
+    # Keep the clearer version diagnostic above, while collecting every other
+    # schema error against the original document (including missing fields).
+    return problems + [
+        Problem(_path(iter(error.absolute_path)), _message(error))
+        for error in errors
+        if list(error.absolute_path) != ["apiVersion"]
+        and not (error.validator == "required" and error.message == "'apiVersion' is a required property")
+    ]
 
 
 def validate_text(text: str, kind: str | None = None) -> list[Problem]:

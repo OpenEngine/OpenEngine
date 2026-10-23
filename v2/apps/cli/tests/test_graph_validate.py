@@ -95,3 +95,31 @@ def test_spec_prints_the_graph_reference_as_markdown(capsys: pytest.CaptureFixtu
         assert f"\n## {title}\n" in out
     assert "Set exactly one of `agent`, `human`, `ci`." in out
     assert "| `prompt` (required) | `string` |" in out
+
+
+@pytest.mark.parametrize("version", [None, "openengine.cc/v1", "unknown"])
+@pytest.mark.parametrize("plan", [None, "not an array"])
+def test_bad_version_keeps_independent_schema_errors(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    version: str | None, plan: str | None,
+) -> None:
+    document = yaml.safe_load(MALFORMED)
+    if version is None:
+        del document["apiVersion"]
+    else:
+        document["apiVersion"] = version
+    document["unexpected"] = True
+    if plan is not None:
+        document["spec"]["plan"] = plan
+    original = yaml.safe_dump(document)
+    monkeypatch.setattr("sys.stdin", io.StringIO(original))
+    code, lines = _validate(capsys, "-")
+    assert code == 1
+    paths = [line.split(": ")[1] for line in lines]
+    assert paths.count("apiVersion") == 1
+    assert {"(document)", "metadata.name", "spec.flow[0]", "spec.flow[0].from"} <= set(paths)
+    if plan is None:
+        assert {"spec.plan[0]", "spec.plan[0].agent"} <= set(paths)
+    else:
+        assert "spec.plan" in paths
+    assert yaml.safe_dump(document) == original
