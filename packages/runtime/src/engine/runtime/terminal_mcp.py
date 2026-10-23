@@ -741,12 +741,8 @@ class TerminalMcpBroker:
 
         branch, base_ref, title, body = _review_arguments(arguments)
         body = _work_order_footer(body, self._run_id, self._work_order_url)
-        options = {}
-        if self._issue:
-            resolution = arguments.get("issue_resolution")  # pyright: ignore[reportAttributeAccessIssue]  # Baseline: see docs/pyright.md
-            if not isinstance(resolution, str) or resolution not in {"resolves", "refs"}:
-                raise ValueError("issue_resolution is required for issue work: choose resolves or refs")
-            options = {"issue": self._issue, "issue_resolution": resolution}
+        options = await self._review_options(arguments)
+        if options:
             approved = await self._approve_forge("open_pull_request", arguments, request_id)
             if approved is not None:
                 return approved
@@ -761,6 +757,36 @@ class TerminalMcpBroker:
             self._opened.add(opened)
         await self._record_pull_request(url)
         return {"ok": True, "acknowledgement": "pull request opened", "output": url}
+
+    async def _review_options(self, arguments: object) -> dict[str, Any]:
+        """Resolve an optional issue within this workspace before publishing."""
+        assert isinstance(arguments, dict)
+        assert self._source_control is not None and self._workspace_id is not None
+        options: dict[str, Any] = {}
+        issue = self._issue
+        issue_number = arguments.get("issue")
+        if issue and issue_number is not None and issue_number != issue["number"]:
+            raise ValueError(
+                f"issue {issue_number} differs from this run's bound issue {issue['number']}"
+            )
+        if issue or issue_number is not None:
+            resolution = arguments.get("issue_resolution")
+            if not isinstance(resolution, str) or resolution not in {"resolves", "refs"}:
+                raise ValueError("issue_resolution is required for issue work: choose resolves or refs")
+            if issue is None:
+                assert type(issue_number) is int
+                try:
+                    # The workspace-scoped lookup chooses the repository and
+                    # confirms existence before any publishing side effects.
+                    item = await self._source_control.view_work_item(self._workspace_id, issue_number)
+                except Exception as error:  # noqa: BLE001 -- report lookup failures at the tool boundary
+                    raise ValueError(f"could not find issue {issue_number} in the workspace repository: {error}") from error
+                reference = re.fullmatch(rf"https?://[^/]+/([\w.-]+/[\w.-]+)/issues/{issue_number}", item.url)
+                if reference is None or item.number != issue_number:
+                    raise ValueError(f"could not identify issue {issue_number} in the workspace repository")
+                issue = {"repository": reference[1], "number": issue_number}
+            options = {"issue": issue, "issue_resolution": resolution}
+        return options
 
     async def _owned_force_push_prs(self) -> tuple[tuple[str, int], ...]:
         # Only the run-bound store and PRs this broker opened establish ownership.
@@ -981,7 +1007,7 @@ class TerminalMcpBroker:
         if self._git_approval is None:
             return {"ok": False, "error": f"{name} requires approval handling for this step"}
         reason = "Publish changes to GitHub."
-        if name == "open_pull_request" and self._issue:
+        if name == "open_pull_request":
             reason = (
                 "Open an issue-linked pull request on GitHub. If issue trailers need "
                 "updating, append an empty metadata commit and push it normally before "
@@ -1243,7 +1269,8 @@ _REPOSITORY_TOOLS: dict[str, dict[str, object]] = {
             "properties": {
                 "branch": {"type": "string", "minLength": 1},
                 "base_ref": {"type": "string", "minLength": 1},
-                "issue_resolution": {"enum": ["resolves", "refs"], "description": "Required for issue work. The host normalizes the PR body and, for resolves, appends and publishes an empty metadata commit with a closing reference when needed."},
+                "issue": {"type": "integer", "minimum": 1, "description": "Pass the issue number from the workspace repository when this run picked its own issue and is not already bound to one. A bound issue wins; a different number is refused."},
+                "issue_resolution": {"enum": ["resolves", "refs"], "description": "Required whenever an issue is linked, either by the run binding or the issue argument. The host normalizes the PR body and, for resolves, appends and publishes an empty metadata commit with a closing reference when needed."},
                 "title": {"type": "string", "minLength": 1},
                 "body": {"type": "string"},
             },
@@ -1510,7 +1537,7 @@ def _work_order_footer(body: str, run_id: RunId, url: str | None) -> str:
 def _review_arguments(arguments: object) -> tuple[str, str, str, str]:
     if not isinstance(arguments, dict):
         raise ValueError("open_pull_request arguments must be an object")
-    unexpected = set(arguments) - {"branch", "base_ref", "title", "body", "issue_resolution"}
+    unexpected = set(arguments) - {"branch", "base_ref", "title", "body", "issue", "issue_resolution"}
     if unexpected:
         names = ", ".join(sorted(str(name) for name in unexpected))
         raise ValueError(f"unexpected open_pull_request arguments: {names}")
@@ -1526,6 +1553,8 @@ def _review_arguments(arguments: object) -> tuple[str, str, str, str]:
         raise ValueError("title must be a non-empty string")
     if not isinstance(body, str):
         raise ValueError("body must be a string")
+    if "issue" in arguments and (type(arguments["issue"]) is not int or arguments["issue"] < 1):
+        raise ValueError("issue must be a positive integer")
     return branch, base_ref, title, body
 
 

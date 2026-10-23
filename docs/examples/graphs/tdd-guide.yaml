@@ -202,7 +202,8 @@ implementation:
       If no pull request is open for that branch yet, open one with
       open_pull_request against that base: a Conventional Commit title, a body
       that summarises the change and the tests written first, and
-      `issue_resolution: resolves`. Review findings and the impact rating are
+      `issue: ${outputs.pick.issue}` with `issue_resolution: resolves`.
+      Review findings and the impact rating are
       posted on it as comments later, so leave them out of the body.
       If one is already open, pushing is enough.
 
