@@ -789,7 +789,7 @@ export function GraphConversationPage({
         <div id={headerDetailsId} className="graph-header-details" data-expanded={headerExpanded}>
           <div className="panel-head-copy">
             <p className="eyebrow">{phaseLabel(nodeId)}</p>
-            <h1>{workOrderName || "WorkOrder"}</h1>
+            <h1 title={workOrderName || "WorkOrder"}>{workOrderName || "WorkOrder"}</h1>
             <p className="lede">
               {working
                 ? "This node's agent is working. What you send reaches the turn it is in the middle of."

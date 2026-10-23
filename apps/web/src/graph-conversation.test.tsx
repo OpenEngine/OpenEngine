@@ -1108,3 +1108,14 @@ it("hides the stop button when nothing is running on the node", async () => {
 
   expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
 });
+
+it("keeps a long WorkOrder name on three lines and on the title attribute", async () => {
+  const longName = "A".repeat(573);
+  serve([], graphRun());
+  render(<GraphConversationPage runId={runId} nodeId={NODE} workOrderName={longName} />);
+  await act(async () => {});
+
+  const heading = screen.getByRole("heading", { level: 1 });
+  expect(heading).toHaveTextContent(longName);
+  expect(heading).toHaveAttribute("title", longName);
+});

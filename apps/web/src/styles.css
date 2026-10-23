@@ -457,6 +457,14 @@ ul, ol { padding: 0; list-style: none; }
   line-height: 1.1;
   letter-spacing: -.035em;
   overflow-wrap: anywhere;
+  /* A long WorkOrder name stops at three lines so it cannot push the chat off
+     screen; the full name stays on the heading's title attribute (#978). */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  max-height: calc(3 * 1.1em);
+  overflow: hidden;
 }
 .panel-head .lede { font-size: 15px; }
 
