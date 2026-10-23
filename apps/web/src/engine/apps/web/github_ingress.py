@@ -137,9 +137,11 @@ class GithubReviewRequest:
     title: str
     url: str
     branch: str
-    """The pull request's head branch, on the repository itself."""
+    """The pull request's head branch, on a fork when `fork` is set."""
     head_sha: str
     sender_id: int = 0
+    fork: bool = False
+    """Whether the head branch lives on another repository than this one."""
 
 
 #: The action a review request arrives as, on the pull request event.
@@ -151,9 +153,10 @@ def review_request_from_payload(
 ) -> GithubReviewRequest | None:
     """The review asked of Engine in a delivery, or ``None`` for anything else.
 
-    Only a request naming Engine's own account, on an open pull request whose
-    head branch lives on the repository itself: a fork's code would run the
-    review's agents, as `engine review` refuses too.
+    Only a request naming Engine's own account, on an open pull request. A
+    fork's pull request is reviewed too: the ingress checks that the sender
+    can write to the repository before any review starts, so it is a
+    maintainer choosing to let the fork's code reach the review's agents.
     """
     if event != MERGE_EVENT or payload.get("action") != REVIEW_REQUESTED or not self_login:
         return None
@@ -176,9 +179,6 @@ def review_request_from_payload(
         return None
     if not isinstance(head_repository, dict) or not isinstance(head_repository.get("full_name"), str):
         return None
-    if head_repository["full_name"].lower() != full_name.lower():
-        log.info("ignored a review request on %s#%s, whose branch is on a fork", full_name, number)
-        return None
     branch, sha = head.get("ref"), head.get("sha")
     if not isinstance(branch, str) or not branch or not isinstance(sha, str) or not sha:
         return None
@@ -187,6 +187,7 @@ def review_request_from_payload(
         title=str(pull_request.get("title") or ""),  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         url=str(pull_request.get("html_url") or ""),  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # Baseline: see docs/pyright.md
         branch=branch, head_sha=sha, sender_id=_account_id(sender),  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
+        fork=head_repository["full_name"].lower() != full_name.lower(),
     )
 
 

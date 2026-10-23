@@ -147,6 +147,7 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.cli import starters
 from engine.graph_service import GraphService, NotFound, StartRequest, StartRun
 from engine.graph_service.service import DEFAULT_PROJECT, ServiceError
 from engine.graph_service.store import GraphRow, VersionRow
@@ -1019,16 +1020,26 @@ class _GraphSurface:
 
     def named_workflow(self, configured: Mapping[str, GraphWorkflow], project: str,
                        reference: str) -> GraphWorkflow | None:
-        """Resolve repository-scoped registered names as well as catalog graph IDs."""
+        """Resolve registered names, as `work_order_graph` does, as well as catalog graph IDs."""
         offered = self.workflows(configured)
         if self.service is not None:
-            try:
-                _, version = self.service.resolve(project, reference)
-            except NotFound:
-                pass
-            else:
+            version = work_order_graph(self.service.resolve, project, reference)
+            if version is not None:
                 return offered.get(version.version_id)
         return offered.get(reference)
+
+    async def starter_workflow(self, configured: Mapping[str, GraphWorkflow], project: str,
+                               reference: str) -> GraphWorkflow | None:
+        """`named_workflow`, registering a built-in graph first as `oe go` does.
+
+        A deployment set up without onboarding has none of the built-ins until
+        `oe go` runs one; a review requested on GitHub should not wait for that.
+        """
+        graph = self.named_workflow(configured, project, reference)
+        if graph is not None or self.service is None or reference not in starters.NAMES:
+            return graph
+        await self.service.add_graph(DEFAULT_PROJECT, source=starters.source(reference), format="python")
+        return self.named_workflow(configured, project, reference)
 
     def registered_workflow(self, project: str, name: str) -> GraphWorkflow | None:
         """The graph `oe graph add` registered as `name`, for work in `project`.
@@ -3917,7 +3928,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         url = pull_request_url(repository, requested.number)
         # Whether the requester can write to the repository was asked by the
         # ingress before this was called; see `github_sender_may_act`.
-        graph = surface.named_workflow(graph_workflows, repository, review_request_workflow)
+        graph = await surface.starter_workflow(graph_workflows, repository, review_request_workflow)
         if graph is None:
             raise RuntimeError(f"review workflow {review_request_workflow!r} is unavailable")
         runtime = surface.runtime
@@ -3930,6 +3941,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 repository, requested.number, run_id,
             )
             return
+        # A fork's branch is not on origin; GitHub mirrors its head there.
+        ref = (f"origin/refs/pull/{requested.number}/head" if requested.fork
+               else f"origin/{requested.branch}")
         await github_start_workorder(
             getattr(runtime, "store", None), repository, requested.number,
             f"Review pull request {url}: {requested.title}",
@@ -3937,7 +3951,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             requester=github_requester(requested.sender_id, requested.sender),
             graph=graph,
             inputs={
-                "mode": "connected", "ref": f"origin/{requested.branch}",
+                "mode": "connected", "ref": ref,
                 "pr_url": url, "branch": requested.branch, "publish": "true",
                 "auto_approve_green": pull_requests.default_for(
                     await github_checkout(repository), repository_registry.snapshot.repos),
