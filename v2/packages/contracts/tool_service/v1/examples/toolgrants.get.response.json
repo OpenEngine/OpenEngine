@@ -1,6 +1,6 @@
 {
   "message": "GetToolGrantResponse",
-  "in_reply_to": "oe.v1.toolgrants.get",
+  "in_reply_to": "oe.v1.tools.grants.get",
   "payload": {
     "status": "ok",
     "result": {

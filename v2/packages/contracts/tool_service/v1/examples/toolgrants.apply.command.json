@@ -1,6 +1,6 @@
 {
   "message": "ApplyToolGrantCommand",
-  "subject": "oe.v1.toolgrants.apply",
+  "subject": "oe.v1.tools.grants.apply",
   "payload": {
     "command_id": "cmd_toolgrants_apply_1",
     "causal_path": [

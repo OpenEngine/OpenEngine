@@ -80,7 +80,7 @@ info:
       (`oe.v1.vcp.control.workspaces.apply`) under a name it chooses. A
       step's `agent.tools` are its only tools: once the attempt has its
       workspace, and before it is sent to run there, GE applies a `ToolGrant`
-      (`oe.v1.toolgrants.apply`) for each listed tool to that attempt
+      (`oe.v1.tools.grants.apply`) for each listed tool to that attempt
       (`stepAttemptId`) in that workspace (`workspaceRef`), and deletes them
       when the attempt ends. Starting such a step needs the tool service.
     - **Workflow approvals** belong to GE. A decision names the execution and

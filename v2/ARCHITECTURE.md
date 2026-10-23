@@ -30,7 +30,7 @@ The documents people write are Kubernetes-style resources (`apiVersion`, `kind`,
 | Kind | apiVersion | What it is | Applied with |
 | -- | -- | -- | -- |
 | [Tool](https://openengine.cc/contracts/tool_service/v1/resources/#tool) | `openengine.cc/v1alpha1` | An invocable capability bound to one Connection, with its adapter, input and output schemas and recovery behaviour. | `oe.v1.tools.apply` |
-| [ToolGrant](https://openengine.cc/contracts/tool_service/v1/resources/#toolgrant) | `openengine.cc/v1alpha1` | Lets a workspace, or one step attempt in it, call one tool, within constraints and until it expires. Graphs declare them inline: a step's `agent.tools: [namespace.name, …]` are its grants. | `oe.v1.toolgrants.apply`, by GE once a step attempt has its workspace and before it runs; deleted when the attempt ends |
+| [ToolGrant](https://openengine.cc/contracts/tool_service/v1/resources/#toolgrant) | `openengine.cc/v1alpha1` | Lets a workspace, or one step attempt in it, call one tool, within constraints and until it expires. Graphs declare them inline: a step's `agent.tools: [namespace.name, …]` are its grants. | `oe.v1.tools.grants.apply`, by GE once a step attempt has its workspace and before it runs; deleted when the attempt ends |
 | [ToolInvocation](https://openengine.cc/contracts/tool_service/v1/resources/#toolinvocation) | `openengine.cc/v1alpha1` | The durable record of one call, with the tool definition it resolved. Created by the service, never applied. | created by `oe.v1.tools.invoke.{namespace}.{name}` |
 
 ### Virtual Control Plane (vcp) · [reference](https://openengine.cc/contracts/virtual_control_plane/v1/resources/)

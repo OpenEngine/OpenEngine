@@ -16,7 +16,7 @@ prove:
 - a response names a request subject whose operation replies with it;
 - every message has an example, and every example validates.
 
-Run it with `uv run python packages/contracts/tooling/validate.py` from `v2/`.
+Run it with `uv run python -m openengine.contracts.validate` from `v2/`.
 """
 
 from __future__ import annotations
@@ -28,13 +28,17 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import yaml
 from jsonschema import Draft7Validator, FormatChecker
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
 
-CONTRACTS = Path(__file__).resolve().parent.parent
+_PACKAGE = Path(__file__).resolve().parent
+CONTRACTS = _PACKAGE if (_PACKAGE / "common").is_dir() else _PACKAGE.parents[2]
+"""The contract files: inside the package when installed from a wheel, `packages/contracts/` in the workspace."""
 SERVICES = tuple(sorted(path.parent.parent.name for path in CONTRACTS.glob("*/v1/asyncapi.yaml")))
 TYPES = CONTRACTS / "common" / "v1" / "types.schema.json"
 MAX_CAUSAL_PATH = 32
@@ -82,7 +86,7 @@ class NonLocalReference(LookupError):
 def _retrieve(uri: str) -> Resource:
     if not uri.startswith("file://"):
         raise NonLocalReference(uri)
-    return Resource.from_contents(_load(Path(uri.removeprefix("file://"))), default_specification=DRAFT7)
+    return Resource.from_contents(_load(Path(url2pathname(urlsplit(uri).path))), default_specification=DRAFT7)
 
 
 @cache

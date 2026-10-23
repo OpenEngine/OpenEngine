@@ -57,11 +57,11 @@ flowchart LR
         end
     end
     subgraph tools["Tool Service (tools)"]
-        tools_control["NATS control<br/><b>oe.v1.</b><br/>tools.apply<br/>tools.delete<br/>tools.invoke.{namespace}.{name}<br/>toolgrants.apply<br/>toolgrants.delete<br/>toolinvocations.cancel"]
+        tools_control["NATS control<br/><b>oe.v1.tools.</b><br/>apply<br/>delete<br/>invoke.{namespace}.{name}<br/>grants.apply<br/>grants.delete<br/>invocations.cancel"]
         class tools_control subjects
-        tools_query["NATS query<br/><b>oe.v1.</b><br/>tools.get<br/>tools.list<br/>toolgrants.get<br/>toolgrants.list<br/>toolinvocations.get<br/>toolinvocations.list"]
+        tools_query["NATS query<br/><b>oe.v1.tools.</b><br/>get<br/>list<br/>grants.get<br/>grants.list<br/>invocations.get<br/>invocations.list"]
         class tools_query subjects
-        tools_events["NATS events → stream tools-events<br/><b>oe.v1.events.toolinvocations.{namespace}.{invocation_id}.</b><br/>accepted<br/>running<br/>succeeded<br/>failed<br/>blocked-auth<br/>outcome-unknown<br/>cancelled"]
+        tools_events["NATS events → stream tools-events<br/><b>oe.v1.tools.events.invocations.{namespace}.{invocation_id}.</b><br/>accepted<br/>running<br/>succeeded<br/>failed<br/>blocked-auth<br/>outcome-unknown<br/>cancelled"]
         class tools_events subjects
         subgraph tools_db["database tools"]
             tools_t_tool_grants[("tool_grants")]

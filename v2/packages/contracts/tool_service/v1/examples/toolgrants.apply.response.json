@@ -1,6 +1,6 @@
 {
   "message": "ApplyToolGrantResponse",
-  "in_reply_to": "oe.v1.toolgrants.apply",
+  "in_reply_to": "oe.v1.tools.grants.apply",
   "payload": {
     "command_id": "cmd_toolgrants_apply_1",
     "status": "accepted",

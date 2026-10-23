@@ -1,4 +1,8 @@
-"""`oe graph`: the graphs the Graph Engine has registered, asked over NATS."""
+"""`oe graph`: the graphs the Graph Engine has registered, asked over NATS, and offline checks of Graph files.
+
+`validate` and `spec` read only the Graph schema in openengine-contracts, so
+neither needs `oe up`, NATS or runner credentials.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,11 @@ import nats
 
 from openengine.cli.commands.status import running_state
 from openengine.cli.output.render import as_json, table
+from openengine.contracts.resources import load_documents, markdown, validate_text
 from openengine.messaging import Client, ServiceError, Unavailable
 
+KIND = "Graph"
+STDIN = "-"
 LIST_SUBJECT = "oe.v1.ge.query.graphs.list"
 CONNECT_TIMEOUT_SECONDS = 2.0
 EXIT_OK = 0
@@ -25,6 +32,11 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     listing = actions.add_parser("list", help="list the registered graphs")
     listing.add_argument("--json", action="store_true", help="print the query-response as JSON")
     listing.set_defaults(command=run_list)
+    validate = actions.add_parser("validate", help="check a Graph file against the Graph schema, offline")
+    validate.add_argument("file", metavar="FILE", help=f"the file to check, or {STDIN} to read standard input")
+    validate.set_defaults(command=run_validate)
+    spec = actions.add_parser("spec", help="print the Graph resource reference as Markdown")
+    spec.set_defaults(command=run_spec)
 
 
 class NotServing(Exception):
@@ -89,4 +101,33 @@ def run_list(arguments: argparse.Namespace) -> int:
         print(f"oe graph list: {error}", file=sys.stderr)
         return EXIT_FAILED
     print(as_json(reply) if arguments.json else render(reply["result"]))
+    return EXIT_OK
+
+
+def _read(name: str) -> str:
+    if name == STDIN:
+        return sys.stdin.read()
+    with open(name, encoding="utf-8") as file:
+        return file.read()
+
+
+def run_validate(arguments: argparse.Namespace) -> int:
+    name = arguments.file
+    try:
+        text = _read(name)
+    except (OSError, UnicodeDecodeError) as error:
+        print(f"{name}: cannot read: {error}")
+        return EXIT_FAILED
+    problems = validate_text(text, KIND)
+    for problem in problems:
+        print(f"{name}: {problem}")
+    if problems:
+        return EXIT_FAILED
+    for document in load_documents(text):
+        print(f"{name}: valid {KIND} {document['metadata']['name']}")
+    return EXIT_OK
+
+
+def run_spec(arguments: argparse.Namespace) -> int:
+    print(markdown(KIND), end="")
     return EXIT_OK

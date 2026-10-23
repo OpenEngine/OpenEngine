@@ -1,6 +1,6 @@
 {
   "message": "ToolInvocationOutcomeUnknown",
-  "subject": "oe.v1.events.toolinvocations.default.ti-123.outcome-unknown",
+  "subject": "oe.v1.tools.events.invocations.default.ti-123.outcome-unknown",
   "headers": {
     "Nats-Msg-Id": "evt_ti123_outcome_unknown"
   },

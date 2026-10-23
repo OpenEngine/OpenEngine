@@ -1,6 +1,6 @@
 {
   "message": "ToolInvocationRunning",
-  "subject": "oe.v1.events.toolinvocations.default.ti-123.running",
+  "subject": "oe.v1.tools.events.invocations.default.ti-123.running",
   "headers": {
     "Nats-Msg-Id": "evt_ti123_running"
   },

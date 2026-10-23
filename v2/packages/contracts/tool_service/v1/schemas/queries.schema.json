@@ -180,7 +180,7 @@
       }
     },
     "list_tool_invocations_response": {
-      "description": "Invocations without their `status.result`; read one with `toolinvocations.get` for it.",
+      "description": "Invocations without their `status.result`; read one with `tools.invocations.get` for it.",
       "allOf": [
         { "$ref": "../../../common/v1/query-response.schema.json" },
         {

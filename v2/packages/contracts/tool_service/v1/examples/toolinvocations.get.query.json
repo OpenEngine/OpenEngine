@@ -1,6 +1,6 @@
 {
   "message": "GetToolInvocationQuery",
-  "subject": "oe.v1.toolinvocations.get",
+  "subject": "oe.v1.tools.invocations.get",
   "payload": {
     "params": {
       "namespace": "default",

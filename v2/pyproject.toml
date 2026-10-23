@@ -1,11 +1,12 @@
 # V2 is its own uv workspace, separate from V1's at the repository root.
 [tool.uv.workspace]
-members = ["apps/cli", "apps/supervisor", "packages/messaging", "packages/persistence", "packages/telemetry", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane"]
+members = ["apps/cli", "apps/supervisor", "packages/contracts", "packages/messaging", "packages/persistence", "packages/telemetry", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane"]
 
 [dependency-groups]
 dev = [
     "openengine-cli",
     "openengine-connection-bus",
+    "openengine-contracts",
     "openengine-graph-engine",
     "openengine-messaging",
     "openengine-persistence",
@@ -19,6 +20,7 @@ dev = [
 
 [tool.uv.sources]
 openengine-cli = { workspace = true }
+openengine-contracts = { workspace = true }
 openengine-messaging = { workspace = true }
 openengine-persistence = { workspace = true }
 openengine-telemetry = { workspace = true }

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Event envelope",
-  "description": "Body of every event published to a service's existing event stream. Events may be delivered more than once: deduplicate on `event_id`. `occurred_at` does not establish a global order; ordering is guaranteed only among events of one partition (the resource named in the subject), in publish order. The final element of `causal_path` must equal `event_id` (checked by `tooling/validate.py`). Service schemas fix `event_type` and `producer` and narrow `resources` and `payload` with `allOf`.",
+  "description": "Body of every event published to a service's existing event stream. Events may be delivered more than once: deduplicate on `event_id`. `occurred_at` does not establish a global order; ordering is guaranteed only among events of one partition (the resource named in the subject), in publish order. The final element of `causal_path` must equal `event_id` (checked by `openengine.contracts.validate`). Service schemas fix `event_type` and `producer` and narrow `resources` and `payload` with `allOf`.",
   "type": "object",
   "required": [
     "event_id",

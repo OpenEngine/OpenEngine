@@ -4,13 +4,14 @@ import copy
 import json
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
-import reference
-import validate
 import yaml
-from validate import CONTRACTS, SERVICES, load_contract, validate_message
+from openengine.contracts import reference, validate
+from openengine.contracts.reference import NAMES, namespace
+from openengine.contracts.validate import CONTRACTS, SERVICES, load_contract, validate_message
 
 STREAMS = CONTRACTS.parent.parent / "infra" / "nats" / "streams"
 
@@ -55,13 +56,13 @@ REQUEST_SUBJECTS = {
         "oe.v1.tools.list",
         "oe.v1.tools.delete",
         "oe.v1.tools.invoke.{namespace}.{name}",
-        "oe.v1.toolgrants.apply",
-        "oe.v1.toolgrants.get",
-        "oe.v1.toolgrants.list",
-        "oe.v1.toolgrants.delete",
-        "oe.v1.toolinvocations.get",
-        "oe.v1.toolinvocations.list",
-        "oe.v1.toolinvocations.cancel",
+        "oe.v1.tools.grants.apply",
+        "oe.v1.tools.grants.get",
+        "oe.v1.tools.grants.list",
+        "oe.v1.tools.grants.delete",
+        "oe.v1.tools.invocations.get",
+        "oe.v1.tools.invocations.list",
+        "oe.v1.tools.invocations.cancel",
     },
     "virtual_control_plane": {
         "oe.v1.vcp.control.workspaces.apply",
@@ -84,21 +85,11 @@ REQUEST_SUBJECTS = {
         "oe.v1.vcp.query.operations.{operation_id}.get",
     },
 }
-SHORT = {"connection_bus": "cxn", "graph_engine": "ge", "tool_service": "tools", "virtual_control_plane": "vcp"}
-# Where each service's subjects live: `oe.v1.{short}.` unless listed here.
-NAMESPACES = {
-    "tool_service": ("oe.v1.tools.", "oe.v1.toolgrants.", "oe.v1.toolinvocations.", "oe.v1.events.toolinvocations."),
-}
-
-
-def namespaces(service: str) -> tuple[str, ...]:
-    return NAMESPACES.get(service, (f"oe.v1.{SHORT[service]}.",))
 
 
 def is_event(address: str) -> bool:
-    """Event subjects: `oe.v1.{short}.events.…`, or `oe.v1.events.…` for the tool service."""
-    tokens = address.split(".")
-    return tokens[2] == "events" or tokens[3] == "events"
+    """Event subjects: `oe.v1.{short}.events.…`."""
+    return address.split(".")[3] == "events"
 
 
 def addresses(service: str) -> set[str]:
@@ -155,14 +146,25 @@ def test_every_request_operation_replies_with_its_own_response(service: str) -> 
 
 
 @pytest.mark.parametrize("service", SERVICES)
+def test_every_subject_is_in_its_service_namespace(service: str) -> None:
+    subjects = addresses(service) | REQUEST_SUBJECTS[service]
+    assert [subject for subject in sorted(subjects) if not subject.startswith(namespace(service))] == []
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_every_event_stream_captures_only_its_service_namespace(service: str) -> None:
+    filters = json.loads((STREAMS / f"{NAMES[service][1]}-events.json").read_text())["subjects"]
+    assert filters == [f"{namespace(service)}events.>"]
+
+
+@pytest.mark.parametrize("service", SERVICES)
 def test_events_land_in_their_stream_and_requests_in_none(service: str) -> None:
     streams = {path.stem: json.loads(path.read_text())["subjects"] for path in STREAMS.glob("*.json")}
     for address in addresses(service):
-        assert address.startswith(namespaces(service)), address
         concrete = ".".join("x" if token.startswith("{") else token for token in address.split("."))
         captured = [name for name, filters in streams.items() if any(nats_matches(f, concrete) for f in filters)]
         if is_event(address):
-            assert captured == [f"{SHORT[service]}-events"], address
+            assert captured == [f"{NAMES[service][1]}-events"], address
         else:
             assert captured == [], f"{address} is request/reply but a stream captures it"
 
@@ -179,7 +181,7 @@ def test_no_streams_or_consumers_are_added() -> None:
 def test_checked_in_reference_is_current(service: str) -> None:
     path = reference.reference_path(service)
     assert path.exists() and path.read_text() == reference.page(service), (
-        f"{path.relative_to(CONTRACTS)} is stale: run `uv run python packages/contracts/tooling/reference.py`"
+        f"{path.relative_to(CONTRACTS)} is stale: run `uv run python -m openengine.contracts.reference`"
     )
 
 
@@ -326,6 +328,13 @@ def test_the_unmutated_bases_are_valid() -> None:
 def test_a_causal_path_of_exactly_32_elements_is_allowed() -> None:
     case = mutated(COMMAND, set_path("payload", "causal_path", [f"cmd_{n}" for n in range(31)] + ["cmd_01JAX8DIS"]))
     assert errors_for("connection_bus", case) == []
+
+
+def test_resolves_schemas_under_a_path_with_spaces(tmp_path: Path) -> None:
+    schema = tmp_path / "with space" / "name.schema.yaml"
+    schema.parent.mkdir()
+    schema.write_text("type: string\n")
+    assert validate._retrieve(schema.as_uri()).contents == {"type": "string"}
 
 
 @pytest.mark.integration

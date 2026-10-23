@@ -31,17 +31,17 @@ info:
     | `oe.v1.tools.list` | namespace, optional label selector | tools the caller may see |
     | `oe.v1.tools.delete` | namespace and name | deletion result |
     | `oe.v1.tools.invoke.{namespace}.{name}` | invocation ID, step, arguments | invocation accepted |
-    | `oe.v1.toolgrants.apply` | ToolGrant resource | accepted once stored |
-    | `oe.v1.toolgrants.get` | namespace and name | ToolGrant |
-    | `oe.v1.toolgrants.list` | namespace and filters | grants |
-    | `oe.v1.toolgrants.delete` | namespace and name | revocation result |
-    | `oe.v1.toolinvocations.get` | namespace and invocation ID | invocation, with its result |
-    | `oe.v1.toolinvocations.list` | namespace, workspace and step filters | invocations |
-    | `oe.v1.toolinvocations.cancel` | namespace and invocation ID | cancellation accepted |
+    | `oe.v1.tools.grants.apply` | ToolGrant resource | accepted once stored |
+    | `oe.v1.tools.grants.get` | namespace and name | ToolGrant |
+    | `oe.v1.tools.grants.list` | namespace and filters | grants |
+    | `oe.v1.tools.grants.delete` | namespace and name | revocation result |
+    | `oe.v1.tools.invocations.get` | namespace and invocation ID | invocation, with its result |
+    | `oe.v1.tools.invocations.list` | namespace, workspace and step filters | invocations |
+    | `oe.v1.tools.invocations.cancel` | namespace and invocation ID | cancellation accepted |
 
     Execution workers answer `oe.v1.tools.invoke.*.*` as one queue group,
     `tool-workers`. Lifecycle events are published on
-    `oe.v1.events.toolinvocations.{namespace}.{invocation_id}.{event}` and
+    `oe.v1.tools.events.invocations.{namespace}.{invocation_id}.{event}` and
     captured by the `tools-events` stream.
 
     Commands use the shared command envelope and queries the shared query
@@ -94,7 +94,7 @@ info:
     carries over through name reuse.
 
     Events carry references and a status summary. Results are read only
-    through `oe.v1.toolinvocations.get`, which checks the reader may see them.
+    through `oe.v1.tools.invocations.get`, which checks the reader may see them.
 
     ## Identity
     The acting identity comes from the authenticated NATS connection (or a
@@ -129,17 +129,17 @@ channels:
     messages:
       InvokeToolCommand: { $ref: '#/components/messages/InvokeToolCommand' }
   toolGrantsApply:
-    address: oe.v1.toolgrants.apply
+    address: oe.v1.tools.grants.apply
     title: Apply a tool grant
     messages:
       ApplyToolGrantCommand: { $ref: '#/components/messages/ApplyToolGrantCommand' }
   toolGrantsDelete:
-    address: oe.v1.toolgrants.delete
+    address: oe.v1.tools.grants.delete
     title: Revoke a tool grant
     messages:
       DeleteToolGrantCommand: { $ref: '#/components/messages/DeleteToolGrantCommand' }
   toolInvocationsCancel:
-    address: oe.v1.toolinvocations.cancel
+    address: oe.v1.tools.invocations.cancel
     title: Cancel a tool invocation
     messages:
       CancelToolInvocationCommand: { $ref: '#/components/messages/CancelToolInvocationCommand' }
@@ -154,22 +154,22 @@ channels:
     messages:
       ListToolsQuery: { $ref: '#/components/messages/ListToolsQuery' }
   toolGrantsGet:
-    address: oe.v1.toolgrants.get
+    address: oe.v1.tools.grants.get
     title: Get a tool grant
     messages:
       GetToolGrantQuery: { $ref: '#/components/messages/GetToolGrantQuery' }
   toolGrantsList:
-    address: oe.v1.toolgrants.list
+    address: oe.v1.tools.grants.list
     title: List tool grants
     messages:
       ListToolGrantsQuery: { $ref: '#/components/messages/ListToolGrantsQuery' }
   toolInvocationsGet:
-    address: oe.v1.toolinvocations.get
+    address: oe.v1.tools.invocations.get
     title: Get a tool invocation
     messages:
       GetToolInvocationQuery: { $ref: '#/components/messages/GetToolInvocationQuery' }
   toolInvocationsList:
-    address: oe.v1.toolinvocations.list
+    address: oe.v1.tools.invocations.list
     title: List tool invocations
     messages:
       ListToolInvocationsQuery: { $ref: '#/components/messages/ListToolInvocationsQuery' }
@@ -191,7 +191,7 @@ channels:
       GetToolInvocationResponse: { $ref: '#/components/messages/GetToolInvocationResponse' }
       ListToolInvocationsResponse: { $ref: '#/components/messages/ListToolInvocationsResponse' }
   invocationAcceptedEvents:
-    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.accepted
+    address: oe.v1.tools.events.invocations.{namespace}.{invocation_id}.accepted
     title: toolinvocation.accepted
     parameters:
       namespace: { $ref: '#/components/parameters/namespace' }
@@ -199,7 +199,7 @@ channels:
     messages:
       ToolInvocationAccepted: { $ref: '#/components/messages/ToolInvocationAccepted' }
   invocationRunningEvents:
-    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.running
+    address: oe.v1.tools.events.invocations.{namespace}.{invocation_id}.running
     title: toolinvocation.running
     parameters:
       namespace: { $ref: '#/components/parameters/namespace' }
@@ -207,7 +207,7 @@ channels:
     messages:
       ToolInvocationRunning: { $ref: '#/components/messages/ToolInvocationRunning' }
   invocationSucceededEvents:
-    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.succeeded
+    address: oe.v1.tools.events.invocations.{namespace}.{invocation_id}.succeeded
     title: toolinvocation.succeeded
     parameters:
       namespace: { $ref: '#/components/parameters/namespace' }
@@ -215,7 +215,7 @@ channels:
     messages:
       ToolInvocationSucceeded: { $ref: '#/components/messages/ToolInvocationSucceeded' }
   invocationFailedEvents:
-    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.failed
+    address: oe.v1.tools.events.invocations.{namespace}.{invocation_id}.failed
     title: toolinvocation.failed
     parameters:
       namespace: { $ref: '#/components/parameters/namespace' }
@@ -223,7 +223,7 @@ channels:
     messages:
       ToolInvocationFailed: { $ref: '#/components/messages/ToolInvocationFailed' }
   invocationBlockedAuthEvents:
-    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.blocked-auth
+    address: oe.v1.tools.events.invocations.{namespace}.{invocation_id}.blocked-auth
     title: toolinvocation.blocked-auth
     parameters:
       namespace: { $ref: '#/components/parameters/namespace' }
@@ -231,7 +231,7 @@ channels:
     messages:
       ToolInvocationBlockedAuth: { $ref: '#/components/messages/ToolInvocationBlockedAuth' }
   invocationOutcomeUnknownEvents:
-    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.outcome-unknown
+    address: oe.v1.tools.events.invocations.{namespace}.{invocation_id}.outcome-unknown
     title: toolinvocation.outcome-unknown
     parameters:
       namespace: { $ref: '#/components/parameters/namespace' }
@@ -239,7 +239,7 @@ channels:
     messages:
       ToolInvocationOutcomeUnknown: { $ref: '#/components/messages/ToolInvocationOutcomeUnknown' }
   invocationCancelledEvents:
-    address: oe.v1.events.toolinvocations.{namespace}.{invocation_id}.cancelled
+    address: oe.v1.tools.events.invocations.{namespace}.{invocation_id}.cancelled
     title: toolinvocation.cancelled
     parameters:
       namespace: { $ref: '#/components/parameters/namespace' }
@@ -272,7 +272,7 @@ operations:
     action: receive
     title: Invoke a tool
     summary: "Call a tool: record a ToolInvocation and dispatch it to an execution worker."
-    description: "Execution workers answer this subject as one queue group, `tool-workers`, so each call is handled once. Accepted means the invocation was recorded and authorized; `resource_id` is its `uid`. Progress and completion are `toolinvocation.*` events; the result is read with `toolinvocations.get`."
+    description: "Execution workers answer this subject as one queue group, `tool-workers`, so each call is handled once. Accepted means the invocation was recorded and authorized; `resource_id` is its `uid`. Progress and completion are `toolinvocation.*` events; the result is read with `tools.invocations.get`."
     channel: { $ref: '#/channels/toolInvoke' }
     tags: [{ name: control }]
     bindings:

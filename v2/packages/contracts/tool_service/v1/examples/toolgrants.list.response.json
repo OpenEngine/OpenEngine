@@ -1,6 +1,6 @@
 {
   "message": "ListToolGrantsResponse",
-  "in_reply_to": "oe.v1.toolgrants.list",
+  "in_reply_to": "oe.v1.tools.grants.list",
   "payload": {
     "status": "ok",
     "result": {
