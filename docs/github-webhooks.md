@@ -232,17 +232,20 @@ as is one from a sender without write access -- `github_sender_may_act` checks
 that before any handler runs, the same as for a comment or an assignment.
 
 The requester's login and account id are carried into the graph as the
-`review_requester` and `review_requester_id` inputs. The approval check
-rechecks that requester's access at decision time, through the same
-collaborator-permission lookup, rather than trusting the gate that let the run
-start: a requester who loses write access, or who is a bot or Engine's own
-account, is skipped with a visible reason. When that recheck passes, the
-requester authorizes approval on their own, so `[pull_requests]
-auto_approve_green` does not need to be enabled for this path -- every other
-gate still applies (Green impact, no surviving findings, the reviewed commit
-matching the PR head, CI not failed, and the approver not the PR's author).
-The approval body names who requested the review. A review started without a
-requester, such as `oe go review` or a manual graph run, keeps the existing
+`review_requester` and `review_requester_id` inputs. Both are internal graph
+inputs: only the review-request webhook handler can set them, so a manually
+started run (the UI, the API, `oe go review`) can never claim a requester it
+does not have. The approval check rechecks that requester's access at
+decision time, through the same collaborator-permission lookup, rather than
+trusting the gate that let the run start: a requester who loses write access,
+who is a bot or Engine's own account, or who is the PR's own author, is
+skipped with a visible reason. When that recheck passes, the requester
+authorizes approval on their own, so `[pull_requests] auto_approve_green`
+does not need to be enabled for this path -- every other gate still applies
+(Green impact, no surviving findings, the reviewed commit matching the PR
+head, CI not failed, and the approver not the PR's author). The approval
+body names who requested the review. A review started without a requester,
+such as `oe go review` or a manual graph run, keeps the existing
 `auto_approve_green` behavior.
 
 ## Merging as the human review

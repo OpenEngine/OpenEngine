@@ -136,6 +136,19 @@ def test_review_topology_and_local_agent_tools():
     assert resolve_inputs(workflow.inputs, {})['publish'] == 'false'
 
 
+def test_review_requester_is_not_settable_by_a_generic_run_start():
+    workflow = graphs.review(graphs.Components('codex', None, None))
+    with pytest.raises(ValueError, match='internal'):
+        resolve_inputs(workflow.inputs, {'review_requester': 'attacker'})
+    with pytest.raises(ValueError, match='internal'):
+        resolve_inputs(workflow.inputs, {'review_requester_id': '1'})
+    # Only a trusted caller -- the webhook handler -- may set it.
+    resolved = resolve_inputs(
+        workflow.inputs, {}, trusted={'review_requester': 'maintainer', 'review_requester_id': '7'})
+    assert resolved['review_requester'] == 'maintainer'
+    assert resolved['review_requester_id'] == '7'
+
+
 @pytest.mark.parametrize('global_value,override,explicit,expected', [
     (False, None, None, 'false'), (True, None, None, 'true'),
     (False, True, None, 'true'), (True, False, None, 'false'),
@@ -256,6 +269,25 @@ def test_requester_matching_engines_own_login_is_blocked(execution):
     execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
     reason = asyncio.run(publish.approval_reason(_with_requester(login='engine')))
     assert 'engine' in reason and 'approving identity' in reason
+
+
+def test_requester_who_is_the_pr_author_is_blocked(execution):
+    # The `execution` fixture's PR author is 'contributor'.
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
+    reason = asyncio.run(publish.approval_reason(_with_requester(login='contributor')))
+    assert 'contributor' in reason and 'PR author' in reason
+    execution.runtime.source_control.approve_change_request.assert_not_awaited()
+
+
+def test_requester_id_zero_does_not_skip_the_crosscheck(execution):
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
+    asyncio.run(publish.approval_reason(_with_requester(requester_id='0')))
+    execution.runtime.source_control.can_write_repository.assert_awaited_once_with(URL, 'maintainer', user_id=0)
+
+
+@pytest.mark.parametrize('raw,expected', [('7', 7), ('0', 0), ('', None), ('not-a-number', None)])
+def test_review_requester_id_parsing(raw, expected):
+    assert publish.review_requester_id({'inputs': {'review_requester_id': raw}}) == expected
 
 
 def test_no_requester_falls_back_to_auto_approve_green(execution):

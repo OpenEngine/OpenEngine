@@ -21,6 +21,7 @@ class WorkflowInput:
     default: str = ""
     required: bool = False
     choices: tuple[str, ...] = ()
+    internal: bool = False
 
     def __post_init__(self) -> None:
         if not self.name.strip() or not self.label.strip():
@@ -55,9 +56,15 @@ def state_input(*states: WorkState) -> WorkflowInput:
 
 
 def resolve_inputs(
-    declarations: tuple[WorkflowInput, ...], values: object
+    declarations: tuple[WorkflowInput, ...], values: object,
+    *, trusted: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Apply defaults and reject invalid values before starting a run."""
+    """Apply defaults and reject invalid values before starting a run.
+
+    `values` is caller-supplied and may never set an `internal` input -- those
+    are only settable through `trusted`, which a generic start request never
+    has access to.
+    """
     if not isinstance(values, Mapping):
         raise ValueError("inputs must be an object")
     if "mode" in values and not any(item.name == "mode" for item in declarations):
@@ -65,9 +72,13 @@ def resolve_inputs(
     unknown = set(values) - {item.name for item in declarations}
     if unknown:
         raise ValueError(f"unknown workflow inputs: {', '.join(sorted(unknown))}")
+    restricted = {item.name for item in declarations if item.internal} & set(values)
+    if restricted:
+        raise ValueError(f"workflow inputs are internal: {', '.join(sorted(restricted))}")
     resolved = {}
     for item in declarations:
-        value = values.get(item.name, item.default)
+        source = trusted if item.internal else values
+        value = (source or {}).get(item.name, item.default)
         if not isinstance(value, str):
             raise ValueError(f"workflow input {item.name!r} must be a string")
         if item.required and not value.strip():

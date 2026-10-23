@@ -22,8 +22,12 @@ def review_requester(state: Mapping[str, Any]) -> str:
 
 
 def review_requester_id(state: Mapping[str, Any]) -> int | None:
+    """None only means the field was not supplied; a present `0` still fails the id crosscheck."""
+    raw = str(state.get('inputs', {}).get('review_requester_id', '')).strip()
+    if not raw:
+        return None
     try:
-        return int(str(state.get('inputs', {}).get('review_requester_id', '')).strip() or 0) or None
+        return int(raw)
     except ValueError:
         return None
 
@@ -89,6 +93,8 @@ async def approval_reason(state: Mapping[str, Any]) -> str:
         # The workspace-scoped lookup must name the exact PR we will approve.
         if change_request(change.url) != target:
             return 'target PR does not match the workspace repository'
+        if requester and change.author and requester.casefold() == change.author.casefold():
+            return f'requester {requester} is the PR author'
         reviewed_sha = state.get('reviewed_sha')
         if not reviewed_sha or reviewed_sha != change.head_sha:
             return 'reviewed commit does not match the PR head'

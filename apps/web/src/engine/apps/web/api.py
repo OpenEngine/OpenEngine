@@ -1940,7 +1940,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                         "id": str(graph.graph_id),
                         "name": graph.name,
                         **(
-                            {"inputs": [asdict(item) for item in surface.declared_inputs(graph)]}
+                            {"inputs": [asdict(item) for item in surface.declared_inputs(graph)
+                                        if not item.internal]}
                             if getattr(graph, "inputs", ()) else {}
                         ),
                     }
@@ -3699,10 +3700,14 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             )
         runtime = surface.runtime
         assert runtime is not None  # only reached with a runtime in hand
+        declared = getattr(graph, "inputs", ())
+        internal_names = {item.name for item in declared if item.internal}
         state = await start_graph_run(
             runtime, graph,
-            inputs=(resolve_inputs(getattr(graph, "inputs", ()), inputs or {}) if named
-                    else _work_order_inputs(graph, prompt, inputs)),
+            inputs=(resolve_inputs(
+                declared, {k: v for k, v in (inputs or {}).items() if k not in internal_names},
+                trusted=inputs,
+            ) if named else _work_order_inputs(graph, prompt, inputs)),
             prompt=prompt, repository=await github_checkout(repository),
             requester=requester,
         )
