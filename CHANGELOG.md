@@ -9,6 +9,13 @@
   still load with deprecation warnings and will be removed in the next release.
   Legacy string checkout paths remain accepted silently.
 
+## [1.11.1](https://github.com/OpenEngine/OpenEngine/compare/v1.11.0...v1.11.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **runtime:** link tdd-guide pull requests to the picked issue ([#1154](https://github.com/OpenEngine/OpenEngine/issues/1154)) ([2207636](https://github.com/OpenEngine/OpenEngine/commit/220763685146ca1732eec7c6d5f1a3c4259aeffb))
+
 ## [1.11.0](https://github.com/OpenEngine/OpenEngine/compare/v1.10.0...v1.11.0) (2026-10-23)
 
 
