@@ -1,0 +1,327 @@
+# True end-to-end benchmark
+
+One real run of OpenEngine, start to finish, with real models, real GitHub and a
+real deploy. It answers two questions: does OpenEngine work end to end, and what
+does it cost in tokens, dollars and time to do so with a given model.
+
+It is run before each release, not on every PR. It is slow, it spends real
+money, and agent runs are noisy.
+
+It is also the regression check for the v2 rewrite. The journey is run against
+v1 first to set the baseline, then against v2, so we know the rewrite did not
+break what v1 could do. That means the journey only touches interfaces v2 is
+meant to keep (the CLI and GitHub), never v1 internals, and the v1 results are
+kept as the comparison point.
+
+## The journey
+
+OpenEngine does not do planning yet, so the harness does the planning ahead of
+time. It gives OpenEngine an empty repository seeded with a fixed, ordered set of
+issues that spell out how to build the calculator web app (add, subtract,
+multiply, divide), for example: scaffold the app, one issue per operation, divide
+by zero, clear, CI, commitlint, docs, deploy to GitHub Pages, and automated
+semver releases with a generated changelog. Each issue is self-contained and
+builds on the merged result of the one before it.
+
+The issues sit in a milestone, and the `tdd-guide` graph works the milestone
+until it is done. Working an issue, opening its PR, CI/CD and the deploy are
+OpenEngine's job. We do not care how it gets there, only that it does.
+
+### Run sequence
+
+One config runs the whole benchmark. The report (see below) is configured up
+front and collected as the run goes, not a step of its own.
+
+0. **Teardown.** Delete the calculator repo, the local test directory with
+   OpenEngine in it, and the deployed site. Stop any leftover daemon or tunnel.
+1. **Clone OpenEngine** at the ref under test (the release commit, or the v1
+   tag for the baseline), and record its SHA.
+2. **Set up OpenEngine.** Configure GitHub login, ideally by having it create a
+   GitHub App. Screenshot where each secret goes, with the secret masked by a
+   test2doc highlight annotation. Start the Cloudflare Tunnel. Register the `tdd-guide` graph.
+3. **Create the calculator repo.**
+4. **Connect the repo to OpenEngine.** Install the app or add webhooks, and
+   apply the repository settings below, including turning on Pages. The deploy
+   workflow itself is one of the seeded issues.
+5. **Seed** the milestone and its issues.
+6. **Run `tdd-guide`** on the milestone until it is done, through both CLI entry
+   points:
+   1. **One run.** Work the first issue with `oe graph run tdd-guide --repo
+      OWNER/REPO -i milestone=NAME`, so a single run is covered end to end.
+   2. **A loop.** Then `oe loop add tdd-guide` with `--every` short enough to
+      keep the run moving (the graph's default is 1h), and `--max-spend` and
+      `--max-prs` as the budget cap. The loop works the rest of the milestone.
+      It does not stop on its own, so the harness pauses it once the milestone
+      has no open issues.
+
+   Each run works one issue and ends at a `human_review` step, and the graph
+   never merges, so for every run the harness approves `human_review` and
+   merges the PR, which closes the issue and unblocks the next. A loop run that
+   starts before the previous PR merges finds no unblocked issue and ends. The
+   guide shows how PRs work, with reviews and impact analysis. A steer is
+   optional and only at a fixed, scripted point, since a run cannot wait for a
+   good example.
+7. **Verify** the calculator on Pages.
+8. **Docs and release checks** on the calculator's own docs and releases.
+9. **Commit the guide.**
+
+After the run, at no fixed time but before each release, a person checks the
+deployed calculator.
+
+The harness owns only what must stay outside the thing being measured:
+
+- **Seed.** Copy the milestone and its issues into the fresh repo. The issues are written once and
+  committed as plain files (title and body, in order) under the `e2e/`
+  fixtures. Seeding is a copy through the GitHub API, with no model involved,
+  so it costs no tokens and every trial gets identical issues.
+
+- **Reset.** Delete and recreate the bench repo, wipe local OpenEngine state,
+  and tear down the deployed site, so every run starts clean and is idempotent.
+  Deletion needs a bench-only token and refuses any repo without the bench
+  prefix or topic. Then apply the repository settings below.
+- **Merge loop.** Approve each run's `human_review` step, then merge its PR once
+  CI is green (`gh pr merge --squash`). It merges whatever the impact rating,
+  including Red, and records the rating in the report.
+- **Verifier.** A fixed Playwright spec the agent never sees. It runs against the
+  Pages URL and checks add, subtract, multiply, divide, divide by zero and
+  clear. It finds things by visible text (`getByText`, or role and name), not
+  `data-testid`, so the issues' contract is only the Pages URL and plain
+  wording: keys labelled `7`, `+`, `-`, `×`, `÷`, `=` and `C`, and a visible
+  display. Nothing else constrains how OpenEngine builds, including how it
+  tests its own work.
+- **Docs check.** The calculator repo must document itself: a README that says
+  how to run, test and deploy it. The verifier checks the file exists and covers
+  those three, and the person checking the final output reads it.
+- **Release check.** CI cuts releases on its own: merges to the default branch
+  produce a semver tag, a GitHub release and a changelog generated from the
+  commits. The check asserts a release exists with a semver tag and a
+  `CHANGELOG.md` entry that lists the merged changes. The issue may name a tool
+  (for example release-please or semantic-release), or leave it to OpenEngine.
+  Changelogs are built from Conventional Commits, and a squash merge uses the PR
+  title as the commit, so PR titles must follow Conventional Commits. A commitlint
+  check in CI enforces this on the PR title (and on commits), so a bad title fails
+  CI instead of quietly breaking the changelog. If the tool opens a release PR,
+  the merge loop merges it too.
+- **Report.** See below.
+
+The verifier and the issues are written and reviewed by a person, outside any
+graph run. OpenEngine's own acceptance tests mean it partly grades itself, so
+two checks sit outside it:
+
+- The verifier is the only pass or fail. It never sees the agent's tests.
+- A person checks the deployed calculator after the run.
+
+### Repository settings the user must enable
+
+A fresh repo does not have what the journey needs. These are prerequisites, not
+something OpenEngine is expected to discover, and they are documented as setup
+steps for anyone running OpenEngine against a real repo:
+
+- **GitHub Pages** enabled, with the source set to GitHub Actions, so the deploy
+  issue's workflow can publish.
+- **Actions workflow permissions** set to read and write, with "Allow GitHub
+  Actions to create and approve pull requests" on.
+- **Squash merging** allowed, since the merge loop uses `gh pr merge --squash`.
+- **Webhook delivery** to OpenEngine, for the CI-wake step. OpenEngine runs on
+  the harness machine, so GitHub reaches it through a Cloudflare Tunnel
+  (`cloudflared`). Use a quick tunnel, which gets a new random URL each run and
+  needs no Cloudflare account or domain. Setup starts it, reads the URL, and
+  points the webhook at it (the app's webhook config, or the repo webhook), and
+  teardown stops it. A fresh URL each run means nothing outside a run knows
+  where to send traffic. The real protection is still the webhook secret:
+  OpenEngine checks each delivery's signature and drops anything unsigned.
+
+The harness applies these through the API right after recreating the repo, so
+every trial is automated. Because the harness is doing what a user would do by
+hand, a failure here points at the setup docs, not at the model. Each setting
+is its own test step with a screenshot, so the committed guide is the setup doc
+and cannot drift from what the harness does.
+
+## Layers
+
+One journey, built one layer at a time. Each later layer swaps a step of the
+journey to a different interface and leaves the rest alone.
+
+1. **CLI.** The whole journey, CLI only: `gh` auth setup, seed the issues, run
+   `tdd-guide` on the milestone, inspect results. This layer also carries the GitHub
+   integration the journey needs anyway (PRs, CI, merge).
+2. **GitHub integration.** Add assertions about issue and PR linking and webhook
+   delivery, plus validating the GitHub CLI setup.
+3. **Slack (stretch).** Run-complete and needs-input notifications, and a
+   Slack-started run as a variant. Slack may be hard to automate, so this layer
+   is optional. **Try it first**: before dropping it, spend a short spike
+   finding out whether a test Slack workspace and bot can be driven from the
+   harness. Record the outcome here either way.
+
+The web UI is not a layer. It is being redone as part of v2, so a v1 web UI layer
+would test something v2 is replacing and could not serve as a regression
+baseline. Once the new web UI exists, add a layer for it that starts a run and
+inspects the run, cost and per-node tokens.
+
+## Product gaps this exposes
+
+- No step merges or auto-merges PRs (the harness covers it for now).
+- No wall-clock or run-level benchmark report. Token and dollar totals already
+  exist in `packages/graph_runtime/src/engine/graph_runtime/usage.py`.
+
+## Real models
+
+- Runs use real agents (`E2E_AGENT=real` semantics), real GitHub and a real
+  Pages deploy. There is no stubbed variant, so nothing about the journey is
+  tested on PRs. The harness is only exercised by benchmark runs, and the
+  verifier is checked against a hand-written calculator first.
+- Runs are manual or on-demand, never on PR CI. Trigger them from a
+  `workflow_dispatch` workflow or locally.
+- Each run has a **budget cap** (dollars and wall-clock). Hitting a cap kills the
+  run and records a failure, so a stuck run cannot burn money without limit.
+- Runners are fixed for now, set through `tdd-guide`'s inputs: Claude for
+  planning and review (`runner`, which picks the issue and writes the tests, and
+  `reviewer`), Codex for implementation and reranking (`implementer` and
+  `reranker`). Comparing other runners comes later.
+- Results are noisy, so run several trials and compare medians.
+- Credentials: a bench-only GitHub account or org and token, and model
+  credentials for the runners under test.
+
+### Release gate
+
+`docs/releases.md` already gates a release on the most recent scheduled
+`ACP compatibility` run being green and recent. The benchmark could gate the
+same way: the most recent benchmark run on the release commit's lineage must
+have passed within an agreed window. Because a single run is noisy, the gate
+should be a pass threshold across trials (for example, 2 of 3), decided once the
+baseline exists.
+
+## Report
+
+The measurements for a run, not its artifacts. The artifacts are the calculator
+repo, its PRs and docs, the deployed site, and the guide. One JSON record per run:
+
+- runner and model per `tdd-guide` role, OpenEngine git SHA, trial number
+- pass or fail per verifier case, and an overall pass, partial, fail or timeout
+- wall-clock per phase
+- tokens and dollars, total, per node, per `tdd-guide` role and per issue
+- what OpenEngine produced: PR count, CI failures, retries and agent turns
+  (recorded, not graded), and per issue whether its PR merged
+
+Cost and tokens are what make a runner swap comparable: with the same issues
+and verifier, a change in runner shows up as a change in tokens, dollars and
+pass rate. The first runs with the fixed runners set that baseline.
+
+`usage.py` already rolls up tokens (input, output, cache read and write) and
+dollars per node from each run's `usage.updated` events. Three things to handle:
+
+- Dollars are approximate. A cost the agent reports is used as-is, otherwise
+  tokens are priced at list rates. An agent that reports nothing has unknown
+  cost, not zero, and the totals say so. Compare tokens first, dollars second.
+- The rollup lives in the web app's in-memory event log, so the harness reads
+  each run's usage before teardown or a server restart loses it.
+- The prices live in `usage.py`, so the recorded OpenEngine SHA pins them. A
+  price change between runs is not a runner change.
+
+## Test harness
+
+The benchmark is a spec in the existing `e2e/` Playwright suite, not a separate
+framework, so it reuses the per-test engine daemon and the terminal fixtures.
+
+- **The CLI runs through xterm.js.** `e2e/fixtures/terminal.ts` already runs
+  `engine …` in a real PTY in a browser page, so the CLI layer drives the same
+  terminal the existing guides use.
+- **Screenshots at every step.** Each `test.step` captures a screenshot, so a run
+  leaves a visual record of the whole journey, including the failure point.
+- **test2doc runs it.** `playwright-test2doc.config.ts` turns the steps and
+  screenshots into a readable walkthrough of the run.
+- **No practical timeout.** The suite's default is 10 s per action
+  (`e2e/playwright.config.ts`). The benchmark overrides the test timeout with a
+  very large value, or none, and relies on the harness's own dollar and
+  wall-clock cap to stop a stuck run. Waits on external state (CI, the deploy)
+  poll with their own bounded deadlines, so the cap is the only global limit.
+
+### Logins that work under Playwright
+
+Driving a real GitHub or Slack sign-in page from automation is fragile (2FA,
+bot checks, magic links, SSO), so the approach is to avoid the interactive page
+wherever the test is not about login:
+
+- **GitHub.** Use a dedicated bench account. For the CLI and for OpenEngine's
+  own GitHub access, authenticate with a token (`gh` auth and `gh_config_dir`),
+  which needs no browser. Use a dedicated bot account (OpenEngine-worker-bot or
+  Rock-AI-bot) inside a bench org, so nothing in the journey needs an interactive
+  sign-in. If a step does need the browser, the bot signs in with a passkey
+  instead of a 2FA code. A person registers the passkey once, in a manual headed
+  Playwright step, and the harness reuses it. Spike whether the credential can be
+  saved and replayed (for example with a virtual authenticator) before relying on
+  it. The passkey is a secret like the tokens below and is never committed.
+- **Slack.** Use a dedicated test workspace. Anything that does not need the
+  Slack UI (posting a message to the bot, reading its replies) goes through the
+  Slack API with a bot or user token. Screenshots of the Slack UI, if wanted,
+  use a saved `storageState` from a one-time manual sign-in. This is the part
+  most likely to be hard, which is why the layer is a spike first.
+- Saved sessions and tokens are secrets: they live in CI secrets or a gitignored
+  local file, never in the repo or in screenshots. The benchmark tests mask them
+  in every screenshot they take: highlight the secret with a test2doc
+  [highlight annotation](https://www.test2doc.com/docs/user-guide/screenshots/annotation#highlight-box-styling)
+  and set `highlightFillStyle` to an opaque hex color, so the box covers the
+  value instead of tinting it.
+
+### Decision: the real run feeds the committed guide
+
+The real run's test2doc output and screenshots are committed as a guide, and the
+diff is noisy on purpose. Each release's guide is a real record of what
+OpenEngine did that time.
+
+- The benchmark guide is its own page and doc category, separate from the
+  existing guides. Those rely on byte-for-byte identical output
+  (`e2e/README.md`), so one noisy page must not churn them or trip any check
+  that the committed guides are up to date.
+- It is regenerated only by a release-time benchmark run, never by `npm run doc`
+  on a developer machine. The benchmark spec carries a `@benchmark` Playwright
+  tag. `npm run doc` already excludes tests with `--grep-invert @skip-docs`, so
+  it adds `@benchmark` to that exclusion, and a new script (name to be decided,
+  for example `oe-benchmark`) runs only the tests with that tag.
+- The release PR carries the diff, so a person reads it as part of the release
+  review. Run IDs, ports and timestamps still use the terminal page's stable
+  stand-ins, which cuts the noise to what the model actually did.
+
+## Guides
+
+The journey is also documentation. The benchmark's output is committed as the
+separate, noisy benchmark guide described under Test harness. The guide is
+generated Docusaurus markdown in the docsite (`site/`), with a section per step
+of the journey that shows how to build a project with OpenEngine, from seeding
+the issues to the deployed site.
+
+## Assumptions to check
+
+Check these early and change the plan if any turn out wrong:
+
+- The harness can approve a run's `human_review` step from the CLI. Human steps
+  are answered in the web UI or interactively with `oe run watch RUN_ID`, so the
+  harness may drive `oe run watch` in the xterm.js terminal.
+- A loop with a short `--every` works a milestone cleanly: no overlapping runs
+  on the same issue, and the shortest interval `oe loop add` accepts.
+- Merging a `tdd-guide` PR closes its issue, so Pick moves on to the next one.
+- OpenEngine can create its own GitHub App during setup.
+- A bot account's passkey can be saved and replayed under Playwright.
+- `tdd-guide` gives its PRs Conventional Commits titles, so the changelog works.
+  If commitlint fails a PR on its title, `tdd-guide`'s CI retry sends it back to
+  the implementer, which may fix code rather than the title.
+
+## Order of work
+
+1. File the "E2E benchmark" milestone, one issue per reviewable piece of work.
+   Work it with the `tdd-guide` graph.
+2. Spikes first: check the assumptions above, and run the Slack spike, so a
+   failed assumption or a dropped Slack layer changes the plan before the
+   harness is built.
+3. Harness, following the run sequence: teardown, clone at a ref, OpenEngine
+   setup (GitHub App, Cloudflare Tunnel, `tdd-guide` registration), repo
+   creation and settings, seeding, merge loop, verifier, docs and release
+   checks, committing the guide. Mask secrets in screenshots from the start. Check the verifier
+   against a hand-written calculator first.
+4. Write the seeded milestone and issues, with "Depends on" lines, and check
+   they build the calculator in order.
+5. Get one passing run with the fixed runners, with `tdd-guide` working the
+   milestone.
+6. Report, budget cap, then several trials to set the baseline.
+7. Layer 2, then layer 3 if the Slack spike says it can be automated.
+8. Decide the release gate once there is a baseline.
