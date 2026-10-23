@@ -5,7 +5,14 @@ from urllib.parse import urlsplit
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+_MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# These endpoints authenticate signatures or complete an OAuth redirect.
+_ORIGIN_EXEMPT = frozenset({
+    "/api/github/events", "/api/slack/events",
+    "/api/auth/github/callback", "/api/slack/callback",
+})
 
 _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
 
@@ -71,6 +78,8 @@ class RequestSecurity:
 
 
 class TrustedDaemonHostMiddleware:
+    """Validate Host and mutating browser requests before auth or routing."""
+
     def __init__(self, app: ASGIApp, security: RequestSecurity) -> None:
         self.app = app
         self.security = security
@@ -83,4 +92,53 @@ class TrustedDaemonHostMiddleware:
                 scope, receive, send
             )
             return
+        if (
+            scope["type"] == "http"
+            and scope["method"] in _MUTATING
+            and scope["path"] not in _ORIGIN_EXEMPT
+        ):
+            request = Request(scope)
+            if not self.security.is_local_request(request):
+                await JSONResponse({"error": "forbidden"}, status_code=403)(
+                    scope, receive, send
+                )
+                return
+            # JSON APIs must not accept a browser's CORS-simple text/plain body.
+            content_type = (
+                request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            )
+            if not content_type:
+                # Inspect the ASGI body rather than trusting Content-Length:
+                # streamed requests may omit it, while bodyless mutations are valid.
+                while True:
+                    message = await receive()
+                    if message["type"] != "http.request" or message.get("body"):
+                        break
+                    if not message.get("more_body", False):
+                        break
+                if message["type"] == "http.request" and message.get("body"):
+                    await JSONResponse(
+                        {"error": "the request body must be JSON"}, status_code=415
+                    )(scope, receive, send)
+                    return
+
+                original_receive = receive
+                pending_message: Message | None = message
+
+                async def replay_receive() -> Message:
+                    nonlocal pending_message
+                    if pending_message is not None:
+                        result = pending_message
+                        pending_message = None
+                        return result
+                    return await original_receive()
+
+                receive = replay_receive
+            elif content_type != "application/json" and not (
+                content_type.startswith("application/") and content_type.endswith("+json")
+            ):
+                await JSONResponse(
+                    {"error": "the request body must be JSON"}, status_code=415
+                )(scope, receive, send)
+                return
         await self.app(scope, receive, send)
