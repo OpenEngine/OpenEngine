@@ -1,10 +1,11 @@
-"""Wait for a started process to report itself healthy over HTTP."""
+"""Wait for a started process to report itself healthy over HTTP, at the URL it names in its ready file."""
 
 from __future__ import annotations
 
 import subprocess
 import time
 from collections.abc import Callable
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -51,5 +52,26 @@ def wait_until_healthy(
                     return
         except (URLError, OSError):
             pass
+        time.sleep(POLL_SECONDS)
+    raise ReadyTimeout(name, timeout)
+
+
+def wait_for_ready_file(
+    name: str,
+    process: subprocess.Popen,
+    path: Path,
+    *,
+    timeout: float,
+    cancelled: Callable[[], bool] = lambda: False,
+) -> str:
+    """The health URL a process writes to `path` once it serves; raise as `wait_until_healthy` does."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cancelled():
+            raise Cancelled(name)
+        if (code := process.poll()) is not None:
+            raise ExitedBeforeReady(name, code)
+        if path.is_file() and (url := path.read_text().strip()):
+            return url
         time.sleep(POLL_SECONDS)
     raise ReadyTimeout(name, timeout)

@@ -8,6 +8,7 @@ dependencies = [
     "nats-py>=2.16.0",
     "openengine-connection-bus",
     "openengine-graph-engine",
+    "openengine-messaging",
     "openengine-persistence",
     "openengine-supervisor",
     "openengine-telemetry",
@@ -28,6 +29,7 @@ packages = ["src/openengine"]
 [tool.uv.sources]
 openengine-connection-bus = { workspace = true }
 openengine-graph-engine = { workspace = true }
+openengine-messaging = { workspace = true }
 openengine-persistence = { workspace = true }
 openengine-supervisor = { workspace = true }
 openengine-telemetry = { workspace = true }

@@ -2,15 +2,16 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.2
+  version: 1.0.0-draft.3
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
     answers and the events it publishes.
 
-    > **Contract only.** These subjects are a defined API, not an implemented
-    > one. No GE handler answers them yet; see the package README's
-    > *Implementation status*.
+    > **Mostly contract only.** GE answers `oe.v1.ge.query.graphs.list`, with
+    > an empty page until the graph registry exists. Every other subject is a
+    > defined API that GE answers with `UNSUPPORTED_CAPABILITY`; see the
+    > package README's *Implementation status*.
 
     ## Versions
     - AsyncAPI format: `3.1.0` (the `asyncapi` field).
@@ -44,6 +45,11 @@ info:
     ## Identity
     The acting identity comes from the authenticated NATS connection (or a
     verified delegation), never from a payload field.
+
+    Under `oe up`, GE runs in **local-operator mode**: NATS listens only on
+    loopback, so whoever reaches it is the operator on that machine, and every
+    request through a loopback listener is allowed. A request through any other
+    listener is rejected with `PERMISSION_DENIED`.
 
     ## Subject tokens
     Every `{…_id}` parameter is a single subject token of the form its prefix
