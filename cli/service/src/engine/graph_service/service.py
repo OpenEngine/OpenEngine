@@ -1444,7 +1444,8 @@ class GraphService:
             if record.metadata.parent_run_id != execution.run_id:
                 continue
             starts = self.runtime.store.events_since(record.run_id, kind=EventKind.RUN_STARTED)
-            if any(event.payload.get("values", {}).get("_parent_step") == node.id for event in starts):
+            if any(isinstance(values := event.payload.get("values"), Mapping)
+                   and values.get("_parent_step") == node.id for event in starts):
                 child_id = record.run_id
                 break
         starting = None
