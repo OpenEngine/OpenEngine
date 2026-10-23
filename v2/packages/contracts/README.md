@@ -48,9 +48,16 @@ common/v1/                 envelopes and types every service shares
   schemas/                 typed payloads, grouped with $defs
   examples/                one JSON file per example message
   resources/               the resources people write, where the service has any
+src/openengine/contracts/  the openengine-contracts package: validate.py, resources.py, reference.py
 tests/                     pytest suite run with the rest of v2
-tooling/                   pinned AsyncAPI parser, validate.py and reference.py
+tooling/                   pinned AsyncAPI parser, and scripts that run the package's modules
 ```
+
+The contracts are also a uv workspace package, `openengine-contracts`, so the
+CLI and the Graph Engine validate resources with the same code and schemas.
+Its wheel carries every contract directory inside `openengine/contracts/`; an
+editable install reads them from this directory. Import it as
+`openengine.contracts.resources` and `openengine.contracts.validate`.
 
 Schemas are JSON Schema draft-07 (the newest draft the AsyncAPI parser
 accepts), referenced from AsyncAPI as
@@ -81,16 +88,19 @@ in `resources/examples/`. Those files are the single source of truth:
 
 - the apply commands' payloads `$ref` them, so the contract validates the
   resource a command carries;
-- `tooling/resources.py` validates resource files against them
-  (`validate_resource`, `validate_text`), reporting every problem with its
-  path, such as `spec.plan[0].agent.prompt`;
+- `openengine.contracts.resources` validates resource files against them
+  (`validate_resource`, `validate_text`, optionally requiring one kind),
+  reporting every problem with its path, such as `spec.plan[0].agent.prompt`.
+  `oe graph validate FILE|-` is that check for Graphs, and
+  `tooling/resources.py check FILE..` for any kind;
 - the same script generates each service's `resources/reference.html`
   ([Connection Bus](https://openengine.cc/contracts/connection_bus/v1/resources/),
   [Graph Engine](https://openengine.cc/contracts/graph_engine/v1/resources/),
   [Tool Service](https://openengine.cc/contracts/tool_service/v1/resources/),
   [Virtual Control Plane](https://openengine.cc/contracts/virtual_control_plane/v1/resources/)),
   a static page of every kind, type, field and example. A test fails when one
-  is stale.
+  is stale. `markdown(kind)` writes the same tables as Markdown, which
+  `oe graph spec` prints for Graph.
 
 The schemas check structure. Rules that span fields or resources, such as
 unique step names, `flow` naming steps that exist, a Tool's connection
@@ -375,14 +385,14 @@ loads the renderer from jsDelivr.
 - **`validate.mjs`** runs the AsyncAPI parser, which checks each document
   against the AsyncAPI 3.1 specification and resolves every schema and example
   reference.
-- **`validate.py`** covers what the parser and JSON Schema cannot: every
+- **`validate.py`** (`openengine.contracts.validate`) covers what the parser and JSON Schema cannot: every
   example validates against its message's schema, subject templates and token
   types, subject/body ID agreement, causal paths ending in the message's own
   ID, event subjects matching `event_type`, `Nats-Msg-Id` equal to
   `event_id`, replies matching their request's operation, and an example for
   every message. Services can call `validate.validate_message` on live
   traffic in their own tests.
-- **`reference.py`** resolves every file reference into one self-contained
+- **`reference.py`** (`openengine.contracts.reference`) resolves every file reference into one self-contained
   document (written by `--bundle`) and embeds it in each service's
   `reference.html`, rendered in the browser by the AsyncAPI React component.
   A test fails when a checked-in page is out of date, so regenerate it after

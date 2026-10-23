@@ -13,10 +13,7 @@ from urllib.request import urlopen
 
 import nats
 import pytest
-
-# The contract validator is a script under tooling/, not an installed package.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "contracts" / "tooling"))
-from validate import load_contract, validate_message  # noqa: E402
+from openengine.contracts.validate import load_contract, validate_message
 
 pytestmark = pytest.mark.integration
 

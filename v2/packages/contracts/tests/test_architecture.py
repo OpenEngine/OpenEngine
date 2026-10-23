@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
-import architecture
 import pytest
-from reference import NAMES
-from validate import SERVICES
+from openengine.contracts.reference import NAMES
+from openengine.contracts.validate import SERVICES
+
+# architecture.py is a script under tooling/, not part of the package; load it from its file.
+_SPEC = importlib.util.spec_from_file_location("architecture", Path(__file__).resolve().parents[1] / "tooling" / "architecture.py")
+assert _SPEC and _SPEC.loader
+architecture = importlib.util.module_from_spec(_SPEC)
+sys.modules["architecture"] = architecture
+_SPEC.loader.exec_module(architecture)
 
 DIAGRAM = architecture.diagram()
 

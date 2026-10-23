@@ -7,10 +7,9 @@ import subprocess
 from typing import Any
 
 import pytest
-import reference
-import validate
 import yaml
-from validate import CONTRACTS, SERVICES, load_contract, validate_message
+from openengine.contracts import reference, validate
+from openengine.contracts.validate import CONTRACTS, SERVICES, load_contract, validate_message
 
 STREAMS = CONTRACTS.parent.parent / "infra" / "nats" / "streams"
 

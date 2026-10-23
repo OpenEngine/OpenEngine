@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import copy
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
 import pytest
-import reference
-import resources
-from resources import API_VERSION, GROUPS, KINDS, group_of, load_documents, validate_resource, validate_text
+from openengine.contracts import reference, resources
+from openengine.contracts.resources import API_VERSION, GROUPS, KINDS, group_of, load_documents, validate_resource, validate_text
+from openengine.contracts.validate import SERVICES
 
 EXAMPLE_FILES = sorted(path for group in GROUPS for path in group.examples.glob("*.yaml"))
 
@@ -92,8 +93,32 @@ def test_unknown_kind_and_version_are_refused() -> None:
     assert _problems({**_example("Graph"), "kind": "Widget"}) == [
         "kind: must be one of Connection, Graph, Loop, Tool, ToolGrant, ToolInvocation, Workspace"
     ]
-    for version in ("openengine.cc/v1", "openengine.cc/v2alpha1", "tools.openengine.cc/v1alpha1"):
+    for version in ("openengine.cc/v2alpha1", "tools.openengine.cc/v1alpha1"):
         assert _problems({**_example("Tool"), "apiVersion": version}) == ["apiVersion: must be openengine.cc/v1alpha1"]
+    assert _problems({**_example("Graph"), "apiVersion": "openengine.cc/v1"}) == [
+        "apiVersion: must be openengine.cc/v1alpha1; openengine.cc/v1 is a V1 manifest, which is not accepted"
+    ]
+
+
+def test_a_resource_of_another_kind_is_refused_when_one_kind_is_expected() -> None:
+    assert validate_resource(_example("Graph"), "Graph") == []
+    assert [str(problem) for problem in validate_resource(_example("Loop"), "Graph")] == ["kind: is a Loop, not a Graph"]
+    assert [str(problem) for problem in validate_resource({"apiVersion": "openengine.cc/v1", "kind": "Widget"}, "Graph")] == [
+        "apiVersion: must be openengine.cc/v1alpha1; openengine.cc/v1 is a V1 manifest, which is not accepted",
+        "kind: must be Graph",
+    ]
+    text = "---\n".join(path.read_text() for path in EXAMPLE_FILES if path.parent == group_of("Graph").examples)
+    assert [str(problem) for problem in validate_text(text, "Graph")] == ["[1].kind: is a Loop, not a Graph"]
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_markdown_reference_has_a_table_for_every_type_on_the_page(kind: str) -> None:
+    text = resources.markdown(kind)
+    assert text.startswith(f"# {kind}\n\n`apiVersion: {API_VERSION}` · `kind: {kind}`")
+    page = resources.page(group_of(kind))
+    for title in re.findall(r"^## (.+)$", text, re.MULTILINE):
+        assert f'id="{title.lower()}"' in page, title
+    assert "<code>" not in text and "<a " not in text
 
 
 def test_resources_are_closed() -> None:
@@ -221,3 +246,9 @@ def test_site_reference_links_every_contract_and_kind() -> None:
 def test_docs_name_only_the_one_api_version(doc: str) -> None:
     text = (ROOT / doc).read_text()
     assert set(re.findall(r"[a-z.]*openengine\.cc/v\d+(?:alpha|beta)\d+", text)) <= {API_VERSION}
+
+
+def test_the_wheel_carries_every_contract_directory() -> None:
+    project = tomllib.loads((resources.CONTRACTS / "pyproject.toml").read_text())
+    included = project["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    assert included == {name: f"openengine/contracts/{name}" for name in ("common", *SERVICES)}

@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 members = [
     "openengine-cli",
     "openengine-connection-bus",
+    "openengine-contracts",
     "openengine-graph-engine",
     "openengine-messaging",
     "openengine-persistence",
@@ -20,6 +21,7 @@ dev = [
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "openengine-cli", editable = "apps/cli" },
     { name = "openengine-connection-bus", editable = "services/connection_bus" },
+    { name = "openengine-contracts", editable = "packages/contracts" },
     { name = "openengine-graph-engine", editable = "services/graph_engine" },
     { name = "openengine-messaging", editable = "packages/messaging" },
     { name = "openengine-persistence", editable = "packages/persistence" },
@@ -517,6 +519,7 @@ source = { editable = "apps/cli" }
 dependencies = [
     { name = "nats-py" },
     { name = "openengine-connection-bus" },
+    { name = "openengine-contracts" },
     { name = "openengine-graph-engine" },
     { name = "openengine-messaging" },
     { name = "openengine-persistence" },
@@ -530,6 +533,7 @@ dependencies = [
 requires-dist = [
     { name = "nats-py", specifier = ">=2.16.0" },
     { name = "openengine-connection-bus", editable = "services/connection_bus" },
+    { name = "openengine-contracts", editable = "packages/contracts" },
     { name = "openengine-graph-engine", editable = "services/graph_engine" },
     { name = "openengine-messaging", editable = "packages/messaging" },
     { name = "openengine-persistence", editable = "packages/persistence" },
@@ -555,11 +559,27 @@ requires-dist = [
 ]
 
 [[package]]
+name = "openengine-contracts"
+version = "0.0.0"
+source = { editable = "packages/contracts" }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", specifier = ">=4.23" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+
+[[package]]
 name = "openengine-graph-engine"
 version = "0.0.0"
 source = { editable = "services/graph_engine" }
 dependencies = [
     { name = "nats-py" },
+    { name = "openengine-contracts" },
     { name = "openengine-messaging" },
     { name = "openengine-persistence" },
     { name = "openengine-telemetry" },
@@ -568,6 +588,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "nats-py", specifier = ">=2.16.0" },
+    { name = "openengine-contracts", editable = "packages/contracts" },
     { name = "openengine-messaging", editable = "packages/messaging" },
     { name = "openengine-persistence", editable = "packages/persistence" },
     { name = "openengine-telemetry", editable = "packages/telemetry" },

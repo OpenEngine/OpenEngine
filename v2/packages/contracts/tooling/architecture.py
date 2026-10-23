@@ -29,10 +29,10 @@ from typing import Any
 
 from openengine.persistence import documentation
 
-from reference import NAMES
-from validate import CONTRACTS, SERVICES, _load, load_contract
+from openengine.contracts.reference import NAMES
+from openengine.contracts.validate import CONTRACTS, SERVICES, _load, load_contract
 
-V2 = CONTRACTS.parent.parent
+V2 = Path(__file__).resolve().parents[3]
 OUTPUT = V2 / "docs" / "architecture.mermaid"
 STREAMS = V2 / "infra" / "nats" / "streams"
 GROUPS = ("control", "query", "events")
