@@ -13,7 +13,7 @@ required: [apiVersion, kind, metadata, spec]
 additionalProperties: false
 properties:
   apiVersion:
-    $ref: ../../../common/v1/meta.schema.yaml#/$defs/tools_api_version
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/api_version
   kind:
     type: string
     const: ToolInvocation

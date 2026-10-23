@@ -8,7 +8,7 @@
     ],
     "payload": {
       "tool": {
-        "apiVersion": "tools.openengine.cc/v1alpha1",
+        "apiVersion": "openengine.cc/v1alpha1",
         "kind": "Tool",
         "metadata": {
           "name": "github-issue-comment",

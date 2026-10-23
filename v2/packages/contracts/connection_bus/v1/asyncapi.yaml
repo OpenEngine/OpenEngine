@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:connection-bus
 info:
   title: OpenEngine Connection Bus (cxn)
-  version: 1.0.0-draft.1
+  version: 1.0.0-draft.2
   description: |
     The Connection Bus links OpenEngine to external providers. This document
     describes the NATS interface **CXN serves**: the commands and queries it
@@ -17,6 +17,8 @@ info:
     - Contract release: `info.version`, semver. Minor releases only add.
     - Subject namespace: `v1` in `oe.v1.cxn.…`. It
       changes only for an incompatible release, which is served side by side.
+    - Resource apiVersion: `openengine.cc/v1alpha1` for every kind. Its
+      `v1` is the subject namespace's; `alpha1` changes while `v1` is a draft.
 
     ## Request/reply
     Control and query subjects use native NATS request/reply: the reply goes
@@ -50,7 +52,7 @@ info:
 
     ## Apply
     Connections are created and changed by applying a Connection resource
-    (`kind: Connection`, `apiVersion: openengine.cc/v2alpha1`; see
+    (`kind: Connection`, `apiVersion: openengine.cc/v1alpha1`; see
     `resources/`), Kubernetes-style, keyed by its `metadata.name`: a new name
     creates the connection and allocates its `conn_…` ID, a known one updates
     it. Tools name the connection they act through by that name.

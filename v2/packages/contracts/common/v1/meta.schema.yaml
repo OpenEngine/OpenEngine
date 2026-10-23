@@ -9,14 +9,12 @@ description: >-
   service-set `metadata` fields are ignored on apply. Several resources may
   share one file, separated by `---`.
 $defs:
-  core_api_version:
-    description: The version of the core resources (Graph, Loop, Connection).
+  api_version:
+    description: >-
+      The API group and version of every resource kind. The version follows
+      the subject namespace: `v1alpha1` while `oe.v1` is a draft.
     type: string
-    const: openengine.cc/v2alpha1
-  tools_api_version:
-    description: The version of the tool service's resources (Tool, ToolGrant, ToolInvocation).
-    type: string
-    const: tools.openengine.cc/v1alpha1
+    const: openengine.cc/v1alpha1
   name:
     description: >-
       Lower-case name, unique among resources of its kind: a letter, then
@@ -31,7 +29,7 @@ $defs:
     pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
   tool_ref:
     description: >-
-      A Tool (`tools.openengine.cc`) as `namespace.name`, such as
+      A Tool as `namespace.name`, such as
       `default.github-issue-comment`: two DNS labels joined by `.`.
     type: string
     pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$

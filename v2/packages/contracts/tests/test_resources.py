@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import copy
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 import reference
 import resources
-from resources import GROUPS, KINDS, group_of, load_documents, validate_resource, validate_text
+from resources import API_VERSION, GROUPS, KINDS, group_of, load_documents, validate_resource, validate_text
 
 EXAMPLE_FILES = sorted(path for group in GROUPS for path in group.examples.glob("*.yaml"))
 
@@ -44,13 +45,43 @@ def test_reference_documents_every_kind_and_example(group: resources.Group) -> N
     for kind in group.kinds:
         assert f'id="{kind.lower()}"' in page
         assert f"<code>kind: {kind}</code>" in page
-    assert f"<code>apiVersion: {group.api_version}</code>" in page
+    assert f"<code>apiVersion: {API_VERSION}</code>" in page
 
 
 def test_every_service_contract_has_its_resources() -> None:
     assert {group.service for group in GROUPS} <= set(reference.NAMES)
     assert group_of("Connection").service == "connection_bus"
-    assert group_of("ToolGrant").api_version == "tools.openengine.cc/v1alpha1"
+    assert group_of("ToolGrant").service == "tool_service"
+
+
+def test_every_resource_uses_the_one_api_version() -> None:
+    assert API_VERSION == "openengine.cc/v1alpha1"
+    meta = resources._load(resources.META)["$defs"]
+    assert [name for name in meta if "version" in name] == ["api_version"]
+    for kind in KINDS:
+        schema = resources._load(resources.schema_path(kind))
+        assert schema["properties"]["apiVersion"] == {"$ref": "../../../common/v1/meta.schema.yaml#/$defs/api_version"}, kind
+    for path in EXAMPLE_FILES:
+        assert {document["apiVersion"] for document in load_documents(path.read_text())} == {API_VERSION}, path.name
+
+
+# `apiVersion: x`, `"apiVersion": "x"` and the escaped `\"apiVersion\":\"x\"` inside a JSON string.
+_API_VERSION_VALUE = re.compile(r"""apiVersion\\?["']?\s*:\s*\\?["']?([A-Za-z0-9./-]+)""")
+
+
+def test_no_contract_file_names_another_api_version() -> None:
+    contract_files = [
+        path
+        for path in resources.CONTRACTS.glob("*/v1/**/*")
+        if path.suffix in {".yaml", ".json"} and "node_modules" not in path.parts
+    ]
+    found = {
+        (path.relative_to(resources.CONTRACTS).as_posix(), value)
+        for path in contract_files
+        for value in _API_VERSION_VALUE.findall(path.read_text())
+    }
+    assert found, "the pattern no longer finds apiVersion values"
+    assert {entry for entry in found if entry[1] != API_VERSION} == set()
 
 
 def _problems(document: dict[str, Any]) -> list[str]:
@@ -59,14 +90,10 @@ def _problems(document: dict[str, Any]) -> list[str]:
 
 def test_unknown_kind_and_version_are_refused() -> None:
     assert _problems({**_example("Graph"), "kind": "Widget"}) == [
-        "kind: must be one of Connection, Graph, Loop, Workspace for openengine.cc/v2alpha1"
+        "kind: must be one of Connection, Graph, Loop, Tool, ToolGrant, ToolInvocation, Workspace"
     ]
-    assert _problems({**_example("Graph"), "kind": "Tool"}) == [
-        "kind: must be one of Connection, Graph, Loop, Workspace for openengine.cc/v2alpha1"
-    ]
-    assert _problems({**_example("Tool"), "apiVersion": "openengine.cc/v1"}) == [
-        "apiVersion: must be one of openengine.cc/v2alpha1, tools.openengine.cc/v1alpha1"
-    ]
+    for version in ("openengine.cc/v1", "openengine.cc/v2alpha1", "tools.openengine.cc/v1alpha1"):
+        assert _problems({**_example("Tool"), "apiVersion": version}) == ["apiVersion: must be openengine.cc/v1alpha1"]
 
 
 def test_resources_are_closed() -> None:
@@ -163,7 +190,7 @@ def test_connection_scope_lists_resources_only_when_selected() -> None:
 
 
 def test_problems_in_a_multi_document_file_name_the_document() -> None:
-    text = "apiVersion: openengine.cc/v2alpha1\nkind: Graph\n---\nkind: Loop\n"
+    text = "apiVersion: openengine.cc/v1alpha1\nkind: Graph\n---\nkind: Loop\n"
     assert [str(problem) for problem in validate_text(text)][0].startswith("[0]")
     assert [str(problem) for problem in validate_text("a: [")][0].startswith("(document): not YAML")
 
@@ -188,3 +215,9 @@ def test_site_reference_links_every_contract_and_kind() -> None:
         service = group_of(kind).service
         assert f"pathname:///contracts/{service}/v1/resources/#{kind.lower()}'" in sidebar
         assert f"pathname:///contracts/{service}/v1/resources/{kind.lower()}.schema.yaml" in overview
+
+
+@pytest.mark.parametrize("doc", ["v2/ARCHITECTURE.md", "v2/packages/contracts/README.md", "site/docs/service-contracts.md"])
+def test_docs_name_only_the_one_api_version(doc: str) -> None:
+    text = (ROOT / doc).read_text()
+    assert set(re.findall(r"[a-z.]*openengine\.cc/v\d+(?:alpha|beta)\d+", text)) <= {API_VERSION}

@@ -6,7 +6,7 @@
     "result": {
       "items": [
         {
-          "apiVersion": "tools.openengine.cc/v1alpha1",
+          "apiVersion": "openengine.cc/v1alpha1",
           "kind": "ToolInvocation",
           "metadata": {
             "name": "ti-123",

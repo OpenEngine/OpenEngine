@@ -9,7 +9,7 @@ required: [apiVersion, kind, metadata, spec]
 additionalProperties: false
 properties:
   apiVersion:
-    $ref: ../../../common/v1/meta.schema.yaml#/$defs/core_api_version
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/api_version
   kind:
     type: string
     const: Loop

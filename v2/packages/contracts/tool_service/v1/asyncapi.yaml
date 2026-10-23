@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:tool-service
 info:
   title: OpenEngine Tool Service (tools)
-  version: 1.0.0-draft.1
+  version: 1.0.0-draft.2
   description: |
     The Tool Service keeps the tools agents may call, who may call them, and a
     durable record of every call. This document describes the NATS interface
@@ -18,6 +18,8 @@ info:
     - Contract release: `info.version`, semver. Minor releases only add.
     - Subject namespace: `v1` in `oe.v1.…`. It changes only for an
       incompatible release, which is served side by side.
+    - Resource apiVersion: `openengine.cc/v1alpha1` for every kind. Its
+      `v1` is the subject namespace's; `alpha1` changes while `v1` is a draft.
 
     ## Subjects
     Resource management is separate from execution:

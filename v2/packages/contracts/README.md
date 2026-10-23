@@ -65,12 +65,15 @@ camelCase fields, lists of named objects, and unions written as exactly one of
 several keys. They are created and changed by **applying** them: a new name
 creates the resource, a known one updates it.
 
-| Service | Kinds | apiVersion | Applied with |
-| -- | -- | -- | -- |
-| Connection Bus | `Connection` | `openengine.cc/v2alpha1` | `connections.apply` |
-| Graph Engine | `Graph`, `Loop` | `openengine.cc/v2alpha1` | `graphs.apply`, `loops.apply` |
-| Tool Service | `Tool`, `ToolGrant`, `ToolInvocation` | `tools.openengine.cc/v1alpha1` | `tools.apply`; `toolgrants.apply` by GE from a Graph step's `agent.tools`; invocations are created by `tools.invoke` |
-| Virtual Control Plane | `Workspace` | `openengine.cc/v2alpha1` | `workspaces.apply` |
+Every kind, whichever service owns it, has `apiVersion: openengine.cc/v1alpha1`
+(see [Versions](#versions)).
+
+| Service | Kinds | Applied with |
+| -- | -- | -- |
+| Connection Bus | `Connection` | `connections.apply` |
+| Graph Engine | `Graph`, `Loop` | `graphs.apply`, `loops.apply` |
+| Tool Service | `Tool`, `ToolGrant`, `ToolInvocation` | `tools.apply`; `toolgrants.apply` by GE from a Graph step's `agent.tools`; invocations are created by `tools.invoke` |
+| Virtual Control Plane | `Workspace` | `workspaces.apply` |
 
 Each kind is defined once, as a JSON Schema in YAML under
 `{service}/v1/resources/`, sharing `common/v1/meta.schema.yaml`, with examples
@@ -96,13 +99,27 @@ check when a resource is applied.
 
 ## Versions
 
-Three versions are tracked separately:
+Every service is on one version line, `v1`. It appears as the subject
+namespace, the directory and the resource apiVersion, and those three always
+change together:
 
-| Version | Where | Changes when |
-| -- | -- | -- |
-| AsyncAPI format | `asyncapi: 3.1.0` in each document | the documents move to a newer AsyncAPI specification |
-| Contract release | `info.version` (semver; now `1.0.0-draft.1`) | any contract change: patch for wording, minor for compatible additions, major for breaking changes |
-| Subject namespace | `v1` in `oe.v1.…` and the `v1/` directories | a breaking change; `v2` is served alongside `v1` until callers move |
+| Identifier | Where | What it means | Changes when |
+| -- | -- | -- | -- |
+| Subject namespace | `v1` in `oe.v1.…` | The wire API generation | a breaking change; `oe.v2` is served alongside `oe.v1` until callers move |
+| Contract directory | `{service}/v1/`, `common/v1/` | The files that define that generation | with the subject namespace: `oe.v2` lives in `{service}/v2/` |
+| Resource apiVersion | `apiVersion: openengine.cc/v1alpha1` on every kind | One API group, `openengine.cc`, for every service's resources, at the subject namespace's version plus a stability suffix | the `v1` part with the subject namespace; the suffix as `v1` matures: `v1alpha1`, `v1alpha2`, …, `v1beta1`, then `v1` once stable |
+| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.2`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
+| AsyncAPI format | `asyncapi: 3.1.0` in each document | The specification the documents are written in | the documents move to a newer AsyncAPI specification |
+
+The resource apiVersion is defined once, as `api_version` in
+[`meta.schema.yaml`](common/v1/meta.schema.yaml); every resource schema refers
+to it, and a test fails if a schema, example or message names another.
+
+"V2", as in OpenEngine V2 and the `v2/` source directory (and the
+`urn:openengine:v2:…` document IDs), is the name of this generation of the
+codebase. It is not an API version and never appears in a subject, directory
+or apiVersion. V1 OpenEngine's graph files (`apiVersion: openengine.cc/v1`)
+are a separate format.
 
 ## Subjects
 

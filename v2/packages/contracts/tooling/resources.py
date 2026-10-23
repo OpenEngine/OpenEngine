@@ -36,15 +36,16 @@ from validate import CONTRACTS, _load
 from validate import _retrieve as _retrieve_file
 
 META = CONTRACTS / "common" / "v1" / "meta.schema.yaml"
+API_VERSION: str = _load(META)["$defs"]["api_version"]["const"]
+"""The one apiVersion every resource kind uses, defined in `meta.schema.yaml`."""
 
 
 @dataclass(frozen=True)
 class Group:
-    """One service's resources: the kinds it owns, under one API version."""
+    """One service's resources: the kinds it owns."""
 
     service: str
     title: str
-    api_version: str
     kinds: tuple[str, ...]
 
     @property
@@ -57,10 +58,10 @@ class Group:
 
 
 GROUPS = (
-    Group("connection_bus", "Connection Bus", "openengine.cc/v2alpha1", ("Connection",)),
-    Group("graph_engine", "Graph Engine", "openengine.cc/v2alpha1", ("Graph", "Loop")),
-    Group("tool_service", "Tool Service", "tools.openengine.cc/v1alpha1", ("Tool", "ToolGrant", "ToolInvocation")),
-    Group("virtual_control_plane", "Virtual Control Plane", "openengine.cc/v2alpha1", ("Workspace",)),
+    Group("connection_bus", "Connection Bus", ("Connection",)),
+    Group("graph_engine", "Graph Engine", ("Graph", "Loop")),
+    Group("tool_service", "Tool Service", ("Tool", "ToolGrant", "ToolInvocation")),
+    Group("virtual_control_plane", "Virtual Control Plane", ("Workspace",)),
 )
 KINDS = tuple(kind for group in GROUPS for kind in group.kinds)
 _DURATION_UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
@@ -161,14 +162,11 @@ def validate_resource(document: Any) -> list[Problem]:
     """Every problem with one resource, each with the path it was found at."""
     if not isinstance(document, Mapping):
         return [Problem("", "a resource is a mapping with apiVersion, kind, metadata and spec")]
-    versions = list(dict.fromkeys(group.api_version for group in GROUPS))
-    version = document.get("apiVersion")
-    if version not in versions:
-        return [Problem("apiVersion", f"must be one of {', '.join(versions)}")]
-    kinds = [kind for group in GROUPS if group.api_version == version for kind in group.kinds]
+    if document.get("apiVersion") != API_VERSION:
+        return [Problem("apiVersion", f"must be {API_VERSION}")]
     kind = document.get("kind")
-    if kind not in kinds:
-        return [Problem("kind", f"must be one of {', '.join(kinds)} for {version}")]
+    if kind not in KINDS:
+        return [Problem("kind", f"must be one of {', '.join(sorted(KINDS))}")]
     errors = sorted(_validator(kind).iter_errors(document), key=lambda error: list(map(str, error.absolute_path)))
     return [Problem(_path(iter(error.absolute_path)), _message(error)) for error in errors]
 
@@ -401,7 +399,7 @@ def page(group: Group) -> str:
                 )
                 types_html.append(
                     f'<h2 class="kind" id="{_anchor(kind)}">{kind}</h2>'
-                    f'<div class="path"><code>apiVersion: {group.api_version}</code> · <code>kind: {kind}</code> · '
+                    f'<div class="path"><code>apiVersion: {API_VERSION}</code> · <code>kind: {kind}</code> · '
                     f'defined in <a href="{html.escape(path.name)}"><code>{html.escape(source)}</code></a></div>'
                     f"<p>{_inline(root['description'])}</p>{examples}{table}"
                 )
