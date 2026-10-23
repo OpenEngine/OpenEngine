@@ -192,7 +192,7 @@ function ConversationHeader({
     <header className="panel-head">
       <div className="panel-head-copy">
         <p className="eyebrow">This conversation</p>
-        <h1>{title}</h1>
+        <h1 title={title}>{title}</h1>
       </div>
       <div className="field">
         <span>Agent</span>
