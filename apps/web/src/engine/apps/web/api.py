@@ -1182,10 +1182,11 @@ async def _ready_runner_choices(
 
 
 async def _review_workorder_context(runtime: GraphRuntime | None, repository: str, number: int) -> str:
-    if runtime is None:
+    store = getattr(runtime, "store", None)
+    if store is None:
         return ""
-    run_id = await runtime.store.run_for_pull_request(repository.lower(), number)
-    record = await runtime.store.run(run_id) if run_id is not None else None
+    run_id = await store.run_for_pull_request(repository.lower(), number)
+    record = await store.run(run_id) if run_id is not None else None
     if record is not None and record.metadata.prompt:
         return "\nLinked work order request:\n" + record.metadata.prompt
     return ""

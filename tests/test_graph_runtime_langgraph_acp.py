@@ -277,6 +277,9 @@ class RecordingSourceControl:
     ) -> None:
         pass
 
+    async def review_context(self, pr_url: str) -> str:
+        raise AssertionError("not called")
+
     async def review_thread(self, pr_url, comment_id):
         raise AssertionError("not called")
 
