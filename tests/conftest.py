@@ -66,6 +66,38 @@ def _model_tiers_are_not_inherited(monkeypatch):
     monkeypatch.setattr(workflows.ADDED_AGENTS, "model_tiers", workflows.ADDED_AGENTS.model_tiers)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _real_user_settings_are_untouched():
+    """Fail the run if any test changed the live daemon's settings file.
+
+    `create_app` falls back to the per-user preference store, so a test that
+    builds the app without its own and then saves a provider would rewrite
+    the configuration a running Engine reads.
+    """
+    from engine.apps.web.source_control import user_config_path
+
+    settings = user_config_path("openengine") / "settings.json"
+
+    def snapshot():
+        try:
+            return settings.read_bytes()
+        except OSError:
+            return None
+
+    before = snapshot()
+    yield
+    assert snapshot() == before, f"tests changed the real user settings file {settings}"
+
+
+@pytest.fixture(autouse=True)
+def _user_settings_are_disposable(monkeypatch, tmp_path):
+    """Point the default per-user preference store at a temporary directory."""
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.user_config_path",
+        lambda name: tmp_path / "user-config" / name,
+    )
+
+
 @pytest.fixture
 def sqlite_store(tmp_path):
     """Create independent stores, or reopen an explicit path; close all at teardown."""

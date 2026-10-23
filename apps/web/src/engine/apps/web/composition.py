@@ -296,6 +296,9 @@ def build_capabilities(
             github,
             github_oauth,
             gitlab,
+            workspace_provider=workspace_provider,
+            github_host_aliases=settings.engine_config.github.host_aliases,
+            github_oauth_connected=lambda: bool(_github_token()),
         )
     Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
     sandbox = (

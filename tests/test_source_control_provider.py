@@ -675,3 +675,160 @@ def test_router_forwards_owned_pull_requests(tmp_path, selected, owned):
         if name != selected:
             unused.run_git.assert_not_awaited()
             unused.request_review.assert_not_awaited()
+
+
+class _Workspaces:
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    async def root_path(self, _workspace_id: object) -> str:
+        return str(self._root)
+
+
+def _forge_router(tmp_path, git_repo, remote, *, aliases=None, oauth_connected=True):
+    providers = {name: AsyncMock() for name in ("gh-cli", "github-oauth", "gitlab-oauth")}
+    preferences = SourceControlPreferences(tmp_path / "settings.json")
+    preferences.set("gitlab-oauth", "https://gitlab.example")
+    router = RoutingSourceControl(
+        preferences, *providers.values(),
+        workspace_provider=_Workspaces(git_repo(origin=remote)),  # type: ignore[arg-type]
+        github_host_aliases=aliases,
+        github_oauth_connected=lambda: oauth_connected,
+    )
+    return router, providers
+
+
+@pytest.mark.parametrize("cli_authenticated", [False, True])
+@pytest.mark.parametrize(
+    ("remote", "aliases"),
+    [
+        ("git@github.com:owner/repo.git", None),
+        ("https://github.com/owner/repo.git", None),
+        ("https://mirror.example/owner/repo.git", {"mirror.example": "github.com"}),
+    ],
+)
+def test_workspace_operations_follow_a_github_remote_despite_gitlab(
+    tmp_path, git_repo, monkeypatch, remote, aliases, cli_authenticated,
+):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: GhCliStatus(True, cli_authenticated),
+    )
+    router, providers = _forge_router(tmp_path, git_repo, remote, aliases=aliases)
+    source = providers["gh-cli" if cli_authenticated else "github-oauth"]
+    workspace = WorkspaceId("workspace")
+
+    asyncio.run(router.list_pipeline_status(workspace, ref="main"))
+    asyncio.run(router.request_review(workspace, "agent/fix", "main", "Fix", "Details"))
+    asyncio.run(router.publish(workspace, "agent/fix"))
+
+    source.list_pipeline_status.assert_awaited_once()
+    source.request_review.assert_awaited_once()
+    source.publish.assert_awaited_once_with(workspace, "agent/fix")
+    for name, provider in providers.items():
+        if provider is not source:
+            assert not provider.mock_calls, name
+
+
+@pytest.mark.parametrize(
+    "remote", ["git@github.com:owner/repo.git", "https://forge.example/owner/repo.git"]
+)
+def test_workspace_remote_without_a_usable_provider_names_the_mismatch(
+    tmp_path, git_repo, monkeypatch, remote,
+):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: GhCliStatus(True, False),
+    )
+    router, providers = _forge_router(tmp_path, git_repo, remote, oauth_connected=False)
+    host = "github.com" if "github" in remote else "forge.example"
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^workspace remote {host} does not match the selected source "
+        r"control \(GitLab, https://gitlab\.example\)$",
+    ):
+        asyncio.run(router.list_pipeline_status(WorkspaceId("workspace"), ref="main"))
+    for provider in providers.values():
+        assert not provider.mock_calls
+
+
+@pytest.mark.parametrize("selected", ["gh-cli", "github-oauth"])
+def test_workspace_on_github_keeps_the_saved_github_choice(tmp_path, git_repo, monkeypatch, selected):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("a saved GitHub choice needs no detection"),
+    )
+    router, providers = _forge_router(tmp_path, git_repo, "git@github.com:owner/repo.git")
+    SourceControlPreferences(tmp_path / "settings.json").set(selected)
+
+    asyncio.run(router.publish(WorkspaceId("workspace"), "agent/fix"))
+
+    providers[selected].publish.assert_awaited_once()
+    for name, provider in providers.items():
+        if name != selected:
+            assert not provider.mock_calls
+
+
+def test_workspace_on_gitlab_still_uses_gitlab(tmp_path, git_repo, monkeypatch):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("GitLab workspaces must not detect GitHub credentials"),
+    )
+    router, providers = _forge_router(
+        tmp_path, git_repo, "git@gitlab.example:group/project.git"
+    )
+
+    asyncio.run(router.list_pipeline_status(WorkspaceId("workspace"), ref="main"))
+
+    providers["gitlab-oauth"].list_pipeline_status.assert_awaited_once()
+    assert not providers["gh-cli"].mock_calls
+    assert not providers["github-oauth"].mock_calls
+
+
+@pytest.mark.parametrize("selected", ["gh-cli", "github-oauth"])
+def test_workspace_on_an_unknown_forge_is_not_sent_to_github(
+    tmp_path, git_repo, monkeypatch, selected,
+):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("an unknown forge needs no GitHub detection"),
+    )
+    router, providers = _forge_router(
+        tmp_path, git_repo, "https://forge.example/owner/repo.git"
+    )
+    SourceControlPreferences(tmp_path / "settings.json").set(selected)
+
+    with pytest.raises(
+        RuntimeError, match=r"^workspace remote forge\.example does not match"
+    ):
+        asyncio.run(router.publish(WorkspaceId("workspace"), "agent/fix"))
+    for provider in providers.values():
+        assert not provider.mock_calls
+
+
+@pytest.mark.parametrize("remote", ["../repo", "./repo", "/srv/git/repo.git", "file:///srv/git/repo.git"])
+def test_workspace_with_a_local_remote_keeps_the_saved_choice(tmp_path, git_repo, monkeypatch, remote):
+    from engine.domain.ids import WorkspaceId
+
+    monkeypatch.setattr(
+        "engine.apps.web.source_control.gh_cli_status",
+        lambda: pytest.fail("a local remote needs no GitHub detection"),
+    )
+    router, providers = _forge_router(tmp_path, git_repo, remote)
+
+    asyncio.run(router.publish(WorkspaceId("workspace"), "agent/fix"))
+
+    providers["gitlab-oauth"].publish.assert_awaited_once()
+    assert not providers["gh-cli"].mock_calls
+    assert not providers["github-oauth"].mock_calls

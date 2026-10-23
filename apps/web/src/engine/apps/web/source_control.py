@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeVar
@@ -25,6 +25,7 @@ from engine.ports.source_control import (
     SourceControl,
     WorkItem,
 )
+from engine.ports.workspace_provider import WorkspaceProvider
 from platformdirs import user_config_path
 
 SourceControlProvider = Literal["gh-cli", "github-oauth", "gitlab-oauth"]
@@ -35,6 +36,9 @@ _Result = TypeVar("_Result")
 #: talks to github.com, so an unreachable forge would otherwise hold a caller
 #: open for as long as the network does.
 _STATUS_TIMEOUT_SECONDS = 10
+
+_PROVIDER_NAMES = {"gh-cli": "GH CLI", "github-oauth": "GitHub OAuth", "gitlab-oauth": "GitLab OAuth"}
+_DEFAULT_GITLAB_ORIGIN = "https://gitlab.com"
 
 
 class SourceControlPreferences:
@@ -149,11 +153,24 @@ class RoutingSourceControl:
         gh_cli: SourceControl,
         github_oauth: SourceControl,
         gitlab_oauth: SourceControl | None = None,
+        *,
+        workspace_provider: WorkspaceProvider | None = None,
+        github_host_aliases: Mapping[str, str] | None = None,
+        github_oauth_connected: Callable[[], bool] | None = None,
     ) -> None:
         self._preferences = preferences
         self._providers = {"gh-cli": gh_cli, "github-oauth": github_oauth}
         if gitlab_oauth is not None:
             self._providers["gitlab-oauth"] = gitlab_oauth
+        # Without a workspace provider the router cannot read a remote, so
+        # workspace operations keep following the saved choice alone.
+        self._workspace_provider = workspace_provider
+        self._github_hosts = frozenset({"github.com"}) | frozenset(
+            _host(alias)
+            for alias, target in (github_host_aliases or {}).items()
+            if _host(target) == "github.com"
+        )
+        self._github_oauth_connected = github_oauth_connected
 
     def _selected(self) -> tuple[SourceControlProvider, SourceControl]:
         selected = self._preferences.get()
@@ -161,25 +178,76 @@ class RoutingSourceControl:
             selected, _ = selected_or_detected_provider(self._preferences)
         return selected, self._providers[selected]
 
+    async def _github_provider(
+        self, selected: SourceControlProvider, *, require_oauth: bool = True
+    ) -> SourceControlProvider | None:
+        """The saved GitHub choice, or detection without saving a choice.
+
+        With `require_oauth` false, detection falls back to GitHub OAuth even
+        when no OAuth connection is known, leaving that provider to report it.
+        """
+        if selected != "gitlab-oauth":
+            return selected
+        # Detection shells out to the GitHub CLI, so it runs off the event
+        # loop: a slow `gh` must not stall every other request this process
+        # is serving.
+        status = await asyncio.to_thread(gh_cli_status)
+        if status.installed and status.authenticated:
+            return "gh-cli"
+        if (
+            not require_oauth
+            or self._github_oauth_connected is None
+            or self._github_oauth_connected()
+        ):
+            return "github-oauth"
+        return None
+
+    async def _workspace_provider_for(
+        self, workspace_id: WorkspaceId, selected: SourceControlProvider
+    ) -> SourceControlProvider:
+        """Follow the forge of the workspace's `origin`, not one global choice."""
+        assert self._workspace_provider is not None
+        root = await self._workspace_provider.root_path(workspace_id)
+        host = _remote_host(await _origin_url(root))
+        gitlab_origin = self._preferences.gitlab_origin() or _DEFAULT_GITLAB_ORIGIN
+        provider: SourceControlProvider | None
+        if host in self._github_hosts:
+            provider = await self._github_provider(selected)
+        elif host and host == _host(gitlab_origin):
+            provider = "gitlab-oauth" if "gitlab-oauth" in self._providers else None
+        elif host:
+            # An unrecognised forge is never handed to GitHub or GitLab.
+            provider = None
+        else:
+            provider = selected
+        if provider is None:
+            configured = _PROVIDER_NAMES[selected].removesuffix(" OAuth")
+            if selected == "gitlab-oauth":
+                configured = f"{configured}, {gitlab_origin}"
+            raise RuntimeError(
+                f"workspace remote {host} does not match the selected source "
+                f"control ({configured})"
+            )
+        return provider
+
     async def _call(
         self, operation: Callable[[SourceControl], Awaitable[_Result]],
-        *, pr_url: str = "",
+        *, pr_url: str = "", workspace_id: WorkspaceId | None = None,
     ) -> _Result:
         provider, source_control = self._selected()
-        if provider == "gitlab-oauth" and urlsplit(pr_url).hostname == "github.com":
+        if workspace_id is not None and self._workspace_provider is not None:
+            provider = await self._workspace_provider_for(workspace_id, provider)
+            source_control = self._providers[provider]
+        elif provider == "gitlab-oauth" and urlsplit(pr_url).hostname == "github.com":
             # Webhook targets are independent of the workspace provider choice.
             # Use the normal GitHub credential detection without saving a choice.
-            # Detection shells out to the GitHub CLI, so it runs off the event
-            # loop: a slow `gh` must not stall every other request this process
-            # is serving.
-            status = await asyncio.to_thread(gh_cli_status)
-            provider = "gh-cli" if status.installed and status.authenticated else "github-oauth"
+            provider = await self._github_provider(provider, require_oauth=False)
+            assert provider is not None
             source_control = self._providers[provider]
         try:
             return await operation(source_control)
         except RuntimeError as error:
-            name = {"gh-cli": "GH CLI", "github-oauth": "GitHub OAuth", "gitlab-oauth": "GitLab OAuth"}[provider]
-            raise RuntimeError(f"{name} provider failed: {error}") from error
+            raise RuntimeError(f"{_PROVIDER_NAMES[provider]} provider failed: {error}") from error
 
     async def run_git(
         self, workspace_id: WorkspaceId, arguments: Sequence[str],
@@ -188,21 +256,29 @@ class RoutingSourceControl:
         return await self._call(
             lambda source: source.run_git(
                 workspace_id, arguments, owned_pull_requests=owned_pull_requests,
-            )
+            ),
+            workspace_id=workspace_id,
         )
 
     async def create_branch(
         self, workspace_id: WorkspaceId, name: str, base_ref: str
     ) -> None:
         await self._call(
-            lambda source: source.create_branch(workspace_id, name, base_ref)
+            lambda source: source.create_branch(workspace_id, name, base_ref),
+            workspace_id=workspace_id,
         )
 
     async def commit_all(self, workspace_id: WorkspaceId, message: str) -> str:
-        return await self._call(lambda source: source.commit_all(workspace_id, message))
+        return await self._call(
+            lambda source: source.commit_all(workspace_id, message),
+            workspace_id=workspace_id,
+        )
 
     async def publish(self, workspace_id: WorkspaceId, branch: str) -> None:
-        await self._call(lambda source: source.publish(workspace_id, branch))
+        await self._call(
+            lambda source: source.publish(workspace_id, branch),
+            workspace_id=workspace_id,
+        )
 
     async def request_review(
         self,
@@ -219,7 +295,8 @@ class RoutingSourceControl:
                 workspace_id, branch, base_ref, title, body,
                 owned_pull_requests=owned_pull_requests,
                 **({"issue": issue, "issue_resolution": issue_resolution} if issue else {}),
-            )
+            ),
+            workspace_id=workspace_id,
         )
 
     async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> None:
@@ -287,7 +364,8 @@ class RoutingSourceControl:
         self, workspace_id: WorkspaceId, number: int
     ) -> ChangeRequest:
         return await self._call(
-            lambda source: source.view_change_request(workspace_id, number)
+            lambda source: source.view_change_request(workspace_id, number),
+            workspace_id=workspace_id,
         )
 
     async def list_work_items(
@@ -298,12 +376,14 @@ class RoutingSourceControl:
         limit: int = 30,
     ) -> tuple[WorkItem, ...]:
         return await self._call(
-            lambda source: source.list_work_items(workspace_id, state, labels, limit)
+            lambda source: source.list_work_items(workspace_id, state, labels, limit),
+            workspace_id=workspace_id,
         )
 
     async def view_work_item(self, workspace_id: WorkspaceId, number: int) -> WorkItem:
         return await self._call(
-            lambda source: source.view_work_item(workspace_id, number)
+            lambda source: source.view_work_item(workspace_id, number),
+            workspace_id=workspace_id,
         )
 
     async def list_pipeline_status(
@@ -316,22 +396,63 @@ class RoutingSourceControl:
         return await self._call(
             lambda source: source.list_pipeline_status(
                 workspace_id, ref=ref, change_request_number=change_request_number
-            )
+            ),
+            workspace_id=workspace_id,
         )
 
     async def get_job_logs(
         self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None
     ) -> JobLogs:
         return await self._call(
-            lambda source: source.get_job_logs(workspace_id, pipeline_id, job_id)
+            lambda source: source.get_job_logs(workspace_id, pipeline_id, job_id),
+            workspace_id=workspace_id,
         )
 
     async def retry_pipeline(
         self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None
     ) -> PipelineRetry:
         return await self._call(
-            lambda source: source.retry_pipeline(workspace_id, pipeline_id, job_id)
+            lambda source: source.retry_pipeline(workspace_id, pipeline_id, job_id),
+            workspace_id=workspace_id,
         )
+
+
+def _host(location: str) -> str:
+    """The lowercase host of a configured URL or bare authority."""
+    location = location.strip()
+    if "://" not in location:
+        location = f"https://{location}"
+    try:
+        return (urlsplit(location).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _remote_host(remote: str) -> str:
+    """The lowercase host of a Git remote, or empty for a local path.
+
+    Git reads `[user@]host:path` as scp-style only when no `/` comes before
+    the first `:`; anything else without a scheme, such as `../repo`, is a
+    path on this machine.
+    """
+    remote = remote.strip()
+    if "://" in remote:
+        return _host(remote)
+    authority, colon, _ = remote.partition(":")
+    if not colon or "/" in authority:
+        return ""
+    return _host(authority.rpartition("@")[2])
+
+
+async def _origin_url(root_path: str) -> str:
+    """The workspace's `origin` URL, or empty when it has none."""
+    process = await asyncio.create_subprocess_exec(
+        "git", "-C", root_path, "remote", "get-url", "origin",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await process.communicate()
+    return stdout.decode(errors="replace").strip() if process.returncode == 0 else ""
 
 
 __all__ = [

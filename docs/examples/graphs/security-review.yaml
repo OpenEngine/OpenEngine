@@ -54,7 +54,9 @@ plan:
       never inspect host credentials, environment secrets or production data.
       Any temporary harness belongs outside the checkout and must exercise
       the real public route/handler with stub dependencies, not a reimplemented
-      copy of the vulnerable logic. Existing targeted tests are allowed.
+      copy of the vulnerable logic. Run every harness with HOME and
+      XDG_CONFIG_HOME set to a temporary directory, so it cannot change the
+      running daemon's per-user settings. Existing targeted tests are allowed.
       Limit investigation to five concrete candidates. A candidate needs a
       reachable public entry point, attacker prerequisites, violated boundary,
       code locations, expected/actual behavior and a safe reproduction plan.
@@ -90,7 +92,9 @@ review:
       the real attacker's permissions. Exercise the real public interface in
       an isolated harness using existing tests, or a temporary test outside
       the checkout; do not merely call an internal helper that bypasses the
-      boundary under review. Record exact test commands and outcomes. Confirm
+      boundary under review. Run every harness with HOME and XDG_CONFIG_HOME
+      set to a temporary directory, so it cannot change the running daemon's
+      per-user settings. Record exact test commands and outcomes. Confirm
       only findings independently reproduced with synthetic input and a
       demonstrated security impact. Static suspicions and unavailable test
       environments go in rejected_or_unverified with the missing evidence.
