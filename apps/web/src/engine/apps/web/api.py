@@ -3930,6 +3930,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 repository, requested.number, run_id,
             )
             return
+        # A fork's branch is not on origin; GitHub mirrors its head there.
+        ref = (f"origin/refs/pull/{requested.number}/head" if requested.fork
+               else f"origin/{requested.branch}")
         await github_start_workorder(
             getattr(runtime, "store", None), repository, requested.number,
             f"Review pull request {url}: {requested.title}",
@@ -3937,7 +3940,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             requester=github_requester(requested.sender_id, requested.sender),
             graph=graph,
             inputs={
-                "mode": "connected", "ref": f"origin/{requested.branch}",
+                "mode": "connected", "ref": ref,
                 "pr_url": url, "branch": requested.branch, "publish": "true",
                 "auto_approve_green": pull_requests.default_for(
                     await github_checkout(repository), repository_registry.snapshot.repos),
