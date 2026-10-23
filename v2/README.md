@@ -16,6 +16,7 @@ uv sync             # install the workspace
 uv run oe up        # start the supervisor and NATS in the background (downloads nats-server on first run)
 uv run oe migrate   # bring every service's database to head and create the NATS streams
 uv run oe status    # what is running, and where (--json for scripts)
+uv run oe graph list # the graphs GE serves over NATS (--json for scripts)
 uv run oe logs -f   # follow the log, JSON lines shown in console form (--json for raw)
 uv run oe down      # stop everything `oe up` started
 ```
@@ -46,6 +47,7 @@ infra/
 integration_tests/ # tests which cross the NATS service boundary
 packages/
   contracts/ # where the contracts between services live
+  messaging/ # request/reply over NATS: envelopes, typed errors, the retrying client and the server adapter
   persistence/ # the database layer services share; one setting picks SQLite or Postgres
   telemetry/ # logging and tracing every process shares; one OTLP endpoint sets the destination
 services/ # where the services themselves live
@@ -83,7 +85,7 @@ TODO:
 - [x] Write the CLI migrate command
 - [x] Migrate NATS on CLI migrate
 - [x] Write shared postgres/sqlite migration layer
-- [ ] Write shared NATS client
+- [x] Write shared NATS client
 - [ ] Construct e2e testing environment
 - [ ] Port graph engine
 - [x] Global logging and tracing

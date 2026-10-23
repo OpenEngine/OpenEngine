@@ -20,7 +20,7 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 
 | Defined here | Implemented |
 | -- | -- |
-| Control and query subjects (`oe.v1.…`) with typed requests and replies | No service answers them. No handlers exist. |
+| Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.query.graphs.list` (an empty page until the registry exists) and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
 | Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.events.toolinvocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
 | Operation, job, execution, workspace, session and approval models | No persistence or state machine implements them. |
 | Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
@@ -108,7 +108,7 @@ change together:
 | Subject namespace | `v1` in `oe.v1.…` | The wire API generation | a breaking change; `oe.v2` is served alongside `oe.v1` until callers move |
 | Contract directory | `{service}/v1/`, `common/v1/` | The files that define that generation | with the subject namespace: `oe.v2` lives in `{service}/v2/` |
 | Resource apiVersion | `apiVersion: openengine.cc/v1alpha1` on every kind | One API group, `openengine.cc`, for every service's resources, at the subject namespace's version plus a stability suffix | the `v1` part with the subject namespace; the suffix as `v1` matures: `v1alpha1`, `v1alpha2`, …, `v1beta1`, then `v1` once stable |
-| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.2`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
+| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.2`, GE's `1.0.0-draft.3`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
 | AsyncAPI format | `asyncapi: 3.1.0` in each document | The specification the documents are written in | the documents move to a newer AsyncAPI specification |
 
 The resource apiVersion is defined once, as `api_version` in
@@ -280,6 +280,32 @@ message carries none. Replies carry none; they belong to the requester's span.
 | `INVALID_CURSOR` | Cursor malformed, expired, or issued for other filters | no |
 | `PROVIDER_ERROR` | An external provider failed (operations and lifecycle failures) | per response |
 | `INTERNAL` | Unexpected service fault | per response |
+
+### Clients and servers
+
+[`openengine-messaging`](../messaging/README.md) applies these envelope rules
+on both sides of request/reply:
+
+- **Clients** build every command and query through it, so a request is
+  checked against its envelope before it is sent. A command's `causal_path`
+  is its cause's path with its own `command_id` appended, and one longer than
+  32 elements is refused with `CAUSAL_PATH_TOO_LONG` before sending.
+- **Each attempt waits a bounded time** (2 s by default). After a timeout the
+  client resends the same encoded bytes, so a retry carries the same
+  `command_id` and `causal_path`. No responders and a closed or draining
+  connection are reported at once as `UNAVAILABLE`, as is a request that gets
+  no reply after its last attempt.
+- **Servers** check each request's envelope, and then its operation's own
+  schema, before running a handler. A request that breaks either gets
+  `INVALID_ARGUMENT` with one `violations` entry per problem. That includes a
+  command whose `causal_path` does not end with its `command_id`.
+- **Authorization is a port.** The server asks an `Authorizer` before
+  handling a request. Local-operator mode, the default and the only one so
+  far, allows a request only when the NATS server it arrived through listens
+  on loopback alone, judged by the host in the server's INFO rather than the
+  URL used to reach it, and rejects the rest with `PERMISSION_DENIED`.
+- **Error replies keep `retryable` as sent.** A client raises a typed error
+  for the code, and keeps an unknown code as its string.
 
 ### Operations
 

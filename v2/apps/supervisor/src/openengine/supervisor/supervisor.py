@@ -1,7 +1,9 @@
 """Start OpenEngine V2's local processes, wait for them, and keep them running.
 
-NATS first, then the services, which are stopped before it. The services
-have no handlers yet; they boot, log, and wait.
+NATS first, then the services, which are stopped before it. A service with
+a readiness check (only ge so far) names its health URL in a ready file; the
+supervisor is READY only once that URL answers 200. If it never does, the
+supervisor writes FAILED with the reason and stops everything.
 """
 
 from __future__ import annotations
@@ -10,11 +12,11 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from openengine.supervisor.processes import nats, services
-from openengine.supervisor.readiness.http import NotReady, wait_until_healthy
+from openengine.supervisor.readiness.http import NotReady, wait_for_ready_file, wait_until_healthy
 from openengine.supervisor.shutdown.processes import stop_all
 from openengine.supervisor.shutdown.signals import ShutdownRequest
 from openengine.supervisor.state import ProcessState, Status, SupervisorState, state_path, write_state
@@ -50,6 +52,14 @@ def _watch(children: dict[str, subprocess.Popen], shutdown: ShutdownRequest) -> 
                 raise ProcessExited(name, code)
 
 
+def _wait_until_ready(
+    name: str, process: subprocess.Popen, ready_file: Path, shutdown: ShutdownRequest
+) -> ProcessState:
+    url = wait_for_ready_file(name, process, ready_file, timeout=READY_TIMEOUT_SECONDS, cancelled=shutdown.requested)
+    wait_until_healthy(name, process, url, timeout=READY_TIMEOUT_SECONDS, cancelled=shutdown.requested)
+    return ProcessState(name, process.pid, url, Status.READY)
+
+
 def run(settings: Settings) -> int:
     shutdown = ShutdownRequest()
     shutdown.install()
@@ -57,6 +67,7 @@ def run(settings: Settings) -> int:
     pid = os.getpid()
     write_state(path, SupervisorState(pid=pid, status=Status.STARTING))
     children: dict[str, subprocess.Popen] = {}
+    processes: list[ProcessState] = []
     try:
         binary = settings.nats_server or nats.install_nats_server(settings.cache_directory)
         store = settings.state_directory / "nats"
@@ -77,16 +88,29 @@ def run(settings: Settings) -> int:
             cancelled=shutdown.requested,
         )
         nats_url = f"nats://{settings.host}:{settings.nats_port}"
-        processes = [ProcessState("nats", children["nats"].pid, nats_url)]
+        processes.append(ProcessState("nats", children["nats"].pid, nats_url, Status.READY))
+        ready_files: dict[str, Path] = {}
         for name, module in services.SERVICES:
-            children[name] = services.start(module, sys.stdout.buffer, nats_url=nats_url)
+            environment = {}
+            if variable := services.READY_FILE_VARIABLES.get(name):
+                ready_files[name] = services.ready_file(settings.state_directory, name)
+                ready_files[name].unlink(missing_ok=True)
+                environment[variable] = str(ready_files[name])
+            children[name] = services.start(module, sys.stdout.buffer, nats_url=nats_url, environment=environment)
             processes.append(ProcessState(name, children[name].pid, ""))
+        for index, process in enumerate(processes):
+            if ready_file := ready_files.get(process.name):
+                try:
+                    processes[index] = _wait_until_ready(process.name, children[process.name], ready_file, shutdown)
+                except NotReady:
+                    processes[index] = replace(process, status=Status.FAILED)
+                    raise
         write_state(path, SupervisorState(pid=pid, status=Status.READY, processes=processes))
         log.info("ready, NATS on %s", nats_url, extra={"services": [name for name, _ in services.SERVICES]})
         _watch(children, shutdown)
     except (nats.NatsError, NotReady, ProcessExited) as error:
         log.exception("failed; stopping")
-        write_state(path, SupervisorState(pid=pid, status=Status.FAILED, error=str(error)))
+        write_state(path, SupervisorState(pid=pid, status=Status.FAILED, processes=processes, error=str(error)))
         return EXIT_FAILED
     finally:
         stop_all(list(children.values()))

@@ -27,7 +27,7 @@ def running_state() -> SupervisorState | None:
 
 def render(state: SupervisorState) -> str:
     rows = [["supervisor", str(state.pid), state.status, ""]]
-    rows += [[process.name, str(process.pid), state.status, process.address] for process in state.processes]
+    rows += [[process.name, str(process.pid), process.status, process.address] for process in state.processes]
     return table(["NAME", "PID", "STATUS", "ADDRESS"], rows)
 
 

@@ -84,11 +84,15 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     while raw.stdout.count('"body": "ready"') < 4 and time.monotonic() < deadline:
         time.sleep(0.2)
         raw = oe("logs", "--json")
-    for service in ("cxn", "ge", "tools", "vcp"):
+    for service in ("cxn", "tools", "vcp"):
         boot = [json.loads(line) for line in raw.stdout.splitlines() if f'"service.name": "openengine-{service}"' in line]
         assert [line["body"] for line in boot][:4] == ["starting", "database configured", "nats configured", "ready"]
         assert len({line["trace_id"] for line in boot[:4]}) == 1
         assert boot[2]["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
+    # ge connects and serves before it is ready; integration_tests/test_ge.py covers it.
+    ge = [json.loads(line) for line in raw.stdout.splitlines() if '"service.name": "openengine-ge"' in line]
+    assert ge[2]["body"] == "nats connected"
+    assert ge[2]["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
 
     down = oe("down")
     assert down.returncode == 0

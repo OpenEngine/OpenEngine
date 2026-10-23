@@ -18,6 +18,9 @@ from pathlib import Path
 class Status(StrEnum):
     STARTING = "starting"
     READY = "ready"
+    """Passed its readiness check."""
+    RUNNING = "running"
+    """Started; it has no readiness check yet."""
     FAILED = "failed"
 
 
@@ -26,6 +29,7 @@ class ProcessState:
     name: str
     pid: int
     address: str
+    status: Status = Status.RUNNING
 
 
 @dataclass(frozen=True)
@@ -56,7 +60,7 @@ def read_state(path: Path) -> SupervisorState | None:
     return SupervisorState(
         pid=data["pid"],
         status=Status(data["status"]),
-        processes=[ProcessState(**process) for process in data["processes"]],
+        processes=[ProcessState(**process | {"status": Status(process.get("status", Status.RUNNING))}) for process in data["processes"]],
         error=data["error"],
     )
 

@@ -1,12 +1,13 @@
 # V2 is its own uv workspace, separate from V1's at the repository root.
 [tool.uv.workspace]
-members = ["apps/cli", "apps/supervisor", "packages/persistence", "packages/telemetry", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane"]
+members = ["apps/cli", "apps/supervisor", "packages/messaging", "packages/persistence", "packages/telemetry", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane"]
 
 [dependency-groups]
 dev = [
     "openengine-cli",
     "openengine-connection-bus",
     "openengine-graph-engine",
+    "openengine-messaging",
     "openengine-persistence",
     "openengine-telemetry",
     "openengine-tool-service",
@@ -18,6 +19,7 @@ dev = [
 
 [tool.uv.sources]
 openengine-cli = { workspace = true }
+openengine-messaging = { workspace = true }
 openengine-persistence = { workspace = true }
 openengine-telemetry = { workspace = true }
 openengine-connection-bus = { workspace = true }
@@ -29,6 +31,7 @@ openengine-virtual-control-plane = { workspace = true }
 testpaths = [
     "apps/cli/tests",
     "apps/supervisor/tests",
+    "packages/messaging/tests",
     "packages/persistence/tests",
     "packages/telemetry/tests",
     "services/connection_bus/tests",
@@ -36,6 +39,7 @@ testpaths = [
     "services/tool_service/tests",
     "services/virtual_control_plane/tests",
     "packages/contracts/tests",
+    "integration_tests",
 ]
 # Each app, package and service keeps its own tests/, so test module names may repeat.
 addopts = "-q --import-mode=importlib"
