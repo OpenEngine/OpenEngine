@@ -1845,6 +1845,9 @@ def _issue_checkout(tmp_path, git_repo, existing):
     root, remote = tmp_path / "checkout", tmp_path / "remote.git"
     git_repo(remote, bare=True)
     git_repo(root, commit=True)
+    # The runtime also commits, outside this helper's per-command identity.
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.com")
     git("remote", "add", "origin", str(remote))
     git("push", "origin", "main")
     git("checkout", "-b", "agent/issue")
