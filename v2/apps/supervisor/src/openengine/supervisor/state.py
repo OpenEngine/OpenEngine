@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
 
@@ -60,9 +60,22 @@ def read_state(path: Path) -> SupervisorState | None:
     return SupervisorState(
         pid=data["pid"],
         status=Status(data["status"]),
-        processes=[ProcessState(**process | {"status": Status(process.get("status", Status.RUNNING))}) for process in data["processes"]],
-        error=data["error"],
+        processes=[_process(process) for process in data["processes"]],
+        error=data.get("error"),
     )
+
+
+def _process(data: dict[str, object]) -> ProcessState:
+    """One process, from a file a supervisor of another version may have written.
+
+    Fields this version does not know are ignored, and a missing status reads as
+    running, so `oe status` and `oe down` still work across an upgrade.
+    """
+    known = {name: data[name] for name in _PROCESS_FIELDS if name in data}
+    return ProcessState(**known | {"status": Status(known.get("status", Status.RUNNING))})
+
+
+_PROCESS_FIELDS = tuple(field.name for field in fields(ProcessState))
 
 
 def is_alive(pid: int) -> bool:
