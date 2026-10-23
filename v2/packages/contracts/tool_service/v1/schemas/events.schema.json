@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Tool Service events",
-  "description": "Invocation lifecycle events, published on `oe.v1.events.toolinvocations.{namespace}.{invocation_id}.{event}` and captured by the `tools-events` stream. Events of one invocation are ordered. They carry references and a status summary only; results are read through the authorized `toolinvocations.get`.",
+  "description": "Invocation lifecycle events, published on `oe.v1.tools.events.invocations.{namespace}.{invocation_id}.{event}` and captured by the `tools-events` stream. Events of one invocation are ordered. They carry references and a status summary only; results are read through the authorized `tools.invocations.get`.",
   "$defs": {
     "invocation_resources": {
       "description": "`invocation_id` is the invocation's name, as in the subject.",
@@ -17,7 +17,7 @@
       }
     },
     "invocation_summary": {
-      "description": "References and a status summary. Never the result: read that through `toolinvocations.get`, which checks the reader may see it.",
+      "description": "References and a status summary. Never the result: read that through `tools.invocations.get`, which checks the reader may see it.",
       "type": "object",
       "required": [
         "namespace",
@@ -147,7 +147,7 @@
       ]
     },
     "invocation_succeeded_event": {
-      "description": "The tool finished. Read the result with `toolinvocations.get`.",
+      "description": "The tool finished. Read the result with `tools.invocations.get`.",
       "allOf": [
         {
           "$ref": "../../../common/v1/event.schema.json"
@@ -287,7 +287,7 @@
       ]
     },
     "invocation_cancelled_event": {
-      "description": "The invocation was cancelled. When `toolinvocations.cancel` caused it, it carries that command's operation.",
+      "description": "The invocation was cancelled. When `tools.invocations.cancel` caused it, it carries that command's operation.",
       "allOf": [
         {
           "$ref": "../../../common/v1/event.schema.json"

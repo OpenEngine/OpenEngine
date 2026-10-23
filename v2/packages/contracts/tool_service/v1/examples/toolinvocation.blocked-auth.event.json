@@ -1,6 +1,6 @@
 {
   "message": "ToolInvocationBlockedAuth",
-  "subject": "oe.v1.events.toolinvocations.default.ti-123.blocked-auth",
+  "subject": "oe.v1.tools.events.invocations.default.ti-123.blocked-auth",
   "headers": {
     "Nats-Msg-Id": "evt_ti123_blocked_auth"
   },

@@ -1,6 +1,6 @@
 {
   "message": "ListToolInvocationsQuery",
-  "subject": "oe.v1.toolinvocations.list",
+  "subject": "oe.v1.tools.invocations.list",
   "payload": {
     "params": {
       "namespace": "default",

@@ -1,6 +1,6 @@
 {
   "message": "DeleteToolGrantCommand",
-  "subject": "oe.v1.toolgrants.delete",
+  "subject": "oe.v1.tools.grants.delete",
   "payload": {
     "command_id": "cmd_toolgrants_delete_1",
     "causal_path": [

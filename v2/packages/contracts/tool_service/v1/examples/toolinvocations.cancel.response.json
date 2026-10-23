@@ -1,6 +1,6 @@
 {
   "message": "CancelToolInvocationResponse",
-  "in_reply_to": "oe.v1.toolinvocations.cancel",
+  "in_reply_to": "oe.v1.tools.invocations.cancel",
   "payload": {
     "command_id": "cmd_toolinvocations_cancel_1",
     "status": "accepted",

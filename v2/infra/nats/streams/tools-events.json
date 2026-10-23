@@ -2,7 +2,7 @@
   "name": "tools-events",
   "description": "What the tool service has done with each tool invocation, for any service to follow.",
   "subjects": [
-    "oe.v1.events.toolinvocations.>"
+    "oe.v1.tools.events.>"
   ],
   "retention": "limits",
   "storage": "file",

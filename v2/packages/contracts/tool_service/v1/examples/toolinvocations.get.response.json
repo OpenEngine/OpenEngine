@@ -1,6 +1,6 @@
 {
   "message": "GetToolInvocationResponse",
-  "in_reply_to": "oe.v1.toolinvocations.get",
+  "in_reply_to": "oe.v1.tools.invocations.get",
   "payload": {
     "status": "ok",
     "result": {

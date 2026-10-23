@@ -34,15 +34,11 @@ NAMES = {
     "tool_service": ("Tool Service", "tools"),
     "virtual_control_plane": ("Virtual Control Plane", "vcp"),
 }
-# Where each service's subjects live: `oe.v1.{short}.` unless listed here.
-NAMESPACES = {
-    "tool_service": ("oe.v1.tools.", "oe.v1.toolgrants.", "oe.v1.toolinvocations.", "oe.v1.events.toolinvocations."),
-}
 
 
-def namespaces(service: str) -> tuple[str, ...]:
-    """The subject prefixes a service's contract uses."""
-    return NAMESPACES.get(service, (f"oe.v1.{NAMES[service][1]}.",))
+def namespace(service: str) -> str:
+    """The prefix every subject in a service's contract starts with: `oe.v1.{short}.`."""
+    return f"oe.v1.{NAMES[service][1]}."
 
 
 def _key(path: Path) -> str:
@@ -107,7 +103,7 @@ def page(service: str) -> str:
 <body>
 <header class="banner">
   <strong>{html.escape(name)} ({short})</strong>
-  <span>Subjects {" ".join(f"<code>{prefix}…</code>" for prefix in namespaces(service))}</span>
+  <span>Subjects <code>{namespace(service)}…</code></span>
   <span>Contract only: no service implements these subjects yet.</span>
 </header>
 <main id="contract-reference"></main>

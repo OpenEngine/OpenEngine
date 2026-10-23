@@ -1,6 +1,6 @@
 {
   "message": "CancelToolInvocationCommand",
-  "subject": "oe.v1.toolinvocations.cancel",
+  "subject": "oe.v1.tools.invocations.cancel",
   "payload": {
     "command_id": "cmd_toolinvocations_cancel_1",
     "causal_path": [

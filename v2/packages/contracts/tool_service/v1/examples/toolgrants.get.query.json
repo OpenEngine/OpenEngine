@@ -1,6 +1,6 @@
 {
   "message": "GetToolGrantQuery",
-  "subject": "oe.v1.toolgrants.get",
+  "subject": "oe.v1.tools.grants.get",
   "payload": {
     "params": {
       "namespace": "default",

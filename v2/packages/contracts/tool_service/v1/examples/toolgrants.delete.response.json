@@ -1,6 +1,6 @@
 {
   "message": "DeleteToolGrantResponse",
-  "in_reply_to": "oe.v1.toolgrants.delete",
+  "in_reply_to": "oe.v1.tools.grants.delete",
   "payload": {
     "command_id": "cmd_toolgrants_delete_1",
     "status": "accepted",

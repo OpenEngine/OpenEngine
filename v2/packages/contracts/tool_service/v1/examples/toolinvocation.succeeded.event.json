@@ -1,6 +1,6 @@
 {
   "message": "ToolInvocationSucceeded",
-  "subject": "oe.v1.events.toolinvocations.default.ti-123.succeeded",
+  "subject": "oe.v1.tools.events.invocations.default.ti-123.succeeded",
   "headers": {
     "Nats-Msg-Id": "evt_ti123_succeeded"
   },

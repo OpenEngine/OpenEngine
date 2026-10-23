@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Tool Service commands",
-  "description": "Requests and responses of the tool service's control subjects: `oe.v1.tools.apply`, `oe.v1.tools.delete`, `oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.toolgrants.apply`, `oe.v1.toolgrants.delete` and `oe.v1.toolinvocations.cancel`. Payload fields are camelCase, like the resources they carry.",
+  "description": "Requests and responses of the tool service's control subjects: `oe.v1.tools.apply`, `oe.v1.tools.delete`, `oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.tools.grants.apply`, `oe.v1.tools.grants.delete` and `oe.v1.tools.invocations.cancel`. Payload fields are camelCase, like the resources they carry.",
   "$defs": {
     "resource_key": {
       "description": "A namespaced resource, by namespace and name.",

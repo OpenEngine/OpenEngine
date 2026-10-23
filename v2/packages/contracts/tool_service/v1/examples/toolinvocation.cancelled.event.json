@@ -1,6 +1,6 @@
 {
   "message": "ToolInvocationCancelled",
-  "subject": "oe.v1.events.toolinvocations.default.ti-123.cancelled",
+  "subject": "oe.v1.tools.events.invocations.default.ti-123.cancelled",
   "headers": {
     "Nats-Msg-Id": "evt_ti123_cancelled"
   },

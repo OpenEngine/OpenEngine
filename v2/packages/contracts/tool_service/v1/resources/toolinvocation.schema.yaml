@@ -7,7 +7,7 @@ description: >-
   The tool comes from the subject and the workspace from the caller's
   verified credentials. The resolved tool definition is stored with it, so
   changing the Tool later cannot change accepted work. Its result is read
-  through `oe.v1.toolinvocations.get`, never from events.
+  through `oe.v1.tools.invocations.get`, never from events.
 type: object
 required: [apiVersion, kind, metadata, spec]
 additionalProperties: false

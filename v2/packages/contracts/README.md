@@ -21,7 +21,7 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 | Defined here | Implemented |
 | -- | -- |
 | Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.query.graphs.list` (an empty page until the registry exists) and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
-| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.events.toolinvocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
 | Operation, job, execution, workspace, session and approval models | No persistence or state machine implements them. |
 | Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
@@ -141,9 +141,9 @@ are a separate format.
 
 The tool service follows its own subject layout, which separates resource
 management from execution: `oe.v1.tools.{apply,get,list,delete}`,
-`oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.toolgrants.…`,
-`oe.v1.toolinvocations.…`, and events on
-`oe.v1.events.toolinvocations.{namespace}.{invocation_id}.{event}` in the
+`oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.tools.grants.…`,
+`oe.v1.tools.invocations.…`, and events on
+`oe.v1.tools.events.invocations.{namespace}.{invocation_id}.{event}` in the
 `tools-events` stream. Its namespaces and names are subject tokens of
 lower-case letters, digits and `-` (`resource_name` in `types.schema.json`).
 

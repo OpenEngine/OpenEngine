@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 import yaml
 from openengine.contracts import reference, validate
-from openengine.contracts.reference import NAMES, namespaces
+from openengine.contracts.reference import NAMES, namespace
 from openengine.contracts.validate import CONTRACTS, SERVICES, load_contract, validate_message
 
 STREAMS = CONTRACTS.parent.parent / "infra" / "nats" / "streams"
@@ -56,13 +56,13 @@ REQUEST_SUBJECTS = {
         "oe.v1.tools.list",
         "oe.v1.tools.delete",
         "oe.v1.tools.invoke.{namespace}.{name}",
-        "oe.v1.toolgrants.apply",
-        "oe.v1.toolgrants.get",
-        "oe.v1.toolgrants.list",
-        "oe.v1.toolgrants.delete",
-        "oe.v1.toolinvocations.get",
-        "oe.v1.toolinvocations.list",
-        "oe.v1.toolinvocations.cancel",
+        "oe.v1.tools.grants.apply",
+        "oe.v1.tools.grants.get",
+        "oe.v1.tools.grants.list",
+        "oe.v1.tools.grants.delete",
+        "oe.v1.tools.invocations.get",
+        "oe.v1.tools.invocations.list",
+        "oe.v1.tools.invocations.cancel",
     },
     "virtual_control_plane": {
         "oe.v1.vcp.control.workspaces.apply",
@@ -88,9 +88,8 @@ REQUEST_SUBJECTS = {
 
 
 def is_event(address: str) -> bool:
-    """Event subjects: `oe.v1.{short}.events.…`, or `oe.v1.events.…` for the tool service."""
-    tokens = address.split(".")
-    return tokens[2] == "events" or tokens[3] == "events"
+    """Event subjects: `oe.v1.{short}.events.…`."""
+    return address.split(".")[3] == "events"
 
 
 def addresses(service: str) -> set[str]:
@@ -147,10 +146,21 @@ def test_every_request_operation_replies_with_its_own_response(service: str) -> 
 
 
 @pytest.mark.parametrize("service", SERVICES)
+def test_every_subject_is_in_its_service_namespace(service: str) -> None:
+    subjects = addresses(service) | REQUEST_SUBJECTS[service]
+    assert [subject for subject in sorted(subjects) if not subject.startswith(namespace(service))] == []
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_every_event_stream_captures_only_its_service_namespace(service: str) -> None:
+    filters = json.loads((STREAMS / f"{NAMES[service][1]}-events.json").read_text())["subjects"]
+    assert filters == [f"{namespace(service)}events.>"]
+
+
+@pytest.mark.parametrize("service", SERVICES)
 def test_events_land_in_their_stream_and_requests_in_none(service: str) -> None:
     streams = {path.stem: json.loads(path.read_text())["subjects"] for path in STREAMS.glob("*.json")}
     for address in addresses(service):
-        assert address.startswith(namespaces(service)), address
         concrete = ".".join("x" if token.startswith("{") else token for token in address.split("."))
         captured = [name for name, filters in streams.items() if any(nats_matches(f, concrete) for f in filters)]
         if is_event(address):
