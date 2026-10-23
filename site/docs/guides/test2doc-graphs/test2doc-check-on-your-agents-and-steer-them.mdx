@@ -18,27 +18,27 @@ Start the graph without the live screen. Type `oe graph run describe-project --n
 
 Your terminal comes straight back, and the run goes on in OpenEngine's background program. You'll see its run ID, starting with `run-`: copy it, because the next commands need it. You can also find it later in the **RUN ID** column of `oe runs list`.
 
-![screenshot](./test2doc-a5981df0fd2c.png)
+![screenshot](./test2doc-40733ec04ea3.png)
 
 Open the live screen so you can answer an agent's questions and read what it is doing. Type `oe run watch` followed by your run ID, and press Enter.
 
 If you declined repository trust in the previous guide, the read step may be waiting for permission to read README.md. The run waits until you answer; waiting longer won't move it along.
 
-![screenshot](./test2doc-816dc3d8f71c.png)
+![screenshot](./test2doc-1cd4a261d2f5.png)
 
 Read the question. Here the agent asks to run `cat README.md`, which reads the file describing your project. Type `y` and press Enter to allow it.
 
 Answer any further permission questions the same way if you want to allow the action. Then watch the lines after ┃: they show the agent's words and actions. Here the suggest agent says it will suggest a new project name. That's the direction we'll correct. Your agent's words may differ, and a short step may finish before you can steer it.
 
-![screenshot](./test2doc-077ec79c0fa0.png)
+![screenshot](./test2doc-e5ceb739746f.png)
 
 To return to your terminal while the agent keeps working, press Ctrl-C. The screen asks what you want to do.
 
-![screenshot](./test2doc-3f8f17d56b27.png)
+![screenshot](./test2doc-24f5b8f97921.png)
 
 Type `d` and press Enter to detach: close this screen and leave the run going. You can now check individual steps and send your message.
 
-![screenshot](./test2doc-f28d7d283029.png)
+![screenshot](./test2doc-bb81751d471b.png)
 
 To see which steps are running or finished, type `oe nodes --run` followed by your run ID, and press Enter.
 
@@ -46,13 +46,13 @@ You'll see one row for each step that has started so far. **NODE** is the step's
 
 Here `read` is done and `suggest` is working. If you see only `read`, the run hasn't reached `suggest` yet; wait a moment and run the command again.
 
-![screenshot](./test2doc-104873684d04.png)
+![screenshot](./test2doc-c9219f002b1b.png)
 
 To look at just that one step, type `oe node get` followed by the ID you copied, and press Enter.
 
 You'll see the same row on its own. It's a quick way to check on one agent while it works.
 
-![screenshot](./test2doc-82b83b34e621.png)
+![screenshot](./test2doc-b344b600eb68.png)
 
 You saw the `suggest` agent propose a new name for your project, and you only wanted its README's wording improved. Tell it so. Type `oe node steer`, the ID you copied, and your message in quotes, then press Enter:
 
@@ -64,7 +64,7 @@ Put your own step's ID where it says `EXECUTION`. OpenEngine takes your message 
 
 If you see *only a running attempt can be steered*, the step is no longer running. Check its **STATUS** with `oe node get`; you can only redirect an agent while it is working.
 
-![screenshot](./test2doc-e812a56a9ade.png)
+![screenshot](./test2doc-9b55c7712ba9.png)
 
 To see whether the agent took your message on board, type `oe node get` and the step's ID again, and press Enter.
 
@@ -72,13 +72,13 @@ Below the step's row there's now a list of the messages you've sent it. **STATUS
 
 If a message says *undelivered*, it never reached the agent: for example, the step finished before receiving it. If it says *rejected*, OpenEngine no longer has a live connection to that agent for this step. Check the step’s **STATUS** before deciding what to do next; these messages did not change the agent’s course.
 
-![screenshot](./test2doc-d77a7a903311.png)
+![screenshot](./test2doc-58b50f55201d.png)
 
 Type `oe runs list` and press Enter.
 
 There's still just the one run, and once `suggest` is done it says *completed*. You changed the agent's course without starting the work over.
 
-![screenshot](./test2doc-1fdd526080be.png)
+![screenshot](./test2doc-e7a23fb415c3.png)
 
 ## See which agents you can use
 
@@ -87,7 +87,7 @@ A graph names the agent that does each step, such as `agent: claude`. To see whi
 
 You'll see one row for each agent. **NAME** is what a graph calls it, and **KIND** is the AI coding assistant behind it. The ones marked *built in* are there from the start: `claude` is Claude Code, `codex` is Codex, and `opencode` is OpenCode. The **RUNNER** column of `oe nodes` shows these same names. To use one, its assistant must be installed and signed in on the computer the run happens on.
 
-![screenshot](./test2doc-b986367905ec.png)
+![screenshot](./test2doc-8a7459a5adcf.png)
 
 Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).
 

@@ -86,6 +86,12 @@ The CLI reads that variable from the process environment first, then from
 they stay out of shell history, and run `chmod 600 ~/.config/openengine/.env`
 so only your account can read it.
 
+If an existing installation already has `ENGINE_SERVICE_TOKEN` set, upgrading
+also protects its web UI and local CLI, even without GitHub login. The local
+CLI reads the token from the same `.env` file; enter that token on the browser
+sign-in screen. Signing out revokes that browser's session, and restarting
+OpenEngine signs out all token sessions.
+
 Reaching a Mac mini: `oe daemon` binds loopback only, so expose it over
 something you trust — an SSH tunnel (`ssh -NL 4365:127.0.0.1:4364 mac-mini`,
 then add `http://127.0.0.1:4365`) or a tailnet. If the daemon has GitHub login
