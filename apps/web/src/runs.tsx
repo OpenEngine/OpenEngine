@@ -1079,6 +1079,13 @@ export function RunDetailPage({ runId }: { runId: string }) {
                 </a>
               } />
             )}
+            {run.childRuns?.map((child) => (
+              <Stat key={child.runId} label={`Child of ${child.step}`} value={
+                <a href={`/runs/${encodeURIComponent(child.runId)}`}>
+                  {child.runId} · {child.status}
+                </a>
+              } />
+            ))}
             <Stat label="Current step" value={run.currentStepId ?? "—"} />
             <Stat label="Final outcome" value={run.terminalOutcome ?? "In progress"} />
             {run.usage && <Stat label="Usage" value={usageLabel(run.usage)} />}

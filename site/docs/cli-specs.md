@@ -41,6 +41,7 @@ Supported YAML fields (from parser validation):
 | checkout | `base_ref`, `description`, `name`, `ref` |
 | human step | `description`, `human`, `name` |
 | human | `choose`, `prompt` |
+| graph step | `description`, `graph`, `inputs`, `name` |
 | ci step | `ci`, `description`, `name` |
 | agent step | `agent`, `description`, `facets`, `model`, `name`, `outputs`, `prompt`, `steering`, `tools` |
 | runner | `choices`, `not`, `same` |
@@ -88,7 +89,23 @@ A step's keys determine its kind:
   on any backend and a run naming an absent runner is refused.
 - `human`: a question, or `{prompt, choose}` for a person to select findings.
 - `ci: true`: wait for CI on the change.
+- `graph: NAME` (or `NAME@VERSION`): start a registered child graph in the
+  same project and wait for it. `inputs` maps declared child input names
+  to literals or `${...}` templates, including structured `${json(...)}`.
+  Required child inputs must be supplied; unknown inputs and recursive calls
+  are rejected at registration, with the call path in the error.
 - None of these keys: the checkout.
+
+Child versions, including transitive dependencies, are resolved when the
+parent starts and saved with its checkpoint state. Explicit `@VERSION`
+pins a particular version. The child inherits the repository, workspace
+and branch; pass `pr_url` or `ref` as child inputs where required. Its
+final step's declared outputs become `outputs.STEP`, preserving their
+types (for example `outputs.review.findings`). Child failure fails the
+calling step with the child's error; cancelling the parent cancels the
+child. Child approvals and human steps use their normal run feed.
+`oe run get` lists children under their calling step and shows the parent
+on a child. Loop spend and PR limits include descendant runs.
 
 Steps accept `name` and `description`. Agent steps also accept `tools`,
 `outputs`, `model`, `steering` and `facets`. Tools must be

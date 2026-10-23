@@ -74,6 +74,8 @@ class WorkspaceNode:
     """
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
+        if state.get("_parent_run_id") and state.get("workspace"):
+            return {key: state[key] for key in ("workspace", "workspaceRef", "workspaceId") if key in state}
         execution = current_execution()
         repository = self.repository or str(state.get(REPOSITORY) or ".")
         inputs = state.get("inputs")

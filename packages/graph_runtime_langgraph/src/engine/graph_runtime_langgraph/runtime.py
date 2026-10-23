@@ -255,6 +255,7 @@ class LangGraphRuntime:
         metadata = existing.metadata if existing else RunMetadata(
             prompt=str(values.get("task") or ""), repository=str(values.get("repository") or ""),
             inputs={str(key): str(value) for key, value in inputs.items()}, created_at=now,
+            parent_run_id=RunId(str(values["_parent_run_id"])) if values.get("_parent_run_id") else None,
         )
         await self._store.save_metadata(run_id, graph_id, replace(metadata, scheduled=False, started_at=now))
         live = _Live(run_id, graph_id)

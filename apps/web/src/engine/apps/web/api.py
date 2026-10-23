@@ -1497,6 +1497,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                     inputs=dict(request.inputs),
                     prompt=request.instruction,
                     repository=request.repository,
+                    parent_run_id=request.parent_run_id,
+                    initial_values=request.values,
                 )
             except ValueError as error:
                 from engine.graph_service import ServiceError
@@ -1996,6 +1998,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         parent_run_id: RunId | None = None,
         depends_on_run_id: RunId | None = None,
         requester: str | None = None,
+        initial_values: Mapping[str, Any] | None = None,
     ) -> RunState:
         """Hand a graph WorkOrder to the graph engine and keep a row for it.
 
@@ -2021,8 +2024,11 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
+        if initial_values is None and surface.service is not None:
+            initial_values = surface.service.run_values(str(graph.graph_id))
         claim_target = (surface.service.claims_pull_request(str(graph.graph_id))
                         if surface.service is not None else graph.graph_id in ("fix", "review"))
+        claim_target = claim_target and not (initial_values or {}).get("_parent_step")
         validate_started_pull_request(claim_target, inputs, run_project(repository))
         if requester is None and scheduled is not None:
             requester = scheduled.requester
@@ -2099,6 +2105,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             snapshot = await runtime.start(
                 GraphId(str(graph.graph_id)),
                 {
+                    **(initial_values or {}),
+                    **({"_parent_run_id": parent_run_id} if parent_run_id else {}),
                     "task": prompt,
                     "repository": repository,
                     **({"inputs": inputs} if inputs else {}),
@@ -2301,8 +2309,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             return _error("run not found", 404)
         # The WorkOrder's usage is its run's: summed from what each node's
         # agent reported, so it is read here rather than stored on the row.
+        children = await _registered_child_runs(surface.service, run_id)
         return JSONResponse({
-            **_run_json(run), "usage": usage_rollup(graph_events.since(run_id)).json(),
+            **_run_json(run), "usage": usage_rollup(graph_events.since(run_id)).json(), **children,
         })
 
     async def delete_run(request: Request) -> Response:
@@ -4948,6 +4957,16 @@ async def _missing_frontend(_request: Request) -> Response:
         status_code=503,
         media_type="text/plain",
     )
+
+
+async def _registered_child_runs(service: GraphService | None, run_id: RunId) -> dict[str, Any]:
+    if service is None:
+        return {}
+    try:
+        children = (await service.run_json(str(run_id)))["childRuns"]
+    except NotFound:
+        return {}
+    return {"childRuns": children} if children else {}
 
 
 __all__ = ["ChatThread", "ThreadService", "create_app"]

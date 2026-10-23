@@ -1,0 +1,55 @@
+apiVersion: openengine.cc/v1
+kind: Graph
+name: adversarial-review
+description: Review a change, challenge every finding, and publish the survivors.
+inputs:
+  pr_url: {required: true, description: Pull request to review}
+  goal: {default: "", description: Goal and context for the change}
+  reviewer: {default: claude, choices: [claude, codex]}
+review:
+  reviewers:
+    agent: ${inputs.reviewer}
+    tools: [git_subcommand]
+    facets:
+      - facet: security
+      - facet: bugs
+      - facet: performance
+      - facet: conciseness
+      - facet: dryness
+      - facet:
+          id: attack
+          name: Attack
+          focus: Seek counterexamples, broken assumptions, and adversarial inputs.
+    prompt: |
+      Review ${inputs.pr_url} against this goal: ${inputs.goal}
+      Focus on ${item.facet.name}: ${item.facet.focus}
+      Inspect the diff and surrounding code. Do not edit files or publish.
+      Use git_subcommand for git operations. Report only actionable findings
+      supported by evidence, with concrete locations and reproductions.
+    outputs:
+      findings: {type: findings, required: true}
+  refute:
+    agent: {not: reviewers}
+    tools: [git_subcommand]
+    prompt: |
+      Try to disprove EVERY finding for ${inputs.pr_url} by inspecting the code.
+      Goal: ${inputs.goal}
+      Findings: ${json(outputs.reviewers)}
+      Check callers, guards and assumptions; look for counterevidence.
+      Do not edit files or publish. Return only findings you cannot disprove,
+      preserving their original agent and facet fields.
+    outputs:
+      findings: {type: findings, required: true, lineage: required}
+  reranker:
+    agent: ${inputs.reviewer}
+    tools: [git_subcommand, add_comment]
+    prompt: |
+      Consolidate the surviving findings for ${inputs.pr_url}.
+      Goal: ${inputs.goal}
+      Findings: ${json(outputs.refute.findings)}
+      Deduplicate and rank by impact. Inspect the code to confirm each finding.
+      Do not edit files. Post each surviving finding with add_comment,
+      preserving its agent and facet. Return the posted survivors; an empty
+      findings list is valid when none survive.
+    outputs:
+      findings: {type: findings, required: true, lineage: required}

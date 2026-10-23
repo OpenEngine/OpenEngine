@@ -71,6 +71,17 @@ Start from `apiVersion: openengine.cc/v1`, `kind: Graph`, a `name` matching
 - Declare every input the prompts use. `instruction` is built in.
 - Add a `loop` section (`every`, `instruction`) when the graph is meant to
   recur, so `oe loop add` needs no flags.
+- Reuse a registered graph with `graph: NAME` or `graph: NAME@VERSION` and
+  an `inputs` mapping. Register children first in the same project. Required
+  child inputs must be supplied; unknown names and recursive calls are rejected.
+  Values can use `${inputs.X}`, `${outputs.STEP.field}` and `${json(...)}`.
+  Child versions are pinned when the parent starts. The child shares its
+  workspace and branch; pass `pr_url` or `ref` where the child requires it.
+  The child's final step outputs become `${outputs.STEP.field}`, typed.
+  Child failure fails the calling step and parent cancellation cancels children.
+  Approvals stay on the child's run feed. `run get` shows children by step and
+  the parent on a child. Loop limits include descendant spend and PRs.
+  See `docs/examples/graphs/adversarial-review.yaml` for a reusable review block.
 - Put example graphs in `docs/examples/graphs/`; a test parses each one.
 
 ## Register and inspect

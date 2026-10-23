@@ -29,7 +29,7 @@ import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -75,6 +75,7 @@ from engine.graph_service.language import (
     STAGES,
     GraphError,
     GraphSpec,
+    NodeSpec,
     Problem,
     parse_duration,
     parse_graph,
@@ -186,6 +187,8 @@ class StartRequest:
     instruction: str
     repository: str
     inputs: Mapping[str, str]
+    values: Mapping[str, Any] = field(default_factory=dict)
+    parent_run_id: RunId | None = None
 
 
 StartRun = Callable[[GraphWorkflow, StartRequest], Awaitable[RunId]]
@@ -522,6 +525,7 @@ class GraphService:
         if not source.strip():
             raise ServiceError("the graph source is empty")
         definition: dict[str, Any]
+        spec: GraphSpec | None = None
         if format == "yaml":
             spec = _parse_yaml(source, runners=self.runners())
             graph_name, definition, digest = spec.name, {"format": "yaml", **spec.json()}, spec.digest
@@ -533,6 +537,8 @@ class GraphService:
                 raise ServiceError("a graph name is lowercase letters, digits, '.', '_' and '-'")
             definition, digest = {"format": "python"}, hashlib.sha256(source.encode()).hexdigest()
         async with self._lock:
+            if format == "yaml":
+                self._child_versions(spec, project, "registration")
             at = self._now_iso()
             version_id = f"gv-{uuid.uuid4().hex[:12]}"
             workflow = None
@@ -705,7 +711,22 @@ class GraphService:
         def runner(node_id: str) -> str:
             return _runner_of(node_id, values, overrides, topology, selected)
 
+        children = []
+        for child_record in await self.runtime.store.runs():
+            if child_record.metadata.parent_run_id == RunId(run_id):
+                child_events = self.runtime.store.events_since(child_record.run_id)
+                ready = any(event.kind is EventKind.CHECKPOINT for event in child_events)
+                child_snapshot = await self.runtime.snapshot(child_record.run_id) if ready else None
+                child_values = next((event.payload.get("values", {}) for event in child_events
+                                     if event.kind is EventKind.RUN_STARTED), {})
+                children.append({
+                    "runId": str(child_record.run_id), "step": child_values.get("_parent_step"),
+                    "status": ("cancelled" if child_snapshot.error == CANCELLED else child_snapshot.status.value)
+                    if child_snapshot else "starting",
+                })
         return {
+            "parentRunId": str(record.metadata.parent_run_id) if record and record.metadata.parent_run_id else None,
+            "childRuns": children,
             "forgeContext": dict(snapshot.forge_context),
             "runId": run_id,
             "name": run_name(record.metadata if record else RunMetadata(), dict(values), RunId(run_id)),
@@ -1097,12 +1118,13 @@ class GraphService:
             if not run_id:
                 continue
             runs += 1
-            total = usage_rollup(self.runtime.store.events_since(RunId(run_id))).total
-            if total.cost_usd is not None:
-                spend += total.cost_usd
-            complete = complete and total.complete
-            estimated = estimated or total.estimated
-            pull_requests.update(await self.runtime.store.pull_requests(RunId(run_id)))
+            for descendant in await self._run_tree(run_id):
+                total = usage_rollup(self.runtime.store.events_since(RunId(descendant))).total
+                if total.cost_usd is not None:
+                    spend += total.cost_usd
+                complete = complete and total.complete
+                estimated = estimated or total.estimated
+                pull_requests.update(await self.runtime.store.pull_requests(RunId(descendant)))
         return Accounting(spend, complete, estimated, len(pull_requests), runs)
 
     async def tick(self) -> None:
@@ -1265,6 +1287,7 @@ class GraphService:
 
     async def _enforce_spend(self, run_id: str) -> None:
         """Stop a loop's run as soon as the loop's spend reaches its cap."""
+        run_id = await self._root_run(run_id)
         loop_id = self.store.loop_for_run(run_id)
         row = self.store.loop(loop_id) if loop_id else None
         if row is None or row.max_spend_usd is None:
@@ -1310,6 +1333,7 @@ class GraphService:
                     agent_models=self._added_agents.models,
                     agent_context_limits=self._added_agents.context_limits,
                     default_base_ref=self._default_base_ref,
+                    invoke_graph=lambda node, state: self._invoke_graph(version.version_id, node, state),
                 ), spec)
             return loaded, loaded.workflow.compiled(self.runtime.checkpointer)
 
@@ -1344,16 +1368,118 @@ class GraphService:
     def _forget_source(self, version_id: str) -> None:
         (self._sources / f"{version_id.replace('-', '_')}.py").unlink(missing_ok=True)
 
+    def _child_versions(
+        self, spec: GraphSpec | None, project: str, version_id: str,
+        path: tuple[str, ...] = (),
+    ) -> dict[str, dict[str, str]]:
+        """Validate the dependency tree and capture every version before launch."""
+        if spec is None:
+            return {}
+        path = (*path, spec.name)
+        pins: dict[str, dict[str, str]] = {version_id: {}}
+        for node in spec.nodes:
+            if node.kind != "graph":
+                continue
+            where = f"{node.path}.graph"
+            target = node.graph.partition("@")[0]
+            if target in path:
+                raise GraphError([Problem(where, "recursive graph call: " + " → ".join((*path, target)))])
+            try:
+                graph, version = self.resolve(project, node.graph)
+            except ServiceError as error:
+                raise GraphError([Problem(where, str(error))]) from error
+            if graph.project != project:
+                raise GraphError([Problem(where, "child graph must belong to the same project")])
+            if graph.name in path:
+                raise GraphError([Problem(where, "recursive graph call: " + " → ".join((*path, graph.name)))])
+            child = _parse_yaml(version.source, runners=None) if version.format == "yaml" else None
+            declarations = child.inputs if child else self._loaded[version.version_id].workflow.inputs
+            names = {item.name for item in declarations} | {"instruction"}
+            problems = [Problem(f"{node.path}.inputs.{name}", "not a declared child input")
+                        for name in node.inputs if name not in names]
+            problems.extend(Problem(f"{node.path}.inputs.{item.name}", "required child input is missing")
+                            for item in declarations if item.required and not item.default
+                            and item.name not in node.inputs and item.name != "instruction")
+            if problems:
+                raise GraphError(problems)
+            pins[version_id][node.id] = version.version_id
+            pins.update(self._child_versions(child, project, version.version_id, path))
+        return pins
+
+    async def _invoke_graph(self, version_id: str, node: NodeSpec, state: Mapping[str, Any]) -> Any:
+        from engine.graph_runtime_langgraph import current_execution
+
+        execution = current_execution()
+        pinned = state["_graph_versions"][version_id][node.id]
+        version = self._version(pinned)
+        instruction = str(node.inputs.get("instruction") or state.get("task") or "Run child graph")
+        # Inputs cross the existing string-valued run boundary as JSON, while
+        # the child's validated outputs return as their native values.
+        given = {key: json.dumps(value) if isinstance(value, (dict, list)) else value
+                 for key, value in node.inputs.items() if key != "instruction"}
+        parent_inputs = state.get("inputs") or {}
+        if parent_inputs.get("mode"):
+            given.setdefault("mode", parent_inputs["mode"])
+        request = self._start_request(version, instruction, given, str(state.get("repository") or ""))
+        inherited = {key: state[key] for key in (
+            "workspace", "workspaceRef", "workspaceId", "branch", "pr_url", "coAuthor", "issue", "_graph_versions",
+        ) if key in state}
+        request = replace(request, values={**inherited, "_parent_step": node.id}, parent_run_id=execution.run_id)
+        starting = asyncio.create_task(self._start_version(version, request))
+        child_id = None
+        try:
+            child_id = await asyncio.shield(starting)
+            await execution.say(f"Child run {child_id} ({node.graph})")
+            while True:
+                child = await self.run_json(str(child_id))
+                if child["terminal"]:
+                    if child["status"] != "completed":
+                        failure = (child.get("failure") or {}).get("error") or child["status"]
+                        raise RuntimeError(f"child run {child_id} ({node.graph}) failed: {failure}")
+                    return (child.get("output") or {}).get("value", {})
+                await asyncio.sleep(0.05)
+        finally:
+            if child_id is None:
+                child_id = await starting
+            snapshot = await self.runtime.snapshot(child_id)
+            if snapshot and snapshot.status not in TERMINAL_RUN_STATUSES:
+                await self.runtime.cancel(child_id)
+
+    async def _run_tree(self, run_id: str) -> list[str]:
+        records = await self.runtime.store.runs()
+        found = [run_id]
+        for parent in found:
+            found.extend(str(row.run_id) for row in records if str(row.metadata.parent_run_id or "") == parent
+                         and str(row.run_id) not in found)
+        return found
+
+    async def _root_run(self, run_id: str) -> str:
+        while (record := await self.runtime.store.run(RunId(run_id))) and record.metadata.parent_run_id:
+            run_id = str(record.metadata.parent_run_id)
+        return run_id
+
+    def run_values(self, version_id: str) -> dict[str, Any]:
+        loaded = self._loaded.get(version_id)
+        version = self.store.version(version_id)
+        if loaded is None or version is None:
+            return {}
+        graph = self.store.graph(version.graph_id)
+        return {"_graph_versions": self._child_versions(loaded.spec, graph.project if graph else "", version_id)}
+
     async def _start_version(self, version: VersionRow, request: StartRequest) -> RunId:
         loaded = self._loaded.get(version.version_id)
         if loaded is None:
             raise Unavailable(f"graph version {version.version_id} is not loaded on this backend")
+        if "_graph_versions" not in request.values:
+            request = replace(request, values={**request.values, **self.run_values(version.version_id)})
         return await self._start(loaded.workflow, request)
 
     async def _start_directly(self, workflow: GraphWorkflow, request: StartRequest) -> RunId:
         snapshot = await self.runtime.start(
             workflow.graph_id,
             {
+                **request.values,
+                **({"_parent_run_id": request.parent_run_id} if request.parent_run_id else {}),
                 "task": request.instruction,
                 "repository": request.repository,
                 **({"inputs": dict(request.inputs)} if request.inputs else {}),

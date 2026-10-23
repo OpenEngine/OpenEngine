@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -119,7 +119,7 @@ class Branch:
 class NodeSpec:
     id: str
     kind: str
-    """`agent`, `human`, `triage` or `ci`."""
+    """`agent`, `human`, `triage`, `ci` or `graph`."""
     stage: str
     """`plan`, `implement` or `review`: the section it is written in."""
     name: str = ""
@@ -131,6 +131,8 @@ class NodeSpec:
     outputs: tuple[OutputSpec, ...] = ()
     always_open: bool = False
     parallel: tuple[Branch, ...] = ()
+    graph: str = ""
+    inputs: Mapping[str, Any] = field(default_factory=dict)
     choose: str = ""
     """For `triage`: the expression naming the findings a person picks from."""
 
@@ -370,10 +372,10 @@ def _steps(raw: Mapping[str, Any], problem: Any) -> list[Step]:
 
 
 def _kind(value: object) -> str:
-    """`agent`, `human` or `ci`; "" for the checkout, "?" for a step with several."""
+    """The executable kind; empty for checkout, "?" for several kinds."""
     if not isinstance(value, Mapping):
         return ""
-    kinds = [key for key in ("agent", "human", "ci") if key in value]
+    kinds = [key for key in ("agent", "human", "ci", "graph") if key in value]
     return kinds[0] if len(kinds) == 1 else "?" if kinds else ""
 
 
@@ -422,7 +424,7 @@ def _nodes(
         kind = _kind(value)
         if kind in ("", "?"):
             if kind == "?":
-                problem(where, "must have only one of agent, human or ci")
+                problem(where, "must have only one of agent, human, ci or graph")
             continue
         assert isinstance(value, Mapping)
         common = {
@@ -431,6 +433,17 @@ def _nodes(
         }
         if kind == "agent":
             found.append(_agent(node_id, value, stage, common, inputs, runners, agents, problem))
+        elif kind == "graph":
+            _known(value, FIELDS["graph step"], f"{where}.", problem)
+            reference = value["graph"]
+            if not isinstance(reference, str) or not reference.strip():
+                problem(f"{where}.graph", "must name a registered graph, optionally NAME@VERSION")
+                reference = ""
+            given = value.get("inputs", {})
+            if not isinstance(given, Mapping) or not all(isinstance(key, str) for key in given):
+                problem(f"{where}.inputs", "must map child input names to values")
+                given = {}
+            found.append(NodeSpec(node_id, "graph", stage, graph=reference.strip(), inputs=dict(given), **common))
         elif kind == "human":
             _known(value, FIELDS["human step"], f"{where}.", problem)
             human = value["human"]
@@ -835,6 +848,11 @@ def _references(spec: GraphSpec, input_names: set[str], problem: Any) -> None:
                 parsed = _template(text, f"{where}.{field_name}", problem)
                 for expression in parsed.expressions if parsed else ():
                     check(expression, f"{where}.{field_name}", node.id, item=parallel)
+        for name, value in node.inputs.items():
+            for text in _input_templates(value):
+                parsed = _template(text, f"{where}.inputs.{name}", problem)
+                for expression in parsed.expressions if parsed else ():
+                    check(expression, f"{where}.inputs.{name}", node.id, item=False)
         if node.choose:
             check(parse(node.choose), f"{where}.human.choose", node.id, item=False)
     if spec.naming and spec.naming.model:
@@ -917,6 +935,17 @@ def _known(raw: Mapping[str, Any], allowed: set[str], prefix: str, problem: Any)
     for key in raw:
         if key not in allowed:
             problem(f"{prefix}{key}", f"unknown field; expected one of {', '.join(sorted(allowed))}")
+
+
+def _input_templates(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _input_templates(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _input_templates(item)
 
 
 __all__ = [

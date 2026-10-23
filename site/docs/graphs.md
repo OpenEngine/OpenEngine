@@ -168,3 +168,35 @@ oe node steer EXECUTION_ID "Use the existing retry helper instead" --wait
 Steering sends a running agent an updated instruction for its next turn. It moves from `accepted` to `delivered` to `applied`, or ends `rejected` or `undelivered` when the attempt has no live session. Steering is not a retry and not an approval.
 
 To run something on a schedule, add a [loop](loops.md). Every command is in the [CLI reference](cli-reference.md).
+
+## Call a registered graph
+
+Register `docs/examples/graphs/adversarial-review.yaml` before registering a
+caller in the same project. A step can replace an inline review block:
+
+```yaml
+review:
+  review:
+    graph: adversarial-review
+    inputs:
+      pr_url: ${outputs.implement.pr_url}
+      goal: ${instruction}
+      reviewer: ${inputs.reviewer}
+  report:
+    agent: ${inputs.reviewer}
+    prompt: "Surviving findings: ${json(outputs.review.findings)}"
+```
+
+Declare `reviewer` in the caller's inputs and have `implement` declare `pr_url`.
+Use `graph: adversarial-review@1` to select a version explicitly. Otherwise all
+child versions are pinned when the parent run starts. Register child graphs
+first; registration checks their required inputs, rejects unknown input names,
+and rejects recursive calls with their path.
+
+The child shares the parent's repository, workspace and branch. Its final
+step's declared outputs become the calling step's outputs with their original
+types. Child failure fails the caller with its error, and cancelling the parent
+cancels the child. Approvals and human questions appear on the child's normal
+run feed. `oe run get` shows child IDs under their calling step and the parent
+ID on a child; the web run page links both directions. Loop spend and PR limits
+include descendants.

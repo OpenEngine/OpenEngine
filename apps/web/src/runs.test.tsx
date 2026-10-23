@@ -769,10 +769,12 @@ describe("RunDetailPage", () => {
     expect(screen.getByRole("heading", { name: "Work stage" })).toBeVisible();
   });
 
-  it("links to the workorder that created this one", async () => {
+  it("links to the parent and child workorders", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path === "/api/runs/run-1") return json(run({ parentRunId: "parent-run" }));
+      if (path === "/api/runs/run-1") return json(run({ parentRunId: "parent-run", childRuns: [
+        { runId: "child-run", step: "review", status: "awaiting_approval" },
+      ] }));
       if (path === "/graph/api/runs/run-1") return json({
         runId: "run-1", graphId: "work-v1", status: "completed",
         activeExecutions: [], nextNodes: [], pendingApprovals: [], values: {}, error: "",
@@ -784,6 +786,9 @@ describe("RunDetailPage", () => {
     render(<RunDetailPage runId="run-1" />);
     expect(await screen.findByRole("link", { name: "parent-run" })).toHaveAttribute(
       "href", "/runs/parent-run",
+    );
+    expect(screen.getByRole("link", { name: "child-run · awaiting_approval" })).toHaveAttribute(
+      "href", "/runs/child-run",
     );
   });
 

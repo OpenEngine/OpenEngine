@@ -952,6 +952,10 @@ def _show_run(run: dict[str, Any], backend: Backend, pretty: bool) -> int:
         if context := run.get("forgeContext"):
             print(context["summary"])
         print(f"{run['runId']}  {run['graph']} v{run['version']}  {run['status']}")
+        if run.get("parentRunId"):
+            print(live.safe_text(f"parent: {run['parentRunId']}"))
+        for child in run.get("childRuns") or []:
+            print(live.safe_text(f"  [{child['step']}] child {child['runId']}  {child['status']}"))
         if run.get("nodes"):
             _table(run["nodes"], _NODE_COLUMNS)
         for node, value in (run.get("results") or {}).items():

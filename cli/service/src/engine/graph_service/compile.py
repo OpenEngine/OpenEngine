@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -111,6 +111,7 @@ def compile_graph(
     agent_models: Mapping[str, str] | None = None,
     agent_context_limits: Mapping[str, int] | None = None,
     default_base_ref: str = "origin/HEAD",
+    invoke_graph: Callable[[NodeSpec, Mapping[str, Any]], Awaitable[Any]] | None = None,
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
     tiers = merge_model_tiers(model_tiers)
@@ -145,7 +146,7 @@ def compile_graph(
             builder.add_node(key, _node(
                 node, key, branch.item if branch else None, groups,
                 registry=registry, runners=runners, tiers=tiers, session_config=session_config,
-                agent_models=models, context_limits=context_limits,
+                agent_models=models, context_limits=context_limits, invoke_graph=invoke_graph,
             ))
 
     def keys_of(name: str) -> list[str]:
@@ -225,6 +226,7 @@ def _node(
     agent_models: Mapping[str, str],
     context_limits: Mapping[str, int],
     session_config: Mapping[str, object] | None,
+    invoke_graph: Callable[[NodeSpec, Mapping[str, Any]], Awaitable[Any]] | None = None,
 ) -> Any:
     label = node.name or node.id
     if item is not None:
@@ -235,6 +237,8 @@ def _node(
         "graph_node_description": node.description,
         "graph_node_group": STAGE_GROUPS[node.stage],
     }
+    if node.kind == "graph":
+        return GraphCallNode(spec=node, groups=groups, invoke=invoke_graph, **common)
     if node.kind == "human":
         return GraphHumanNode(state_key=key, **({"prompt": node.prompt} if node.prompt else {}), **common)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     if node.kind == "triage":
@@ -646,6 +650,36 @@ def _typed(value: object, kind: str) -> bool:
     if kind == "object":
         return isinstance(value, Mapping)
     return True
+
+
+def render_inputs(value: Any, names: Mapping[str, Any]) -> Any:
+    """Preserve structured values in whole-expression input bindings."""
+    if isinstance(value, str):
+        parsed = template(value)
+        return parsed.single.evaluate(names) if parsed.single else parsed.render(names)
+    if isinstance(value, Mapping):
+        return {key: render_inputs(item, names) for key, item in value.items()}
+    if isinstance(value, list):
+        return [render_inputs(item, names) for item in value]
+    return value
+
+
+@dataclass(frozen=True, kw_only=True)
+class GraphCallNode:
+    spec: NodeSpec
+    groups: Groups
+    invoke: Callable[[NodeSpec, Mapping[str, Any]], Awaitable[Any]] | None
+    graph_node_name: str = "Graph"
+    graph_node_description: str = ""
+    graph_node_group: str = ""
+    graph_node_kind: str = "graph"
+
+    async def __call__(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        if self.invoke is None:
+            raise RuntimeError("child graph execution requires the graph service")
+        node = replace(self.spec, inputs=render_inputs(self.spec.inputs, environment(state, self.groups)))
+        result = await self.invoke(node, state)
+        return {self.spec.id: result, visits_key(self.spec.id): int(state.get(visits_key(self.spec.id)) or 0) + 1}
 
 
 __all__ = ["DEFAULT_MODEL_TIERS", "compile_graph", "environment"]

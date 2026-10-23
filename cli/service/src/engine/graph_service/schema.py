@@ -24,6 +24,7 @@ FIELDS = {
     "checkout": {"base_ref", "ref", "name", "description"},
     "human step": {"human", "name", "description"},
     "human": {"prompt", "choose"},
+    "graph step": {"graph", "inputs", "name", "description"},
     "ci step": {"ci", "name", "description"},
     "agent step": {
         "agent", "name", "description", "tools", "outputs", "facets",

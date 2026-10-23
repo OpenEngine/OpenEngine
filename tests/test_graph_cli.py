@@ -802,3 +802,13 @@ def test_review_backend_rejects_onboarding_credentials_before_submit(monkeypatch
     assert main(['repo', 'add', 'owner/repo', '--review-backend', 'onboarding']) == 2
     assert 'must use service credentials' in capsys.readouterr().err
     assert recorded.requests == []
+
+
+def test_run_get_shows_parent_and_children_under_calling_step(monkeypatch, capsys):
+    serve(monkeypatch, {**RUN, "parentRunId": "run-parent", "childRuns": [
+        {"runId": "run-child", "step": "review", "status": "completed"},
+    ]})
+    assert main(["run", "get", "run-1", "--pretty"]) == 0
+    out = capsys.readouterr().out
+    assert "parent: run-parent" in out
+    assert "[review] child run-child  completed" in out
