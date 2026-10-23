@@ -4,6 +4,7 @@ import copy
 import json
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -325,6 +326,13 @@ def test_the_unmutated_bases_are_valid() -> None:
 def test_a_causal_path_of_exactly_32_elements_is_allowed() -> None:
     case = mutated(COMMAND, set_path("payload", "causal_path", [f"cmd_{n}" for n in range(31)] + ["cmd_01JAX8DIS"]))
     assert errors_for("connection_bus", case) == []
+
+
+def test_resolves_schemas_under_a_path_with_spaces(tmp_path: Path) -> None:
+    schema = tmp_path / "with space" / "name.schema.yaml"
+    schema.parent.mkdir()
+    schema.write_text("type: string\n")
+    assert validate._retrieve(schema.as_uri()).contents == {"type": "string"}
 
 
 @pytest.mark.integration

@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import yaml
 from jsonschema import Draft7Validator, FormatChecker
@@ -84,7 +86,7 @@ class NonLocalReference(LookupError):
 def _retrieve(uri: str) -> Resource:
     if not uri.startswith("file://"):
         raise NonLocalReference(uri)
-    return Resource.from_contents(_load(Path(uri.removeprefix("file://"))), default_specification=DRAFT7)
+    return Resource.from_contents(_load(Path(url2pathname(urlsplit(uri).path))), default_specification=DRAFT7)
 
 
 @cache
