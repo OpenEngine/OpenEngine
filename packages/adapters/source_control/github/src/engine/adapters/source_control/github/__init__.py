@@ -527,18 +527,18 @@ class GitHubSourceControl:
             include("review_location", {key: review.get(key) for key in (
                 "id", "body", "path", "line", "original_line", "side", "diff_hunk", "in_reply_to_id",
             )})
-            comments = await self._api("GET", f"{root}/pulls/{number}/comments?per_page=100&sort=created&direction=desc")
+            comments = _objects(await self._api("GET", f"{root}/pulls/{number}/comments?per_page=100&sort=created&direction=desc"))
             thread_root = review.get("in_reply_to_id") or comment_id
             include("review_conversation", [entry for entry in comments if
                 entry.get("id") == thread_root or entry.get("in_reply_to_id") == thread_root])
             if len(comments) == 100:
                 missing.append("Review conversation limited to the latest 100 PR comments")
         include("pull_request", {key: pull.get(key) for key in ("title", "body", "head", "base", "html_url")})
-        files = await self._api("GET", f"{root}/pulls/{number}/files?per_page=100")
+        files = _objects(await self._api("GET", f"{root}/pulls/{number}/files?per_page=100"))
         include("files", files)
         if len(files) == 100:
             missing.append("Changed files limited to the first 100")
-        commits = await self._api("GET", f"{root}/pulls/{number}/commits?per_page=20")
+        commits = _objects(await self._api("GET", f"{root}/pulls/{number}/commits?per_page=20"))
         include("commits", commits)
         if len(commits) == 20:
             missing.append("Commit history limited to the first 20")
