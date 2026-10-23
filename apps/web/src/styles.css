@@ -23,6 +23,7 @@
   --fill: #e7e6e3;
   --fill-hover: #dedcd7;
   --white: #ffffff;
+  --bright: #ffffff;
   --rule: #d4d3cf;
 
   --flame: #e8452b;
@@ -54,9 +55,11 @@
 }
 
 /* Dark mode, chosen in settings: the paper turns to night and the ink to
- *  paper. The rail is already night, so only the page side changes. */
+ *  paper. The rail is already night, so only the page side changes. --white
+ *  is a surface and darkens with it; --bright is white ink printed on flame
+ *  or on the rail, and stays white in both themes. */
 :root[data-theme="dark"] {
-  --ink: #f4f3f1;
+  --ink: var(--night-ink);
   --ink-soft: #cfcec9;
   --muted: #a3a39c;
   --faint: #85857f;
@@ -64,7 +67,7 @@
   --paper: #161615;
   --fill: #222220;
   --fill-hover: #2c2c2a;
-  --white: #1c1c1b;
+  --white: var(--night-raised);
   --rule: #3a3a37;
 
   --flame-wash: #3a1d17;
@@ -73,9 +76,6 @@
 
   color-scheme: dark;
 }
-/* White printed on flame stays white; --white is a surface in the dark. */
-:root[data-theme="dark"] .btn-primary,
-:root[data-theme="dark"] .rail-mark { color: #ffffff; }
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
@@ -121,7 +121,7 @@ ul, ol { padding: 0; list-style: none; }
 .btn:hover:enabled, a.btn:hover { background: var(--fill); }
 .btn:disabled { cursor: default; opacity: .4; }
 .btn-primary {
-  color: var(--white);
+  color: var(--bright);
   background: var(--flame);
   border-color: var(--flame);
 }
@@ -206,7 +206,7 @@ ul, ol { padding: 0; list-style: none; }
   width: 40px;
   height: 40px;
   padding: 7px;
-  color: var(--white);
+  color: var(--bright);
   background: var(--flame);
 }
 .rail-wordmark { font-size: 21px; font-weight: 800; letter-spacing: -.025em; }
@@ -250,7 +250,7 @@ ul, ol { padding: 0; list-style: none; }
   border: 1px solid transparent; cursor: pointer;
 }
 .rail-filter-toggle:hover, .rail-filter-toggle:focus-visible { border-color: var(--night-ink); }
-.rail-filter-toggle[data-active] { color: var(--white); border-color: var(--night-muted); }
+.rail-filter-toggle[data-active] { color: var(--bright); border-color: var(--night-muted); }
 .rail-filter-options {
   --filter-opens-up: 0;
   overflow-y: auto;
@@ -281,7 +281,7 @@ ul, ol { padding: 0; list-style: none; }
 }
 .rail-head:hover { border-color: #6a6a64; }
 .rail-head:focus-visible { border-color: var(--night-ink); outline: 0; }
-.rail-section[data-open] > .rail-heading > .rail-head { color: var(--white); }
+.rail-section[data-open] > .rail-heading > .rail-head { color: var(--bright); }
 
 .rail-note {
   display: grid;
@@ -318,7 +318,7 @@ ul, ol { padding: 0; list-style: none; }
   border-color: #6a6a64;
 }
 .rail-button-primary {
-  color: var(--white);
+  color: var(--bright);
   background: var(--flame);
   border-color: var(--flame);
 }
@@ -882,7 +882,7 @@ select:disabled { cursor: default; }
 .segmented button:hover { background: var(--fill); }
 .segmented button[aria-pressed="true"] {
   position: relative;
-  color: var(--white);
+  color: var(--bright);
   background: var(--flame);
   border-color: var(--flame);
   font-weight: 700;
