@@ -360,6 +360,10 @@ def test_tdd_guide_writes_tests_first_and_bounds_its_retries() -> None:
     # Only publish opens the pull request; CI and the review find it by the URL it reports.
     assert [node.id for node in spec.nodes if "open_pull_request" in node.tools] == ["publish"]
     assert [output.name for output in spec.node("publish").outputs] == ["pr_url"]
+    # The run picks its own issue, so publish names it for the pull request to resolve.
+    publish = spec.node("publish").prompt
+    assert "`issue: ${outputs.pick.issue}`" in publish
+    assert "`issue_resolution: resolves`" in publish
     # The reranker's findings and the impact rating are posted on the pull
     # request, and the implementer answers the threads it acts on.
     assert [node.id for node in spec.nodes if "add_comment" in node.tools] == ["implement", "reranker", "impact"]

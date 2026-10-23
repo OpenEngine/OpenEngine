@@ -500,6 +500,27 @@ def test_repository_tools_are_listed_only_when_the_step_holds_them() -> None:
     ]
 
 
+def test_open_pull_request_offers_an_issue_number_for_unbound_runs() -> None:
+    """A run that picks its own issue names it when opening the pull request."""
+    response = asyncio.run(
+        _mcp_response(
+            "127.0.0.1",
+            1,
+            "unused",
+            {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list"},
+            repository_tools=("open_pull_request",),
+        )
+    )
+
+    assert response is not None
+    tool = {tool["name"]: tool for tool in response["result"]["tools"]}["open_pull_request"]
+    issue = tool["inputSchema"]["properties"]["issue"]
+    assert (issue["type"], issue["minimum"]) == ("integer", 1)
+    assert "issue" not in tool["inputSchema"]["required"]
+    # The agent is told when to pass it.
+    assert issue["description"].strip()
+
+
 def test_git_runs_against_the_step_workspace_and_returns_what_it_printed() -> None:
     """The model names the command; the broker names the workspace.
 
@@ -1776,6 +1797,193 @@ def test_issue_publication_requires_explicit_resolution_and_approval(accepted):
         assert "repository hooks and signing helpers are disabled" in request.reason
         assert "helpers still run on the host" in request.reason
         assert json.loads(request.arguments) == args
+    asyncio.run(scenario())
+
+
+class _IssueForge:
+    """The GitHub API for acme/api, holding issues `existing` and accepting pull requests."""
+
+    def __init__(self, existing: Sequence[int]) -> None:
+        self.existing = set(existing)
+        self.pulls: list[dict[str, object]] = []
+
+    async def request(self, method, path, **kwargs):
+        from engine.adapters.source_control.github.transports import GitHubTransportError
+
+        if method == "POST" and path == "/repos/acme/api/pulls":
+            self.pulls.append(kwargs["json"])
+            return {"html_url": f"https://github.com/acme/api/pull/{100 + len(self.pulls)}"}
+        if method == "GET" and path.startswith("/repos/acme/api/issues/"):
+            number = int(path.split("/")[5])
+            if number not in self.existing:
+                raise GitHubTransportError("GitHub API returned 404 Not Found")
+            if path.endswith("/comments"):
+                return []
+            return {
+                "number": number, "title": "Picked issue", "state": "open", "body": "",
+                "user": {"login": "maintainer"},
+                "html_url": f"https://github.com/acme/api/issues/{number}",
+            }
+        raise AssertionError(f"unexpected GitHub request {method} {path}")
+
+    async def download(self, path):
+        raise AssertionError(f"unexpected download {path}")
+
+
+def _issue_checkout(tmp_path, git_repo, existing):
+    """A pushed `agent/issue` branch whose workspace repository is acme/api on GitHub."""
+    import subprocess
+
+    from engine.adapters.source_control.github import GitHubSourceControl
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    root, remote = tmp_path / "checkout", tmp_path / "remote.git"
+    git_repo(remote, bare=True)
+    git_repo(root, commit=True)
+    # The runtime also commits, outside this helper's per-command identity.
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.com")
+    git("remote", "add", "origin", str(remote))
+    git("push", "origin", "main")
+    git("checkout", "-b", "agent/issue")
+    git("commit", "--allow-empty", "-m", "feat: fix the picked issue")
+    git("push", "origin", "agent/issue")
+
+    class Workspace:
+        async def root_path(self, workspace_id):
+            return str(root)
+
+    forge = _IssueForge(existing)
+    source = GitHubSourceControl("", workspace_provider=Workspace(), transport=forge)
+    # The workspace's origin is a local mirror standing in for github.com/acme/api.
+    source._repo_coords = AsyncMock(return_value=("acme", "api"))
+    return source, forge, git
+
+
+def _issue_broker(source, approval, bound=None):
+    broker = TerminalMcpBroker(
+        run_id=RunId("run"), agent_run_id=AgentRunId("agent"), step=STEP,
+        registry=TerminalResultRegistry(),
+    )
+    broker.enable_repository_tools(source, ("open_pull_request",), WorkspaceId("ws"), approval)
+    if bound is not None:
+        broker.enable_issue(bound)
+    return broker
+
+
+def test_unbound_run_links_the_issue_number_it_is_given(tmp_path, *, git_repo):
+    """A run that picked issue 9 itself opens a pull request that resolves it."""
+    source, forge, git = _issue_checkout(tmp_path, git_repo, existing=[9])
+    approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+    broker = _issue_broker(source, approval)
+    args = {
+        "branch": "agent/issue", "title": "fix: the picked issue", "body": "Change",
+        "issue": 9, "issue_resolution": "resolves",
+    }
+
+    result = asyncio.run(broker._submit(_direct_request(broker, "1", "open_pull_request", args)))
+
+    assert result == {"ok": True, "acknowledgement": "pull request opened",
+                      "output": "https://github.com/acme/api/pull/101"}
+    [pull] = forge.pulls
+    assert pull["body"].endswith("Resolves #9")
+    # The closing reference is published on the branch, as for a bound issue.
+    assert "Resolves #9" in git("log", "-1", "--format=%B")
+    assert git("ls-remote", "origin", "refs/heads/agent/issue").split()[0] == git("rev-parse", "HEAD")
+    approval.assert_awaited_once()
+
+
+def test_unbound_run_refuses_an_issue_number_missing_from_the_repository(tmp_path, *, git_repo):
+    source, forge, git = _issue_checkout(tmp_path, git_repo, existing=[9])
+    published = git("rev-parse", "HEAD")
+    broker = _issue_broker(source, AsyncMock(return_value=ApprovalDecision.ACCEPT))
+    args = {
+        "branch": "agent/issue", "title": "fix: the picked issue", "body": "Change",
+        "issue": 99, "issue_resolution": "resolves",
+    }
+
+    result = asyncio.run(broker._submit(_direct_request(broker, "1", "open_pull_request", args)))
+
+    assert result["ok"] is False
+    assert "99" in result["error"] and "issue" in result["error"].lower()
+    assert forge.pulls == []
+    assert git("ls-remote", "origin", "refs/heads/agent/issue").split()[0] == published
+
+
+@pytest.mark.parametrize("number", [8, 12])
+def test_bound_run_refuses_a_different_issue_number(number):
+    async def scenario():
+        source = AsyncMock()
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+        broker = _issue_broker(source, approval, bound={"repository": "acme/api", "number": 7})
+        args = {"branch": "agent/issue", "title": "fix: it", "body": "Change",
+                "issue": number, "issue_resolution": "resolves"}
+        result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
+        assert result["ok"] is False
+        assert "7" in result["error"] and str(number) in result["error"]
+        source.request_review.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_bound_run_accepts_its_own_issue_number():
+    async def scenario():
+        source = AsyncMock()
+        source.request_review.return_value = "https://github.com/acme/api/pull/8"
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+        bound = {"repository": "acme/api", "number": 7}
+        broker = _issue_broker(source, approval, bound=dict(bound))
+        args = {"branch": "agent/issue", "title": "fix: it", "body": "Change",
+                "issue": 7, "issue_resolution": "resolves"}
+        result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
+        assert result["ok"] is True
+        assert source.request_review.await_args.kwargs == {"issue": bound, "issue_resolution": "resolves"}
+        approval.assert_awaited_once()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", [None, "nonsense"])
+def test_issue_number_still_requires_an_issue_resolution(missing):
+    async def scenario():
+        source = AsyncMock()
+        broker = _issue_broker(source, AsyncMock(return_value=ApprovalDecision.ACCEPT))
+        args = {"branch": "agent/issue", "title": "fix: it", "body": "Change", "issue": 9}
+        if missing is not None:
+            args["issue_resolution"] = missing
+        result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
+        assert result["ok"] is False and "issue_resolution" in result["error"]
+        source.request_review.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("number", [0, -3, True, 9.0])
+def test_issue_number_must_be_a_positive_integer(number):
+    async def scenario():
+        source = AsyncMock()
+        broker = _issue_broker(source, AsyncMock(return_value=ApprovalDecision.ACCEPT))
+        args = {"branch": "agent/issue", "title": "fix: it", "body": "Change",
+                "issue": number, "issue_resolution": "resolves"}
+        result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
+        assert result["ok"] is False and "issue" in result["error"]
+        source.request_review.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_unbound_run_without_an_issue_number_opens_a_plain_pull_request():
+    async def scenario():
+        source = AsyncMock()
+        source.request_review.return_value = "https://github.com/acme/api/pull/8"
+        approval = AsyncMock(return_value=ApprovalDecision.ACCEPT)
+        broker = _issue_broker(source, approval)
+        args = {"branch": "agent/change", "title": "feat: change", "body": "Change"}
+        result = await broker._submit(_direct_request(broker, "1", "open_pull_request", args))
+        assert result["ok"] is True
+        assert source.request_review.await_args.kwargs == {}
+        approval.assert_not_awaited()
     asyncio.run(scenario())
 
 
