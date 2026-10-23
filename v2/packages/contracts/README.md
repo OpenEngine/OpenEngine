@@ -370,7 +370,7 @@ npm ci                      # install the pinned AsyncAPI parser
 npm run validate            # parse each document and resolve every $ref it reaches
 
 cd v2
-uv run python packages/contracts/tooling/validate.py              # examples, subjects, cross-field rules
+uv run python -m openengine.contracts.validate              # examples, subjects, cross-field rules
 uv run python -m openengine.contracts.reference             # regenerate {service}/v1/reference.html
 uv run python -m openengine.contracts.reference --bundle    # also write dist/{service}/asyncapi.json
 uv run python packages/contracts/tooling/resources.py            # regenerate {service}/v1/resources/reference.html

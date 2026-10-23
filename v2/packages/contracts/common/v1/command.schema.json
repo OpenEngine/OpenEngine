@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Command envelope",
-  "description": "Request body of every control subject (`oe.v1.{service}.control.…`), sent with NATS request/reply. The final element of `causal_path` must equal `command_id`; JSON Schema cannot say so, and `tooling/validate.py` checks it. Service schemas narrow `payload` with `allOf`.",
+  "description": "Request body of every control subject (`oe.v1.{service}.control.…`), sent with NATS request/reply. The final element of `causal_path` must equal `command_id`; JSON Schema cannot say so, and `openengine.contracts.validate` checks it. Service schemas narrow `payload` with `allOf`.",
   "type": "object",
   "required": ["command_id", "causal_path", "payload"],
   "additionalProperties": false,

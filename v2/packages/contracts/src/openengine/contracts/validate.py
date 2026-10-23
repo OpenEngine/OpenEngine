@@ -16,7 +16,7 @@ prove:
 - a response names a request subject whose operation replies with it;
 - every message has an example, and every example validates.
 
-Run it with `uv run python packages/contracts/tooling/validate.py` from `v2/`.
+Run it with `uv run python -m openengine.contracts.validate` from `v2/`.
 """
 
 from __future__ import annotations
