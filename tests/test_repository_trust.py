@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import tomllib
 from unittest.mock import AsyncMock, Mock
 
@@ -105,7 +106,8 @@ def test_trust_preserves_home_relative_config_path(tmp_path, monkeypatch):
         assert saved.repository_trust == {'owner/repo': decision}
 
 
-def test_trust_api_checks_origin_before_mutating_config(tmp_path):
+@pytest.mark.parametrize("login_configured", [False, True])
+def test_trust_api_checks_origin_before_mutating_config(tmp_path, login_configured):
     from test_web_app import ConcurrentRunner, _session
     from engine.apps.web.api import create_app as create_web_app
     from engine.apps.web.composition import Settings, build_graph_runtime, build_graph_service
@@ -115,21 +117,45 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path):
     registry = RepositoryRegistry({'owner/repo': str(tmp_path / 'checkout')}, projects={})
     settings = Settings(graph_state_directory=str(tmp_path / 'graphs'), workspace_root=str(tmp_path / 'workspaces'))
     runner = ConcurrentRunner()
+    from engine.apps.web.github_login import GitHubLoginConfig
+    login = GitHubLoginConfig("client", "secret", "https://engine.example/api/auth/github/callback") if login_configured else None
     app = create_web_app(_session(runner), {'test': runner}, repos=registry,
                          workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=config_path,
-                         public_url='https://engine.example',
+                         public_url='https://engine.example', github_login_config=login,
                          graph_runtime=build_graph_runtime(settings, ()),
                          graph_service=build_graph_service(settings, repositories=registry))
 
     async def run():
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://localhost:4364') as client:
-                # Other graph API POSTs still reach their handlers with a proxy Origin.
+                # Enumerate the actual route tables, including the forwarded APIs.
+                from engine.graph_runtime.api import create_app as runtime_app
+                from engine.apps.web.request_security import _ORIGIN_EXEMPT
+                tables = [("", app.routes), ("/api/v1", create_app(Mock()).routes),
+                          ("/graph", runtime_app(Mock()).routes)]
+                for prefix, routes in tables:
+                    for route in routes:
+                        path = prefix + route.path
+                        if path in _ORIGIN_EXEMPT:
+                            continue
+                        for method in set(getattr(route, "methods", ()) or ()) & {"POST", "PUT", "PATCH", "DELETE"}:
+                            response = await client.request(method, path, content='{}',
+                                headers={"Origin": "https://evil.example", "Content-Type": "text/plain"})
+                            assert response.status_code == 403, (method, path, response.text)
+                marker = tmp_path / "imported"
+                response = await client.post('/api/v1/graphs',
+                    content=json.dumps({"project": "default", "format": "python", "name": "probe",
+                        "source": f"from pathlib import Path; Path({str(marker)!r}).touch()"}),
+                    headers={"Origin": "https://evil.example", "Content-Type": "text/plain"})
+                assert response.status_code == 403
+                assert not marker.exists()
+                assert not list((tmp_path / 'graphs').rglob('*.py'))
+                # All graph API writes reject a foreign Origin before parsing.
                 for route in ('runs', 'loops', 'agents', 'sessions'):
                     response = await client.post(f'/api/v1/{route}', content='invalid JSON',
                         headers={'Origin': 'https://proxy.example', 'Content-Type': 'application/json'})
-                    assert response.status_code == 400
-                    assert response.json()['error'] == 'the request body must be JSON'
+                    assert response.status_code == 403
+                    assert response.json()['error'] == 'forbidden'
                 for origin in ('https://evil.example', 'http://localhost.evil.example', 'null', 'http://localhost:9999'):
                     response = await client.post('/api/v1/repositories/trust',
                         content='{"repository":"owner/repo","trusted":true}',
@@ -137,6 +163,8 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path):
                     assert response.status_code == 403
                     assert registry.lookup('owner/repo')[1] is None
                     assert not config_path.exists()
+                if login_configured:
+                    return  # Allowed origins still require a session in login mode.
                 for origin in (None, 'http://localhost:4364', 'https://engine.example'):
                     response = await client.post('/api/v1/repositories/trust',
                         json={'repository': 'owner/repo', 'trusted': True},

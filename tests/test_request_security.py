@@ -51,3 +51,50 @@ def test_unconfigured_public_host_and_duplicate_host_are_rejected():
             {"type": "http", "scheme": "http", "path": "/", "headers": headers}
         )
         assert not security.is_local_request(request)
+
+
+@pytest.mark.parametrize("path", [
+    "/api/github/events", "/api/slack/events",
+    "/api/auth/github/callback", "/api/slack/callback",
+])
+def test_signature_and_oauth_endpoints_bypass_origin_check(path):
+    import asyncio
+    import httpx
+    from starlette.responses import Response
+    from engine.apps.web.request_security import TrustedDaemonHostMiddleware
+
+    async def endpoint(scope, receive, send):
+        await Response(status_code=204)(scope, receive, send)
+
+    async def run():
+        app = TrustedDaemonHostMiddleware(endpoint, RequestSecurity(""))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://localhost") as client:
+            response = await client.post(path, content="signed payload", headers={
+                "Origin": "https://evil.example", "Content-Type": "text/plain",
+            })
+            assert response.status_code == 204
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("origin", [None, "http://localhost:4364", "https://engine.example"])
+@pytest.mark.parametrize("content_type,status", [("text/plain", 415), ("application/json", 204), ("application/json; charset=utf-8", 204)])
+def test_mutations_check_media_type_before_reading_body(origin, content_type, status):
+    import asyncio
+    import httpx
+    from starlette.responses import Response
+    from engine.apps.web.request_security import TrustedDaemonHostMiddleware
+
+    async def endpoint(scope, receive, send):
+        assert status == 204  # Refused bodies must never reach a handler.
+        await Response(status_code=204)(scope, receive, send)
+
+    async def run():
+        app = TrustedDaemonHostMiddleware(endpoint, RequestSecurity("https://engine.example"))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://localhost:4364") as client:
+            headers = {"Content-Type": content_type}
+            if origin is not None:
+                headers["Origin"] = origin
+            assert (await client.post("/api/v1/graphs", content="{}", headers=headers)).status_code == status
+
+    asyncio.run(run())
