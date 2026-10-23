@@ -39,7 +39,10 @@ front and collected as the run goes, not a step of its own.
 2. **Set up OpenEngine.** Configure GitHub login, ideally by having it create a
    GitHub App. Screenshot where each secret goes, with the secret masked by a
    test2doc highlight annotation. Start the Cloudflare Tunnel. Register the `tdd-guide` graph.
-3. **Create the calculator repo.**
+   Check every runner is signed in (`oe agents`), so a missing sign-in fails
+   here rather than minutes into a run.
+3. **Create the calculator repo** under the account `gh` is logged in as, and
+   clone it locally.
 4. **Connect the repo to OpenEngine.** Install the app or add webhooks, and
    apply the repository settings below, including turning on Pages. The deploy
    workflow itself is one of the seeded issues.
@@ -47,7 +50,9 @@ front and collected as the run goes, not a step of its own.
 6. **Run `tdd-guide`** on the milestone until it is done, through both CLI entry
    points:
    1. **One run.** Work the first issue with `oe graph run tdd-guide --repo
-      OWNER/REPO -i milestone=NAME`, so a single run is covered end to end.
+      PATH -i milestone=NAME --trust`, so a single run is covered end to end.
+      `--repo` takes the local clone (or a configured name), not `OWNER/REPO`,
+      and `--trust` lets agents run commands without asking.
    2. **A loop.** Then `oe loop add tdd-guide` with `--every` short enough to
       keep the run moving (the graph's default is 1h), and `--max-spend` and
       `--max-prs` as the budget cap. The loop works the rest of the milestone.
@@ -77,11 +82,17 @@ The harness owns only what must stay outside the thing being measured:
 
 - **Reset.** Delete and recreate the bench repo, wipe local OpenEngine state,
   and tear down the deployed site, so every run starts clean and is idempotent.
-  Deletion needs a bench-only token and refuses any repo without the bench
-  prefix or topic. Then apply the repository settings below.
-- **Merge loop.** Approve each run's `human_review` step, then merge its PR once
-  CI is green (`gh pr merge --squash`). It merges whatever the impact rating,
-  including Red, and records the rating in the report.
+  The repo lives under the account `gh` is logged in as, which owns it and so
+  can delete it (its token needs the `delete_repo` scope). Teardown refuses any
+  repo without the bench prefix and `oe-bench` topic. Then apply the repository
+  settings below.
+- **Merge loop.** Approve each run's `human_review` step through the API
+  (`POST /runs/{id}/approvals/{approvalId}`), then merge its PR once CI is green
+  (`gh pr merge --squash`). It merges whatever the impact rating, including
+  Red, and records the rating in the report. Approve first: OpenEngine ignores
+  the merge webhook when the merger is its own login, by design, so a merge by
+  the same account does not release `human_review`. If the issue is still open
+  after the merge, the harness records that and closes it.
 - **Verifier.** A fixed Playwright spec the agent never sees. It runs against the
   Pages URL and checks add, subtract, multiply, divide, divide by zero and
   clear. It finds things by visible text (`getByText`, or role and name), not
@@ -179,8 +190,8 @@ inspects the run, cost and per-node tokens.
   `reviewer`), Codex for implementation and reranking (`implementer` and
   `reranker`). Comparing other runners comes later.
 - Results are noisy, so run several trials and compare medians.
-- Credentials: a bench-only GitHub account or org and token, and model
-  credentials for the runners under test.
+- Credentials: the GitHub account `gh` is logged in as, with `repo` and
+  `delete_repo` scopes, and model credentials for the runners under test.
 
 ### Release gate
 
@@ -242,11 +253,17 @@ Driving a real GitHub or Slack sign-in page from automation is fragile (2FA,
 bot checks, magic links, SSO), so the approach is to avoid the interactive page
 wherever the test is not about login:
 
-- **GitHub.** Use a dedicated bench account. For the CLI and for OpenEngine's
-  own GitHub access, authenticate with a token (`gh` auth and `gh_config_dir`),
-  which needs no browser. Use a dedicated bot account (OpenEngine-worker-bot or
-  Rock-AI-bot) inside a bench org, so nothing in the journey needs an interactive
-  sign-in. If a step does need the browser, the bot signs in with a passkey
+- **GitHub.** The benchmark runs as whatever account `gh` is logged in as, read
+  at the start with `gh api user`, so it can run on any machine that runs
+  OpenEngine: rock-ai-bot on one Mac mini, OpenEngine-worker-bot on another.
+  The harness and OpenEngine use the same account and token (`gh` auth and
+  `gh_config_dir`), which needs no browser. Bench repos are created under that
+  account's own user, so it owns them and can delete them, and nothing in an
+  org has to grant it access. One account is enough because the harness
+  approves `human_review` itself before merging. Testing that a person's merge
+  releases `human_review` needs a second account and belongs to the GitHub
+  integration layer. How CI provides the account is decided later. If a step
+  does need the browser, the account signs in with a passkey
   instead of a 2FA code. A person registers the passkey once, in a manual headed
   Playwright step, and the harness reuses it. Spike whether the credential can be
   saved and replayed (for example with a virtual authenticator) before relying on
