@@ -24,6 +24,7 @@ import {
 import { LoopPage, NewLoopPage } from "./loops";
 import { routeForPath, type Route } from "./routes";
 import { Sidebar } from "./sidebar";
+import { applyTheme, savedTheme } from "./theme";
 import { UtilizationPage } from "./utilization";
 import "./styles.css";
 
@@ -331,6 +332,9 @@ function App() {
     </EngineRuntimeProvider>
   );
 }
+
+// Before the first paint, so a dark choice does not flash light.
+applyTheme(savedTheme());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -144,3 +144,52 @@ describe("SettingsPanel Slack connection", () => {
     expect(await screen.findByText("GitLab OAuth client ID saved")).toBeVisible();
   });
 });
+
+describe("SettingsPanel dark mode", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    const stored = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        clear: () => stored.clear(),
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
+      },
+    });
+    delete document.documentElement.dataset.theme;
+    vi.mocked(api.getGitHubClientId).mockResolvedValue({ source: "none", hint: "" });
+    vi.mocked(api.getGitHubStatus).mockResolvedValue({ connected: false, clientIdConfigured: false });
+    vi.mocked(api.getGitLabStatus).mockResolvedValue({
+      origin: "https://gitlab.com",
+      connected: false,
+      clientIdConfigured: false,
+    });
+    vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: false, connected: false });
+    vi.mocked(api.getSourceControlProvider).mockResolvedValue({
+      provider: "github-oauth",
+      autoSelected: false,
+    });
+  });
+
+  it("switches the page to dark and remembers the choice", async () => {
+    const { unmount } = render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    const toggle = screen.getByRole("switch", { name: "Dark mode" });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+
+    expect(toggle).toBeChecked();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem("engine.theme")).toBe("dark");
+
+    unmount();
+    render(<SettingsPanel onClose={vi.fn()} />);
+    expect(screen.getByRole("switch", { name: "Dark mode" })).toBeChecked();
+
+    await user.click(screen.getByRole("switch", { name: "Dark mode" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(window.localStorage.getItem("engine.theme")).toBe("light");
+  });
+});

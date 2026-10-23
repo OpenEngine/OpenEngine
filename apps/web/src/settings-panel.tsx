@@ -28,6 +28,7 @@ import {
   type GitLabDeviceFlow,
   type SlackStatus,
 } from "./api";
+import { saveTheme, savedTheme, type Theme } from "./theme";
 
 type SlackState = {
   configured: boolean;
@@ -98,6 +99,7 @@ type GitLabState = {
 };
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
+  const [theme, setTheme] = useState<Theme>(savedTheme);
   // Whether agents act as the connection made below; not with sign-in on.
   const [agentsUseConnection, setAgentsUseConnection] = useState(true);
   const [connection, setConnection] = useState<ConnectionState>({
@@ -535,6 +537,22 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="settings-panel-body">
+        <section className="settings-section">
+          <h2 className="settings-section-title">Appearance</h2>
+          <label className="settings-toggle">
+            <input
+              checked={theme === "dark"}
+              onChange={(event) => {
+                const next = event.target.checked ? "dark" : "light";
+                saveTheme(next);
+                setTheme(next);
+              }}
+              role="switch"
+              type="checkbox"
+            />{" "}
+            Dark mode
+          </label>
+        </section>
         <section className="settings-section">
           <h2 className="settings-section-title">GitHub</h2>
           <p className="settings-status settings-status-muted">
