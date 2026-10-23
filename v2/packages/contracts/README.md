@@ -371,8 +371,8 @@ npm run validate            # parse each document and resolve every $ref it reac
 
 cd v2
 uv run python packages/contracts/tooling/validate.py              # examples, subjects, cross-field rules
-uv run python packages/contracts/tooling/reference.py             # regenerate {service}/v1/reference.html
-uv run python packages/contracts/tooling/reference.py --bundle    # also write dist/{service}/asyncapi.json
+uv run python -m openengine.contracts.reference             # regenerate {service}/v1/reference.html
+uv run python -m openengine.contracts.reference --bundle    # also write dist/{service}/asyncapi.json
 uv run python packages/contracts/tooling/resources.py            # regenerate {service}/v1/resources/reference.html
 uv run python packages/contracts/tooling/resources.py check F..  # validate resource files
 uv run pytest packages/contracts/tests                            # all of the above, plus malformed variants

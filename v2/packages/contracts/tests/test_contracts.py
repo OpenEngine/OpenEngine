@@ -181,7 +181,7 @@ def test_no_streams_or_consumers_are_added() -> None:
 def test_checked_in_reference_is_current(service: str) -> None:
     path = reference.reference_path(service)
     assert path.exists() and path.read_text() == reference.page(service), (
-        f"{path.relative_to(CONTRACTS)} is stale: run `uv run python packages/contracts/tooling/reference.py`"
+        f"{path.relative_to(CONTRACTS)} is stale: run `uv run python -m openengine.contracts.reference`"
     )
 
 

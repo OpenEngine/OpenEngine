@@ -87,7 +87,7 @@ jobs:
 
       - name: Regenerate contract references
         run: |
-          uv run --project v2 --frozen python v2/packages/contracts/tooling/reference.py
+          uv run --project v2 --frozen python -m openengine.contracts.reference
           uv run --project v2 --frozen python v2/packages/contracts/tooling/resources.py
           git diff --exit-code -- 'v2/packages/contracts/**/reference.html'
 
