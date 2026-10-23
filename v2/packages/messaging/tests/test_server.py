@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from openengine.messaging import LocalOperator, Request, Route, Server, ServiceError, envelopes
+from openengine.messaging import LocalOperator, Request, Route, Server, ServiceError, envelopes, listen_address
 
 LOOPBACK = "nats://127.0.0.1:4222"
 GRAPHS = "graph_engine/v1/schemas/queries.schema.json#/$defs/list_graphs_query"
@@ -112,3 +112,19 @@ def test_a_causal_path_past_its_limit_is_refused_before_sending() -> None:
         envelopes.command({}, command_id="cmd_33", caused_by=[f"cmd_{index}" for index in range(32)])
 
     assert raised.value.code == "CAUSAL_PATH_TOO_LONG"
+
+
+@pytest.mark.parametrize(
+    ("info", "address", "allowed"),
+    [
+        ({"host": "127.0.0.1", "port": 4222}, "nats://127.0.0.1:4222", True),
+        ({"host": "0.0.0.0", "port": 4222}, "nats://0.0.0.0:4222", False),
+        ({"host": "::", "port": 4222}, "nats://[::]:4222", False),
+    ],
+)
+def test_local_operator_mode_judges_the_address_nats_listens_on(info: dict[str, Any], address: str, allowed: bool) -> None:
+    connection = type("Connected", (), {"_server_info": info})()
+
+    assert listen_address(connection) == address
+    reply = _send("oe.v1.ge.query.graphs.list", {"params": {}}, listener=address)
+    assert (reply["status"] == "ok") is allowed

@@ -292,16 +292,18 @@ on both sides of request/reply:
   32 elements is refused with `CAUSAL_PATH_TOO_LONG` before sending.
 - **Each attempt waits a bounded time** (2 s by default). After a timeout the
   client resends the same encoded bytes, so a retry carries the same
-  `command_id` and `causal_path`. No responders is reported at once as
-  `UNAVAILABLE`, as is a request that gets no reply after its last attempt.
+  `command_id` and `causal_path`. No responders and a closed or draining
+  connection are reported at once as `UNAVAILABLE`, as is a request that gets
+  no reply after its last attempt.
 - **Servers** check each request's envelope, and then its operation's own
   schema, before running a handler. A request that breaks either gets
   `INVALID_ARGUMENT` with one `violations` entry per problem. That includes a
   command whose `causal_path` does not end with its `command_id`.
 - **Authorization is a port.** The server asks an `Authorizer` before
   handling a request. Local-operator mode, the default and the only one so
-  far, allows requests that arrive through a loopback NATS listener and
-  rejects the rest with `PERMISSION_DENIED`.
+  far, allows a request only when the NATS server it arrived through listens
+  on loopback alone, judged by the host in the server's INFO rather than the
+  URL used to reach it, and rejects the rest with `PERMISSION_DENIED`.
 - **Error replies keep `retryable` as sent.** A client raises a typed error
   for the code, and keeps an unknown code as its string.
 

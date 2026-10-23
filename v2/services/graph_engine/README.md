@@ -34,11 +34,16 @@ process and exits nonzero, so `oe up` fails too.
 
 On SIGTERM GE logs `draining`, unsubscribes, answers the requests it has
 already received, removes its ready file, logs `stopped` and exits 0.
+A SIGTERM while GE is still retrying its first NATS connection ends the
+retries, and GE exits 0 without having been ready.
 
 ### Local-operator mode
 NATS under `oe up` listens only on loopback and has no accounts, so whoever
 can reach it is the operator on that machine. GE authorizes each request
 through the messaging package's `Authorizer` port. The default,
-`LocalOperator`, allows a request when GE's NATS listener is a loopback
-address and rejects it with `PERMISSION_DENIED` otherwise. Remote access
+`LocalOperator`, allows a request when the NATS server listens on a loopback
+address and rejects it with `PERMISSION_DENIED` otherwise. It reads that
+address from the server's INFO, not from `OE_NATS_URL`: a server bound to
+`0.0.0.0` is reachable from other hosts even when GE dials `127.0.0.1`, so
+GE logs a warning at connect and refuses every request. Remote access
 needs a different authorizer, which does not exist yet.

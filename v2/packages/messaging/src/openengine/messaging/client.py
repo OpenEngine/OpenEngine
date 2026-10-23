@@ -3,8 +3,9 @@
 Each attempt waits `timeout` seconds. A timeout means the request or its
 reply was lost, so the outcome is unknown: the client sends the same bytes
 again, so a command keeps its `command_id` and `causal_path`, up to
-`attempts` times. No responders means nothing serves the subject; that is
-reported at once, as retrying cannot help.
+`attempts` times. No responders means nothing serves the subject, and a
+closed or draining connection means NATS went away; both are reported at once
+as Unavailable, as retrying cannot help.
 """
 
 from __future__ import annotations
@@ -12,7 +13,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol
 
-from nats.errors import NoRespondersError, TimeoutError as NatsTimeoutError
+from nats.errors import (
+    ConnectionClosedError,
+    ConnectionDrainingError,
+    NoRespondersError,
+    StaleConnectionError,
+    TimeoutError as NatsTimeoutError,
+)
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ServiceError, Unavailable
@@ -65,6 +72,8 @@ class Client:
                     message = await self._nats.request(subject, body, timeout=self.timeout, headers=headers)
             except NoRespondersError:
                 raise Unavailable(subject, "no responders", no_responders=True) from None
+            except (ConnectionClosedError, ConnectionDrainingError, StaleConnectionError) as lost:
+                raise Unavailable(subject, f"NATS connection lost: {type(lost).__name__}") from None
             except NatsTimeoutError:
                 log.warning("no reply in time", extra={"messaging.destination.name": subject, "attempt": attempt})
                 continue

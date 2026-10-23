@@ -18,9 +18,11 @@ import signal
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import nats
-from openengine.messaging import Request, Route, Server
+from openengine.messaging import Request, Route, Server, listen_address
+from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
 
@@ -63,15 +65,28 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, stopping.set)
+    connecting = asyncio.ensure_future(
+        nats.connect(nats_url, name="ge", connect_timeout=CONNECT_TIMEOUT_SECONDS, max_reconnect_attempts=-1)
+    )
+    # nats-py retries a first connection forever, so a SIGTERM must be able to end the wait.
+    stopped = asyncio.ensure_future(stopping.wait())
+    await asyncio.wait([connecting, stopped], return_when=asyncio.FIRST_COMPLETED)
+    stopped.cancel()
+    if not connecting.done():
+        connecting.cancel()
+        log.info("stopped before NATS connected", extra={"server.address": nats_url})
+        return EXIT_OK
     try:
-        connection = await nats.connect(
-            nats_url, name="ge", connect_timeout=CONNECT_TIMEOUT_SECONDS, max_reconnect_attempts=-1
-        )
+        connection = connecting.result()
     except (OSError, nats.errors.Error):
         log.exception("could not connect to NATS", extra={"server.address": nats_url})
         return EXIT_FAILED
-    log.info("nats connected", extra={"server.address": nats_url})
-    server = Server(connection, "ge", nats_url, queries=QUERIES)
+    listener = listen_address(connection)
+    log.info("nats connected", extra={"server.address": nats_url, "server.listen": listener})
+    if not is_loopback(urlsplit(listener).hostname):
+        log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
+                    extra={"server.listen": listener})
+    server = Server(connection, "ge", listener, queries=QUERIES)
     await server.start()
     health = await asyncio.start_server(
         lambda reader, writer: _health(

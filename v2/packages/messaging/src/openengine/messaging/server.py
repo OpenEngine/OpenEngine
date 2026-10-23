@@ -40,7 +40,7 @@ class Request:
     """The subject after `oe.v1.{service}.{kind}.`, such as `graphs.list`."""
     body: dict[str, Any]
     listener: str
-    """The NATS server the request arrived through."""
+    """The address the NATS server the request arrived through listens on."""
 
 
 class Authorizer(Protocol):
@@ -53,8 +53,10 @@ class LocalOperator:
 
     NATS has no accounts here: the local nats-server listens only on loopback,
     so whoever reaches it is the operator on this machine. A request is
-    allowed only when it arrived through a loopback listener; anything else
-    is PERMISSION_DENIED until a non-loopback authorizer exists.
+    allowed only when the server it arrived through listens on loopback alone,
+    as `listen_address` reports it; a server bound to any other address, such
+    as 0.0.0.0, is reachable from off the machine, so its requests are
+    PERMISSION_DENIED until a non-loopback authorizer exists.
     """
 
     def authorize(self, request: Request) -> None:
@@ -64,6 +66,17 @@ class LocalOperator:
                 f"local-operator mode serves loopback requests only, not ones through {request.listener}",
                 details={"permission": f"{request.kind}.{request.operation}"},
             )
+
+
+def listen_address(nats: NATS) -> str:
+    """The address the connected NATS server listens on, from its INFO.
+
+    This, not the URL used to reach it, is what bounds who else can reach it:
+    a server bound to 0.0.0.0 still answers on 127.0.0.1.
+    """
+    info = nats._server_info  # noqa: SLF001 -- nats-py exposes INFO only here
+    host = str(info.get("host", ""))
+    return f"nats://{f'[{host}]' if ':' in host else host}:{info.get('port', '')}"
 
 
 def is_loopback(host: str | None) -> bool:
@@ -140,7 +153,6 @@ class Server:
                 log.exception("%s failed", operation, extra=_identity(body))
                 reply = _error_reply(kind, body, ServiceError(ErrorCode.INTERNAL, "unexpected service fault"))
         return envelopes.encode(reply)
-
 
     def _route(self, subject: str, kind: str, operation: str) -> Route:
         route = (self.commands if kind == "control" else self.queries).get(operation)

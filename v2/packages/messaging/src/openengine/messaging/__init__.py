@@ -2,6 +2,6 @@
 
 from openengine.messaging.client import Client
 from openengine.messaging.errors import ErrorCode, ServiceError, Unavailable
-from openengine.messaging.server import Authorizer, LocalOperator, Request, Route, Server
+from openengine.messaging.server import Authorizer, LocalOperator, Request, Route, Server, listen_address
 
-__all__ = ["Authorizer", "Client", "ErrorCode", "LocalOperator", "Request", "Route", "Server", "ServiceError", "Unavailable"]
+__all__ = ["Authorizer", "Client", "ErrorCode", "LocalOperator", "Request", "Route", "Server", "ServiceError", "Unavailable", "listen_address"]

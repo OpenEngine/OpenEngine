@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from nats.errors import NoRespondersError, TimeoutError as NatsTimeoutError
+from nats.errors import ConnectionClosedError, NoRespondersError, TimeoutError as NatsTimeoutError
 
 from openengine.messaging import Client, ErrorCode, ServiceError, Unavailable
 
@@ -102,3 +102,13 @@ def test_a_query_is_sent_as_a_valid_envelope() -> None:
     asyncio.run(Client(nats).query("oe.v1.ge.query.graphs.list", {"limit": 10}, request_id="req_1"))
 
     assert json.loads(nats.sent[0][1]) == {"request_id": "req_1", "params": {"limit": 10}}
+
+
+def test_a_connection_lost_while_waiting_reports_unavailable() -> None:
+    nats = ScriptedNats([NatsTimeoutError(), ConnectionClosedError()])
+
+    with pytest.raises(Unavailable) as raised:
+        asyncio.run(Client(nats, timeout=0.25).query("oe.v1.ge.query.graphs.list"))
+
+    assert raised.value.code is ErrorCode.UNAVAILABLE
+    assert len(nats.sent) == 2

@@ -106,3 +106,21 @@ def test_supervisor_fails_when_ge_cannot_become_ready(oe, tmp_path: Path) -> Non
     assert state["status"] == "failed"
     assert state["error"] == "ge exited with status 1 before it was ready"
     assert {process["name"]: process["status"] for process in state["processes"]}["ge"] == "failed"
+
+
+def test_ge_stops_on_sigterm_while_nats_is_unreachable(tmp_path: Path) -> None:
+    ge = subprocess.Popen(
+        [sys.executable, "-m", "graph_engine"],
+        env={**os.environ, "XDG_STATE_HOME": str(tmp_path / "state"),
+             "OE_NATS_URL": f"nats://127.0.0.1:{_free_port()}", "OE_GE_READY_FILE": str(tmp_path / "ready")},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            ge.wait(timeout=2)  # still retrying its first connection
+        ge.terminate()
+        assert ge.wait(timeout=5) == 0
+    finally:
+        ge.kill()
+    assert not (tmp_path / "ready").exists()
