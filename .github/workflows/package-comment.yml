@@ -20,7 +20,7 @@ jobs:
     steps:
       # Runs from the default branch: never check out or execute PR code, or
       # download artifact contents, with this privileged token.
-      - uses: actions/github-script@v8
+      - uses: actions/github-script@v9
         with:
           script: |
             const run = context.payload.workflow_run;
