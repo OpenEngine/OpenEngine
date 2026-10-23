@@ -23,6 +23,9 @@
   --fill: #e7e6e3;
   --fill-hover: #dedcd7;
   --white: #ffffff;
+  --surface: #ffffff;
+  --inverse-ink: #ffffff;
+  color-scheme: light;
   --rule: #d4d3cf;
 
   --flame: #e8452b;
@@ -51,6 +54,22 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f4f3f1;
+  --ink-soft: #d4d3cf;
+  --muted: #aaa9a3;
+  --faint: #96968f;
+  --paper: #181817;
+  --fill: #242423;
+  --fill-hover: #30302e;
+  --surface: #1f1f1e;
+  --inverse-ink: #111111;
+  --rule: #41413d;
+  --flame-wash: #38231e;
+  --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0h10L5 6z' fill='%23f4f3f1'/%3E%3C/svg%3E");
 }
 
 * { box-sizing: border-box; }
@@ -84,7 +103,7 @@ ul, ol { padding: 0; list-style: none; }
   gap: 8px;
   height: 44px;
   padding: 0 18px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--ink);
   border-radius: 0;
   font-size: 15px;
@@ -117,13 +136,13 @@ ul, ol { padding: 0; list-style: none; }
   display: inline-flex;
   align-items: center;
   padding: 5px 9px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
   font: 500 12px/1 var(--mono);
   white-space: nowrap;
 }
 .chip-flame { color: var(--flame); background: transparent; border-color: var(--flame); }
-.chip-ink { color: var(--white); background: var(--ink); border-color: var(--ink); }
+.chip-ink { color: var(--inverse-ink); background: var(--ink); border-color: var(--ink); }
 
 .link-flame {
   padding: 0;
@@ -147,6 +166,7 @@ ul, ol { padding: 0; list-style: none; }
   line-height: 1.55;
   white-space: pre-line;
 }
+:root[data-theme="dark"] .notice { color: #fa8b76; }
 .notice-block { margin: 26px var(--gutter); }
 .notice code, .code-inline {
   padding: 2px 5px;
@@ -600,7 +620,7 @@ select:disabled { cursor: default; }
   white-space: pre-wrap;
   word-break: break-word;
 }
-.tool .tool-result { color: var(--ink); background: var(--white); }
+.tool .tool-result { color: var(--ink); background: var(--surface); }
 
 /* Only worth a button when there is somewhere to jump to. */
 .jump-button { display: block; margin: 10px auto 0; }
@@ -613,7 +633,7 @@ select:disabled { cursor: default; }
    so it reads as part of that row rather than as the next thing that happened. */
 .approvals-call { margin: 0 0 8px 16px; }
 .approval { background: var(--fill); border: 1px solid var(--rule); }
-.approval-pending { background: var(--white); border-color: var(--flame); border-left: 4px solid var(--flame); }
+.approval-pending { background: var(--surface); border-color: var(--flame); border-left: 4px solid var(--flame); }
 .approval-summary {
   display: flex;
   gap: 10px;
@@ -685,7 +705,7 @@ select:disabled { cursor: default; }
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--white);
+  background: var(--surface);
   box-shadow: 0 24px 80px rgb(18 20 24 / 24%);
 }
 .question-field { display: grid; gap: 12px; padding: 0; border: 0; }
@@ -711,7 +731,7 @@ select:disabled { cursor: default; }
   border: 1px solid var(--line);
   border-radius: 7px;
   color: var(--ink);
-  background: var(--white);
+  background: var(--surface);
 }
 
 /* --- composer dock ------------------------------------------------------- */
@@ -758,7 +778,7 @@ select:disabled { cursor: default; }
   min-height: 48px;
   padding: 13px 14px;
   resize: none;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: 0;
   outline: 0;
@@ -781,7 +801,7 @@ select:disabled { cursor: default; }
 .workspace-control { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .dock-path {
   padding: 8px 11px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
   font: 400 13px/1.2 var(--mono);
   user-select: all;
@@ -836,7 +856,7 @@ select:disabled { cursor: default; }
   max-width: 320px;
   height: 40px;
   padding: 0 14px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: 0;
   font-size: 14px;
@@ -847,7 +867,7 @@ select:disabled { cursor: default; }
 .segmented button {
   height: 40px;
   padding: 0 16px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
   border-left-width: 0;
   font-size: 14px;
@@ -1082,7 +1102,7 @@ select:disabled { cursor: default; }
 .decision textarea {
   width: 100%;
   padding: 13px 14px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: 0;
   font-family: var(--sans);
@@ -1145,7 +1165,7 @@ select:disabled { cursor: default; }
   background: var(--fill);
   border: 1px solid var(--rule);
 }
-.step-current .step-body { background: var(--white); border-color: var(--flame); }
+.step-current .step-body { background: var(--surface); border-color: var(--flame); }
 /* The one step being worked on, said the way the rail's live pip says it: a
    box that glows rather than one merely outlined, so a run reopened from its
    conversation reads as in progress without being read. */
@@ -1187,7 +1207,7 @@ select:disabled { cursor: default; }
 .form input, .form select, .form textarea {
   width: 100%;
   padding: 13px 14px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: 0;
   font-size: 15px;
@@ -1238,7 +1258,7 @@ select:disabled { cursor: default; }
   width: 100%;
   max-width: 380px;
   padding: 48px 36px;
-  background: var(--white);
+  background: var(--surface);
   border: 1px solid var(--rule);
 }
 .login-card h1 {
@@ -1642,3 +1662,11 @@ select:disabled { cursor: default; }
   pointer-events: none;
 }
 .info-tip:hover::after, .info-tip:focus::after { visibility: visible; }
+
+.settings-theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.settings-theme-toggle input { margin: 0; }

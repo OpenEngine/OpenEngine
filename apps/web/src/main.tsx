@@ -26,6 +26,9 @@ import { routeForPath, type Route } from "./routes";
 import { Sidebar } from "./sidebar";
 import { UtilizationPage } from "./utilization";
 import "./styles.css";
+import { loadTheme } from "./theme";
+
+loadTheme();
 
 function ChatPanel({
   config,
