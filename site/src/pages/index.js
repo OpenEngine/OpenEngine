@@ -102,7 +102,7 @@ export default function Home() {
               <code>
                 npm i -g @openengine.cc/engine{'\n'}
                 cd your-repo{'\n'}
-                engine go "add a dark mode toggle"
+                oe go "add a dark mode toggle"
               </code>
             </pre>
           </div>
