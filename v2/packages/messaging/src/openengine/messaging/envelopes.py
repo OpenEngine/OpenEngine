@@ -29,10 +29,17 @@ COMMAND_RESPONSE = "common/v1/command-response.schema.json"
 MAX_CAUSAL_PATH = 32
 
 
+class ForeignReference(LookupError):
+    """A schema referenced something outside the contracts tree."""
+
+    def __init__(self, uri: str) -> None:
+        super().__init__(f"only contract schemas may be referenced, not {uri}")
+
+
 def _retrieve(uri: str) -> Resource:
     path = Path(uri.removeprefix("file://"))
     if not uri.startswith("file://") or not path.resolve().is_relative_to(CONTRACTS.resolve()):
-        raise LookupError(f"only contract schemas may be referenced, not {uri}")
+        raise ForeignReference(uri)
     return Resource.from_contents(json.loads(path.read_text()), default_specification=DRAFT7)
 
 

@@ -31,6 +31,16 @@ class NotServing(Exception):
     """OpenEngine cannot answer: the reason, for the user."""
 
 
+class NatsUnreachable(NotServing):
+    def __init__(self, nats_url: str) -> None:
+        super().__init__(f"cannot reach NATS at {nats_url}")
+
+
+class NoReply(NotServing):
+    def __init__(self, service: str) -> None:
+        super().__init__(f"no reply from {service}")
+
+
 async def _query(nats_url: str, subject: str) -> dict[str, Any]:
     async def ignore(_: Exception) -> None:
         pass
@@ -42,11 +52,11 @@ async def _query(nats_url: str, subject: str) -> dict[str, Any]:
             max_reconnect_attempts=1, reconnect_time_wait=0.1, error_cb=ignore,
         )
     except (OSError, nats.errors.Error):
-        raise NotServing(f"cannot reach NATS at {nats_url}") from None
+        raise NatsUnreachable(nats_url) from None
     try:
         return await Client(connection).query(subject)
     except Unavailable:
-        raise NotServing("no reply from ge") from None
+        raise NoReply("ge") from None
     finally:
         await connection.close()
 
@@ -61,16 +71,20 @@ def render(page: dict[str, Any]) -> str:
     return table(["NAME", "REVISION", "UPDATED", "DESCRIPTION"], rows)
 
 
+def _not_running(reason: str) -> int:
+    print(f"OpenEngine is not running ({reason}). Start it with `oe up`; see `oe logs`.", file=sys.stderr)
+    return EXIT_FAILED
+
+
 def run_list(arguments: argparse.Namespace) -> int:
     state = running_state()
     nats_url = next((process.address for process in state.processes if process.name == "nats"), None) if state else None
+    if nats_url is None:
+        return _not_running("no supervisor")
     try:
-        if nats_url is None:
-            raise NotServing("no supervisor")
         reply = asyncio.run(_query(nats_url, LIST_SUBJECT))
     except NotServing as reason:
-        print(f"OpenEngine is not running ({reason}). Start it with `oe up`; see `oe logs`.", file=sys.stderr)
-        return EXIT_FAILED
+        return _not_running(str(reason))
     except ServiceError as error:
         print(f"oe graph list: {error}", file=sys.stderr)
         return EXIT_FAILED

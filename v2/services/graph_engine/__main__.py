@@ -67,8 +67,8 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int
         connection = await nats.connect(
             nats_url, name="ge", connect_timeout=CONNECT_TIMEOUT_SECONDS, max_reconnect_attempts=-1
         )
-    except (OSError, nats.errors.Error) as error:
-        log.error("could not connect to NATS: %s", error, extra={"server.address": nats_url})
+    except (OSError, nats.errors.Error):
+        log.exception("could not connect to NATS", extra={"server.address": nats_url})
         return EXIT_FAILED
     log.info("nats connected", extra={"server.address": nats_url})
     server = Server(connection, "ge", nats_url, queries=QUERIES)
@@ -115,8 +115,8 @@ def main() -> int:
                 Path(ready_file) if ready_file else None,
             )
         )
-    except OSError as error:
-        log.error("failed: %s", error)
+    except OSError:
+        log.exception("failed")
         return EXIT_FAILED
     finally:
         telemetry.shutdown()

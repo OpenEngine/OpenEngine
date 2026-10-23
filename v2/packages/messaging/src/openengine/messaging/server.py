@@ -128,12 +128,7 @@ class Server:
                 request = Request(subject, kind, operation, body, self.listener)
                 log.info("%s request", operation, extra=_identity(body))
                 self.authorizer.authorize(request)
-                route = (self.commands if kind == "control" else self.queries).get(operation)
-                if route is None:
-                    raise ServiceError(
-                        ErrorCode.UNSUPPORTED_CAPABILITY, f"{self.service} does not serve {subject}",
-                        details={"capability": f"{kind}.{operation}"},
-                    )
+                route = self._route(subject, kind, operation)
                 if route.schema:
                     envelopes.check(route.schema, body)
                 result = await route.handler(request)
@@ -145,6 +140,16 @@ class Server:
                 log.exception("%s failed", operation, extra=_identity(body))
                 reply = _error_reply(kind, body, ServiceError(ErrorCode.INTERNAL, "unexpected service fault"))
         return envelopes.encode(reply)
+
+
+    def _route(self, subject: str, kind: str, operation: str) -> Route:
+        route = (self.commands if kind == "control" else self.queries).get(operation)
+        if route is None:
+            raise ServiceError(
+                ErrorCode.UNSUPPORTED_CAPABILITY, f"{self.service} does not serve {subject}",
+                details={"capability": f"{kind}.{operation}"},
+            )
+        return route
 
 
 def _identity(body: Any) -> dict[str, Any]:

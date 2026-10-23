@@ -95,8 +95,10 @@ def test_an_unserved_subject_is_unsupported_capability() -> None:
 
 
 def test_a_handler_fault_is_internal_without_its_detail() -> None:
+    detail = "secret detail"
+
     async def broken(request: Request) -> dict[str, Any]:
-        raise RuntimeError("secret detail")
+        raise RuntimeError(detail)
 
     server = Server(None, "ge", LOOPBACK, queries={"graphs.list": Route(broken)})
     reply = json.loads(asyncio.run(server.handle("oe.v1.ge.query.graphs.list", b'{"params": {}}')))
