@@ -496,29 +496,85 @@ class GitHubSourceControl:
                 raise GitHubSourceControlError("GitHub returned an invalid review thread cursor")
             cursor = following
 
-    async def review_context(self, pr_url: str) -> str:
-        """Gather review evidence at the PR head using only forge GETs."""
+    async def review_context(self, pr_url: str, *, comment_id: int | None = None) -> str:
+        """Bounded forge evidence, prioritizing the original inline location.
+
+        Limit API requests as well as prompt bytes: never download every source
+        file or follow arbitrarily many references while holding the concierge lock.
+        """
         owner, repo, number = _pull_request_parts(pr_url, self._hosts | {self._transport.host})
         root = f"/repos/{owner}/{repo}"
+        evidence: dict = {}
+        missing: list[str] = []
+        remaining = 96_000
+
+        def include(key: str, value: object) -> None:
+            nonlocal remaining
+            encoded = json.dumps(value, ensure_ascii=True)
+            # Store oversized evidence as a labelled excerpt, keeping valid JSON.
+            limit = min(remaining, 24_000)
+            if len(encoded) > limit:
+                value = {"excerpt": encoded[:max(0, limit // 6)], "truncated": True}
+                missing.append(f"{key}: evidence budget exceeded")
+            remaining = max(0, remaining - len(json.dumps(value)))
+            evidence[key] = value
+
         pull = _object(await self._api("GET", f"{root}/pulls/{number}"))
-        files = await self._paginated_objects(f"{root}/pulls/{number}/files")
-        commits = await self._paginated_objects(f"{root}/pulls/{number}/commits")
+        review = None
+        if comment_id is not None:
+            _positive_number(comment_id, "comment_id")
+            review = _object(await self._api("GET", f"{root}/pulls/comments/{comment_id}"))
+            include("review_location", {key: review.get(key) for key in (
+                "id", "body", "path", "line", "original_line", "side", "diff_hunk", "in_reply_to_id",
+            )})
+            comments = await self._api("GET", f"{root}/pulls/{number}/comments?per_page=100&sort=created&direction=desc")
+            thread_root = review.get("in_reply_to_id") or comment_id
+            include("review_conversation", [entry for entry in comments if
+                entry.get("id") == thread_root or entry.get("in_reply_to_id") == thread_root])
+            if len(comments) == 100:
+                missing.append("Review conversation limited to the latest 100 PR comments")
+        include("pull_request", {key: pull.get(key) for key in ("title", "body", "head", "base", "html_url")})
+        files = await self._api("GET", f"{root}/pulls/{number}/files?per_page=100")
+        include("files", files)
+        if len(files) == 100:
+            missing.append("Changed files limited to the first 100")
+        commits = await self._api("GET", f"{root}/pulls/{number}/commits?per_page=20")
+        include("commits", commits)
+        if len(commits) == 20:
+            missing.append("Commit history limited to the first 20")
         issues = []
-        body = _string(pull, "body")
-        for issue in dict.fromkeys(re.findall(r"(?<![\w/])#(\d+)\b", body)):
-            issues.append(await self._api("GET", f"{root}/issues/{issue}"))
+        references = list(dict.fromkeys(re.findall(r"(?<![\w/])#(\d+)\b", _string(pull, "body"))))
+        for issue in references[:5]:
+            try:
+                issues.append(await self._api("GET", f"{root}/issues/{issue}"))
+            except GitHubSourceControlError:
+                missing.append(f"Linked issue #{issue} unavailable")
+        if len(references) > 5:
+            missing.append("Linked issues limited to five")
+        include("linked_issues", issues)
         sources = {}
         sha = _nested_string(pull, "head", "sha")
-        for changed in files:
-            if changed.get("status") != "removed" and isinstance(changed.get("filename"), str):
-                path = quote(changed["filename"], safe="/")
+        relevant = [entry for entry in files if not review or entry.get("filename") == review.get("path")]
+        if review and not relevant and review.get("path"):
+            relevant = [{"filename": review["path"]}]
+        for changed in relevant[:3]:
+            if changed.get("status") == "removed" or not isinstance(changed.get("filename"), str):
+                continue
+            path = quote(changed["filename"], safe="/")
+            try:
                 content = _object(await self._api("GET", f"{root}/contents/{path}?ref={quote(sha, safe='')}"))
-                if content.get("encoding") == "base64":
-                    sources[changed["filename"]] = base64.b64decode(content.get("content", "")).decode("utf-8", errors="replace")
+                encoded = content.get("content", "")
+                if content.get("encoding") == "base64" and len(encoded) <= 24_000:
+                    sources[changed["filename"]] = base64.b64decode(encoded).decode("utf-8", errors="replace")
                 else:
-                    sources[changed["filename"]] = content
-        return json.dumps({"pull_request": pull, "commits": commits, "files": files,
-                           "linked_issues": issues, "source": sources})
+                    missing.append(f"Source {changed['filename']} unavailable or exceeds 18 KB")
+            except GitHubSourceControlError:
+                missing.append(f"Source {changed['filename']} unavailable")
+        if len(relevant) > 3:
+            missing.append("Source limited to three relevant files")
+        include("source", sources)
+        evidence["missing_context"] = missing
+        return json.dumps(evidence)
 
     async def review_thread(self, pr_url: str, comment_id: int) -> Discussion:
         _positive_number(comment_id, "comment_id")

@@ -406,11 +406,17 @@ as “why don't we just X?” otherwise both receives an answer and forwards the
 requested change to the work order.
 
 Answers use the PR description, commit history, file patches, changed source at
-the head revision, and issues referenced by number in the description. Missing
+the head revision, and issues referenced by number in the description. Inline
+reviews include the original path, line, diff hunk and recent thread conversation.
+Evidence is capped at 100 changed files, 20 commits, five linked issues, three
+source files (18 KB each), and approximately 100 KB of forge evidence plus 16 KB of linked work-order context. Inline
+reviews fetch source only for their file. Unavailable issues are reported without
+aborting the reply. Missing
 evidence must be acknowledged. Better suggestions are acknowledged with an
 offer to change them, without editing for an answer-only request. The answer
-session has no MCP tools and runs in Codex's read-only sandbox in an empty
-temporary directory. It cannot start or steer implementation work, commit,
+session uses the configured Claude runner and credentials with native tools
+removed (`tools=[]`), no MCP servers, and an empty temporary directory. Read-only
+sandboxing alone would still permit host secret reads. It cannot start or steer implementation work, commit,
 push, or resolve threads. The provider posts the reply without changing PR state.
 Existing ingress comment-kind keys and durable acknowledgement dedupe deliveries;
 within the concierge, cached answers also prevent a reply retry from rerunning

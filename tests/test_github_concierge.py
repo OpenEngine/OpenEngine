@@ -2279,6 +2279,11 @@ def test_clarification_replies_without_implementation(event, github_app, client)
         in_reply_to_id=123 if event == 'pull_request_review_comment' else None,
     )
     assert agent.new_session.call_args.kwargs['mcp_servers'] == []
+    assert agent.new_session.call_args.kwargs['session_config']['claudeCode']['options']['tools'] == []
+    source.review_context.assert_awaited_once_with(
+        'https://github.com/acme/api/pull/7',
+        comment_id=123 if event == 'pull_request_review_comment' else None,
+    )
     runtime.steer.assert_not_awaited()
     runtime.start.assert_not_awaited()
     for method in (source.commit_all, source.publish, source.run_git, source.request_review, source.resolve_review_thread):

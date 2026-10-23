@@ -89,7 +89,7 @@ def classify_feedback(text: str) -> str:
     if re.search(r"just answer|don['’]t (?:make (?:modifications|changes)|change|modify|edit)|do not (?:make (?:modifications|changes)|modify|change|edit)|no changes|question:", text, re.I):
         return "answer"
     question = bool(re.search(r"\?|\b(?:why|how|what|where|explain|clarify)\b", text, re.I))
-    change = bool(re.search(r"(?:^|[.!?]\s*|\n)(?:please\s+)?(?:change|fix|replace|remove|add|move|update|use|implement)\b|\b(?:can|could|would) you (?:change|fix|replace|remove|add|move|update|use|implement)\b|why (?:don['’]t|not) we", text, re.I))
+    change = bool(re.search(r"(?:^|[.!?]\s*|\n)(?:please\s+)?(?:change|fix|replace|remove|add|move|update|use|implement)\b|\b(?:can|could|would) you\s+(?:please\s+)?(?:change|fix|replace|remove|add|move|update|use|implement)\b|why (?:don['’]t|not) we", text, re.I))
     return "both" if question and change else "answer" if question else "change"
 
 
@@ -202,7 +202,7 @@ class GithubConcierge:
             raise ValueError("max_threads must be positive")
         self.provider = provider
         self.context = context
-        self.answer_provider = answer_provider or provider
+        self.answer_provider = answer_provider
         self._answered: OrderedDict[tuple[str, str, str], str] = OrderedDict()
         self._replied: set[tuple[str, str, str]] = set()
         self.continue_workorder = continue_workorder
@@ -298,14 +298,23 @@ class GithubConcierge:
             return self._answered[key]
         if self.context is None:
             raise RuntimeError("review context reader is unavailable")
+        if self.answer_provider is None:
+            raise RuntimeError("tool-free review answer provider is unavailable")
         context = await self.context(request.origin)
+        # Native tools are removed through Claude SDK options below. A read-only
+        # sandbox alone would still allow shell commands to read host secrets.
         # No broker, workspace, or tools: this session cannot steer a work order,
         # commit, push, resolve threads, or change pull request state.
         async with AsyncExitStack() as opened:
             cwd = opened.enter_context(TemporaryDirectory(prefix="review-answer-"))
             client = await self.answer_provider.connect()
             opened.push_async_callback(client.close)
-            session = await client.new_session(cwd=cwd, mcp_servers=[])
+            session = await client.new_session(
+                cwd=cwd, mcp_servers=[],
+                session_config={"mode": "default", "claudeCode": {"options": {
+                    "tools": [], "allowedTools": [],
+                }}},
+            )
             parts = []
             async for event in session.prompt(ANSWER_INSTRUCTIONS + "\nEvidence:\n" + context + "\nReview:\n" + request.text):
                 if event.type == ACPEventType.MESSAGE_DELTA:

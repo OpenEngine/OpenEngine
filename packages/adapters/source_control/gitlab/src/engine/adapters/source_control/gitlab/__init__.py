@@ -163,7 +163,7 @@ class GitLabSourceControl:
     ) -> None:
         raise NotImplementedError("GitLab comment reactions are not supported")
 
-    async def review_context(self, pr_url: str) -> str:
+    async def review_context(self, pr_url: str, *, comment_id: int | None = None) -> str:
         raise NotImplementedError("GitLab review ingestion is not supported")
 
     async def add_comment(self, pr_url: str, comment: str, file: str | None = None, line: int | None = None, in_reply_to_id: int | None = None, *, thread_id: str | None = None, resolve: bool = False, commit_sha: str | None = None) -> CommentResult:

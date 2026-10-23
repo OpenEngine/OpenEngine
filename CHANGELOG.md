@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-- Answer PR review clarification requests in-thread using a read-only session;
-  explicit answer-only directives never start implementation work.
+- Answer PR review clarification requests in-thread using a session with native and MCP tools disabled;
+  explicit answer-only directives never start implementation work. Polite change
+  requests still reach implementation; bounded evidence includes inline location
+  and conversation and tolerates unavailable linked issues.
 
 - Consolidate repository settings in `[repos."owner/name"]` tables. Slug keys
   accept webhooks by default; set `webhooks = false` to opt out.

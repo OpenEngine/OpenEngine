@@ -97,7 +97,7 @@ from engine.apps.web.utilization import (
     UtilizationService,
     utilization_json,
 )
-from engine.adapters.agent_runner.acp import agent_provider, codex_acp_runner
+from engine.adapters.agent_runner.acp import agent_provider
 from engine.adapters.communications.slack import (
     SlackAuthError,
     SlackCommunications,
@@ -1188,7 +1188,11 @@ async def _review_workorder_context(runtime: GraphRuntime | None, repository: st
     run_id = await store.run_for_pull_request(repository.lower(), number)
     record = await store.run(run_id) if run_id is not None else None
     if record is not None and record.metadata.prompt:
-        return "\nLinked work order request:\n" + record.metadata.prompt
+        prompt = record.metadata.prompt.encode("utf-8")
+        excerpt = prompt[:16_000].decode("utf-8", errors="ignore")
+        if len(prompt) > 16_000:
+            excerpt += "\n[Work order context truncated]"
+        return "\nLinked work order request:\n" + excerpt
     return ""
 
 
@@ -3856,9 +3860,11 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
 
     async def github_review_context(origin: RunOrigin) -> str:
         repository = origin.channel.removeprefix("github:")
-        number = int(origin.thread_id.partition("/review/")[0])
+        number_text, _, review_id = origin.thread_id.partition("/review/")
+        number = int(number_text)
         context = await session.capabilities.source_control.review_context(
-            pull_request_url(repository, number)
+            pull_request_url(repository, number),
+            comment_id=int(review_id) if review_id else None,
         )
         context += await _review_workorder_context(surface.runtime, repository, number)
         return context
@@ -3866,7 +3872,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     github_concierge = GithubConcierge(
         provider=concierge_provider or agent_provider(agent_config, "codex", permissions=github_tool_permission),
         continue_workorder=github_continue_workorder, reply=github_reply, react=github_react,
-        answer_provider=concierge_provider or codex_acp_runner(config=agent_config, sandbox="read-only").provider,
+        answer_provider=concierge_provider or agent_provider(agent_config, "claude"),
         context=github_review_context,
     )
 

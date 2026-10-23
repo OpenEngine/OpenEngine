@@ -256,7 +256,7 @@ class SourceControl(Protocol):
         """
         ...
 
-    async def review_context(self, pr_url: str) -> str:
+    async def review_context(self, pr_url: str, *, comment_id: int | None = None) -> str:
         """Read PR description, history, diff, linked issues and changed source.
 
         Unsupported providers raise NotImplementedError. No workspace is used.
