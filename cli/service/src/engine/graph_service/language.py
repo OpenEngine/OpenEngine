@@ -443,7 +443,10 @@ def _nodes(
             if not isinstance(given, Mapping) or not all(isinstance(key, str) for key in given):
                 problem(f"{where}.inputs", "must map child input names to values")
                 given = {}
-            found.append(NodeSpec(node_id, "graph", stage, graph=reference.strip(), inputs=dict(given), **common))
+            found.append(NodeSpec(
+                node_id, "graph", stage, graph=reference.strip(), inputs=dict(given),
+                name=common["name"], description=common["description"],
+            ))
         elif kind == "human":
             _known(value, FIELDS["human step"], f"{where}.", problem)
             human = value["human"]
@@ -507,7 +510,7 @@ def _agent(
     return NodeSpec(
         node_id, "agent", stage, prompt=prompt.strip(), runner=runner, model=model.strip(),
         tools=tuple(tools), outputs=outputs, always_open=steering == "always-open",
-        parallel=parallel, **common,
+        parallel=parallel, name=common["name"], description=common["description"],
     )
 
 

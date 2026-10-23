@@ -719,6 +719,7 @@ class GraphService:
                 child_snapshot = await self.runtime.snapshot(child_record.run_id) if ready else None
                 child_values = next((event.payload.get("values", {}) for event in child_events
                                      if event.kind is EventKind.RUN_STARTED), {})
+                child_values = child_values if isinstance(child_values, Mapping) else {}
                 children.append({
                     "runId": str(child_record.run_id), "step": child_values.get("_parent_step"),
                     "status": ("cancelled" if child_snapshot.error == CANCELLED else child_snapshot.status.value)
