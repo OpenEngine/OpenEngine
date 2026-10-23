@@ -1,0 +1,10 @@
+{
+  "message": "InvokeToolResponse",
+  "in_reply_to": "oe.v1.tools.invoke.default.github-issue-comment",
+  "payload": {
+    "command_id": "cmd_tools_invoke_1",
+    "status": "accepted",
+    "operation_id": "op_tools_invoke_1",
+    "resource_id": "invocation-uid-123"
+  }
+}

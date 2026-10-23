@@ -1,0 +1,10 @@
+{
+  "message": "ListToolGrantsQuery",
+  "subject": "oe.v1.toolgrants.list",
+  "payload": {
+    "params": {
+      "namespace": "default",
+      "workspaceName": "review-job-88"
+    }
+  }
+}

@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping
@@ -40,7 +41,7 @@ _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 # The one route a service credential may reach: the MCP gateway creating work
 # orders. Everything else still requires a browser session.
 _SERVICE_ROUTE = ("POST", "/api/runs")
-#: The graph API `engine graph|loop|node` speak, which a remote CLI reaches with
+#: The graph API `oe graph|loop|node` speak, which a remote CLI reaches with
 #: the same service credential. Operator-level, like the credential itself.
 _SERVICE_PREFIX = "/api/v1/"
 # How often a response still streaming asks whether its user may keep it, so an
@@ -106,6 +107,7 @@ class GitHubLogin:
         operators: Collection[int] = frozenset(),
         authorize_user: Callable[[str], Awaitable[Mapping[str, bool | None]]] | None = None,
         access_timeout: float = 10,
+        onboarding_token: Callable[[], str] = lambda: "",
     ) -> None:
         self.config = config
         # Which of the deployment's repositories a verified GitHub account
@@ -142,6 +144,7 @@ class GitHubLogin:
         # A reader rather than a value, so rotating the secret on disk takes
         # effect on the next request without a restart.
         self.service_token = service_token
+        self.onboarding_token = onboarding_token
         self._signing_key = secrets.token_bytes(32)
 
     def routes(self) -> list[Route]:
@@ -294,7 +297,7 @@ class GitHubLogin:
         Everything when login is off, for the service credential, and for
         operators; otherwise the repositories the signed-in user can write to.
         """
-        if self.config is None or self._has_service_token(request):
+        if self.config is None or self._has_service_token(request) or self._has_onboarding_token(request):
             return None
         user = self._read_session(request)
         if user is None:
@@ -346,8 +349,27 @@ class GitHubLogin:
             and not request.url.path.startswith(_SERVICE_PREFIX)
         ):
             return False
+        if request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
+            return False
         expected = self.service_token()
         if not valid_service_token(expected):
+            return False
+        headers = request.headers.getlist("authorization")
+        return len(headers) == 1 and secrets.compare_digest(
+            headers[0].encode(), f"Bearer {expected}".encode()
+        )
+
+    def _has_onboarding_token(self, request: Request) -> bool:
+        """A separate operator credential, limited to creating/polling onboarding jobs."""
+        path = request.url.path
+        if not (
+            (request.method == "POST" and path == "/api/repositories/onboard")
+            or (request.method == "GET" and re.fullmatch(r"/api/repositories/onboard/[A-Za-z0-9_-]+", path))
+        ):
+            return False
+        expected = self.onboarding_token()
+        # Misconfiguration must never promote the general service credential.
+        if not valid_service_token(expected) or expected == self.service_token():
             return False
         headers = request.headers.getlist("authorization")
         return len(headers) == 1 and secrets.compare_digest(
@@ -521,7 +543,8 @@ class GitHubLogin:
         Unauthenticated requests to protected API endpoints receive a 401.
         Auth-related endpoints, static assets, and SPA pages are exempt. The
         service token admits `POST /api/runs`, for the MCP gateway, and the
-        `/api/v1/` graph API, for a CLI pointed at this server.
+        `/api/v1/` graph API (except trust writes), for a CLI pointed at this server.
+        A distinct onboarding token admits only job creation and polling.
         """
         if not self.configured:
             return app
@@ -555,7 +578,7 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
-        if self.login._has_service_token(request):
+        if self.login._has_service_token(request) or self.login._has_onboarding_token(request):
             await self.app(scope, receive, send)
             return
         user = self.login._read_session(request)

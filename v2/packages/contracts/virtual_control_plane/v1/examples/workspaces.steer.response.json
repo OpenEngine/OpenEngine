@@ -1,0 +1,10 @@
+{
+  "message": "SteerResponse",
+  "in_reply_to": "oe.v1.vcp.control.workspaces.ws_a1.steer",
+  "payload": {
+    "command_id": "cmd_steer_a",
+    "status": "accepted",
+    "operation_id": "op_steer_a",
+    "resource_id": "session_a1"
+  }
+}

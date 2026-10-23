@@ -1,0 +1,74 @@
+{
+  "message": "ApplyToolCommand",
+  "subject": "oe.v1.tools.apply",
+  "payload": {
+    "command_id": "cmd_tools_apply_1",
+    "causal_path": [
+      "cmd_tools_apply_1"
+    ],
+    "payload": {
+      "tool": {
+        "apiVersion": "openengine.cc/v1alpha1",
+        "kind": "Tool",
+        "metadata": {
+          "name": "github-issue-comment",
+          "namespace": "default",
+          "labels": {
+            "provider": "github"
+          }
+        },
+        "spec": {
+          "description": "Add a comment to an issue in the OpenEngine repository.",
+          "connectionRef": {
+            "name": "github-openengine"
+          },
+          "executor": {
+            "adapter": "nango",
+            "operation": "github-issue-comment"
+          },
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "issueNumber",
+              "body"
+            ],
+            "properties": {
+              "issueNumber": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "outputSchema": {
+            "type": "object",
+            "required": [
+              "commentId",
+              "url"
+            ],
+            "properties": {
+              "commentId": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          "configuration": {
+            "repository": "spiralsoft/openengine"
+          },
+          "execution": {
+            "timeoutSeconds": 60,
+            "recovery": "reconcile",
+            "maxAttempts": 3
+          }
+        }
+      }
+    }
+  }
+}

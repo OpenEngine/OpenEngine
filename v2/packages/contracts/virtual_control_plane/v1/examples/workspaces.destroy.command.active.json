@@ -1,0 +1,10 @@
+{
+  "summary": "Step 1 of cancel-then-destroy: destroy while attempt_a2 is still running.",
+  "message": "DestroyCommand",
+  "subject": "oe.v1.vcp.control.workspaces.ws_a1.destroy",
+  "payload": {
+    "command_id": "cmd_destroy_a1",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_destroy_a1"],
+    "payload": { "retention": { "artifacts": "retain", "checkpoints": "delete" } }
+  }
+}

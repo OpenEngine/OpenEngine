@@ -288,7 +288,7 @@ def test_fresh_daemon_registers_starters_and_offers_them_without_restart(tmp_pat
 
 def test_default_checkout_is_under_daemon_home(tmp_path, monkeypatch):
     monkeypatch.setattr(onboard.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(onboard, 'preflight', lambda: ([{'code': 'agent', 'message': 'sign in', 'fix': 'engine agent signin codex'}], None))
+    monkeypatch.setattr(onboard, 'preflight', lambda: ([{'code': 'agent', 'message': 'sign in', 'fix': 'oe agent signin codex'}], None))
     service = onboard.RepositoryOnboarding(RepositoryRegistry(projects={}), None, AsyncMock())
 
     async def run():
@@ -680,3 +680,46 @@ other = true
     assert saved['repo_modes'] == {'other': 'connected'}
     assert saved['trusted_repos'] == {'other': True}
     assert '# preserve' in config.read_text()
+
+
+def test_onboarding_credential_can_clone_and_trust_but_service_cannot(tmp_path, monkeypatch):
+    from test_web_app import ConcurrentRunner, _session
+    from engine.apps.web.api import create_app
+    from engine.apps.web.github_login import GitHubLoginConfig
+    from engine.runtime import WorkflowCatalog
+
+    target = tmp_path / 'repo'
+    config = tmp_path / 'engine.toml'
+    clone = Mock(side_effect=lambda repos, **kwargs: target.mkdir())
+    monkeypatch.setattr(onboard, 'preflight', lambda: ([], 'codex'))
+    monkeypatch.setattr(onboard, 'validate_checkout', lambda *args: None)
+    monkeypatch.setattr(onboard, 'ensure_repository_checkouts', clone)
+    monkeypatch.setattr(onboard, 'register_starters', AsyncMock())
+    monkeypatch.setattr(RepositoryRegistry, '_project', lambda self, path: 'owner/repo')
+    runner = ConcurrentRunner()
+    app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
+                     workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=config,
+                     github_login_config=GitHubLoginConfig('client', 'secret', 'http://localhost/api/auth/github/callback'),
+                     service_token=lambda: 's' * 40, onboarding_token=lambda: 'o' * 40)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
+            body = {'repository': 'https://github.com/owner/repo', 'path': str(target), 'trusted': True}
+            response = await client.post('/api/repositories/onboard', json=body, headers={'Authorization': 'Bearer ' + 's' * 40})
+            assert response.status_code == 401
+            clone.assert_not_called()
+            assert not config.exists()
+            headers = {'Authorization': 'Bearer ' + 'o' * 40}
+            response = await client.post('/api/repositories/onboard', json=body, headers=headers)
+            assert response.status_code == 202
+            assert 'secret' not in response.text
+            for _ in range(100):
+                response = await client.get('/api/repositories/onboard/' + response.json()['id'], headers=headers)
+                assert 'secret' not in response.text
+                if response.json()['status'] in {'complete', 'failed'}:
+                    break
+                await asyncio.sleep(.01)
+            assert response.json()['status'] == 'complete', response.text
+            assert 'trusted = true' in config.read_text()
+            clone.assert_called_once()
+            assert (await client.get('/api/config', headers=headers)).status_code == 401
+    asyncio.run(run())

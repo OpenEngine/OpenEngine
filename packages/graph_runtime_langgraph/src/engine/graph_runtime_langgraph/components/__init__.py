@@ -34,7 +34,7 @@ the only thing the split would have bought.
 """
 
 from engine.graph_runtime_langgraph.acp import ACPNode, NoWorkingDirectoryError
-from engine.graph_runtime_langgraph.components.ci_check import CICheck
+from engine.graph_runtime_langgraph.components.ci_check import CICheck, wake_ci
 from engine.graph_runtime_langgraph.components.findings import (
     REVIEW_FACETS,
     Finding,
@@ -66,4 +66,5 @@ __all__ = [
     "TriageNode",
     "WorkspaceNode",
     "checkout",
+    "wake_ci",
 ]

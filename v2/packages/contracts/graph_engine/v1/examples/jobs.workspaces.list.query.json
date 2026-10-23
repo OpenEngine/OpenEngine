@@ -1,0 +1,5 @@
+{
+  "message": "ListJobWorkspacesQuery",
+  "subject": "oe.v1.ge.query.jobs.job_42.workspaces.list",
+  "payload": { "params": { "execution_id": "exec_42a" } }
+}

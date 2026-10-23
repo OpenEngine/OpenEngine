@@ -1,0 +1,14 @@
+{
+  "summary": "Second page of open or paused jobs running the review graph, with the cursor the first page returned for the same filters.",
+  "message": "ListJobsQuery",
+  "subject": "oe.v1.ge.query.jobs.list",
+  "payload": {
+    "request_id": "req_jobs_p2",
+    "params": {
+      "state": ["open", "paused"],
+      "graph_id": "graph_review",
+      "limit": 1,
+      "cursor": "eyJ0IjoiMjAyNi0xMC0xOVQyMTozMDowMVoiLCJpZCI6ImpvYl80MyJ9"
+    }
+  }
+}

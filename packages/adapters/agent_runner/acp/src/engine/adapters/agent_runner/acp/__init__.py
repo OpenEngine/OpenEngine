@@ -41,12 +41,13 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langgraph_acp import (
     ACPAgentProvider,
@@ -105,6 +106,7 @@ from engine.ports.agent_runner import (
 )
 from engine.ports.permissions import PermissionTranslator
 from engine.ports.workspace_provider import WorkspaceProvider
+from engine.runtime.config import EngineConfig
 from engine.runtime.session_grants import PATH_COLLECTION_FIELDS, PATH_FIELDS
 from engine.runtime.transcript import flatten
 
@@ -117,6 +119,9 @@ CODEX_AGENT_MODE = "read-only"
 
 #: The Codex sandbox names `codex_acp_runner` accepts.
 CODEX_SANDBOXES = tuple(SANDBOX_POLICIES)
+
+#: The Claude Code binary claude-agent-acp runs, in place of the one it bundles.
+CLAUDE_EXECUTABLE_VARIABLE = "CLAUDE_CODE_EXECUTABLE"
 
 NO_ATTRIBUTION_INSTRUCTIONS = (
     "Do not add AI attribution to commits or pull requests, including "
@@ -884,6 +889,100 @@ def _count(usage: Mapping[str, Any], name: str) -> int:
 # --- the agents Engine ships with ------------------------------------------
 
 
+def installed_codex(env: Mapping[str, str] | None = None, *, path: str = "") -> str | None:
+    """The operator's Codex: `path` (`[runners.codex].path`), `CODEX_PATH`,
+    `ENGINE_CODEX_PATH`, or `codex` on `PATH`.
+
+    Resolved here, before npx prepends the adapter's bundled executables to
+    `PATH`. The `@openai/codex` codex-acp bundles trails the installed CLI, and
+    may not know the model the operator's configuration names. `None` leaves
+    codex-acp to its bundled copy.
+    """
+    env = env or {}
+    return (
+        path
+        or env.get("CODEX_PATH")
+        or os.environ.get("CODEX_PATH")
+        or env.get(CODEX_PATH_VARIABLE)
+        or os.environ.get(CODEX_PATH_VARIABLE)
+        or shutil.which("codex", path=env.get("PATH"))
+    )
+
+
+def agent_provider(config: EngineConfig, agent: str, /, **overrides: Any) -> ACPAgentProvider:
+    """The provider for `agent` (`codex`, `claude` or `opencode`).
+
+    `overrides` reach the provider's constructor, for a caller that needs its
+    own `permissions` or `name`. `[runners.<agent>].path` names the binary:
+    Codex runs the one `installed_codex` resolves, with the path first; Claude's
+    adapter runs it as `CLAUDE_CODE_EXECUTABLE`; OpenCode is started as
+    `<path> acp` unless a `command` override names something else. An `env`
+    override is laid over these.
+    """
+    path = config.runner_paths.get(agent, "")
+    env = dict(overrides.pop("env", None) or {})
+    if agent == "codex":
+        codex = installed_codex(path=path)
+        env = {**({"CODEX_PATH": codex} if codex else {}), **env}
+        return CodexACPProvider(env=env or None, **overrides)
+    if agent == "claude":
+        env = {**({CLAUDE_EXECUTABLE_VARIABLE: path} if path else {}), **env}
+        return ClaudeACPProvider(env=env or None, **overrides)
+    if agent == "opencode":
+        if path and tuple(overrides.get("command", OPENCODE_ACP_COMMAND)) == OPENCODE_ACP_COMMAND:
+            overrides["command"] = (path, "acp")
+        return OpenCodeACPProvider(env=env or None, **overrides)
+    raise ValueError(f"unknown agent {agent!r}; expected one of: codex, claude, opencode")
+
+
+#: What each built-in agent's provider launches when it is given no binary.
+_ADAPTER_COMMANDS = {
+    "codex": CODEX_ACP_COMMAND, "claude": CLAUDE_ACP_COMMAND, "opencode": OPENCODE_ACP_COMMAND,
+}
+
+
+def runner_binary(config: EngineConfig, agent: str) -> tuple[str, str]:
+    """The binary `agent_provider` runs for `agent`, and the version it reports.
+
+    With no binary of its own, the agent is the npm package npx launches, at
+    the version the adapter pins: e.g. Claude Code bundled with claude-agent-acp.
+    """
+    path = config.runner_paths.get(agent, "")
+    if agent == "codex":
+        path = installed_codex(path=path) or ""
+    if path:
+        return path, binary_version(path)
+    package = next((part for part in _ADAPTER_COMMANDS.get(agent, ()) if "@" in part[1:]), "")
+    name, _, version = package.rpartition("@")
+    return (f"npx {name}", version) if name else ("", "")
+
+
+@functools.cache
+def binary_version(path: str) -> str:
+    """What `path --version` reports, or empty if it will not say."""
+    if not path:
+        return ""
+    try:
+        result = subprocess.run(
+            (path, "--version"), capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = (result.stdout or result.stderr).strip().splitlines()
+    return lines[0].strip() if result.returncode == 0 and lines else ""
+
+
+def agent_providers(
+    config: EngineConfig,
+) -> tuple[CodexACPProvider, ClaudeACPProvider, OpenCodeACPProvider]:
+    """The agents Engine ships with, configured from `config`."""
+    return (
+        cast(CodexACPProvider, agent_provider(config, "codex")),
+        cast(ClaudeACPProvider, agent_provider(config, "claude")),
+        cast(OpenCodeACPProvider, agent_provider(config, "opencode")),
+    )
+
+
 def codex_acp_runner(
     *,
     command: Sequence[str] = CODEX_ACP_COMMAND,
@@ -894,13 +993,15 @@ def codex_acp_runner(
     workspace_provider: WorkspaceProvider | None = None,
     attribution: bool = True,
     env: Mapping[str, str] | None = None,
+    config: EngineConfig | None = None,
 ) -> ACPAgentRunner:
     """Codex, through codex-acp, in the sandbox Engine names.
 
     codex-acp cannot be asked for a sandbox, so it is handed a Codex that
     enforces one: `CODEX_PATH` names `codex_policy`, which pins every turn to
-    `sandbox` with `on-request` approval. The operator's own `CODEX_PATH`, if
-    any, is the Codex that runs underneath. Attribution reaches Codex as
+    `sandbox` with `on-request` approval. The Codex `installed_codex` resolves
+    -- `[runners.codex].path` from `config` first -- is the one that runs
+    underneath. Attribution reaches Codex as
     `developer_instructions` in `CODEX_CONFIG`, which codex-acp reads from its
     environment rather than from the protocol.
     """
@@ -912,7 +1013,8 @@ def codex_acp_runner(
         "CODEX_PATH": _codex_policy_launcher(),
         SANDBOX_VARIABLE: sandbox,
     }
-    codex_path = (env or {}).get("CODEX_PATH") or os.environ.get("CODEX_PATH")
+    config = config or EngineConfig()
+    codex_path = installed_codex(env, path=config.runner_paths.get("codex", ""))
     if codex_path:
         codex_env[CODEX_PATH_VARIABLE] = codex_path
     if not attribution:
@@ -920,7 +1022,7 @@ def codex_acp_runner(
             {"developer_instructions": NO_ATTRIBUTION_INSTRUCTIONS}
         )
     return ACPAgentRunner(
-        CodexACPProvider(command=command, env=codex_env),
+        agent_provider(config, "codex", command=command, env=codex_env),
         working_directory=working_directory,
         model=model,
         timeout_seconds=timeout_seconds,
@@ -964,6 +1066,7 @@ def claude_acp_runner(
     attribution: bool = True,
     output_style: ResponseStyle | None = None,
     env: Mapping[str, str] | None = None,
+    config: EngineConfig | None = None,
 ) -> ACPAgentRunner:
     """Claude Code, through claude-agent-acp, with Engine's tool settings.
 
@@ -976,6 +1079,8 @@ def claude_acp_runner(
     The session is pinned to Claude's `default` permission mode. The adapter
     otherwise starts in whatever mode the operator's own Claude settings name,
     and one like `auto` approves requests without them ever reaching Engine.
+
+    The Claude Code underneath is `[runners.claude].path` from `config`, when set.
     """
     base = claude_session_config(attribution=attribution, output_style=output_style)
     options: dict[str, Any] = dict((base or {}).get("claudeCode", {}).get("options", {}))
@@ -983,7 +1088,7 @@ def claude_acp_runner(
     if tools is not None:
         options["tools"] = list(tools)
     return ACPAgentRunner(
-        ClaudeACPProvider(command=command, env=env),
+        agent_provider(config or EngineConfig(), "claude", command=command, env=env),
         working_directory=working_directory,
         model=model,
         timeout_seconds=timeout_seconds,
@@ -1007,6 +1112,7 @@ def opencode_acp_runner(
     workspace_provider: WorkspaceProvider | None = None,
     attribution: bool = True,
     env: Mapping[str, str] | None = None,
+    config: EngineConfig | None = None,
 ) -> ACPAgentRunner:
     """OpenCode, through `opencode acp`, asking before it does anything but read.
 
@@ -1025,6 +1131,9 @@ def opencode_acp_runner(
 
     Attribution reaches OpenCode as an instructions file, the only way it
     takes instructions from configuration.
+
+    `[runners.opencode].path` from `config`, when set, replaces the pinned
+    `npx` command, as long as `command` is left at that default.
     """
     unasked = "deny" if read_only else "ask"
     permission = {
@@ -1041,20 +1150,22 @@ def opencode_acp_runner(
         "list": "allow",
         "external_directory": unasked,
     }
-    config: dict[str, Any] = {
+    opencode_config: dict[str, Any] = {
         "permission": permission,
         "agent": {
             name: {"permission": permission} for name in OPENCODE_SESSION_AGENTS
         },
     }
     if not attribution:
-        config["instructions"] = [_no_attribution_instructions()]
+        opencode_config["instructions"] = [_no_attribution_instructions()]
     return ACPAgentRunner(
-        OpenCodeACPProvider(
+        agent_provider(
+            config or EngineConfig(),
+            "opencode",
             command=command,
             env={
                 **(env or {}),
-                "OPENCODE_CONFIG_CONTENT": json.dumps(config),
+                "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
                 "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
             },
         ),
@@ -1081,9 +1192,12 @@ def _no_attribution_instructions() -> str:
 
 __all__ = [
     "ACP_PERMISSION_TRANSLATOR",
+    "CLAUDE_EXECUTABLE_VARIABLE",
     "CODEX_AGENT_MODE",
     "CODEX_SANDBOXES",
     "READ_ONLY_TOOLS",
+    "agent_provider",
+    "agent_providers",
     "NO_ATTRIBUTION_INSTRUCTIONS",
     "ACPAgentRunner",
     "ACPExecutionError",
@@ -1093,6 +1207,9 @@ __all__ = [
     "claude_acp_runner",
     "claude_session_config",
     "codex_acp_runner",
+    "binary_version",
+    "installed_codex",
     "opencode_acp_runner",
+    "runner_binary",
     "render_prompt",
 ]

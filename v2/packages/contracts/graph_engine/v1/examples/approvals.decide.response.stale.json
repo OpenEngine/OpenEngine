@@ -1,0 +1,19 @@
+{
+  "summary": "Rejected: a second decider answered after the approval was already decided.",
+  "message": "DecideApprovalResponse",
+  "in_reply_to": "oe.v1.ge.control.approvals.wfappr_ship42.decide",
+  "payload": {
+    "command_id": "cmd_decide_ship_2",
+    "status": "rejected",
+    "error": {
+      "code": "STALE_APPROVAL",
+      "message": "wfappr_ship42 was already approved.",
+      "retryable": false,
+      "details": {
+        "approval_id": "wfappr_ship42",
+        "reason": "already_decided",
+        "current_state": "approved"
+      }
+    }
+  }
+}

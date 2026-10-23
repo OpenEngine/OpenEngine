@@ -1,0 +1,88 @@
+apiVersion: openengine.cc/v1alpha1
+kind: Tool
+metadata:
+  name: github-issue-comment
+  namespace: default
+  labels:
+    provider: github
+spec:
+  description: Add a comment to an issue in the OpenEngine repository.
+  connectionRef:
+    name: github-openengine
+  executor:
+    adapter: nango
+    operation: github-issue-comment
+  inputSchema:
+    type: object
+    additionalProperties: false
+    required: [issueNumber, body]
+    properties:
+      issueNumber:
+        type: integer
+        minimum: 1
+      body:
+        type: string
+        minLength: 1
+  outputSchema:
+    type: object
+    required: [commentId, url]
+    properties:
+      commentId:
+        type: string
+      url:
+        type: string
+  configuration:
+    repository: spiralsoft/openengine
+  execution:
+    timeoutSeconds: 60
+    recovery: reconcile
+    maxAttempts: 3
+status:
+  phase: Ready
+  observedGeneration: 1
+---
+apiVersion: openengine.cc/v1alpha1
+kind: ToolGrant
+metadata:
+  name: reviewer-comment-access
+  namespace: default
+spec:
+  subject:
+    workspaceRef:
+      name: review-job-88
+    stepAttemptId: stepa_88_review_1
+  toolRef:
+    name: github-issue-comment
+  constraints:
+    issueNumbers: [42]
+  expiresAt: "2026-10-22T00:00:00Z"
+status:
+  phase: Active
+  toolUid: tool-uid-123
+---
+apiVersion: openengine.cc/v1alpha1
+kind: ToolInvocation
+metadata:
+  name: ti-123
+  namespace: default
+  uid: invocation-uid-123
+  generation: 1
+spec:
+  toolRef:
+    name: github-issue-comment
+    uid: tool-uid-123
+    generation: 1
+  workspaceRef:
+    name: review-job-88
+  workspaceGeneration: 3
+  stepAttemptId: stepa_88_review_1
+  arguments:
+    issueNumber: 42
+    body: Review complete.
+status:
+  phase: Accepted
+  authorization:
+    grantRefs:
+      - name: reviewer-comment-access
+        uid: grant-uid-123
+  attemptCount: 0

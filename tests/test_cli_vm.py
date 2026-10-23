@@ -38,7 +38,7 @@ def test_switch_to_vm_and_back_preserves_settings_comments_and_permissions(confi
     assert settings['server']['port'] == 4364
     assert config.read_text().startswith('# Keep this comment')
     assert stat.S_IMODE(config.stat().st_mode) == 0o600
-    assert 'engine daemon restart' in capsys.readouterr().out
+    assert 'oe daemon restart' in capsys.readouterr().out
     monkeypatch.setattr(vm, 'detect_support', lambda **_: pytest.fail('process selection must not probe SmolVM'))
     assert cli.main(['vm', 'process']) == 0
     assert tomllib.loads(config.read_text())['sandbox'] == {'backend': 'process', 'image': str(image)}
@@ -53,7 +53,7 @@ def test_vm_prerequisite_failures_preserve_configuration(config, tmp_path, monke
     monkeypatch.setattr(vm, 'detect_support', lambda **_: SmolvmSupport(False, 'smolvm is unavailable'))
     assert cli.main(['vm', 'smolvm', '--image', str(image)]) == 1
     assert config.read_bytes() == original
-    assert 'engine vm:' in capsys.readouterr().err
+    assert 'oe vm:' in capsys.readouterr().err
 
 
 def test_reuse_configured_image_resolves_relative_to_config(config, tmp_path, monkeypatch):

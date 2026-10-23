@@ -25,6 +25,24 @@ DEFAULT_CONFIG_TEMPLATE = Path(__file__).with_name("default-engine.toml")
 #: What a repository table's `mode` may say a repository's WorkOrders run as.
 REPO_MODES = tuple(str(mode) for mode in ForgeMode)
 """A distributable `engine.toml`: loopback only, nothing machine-specific."""
+#: What `model: default`, `model: elevated` and `model: cheapest` mean when a
+#: backend says nothing. A blank tier leaves the agent to its own default, for
+#: Codex the model `~/.codex/config.toml` names.
+DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
+    "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
+    "codex": {"cheapest": "", "default": "", "elevated": ""},
+    "opencode": {"cheapest": "", "default": "", "elevated": ""},
+}
+
+
+def merge_model_tiers(
+    model_tiers: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[str, dict[str, str]]:
+    """`[runners.<runner>.models]` over `DEFAULT_MODEL_TIERS`, tier by tier."""
+    return {
+        runner: {**DEFAULT_MODEL_TIERS.get(runner, {}), **models}
+        for runner, models in {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}.items()
+    }
 
 
 class EngineConfigError(ValueError):
@@ -58,7 +76,7 @@ class WorkflowsConfig:
 
 @dataclass(frozen=True, slots=True)
 class OnboardingConfig:
-    """Where `engine repo add` clones a repository when no path is given.
+    """Where `oe repo add` clones a repository when no path is given.
 
     `directory`, when set, replaces the daemon home's `code` subdirectory, so
     a deployment that keeps checkouts elsewhere need not pass `--path` on every
@@ -68,13 +86,13 @@ class OnboardingConfig:
     directory: str = ""
 
 
-#: What `engine agent claude|codex|opencode` serves when `[sessions] tools` says nothing: an implementation node's tools.
+#: What `oe agent claude|codex|opencode` serves when `[sessions] tools` says nothing: an implementation node's tools.
 DEFAULT_SESSION_TOOLS: tuple[str, ...] = ("git_subcommand", "open_pull_request")
 
 
 @dataclass(frozen=True, slots=True)
 class SessionsConfig:
-    """`[sessions]`: what an interactive `engine agent claude|codex|opencode` session is given."""
+    """`[sessions]`: what an interactive `oe agent claude|codex|opencode` session is given."""
 
     tools: tuple[str, ...] = DEFAULT_SESSION_TOOLS
     """The repository tools its agent reaches through Engine, as an implementation node's `tools`."""
@@ -82,7 +100,7 @@ class SessionsConfig:
 
 @dataclass(frozen=True, slots=True)
 class GraphsConfig:
-    """How this backend treats graphs registered through `engine graph add`."""
+    """How this backend treats graphs registered through `oe graph add`."""
 
     allow_python: bool = True
     """Whether a Python graph may be uploaded. Python runs with the daemon's
@@ -192,6 +210,9 @@ class GitHubConfig:
     gh_config_dir: str = ""
     """`gh` login directory (GH_CONFIG_DIR), or empty to inherit the provider environment."""
 
+    ssh_key: str = ""
+    """SSH private key for daemon git operations, or empty to inherit SSH settings."""
+
     @property
     def webhook_repositories(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(
@@ -279,15 +300,18 @@ class EngineConfig:
     """`[runners.<runner>.models]`: tier name to model, per runner.
 
     What a graph's `model: elevated` means on this backend, so graphs name a
-    tier and each backend decides which model that is.
+    tier and each backend decides which model that is. A blank tier leaves
+    the agent to its own default; `merge_model_tiers` fills in the rest.
     """
+    runner_paths: Mapping[str, str] = field(default_factory=dict)
+    """`[runners.<runner>.path]`: the agent binary a runner launches, `~` expanded."""
     attribution: bool = True
     repo_configs: Mapping[str, RepoConfig] = field(default_factory=dict)
     repos: Mapping[str, str] = field(default_factory=dict)
     repo_modes: Mapping[str, str] = field(default_factory=dict)
     """`[repos]` names mapped to the mode their WorkOrders run in.
 
-    Written by `engine repo add`. A repository named `disconnected` here has every
+    Written by `oe repo add`. A repository named `disconnected` here has every
     WorkOrder on it run disconnected; one not named runs as the workflow says.
     """
     repository_trust: Mapping[str, bool] = field(default_factory=dict)
@@ -324,6 +348,10 @@ class LoadedEngineConfig:
     @property
     def gh_config_dir(self) -> Path | None:
         return self._config_directory(self.config.github.gh_config_dir)
+
+    @property
+    def ssh_key(self) -> Path | None:
+        return self._config_directory(self.config.github.ssh_key)
 
     @property
     def workflows_directory(self) -> Path | None:
@@ -417,6 +445,8 @@ def load_engine_config(
     ):
         if directory is not None and not directory.is_dir():
             raise EngineConfigError(f"{label} is not an existing directory: {directory}")
+    if loaded.ssh_key is not None and not loaded.ssh_key.is_file():
+        raise EngineConfigError(f"github.ssh_key is not an existing file: {loaded.ssh_key}")
     return loaded
 
 
@@ -483,7 +513,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
     github = _table(document.get("github", {}), "github")
     _reject_unknown(
         github,
-        {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow", "gh_config_dir"},
+        {"repository", "repositories", "host_aliases", "resolve_addressed_threads", "review_request_workflow", "gh_config_dir", "ssh_key"},
         "github",
     )
     gh_config_dir = (
@@ -609,11 +639,21 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
                 f"sessions.tools contains unknown tool {tool!r}; expected one of: {', '.join(REPOSITORY_TOOL_NAMES)}"
             )
     model_tiers: dict[str, dict[str, str]] = {}
+    runner_paths: dict[str, str] = {}
     for runner, settings in _table(document.get("runners", {}), "runners").items():
         settings = _table(settings, f"runners.{runner}")
-        _reject_unknown(settings, {"models"}, f"runners.{runner}")
+        _reject_unknown(settings, {"models", "path"}, f"runners.{runner}")
+        if "path" in settings:
+            # A relative path would resolve against whatever directory the
+            # agent starts in, which may be an untrusted checkout.
+            path = Path(_nonblank_string(settings["path"], f"runners.{runner}.path")).expanduser()
+            if not path.is_absolute():
+                raise EngineConfigError(
+                    f"runners.{runner}.path must be absolute or start with ~: {settings['path']!r}"
+                )
+            runner_paths[runner] = str(path)
         model_tiers[runner] = {
-            tier: _nonblank_string(model, f"runners.{runner}.models.{tier}")
+            tier: _optional_nonblank_string(model, f"runners.{runner}.models.{tier}")
             for tier, model in _table(settings.get("models", {}), f"runners.{runner}.models").items()
         }
 
@@ -693,6 +733,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
             repositories=github_repositories,
             resolve_addressed_threads=resolve_addressed_threads,
             gh_config_dir=gh_config_dir,
+            ssh_key=_nonblank_string(github["ssh_key"], "github.ssh_key") if "ssh_key" in github else "",
             host_aliases={
                 _nonblank_string(alias, "github.host_aliases").lower():
                 _nonblank_string(target, "github.host_aliases").lower()
@@ -716,6 +757,7 @@ def parse_engine_config(document: Mapping[str, object]) -> EngineConfig:
         graphs=GraphsConfig(allow_python=allow_python),
         sessions=SessionsConfig(tools=tuple(session_tools)),
         model_tiers=model_tiers,
+        runner_paths=runner_paths,
         approvals=ApprovalConfig(
             auto_approve=auto_approve,
             allow=tuple(capabilities),
@@ -975,6 +1017,7 @@ __all__ = [
     "ClaudeConfig",
     "DEFAULT_CONFIG_NAME",
     "DEFAULT_CONFIG_TEMPLATE",
+    "DEFAULT_MODEL_TIERS",
     "EngineConfig",
     "EngineConfigError",
     "GitHubConfig",
@@ -991,5 +1034,6 @@ __all__ = [
     "WorkflowsConfig",
     "describe_loaded_config",
     "load_engine_config",
+    "merge_model_tiers",
     "parse_engine_config",
 ]

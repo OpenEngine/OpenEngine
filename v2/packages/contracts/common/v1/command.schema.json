@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Command envelope",
+  "description": "Request body of every control subject (`oe.v1.{service}.control.…`), sent with NATS request/reply. The final element of `causal_path` must equal `command_id`; JSON Schema cannot say so, and `tooling/validate.py` checks it. Service schemas narrow `payload` with `allOf`.",
+  "type": "object",
+  "required": ["command_id", "causal_path", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "command_id": { "$ref": "types.schema.json#/$defs/command_id" },
+    "causal_path": { "$ref": "types.schema.json#/$defs/causal_path" },
+    "expected_version": {
+      "description": "Accept only if the target resource is still at this version; otherwise reject with VERSION_CONFLICT. Only meaningful on subjects that name an existing resource.",
+      "$ref": "types.schema.json#/$defs/resource_version"
+    },
+    "deadline_at": {
+      "description": "Latest time the command may be accepted. A command not yet accepted by then is rejected with DEADLINE_EXCEEDED. The deadline never cancels work already accepted.",
+      "$ref": "types.schema.json#/$defs/utc_timestamp"
+    },
+    "payload": { "type": "object", "description": "Typed inputs of the operation." }
+  },
+  "$defs": {
+    "headers": {
+      "description": "NATS headers a command may carry: the sender's trace context.",
+      "$ref": "types.schema.json#/$defs/trace_headers"
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "summary": "Execution → step instance → attempts → workspace. The first attempt's result failed a gate and GE retried it.",
+  "message": "ListExecutionStepsResponse",
+  "in_reply_to": "oe.v1.ge.query.executions.exec_42a.steps.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "step_instance_id": "stepi_42_sec",
+          "execution_id": "exec_42a",
+          "node_id": "reviewers_security",
+          "status": "succeeded",
+          "entered_from": ["stepi_42_impl"],
+          "attempts": [
+            {
+              "step_attempt_id": "stepa_42_sec_1",
+              "number": 1,
+              "status": "failed",
+              "workspace": {
+                "workspace_id": "ws_42",
+                "runtime_generation": 1,
+                "session_id": "session_42_sec",
+                "attempt_id": "attempt_42_sec0"
+              },
+              "evaluation": {
+                "task_status": "completed",
+                "verdict": "retry",
+                "gate": "outputs.findings required"
+              },
+              "started_at": "2026-10-19T22:05:00Z",
+              "ended_at": "2026-10-19T22:09:00Z"
+            },
+            {
+              "step_attempt_id": "stepa_42_sec_2",
+              "number": 2,
+              "status": "succeeded",
+              "workspace": {
+                "workspace_id": "ws_42",
+                "runtime_generation": 1,
+                "session_id": "session_42_sec",
+                "attempt_id": "attempt_42_sec"
+              },
+              "evaluation": {
+                "task_status": "completed",
+                "result_ref": "artifact_sec_findings",
+                "verdict": "pass"
+              },
+              "started_at": "2026-10-19T22:10:00Z",
+              "ended_at": "2026-10-19T22:40:00Z"
+            }
+          ],
+          "transition": { "to": ["reranker"], "kind": "join" },
+          "entered_at": "2026-10-19T22:05:00Z",
+          "ended_at": "2026-10-19T22:40:00Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

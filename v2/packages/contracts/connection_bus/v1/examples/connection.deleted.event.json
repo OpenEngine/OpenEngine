@@ -1,0 +1,19 @@
+{
+  "message": "ConnectionDeleted",
+  "subject": "oe.v1.cxn.events.connections.conn_acme_gh_legacy.connection.deleted",
+  "headers": { "Nats-Msg-Id": "evt_01JAXCDELD" },
+  "payload": {
+    "event_id": "evt_01JAXCDELD",
+    "event_type": "connection.deleted",
+    "occurred_at": "2026-10-19T23:00:00Z",
+    "producer": "cxn",
+    "causal_path": ["cmd_01JAXCDEL", "evt_01JAXCDELD"],
+    "resources": { "connection_id": "conn_acme_gh_legacy" },
+    "resource_version": 11,
+    "payload": {
+      "operation": { "operation_id": "op_01JAXCDEL", "command_id": "cmd_01JAXCDEL" },
+      "failed_deliveries": 1,
+      "reason": "Replaced by conn_acme_gh"
+    }
+  }
+}

@@ -1,7 +1,7 @@
 # Onboarding a repository
 
-Run `engine repo add .` or `engine repo add /path/to/repo` to register an
-existing GitHub or GitLab checkout. Run `engine repo add <github-or-gitlab-url>`
+Run `oe repo add .` or `oe repo add /path/to/repo` to register an
+existing GitHub or GitLab checkout. Run `oe repo add <github-or-gitlab-url>`
 to clone and register a remote repository, preserving its HTTPS or SSH transport.
 Use `--path /absolute/checkout` to select the clone destination. Connected mode
 is the default; use `--mode disconnected` for local-only work.
@@ -20,7 +20,7 @@ MCP clients can call `onboard_repository(repository, path?, mode?)`, then poll
 `repository_onboarding_status(job_id)` using the returned `id`. All three surfaces
 use the same daemon job and display its progress and actionable failures.
 
-The daemon account needs git and a signed-in agent (`engine agent signin claude`, `codex`, or `opencode`).
+The daemon account needs git and a signed-in agent (`oe agent signin claude`, `codex`, or `opencode`).
 Cloning uses the daemon account’s existing credentials for the supplied URL.
 Existing checkouts do not require remote access. Preflight failures leave the checkout and configuration untouched. Onboarding
 never changes credentials. Existing checkouts of the same remote are reused.
@@ -33,7 +33,7 @@ in that destination and leaves automatically discovered project-local files
 untouched. It updates the running daemon immediately and
 registers the four starter graphs for the `owner/repo` project. No restart is needed.
 The repository is ready to select in the WorkOrder form; the CLI prints a
-`engine graph run review --project owner/repo --repo /checkout/path --input ref=HEAD` command.
+`oe graph run review --project owner/repo --repo /checkout/path --input ref=HEAD` command.
 
 The web daemon accepts loopback hostnames (`localhost`, `127.0.0.1`, and `::1`).
 For access through another hostname or a reverse proxy, set `public_url` in the
@@ -143,3 +143,53 @@ live UI as part of rollout.
 
 Registering a repository does not configure its GitHub event routing;
 multi-repository webhooks are tracked in #709.
+
+## Dedicated GitHub accounts and authenticated CLI onboarding
+
+With GitHub login enabled, onboarding requires an operator browser session or a
+separate `ENGINE_ONBOARDING_TOKEN`. Set this secret in the daemon environment or
+in `.env` beside its selected `engine.toml`. Use at least 32 non-whitespace
+characters and a different value from `ENGINE_SERVICE_TOKEN`. An unset token
+disables bearer onboarding; using the service token as the onboarding token is
+rejected. File-based secrets are reread on each request for rotation.
+
+This is an operator credential: it explicitly permits cloning, rewriting repository
+configuration, registering starter graphs and setting `trusted=true` through
+onboarding. It authorizes only `POST /api/repositories/onboard` and
+`GET /api/repositories/onboard/{job_id}`. Keep it out of agents and general service
+clients. The general service token cannot onboard repositories or write repository
+trust through `/api/v1/repositories/trust`; use the browser for later trust changes.
+Host and browser Origin checks still apply.
+
+Set the same onboarding secret in your CLI environment, then configure a dedicated
+backend without changing the work-order backend:
+
+```sh
+oe backend add onboarding http://localhost:4364 --token-env ENGINE_ONBOARDING_TOKEN
+oe repo add git@github.com:owner/repo.git --backend onboarding --review-backend local
+```
+
+Use your daemon's actual URL and port. Continue using the regular backend and
+`ENGINE_SERVICE_TOKEN` for work orders.
+Replace `local` with your regular backend for the same daemon. `--review-backend`
+selects the backend in the printed review command; onboarding still uses
+`--backend onboarding`. Without it, an onboarding-token backend prints setup
+guidance instead of a review command that would fail authentication.
+
+For a dedicated GitHub account, configure both the GitHub CLI login directory and
+its SSH private key in the daemon's `engine.toml`:
+
+```toml
+[github]
+gh_config_dir = "~/.config/gh-work"
+ssh_key = "~/.ssh/id_ed25519_work"
+```
+
+`ssh_key` must name an existing file. It expands `~` and resolves relative paths
+beside the configuration file. The daemon exports a shell-quoted
+`GIT_SSH_COMMAND` with `IdentitiesOnly=yes` and `BatchMode=yes` before cloning;
+workspace fetches and pushes inherit it. The key must work without an interactive
+passphrase prompt. When omitted, the existing SSH environment is preserved.
+Restart the daemon after changing these settings. Clone failures report git's
+reason with URLs and embedded credentials redacted; publickey denials point to
+`[github] ssh_key`, and timeouts are named explicitly.

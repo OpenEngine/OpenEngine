@@ -95,9 +95,16 @@ export default function Home() {
                 Read the docs
               </Link>
               <Link className={styles.btn} href={siteConfig.customFields.repo}>
-                GitHub
+                ★ Star on GitHub
               </Link>
             </div>
+            <pre className={`${styles.install} ${styles.rise}`}>
+              <code>
+                npm i -g @openengine.cc/engine{'\n'}
+                cd your-repo{'\n'}
+                oe go "add a dark mode toggle"
+              </code>
+            </pre>
           </div>
 
           <figure className={styles.video}>

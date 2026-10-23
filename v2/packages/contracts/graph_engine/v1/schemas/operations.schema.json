@@ -1,0 +1,212 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Graph Engine operations",
+  "description": "Operation snapshots `oe.v1.ge.query.operations.{operation_id}.get` returns. Operation status says whether the command was carried out; it is not the job's or execution's status.",
+  "$defs": {
+    "ge_operation": {
+      "description": "A GE operation snapshot. `operation` is one of the control operations; `result` is narrowed by it.",
+      "allOf": [
+        { "$ref": "../../../common/v1/operation.schema.json" },
+        {
+          "properties": {
+            "operation": {
+              "enum": [
+                "graphs.apply",
+                "graphs.run",
+                "jobs.submit",
+                "jobs.steer",
+                "jobs.pause",
+                "jobs.resume",
+                "jobs.cancel",
+                "approvals.decide",
+                "loops.apply",
+                "loops.pause",
+                "loops.resume",
+                "loops.remove"
+              ]
+            }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "graphs.apply" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/graphs_apply_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "graphs.run" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/graphs_run_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "jobs.submit" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/jobs_submit_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "jobs.steer" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/jobs_steer_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "jobs.pause" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/jobs_pause_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "jobs.resume" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/jobs_resume_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "jobs.cancel" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/jobs_cancel_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "approvals.decide" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/approvals_decide_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "loops.apply" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/loops_apply_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "loops.pause" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/loops_pause_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "loops.resume" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/loops_resume_result" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "loops.remove" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/loops_remove_result" } } }
+        }
+      ]
+    },
+    "graphs_apply_result": {
+      "type": "object",
+      "required": ["graph", "created"],
+      "additionalProperties": false,
+      "properties": {
+        "graph": { "$ref": "graph.schema.json#/$defs/graph_ref" },
+        "created": {
+          "type": "boolean",
+          "description": "False when an unchanged definition matched an existing revision."
+        }
+      }
+    },
+    "graphs_run_result": {
+      "type": "object",
+      "required": ["job_id", "execution_id", "graph"],
+      "additionalProperties": false,
+      "properties": {
+        "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "graph": { "$ref": "graph.schema.json#/$defs/graph_ref" }
+      }
+    },
+    "jobs_submit_result": {
+      "type": "object",
+      "required": ["job_id"],
+      "additionalProperties": false,
+      "properties": {
+        "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" }
+      }
+    },
+    "jobs_steer_result": {
+      "description": "delivered: given to the targeted active work. follow_up: the job was finished, so a new execution was started carrying the instruction.",
+      "type": "object",
+      "required": ["disposition", "execution_id"],
+      "additionalProperties": false,
+      "properties": {
+        "disposition": { "type": "string", "enum": ["delivered", "follow_up"] },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" }
+      }
+    },
+    "jobs_pause_result": {
+      "type": "object",
+      "required": ["job_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "job_ids": {
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Every job the control applied to: the named job, plus descendants when the scope included them."
+        }
+      }
+    },
+    "jobs_resume_result": {
+      "type": "object",
+      "required": ["job_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "job_ids": {
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Every job the control applied to: the named job, plus descendants when the scope included them."
+        }
+      }
+    },
+    "jobs_cancel_result": {
+      "type": "object",
+      "required": ["job_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "job_ids": {
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Every job the control applied to: the named job, plus descendants when the scope included them."
+        }
+      }
+    },
+    "approvals_decide_result": {
+      "type": "object",
+      "required": ["approval_id", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+        },
+        "state": { "type": "string", "enum": ["approved", "rejected"] }
+      }
+    },
+    "loops_apply_result": {
+      "type": "object",
+      "required": ["loop_id", "version", "created"],
+      "additionalProperties": false,
+      "properties": {
+        "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" },
+        "created": { "type": "boolean", "description": "True when the apply created the loop, false when it updated one." }
+      }
+    },
+    "loops_pause_result": {
+      "type": "object",
+      "required": ["loop_id", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" }
+      }
+    },
+    "loops_resume_result": {
+      "type": "object",
+      "required": ["loop_id", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" }
+      }
+    },
+    "loops_remove_result": {
+      "type": "object",
+      "required": ["loop_id", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
+        "version": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_version" }
+      }
+    }
+  }
+}

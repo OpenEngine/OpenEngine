@@ -1,4 +1,4 @@
-"""`engine connect|connections|disconnect`: the service's shared source control and Slack."""
+"""`oe connect|connections|disconnect`: the service's shared source control and Slack."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from engine.cli.commands import add_list_alias
 EXIT_OK = 0
 EXIT_FAILED = 1
 PROVIDERS = ("gh", "github", "gitlab", "slack")
-#: What `engine disconnect` can undo; `gh` is the host's own login (`gh auth logout`).
+#: What `oe disconnect` can undo; `gh` is the host's own login (`gh auth logout`).
 DISCONNECTABLE = ("github", "gitlab", "slack")
 #: `/api/source-control/provider` values, by the provider name a command takes.
 SOURCE_CONTROL = {"gh": "gh-cli", "github": "github-oauth", "gitlab": "gitlab-oauth"}
@@ -170,7 +170,7 @@ def connections(arguments: argparse.Namespace) -> int:
         ensure_ready(backend)
         rows = connection_rows(backend, arguments.origin)
     except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
+        print(f"oe: {error}", file=sys.stderr)
         return EXIT_FAILED
     if arguments.json:
         print(json.dumps({"connections": rows}))
@@ -189,7 +189,7 @@ def disconnect(arguments: argparse.Namespace) -> int:
         body = {"origin": arguments.origin} if arguments.provider == "gitlab" else {}
         request(backend, f"/api/{arguments.provider}/disconnect", body)
     except (ValueError, RuntimeError) as error:
-        print(f"engine: {error}", file=sys.stderr)
+        print(f"oe: {error}", file=sys.stderr)
         return EXIT_FAILED
     print(f"Disconnected {arguments.provider}.")
     return EXIT_OK
@@ -210,5 +210,5 @@ def main(arguments: argparse.Namespace) -> int:
         print("Connected.")
         return EXIT_OK
     except (ValueError, RuntimeError, KeyError) as error:
-        print(f"engine: {error}", file=sys.stderr)
+        print(f"oe: {error}", file=sys.stderr)
         return EXIT_FAILED

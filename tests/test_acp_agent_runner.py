@@ -27,10 +27,15 @@ from engine.adapters.agent_runner.acp import (
     READ_ONLY_TOOLS,
     ACPAgentRunner,
     ACPToolsUnsupportedError,
+    agent_provider,
+    agent_providers,
     claude_acp_runner,
     codex_acp_runner,
     opencode_acp_runner,
 )
+from engine.apps.web.composition import added_agent
+from engine.graph_service.store import AgentRow
+from engine.runtime import EngineConfig
 from engine.domain import (
     AgentId,
     AgentProfile,
@@ -333,9 +338,11 @@ def test_codex_s_questions_read_the_same_as_claude_s() -> None:
 
 
 @pytest.mark.parametrize("sandbox", CODEX_SANDBOXES)
-def test_codex_runs_in_the_sandbox_engine_names(sandbox: str) -> None:
+def test_codex_runs_in_the_sandbox_engine_names(sandbox: str, monkeypatch) -> None:
     """codex-acp is handed a Codex that holds every turn to `sandbox`."""
-    runner = codex_acp_runner(sandbox=sandbox)
+    monkeypatch.delenv("CODEX_PATH", raising=False)
+    monkeypatch.delenv("ENGINE_CODEX_PATH", raising=False)
+    runner = codex_acp_runner(sandbox=sandbox, env={"PATH": ""})
     env = runner.provider.env
 
     # A person reviews, never a model on their behalf.
@@ -369,6 +376,115 @@ def test_the_operator_s_codex_still_runs_under_the_sandbox() -> None:
 
     assert env["ENGINE_CODEX_PATH"] == "/opt/codex"
     assert env["CODEX_PATH"] != "/opt/codex"
+
+
+def test_codex_uses_installed_cli_before_npx_changes_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_PATH", raising=False)
+    monkeypatch.delenv("ENGINE_CODEX_PATH", raising=False)
+    installed = tmp_path / "codex"
+    installed.write_text("#!/bin/sh\nexit 0\n")
+    installed.chmod(0o755)
+    env = codex_acp_runner(env={"PATH": str(tmp_path)}).provider.env
+
+    assert env["ENGINE_CODEX_PATH"] == str(installed)
+    assert env["CODEX_PATH"] != str(installed)
+
+
+def _install_codex(directory: Path, monkeypatch) -> Path:
+    """A `codex` on an otherwise empty `PATH`, with no `CODEX_PATH` set."""
+    monkeypatch.delenv("CODEX_PATH", raising=False)
+    monkeypatch.delenv("ENGINE_CODEX_PATH", raising=False)
+    installed = directory / "codex"
+    installed.write_text("#!/bin/sh\nexit 0\n")
+    installed.chmod(0o755)
+    monkeypatch.setenv("PATH", str(directory))
+    return installed
+
+
+def test_a_bare_codex_provider_is_pointed_at_the_installed_cli(tmp_path, monkeypatch) -> None:
+    """Without it, codex-acp runs the Codex it bundles, which may not know the configured model."""
+    installed = _install_codex(tmp_path, monkeypatch)
+
+    assert agent_provider(EngineConfig(), "codex").env == {"CODEX_PATH": str(installed)}
+
+
+def test_the_operator_s_codex_path_wins_over_the_one_on_path(tmp_path, monkeypatch) -> None:
+    _install_codex(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODEX_PATH", "/opt/codex")
+
+    assert agent_provider(EngineConfig(), "codex").env == {"CODEX_PATH": "/opt/codex"}
+
+
+def test_codex_acp_keeps_its_bundled_cli_when_none_is_installed(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_PATH", raising=False)
+    monkeypatch.delenv("ENGINE_CODEX_PATH", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    assert agent_provider(EngineConfig(), "codex").env is None
+
+
+def test_the_configured_codex_path_wins_over_the_environment(tmp_path, monkeypatch) -> None:
+    _install_codex(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODEX_PATH", "/opt/codex")
+    monkeypatch.setenv("ENGINE_CODEX_PATH", "/opt/engine-codex")
+    config = EngineConfig(runner_paths={"codex": "/configured/codex"})
+
+    codex, _, _ = agent_providers(config)
+
+    assert codex.env == {"CODEX_PATH": "/configured/codex"}
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({"CODEX_PATH": "/opt/codex", "ENGINE_CODEX_PATH": "/opt/engine-codex"}, "/opt/codex"),
+        ({"ENGINE_CODEX_PATH": "/opt/engine-codex"}, "/opt/engine-codex"),
+        ({}, "installed"),
+    ],
+)
+def test_codex_resolves_the_environment_then_path(tmp_path, monkeypatch, environment, expected) -> None:
+    installed = _install_codex(tmp_path, monkeypatch)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    codex, _, _ = agent_providers(EngineConfig())
+
+    assert codex.env == {"CODEX_PATH": str(installed) if expected == "installed" else expected}
+
+
+def test_the_providers_keep_codex_s_bundled_cli_when_none_is_found(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_PATH", raising=False)
+    monkeypatch.delenv("ENGINE_CODEX_PATH", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    codex, claude, opencode = agent_providers(EngineConfig())
+
+    assert codex.env is None
+    assert (codex.name, claude.name, opencode.name) == ("codex", "claude", "opencode")
+
+
+def test_one_provider_takes_a_name_permissions_and_extra_environment(tmp_path, monkeypatch) -> None:
+    _install_codex(tmp_path, monkeypatch)
+    config = EngineConfig(runner_paths={"codex": "/configured/codex"})
+
+    async def permissions(request):
+        raise AssertionError(request)
+
+    codex = agent_provider(config, "codex", name="reviewer", permissions=permissions, env={"EXTRA": "1"})
+    claude = agent_provider(config, "claude", name="concierge")
+
+    assert (codex.name, codex.env) == ("reviewer", {"CODEX_PATH": "/configured/codex", "EXTRA": "1"})
+    assert codex.permissions is permissions
+    assert claude.name == "concierge"
+    with pytest.raises(ValueError, match="unknown agent 'qwen'"):
+        agent_provider(config, "qwen")
+
+
+def test_an_added_codex_agent_runs_the_installed_cli(tmp_path, monkeypatch) -> None:
+    installed = _install_codex(tmp_path, monkeypatch)
+    row = AgentRow(name="codex-fast", kind="codex", model="", url="", created_at="", updated_at="")
+
+    assert added_agent(row).env == {"CODEX_PATH": str(installed)}
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake Codex is a shell script")

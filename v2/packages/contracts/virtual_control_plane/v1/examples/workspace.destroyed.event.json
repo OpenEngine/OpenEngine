@@ -1,0 +1,19 @@
+{
+  "summary": "Step 5 of cancel-then-destroy.",
+  "message": "WorkspaceDestroyed",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.workspace.destroyed",
+  "headers": { "Nats-Msg-Id": "evt_destroy_a" },
+  "payload": {
+    "event_id": "evt_destroy_a",
+    "event_type": "workspace.destroyed",
+    "occurred_at": "2026-10-19T22:20:00Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_destroy_a2", "evt_destroy_a"],
+    "resources": { "workspace_id": "ws_a1" },
+    "resource_version": 8,
+    "payload": {
+      "operation": { "operation_id": "op_destroy_a2", "command_id": "cmd_destroy_a2" },
+      "retention": { "artifacts": "retain", "checkpoints": "delete" }
+    }
+  }
+}

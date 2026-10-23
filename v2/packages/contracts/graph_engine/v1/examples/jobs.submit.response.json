@@ -1,0 +1,11 @@
+{
+  "summary": "Accepted (and the identical reply to the retry). Completion: job.created, then execution.started.",
+  "message": "SubmitJobResponse",
+  "in_reply_to": "oe.v1.ge.control.jobs.submit",
+  "payload": {
+    "command_id": "cmd_submit_42",
+    "status": "accepted",
+    "operation_id": "op_submit_42",
+    "resource_id": "job_42"
+  }
+}

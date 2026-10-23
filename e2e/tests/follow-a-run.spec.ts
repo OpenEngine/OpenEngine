@@ -109,7 +109,7 @@ async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, high
  */
 async function distrust(terminal: Terminal) {
   await test.step("[nodoc] Say agents must ask before running commands here", async () => {
-    await terminal.run("engine repo untrust")
+    await terminal.run("oe repo untrust")
     await terminal.run("clear")
   })
 }
@@ -120,14 +120,14 @@ async function prepare(engine: Engine, terminal: Terminal, script: AgentScript) 
     engine.script(script)
     const file = path.join(engine.repository, "describe-project.yaml")
     writeFileSync(file, GRAPH)
-    await terminal.run("engine graph add describe-project.yaml")
+    await terminal.run("oe graph add describe-project.yaml")
   })
   await distrust(terminal)
 }
 
 /** Start the run and wait for the live view. */
 async function start(terminal: Terminal) {
-  await terminal.type("engine graph run describe-project")
+  await terminal.type("oe graph run describe-project")
   await terminal.press("Enter")
   await terminal.waitForText(/^\s+Graph\s+/m)
 }
@@ -166,7 +166,7 @@ In [Save Your First Graph](./test2doc-save-your-first-graph.mdx) you saved a gra
         )
 
         await step(
-          `This guide uses a graph with two steps. In your project's folder, save this as \`describe-project.yaml\`, then type \`engine graph add describe-project.yaml\` and press Enter to save it to OpenEngine, as in the last guide:
+          `This guide uses a graph with two steps. In your project's folder, save this as \`describe-project.yaml\`, then type \`oe graph add describe-project.yaml\` and press Enter to save it to OpenEngine, as in the last guide:
 
 \`\`\`yaml
 ${GRAPH}\`\`\`
@@ -174,7 +174,7 @@ ${GRAPH}\`\`\`
 \`plan\` and \`implementation\` are two of a graph's **stages**: groups of steps that happen one after another. The first stage plans the work and the second does it. Here each has one step: \`read\` looks at your README, then \`suggest\` proposes an improvement to it.`,
           async () => {
             writeFileSync(path.join(engine.repository, "describe-project.yaml"), GRAPH)
-            await terminal.run("engine graph add describe-project.yaml")
+            await terminal.run("oe graph add describe-project.yaml")
             await show(terminal, engine, testInfo, await terminal.row(/^registered describe-project v1\s/), "Your graph is saved")
           },
         )
@@ -182,11 +182,11 @@ ${GRAPH}\`\`\`
         await distrust(terminal)
 
         await step(
-          `Start the graph. Type \`engine graph run describe-project\` and press Enter.
+          `Start the graph. Type \`oe graph run describe-project\` and press Enter.
 
 The first time you run a graph in a folder, OpenEngine asks whether to trust it. Trusting a folder lets agents change files and run commands there without asking you first. Type \`n\` and press Enter: the agents will check with you before they run a command. You can change that choice later.`,
           async () => {
-            await terminal.type("engine graph run describe-project")
+            await terminal.type("oe graph run describe-project")
             await terminal.press("Enter")
           },
         )
@@ -267,11 +267,11 @@ If an agent asks to run a command, read the question. To allow it, type \`y\` an
         await test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
 
         await step(
-          `To see your runs afterwards, type \`engine runs list\` and press Enter.
+          `To see your runs afterwards, type \`oe runs list\` and press Enter.
 
 You'll see one row for each run, newest first, with the graph it ran and its status: *completed* when it finished, *cancelled* if you stopped it, and *running* if it's still going. You can leave the other columns alone.`,
           async () => {
-            const { output } = await terminal.run("engine runs list")
+            const { output } = await terminal.run("oe runs list")
             expect(output).toMatch(/^run-\S+\s.*\sdescribe-project v1\s+completed\s/m)
             await show(terminal, engine, testInfo, await terminal.row(/^run-\S+\s.*\sdescribe-project v1\s+completed\s/), "Your run, and that it finished")
           },
@@ -297,7 +297,7 @@ You'll see one row for each run, newest first, with the graph it ran and its sta
         await step(
           `Sometimes an agent stops and asks you something, such as whether it may run a command. The run waits for your answer, and the question appears right in the screen you're watching.
 
-Start the graph again with \`engine graph run describe-project\`, and answer \`n\` if you're asked whether to trust the folder.`,
+Start the graph again with \`oe graph run describe-project\`, and answer \`n\` if you're asked whether to trust the folder.`,
           async () => start(terminal),
         )
 
@@ -348,7 +348,7 @@ Type \`y\` and press Enter to let it, or \`n\` to say no. If you say no, the com
         await step(
           `A run doesn't need your terminal open. It goes on in OpenEngine's background program, so you can close the screen that shows it, do something else, and come back to it later, for example when an agent has a question for you.
 
-Start the graph with \`engine graph run describe-project\`, and answer \`n\` if you're asked whether to trust the folder.`,
+Start the graph with \`oe graph run describe-project\`, and answer \`n\` if you're asked whether to trust the folder.`,
           async () => {
             await start(terminal)
             await terminal.waitForText(ALLOW)
@@ -371,12 +371,12 @@ The screen stops and asks what you want: *d* to detach, which closes this screen
         await step(
           `Type \`d\` and press Enter.
 
-The screen says *Detached* and gives you the command to come back with, which includes the run ID. \`local\` means the backend on this computer; it's there from the start. Copy it somewhere, or find the ID later in the **RUN ID** column of \`engine runs list\`. The run is still going, waiting for the answer to its question.`,
+The screen says *Detached* and gives you the command to come back with, which includes the run ID. \`local\` means the backend on this computer; it's there from the start. Copy it somewhere, or find the ID later in the **RUN ID** column of \`oe runs list\`. The run is still going, waiting for the answer to its question.`,
           async () => {
             await terminal.type("d")
             await terminal.press("Enter")
             expect(await terminal.waitForPrompt()).toBe(0)
-            const detached = new RegExp(`^Detached\\. Reattach with: engine run watch ${runId} --backend local$`)
+            const detached = new RegExp(`^Detached\\. Reattach with: oe run watch ${runId} --backend local$`)
             await terminal.waitForText(new RegExp(detached.source, "m"))
             const waiting = await run(engine, runId)
             expect(["running", "awaiting_approval"]).toContain(waiting.status)
@@ -388,14 +388,14 @@ The screen says *Detached* and gives you the command to come back with, which in
         await test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
 
         await step(
-          `To come back, type the command it gave you, \`engine run watch\` followed by the run ID, and press Enter.
+          `To come back, type the command it gave you, \`oe run watch\` followed by the run ID, and press Enter.
 
 The same screen comes back, showing where the run is now. Since the agent is still waiting, its question is asked again.`,
           async () => {
-            await terminal.type(`engine run watch ${runId}`)
+            await terminal.type(`oe run watch ${runId}`)
             await terminal.press("Enter")
             // Asked again, below the command that came back to it.
-            await expect.poll(async () => (await terminal.text()).split("$ engine run watch").at(-1)).toMatch(ALLOW)
+            await expect.poll(async () => (await terminal.text()).split("$ oe run watch").at(-1)).toMatch(ALLOW)
             expect((await run(engine, runId)).pendingApprovals ?? []).toHaveLength(1)
             await show(terminal, engine, testInfo, await terminal.rows(STAGES, ALLOW), "You're back, and the question is waiting")
           },
@@ -432,7 +432,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
         let runId = ""
 
         await step(
-          `If you started the wrong graph, or no longer need what it's doing, you can stop it. Start the graph with \`engine graph run describe-project\`, and answer \`n\` if you're asked whether to trust the folder.`,
+          `If you started the wrong graph, or no longer need what it's doing, you can stop it. Start the graph with \`oe graph run describe-project\`, and answer \`n\` if you're asked whether to trust the folder.`,
           async () => {
             await start(terminal)
             await terminal.waitForText(ALLOW)
@@ -470,9 +470,9 @@ OpenEngine stops the agent and ends the run. Below the last view of its progress
         await test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
 
         await step(
-          `Type \`engine runs list\` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.`,
+          `Type \`oe runs list\` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.`,
           async () => {
-            const { output } = await terminal.run("engine runs list")
+            const { output } = await terminal.run("oe runs list")
             const row = new RegExp(`^${runId}\\s.*\\sdescribe-project v1\\s+cancelled\\s`, "m")
             expect(output).toMatch(row)
             await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "The run you stopped")
@@ -500,7 +500,7 @@ for (const action of ["approve", "decline", "reconnect", "cancel"] as const) {
       suggest,
     ] })
     writeFileSync(path.join(engine.repository, "describe-project.yaml"), graph)
-    await terminal.run("engine graph add describe-project.yaml")
+    await terminal.run("oe graph add describe-project.yaml")
     await distrust(terminal)
     await start(terminal)
     await terminal.waitForText(ALLOW, { timeout: 240_000 })
@@ -520,7 +520,7 @@ for (const action of ["approve", "decline", "reconnect", "cancel"] as const) {
       expect(code).toBe(0)
       expect((await run(engine, runId)).pendingApprovals).toHaveLength(1)
       await terminal.run("clear")
-      await terminal.type(`engine run watch ${runId}`)
+      await terminal.type(`oe run watch ${runId}`)
       await terminal.press("Enter")
       await terminal.waitForText(ALLOW)
     }

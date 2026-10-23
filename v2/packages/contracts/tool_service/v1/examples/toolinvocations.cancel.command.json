@@ -1,0 +1,14 @@
+{
+  "message": "CancelToolInvocationCommand",
+  "subject": "oe.v1.toolinvocations.cancel",
+  "payload": {
+    "command_id": "cmd_toolinvocations_cancel_1",
+    "causal_path": [
+      "cmd_toolinvocations_cancel_1"
+    ],
+    "payload": {
+      "namespace": "default",
+      "name": "ti-123"
+    }
+  }
+}

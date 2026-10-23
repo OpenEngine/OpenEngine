@@ -1,0 +1,14 @@
+{
+  "summary": "Run revision 3 on an existing job.",
+  "message": "RunGraphCommand",
+  "subject": "oe.v1.ge.control.graphs.graph_review.run",
+  "payload": {
+    "command_id": "cmd_run_42",
+    "causal_path": ["cmd_run_42"],
+    "payload": {
+      "revision": 3,
+      "inputs": { "instruction": "Address the security review" },
+      "target": { "mode": "existing_job", "job_id": "job_42" }
+    }
+  }
+}

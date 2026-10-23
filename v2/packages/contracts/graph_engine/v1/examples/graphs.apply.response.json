@@ -1,0 +1,10 @@
+{
+  "message": "ApplyGraphResponse",
+  "in_reply_to": "oe.v1.ge.control.graphs.apply",
+  "payload": {
+    "command_id": "cmd_applygraph_3",
+    "status": "accepted",
+    "operation_id": "op_applygraph_3",
+    "resource_id": "graph_review"
+  }
+}

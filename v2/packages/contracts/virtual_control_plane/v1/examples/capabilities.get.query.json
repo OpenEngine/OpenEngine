@@ -1,0 +1,5 @@
+{
+  "message": "GetCapabilitiesQuery",
+  "subject": "oe.v1.vcp.query.capabilities.get",
+  "payload": { "params": {} }
+}

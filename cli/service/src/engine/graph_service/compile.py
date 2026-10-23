@@ -26,6 +26,7 @@ The graph's id is the version's id, so a run pins exactly what it started.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -45,6 +46,8 @@ from engine.graph_runtime_langgraph.acp import TerminalEvent
 from engine.graph_runtime_langgraph.components import ACPNode, CICheck, NameNode, TriageNode, checkout
 from engine.graph_runtime_langgraph.components.findings import parse_findings
 from engine.ports import WorkspaceProvider
+from engine.runtime.config import DEFAULT_MODEL_TIERS, merge_model_tiers
+from engine.runtime.step_results import InvalidStepResultError
 from langgraph.graph import END, START, StateGraph
 from langgraph_acp import ACPAgentRegistry
 from langgraph_acp.providers import ClaudeACPProvider
@@ -61,12 +64,7 @@ from engine.graph_service.language import (
     RunnerRule,
 )
 
-#: What `model: default`, `model: elevated` and `model: cheapest` mean when a
-#: backend says nothing. `cheapest` is what a graph's naming turn uses.
-DEFAULT_MODEL_TIERS: Mapping[str, Mapping[str, str]] = {
-    "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
-    "codex": {"cheapest": "gpt-5.6-terra", "default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
-}
+#: The tier a graph's naming turn uses.
 NAMING_TIER = "cheapest"
 #: The only tools a Claude naming turn has: the ACP adapter's `READ_ONLY_TOOLS`,
 #: which this package may not import.
@@ -111,15 +109,14 @@ def compile_graph(
     session_config: Mapping[str, object] | None = None,
     model_tiers: Mapping[str, Mapping[str, str]] | None = None,
     agent_models: Mapping[str, str] | None = None,
+    agent_context_limits: Mapping[str, int] | None = None,
     default_base_ref: str = "origin/HEAD",
 ) -> GraphWorkflow:
     groups: Groups = {node.id: (node.keys, bool(node.parallel)) for node in spec.nodes}
-    tiers = {
-        runner: {**DEFAULT_MODEL_TIERS.get(runner, {}), **models}
-        for runner, models in {**DEFAULT_MODEL_TIERS, **(model_tiers or {})}.items()
-    }
+    tiers = merge_model_tiers(model_tiers)
     runners = tuple(registry.names)
     models = {} if agent_models is None else agent_models
+    context_limits = {} if agent_context_limits is None else agent_context_limits
     builder: Any = StateGraph(State)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     builder.add_node(
         spec.checkout,
@@ -148,7 +145,7 @@ def compile_graph(
             builder.add_node(key, _node(
                 node, key, branch.item if branch else None, groups,
                 registry=registry, runners=runners, tiers=tiers, session_config=session_config,
-                agent_models=models,
+                agent_models=models, context_limits=context_limits,
             ))
 
     def keys_of(name: str) -> list[str]:
@@ -226,6 +223,7 @@ def _node(
     runners: tuple[str, ...],
     tiers: Mapping[str, Mapping[str, str]],
     agent_models: Mapping[str, str],
+    context_limits: Mapping[str, int],
     session_config: Mapping[str, object] | None,
 ) -> Any:
     label = node.name or node.id
@@ -284,6 +282,7 @@ def _node(
         groups=groups,
         tiers=tiers,
         agent_models=agent_models,
+        context_limits=context_limits,
         runners=runners,
         **common,  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
     )
@@ -509,15 +508,11 @@ def _completion_instructions(outputs: Sequence[OutputSpec]) -> str:
         lines[-1] += "."
         return "\n".join(lines)
     lines[-1] += " and these outputs:"
-    if any(output.type not in ("string", "findings") for output in outputs):
-        lines.append(
-            'Send typed outputs as JSON-encoded strings, for example '
-            '"model": "{\\"a\\": 1}". All output values must be strings on the wire.'
-        )
+    lines.append('Send typed outputs as native JSON values (for example "ready": true).')
     for output in outputs:
         detail = {
             "findings": (
-                "a JSON array of findings, each {\"tagline\": 1-2 plain-language lines, "
+                "a JSON-encoded string containing an array of findings, each {\"tagline\": 1-2 plain-language lines, "
                 "\"description\": 1-3 lines on what it is and why it matters, \"file\"?: path, "
                 "\"line\"?: number, \"severity\"?: \"high\"|\"medium\"|\"low\"}; [] when there are none"
                 + ("; keep each finding's agent and facet unchanged" if output.lineage else "")
@@ -542,10 +537,52 @@ class GraphTerminalMcpServer(TerminalMcpServer):
     outputs: tuple[OutputSpec, ...] = ()
 
     def for_mode(self, mode: ForgeMode) -> TerminalMcpServer:
+        outputs = _mode_outputs(self.outputs, mode)
         return replace(
             TerminalMcpServer.for_mode(self, mode),
-            validate_completion=_validator(_mode_outputs(self.outputs, mode)),
+            validate_completion=_validator(outputs),
+            validate_outputs=_wire_outputs(outputs),
+            outputs_schema=_outputs_schema(outputs),
         )
+
+
+def _outputs_schema(outputs: Sequence[OutputSpec]) -> dict[str, object]:
+    properties = {}
+    for output in outputs:
+        schema: dict[str, object] = {"type": {"list": "array", "findings": "string"}.get(output.type, output.type)}
+        if output.type == "list":
+            schema["items"] = {}
+        if output.enum:
+            schema["enum"] = list(output.enum)
+        properties[output.name] = schema
+    return {
+        "type": "object", "properties": properties,
+        "required": [output.name for output in outputs if output.required],
+        "additionalProperties": False,
+    }
+
+
+def _wire_outputs(outputs: Sequence[OutputSpec]) -> Callable[[object], dict[str, str]]:
+    """Validate YAML's JSON contract, then encode for the shared string event store."""
+    def validate(values: object) -> dict[str, str]:
+        if not isinstance(values, dict):
+            raise InvalidStepResultError("step result outputs must be a JSON object")
+        extra = set(values) - {output.name for output in outputs}
+        if extra:
+            raise ValueError(f"step result has undeclared outputs: {', '.join(sorted(extra))}")
+        encoded = {}
+        for output in outputs:
+            if output.name not in values:
+                if output.required:
+                    raise ValueError(f"output {output.name} is required")
+                continue
+            value = values[output.name]
+            if not _typed(value, output.type):
+                raise ValueError(f"output {output.name} must be a {output.type}")
+            _validate_finite_numbers(value, output.name)
+            encoded[output.name] = value if isinstance(value, str) else json.dumps(value)
+        return encoded
+    return validate
 
 
 def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]:
@@ -555,11 +592,12 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
         values = {output.name: output.value for output in event.outputs}
         for output in outputs:
             value = values.get(output.name)
-            if value is None or (value == "" and output.type in ("string", "findings")):
+            if output.name not in values or (output.required and value == "" and output.type in ("string", "findings")):
                 if output.required:
                     raise ValueError(f"output {output.name} is required")
                 continue
             value = _decode_output(value, output)
+            _validate_finite_numbers(value, output.name)
             if output.type == "findings":
                 parse_findings(value, require_lineage=output.lineage)
             elif output.enum and value not in output.enum:
@@ -568,6 +606,18 @@ def _validator(outputs: Sequence[OutputSpec]) -> Callable[[StepCompleted], None]
                 raise ValueError(f"output {output.name} must be a {output.type}")
 
     return validate
+
+
+def _validate_finite_numbers(value: object, name: str) -> None:
+    """Keep non-finite JSON numbers out of persisted graph state."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"output {name} must contain only finite numbers")
+    if isinstance(value, Mapping):
+        for item in value.values():
+            _validate_finite_numbers(item, name)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_finite_numbers(item, name)
 
 
 def _decode_output(value: object, output: OutputSpec) -> Any:

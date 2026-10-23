@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Provider capabilities",
+  "description": "What each workspace provider can do. Requests that need a missing capability are rejected with UNSUPPORTED_CAPABILITY rather than approximated.",
+  "$defs": {
+    "provider_capabilities": {
+      "type": "object",
+      "required": [
+        "provider",
+        "isolation",
+        "checkpoint",
+        "suspend",
+        "restore",
+        "approvals_survive_restore",
+        "max_resources",
+        "tools"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "workspace.schema.json#/$defs/provider" },
+        "isolation": {
+          "description": "Boundary between a workspace and its host.",
+          "type": "string",
+          "enum": ["process", "container", "microvm", "vm"]
+        },
+        "checkpoint": {
+          "type": "boolean",
+          "description": "Can capture restoration state (`checkpoint`)."
+        },
+        "suspend": {
+          "type": "boolean",
+          "description": "Can release compute while keeping restoration state (`suspend`)."
+        },
+        "restore": {
+          "description": "Where a suspended workspace can be restored.",
+          "type": "string",
+          "enum": ["none", "same_host", "any_host"]
+        },
+        "approvals_survive_restore": {
+          "type": "boolean",
+          "description": "Pending runtime approvals stay decidable across restoration. When false they expire as `runtime_generation_changed`."
+        },
+        "max_resources": { "$ref": "workspace.schema.json#/$defs/resources" },
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "workspace.schema.json#/$defs/tool" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

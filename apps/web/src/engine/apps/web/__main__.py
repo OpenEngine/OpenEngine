@@ -13,6 +13,7 @@ import asyncio
 import ipaddress
 import logging
 import os
+import shlex
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
@@ -20,8 +21,10 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import dotenv_values
+from langgraph_acp import configure_default_registry
 from starlette.applications import Starlette
 
+from engine.adapters.agent_runner.acp import CLAUDE_EXECUTABLE_VARIABLE
 from engine.apps.web.api import create_app, work_order_graph
 from engine.apps.web.composition import (
     Settings,
@@ -31,6 +34,7 @@ from engine.apps.web.composition import (
     build_read_only_runners,
     build_runners,
     build_session,
+    builtin_agents,
     claude_session_config_for,
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
@@ -141,7 +145,7 @@ def check_work_order_workflow(settings: Settings, catalog: WorkflowCatalog | Non
         return
     raise EngineConfigError(
         f"work_orders.workflow is {name!r}, which is neither a workflow in [workflows] directory "
-        "nor a graph registered with `engine graph add`"
+        "nor a graph registered with `oe graph add`"
         + (f" for {', '.join(missing)}" if any(missing) else "")
     )
 
@@ -306,8 +310,8 @@ def _require_login_off_loopback(
         )
 
 
-def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
-    """How the login middleware reads `ENGINE_SERVICE_TOKEN`, per request.
+def _service_token_reader(loaded: LoadedEngineConfig, variable: str = "ENGINE_SERVICE_TOKEN") -> Callable[[], str]:
+    """Read a service or onboarding bearer secret per request.
 
     Read like the login client secret: the process environment first, then the
     server-local `.env` beside `engine.toml`, never TOML. A reader so rotating
@@ -318,15 +322,15 @@ def _service_token_reader(loaded: LoadedEngineConfig) -> Callable[[], str]:
     secret_file = (loaded.path.parent if loaded.path else Path.cwd()) / ".env"
 
     def read() -> str:
-        if "ENGINE_SERVICE_TOKEN" in os.environ:
-            return os.environ["ENGINE_SERVICE_TOKEN"]
+        if variable in os.environ:
+            return os.environ[variable]
         values = dotenv_values(secret_file, interpolate=False)
-        return values.get("ENGINE_SERVICE_TOKEN") or ""
+        return values.get(variable) or ""
 
     token = read()
     if token and not valid_service_token(token):
         raise EngineConfigError(
-            "ENGINE_SERVICE_TOKEN must contain at least 32 non-whitespace characters"
+            f"{variable} must contain at least 32 non-whitespace characters"
         )
     return read
 
@@ -351,6 +355,19 @@ def read_configuration(
     # Likewise for `gh`: the source-control provider and agents' `gh` share this login.
     if (directory := loaded.gh_config_dir) is not None:
         os.environ["GH_CONFIG_DIR"] = str(directory)
+    if (key := loaded.ssh_key) is not None:
+        os.environ["GIT_SSH_COMMAND"] = shlex.join([
+            "ssh", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+        ])
+    # And for Codex and Claude: open-verify, which cannot read engine.toml,
+    # starts them too, and reads the variables their adapters do.
+    if (codex := loaded.config.runner_paths.get("codex")) is not None:
+        os.environ["CODEX_PATH"] = codex
+    if (claude := loaded.config.runner_paths.get("claude")) is not None:
+        os.environ[CLAUDE_EXECUTABLE_VARIABLE] = claude
+    # A node given no registry, and the starter graphs loaded below, run the
+    # configured agents rather than langgraph-acp's bare built-ins.
+    configure_default_registry(builtin_agents(loaded.config))
     settings = _settings(loaded)
     catalog = (
         load_workflow_catalog(
@@ -376,7 +393,7 @@ def compose_app(
     github_login_config = _github_login_config(loaded, registry)
     _require_login_off_loopback(settings, github_login_config)
     # One cached store for Settings and agent actions alike, so the token
-    # `engine connect github` saved is used without reading the keychain again.
+    # `oe connect github` saved is used without reading the keychain again.
     credential_store = GitHubCredentialStore(cached=True)
     slack_credential_store = SlackCredentialStore()
     capabilities = build_capabilities(
@@ -406,6 +423,7 @@ def compose_app(
         github_client_id_source=_github_client_id_source(),
         github_login_config=github_login_config,
         service_token=_service_token_reader(loaded),
+        onboarding_token=_service_token_reader(loaded, "ENGINE_ONBOARDING_TOKEN"),
         source_control_preferences=settings.source_control_preferences,
         slack_credential_store=slack_credential_store,
         github_webhook_secret=_webhook_secret_reader(settings.github_webhook),
@@ -420,6 +438,7 @@ def compose_app(
         config_path=loaded.path if loaded.explicit else None,
         onboarding_directory=loaded.onboarding_directory,
         login_operators=loaded.config.access.operators,
+        agent_config=loaded.config,
         graph_service=build_graph_service(
             settings,
             default_repository=loaded.config.work_orders.repository,
@@ -469,6 +488,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.check:
             _require_login_off_loopback(settings, _github_login_config(loaded))
             _service_token_reader(loaded)
+            _service_token_reader(loaded, "ENGINE_ONBOARDING_TOKEN")
             report_wiring(settings)
             return 0
         configure_logging()

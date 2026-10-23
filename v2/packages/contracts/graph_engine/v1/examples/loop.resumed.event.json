@@ -1,0 +1,34 @@
+{
+  "message": "LoopResumed",
+  "subject": "oe.v1.ge.events.loops.loop_nightly.loop.resumed",
+  "headers": { "Nats-Msg-Id": "evt_loop_resumed" },
+  "payload": {
+    "event_id": "evt_loop_resumed",
+    "event_type": "loop.resumed",
+    "occurred_at": "2026-10-19T21:40:00Z",
+    "producer": "ge",
+    "causal_path": ["cmd_resumeloop", "evt_loop_resumed"],
+    "resources": { "loop_id": "loop_nightly" },
+    "resource_version": 4,
+    "payload": {
+      "operation": { "operation_id": "op_resumeloop", "command_id": "cmd_resumeloop" },
+      "loop": {
+        "loop_id": "loop_nightly",
+        "version": 4,
+        "name": "nightly-dependency-review",
+        "state": "active",
+        "graph": { "graph_id": "graph_review", "track_latest": true },
+        "trigger": { "kind": "cron", "expression": "0 3 * * *", "timezone": "UTC" },
+        "concurrency": { "max_active_jobs": 2, "on_overlap": "queue" },
+        "job_template": {
+          "goal": "Review dependency updates",
+          "inputs": { "instruction": "Review open dependency PRs" }
+        },
+        "next_run_at": "2026-10-20T03:00:00Z",
+        "active_job_count": 0,
+        "created_at": "2026-10-19T21:40:00Z",
+        "updated_at": "2026-10-19T21:40:00Z"
+      }
+    }
+  }
+}

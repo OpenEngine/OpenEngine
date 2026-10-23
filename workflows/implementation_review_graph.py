@@ -46,12 +46,14 @@ from engine.adapters.workspace_provider.git_worktree import (
 from engine.graph_runtime_langgraph import (
     GraphWorkflow,
     WorkflowInput,
+    CHEAPEST_TIER,
+    DEFAULT_TIER,
+    ELEVATED_TIER,
     State,
     TerminalMcpServer,
-    WithAddedAgents,
-    agent_registry,
+    configured_agents,
     graph_workflow,
-    with_added_agents,
+    on_runner,
 )
 from engine.graph_runtime_langgraph.components import (
     ACPNode,
@@ -87,7 +89,6 @@ from engine.ports import ApprovalHandler, WorkspaceProvider
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from langgraph_acp import ACPAgentRegistry
-from langgraph_acp.providers import ClaudeACPProvider, CodexACPProvider
 
 
 # ---------------------------------------------------------------------------
@@ -120,21 +121,10 @@ FIX = "fix"
 #: The creation inputs naming the change a run started in review looks at.
 REF_INPUT, PR_INPUT, BRANCH_INPUT = REVIEW_REF_INPUT, REVIEW_PR_INPUT, REVIEW_BRANCH_INPUT
 
-#: Codex and Claude, reached through their ACP adapters, and any agent added
-#: with `engine agent add`.  `agent_registry` is what routes an agent's
-#: permission request back to the run that raised it.
-AGENTS = with_added_agents(agent_registry([CodexACPProvider(), ClaudeACPProvider()]))
-
-#: Model identifiers per runner.  The default tier handles most facets; the
-#: elevated tier handles security, where missing something costs more.
-#:
-#: Claude reviewers are sonnet-sized by default, opus-sized for security.
-#: Tier aliases intentionally track the current Claude model of each size.
-#: Codex reviewers are terra-sized by default, sol-sized for security.
-REVIEW_MODELS: dict[str, dict[str, str]] = {
-    "claude": {"default": "sonnet", "elevated": "opus"},
-    "codex": {"default": "gpt-5.6-terra", "elevated": "gpt-5.6-sol"},
-}
+#: Codex, Claude and OpenCode as `engine.toml` configures them, reached
+#: through ACP, and any agent added with `oe agent add`. Steps name a model
+#: tier; these resolve it from `[runners.<name>.models]` when the step runs.
+AGENTS = configured_agents()
 
 
 # ---------------------------------------------------------------------------
@@ -146,31 +136,16 @@ REVIEW_MODELS: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 
 class _RunnerInput:
-    """Resolve the stage's runner per invocation, including its MCP identity."""
+    """Resolve the stage's runner per invocation, its model tier and MCP identity."""
 
     graph_node_runner_input = "implementation_runner"
+    model_tier = DEFAULT_TIER
 
     def _for_runner(self, runner: str) -> ACPNode:
-        node = cast(ACPNode, self)
-        config = node.session_config
-        if isinstance(self, ReviewNode) and runner in REVIEW_MODELS:
-            facet = next(f for f in REVIEW_FACETS if f.id == self.facet)
-            model = REVIEW_MODELS[runner]["elevated" if facet.elevated else "default"]
-            config = _with_model(config, model)
-        elif runner not in REVIEW_MODELS:
-            # An added agent asks for its own model, as it does from the CLI.
-            added = node.registry.model(runner) if isinstance(node.registry, WithAddedAgents) else ""
-            config = _with_model(config, added)
-        return replace(
-            node,
-            agent=runner,
-            session_config=config,
-            mcp_server_bindings=tuple(
-                replace(binding, agent_id=runner)
-                if isinstance(binding, TerminalMcpServer) else binding
-                for binding in node.mcp_server_bindings
-            ),
-        )
+        return on_runner(cast(ACPNode, self), runner, self._model_tier())
+
+    def _model_tier(self) -> str:
+        return self.model_tier
 
 
 class InputImplementationNode(_RunnerInput, ACPNode):
@@ -178,7 +153,7 @@ class InputImplementationNode(_RunnerInput, ACPNode):
 
 
 class InputNameNode(_RunnerInput, NameNode):
-    pass
+    model_tier = CHEAPEST_TIER
 
 
 class InputImpactAnalysisNode(_RunnerInput, ACPNode):
@@ -198,6 +173,9 @@ def _validate_impact_analysis(event: StepCompleted) -> None:
 
 class InputReviewNode(_RunnerInput, ReviewNode):
     graph_node_runner_input = "review_runner"
+
+    def _model_tier(self) -> str:
+        return ELEVATED_TIER if self.facet == "security" else DEFAULT_TIER
 
 
 class _RerankerTools(TerminalMcpServer):
@@ -231,18 +209,6 @@ class InputRerankerNode(_RunnerInput, RerankerNode):
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
         update = await super().__call__(state)
         return {**update, "review_rounds": state.get("review_rounds", 0) + 1}
-
-
-def _with_model(
-    base: Mapping[str, Any] | None, model: str
-) -> dict[str, object]:
-    """Merge a model override into the caller's session config; none leaves the agent's own."""
-    merged = dict(base or {})
-    if model:
-        merged["model"] = model
-    else:
-        merged.pop("model", None)
-    return merged
 
 
 def _cross_reviewer(runner: str) -> str:
@@ -449,9 +415,7 @@ def pipeline(
     # ---- review fan-out: one node per facet, run in parallel ----------------
 
     reviewer = _cross_reviewer(runner)
-    models = REVIEW_MODELS[reviewer]
     for facet in REVIEW_FACETS:
-        model = models["elevated"] if facet.elevated else models["default"]
         node_name = _review_node_name(facet.id)
         builder.add_node(
             node_name,
@@ -485,7 +449,7 @@ def pipeline(
                 graph_node_description=(
                     f"Reviews the change for {facet.name.lower()}."
                 ),
-                session_config=_with_model(session_config, model),
+                session_config=session_config,
             ),
         )
 
@@ -633,12 +597,12 @@ def pipeline(
 
 
 #: Runner choices for the implementation and review stages.  An agent added
-#: with `engine agent add` is offered beside these by the process serving it,
+#: with `oe agent add` is offered beside these by the process serving it,
 #: and joins the policies when installed and signed in on the backend.
 DEFAULT_RUNNER = "round-robin"
 DEFAULT_REVIEW_RUNNER = "round-robin"
 RUNNER_CHOICES = tuple(dict.fromkeys(
-    runner for runner in ("codex", "claude", DEFAULT_RUNNER)
+    runner for runner in ("codex", "claude", "opencode", DEFAULT_RUNNER)
     if runner not in (LEAST_UTILIZED, ROUND_ROBIN)
 ))
 #: What the runner dropdowns offer: a runner, or a policy that picks one per run.

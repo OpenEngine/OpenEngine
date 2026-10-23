@@ -1,0 +1,129 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: ToolInvocation
+description: >-
+  The durable record of one tool call. The service creates it when a call on
+  `oe.v1.tools.invoke.{namespace}.{name}` is accepted, and owns its status;
+  it cannot be applied, so nobody can forge its identity or authorization.
+  The tool comes from the subject and the workspace from the caller's
+  verified credentials. The resolved tool definition is stored with it, so
+  changing the Tool later cannot change accepted work. Its result is read
+  through `oe.v1.toolinvocations.get`, never from events.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/api_version
+  kind:
+    type: string
+    const: ToolInvocation
+  metadata:
+    description: '`name` is the caller''s `invocationId`.'
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/namespaced_object_meta
+  spec:
+    $ref: '#/$defs/tool_invocation_spec'
+  status:
+    $ref: '#/$defs/tool_invocation_status'
+$defs:
+  tool_invocation_spec:
+    title: ToolInvocationSpec
+    description: What was called, by whom, with what.
+    type: object
+    required: [toolRef, workspaceRef, workspaceGeneration, stepAttemptId, arguments]
+    additionalProperties: false
+    properties:
+      toolRef:
+        $ref: '#/$defs/tool_ref'
+      workspaceRef:
+        description: The caller's Workspace, by name, from its verified credentials.
+        $ref: toolgrant.schema.yaml#/$defs/name_ref
+      workspaceGeneration:
+        description: The workspace's generation when the call was accepted.
+        type: integer
+        minimum: 1
+      stepAttemptId:
+        description: The step attempt the call was made for, by its Graph Engine ID.
+        $ref: ../../../common/v1/types.schema.json#/$defs/step_attempt_id
+      arguments:
+        description: The agent's arguments, valid against the tool's `inputSchema`.
+        type: object
+  tool_ref:
+    title: ToolRef
+    description: The exact tool the call resolved to.
+    type: object
+    required: [name, uid, generation]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/dns_label
+      uid:
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/uid
+      generation:
+        type: integer
+        minimum: 1
+  tool_invocation_status:
+    title: ToolInvocationStatus
+    description: Where the call is, which grants allowed it, and how it ended.
+    type: object
+    required: [phase, authorization, attemptCount]
+    additionalProperties: false
+    properties:
+      phase:
+        description: >-
+          `Accepted`: recorded, not yet dispatched. `Running`: an attempt is
+          under way. `Succeeded`, `Failed`, `Cancelled`: finished.
+          `BlockedAuth`: the connection's credential needs attention before
+          the call can run. `OutcomeUnknown`: an attempt was interrupted and
+          its effect could not be determined; a person resolves it.
+        type: string
+        enum: [Accepted, Running, Succeeded, Failed, BlockedAuth, OutcomeUnknown, Cancelled]
+      authorization:
+        $ref: '#/$defs/authorization'
+      attemptCount:
+        type: integer
+        minimum: 0
+      result:
+        description: With `Succeeded`, the tool's result, valid against its `outputSchema`.
+        type: object
+      error:
+        $ref: '#/$defs/invocation_error'
+      startedAt:
+        $ref: ../../../common/v1/types.schema.json#/$defs/utc_timestamp
+      completedAt:
+        $ref: ../../../common/v1/types.schema.json#/$defs/utc_timestamp
+  authorization:
+    title: Authorization
+    description: The grants that allowed the call. They are checked again before every dispatch.
+    type: object
+    required: [grantRefs]
+    additionalProperties: false
+    properties:
+      grantRefs:
+        type: array
+        minItems: 1
+        items:
+          $ref: '#/$defs/grant_ref'
+  grant_ref:
+    title: GrantRef
+    type: object
+    required: [name, uid]
+    additionalProperties: false
+    properties:
+      name:
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/dns_label
+      uid:
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/uid
+  invocation_error:
+    title: InvocationError
+    description: With `Failed`, `BlockedAuth` or `OutcomeUnknown`, what went wrong.
+    type: object
+    required: [code, message]
+    additionalProperties: false
+    properties:
+      code:
+        type: string
+        enum: [ArgumentsRejected, GrantRevoked, ProviderError, AuthRequired, Timeout, Interrupted, OutputInvalid]
+      message:
+        type: string
+        minLength: 1
+        maxLength: 2048

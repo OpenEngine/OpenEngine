@@ -1,0 +1,10 @@
+{
+  "message": "DeleteToolResponse",
+  "in_reply_to": "oe.v1.tools.delete",
+  "payload": {
+    "command_id": "cmd_tools_delete_1",
+    "status": "accepted",
+    "operation_id": "op_tools_delete_1",
+    "resource_id": "tool-uid-123"
+  }
+}

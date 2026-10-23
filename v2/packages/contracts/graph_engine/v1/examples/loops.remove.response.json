@@ -1,0 +1,10 @@
+{
+  "message": "RemoveLoopResponse",
+  "in_reply_to": "oe.v1.ge.control.loops.loop_nightly.remove",
+  "payload": {
+    "command_id": "cmd_removeloop",
+    "status": "accepted",
+    "operation_id": "op_removeloop",
+    "resource_id": "loop_nightly"
+  }
+}

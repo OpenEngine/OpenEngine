@@ -1,0 +1,87 @@
+{
+  "summary": "Apply a Graph resource. Applying it again unchanged returns the existing revision.",
+  "message": "ApplyGraphCommand",
+  "subject": "oe.v1.ge.control.graphs.apply",
+  "payload": {
+    "command_id": "cmd_applygraph_3",
+    "causal_path": [
+      "cmd_applygraph_3"
+    ],
+    "payload": {
+      "graph": {
+        "apiVersion": "openengine.cc/v1alpha1",
+        "kind": "Graph",
+        "metadata": {
+          "name": "review"
+        },
+        "spec": {
+          "description": "Plan, implement, review in parallel, then ask a person.",
+          "inputs": [
+            {
+              "name": "instruction",
+              "required": true,
+              "description": "The change to make"
+            }
+          ],
+          "plan": [
+            {
+              "name": "planner",
+              "agent": {
+                "runner": {
+                  "name": "claude"
+                },
+                "prompt": "Plan: ${inputs.instruction}"
+              }
+            }
+          ],
+          "implementation": [
+            {
+              "name": "implementer",
+              "agent": {
+                "runner": {
+                  "sameAs": "planner"
+                },
+                "prompt": "Implement the plan: ${outputs.planner}"
+              }
+            }
+          ],
+          "review": [
+            {
+              "name": "reviewers",
+              "agent": {
+                "runner": {
+                  "differentFrom": "implementer"
+                },
+                "facets": [
+                  {
+                    "name": "security",
+                    "model": "elevated"
+                  },
+                  {
+                    "name": "bugs"
+                  }
+                ],
+                "prompt": "Review the change for ${item.facet.name}"
+              }
+            },
+            {
+              "name": "reranker",
+              "agent": {
+                "runner": {
+                  "sameAs": "implementer"
+                },
+                "prompt": "Consolidate: ${json(outputs.reviewers)}"
+              }
+            },
+            {
+              "name": "ship",
+              "human": {
+                "prompt": "Ship this change?"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

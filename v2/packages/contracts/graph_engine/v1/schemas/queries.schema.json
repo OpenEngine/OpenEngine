@@ -1,0 +1,372 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Graph Engine queries",
+  "description": "Requests and responses of `oe.v1.ge.query.…`.",
+  "$defs": {
+    "empty_params": { "type": "object", "additionalProperties": false, "maxProperties": 0 },
+    "list_graphs_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_graphs_params" } } }
+      ]
+    },
+    "list_graphs_params": {
+      "description": "Sorted by `name` ascending, then `graph_id`.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name_prefix": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_graphs_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/graph_page" } } }
+      ]
+    },
+    "graph_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "graph.schema.json#/$defs/graph" } },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_graph_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/get_graph_params" } } }
+      ]
+    },
+    "get_graph_params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "description": "Defaults to the latest revision.",
+          "$ref": "graph.schema.json#/$defs/revision"
+        },
+        "include_source": { "type": "boolean", "default": true }
+      }
+    },
+    "get_graph_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/get_graph_result" } } }
+      ]
+    },
+    "get_graph_result": {
+      "type": "object",
+      "required": ["graph", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "graph": { "$ref": "graph.schema.json#/$defs/graph" },
+        "revision": { "$ref": "graph.schema.json#/$defs/graph_revision" }
+      }
+    },
+    "list_jobs_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_jobs_params" } } }
+      ]
+    },
+    "list_jobs_params": {
+      "description": "Sorted by `created_at` descending, then `job_id` descending.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "array",
+          "items": { "$ref": "job.schema.json#/$defs/job_state" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "graph_id": {
+          "description": "Jobs with at least one execution of this graph.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id"
+        },
+        "parent_job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_jobs_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/job_page" } } }
+      ]
+    },
+    "job_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "job.schema.json#/$defs/job" } },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_job_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/empty_params" } } }
+      ]
+    },
+    "get_job_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/get_job_result" } } }
+      ]
+    },
+    "get_job_result": {
+      "type": "object",
+      "required": ["job"],
+      "additionalProperties": false,
+      "properties": { "job": { "$ref": "job.schema.json#/$defs/job" } }
+    },
+    "list_job_executions_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_job_executions_params" } } }
+      ]
+    },
+    "list_job_executions_params": {
+      "description": "The job's execution history, sorted by `created_at` ascending, then `execution_id`.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "array",
+          "items": { "$ref": "execution.schema.json#/$defs/execution_status" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_job_executions_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/execution_page" } } }
+      ]
+    },
+    "execution_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "execution.schema.json#/$defs/execution" } },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "list_job_workspaces_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_job_workspaces_params" } } }
+      ]
+    },
+    "list_job_workspaces_params": {
+      "description": "Workspaces used by the job's step attempts, sorted by `first_used_at` ascending, then `step_attempt_id`.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_job_workspaces_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/job_workspace_page" } } }
+      ]
+    },
+    "job_workspace_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "execution.schema.json#/$defs/job_workspace" }
+        },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "list_job_approvals_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_job_approvals_params" } } }
+      ]
+    },
+    "list_job_approvals_params": {
+      "description": "Sorted by `requested_at` descending, then `approval_id` descending.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "array",
+          "items": { "$ref": "approval.schema.json#/$defs/approval_state" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_job_approvals_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/approval_page" } } }
+      ]
+    },
+    "approval_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "approval.schema.json#/$defs/workflow_approval" }
+        },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_execution_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/empty_params" } } }
+      ]
+    },
+    "get_execution_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/get_execution_result" } } }
+      ]
+    },
+    "get_execution_result": {
+      "type": "object",
+      "required": ["execution"],
+      "additionalProperties": false,
+      "properties": { "execution": { "$ref": "execution.schema.json#/$defs/execution" } }
+    },
+    "list_execution_steps_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_execution_steps_params" } } }
+      ]
+    },
+    "list_execution_steps_params": {
+      "description": "Step instances with their attempts, sorted by `entered_at` ascending, then `step_instance_id`.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "array",
+          "items": { "$ref": "execution.schema.json#/$defs/step_status" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "node_id": { "$ref": "execution.schema.json#/$defs/node_id" },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_execution_steps_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/step_page" } } }
+      ]
+    },
+    "step_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "execution.schema.json#/$defs/step_instance" }
+        },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "list_loops_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_loops_params" } } }
+      ]
+    },
+    "list_loops_params": {
+      "description": "Sorted by `name` ascending, then `loop_id`. Removed loops are excluded unless `state` names `removed`.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "array",
+          "items": { "$ref": "loop.schema.json#/$defs/loop_state" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "default": ["active", "paused"]
+        },
+        "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_loops_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/loop_page" } } }
+      ]
+    },
+    "loop_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "loop.schema.json#/$defs/loop" } },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_loop_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/empty_params" } } }
+      ]
+    },
+    "get_loop_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/get_loop_result" } } }
+      ]
+    },
+    "get_loop_result": {
+      "type": "object",
+      "required": ["loop"],
+      "additionalProperties": false,
+      "properties": { "loop": { "$ref": "loop.schema.json#/$defs/loop" } }
+    },
+    "get_operation_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/empty_params" } } }
+      ]
+    },
+    "get_operation_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/get_operation_result" } } }
+      ]
+    },
+    "get_operation_result": {
+      "type": "object",
+      "required": ["operation"],
+      "additionalProperties": false,
+      "properties": { "operation": { "$ref": "operations.schema.json#/$defs/ge_operation" } }
+    }
+  }
+}

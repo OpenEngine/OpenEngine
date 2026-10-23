@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Connection Bus queries",
+  "description": "Requests and responses of `oe.v1.cxn.query.…`. Results never contain secrets.",
+  "$defs": {
+    "list_connections_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_connections_params" } } }
+      ]
+    },
+    "list_connections_params": {
+      "description": "Sorted by `created_at` descending, then `connection_id` descending. Deleted connections are excluded unless `state` names `deleted`.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Only the connection with this `metadata.name`, which is how tools refer to it.",
+          "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+        },
+        "provider": { "$ref": "connection.schema.json#/$defs/provider" },
+        "state": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "connection.schema.json#/$defs/state" },
+          "default": ["active", "disabled"]
+        },
+        "health": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["healthy", "degraded", "unknown"] }
+        },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_connections_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/connection_page" } } }
+      ]
+    },
+    "connection_page": {
+      "type": "object",
+      "required": ["items", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "connection.schema.json#/$defs/connection" }
+        },
+        "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+      }
+    },
+    "get_connection_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        {
+          "properties": {
+            "params": { "type": "object", "additionalProperties": false, "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "get_connection_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        { "properties": { "result": { "$ref": "#/$defs/get_connection_result" } } }
+      ]
+    },
+    "get_connection_result": {
+      "type": "object",
+      "required": ["connection"],
+      "additionalProperties": false,
+      "properties": { "connection": { "$ref": "connection.schema.json#/$defs/connection" } }
+    }
+  }
+}

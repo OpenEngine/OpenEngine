@@ -1,0 +1,53 @@
+{
+  "summary": "GE applies a named workspace for a step attempt of job_88. The path extends the job's ancestry.",
+  "message": "ApplyWorkspaceCommand",
+  "subject": "oe.v1.vcp.control.workspaces.apply",
+  "payload": {
+    "command_id": "cmd_create_a",
+    "causal_path": [
+      "gh-conn_acme_gh-dlv_88",
+      "cmd_submit_88",
+      "cmd_create_a"
+    ],
+    "deadline_at": "2026-10-19T21:32:00Z",
+    "payload": {
+      "workspace": {
+        "apiVersion": "openengine.cc/v1alpha1",
+        "kind": "Workspace",
+        "metadata": {
+          "name": "review-job-88"
+        },
+        "spec": {
+          "provider": "smolvm",
+          "resources": {
+            "cpuMillis": 2000,
+            "memoryMib": 4096,
+            "diskGib": 20
+          },
+          "tools": [
+            "git",
+            "terminal"
+          ],
+          "context": {
+            "repositories": [
+              {
+                "url": "https://github.com/acme/api",
+                "ref": "main"
+              }
+            ],
+            "instructions": "Follow the repository's CONTRIBUTING.md."
+          },
+          "requiredCapabilities": [
+            "checkpoint",
+            "isolation_microvm"
+          ],
+          "owner": {
+            "jobId": "job_88",
+            "executionId": "exec_88a",
+            "stepAttemptId": "stepa_88_impl_1"
+          }
+        }
+      }
+    }
+  }
+}

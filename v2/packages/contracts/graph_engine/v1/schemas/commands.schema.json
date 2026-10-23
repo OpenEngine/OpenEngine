@@ -1,0 +1,352 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Graph Engine commands",
+  "description": "Requests and responses of `oe.v1.ge.control.…`. The resource named in the subject is the target; payloads do not repeat it.",
+  "$defs": {
+    "apply_graph_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/apply_graph_payload" } } }
+      ]
+    },
+    "apply_graph_payload": {
+      "description": "Create or update a graph by name. `graph` is a Graph resource, named by its `metadata.name`; `python` is a Python LangGraph module exporting `workflow`. A new name creates the graph at revision 1, a changed definition adds the next revision, and an unchanged one returns the existing revision. Invalid input is rejected with INVALID_ARGUMENT listing every problem.",
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["graph"] }, { "required": ["python"] }],
+      "properties": {
+        "graph": { "$ref": "../resources/graph.schema.yaml" },
+        "python": {
+          "description": "Executes on the backend; refused with UNSUPPORTED_CAPABILITY where Python graphs are disabled.",
+          "type": "object",
+          "required": ["name", "source"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "graph.schema.json#/$defs/graph_name" },
+            "source": { "$ref": "graph.schema.json#/$defs/graph_source" },
+            "description": { "type": "string", "minLength": 1, "maxLength": 2000 }
+          }
+        }
+      }
+    },
+    "run_graph_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/run_graph_payload" } } }
+      ]
+    },
+    "run_graph_payload": {
+      "description": "Start an execution of the graph named in the subject.",
+      "type": "object",
+      "required": ["inputs", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "description": "Revision to run; defaults to the latest at acceptance, recorded in the operation result.",
+          "$ref": "graph.schema.json#/$defs/revision"
+        },
+        "inputs": {
+          "description": "Values for the graph's declared `inputs`, by name. Validated against the revision's input declarations at acceptance.",
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "null", "array", "object"]
+          }
+        },
+        "target": {
+          "description": "Explicitly target a new job or an existing one. An existing job with an active execution is rejected with INVALID_STATE; a cancelled job is rejected with INVALID_STATE.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["mode", "job"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "new_job" },
+                "job": {
+                  "type": "object",
+                  "required": ["goal"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "goal": { "$ref": "job.schema.json#/$defs/goal" },
+                    "context": { "$ref": "job.schema.json#/$defs/context" },
+                    "parent_job_id": {
+                      "$ref": "../../../common/v1/types.schema.json#/$defs/job_id"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["mode", "job_id"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "existing_job" },
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "submit_job_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/submit_job_payload" } } }
+      ]
+    },
+    "submit_job_payload": {
+      "description": "Create a job.",
+      "type": "object",
+      "required": ["goal", "execution"],
+      "additionalProperties": false,
+      "properties": {
+        "goal": { "$ref": "job.schema.json#/$defs/goal" },
+        "context": { "$ref": "job.schema.json#/$defs/context" },
+        "parent_job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "execution": {
+          "description": "Explicit execution intent: run a graph now, or hold the job open with no execution until `graphs.run` targets it.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["mode", "graph", "inputs"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "run_graph" },
+                "graph": { "$ref": "graph.schema.json#/$defs/graph_selector" },
+                "inputs": {
+                  "description": "Values for the graph's declared `inputs`, by name. Validated against the revision's input declarations at acceptance.",
+                  "type": "object",
+                  "maxProperties": 64,
+                  "additionalProperties": {
+                    "type": ["string", "number", "boolean", "null", "array", "object"]
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["mode"],
+              "additionalProperties": false,
+              "properties": { "mode": { "const": "hold" } }
+            }
+          ]
+        }
+      }
+    },
+    "steer_job_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/steer_job_payload" } } }
+      ]
+    },
+    "steer_job_payload": {
+      "description": "Record an instruction for the job. A cancelled job always rejects with INVALID_STATE.",
+      "type": "object",
+      "required": ["instruction", "if_completed"],
+      "additionalProperties": false,
+      "properties": {
+        "instruction": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "target": {
+          "description": "Narrow delivery to one part of the job; by default GE delivers to the active execution's running steps. Each ID must belong to the job, or the command is rejected with INVALID_ARGUMENT.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["execution_id"],
+              "additionalProperties": false,
+              "properties": {
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["step_attempt_id"],
+              "additionalProperties": false,
+              "properties": {
+                "step_attempt_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["workspace_id"],
+              "additionalProperties": false,
+              "properties": {
+                "workspace_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["session_id"],
+              "additionalProperties": false,
+              "properties": {
+                "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" }
+              }
+            }
+          ]
+        },
+        "if_completed": {
+          "description": "Required choice for a job (or target) that has already finished. follow_up: reopen the job and start a new execution of its latest graph revision carrying the instruction. reject: reject the command with INVALID_STATE. Ignored while the target is still active.",
+          "type": "string",
+          "enum": ["follow_up", "reject"]
+        }
+      }
+    },
+    "pause_job_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/pause_job_payload" } } }
+      ]
+    },
+    "pause_job_payload": {
+      "description": "Stop new scheduling. Steps already running continue unless `active_tasks: cancel`. Pausing a paused job is accepted and changes nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": { "$ref": "job.schema.json#/$defs/job_scope" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "active_tasks": { "type": "string", "enum": ["continue", "cancel"], "default": "continue" }
+      }
+    },
+    "resume_job_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/resume_job_payload" } } }
+      ]
+    },
+    "resume_job_payload": {
+      "description": "Resume a paused execution. Pending approvals stay pending: resuming never approves anything. A cancelled job or execution is never resurrected (INVALID_STATE).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": { "$ref": "job.schema.json#/$defs/job_scope" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "cancel_job_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/cancel_job_payload" } } }
+      ]
+    },
+    "cancel_job_payload": {
+      "description": "Permanently stop the job: no further progression, the active execution is cancelled, and cancellation is requested for every active task. Workspaces are kept; destroying them is VCP's separate concern.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": { "$ref": "job.schema.json#/$defs/job_scope" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "decide_approval_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/decide_approval_payload" } } }
+      ]
+    },
+    "decide_approval_payload": {
+      "description": "Resolve a workflow approval. `execution_id` and `step_instance_id` name the gate the decider saw; if they no longer match a `requested` approval (already decided, superseded, expired, or a different step) the command is rejected with STALE_APPROVAL.",
+      "type": "object",
+      "required": ["decision", "execution_id", "step_instance_id"],
+      "additionalProperties": false,
+      "properties": {
+        "decision": { "$ref": "approval.schema.json#/$defs/decision" },
+        "comment": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "step_instance_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+        }
+      }
+    },
+    "apply_loop_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/apply_loop_payload" } } }
+      ]
+    },
+    "apply_loop_payload": {
+      "description": "Create or update a loop by its `metadata.name`. `spec.graphRef` must name a registered graph (NOT_FOUND otherwise) and `spec.jobTemplate.inputs` must fit its inputs (INVALID_ARGUMENT otherwise). `spec.suspend: true` stores the loop paused. Changes apply to future triggers only. `expected_version` guards an update.",
+      "type": "object",
+      "required": ["loop"],
+      "additionalProperties": false,
+      "properties": {
+        "loop": { "$ref": "../resources/loop.schema.yaml" }
+      }
+    },
+    "pause_loop_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/loop_control_payload" } } }
+      ]
+    },
+    "resume_loop_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/loop_control_payload" } } }
+      ]
+    },
+    "remove_loop_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/loop_control_payload" } } }
+      ]
+    },
+    "loop_control_payload": {
+      "description": "Pause, resume or remove the loop's future scheduling. Jobs the loop already created are unaffected.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 2000 } }
+    },
+    "graph_command_response": {
+      "description": "Reply to `graphs.apply`; `resource_id` is the graph ID.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" }
+          }
+        }
+      ]
+    },
+    "job_command_response": {
+      "description": "Reply to `graphs.run`, `jobs.submit` and job controls; `resource_id` is the job ID (allocated at acceptance for a new job).",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" }
+          }
+        }
+      ]
+    },
+    "approval_command_response": {
+      "description": "Reply to `approvals.decide`.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+            }
+          }
+        }
+      ]
+    },
+    "loop_command_response": {
+      "description": "Reply to `loops.apply` and loop controls; `resource_id` is the loop ID.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" }
+          }
+        }
+      ]
+    }
+  }
+}

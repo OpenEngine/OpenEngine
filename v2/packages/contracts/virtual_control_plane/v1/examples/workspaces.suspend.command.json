@@ -1,0 +1,10 @@
+{
+  "summary": "Suspend a workspace on the `process` provider.",
+  "message": "SuspendCommand",
+  "subject": "oe.v1.vcp.control.workspaces.ws_p1.suspend",
+  "payload": {
+    "command_id": "cmd_suspend_p",
+    "causal_path": ["cmd_suspend_p"],
+    "payload": { "if_active": "reject" }
+  }
+}

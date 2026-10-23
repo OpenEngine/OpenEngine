@@ -1,4 +1,4 @@
-"""The `/api/v1` HTTP surface (mounted there by the daemon) `engine graph`, `loop` and `node` commands speak.
+"""The `/api/v1` HTTP surface (mounted there by the daemon) `oe graph`, `loop` and `node` commands speak.
 
     GET  /graphs                      registered graphs in a project
     POST /graphs                      register {format: yaml|python, source} (a new version if it changed)
@@ -205,7 +205,8 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
         ))
 
     async def list_agents(_request: Request) -> JSONResponse:
-        return JSONResponse({"agents": service.agents_json()})
+        # A built-in agent's version is read off its binary, once.
+        return JSONResponse({"agents": await asyncio.to_thread(service.agents_json)})
 
     async def add_agent(request: Request) -> JSONResponse:
         body = await _body(request)
@@ -223,7 +224,7 @@ def create_app(service: GraphService, *, repository_trust: Callable[[str, bool |
         ), status_code=201)
 
     async def get_agent(request: Request) -> JSONResponse:
-        return JSONResponse(service.agent_json(request.path_params["name"]))
+        return JSONResponse(await asyncio.to_thread(service.agent_json, request.path_params["name"]))
 
     async def remove_agent(request: Request) -> JSONResponse:
         return JSONResponse(await service.remove_agent(request.path_params["name"]))

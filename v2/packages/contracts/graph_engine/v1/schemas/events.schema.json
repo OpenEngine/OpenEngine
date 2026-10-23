@@ -1,0 +1,660 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Graph Engine events",
+  "description": "Events GE publishes, captured by the existing `ge-events` stream: `oe.v1.ge.events.jobs.{job_id}.{event_type}` for job, execution and approval events (ordered per job) and `oe.v1.ge.events.loops.{loop_id}.{event_type}` for loop events (ordered per loop). `resource_version` is the version of the job or loop after the event. Events that complete a command carry its operation reference.",
+  "$defs": {
+    "job_created_event": {
+      "description": "A job was created by `jobs.submit`, `graphs.run` (new job) or a loop. `operation` is absent for loop-created jobs.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "job.created" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["job"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "job": { "$ref": "job.schema.json#/$defs/job" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "job_completed_event": {
+      "description": "The job's latest execution succeeded and nothing remains active. A follow-up steer can reopen it.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "job.completed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["job"],
+              "additionalProperties": false,
+              "properties": { "job": { "$ref": "job.schema.json#/$defs/job" } }
+            }
+          }
+        }
+      ]
+    },
+    "job_failed_event": {
+      "description": "The job's latest execution failed and nothing remains active. Distinct from operation failure.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "job.failed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["job", "error"],
+              "additionalProperties": false,
+              "properties": {
+                "job": { "$ref": "job.schema.json#/$defs/job" },
+                "error": { "$ref": "../../../common/v1/error.schema.json" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "job_cancelled_event": {
+      "description": "The job was permanently cancelled by `jobs.cancel`. Only this event means the job will never progress again; `execution.cancelled` alone does not.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "job.cancelled" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "job"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "job": { "$ref": "job.schema.json#/$defs/job" },
+                "cancelled_job_ids": {
+                  "type": "array",
+                  "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                  "uniqueItems": true
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_started_event": {
+      "description": "Completion of `graphs.run`, or of `jobs.submit` with `run_graph`, or of a follow-up steer.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.started" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["execution"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "execution": { "$ref": "execution.schema.json#/$defs/execution" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_progressed_event": {
+      "description": "A step instance entered, finished an attempt, or transitioned. Parallel branches publish sibling events whose causal paths share a prefix.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.progressed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id", "step_instance_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                },
+                "step_instance_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+                },
+                "step_attempt_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["node_id", "step_status"],
+              "additionalProperties": false,
+              "properties": {
+                "node_id": { "$ref": "execution.schema.json#/$defs/node_id" },
+                "step_status": { "$ref": "execution.schema.json#/$defs/step_status" },
+                "attempt": { "$ref": "execution.schema.json#/$defs/step_attempt" },
+                "transition": { "$ref": "execution.schema.json#/$defs/transition" },
+                "entered_from": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+                  },
+                  "uniqueItems": true,
+                  "description": "Every dependency of the step instance. At a join the causal path follows only one of them; the full set is here and in the execution records."
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_awaiting_approval_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.awaiting_approval" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id", "step_instance_id", "approval_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                },
+                "step_instance_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+                },
+                "approval_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["approval"],
+              "additionalProperties": false,
+              "properties": {
+                "approval": { "$ref": "approval.schema.json#/$defs/workflow_approval" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_paused_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.paused" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "active_tasks"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "active_tasks": { "type": "string", "enum": ["continue", "cancel"] },
+                "running_step_instance_ids": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_resumed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.resumed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "pending_approval_ids": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+                  },
+                  "uniqueItems": true,
+                  "description": "Approvals still awaiting a decision; resuming did not approve them."
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_completed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.completed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["execution"],
+              "additionalProperties": false,
+              "properties": {
+                "execution": { "$ref": "execution.schema.json#/$defs/execution" },
+                "result_ref": { "$ref": "../../../common/v1/types.schema.json#/$defs/artifact_id" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_failed_event": {
+      "description": "The execution failed. Not an operation failure and not a workspace failure.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.failed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["execution", "error"],
+              "additionalProperties": false,
+              "properties": {
+                "execution": { "$ref": "execution.schema.json#/$defs/execution" },
+                "error": { "$ref": "../../../common/v1/error.schema.json" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution_cancelled_event": {
+      "description": "The execution stopped. This does not necessarily mean the job is cancelled: see `job_state`, and `job.cancelled`.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "execution.cancelled" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["execution", "job_state"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "execution": { "$ref": "execution.schema.json#/$defs/execution" },
+                "job_state": {
+                  "description": "The job's state after this execution was cancelled. `open` means the job may still run another execution.",
+                  "$ref": "job.schema.json#/$defs/job_state"
+                },
+                "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "approval_requested_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "approval.requested" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id", "step_instance_id", "approval_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                },
+                "step_instance_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+                },
+                "approval_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["approval"],
+              "additionalProperties": false,
+              "properties": {
+                "approval": { "$ref": "approval.schema.json#/$defs/workflow_approval" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "approval_resolved_event": {
+      "description": "The approval left `requested`: approved or rejected (with `operation`), or superseded or expired (without).",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "approval.resolved" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["job_id", "execution_id", "step_instance_id", "approval_id"],
+              "additionalProperties": false,
+              "properties": {
+                "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                "execution_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id"
+                },
+                "step_instance_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+                },
+                "approval_id": {
+                  "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+                }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["approval"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "approval": { "$ref": "approval.schema.json#/$defs/workflow_approval" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "loop_applied_event": {
+      "description": "A loop was created or updated by `loops.apply`. Affects future triggers only.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "loop.applied" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["loop_id"],
+              "additionalProperties": false,
+              "properties": {
+                "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "loop", "created"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "loop": { "$ref": "loop.schema.json#/$defs/loop" },
+                "created": { "type": "boolean", "description": "True for a new loop, false for an update." }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "loop_paused_event": {
+      "description": "Future triggers stop. Existing jobs are unaffected.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "loop.paused" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["loop_id"],
+              "additionalProperties": false,
+              "properties": {
+                "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "loop"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "loop": { "$ref": "loop.schema.json#/$defs/loop" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "loop_resumed_event": {
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "loop.resumed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["loop_id"],
+              "additionalProperties": false,
+              "properties": {
+                "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "loop"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "loop": { "$ref": "loop.schema.json#/$defs/loop" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "loop_removed_event": {
+      "description": "The loop will never fire again. Its jobs are not cancelled.",
+      "allOf": [
+        { "$ref": "../../../common/v1/event.schema.json" },
+        {
+          "required": ["resource_version"],
+          "properties": {
+            "event_type": { "const": "loop.removed" },
+            "producer": { "const": "ge" },
+            "resources": {
+              "type": "object",
+              "required": ["loop_id"],
+              "additionalProperties": false,
+              "properties": {
+                "loop_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/loop_id" }
+              }
+            },
+            "payload": {
+              "type": "object",
+              "required": ["operation", "loop"],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+                },
+                "loop": { "$ref": "loop.schema.json#/$defs/loop" },
+                "open_job_ids": {
+                  "type": "array",
+                  "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+                  "uniqueItems": true,
+                  "description": "Jobs the loop created that are still open; they continue."
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

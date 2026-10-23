@@ -55,7 +55,7 @@ def _save(path: Path, original: str, updated: str) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         if path.read_text(encoding="utf-8") != original:
-            message = "configuration changed during selection; retry engine vm"
+            message = "configuration changed during selection; retry oe vm"
             raise ValueError(message)
         os.replace(temporary, path)
     finally:
@@ -69,7 +69,7 @@ def _refuse(message: str) -> None:
 
 def _select(arguments: argparse.Namespace) -> dict:
     if arguments.image is not None and arguments.backend != "smolvm":
-        _refuse("--image requires engine vm use smolvm (or engine vm smolvm)")
+        _refuse("--image requires oe vm use smolvm (or oe vm smolvm)")
     path = (arguments.config or daemon.config_path()).expanduser().resolve()
     if not path.is_file():
         _refuse(f"{path} does not exist; run the installer or select an existing file with --config")
@@ -104,7 +104,7 @@ def _select(arguments: argparse.Namespace) -> dict:
         updated = tomlkit.dumps(document)
         sandbox = parse_engine_config(document.unwrap()).sandbox
         _save(path, original, updated)
-    notice = "Existing services must be restarted to load changes (engine daemon restart for the managed service). Node execution remains on the host until sandbox routing is implemented."
+    notice = "Existing services must be restarted to load changes (oe daemon restart for the managed service). Node execution remains on the host until sandbox routing is implemented."
     return {"config": str(path), "backend": sandbox.backend, "image": sandbox.image, "changed": changed, "notice": notice}
 
 
@@ -112,7 +112,7 @@ def main(arguments: argparse.Namespace) -> int:
     try:
         result = _select(arguments)
     except (EngineConfigError, OSError, ValueError, TOMLKitError) as error:
-        print(f"engine vm: {error}", file=sys.stderr)
+        print(f"oe vm: {error}", file=sys.stderr)
         return 1
     if arguments.vm_action == "list":
         rows = [{"name": name, "current": name == result['backend'], "description": description}

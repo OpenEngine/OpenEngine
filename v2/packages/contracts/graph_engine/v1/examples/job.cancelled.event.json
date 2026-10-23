@@ -1,0 +1,31 @@
+{
+  "message": "JobCancelled",
+  "subject": "oe.v1.ge.events.jobs.job_42.job.cancelled",
+  "headers": { "Nats-Msg-Id": "evt_job42_cancelled" },
+  "payload": {
+    "event_id": "evt_job42_cancelled",
+    "event_type": "job.cancelled",
+    "occurred_at": "2026-10-19T22:30:00Z",
+    "producer": "ge",
+    "causal_path": ["cmd_cancel_42", "evt_job42_cancelled"],
+    "resources": { "job_id": "job_42" },
+    "resource_version": 15,
+    "payload": {
+      "operation": { "operation_id": "op_cancel_42", "command_id": "cmd_cancel_42" },
+      "job": {
+        "job_id": "job_42",
+        "version": 15,
+        "goal": "Address the security review on acme/api#88",
+        "context": { "repository": "acme/api", "pull_request": 88 },
+        "state": "cancelled",
+        "active_execution_id": null,
+        "execution_count": 1,
+        "child_job_count": 0,
+        "created_at": "2026-10-19T21:30:01Z",
+        "updated_at": "2026-10-19T22:30:00Z",
+        "ended_at": "2026-10-19T22:30:00Z"
+      },
+      "cancelled_job_ids": ["job_42", "job_43"]
+    }
+  }
+}

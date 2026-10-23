@@ -791,8 +791,8 @@ def test_stage_runners_configure_models_and_mcp_identity(
     assert [node.agent for node in observed] == [implementation, review, review, implementation]
     for node in observed:
         assert all(binding.agent_id == node.agent for binding in node.mcp_server_bindings)
-    assert observed[1].session_config["model"] == module.REVIEW_MODELS[review]["elevated"]
-    assert observed[2].session_config["model"] == module.REVIEW_MODELS[review]["default"]
+    assert not (observed[1].session_config or {}).get("model")
+    assert not (observed[2].session_config or {}).get("model")
 
 
 @pytest.mark.parametrize(("model", "expected"), (("engine/qwen3", "engine/qwen3"), ("", None)))
@@ -811,9 +811,34 @@ def test_an_added_agent_runs_any_stage_on_its_own_model(model, expected) -> None
         assert node.agent == "qwen" and agents.resolve("qwen").name == "qwen"
         assert all(binding.agent_id == "qwen" for binding in node.mcp_server_bindings)
         assert (node.session_config or {}).get("model") == expected
-    # Codex and Claude keep their own review models beside it.
+    # Built-in agents continue to use their own configured/default model.
     claude = nodes["review-security"]._for_runner("claude")
-    assert claude.session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+    assert not (claude.session_config or {}).get("model")
+
+
+def test_stages_ask_for_their_tier_as_configured_when_they_run() -> None:
+    """A graph built before the tiers changed asks for the new models: a restart is enough."""
+    from engine.graph_runtime_langgraph import configure_model_tiers
+
+    module = definition_module()
+    nodes = nodes_of(module.graph_for("codex").builder)
+
+    def model(name: str, runner: str = "codex") -> object:
+        return (nodes[name]._for_runner(runner).session_config or {}).get("model")
+
+    configure_model_tiers({
+        "codex": {"cheapest": "codex-mini", "default": "codex-main", "elevated": "codex-max"},
+        "claude": {"cheapest": "haiku", "default": "sonnet", "elevated": "opus"},
+    })
+    assert [model(name) for name in ("naming", "implementation", "review-security", "review-bugs", "impact-analysis")] == [
+        "codex-mini", "codex-main", "codex-max", "codex-main", "codex-main",
+    ]
+    assert model("review-security", "claude") == "opus"
+
+    configure_model_tiers({"codex": {"cheapest": "", "default": "codex-next", "elevated": ""}})
+    assert model("implementation") == "codex-next"
+    # A blank tier leaves the agent to its own default, e.g. `~/.codex/config.toml`.
+    assert model("review-security") is None and model("naming") is None
 
 
 def test_an_added_implementer_is_reviewed_by_claude() -> None:
@@ -821,7 +846,7 @@ def test_an_added_implementer_is_reviewed_by_claude() -> None:
     nodes = nodes_of(module.pipeline("qwen"))
     assert nodes["implementation"].agent == "qwen"
     assert nodes["review-security"].agent == "claude"
-    assert nodes["review-security"].session_config["model"] == module.REVIEW_MODELS["claude"]["elevated"]
+    assert not (nodes["review-security"].session_config or {}).get("model")
     defaults = {item.name: item.default for item in module.graph_for("codex").inputs}
     assert defaults["implementation_runner"] == "codex" and defaults["review_runner"] == "round-robin"
     assert {item.name: item.default for item in module.graph_for("claude").inputs}["review_runner"] == "round-robin"

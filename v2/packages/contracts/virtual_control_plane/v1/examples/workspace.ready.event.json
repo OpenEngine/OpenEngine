@@ -1,0 +1,19 @@
+{
+  "summary": "Completes the create operation.",
+  "message": "WorkspaceReady",
+  "subject": "oe.v1.vcp.events.workspaces.ws_a1.workspace.ready",
+  "headers": { "Nats-Msg-Id": "evt_ready_a" },
+  "payload": {
+    "event_id": "evt_ready_a",
+    "event_type": "workspace.ready",
+    "occurred_at": "2026-10-19T21:31:12Z",
+    "producer": "vcp",
+    "causal_path": ["gh-conn_acme_gh-dlv_88", "cmd_submit_88", "cmd_create_a", "evt_ready_a"],
+    "resources": { "workspace_id": "ws_a1", "runtime_id": "rt_a1g1" },
+    "resource_version": 2,
+    "payload": {
+      "operation": { "operation_id": "op_create_a", "command_id": "cmd_create_a" },
+      "runtime_generation": 1
+    }
+  }
+}

@@ -1,0 +1,325 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tool Service events",
+  "description": "Invocation lifecycle events, published on `oe.v1.events.toolinvocations.{namespace}.{invocation_id}.{event}` and captured by the `tools-events` stream. Events of one invocation are ordered. They carry references and a status summary only; results are read through the authorized `toolinvocations.get`.",
+  "$defs": {
+    "invocation_resources": {
+      "description": "`invocation_id` is the invocation's name, as in the subject.",
+      "type": "object",
+      "required": [
+        "invocation_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "invocation_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name"
+        }
+      }
+    },
+    "invocation_summary": {
+      "description": "References and a status summary. Never the result: read that through `toolinvocations.get`, which checks the reader may see it.",
+      "type": "object",
+      "required": [
+        "namespace",
+        "invocation",
+        "toolRef",
+        "workspaceRef",
+        "stepAttemptId",
+        "phase",
+        "attemptCount"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+        },
+        "namespace": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name"
+        },
+        "invocation": {
+          "type": "object",
+          "required": [
+            "name",
+            "uid"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name"
+            },
+            "uid": {
+              "$ref": "../../../common/v1/meta.schema.yaml#/$defs/uid"
+            }
+          }
+        },
+        "toolRef": {
+          "$ref": "../resources/toolinvocation.schema.yaml#/$defs/tool_ref"
+        },
+        "workspaceRef": {
+          "$ref": "../resources/toolgrant.schema.yaml#/$defs/name_ref"
+        },
+        "stepAttemptId": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id"
+        },
+        "phase": {
+          "$ref": "../resources/toolinvocation.schema.yaml#/$defs/tool_invocation_status/properties/phase"
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error": {
+          "$ref": "../resources/toolinvocation.schema.yaml#/$defs/invocation_error"
+        }
+      }
+    },
+    "invocation_accepted_event": {
+      "description": "The invocation was recorded and authorized. Completes `tools.invoke`, so it carries the command's operation.",
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/event.schema.json"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "const": "toolinvocation.accepted"
+            },
+            "producer": {
+              "const": "tools"
+            },
+            "resources": {
+              "$ref": "#/$defs/invocation_resources"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/invocation_summary"
+                },
+                {
+                  "properties": {
+                    "phase": {
+                      "const": "Accepted"
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "invocation_running_event": {
+      "description": "An attempt started. Sent again for each retry, with the new `attemptCount`.",
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/event.schema.json"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "const": "toolinvocation.running"
+            },
+            "producer": {
+              "const": "tools"
+            },
+            "resources": {
+              "$ref": "#/$defs/invocation_resources"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/invocation_summary"
+                },
+                {
+                  "properties": {
+                    "phase": {
+                      "const": "Running"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "invocation_succeeded_event": {
+      "description": "The tool finished. Read the result with `toolinvocations.get`.",
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/event.schema.json"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "const": "toolinvocation.succeeded"
+            },
+            "producer": {
+              "const": "tools"
+            },
+            "resources": {
+              "$ref": "#/$defs/invocation_resources"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/invocation_summary"
+                },
+                {
+                  "properties": {
+                    "phase": {
+                      "const": "Succeeded"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "invocation_failed_event": {
+      "description": "The tool failed, or a recheck found its grant revoked or expired, and no attempt is left.",
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/event.schema.json"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "const": "toolinvocation.failed"
+            },
+            "producer": {
+              "const": "tools"
+            },
+            "resources": {
+              "$ref": "#/$defs/invocation_resources"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/invocation_summary"
+                },
+                {
+                  "properties": {
+                    "phase": {
+                      "const": "Failed"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "invocation_blocked_auth_event": {
+      "description": "The connection's credential needs attention; the call waits until it is fixed or cancelled.",
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/event.schema.json"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "const": "toolinvocation.blocked-auth"
+            },
+            "producer": {
+              "const": "tools"
+            },
+            "resources": {
+              "$ref": "#/$defs/invocation_resources"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/invocation_summary"
+                },
+                {
+                  "properties": {
+                    "phase": {
+                      "const": "BlockedAuth"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "invocation_outcome_unknown_event": {
+      "description": "An attempt was interrupted and its effect could not be determined; a person resolves it.",
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/event.schema.json"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "const": "toolinvocation.outcome-unknown"
+            },
+            "producer": {
+              "const": "tools"
+            },
+            "resources": {
+              "$ref": "#/$defs/invocation_resources"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/invocation_summary"
+                },
+                {
+                  "properties": {
+                    "phase": {
+                      "const": "OutcomeUnknown"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "invocation_cancelled_event": {
+      "description": "The invocation was cancelled. When `toolinvocations.cancel` caused it, it carries that command's operation.",
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/event.schema.json"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "const": "toolinvocation.cancelled"
+            },
+            "producer": {
+              "const": "tools"
+            },
+            "resources": {
+              "$ref": "#/$defs/invocation_resources"
+            },
+            "payload": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/invocation_summary"
+                },
+                {
+                  "properties": {
+                    "phase": {
+                      "const": "Cancelled"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -10,18 +10,18 @@ slug: /guides/graphs/run-your-graph-on-a-schedule
 
 Read about scheduled graphs
 
-The `engine` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
+The `oe` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
 
 Some work is never finished for good: keeping a README up to date, fixing one flaky test at a time, tidying a little more each day. Instead of starting the same graph yourself every few hours, you can set up a **loop**: a graph set to run again and again on a schedule, with limits on how much it may spend. You choose how often it runs, how much money its agents may spend in all, and how many pull requests (proposed changes to your code) it may open. When it reaches a limit, it pauses itself, and you can pause or stop it yourself at any time.
 
 
-To read everything a loop can do, type `engine loop spec` and press Enter.
+To read everything a loop can do, type `oe loop spec` and press Enter.
 
 You'll see detailed reference material about loops: how to set one up, how often it can run, its limits, and how to pause it. You don't need any of it to follow this guide, but it's there whenever you want the details.
 
 ![screenshot](./test2doc-f8492cf88cba.png)
 
-A loop needs a graph to run. This guide uses one with a single step. In your project's folder, save this as `check-readme.yaml`, then type `engine graph add check-readme.yaml` and press Enter to save it to OpenEngine, as in [Save Your First Graph](./test2doc-save-your-first-graph.mdx):
+A loop needs a graph to run. This guide uses one with a single step. In your project's folder, save this as `check-readme.yaml`, then type `oe graph add check-readme.yaml` and press Enter to save it to OpenEngine, as in [Save Your First Graph](./test2doc-save-your-first-graph.mdx):
 
 ```yaml
 apiVersion: openengine.cc/v1
@@ -40,7 +40,7 @@ The `loop` part is new. `every: 1h` says to run the graph once an hour, and `ins
 
 ![screenshot](./test2doc-9ac293ca4ff5.png)
 
-Set up the loop. Type `engine loop add check-readme --every 1h --max-spend 5 --max-prs 1` and press Enter.
+Set up the loop. Type `oe loop add check-readme --every 1h --max-spend 5 --max-prs 1` and press Enter.
 
 `--max-spend 5` sets a $5 limit on reported agent usage across every run. OpenEngine stops the active run when reported spending reaches the limit; usage it cannot price and other costs, such as hosting, are not included. `--max-prs 1` means it may open at most one pull request. When the loop reaches either limit, it pauses itself. `--every 1h` says how often to run; you can leave it out when the graph says, as this one does.
 
@@ -48,15 +48,15 @@ OpenEngine shows the loop's name, that it's *active*, how often it runs and when
 
 ![screenshot](./test2doc-9ada2d31a73c.png)
 
-To see all your loops, type `engine loops list` and press Enter.
+To see all your loops, type `oe loops list` and press Enter.
 
 You'll see one row for each loop, with its graph, its state (*active*, *paused* or *stopped*), how often it runs, when it runs next, and how far it is toward each limit: *PRS* is pull requests opened out of the most allowed, and *SPEND* is money spent out of the most allowed.
 
 ![screenshot](./test2doc-8dfe52c481f0.png)
 
-To look at one loop more closely, type `engine loop get check-readme` and press Enter.
+To look at one loop more closely, type `oe loop get check-readme` and press Enter.
 
-Along with what the list shows, you'll see the run it's doing now, if there is one, under *active run*. Once a run has finished, *latest output* shows what its last step replied. To follow the run as it goes, type `engine run watch` and the run ID, as in [Run Your Graph and Watch It Work](./test2doc-run-your-graph-and-watch-it-work.mdx).
+Along with what the list shows, you'll see the run it's doing now, if there is one, under *active run*. Once a run has finished, *latest output* shows what its last step replied. To follow the run as it goes, type `oe run watch` and the run ID, as in [Run Your Graph and Watch It Work](./test2doc-run-your-graph-and-watch-it-work.mdx).
 
 ![screenshot](./test2doc-0caefe92231a.png)
 
@@ -65,15 +65,15 @@ Along with what the list shows, you'll see the run it's doing now, if there is o
 
 If you want a loop to take a break, for example while you review what it has done so far, pause it. A paused loop starts no new runs until you start it again. A run that's already going carries on to its end.
 
-Type `engine loop pause check-readme --reason "Reviewing its work"` and press Enter. The reason is for you and anyone else who looks at the loop later; you can leave it out.
+Type `oe loop pause check-readme --reason "Reviewing its work"` and press Enter. The reason is for you and anyone else who looks at the loop later; you can leave it out.
 
 ![screenshot](./test2doc-12ef3c63b714.png)
 
-Type `engine loops list` and press Enter. Your loop shows *paused*, with your reason under *PAUSED BECAUSE*. When a loop pauses itself because it reached a limit, this is where it says which one.
+Type `oe loops list` and press Enter. Your loop shows *paused*, with your reason under *PAUSED BECAUSE*. When a loop pauses itself because it reached a limit, this is where it says which one.
 
 ![screenshot](./test2doc-ee79b8fa85f6.png)
 
-To start it again, type `engine loop resume check-readme` and press Enter. The loop is *active* again and goes back to its schedule.
+To start it again, type `oe loop resume check-readme` and press Enter. The loop is *active* again and goes back to its schedule.
 
 If it paused itself because it reached a limit, it won't start again until you raise that limit: add a higher one, such as `--max-spend 10` or `--max-prs 2`, to the same command.
 
@@ -84,11 +84,11 @@ If it paused itself because it reached a limit, it won't start again until you r
 
 When you no longer want a loop at all, stop it. Unlike pausing, stopping is for good: the loop starts no more runs, the run it's doing now is stopped too, and it can't be started again. To have the graph run on a schedule again later, set up a new loop with a different name using `--name`.
 
-Type `engine loop stop check-readme` and press Enter. OpenEngine shows the loop as *stopped*.
+Type `oe loop stop check-readme` and press Enter. OpenEngine shows the loop as *stopped*.
 
 ![screenshot](./test2doc-ad1f34f16ca5.png)
 
-Type `engine loops list` and press Enter. Your loop is still listed, as *stopped*, so you can look back at what it did. Its last run shows as *cancelled* in `engine runs list`.
+Type `oe loops list` and press Enter. Your loop is still listed, as *stopped*, so you can look back at what it did. Its last run shows as *cancelled* in `oe runs list`.
 
 Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).
 

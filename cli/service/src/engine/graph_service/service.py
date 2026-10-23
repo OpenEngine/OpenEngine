@@ -32,10 +32,12 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qsl, urlsplit
 
 import yaml
+from langgraph_acp.readiness import AgentReadiness, AgentReadinessCache, missing_runtime
+from langgraph_acp._json import JSONValue
 from engine.runtime.repositories import RepositoryRegistry
 from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
 from engine.graph_runtime import (
@@ -49,14 +51,14 @@ from engine.graph_runtime.control import CANCELLED
 from engine.graph_runtime.events import EventKind, RuntimeEvent
 from engine.graph_runtime.identity import ExecutionId
 from engine.graph_runtime.usage import usage_rollup
-from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime
+from engine.graph_runtime_langgraph import AddedAgents, GraphWorkflow, LangGraphRuntime, configure_model_tiers
 from engine.ports import WorkspaceProvider
-from langgraph_acp import ACPAgentRegistry
+from langgraph_acp import ACPAgentRegistry, ACPAgentNotFoundError
 
 from engine.graph_runtime import GraphId
-from engine.graph_runtime.inputs import RUNNER_POLICIES, resolve_inputs
+from engine.graph_runtime.inputs import RUNNER_POLICIES, WorkflowInput, choose_runners, resolve_inputs
 from engine.graph_runtime.topology import GraphTopology
-from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig, PullRequestsConfig
+from engine.runtime.config import DEFAULT_SESSION_TOOLS, ApprovalConfig, PullRequestsConfig, merge_model_tiers
 from engine.runtime.workflows import WorkflowLoadError, load_workflow_file
 
 from engine.graph_service.compile import compile_graph
@@ -226,6 +228,7 @@ class GraphService:
         allow_python: bool = True,
         agent_factory: AgentFactory | None = None,
         added_agents: AddedAgents | None = None,
+        runner_binary: Callable[[str], tuple[str, str]] | None = None,
         session_tools: Sequence[str] = DEFAULT_SESSION_TOOLS,
         approval_policy: ApprovalConfig | None = None,
         pull_requests: PullRequestsConfig = PullRequestsConfig(),
@@ -238,6 +241,7 @@ class GraphService:
         self.store = GraphServiceStore(database)
         self._workspace_provider = workspace_provider
         self._registry = registry
+        self._readiness = AgentReadinessCache()
         self._start = start or self._start_directly
         self._session_config = session_config
         self._pull_requests = pull_requests
@@ -252,10 +256,14 @@ class GraphService:
         self._model_tiers = model_tiers
         self._allow_python = allow_python
         self._agent_factory = agent_factory
+        #: A built-in runner's binary and its version; empty for the adapter's own.
+        self._runner_binary = runner_binary or (lambda _name: ("", ""))
         #: Added agents and their models, offered to workflow files too when this
         #: process runs any. Compiled graphs hold its `models` dict, not a copy,
         #: so a model changed here reaches graphs registered before the change.
         self._added_agents = added_agents if added_agents is not None else AddedAgents()
+        # The tiers this service's workflow files ask for, supplied with its agents.
+        configure_model_tiers(merge_model_tiers(model_tiers), self._added_agents)
         #: What the registry held before any added agent: these cannot be replaced or removed.
         self._builtin_agents = tuple(registry.names)
         self._sessions = Sessions()
@@ -305,6 +313,7 @@ class GraphService:
             self._scheduler = asyncio.create_task(self._schedule())
 
     async def aclose(self) -> None:
+        await self._readiness.aclose()
         if self._scheduler is not None:
             self._scheduler.cancel()
             await asyncio.gather(self._scheduler, return_exceptions=True)
@@ -315,7 +324,7 @@ class GraphService:
         return tuple(self._registry.names)
 
     def added_agents(self) -> tuple[str, ...]:
-        """The runners `engine agent add` offers, beyond the built-in ones."""
+        """The runners `oe agent add` offers, beyond the built-in ones."""
         return self._added_agents.names
 
     # --- agents -------------------------------------------------------------
@@ -333,7 +342,13 @@ class GraphService:
                 "builtin": False, "createdAt": row.created_at, "updatedAt": row.updated_at,
             }
         if name in self._builtin_agents:
-            return {"name": name, "kind": name, "model": "", "url": "", "builtin": True}
+            path, version = self._runner_binary(name)
+            return {
+                "name": name, "kind": name, "model": "", "url": "", "builtin": True,
+                "path": path, "version": version,
+                # A blank tier is the agent's own default, e.g. `~/.codex/config.toml`.
+                "models": merge_model_tiers(self._model_tiers).get(name, {}),
+            }
         raise NotFound(f"no agent named {name!r}", agent=name)
 
     async def add_agent(
@@ -395,7 +410,57 @@ class GraphService:
         assert self._agent_factory is not None
         provider = self._agent_factory(row)
         self._registry.register(provider, replace=True)
-        self._added_agents.offer(provider, session_model(row) if row.model else "")
+        self._added_agents.offer(
+            provider, session_model(row) if row.model else "", row.context_limit,
+        )
+
+    async def agent_readiness(self, name: str, *, automatic: bool = False) -> AgentReadiness:
+        """Probe the same provider and model the registered workflow will use."""
+        try:
+            provider = self._registry.resolve(name)
+        except ACPAgentNotFoundError as error:
+            return AgentReadiness(False, str(error))
+        if automatic and name in self._builtin_agents and (missing := missing_runtime(provider)):
+            return AgentReadiness(False, missing)
+        config = dict(self._session_config or {})
+        if model := self._added_agents.models.get(name):
+            config["model"] = model
+        return await self._readiness.check(provider, cast(Mapping[str, JSONValue], config))
+
+    async def ready_runner_choices(
+        self, declarations: tuple[WorkflowInput, ...], inputs: Mapping[str, str],
+    ) -> tuple[str, ...]:
+        """Select only usable providers; explicit choices fail without fallback."""
+        offered = set(self._registry.names)
+        runner_inputs = [item for item in declarations if
+                         any(choice in offered for choice in item.choices)
+                         or item.name in ("implementation_runner", "review_runner", "runner", "agent")]
+        requested = set()
+        for item in runner_inputs:
+            value = inputs.get(item.name, item.default)
+            requested.update(
+                (choice for choice in item.choices if choice not in RUNNER_POLICIES)
+                if value in RUNNER_POLICIES else (value,) if value else ()
+            )
+        names = sorted(requested)
+        explicit = {inputs.get(item.name, item.default) for item in runner_inputs} - set(RUNNER_POLICIES)
+        readiness = await asyncio.gather(*(
+            self.agent_readiness(name, automatic=name not in explicit) for name in names
+        ))
+        available = tuple(name for name, result in zip(names, readiness) if result.ready)
+        reasons = {name: result.reason for name, result in zip(names, readiness) if not result.ready}
+        for item in runner_inputs:
+            chosen = inputs.get(item.name, item.default)
+            if chosen not in RUNNER_POLICIES and chosen in reasons:
+                raise ValueError(f"agent {chosen!r} is not ready: {reasons[chosen]}. "
+                                 "Check that agent's login, configured model and adapter on the backend; "
+                                 "an explicitly selected agent is never replaced automatically.")
+        try:
+            choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
+        except ValueError as error:
+            details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
+            raise ValueError(f"{error}. Readiness checks: {details}") from error
+        return available
 
     # --- sessions -----------------------------------------------------------
 
@@ -1242,7 +1307,9 @@ class GraphService:
                     spec, version_id=version.version_id, number=version.number,
                     workspace_provider=self._workspace_provider, registry=self._registry,
                     session_config=self._session_config, model_tiers=self._model_tiers,
-                    agent_models=self._added_agents.models, default_base_ref=self._default_base_ref,
+                    agent_models=self._added_agents.models,
+                    agent_context_limits=self._added_agents.context_limits,
+                    default_base_ref=self._default_base_ref,
                 ), spec)
             return loaded, loaded.workflow.compiled(self.runtime.checkpointer)
 
@@ -1672,10 +1739,10 @@ def auth_required(error: str, runner: str) -> dict[str, str] | None:
     target = runner or "<runner>"
     return {
         "runner": runner or "",
-        "command": f"engine agent signin {target}",
+        "command": f"oe agent signin {target}",
         "message": (
             f"agent {target} is not signed in on this backend; run "
-            f"`engine agent signin {target}` and retry"
+            f"`oe agent signin {target}` and retry"
         ),
     }
 

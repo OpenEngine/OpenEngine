@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Connection Bus commands",
+  "description": "Requests and responses of `oe.v1.cxn.control.…`. The connection named in the subject is the target; payloads do not repeat it.",
+  "$defs": {
+    "apply_connection_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/apply_connection_payload" } } }
+      ]
+    },
+    "apply_connection_payload": {
+      "description": "Create or update the connection named by `connection.metadata.name`. An update cannot change `spec.provider` or `spec.externalAccount`. A deleted connection's name can be applied again; it creates a new connection with a new ID.",
+      "type": "object",
+      "required": ["connection"],
+      "additionalProperties": false,
+      "properties": {
+        "connection": { "$ref": "../resources/connection.schema.yaml" }
+      }
+    },
+    "disable_connection_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/disable_connection_payload" } } }
+      ]
+    },
+    "disable_connection_payload": {
+      "description": "Stop new integration activity: ingress for the connection is refused at the provider edge and no new egress is accepted. Configuration and bindings are kept. Disabling an already-disabled connection is accepted and changes nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "in_flight": { "$ref": "connection.schema.json#/$defs/in_flight_on_disable" },
+        "reason": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "delete_connection_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/delete_connection_payload" } } }
+      ]
+    },
+    "delete_connection_payload": {
+      "description": "Remove the connection's configuration and bindings. Historical jobs, deliveries and audit records that reference it are kept, and its ID is never reused. An active connection is disabled as part of deletion.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "in_flight": { "$ref": "connection.schema.json#/$defs/in_flight_on_delete" },
+        "reason": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "connection_command_response": {
+      "description": "Reply to every CXN command. `resource_id` is the connection ID; `apply` allocates it at acceptance for a new name.",
+      "allOf": [
+        { "$ref": "../../../common/v1/command-response.schema.json" },
+        {
+          "properties": {
+            "resource_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/connection_id" }
+          }
+        }
+      ]
+    }
+  }
+}

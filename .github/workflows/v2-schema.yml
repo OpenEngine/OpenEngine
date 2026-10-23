@@ -1,7 +1,9 @@
 name: v2 schema documentation
 
 # Documents each v2 service's schema at every migration revision, renders its
-# ERD, commits what changed and comments the new schemas on open PRs.
+# ERD and the v2 architecture diagram, commits what changed and comments the new
+# schemas on open PRs. The architecture is drawn from the contracts and the
+# migrations, so a change to either redraws it.
 on:
   push:
     # PR branches are handled only by pull_request, avoiding duplicate publication.
@@ -9,12 +11,18 @@ on:
     paths:
       - 'v2/services/*/persistence/migrations/versions/**'
       - 'v2/packages/persistence/src/openengine/persistence/documentation.py'
+      - 'v2/packages/contracts/*/v1/**'
+      - 'v2/packages/contracts/tooling/architecture.py'
+      - 'v2/infra/nats/streams/**'
       - '.github/scripts/**'
       - '.github/workflows/v2-schema.yml'
   pull_request:
     paths:
       - 'v2/services/*/persistence/migrations/versions/**'
       - 'v2/packages/persistence/src/openengine/persistence/documentation.py'
+      - 'v2/packages/contracts/*/v1/**'
+      - 'v2/packages/contracts/tooling/architecture.py'
+      - 'v2/infra/nats/streams/**'
       - '.github/scripts/**'
       - '.github/workflows/v2-schema.yml'
   workflow_dispatch:
@@ -51,7 +59,11 @@ jobs:
         run: >-
           uv run --project v2 --frozen python -m openengine.persistence.documentation
           --services v2/services --output v2/docs/schema --manifest service-schema-changes.json
-      - name: Render changed ERDs
+      - name: Draw the architecture
+        run: >-
+          uv run --project v2 --frozen python v2/packages/contracts/tooling/architecture.py
+          --manifest service-schema-changes.json
+      - name: Render changed diagrams
         # Hosted Ubuntu runners can block Chromium's sandbox via AppArmor.
         run: |
           for diagram in $(jq -r '.[] | select(endswith(".mermaid"))' service-schema-changes.json); do
@@ -60,7 +72,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: v2-schema-documentation
-          path: v2/docs/schema
+          path: |
+            v2/docs/schema
+            v2/docs/architecture.*
       # Never execute fork code with a privileged pull_request_target token.
       - name: Commit changed schemas and comment on open PRs
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

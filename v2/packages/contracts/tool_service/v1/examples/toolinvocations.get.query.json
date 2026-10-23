@@ -1,0 +1,10 @@
+{
+  "message": "GetToolInvocationQuery",
+  "subject": "oe.v1.toolinvocations.get",
+  "payload": {
+    "params": {
+      "namespace": "default",
+      "name": "ti-123"
+    }
+  }
+}

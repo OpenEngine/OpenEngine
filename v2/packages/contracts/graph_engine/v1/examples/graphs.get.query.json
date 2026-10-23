@@ -1,0 +1,5 @@
+{
+  "message": "GetGraphQuery",
+  "subject": "oe.v1.ge.query.graphs.graph_review.get",
+  "payload": { "params": { "revision": 3 } }
+}

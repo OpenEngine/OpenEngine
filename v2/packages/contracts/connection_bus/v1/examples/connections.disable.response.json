@@ -1,0 +1,10 @@
+{
+  "message": "DisableConnectionResponse",
+  "in_reply_to": "oe.v1.cxn.control.connections.conn_acme_gh.disable",
+  "payload": {
+    "command_id": "cmd_01JAX8DIS",
+    "status": "accepted",
+    "operation_id": "op_01JAX8DIS",
+    "resource_id": "conn_acme_gh"
+  }
+}

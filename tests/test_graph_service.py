@@ -362,7 +362,7 @@ def test_a_runner_without_credentials_fails_with_a_signin_instruction(tmp_path: 
             failed = await settled(service, run["runId"])
             assert failed["status"] == "failed"
             assert failed["failure"]["node"] == "work"
-            assert failed["failure"]["authRequired"]["command"] == "engine agent signin stub"
+            assert failed["failure"]["authRequired"]["command"] == "oe agent signin stub"
 
     asyncio.run(scenario())
 
@@ -386,7 +386,7 @@ def test_a_node_names_the_runner_it_chose_before_it_finishes(tmp_path: Path) -> 
             )
             failed = await settled(service, run["runId"])
             assert failed["status"] == "failed"
-            assert failed["failure"]["authRequired"]["command"] == "engine agent signin qwen"
+            assert failed["failure"]["authRequired"]["command"] == "oe agent signin qwen"
             assert {node["node"]: node["runner"] for node in failed["nodes"]}["work"] == "qwen"
 
     asyncio.run(scenario())
@@ -670,7 +670,7 @@ def test_a_loop_pauses_when_its_runner_needs_signing_in(tmp_path: Path) -> None:
             await service.tick()
             await settled(service, (await service.loop_json(loop["loopId"]))["activeRunId"])
             loop = await paused(service, loop["loopId"])
-            assert "engine agent signin stub" in loop["pauseReason"]
+            assert "oe agent signin stub" in loop["pauseReason"]
 
     asyncio.run(scenario())
 
@@ -746,6 +746,26 @@ def test_each_session_agent_is_told_engines_shell_rules_in_its_own_terms() -> No
 
 
 # --- agents -------------------------------------------------------------------
+
+
+def test_each_service_supplies_its_own_model_tiers_to_workflow_agents(tmp_path: Path) -> None:
+    """Python graphs read the tiers of the service serving them, not a process-wide table."""
+    from engine.graph_runtime_langgraph import AddedAgents, agent_registry, with_added_agents
+
+    async def scenario() -> None:
+        first, second = AddedAgents(), AddedAgents()
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        async with graph_service(tmp_path / "a", added_agents=first,
+                                 model_tiers={"stub": {"default": "fast"}}):
+            async with graph_service(tmp_path / "b", added_agents=second,
+                                     model_tiers={"stub": {"default": "slow"}}):
+                registry = agent_registry([StdioACPProvider(name="stub", command=["true"])])
+                assert with_added_agents(registry, first).model("stub", "default") == "fast"
+                assert with_added_agents(registry, second).model("stub", "default") == "slow"
+                assert first.model_tiers["claude"]["elevated"] == "opus"
+
+    asyncio.run(scenario())
 
 
 def test_an_added_agent_runs_graphs_and_outlives_the_daemon(tmp_path: Path) -> None:
@@ -887,6 +907,21 @@ def test_an_agent_on_a_model_server_keeps_its_context_limit(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
+def test_an_added_agents_context_limit_reaches_the_nodes_that_run_it(tmp_path: Path) -> None:
+    """The node bounds its replay by the window the agent was added with."""
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            url = "http://127.0.0.1:11434/v1"
+            await service.add_agent("opencode", name="qwen", model="q", url=url, context_limit=65536)
+            graph, _ = await service.add_graph("p", source=PAIR.replace("agent: stub", "agent: qwen", 1))
+            loaded = service._loaded[graph["versionId"]].workflow
+            node = loaded.builder.nodes["implement"].runnable.afunc
+            assert node.context_limits.get("qwen") == 65536
+
+    asyncio.run(scenario())
+
+
 def test_an_added_agents_model_applies_when_a_node_names_none_or_an_unknown_tier() -> None:
     from engine.graph_service.compile import GraphAgentNode
     from engine.graph_service.language import RunnerRule
@@ -943,9 +978,13 @@ def test_the_http_surface_reports_validation_problems_and_conflicts(tmp_path: Pa
 @pytest.mark.parametrize("mode,customized", [(None, False), ("fix", False), ("review", False),
                                            ("fix", True), ("review", True)])
 def test_the_daemon_serves_the_graph_api_and_lists_its_runs_as_work_orders(
-    tmp_path: Path, mode: str | None, customized: bool, *, workflow_app
+    tmp_path: Path, mode: str | None, customized: bool, *, workflow_app, monkeypatch
 ) -> None:
     """`engine-web` mounts the service at /api/v1 and starts runs as WorkOrders."""
+    from unittest.mock import AsyncMock
+    from langgraph_acp.readiness import AgentReadiness
+    # This test replaces execution with a lambda; no real agent is involved.
+    monkeypatch.setattr(GraphService, "agent_readiness", AsyncMock(return_value=AgentReadiness(True)))
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from engine.adapters.state_store.memory import InMemoryStateStore
     from web_fakes import ConcurrentRunner
@@ -1175,8 +1214,10 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                         assert selected.status_code == 201, selected.text
                         snapshot = await runtime.snapshot(RunId(selected.json()["runId"]))
                         assert snapshot.values["inputs"]["implementation_runner"] == "qwen"
-                    monkeypatch.setattr("engine.apps.web.onboarding.agent_available",
-                                        lambda *args, **kwargs: False)
+                    from unittest.mock import AsyncMock
+                    from langgraph_acp.readiness import AgentReadiness
+                    monkeypatch.setattr(GraphService, "agent_readiness",
+                                        AsyncMock(return_value=AgentReadiness(False, "not signed in")))
                     registered = await client.post("/api/v1/graphs", json={
                         "project": "default", "format": "python", "source": starters.source(),
                     })
@@ -1186,7 +1227,7 @@ def test_the_daemon_offers_added_agents_as_workflow_runners(
                         "instruction": "Implement the task",
                     })
                     assert refused.status_code == 400, refused.text
-                    assert "engine agent signin" in refused.text
+                    assert "oe agent signin" in refused.text
                     saved = await client.put("/api/loops/settings", json={
                         "activeHours": {"start": "00:00", "end": "00:00"}, "maxPrs": 1, "maxDailySpend": 0,
                         "runnerStrategy": "manual", "implementationRunner": "qwen", "reviewRunner": "test",
@@ -1436,6 +1477,25 @@ def test_typed_outputs_reject_wrong_json_type(kind, wire, required):
         )
 
 
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("number", ["1e400", "-1e400", "NaN"])
+@pytest.mark.parametrize("kind,template", [
+    ("number", "NUMBER"),
+    ("list", '[0, {"nested": [NUMBER]}]'),
+    ("object", '{"nested": [0, {"value": NUMBER}]}'),
+])
+def test_typed_outputs_reject_nonfinite_numbers(kind, template, number, required):
+    from engine.graph_service.compile import _validator, _wire_outputs
+    from engine.graph_service.language import OutputSpec
+
+    wire = template.replace("NUMBER", number)
+    outputs = (OutputSpec("model", kind, required=required),)
+    with pytest.raises(ValueError, match="output model must contain only finite numbers"):
+        _wire_outputs(outputs)({"model": json.loads(wire)})
+    with pytest.raises(ValueError, match="output model must contain only finite numbers"):
+        _validator(outputs)(typed_completion({"model": wire}))
+
+
 @pytest.mark.parametrize("kind", ["object", "list", "number", "integer", "boolean"])
 @pytest.mark.parametrize("wire", ["not JSON", ""])
 def test_typed_outputs_reject_invalid_json(kind, wire):
@@ -1465,8 +1525,7 @@ def test_typed_completion_flows_through_broker_and_downstream_nodes():
     )
     groups = {"s": (("s",), False)}
     instructions = _completion_instructions(outputs)
-    assert "JSON-encoded strings" in instructions
-    assert '"model": "{\\"a\\": 1}"' in instructions
+    assert "native JSON values" in instructions
 
     async def source(state):
         broker = TerminalMcpBroker(
@@ -1601,4 +1660,136 @@ def test_stopping_loop_during_start_clears_missing_run(tmp_path: Path, monkeypat
             assert len(service.store.loop_runs(loop_id)) == 1
             cancel.assert_awaited_once()
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("include_optional", [False, True])
+def test_compiled_yaml_terminal_accepts_json_outputs(tmp_path, monkeypatch, include_optional):
+    from types import SimpleNamespace
+    from engine.graph_service.compile import compile_graph
+    from engine.graph_runtime_langgraph import terminal_mcp
+    from engine.runtime.terminal_mcp import TerminalMcpBroker, _mcp_response
+    from tests.test_terminal_mcp import _direct_request
+    from tests.test_graph_workflow_definitions import nodes_of
+
+    spec = parse_graph({
+        "apiVersion": "openengine.cc/v1", "name": "typed",
+        "implementation": {"work": {"agent": "stub", "prompt": "Report values", "outputs": {
+            "ready": {"type": "boolean", "required": True},
+            "count": {"type": "integer", "required": True},
+            "items": {"type": "list", "required": True},
+            "score": {"type": "number", "required": True},
+            "model": {"type": "object", "required": True},
+            "note": {"type": "string", "enum": ["ok"]},
+        }}},
+    })
+    workflow = compile_graph(spec, version_id="typed-v1", number=1,
+                             workspace_provider=Checkouts(tmp_path), registry=agent_registry([]))
+    node = nodes_of(workflow.builder)["work"]
+    binding, = node.mcp_server_bindings
+    brokers = []
+
+    def capture(**kwargs):
+        broker = TerminalMcpBroker(**kwargs)
+        brokers.append(broker)
+        return broker
+
+    monkeypatch.setattr(terminal_mcp, "TerminalMcpBroker", capture)
+
+    async def scenario():
+        execution = SimpleNamespace(run_id=RunId("typed"), execution_id="work",
+                                    runtime=SimpleNamespace(source_control=Forge(), public_url=""))
+        async with binding({"workspaceId": "ws"}, execution, None):
+            broker, = brokers
+            args = broker.config.args
+            schema = json.loads(args[args.index("--outputs-schema") + 1])
+            listing = await _mcp_response("", 0, "", {"id": 1, "method": "tools/list"}, outputs_schema=schema)
+            assert listing["result"]["tools"][0]["inputSchema"]["properties"]["outputs"] == schema
+            assert schema["properties"]["ready"]["type"] == "boolean"
+            assert "note" not in schema["required"]
+            values = {"ready": True, "count": 2, "items": [1, {"a": 2}], "score": 1.5, "model": {"a": 1}}
+            for invalid, error in [
+                ({**values, "ready": "true"}, "output ready must be a boolean"),
+                ({**values, "count": True}, "output count must be a integer"),
+                ({**values, "items": {}}, "output items must be a list"),
+                ({**values, "note": "bad"}, "output note must be one of ok"),
+                ({**values, "note": ""}, "output note must be one of ok"),
+                ({**values, "score": True}, "output score must be a number"),
+                ({**values, "score": json.loads("1e400")}, "output score must contain only finite numbers"),
+                ({**values, "items": [0, {"a": [float("-inf")]}]}, "output items must contain only finite numbers"),
+                ({**values, "model": {"a": [{"b": float("nan")}]}}, "output model must contain only finite numbers"),
+                ({**values, "model": []}, "output model must be a object"),
+                ({**values, "note": None}, "output note must be a string"),
+                ({**values, "extra": "x"}, "undeclared outputs: extra"),
+                ({k: v for k, v in values.items() if k != "ready"}, "output ready is required"),
+            ]:
+                response = await broker._submit(_direct_request(broker, 2, "complete_step", {
+                    "outcome": "success", "summary": "Done", "outputs": invalid,
+                }))
+                assert response["ok"] is False
+                assert error in response["error"]
+                assert not broker._result.done()
+            if include_optional:
+                values["note"] = "ok"
+            response = await broker._submit(_direct_request(broker, 3, "complete_step", {
+                "outcome": "success", "summary": "Done", "outputs": values,
+            }))
+            assert response["ok"] is True
+            state = node._terminal_update(await broker.result())["work"]
+            for name, value in values.items():
+                assert state[name] == value
+                assert type(state[name]) is type(value)
+            assert ("note" in state) == include_optional
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('only_agent', ['codex', 'claude', 'opencode'])
+def test_default_workflow_can_use_one_ready_agent_for_both_stages(tmp_path, only_agent):
+    from engine.graph_runtime.inputs import ROUND_ROBIN, choose_runners
+    from engine.runtime.workflows import load_workflow_file
+
+    path = tmp_path / 'starter.py'
+    path.write_text(starters.source())
+    graph = load_workflow_file(path)[0]
+    inputs = {item.name: item.default for item in graph.inputs}
+    assert inputs['implementation_runner'] == inputs['review_runner'] == ROUND_ROBIN
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            service._registry.register(StdioACPProvider(name=only_agent, command=[sys.executable, str(AGENT)]))
+            service._builtin_agents = service._registry.names
+            ready = await service.ready_runner_choices(graph.inputs, inputs)
+            picked = choose_runners(graph.inputs, inputs, usage=dict, turns={}, available=ready)
+            assert picked['implementation_runner'] == picked['review_runner'] == only_agent
+    asyncio.run(scenario())
+
+
+def test_invalid_model_is_excluded_from_auto_selection_but_explicit_choice_fails(tmp_path):
+    from engine.graph_runtime.inputs import ROUND_ROBIN, WorkflowInput, choose_runners
+    from langgraph_acp import ACPAgentRegistry
+
+    fake = Path(__file__).parents[1] / 'langgraph-acp/tests/fake_agent.py'
+    reason = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."
+    failure = json.dumps({'type': 'error', 'status': 400,
+                          'error': {'type': 'invalid_request_error', 'message': reason}})
+    declarations = tuple(WorkflowInput(name, name, ROUND_ROBIN, choices=('codex', 'claude', ROUND_ROBIN))
+                         for name in ('implementation_runner', 'review_runner'))
+    inputs = {item.name: item.default for item in declarations}
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            service._registry = ACPAgentRegistry([
+                StdioACPProvider(name='codex', command=[sys.executable, str(fake)], env={'FAKE_AGENT_RESPONSE': failure}),
+                StdioACPProvider(name='claude', command=[sys.executable, str(fake)]),
+            ])
+            service._builtin_agents = service._registry.names
+            ready = await service.ready_runner_choices(declarations, inputs)
+            chosen = choose_runners(declarations, inputs, usage=dict, turns={}, available=ready)
+            assert chosen == dict.fromkeys(inputs, 'claude')
+            with pytest.raises(ValueError, match='not supported when using Codex'):
+                await service.ready_runner_choices(declarations, {**inputs, 'implementation_runner': 'codex'})
+            service._registry.unregister('claude')
+            with pytest.raises(ValueError, match='Readiness checks:.*not supported when using Codex'):
+                await service.ready_runner_choices(declarations, inputs)
     asyncio.run(scenario())

@@ -1,6 +1,6 @@
 # e2e
 
-End-to-end tests for the `engine` CLI, driven through a real terminal in a
+End-to-end tests for the `oe` CLI, driven through a real terminal in a
 browser. The same specs become the site's Guides.
 
 ```sh
@@ -32,7 +32,9 @@ generate the guides with it too, so they come out the same every time.
 
 `E2E_AGENT=real` runs Claude Code through its ACP adapter instead, to show
 the whole chain works. It needs a Claude Code login and `npx`, and refuses to
-start without them rather than falling back to the stub.
+start without them rather than falling back to the stub. Every step runs
+`claude-haiku-5-5`, whichever tier it asks for; set `E2E_CLAUDE_MODEL` to a
+full model ID to run a stronger one.
 
 So that a spec passes in both modes:
 
@@ -40,7 +42,8 @@ So that a spec passes in both modes:
   and what exists, not what an agent said.
 - **Keep example graphs tiny.** One or two steps, no tools unless the guide is
   about them, an explicit prompt ("reply with one sentence; don't run
-  commands"), and no `model:` field.
+  commands"), and no `model:` field, or only a tier: a step naming a model
+  itself (`model: opus`) bypasses the cheap one real runs are given.
 - **Script what needs choreography.** An agent asking an inline question, or
   a run still going when the test presses Ctrl+C, is something only the stub
   does on cue. Skip that part with
@@ -53,7 +56,7 @@ technical; `WRITING.md` says how, with a glossary every page uses.
 
 A spec under `tests/` whose describe blocks use `withDocCategory` and
 `withDocMeta` becomes a page. Every `test.step` title is a sentence the reader
-follows ("Run `engine graphs list`."). Setup and cleanup go in `[nodoc]`
+follows ("Run `oe graphs list`."). Setup and cleanup go in `[nodoc]`
 steps. Put each category in `tests/docCategories.ts`. Specs that test the
 harness itself are tagged `@skip-docs`.
 

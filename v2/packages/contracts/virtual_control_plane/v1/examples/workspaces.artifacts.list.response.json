@@ -1,0 +1,24 @@
+{
+  "message": "ListArtifactsResponse",
+  "in_reply_to": "oe.v1.vcp.query.workspaces.ws_a1.artifacts.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "artifact_id": "artifact_a1_patch",
+          "workspace_id": "ws_a1",
+          "attempt_id": "attempt_a1",
+          "kind": "patch",
+          "name": "fix-ssrf.patch",
+          "media_type": "text/x-diff",
+          "size_bytes": 4182,
+          "sha256": "9f2c1e0b7a6d5c4b3a29180f7e6d5c4b3a2918007e6d5c4b3a2918f7e6d5c4b3",
+          "uri": "s3://openengine-artifacts/ws_a1/artifact_a1_patch",
+          "created_at": "2026-10-19T21:47:30Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "message": "GetGraphResponse",
+  "in_reply_to": "oe.v1.ge.query.graphs.graph_review.get",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "graph": {
+        "graph_id": "graph_review",
+        "name": "review",
+        "description": "Plan, implement, review in parallel, then ask a person.",
+        "latest_revision": 3,
+        "created_at": "2026-09-01T10:00:00Z",
+        "updated_at": "2026-10-18T09:12:00Z"
+      },
+      "revision": {
+        "graph_id": "graph_review",
+        "revision": 3,
+        "format": "resource",
+        "source": "{\"apiVersion\":\"openengine.cc/v1alpha1\",\"kind\":\"Graph\",\"metadata\":{\"name\":\"review\"},\"spec\":{\"description\":\"Plan, implement, review in parallel, then ask a person.\",\"implementation\":[{\"agent\":{\"prompt\":\"Implement the plan: ${outputs.planner}\",\"runner\":{\"sameAs\":\"planner\"}},\"name\":\"implementer\"}],\"inputs\":[{\"description\":\"The change to make\",\"name\":\"instruction\",\"required\":true}],\"plan\":[{\"agent\":{\"prompt\":\"Plan: ${inputs.instruction}\",\"runner\":{\"name\":\"claude\"}},\"name\":\"planner\"}],\"review\":[{\"agent\":{\"facets\":[{\"model\":\"elevated\",\"name\":\"security\"},{\"name\":\"bugs\"}],\"prompt\":\"Review the change for ${item.facet.name}\",\"runner\":{\"differentFrom\":\"implementer\"}},\"name\":\"reviewers\"},{\"agent\":{\"prompt\":\"Consolidate: ${json(outputs.reviewers)}\",\"runner\":{\"sameAs\":\"implementer\"}},\"name\":\"reranker\"},{\"human\":{\"prompt\":\"Ship this change?\"},\"name\":\"ship\"}]}}",
+        "source_sha256": "01921dcf50552e2ecdf4504a31b7afc34e0de29be20ff7af6b6d9ca6a87b4536",
+        "inputs": {
+          "instruction": {
+            "required": true,
+            "description": "The change to make"
+          }
+        },
+        "nodes": [
+          "workspace",
+          "planner",
+          "implementer",
+          "reviewers_security",
+          "reviewers_bugs",
+          "reranker",
+          "ship"
+        ],
+        "created_at": "2026-10-18T09:12:00Z"
+      }
+    }
+  }
+}

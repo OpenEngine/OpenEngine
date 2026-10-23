@@ -1,0 +1,20 @@
+{
+  "message": "ConnectionDisabled",
+  "subject": "oe.v1.cxn.events.connections.conn_acme_gh.connection.disabled",
+  "headers": { "Nats-Msg-Id": "evt_01JAX8DISD" },
+  "payload": {
+    "event_id": "evt_01JAX8DISD",
+    "event_type": "connection.disabled",
+    "occurred_at": "2026-10-19T22:01:00Z",
+    "producer": "cxn",
+    "causal_path": ["cmd_01JAX8DIS", "evt_01JAX8DISD"],
+    "resources": { "connection_id": "conn_acme_gh" },
+    "resource_version": 3,
+    "payload": {
+      "operation": { "operation_id": "op_01JAX8DIS", "command_id": "cmd_01JAX8DIS" },
+      "in_flight": "hold",
+      "outstanding_deliveries": 2,
+      "reason": "Credential rotation"
+    }
+  }
+}

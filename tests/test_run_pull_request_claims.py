@@ -14,6 +14,12 @@ from test_github_concierge import _graph_runtime
 from web_fakes import RecordingCommunications
 
 
+@pytest.fixture(autouse=True)
+def available_runners(monkeypatch):
+    """Claim tests use a fake runtime and do not require host coding agents."""
+    monkeypatch.setattr("engine.apps.web.onboarding.agent_available", lambda *args, **kwargs: True)
+
+
 @pytest.fixture
 def catalog(tmp_path):
     workflows = []

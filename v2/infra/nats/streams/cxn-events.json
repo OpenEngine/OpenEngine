@@ -2,7 +2,7 @@
   "name": "cxn-events",
   "description": "What the connection bus has done, for any service to follow.",
   "subjects": [
-    "cxn.events.>"
+    "oe.v1.cxn.events.>"
   ],
   "retention": "limits",
   "storage": "file",

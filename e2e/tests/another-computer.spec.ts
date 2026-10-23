@@ -5,9 +5,7 @@ import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { screenshot } from "@test2doc/playwright/screenshots"
 import { test, expect, type Engine } from "../fixtures/engine.ts"
 import { anotherComputerCategory } from "./docCategories"
-
-/** Where the Mac mini in this guide answers. */
-const MAC_MINI = "mac-mini.local:4364"
+import { MAC_MINI, MAC_MINI_PATTERN } from "./macMini"
 
 test.use({ terminalSession: { cols: 120, rows: 30 }, anotherComputerAt: MAC_MINI })
 
@@ -75,11 +73,11 @@ OpenEngine on the other computer only answers programs on that computer itself, 
         )
 
         await step(
-          `Give the other computer a name and tell OpenEngine its address. Type \`engine backend add mac-mini https://${MAC_MINI}\` and press Enter.
+          `Give the other computer a name and tell OpenEngine its address. Type \`oe backend add mac-mini https://${MAC_MINI}\` and press Enter.
 
 OpenEngine saves the Mac mini under the name \`mac-mini\` and shows what it saved: the name, the address, and a project setting you can leave alone. Your commands still go to this computer for now.`,
           async () => {
-            await terminal.run(`engine backend add mac-mini https://${MAC_MINI}`)
+            await terminal.run(`oe backend add mac-mini https://${MAC_MINI}`)
             expect(backends(engine)).toEqual({ current: "local", names: ["local", "mac-mini"] })
             await show(await terminal.row(/^mac-mini\s+https:/), "The Mac mini is saved as mac-mini")
           },
@@ -88,15 +86,15 @@ OpenEngine saves the Mac mini under the name \`mac-mini\` and shows what it save
         await clear()
 
         await step(
-          `Check that OpenEngine can reach it. Type \`engine backends list --check\` and press Enter.
+          `Check that OpenEngine can reach it. Type \`oe backends list --check\` and press Enter.
 
 You'll see every computer OpenEngine knows about, with *up* beside each one it could reach, followed by the agents it can use there. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The star marks the computer your commands go to: still \`local\`. You can leave the other columns alone for now.
 
-If you see *down* beside the Mac mini instead, check that it's switched on, that OpenEngine is running on it, that the private network or tunnel to it is working, and that you typed its address correctly. If it says the Mac mini *requires a token*, it was given a token of its own: see [\`engine backend add\`](../../cli-reference.md#engine-backend-add) for how to send it.`,
+If you see *down* beside the Mac mini instead, check that it's switched on, that OpenEngine is running on it, that the private network or tunnel to it is working, and that you typed its address correctly. If it says the Mac mini *requires a token*, it was given a token of its own: see [\`oe backend add\`](../../cli-reference.md#engine-backend-add) for how to send it.`,
           async () => {
-            const { output } = await terminal.run("engine backends list --check")
+            const { output } = await terminal.run("oe backends list --check")
             expect(output).toMatch(/^\*\s+local\s.*\bup\b/m)
-            expect(output).toMatch(new RegExp(`^\\s+mac-mini\\s+https://${MAC_MINI.replace(/\./g, "\\.")}\\s.*\\bup\\b`, "m"))
+            expect(output).toMatch(new RegExp(`^\\s+mac-mini\\s+https://${MAC_MINI_PATTERN}\\s.*\\bup\\b`, "m"))
             await show(await terminal.row(/^\s+mac-mini\s.*\bup\b/), "The Mac mini is up: OpenEngine can reach it")
           },
         )
@@ -104,11 +102,11 @@ If you see *down* beside the Mac mini instead, check that it's switched on, that
         await clear()
 
         await step(
-          `Switch to the Mac mini, so your commands go there from now on. Type \`engine backend use mac-mini\` and press Enter.
+          `Switch to the Mac mini, so your commands go there from now on. Type \`oe backend use mac-mini\` and press Enter.
 
 OpenEngine shows the computer you switched to, with a star to say your commands go there now.`,
           async () => {
-            await terminal.run("engine backend use mac-mini")
+            await terminal.run("oe backend use mac-mini")
             expect(backends(engine).current).toBe("mac-mini")
             await show(await terminal.row(/^\* mac-mini\s/), "Your commands now go to the Mac mini")
           },
@@ -117,11 +115,11 @@ OpenEngine shows the computer you switched to, with a star to say your commands 
         await clear()
 
         await step(
-          `Each computer keeps its own graphs: recipes for a piece of work, saying its steps, which agent does each one, and in what order. To see that your commands now go to the Mac mini, save a graph there. Here, your project has one in a file called \`hello.yaml\`. Type \`engine graph add hello.yaml\` and press Enter.
+          `Each computer keeps its own graphs: recipes for a piece of work, saying its steps, which agent does each one, and in what order. To see that your commands now go to the Mac mini, save a graph there. Here, your project has one in a file called \`hello.yaml\`. Type \`oe graph add hello.yaml\` and press Enter.
 
 OpenEngine saves the graph, called \`hello\`, on the Mac mini. The screen says *registered*, OpenEngine's word for saved, followed by labels OpenEngine uses to tell graphs and their versions apart, and the project it's saved under. You can leave those alone.`,
           async () => {
-            await terminal.run("engine graph add hello.yaml")
+            await terminal.run("oe graph add hello.yaml")
             expect(await graphNames(anotherComputer!.url, engine)).toContain('"hello"')
             expect(await graphNames(engine.url, engine)).not.toContain('"hello"')
             await show(await terminal.row(/^registered hello\s/), "hello is saved on the Mac mini")
@@ -131,11 +129,11 @@ OpenEngine saves the graph, called \`hello\`, on the Mac mini. The screen says *
         await clear()
 
         await step(
-          `Type \`engine graphs list\` and press Enter.
+          `Type \`oe graphs list\` and press Enter.
 
 You'll see the Mac mini's graphs, with \`hello\` among them.`,
           async () => {
-            const { output } = await terminal.run("engine graphs list")
+            const { output } = await terminal.run("oe graphs list")
             expect(output).toMatch(/^hello\s/m)
             await show(await terminal.row(/^hello\s/), "The graph you saved on the Mac mini")
           },
@@ -144,11 +142,11 @@ You'll see the Mac mini's graphs, with \`hello\` among them.`,
         await clear()
 
         await step(
-          `To use another computer for a single command without switching, add \`--backend\` and its name. Type \`engine graphs list --backend local\` and press Enter.
+          `To use another computer for a single command without switching, add \`--backend\` and its name. Type \`oe graphs list --backend local\` and press Enter.
 
 You'll see this computer's graphs instead, and \`hello\` isn't among them: you saved it on the Mac mini. Your other commands still go to the Mac mini.`,
           async () => {
-            const { output } = await terminal.run("engine graphs list --backend local")
+            const { output } = await terminal.run("oe graphs list --backend local")
             expect(output).not.toMatch(/^hello\s/m)
             expect(backends(engine).current).toBe("mac-mini")
             await show(await terminal.row(/^NAME\s+VERSION\s/), "This computer's graphs: no hello here")
@@ -158,11 +156,11 @@ You'll see this computer's graphs instead, and \`hello\` isn't among them: you s
         await clear()
 
         await step(
-          `When you want your commands to go to this computer again, switch back the same way. Type \`engine backend use local\` and press Enter.
+          `When you want your commands to go to this computer again, switch back the same way. Type \`oe backend use local\` and press Enter.
 
 OpenEngine shows \`local\` with the star: your commands go to this computer again.`,
           async () => {
-            await terminal.run("engine backend use local")
+            await terminal.run("oe backend use local")
             expect(backends(engine)).toEqual({ current: "local", names: ["local", "mac-mini"] })
             await show(await terminal.row(/^\* local\s/), "Your commands go to this computer again")
           },

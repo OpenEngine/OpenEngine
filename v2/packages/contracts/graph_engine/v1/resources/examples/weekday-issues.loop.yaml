@@ -1,0 +1,21 @@
+apiVersion: openengine.cc/v1alpha1
+kind: Loop
+metadata:
+  name: weekday-issues
+spec:
+  graphRef:
+    name: implement-review
+  schedule:
+    cron: "0 9-17 * * 1-5"
+    timeZone: Europe/Berlin
+  startsAt: 2026-11-02T08:00:00Z
+  concurrency:
+    maxActiveJobs: 2
+    overlapPolicy: Queue
+  jobTemplate:
+    goal: Work the next unblocked issue in the milestone.
+    context:
+      milestone: CLI e2e tests
+    inputs:
+      instruction: Work the next unblocked issue in the CLI e2e tests milestone.
+      runner: codex

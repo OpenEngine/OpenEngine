@@ -1,0 +1,75 @@
+---
+title: tools at 01c7cfcaaab7 (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% REMOVED tables/columns are tombstones, absent from this revision's schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    tool_grants["tool_grants"] {
+        VARCHAR(63) uid PK "not null"
+        VARCHAR(63) namespace UK "not null"
+        VARCHAR(63) name UK "not null"
+        INTEGER generation "not null"
+        JSON labels "not null"
+        JSON annotations "not null"
+        VARCHAR(63) tool_name "not null"
+        VARCHAR(63) tool_uid "not null"
+        VARCHAR(63) workspace_name "not null"
+        VARCHAR(128) step_attempt_id "nullable"
+        JSON constraints "not null"
+        DATETIME expires_at "nullable"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+    }
+    tool_invocation_attempts["tool_invocation_attempts (ADDED)"] {
+        VARCHAR(63) invocation_uid PK,FK "ADDED; not null"
+        INTEGER number PK "ADDED; not null"
+        VARCHAR(128) idempotency_key "ADDED; not null"
+        VARCHAR(16) outcome "ADDED; nullable"
+        DATETIME started_at "ADDED; not null"
+        DATETIME finished_at "ADDED; nullable"
+    }
+    class tool_invocation_attempts added
+    tool_invocations ||--o{ tool_invocation_attempts : "invocation_uid"
+    tool_invocations["tool_invocations (ADDED)"] {
+        VARCHAR(63) uid PK "ADDED; not null"
+        VARCHAR(63) namespace UK "ADDED; not null"
+        VARCHAR(63) name UK "ADDED; not null"
+        VARCHAR(63) tool_name "ADDED; not null"
+        VARCHAR(63) tool_uid "ADDED; not null"
+        INTEGER tool_generation "ADDED; not null"
+        JSON tool_spec "ADDED; not null"
+        VARCHAR(63) workspace_name "ADDED; not null"
+        INTEGER workspace_generation "ADDED; not null"
+        VARCHAR(128) step_attempt_id "ADDED; not null"
+        JSON arguments "ADDED; not null"
+        JSON grant_refs "ADDED; not null"
+        VARCHAR(16) phase "ADDED; not null"
+        INTEGER attempt_count "ADDED; not null"
+        JSON result "ADDED; nullable"
+        JSON error "ADDED; nullable"
+        DATETIME created_at "ADDED; not null"
+        DATETIME updated_at "ADDED; not null"
+        DATETIME started_at "ADDED; nullable"
+        DATETIME completed_at "ADDED; nullable"
+    }
+    class tool_invocations added
+    tools["tools"] {
+        VARCHAR(63) uid PK "not null"
+        VARCHAR(63) namespace UK "not null"
+        VARCHAR(63) name UK "not null"
+        INTEGER generation "not null"
+        JSON labels "not null"
+        JSON annotations "not null"
+        JSON spec "not null"
+        VARCHAR(64) connection_name "not null"
+        VARCHAR(16) phase "not null"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+    }

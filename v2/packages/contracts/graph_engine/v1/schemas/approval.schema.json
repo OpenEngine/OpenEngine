@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Workflow approvals",
+  "description": "GE-owned approval gates in a graph execution (a `human:` step, or a gate that requires a decision). Distinct from VCP runtime approvals, which an agent runtime raises inside a workspace.",
+  "$defs": {
+    "approval_state": {
+      "description": "requested: awaiting a decision. approved / rejected: decided. superseded: the execution moved on (cancelled, or the step re-entered) before a decision. expired: its deadline passed.",
+      "type": "string",
+      "enum": ["requested", "approved", "rejected", "superseded", "expired"]
+    },
+    "decision": { "type": "string", "enum": ["approve", "reject"] },
+    "workflow_approval": {
+      "description": "Snapshot of a workflow approval. `decision` is present once approved or rejected.",
+      "type": "object",
+      "required": [
+        "approval_id",
+        "job_id",
+        "execution_id",
+        "step_instance_id",
+        "node_id",
+        "state",
+        "prompt",
+        "requested_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/workflow_approval_id"
+        },
+        "job_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/job_id" },
+        "execution_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/execution_id" },
+        "step_instance_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/step_instance_id"
+        },
+        "node_id": { "$ref": "execution.schema.json#/$defs/node_id" },
+        "state": { "$ref": "#/$defs/approval_state" },
+        "prompt": {
+          "description": "What the decider is asked.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "requested_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "expires_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "decision": {
+          "type": "object",
+          "required": ["decision", "decided_at"],
+          "additionalProperties": false,
+          "properties": {
+            "decision": { "$ref": "#/$defs/decision" },
+            "comment": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "decided_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "enum": ["approved", "rejected"] } } },
+          "then": { "required": ["decision"] },
+          "else": { "not": { "required": ["decision"] } }
+        }
+      ]
+    }
+  }
+}

@@ -25,7 +25,7 @@ provider = "slack"
 # The Claude Code login agents use (CLAUDE_CONFIG_DIR). Defaults to ~/.claude.
 # config_dir = "~/repo/work/.claude-work"
 
-# Keep global approvals manual; engine repo trust opts individual repositories in.
+# Keep global approvals manual; oe repo trust opts individual repositories in.
 # Set trusted = true (auto-approve) or false (manual) in each [repos."owner/name"].
 # A saved false decision suppresses the first-run trust prompt.
 [approvals]
@@ -40,17 +40,18 @@ directory = "workflows"
 [sandbox]
 backend = "process"
 
-# Where `engine repo add` clones a repository when no path is given, instead of
+# Where `oe repo add` clones a repository when no path is given, instead of
 # ~/code. Expand ~ and resolve relative to this file. Omit to keep ~/code.
 # [onboarding]
 # directory = "~/code/work"
 
 [github]
-# Review-request webhooks start this graph (also used by `engine go review`).
+# Review-request webhooks start this graph (also used by `oe go review`).
 review_request_workflow = "review"
 # The gh login source control and agents use (GH_CONFIG_DIR). Defaults to gh's own
 # location: $XDG_CONFIG_HOME/gh when set, otherwise ~/.config/gh.
 # gh_config_dir = "~/.config/gh-work"
+# ssh_key = "~/.ssh/id_ed25519_work"
 
 # Defaults resolved when a review run starts; explicit run inputs win.
 [pull_requests]

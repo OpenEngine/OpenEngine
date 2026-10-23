@@ -7,7 +7,7 @@ arrived late would otherwise be indistinguishable from a second copy of the
 same comment.
 
 Comments, issue assignments, and review requests ask for work; merges accept
-the work.
+the work; CI events wake a run waiting on CI.
 """
 from __future__ import annotations
 
@@ -40,6 +40,10 @@ COMMENT_EVENTS = frozenset({"issue_comment", "pull_request_review_comment"})
 #: any other event: a GitHub app subscribed to more than Engine reads is a
 #: configuration this route tolerates rather than an error it reports.
 MERGE_EVENT = "pull_request"
+
+#: The delivery kinds CI finishing arrives as: check suites and check runs for
+#: GitHub Apps such as Actions, commit statuses for providers that post those.
+CI_EVENTS = frozenset({"check_suite", "check_run", "status"})
 
 #: Initial affiliation filter. These labels do not prove write access; the
 #: concierge checks effective repository permissions before steering a run.
@@ -95,6 +99,18 @@ class GithubMerge:
     merged_by: str
     """Whoever merged. A merge with no person behind it is not read at all."""
     url: str
+
+
+@dataclass(frozen=True)
+class GithubCI:
+    """CI that changed on a commit: a hint to read it again, not a verdict."""
+
+    repository: str
+    sha: str
+    event: str
+    #: The pull requests GitHub says the commit heads. Empty for a ``status``,
+    #: and for a check on a fork's branch, where GitHub does not say.
+    pull_requests: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -379,6 +395,37 @@ def merge_from_payload(
     )
 
 
+def ci_from_payload(event: str, payload: Mapping[str, object]) -> GithubCI | None:
+    """The commit whose CI just settled, or ``None`` for anything else.
+
+    Check suites and runs are read once ``completed``; a commit status once it
+    is no longer ``pending``. Nothing else in the payload is kept: the waiting
+    step reads CI from the API, because a delivery may not cover every
+    required check.
+    """
+    if event not in CI_EVENTS:
+        return None
+    pull_requests: tuple[int, ...] = ()
+    if event == "status":
+        sha, settled = payload.get("sha"), payload.get("state") != "pending"
+    else:
+        subject = payload.get(event)
+        sha = subject.get("head_sha") if isinstance(subject, dict) else None
+        settled = payload.get("action") == "completed"
+        listed = subject.get("pull_requests") if isinstance(subject, dict) else None
+        pull_requests = tuple(
+            pr["number"] for pr in listed or ()
+            if isinstance(pr, dict) and isinstance(pr.get("number"), int)
+        ) if isinstance(listed, list) else ()
+    repository = payload.get("repository")
+    full_name = repository.get("full_name") if isinstance(repository, dict) else None
+    if not settled or not isinstance(sha, str) or not sha:
+        return None
+    if not isinstance(full_name, str) or not full_name:
+        return None
+    return GithubCI(repository=full_name, sha=sha, event=event, pull_requests=pull_requests)
+
+
 _Delivery = GithubComment | GithubMerge | GithubAssignment | GithubReviewRequest
 
 
@@ -402,6 +449,7 @@ class GithubIngress:
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
         handle_review_request: Callable[[GithubReviewRequest], Awaitable[None]] | None = None,
+        handle_ci: Callable[[GithubCI], int] | None = None,
         authenticated_login: Callable[[str], Awaitable[str]] | None = None,
         may_act: Callable[
             [GithubComment | GithubAssignment | GithubReviewRequest], Awaitable[bool]
@@ -424,6 +472,7 @@ class GithubIngress:
         self._handle_merge = handle_merge
         self._handle_assignment = handle_assignment
         self._handle_review_request = handle_review_request
+        self._handle_ci = handle_ci
         self._verify_signature = verify_signature
         self._max_body_bytes = max_body_bytes
         # Where a comment's progress is written down for the web UI. Recording
@@ -497,7 +546,7 @@ class GithubIngress:
         if (
             _asks_for_self_login(event, payload)
             and self._authenticated_login is not None
-            and repository.lower() in self._repositories
+            and self._answers(repository)
         ):
             try:
                 # Leave time to acknowledge within GitHub's ten-second deadline.
@@ -517,6 +566,10 @@ class GithubIngress:
             ) else 503
         )
 
+    def _answers(self, repository: str) -> bool:
+        """Whether `repository` is one this deployment is configured to answer."""
+        return repository.lower() in self._repositories
+
     def accept(
         self, event: str, payload: Mapping[str, object], *, self_login: str = "",
         delivery_id: str = "",
@@ -529,7 +582,7 @@ class GithubIngress:
         """
         repository = payload.get("repository")
         name = repository.get("full_name") if isinstance(repository, dict) else None
-        if self._repositories and isinstance(name, str) and name.lower() not in self._repositories:
+        if self._repositories and isinstance(name, str) and not self._answers(name):
             log.info("ignored delivery from %s: this deployment answers %s", name, sorted(self._repositories))
             return True
         if _asks_for_self_login(event, payload) and not self_login:
@@ -539,6 +592,19 @@ class GithubIngress:
                 payload.get("action"),
             )
             return False
+        ci = ci_from_payload(event, payload)
+        if ci is not None:
+            # Handled here rather than queued: waking a waiting step is
+            # instant, and behind a concierge turn it would arrive late. Never
+            # refused either, since a missed one only costs the fallback poll.
+            if not self._answers(ci.repository) or self._handle_ci is None:
+                log.info("ignored GitHub %s delivery %s for %s@%s: not a configured repository",
+                         event, delivery_id or "-", ci.repository, ci.sha)
+                return True
+            woken = self._handle_ci(ci)
+            log.info("GitHub %s delivery %s for %s@%s woke %d CI %s", event, delivery_id or "-",
+                     ci.repository, ci.sha, woken, "step" if woken == 1 else "steps")
+            return True
         assignment = assignment_from_payload(event, payload, self_login=self_login)
         if assignment is not None:
             return self._enqueue(
@@ -611,7 +677,7 @@ class GithubIngress:
                 "a GitHub %s was delivered but no target repository is configured", subject
             )
             return False
-        if delivery.repository.lower() not in self._repositories:
+        if not self._answers(delivery.repository):
             # A shared App secret authenticates deliveries from other repos too.
             # Ignore them before queueing or remembering their identities.
             log.info("ignored %s: this deployment answers %s", named, sorted(self._repositories))

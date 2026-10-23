@@ -1,0 +1,38 @@
+{
+  "message": "ApplyLoopCommand",
+  "subject": "oe.v1.ge.control.loops.apply",
+  "payload": {
+    "command_id": "cmd_applyloop",
+    "causal_path": [
+      "cmd_applyloop"
+    ],
+    "payload": {
+      "loop": {
+        "apiVersion": "openengine.cc/v1alpha1",
+        "kind": "Loop",
+        "metadata": {
+          "name": "nightly-dependency-review"
+        },
+        "spec": {
+          "graphRef": {
+            "name": "review"
+          },
+          "schedule": {
+            "cron": "0 3 * * *",
+            "timeZone": "UTC"
+          },
+          "concurrency": {
+            "maxActiveJobs": 1,
+            "overlapPolicy": "Skip"
+          },
+          "jobTemplate": {
+            "goal": "Review dependency updates",
+            "inputs": {
+              "instruction": "Review open dependency PRs"
+            }
+          }
+        }
+      }
+    }
+  }
+}

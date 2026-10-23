@@ -157,6 +157,6 @@ def test_summary_points_to_workspace_details_without_printing_machine_paths():
     run = run_state("completed")
     run["workspace"] = {"path": "/private/tmp/engine-workspaces/ws-example", "ref": "engine/ws-example"}
     output = "\n".join(live.summary(run, "local"))
-    assert "Workspace details: engine run get run-1 --backend local" in output
+    assert "Workspace details: oe run get run-1 --backend local" in output
     assert run["workspace"]["path"] not in output
     assert run["workspace"]["ref"] not in output

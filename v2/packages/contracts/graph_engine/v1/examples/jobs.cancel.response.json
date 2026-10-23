@@ -1,0 +1,10 @@
+{
+  "message": "CancelJobResponse",
+  "in_reply_to": "oe.v1.ge.control.jobs.job_42.cancel",
+  "payload": {
+    "command_id": "cmd_cancel_42",
+    "status": "accepted",
+    "operation_id": "op_cancel_42",
+    "resource_id": "job_42"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "summary": "An operator applies a GitHub App installation scoped to two repositories. The command is a root, so its path is its own ID.",
+  "message": "ApplyConnectionCommand",
+  "subject": "oe.v1.cxn.control.connections.apply",
+  "payload": {
+    "command_id": "cmd_01JAX4ADDGH",
+    "causal_path": [
+      "cmd_01JAX4ADDGH"
+    ],
+    "deadline_at": "2026-10-19T21:31:00Z",
+    "payload": {
+      "connection": {
+        "apiVersion": "openengine.cc/v1alpha1",
+        "kind": "Connection",
+        "metadata": {
+          "name": "acme-github"
+        },
+        "spec": {
+          "provider": "github",
+          "displayName": "Acme GitHub",
+          "externalAccount": {
+            "kind": "Installation",
+            "id": "55012231",
+            "name": "acme"
+          },
+          "credentialRef": {
+            "store": "vault",
+            "key": "openengine/github/acme-app"
+          },
+          "scope": {
+            "mode": "Selected",
+            "resources": [
+              "acme/api",
+              "acme/web"
+            ]
+          },
+          "settings": {
+            "default_branch": "main"
+          }
+        }
+      }
+    }
+  }
+}

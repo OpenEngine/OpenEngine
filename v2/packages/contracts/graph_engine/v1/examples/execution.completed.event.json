@@ -1,0 +1,29 @@
+{
+  "message": "ExecutionCompleted",
+  "subject": "oe.v1.ge.events.jobs.job_42.execution.completed",
+  "headers": { "Nats-Msg-Id": "evt_exec42a_done" },
+  "payload": {
+    "event_id": "evt_exec42a_done",
+    "event_type": "execution.completed",
+    "occurred_at": "2026-10-19T23:05:00Z",
+    "producer": "ge",
+    "causal_path": ["cmd_decide_ship", "evt_42_approved", "evt_exec42a_done"],
+    "resources": { "job_id": "job_42", "execution_id": "exec_42a" },
+    "resource_version": 18,
+    "payload": {
+      "execution": {
+        "execution_id": "exec_42a",
+        "job_id": "job_42",
+        "graph": { "graph_id": "graph_review", "revision": 3 },
+        "inputs": { "instruction": "Address the security review" },
+        "status": "succeeded",
+        "active_step_instance_ids": [],
+        "created_at": "2026-10-19T21:30:02Z",
+        "updated_at": "2026-10-19T23:05:00Z",
+        "started_at": "2026-10-19T21:30:02Z",
+        "ended_at": "2026-10-19T23:05:00Z"
+      },
+      "result_ref": "artifact_42_summary"
+    }
+  }
+}

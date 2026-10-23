@@ -2,7 +2,7 @@
   "name": "vcp-events",
   "description": "What the virtual control plane has done, for any service to follow.",
   "subjects": [
-    "vcp.events.>"
+    "oe.v1.vcp.events.>"
   ],
   "retention": "limits",
   "storage": "file",

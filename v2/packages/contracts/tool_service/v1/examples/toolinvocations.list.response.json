@@ -1,0 +1,53 @@
+{
+  "message": "ListToolInvocationsResponse",
+  "in_reply_to": "oe.v1.toolinvocations.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "apiVersion": "openengine.cc/v1alpha1",
+          "kind": "ToolInvocation",
+          "metadata": {
+            "name": "ti-123",
+            "namespace": "default",
+            "uid": "invocation-uid-123",
+            "generation": 1,
+            "creationTimestamp": "2026-10-21T15:05:00Z"
+          },
+          "spec": {
+            "toolRef": {
+              "name": "github-issue-comment",
+              "uid": "tool-uid-123",
+              "generation": 1
+            },
+            "workspaceRef": {
+              "name": "review-job-88"
+            },
+            "workspaceGeneration": 3,
+            "stepAttemptId": "stepa_88_review_1",
+            "arguments": {
+              "issueNumber": 42,
+              "body": "Review complete."
+            }
+          },
+          "status": {
+            "phase": "Succeeded",
+            "authorization": {
+              "grantRefs": [
+                {
+                  "name": "reviewer-comment-access",
+                  "uid": "grant-uid-123"
+                }
+              ]
+            },
+            "attemptCount": 1,
+            "startedAt": "2026-10-21T15:05:01Z",
+            "completedAt": "2026-10-21T15:05:02Z"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

@@ -1,0 +1,1455 @@
+asyncapi: 3.1.0
+id: urn:openengine:v2:graph-engine
+info:
+  title: OpenEngine Graph Engine (ge)
+  version: 1.0.0-draft.2
+  description: |
+    The Graph Engine decides which steps of a graph run and when. This document
+    describes the NATS interface **GE serves**: the commands and queries it
+    answers and the events it publishes.
+
+    > **Contract only.** These subjects are a defined API, not an implemented
+    > one. No GE handler answers them yet; see the package README's
+    > *Implementation status*.
+
+    ## Versions
+    - AsyncAPI format: `3.1.0` (the `asyncapi` field).
+    - Contract release: `info.version`, semver. Minor releases only add.
+    - Subject namespace: `v1` in `oe.v1.ge.…`. It changes
+      only for an incompatible release, which is served side by side.
+    - Resource apiVersion: `openengine.cc/v1alpha1` for every kind. Its
+      `v1` is the subject namespace's; `alpha1` changes while `v1` is a draft.
+
+    ## Request/reply
+    Control and query subjects use native NATS request/reply: the reply goes to
+    the request's reply inbox, and payloads carry no `replyTo`. Every reply is a
+    typed response, including rejections.
+
+    - **Control** (`oe.v1.ge.control.…`): `accepted` means the command is durably
+      recorded with an operation; it does not mean it is done. Completion is
+      reported by lifecycle events carrying the command's `operation` reference
+      and by `oe.v1.ge.query.operations.{operation_id}.get`.
+    - **Query** (`oe.v1.ge.query.…`): read-only, creates no operation.
+    - A request that times out has an **unknown** outcome. Retry with the same
+      `command_id`.
+
+    ## Idempotency
+    A retry with the same `command_id` and identical subject, payload,
+    `expected_version` and `causal_path` returns the original response and
+    operation ID. The same `command_id` with anything else is rejected with
+    `COMMAND_ID_CONFLICT`. Command IDs are remembered for at least **7 days**.
+    Non-retryable rejections are remembered and replayed; retryable ones
+    (`UNAVAILABLE`) are not.
+
+    ## Identity
+    The acting identity comes from the authenticated NATS connection (or a
+    verified delegation), never from a payload field.
+
+    ## Subject tokens
+    Every `{…_id}` parameter is a single subject token of the form its prefix
+    names (`job_…`, `wfappr_…`). A malformed token is answered with
+    `INVALID_ARGUMENT` naming `subject.{parameter}`.
+
+    ## Model
+    - A **job** has a goal and a history of **graph executions**; at most one
+      execution is active at a time. There is no separate execution control API:
+      job controls act on the job's active execution.
+    - Job controls affect the named job only, unless `scope` is
+      `job_and_descendants`.
+    - **pause** stops new scheduling; running tasks continue unless
+      `active_tasks: cancel`. **resume** continues a paused execution; it never
+      approves pending approvals and never resurrects cancelled work.
+      **cancel** permanently stops the job and requests cancellation of its
+      active tasks; workspaces are kept (destroying them is a VCP operation).
+    - A cancelled **execution** does not necessarily mean the **job** is
+      cancelled: `execution.cancelled` reports the job's state, and only
+      `job.cancelled` means the job will never progress again. Likewise
+      execution failure, job failure and operation failure are distinct.
+    - Steering finished work must choose `if_completed`: `follow_up` reopens the
+      job with a new execution, `reject` refuses with `INVALID_STATE`.
+    - GE evaluates each step attempt's task result against the graph's outputs,
+      gates and transitions, and keeps the chain execution → step instance →
+      step attempt → workspace.
+    - **Workspaces and tool grants.** GE applies a step attempt's Workspace
+      (`oe.v1.vcp.control.workspaces.apply`) under a name it chooses. A
+      step's `agent.tools` are its only tools: once the attempt has its
+      workspace, and before it is sent to run there, GE applies a `ToolGrant`
+      (`oe.v1.toolgrants.apply`) for each listed tool to that attempt
+      (`stepAttemptId`) in that workspace (`workspaceRef`), and deletes them
+      when the attempt ends. Starting such a step needs the tool service.
+    - **Workflow approvals** belong to GE. A decision names the execution and
+      step instance it was made for; a decision for an approval that is no
+      longer pending there is rejected with `STALE_APPROVAL`.
+    - **Loops** create jobs on a schedule. Pausing or removing a loop affects
+      future triggers only and never cancels existing jobs.
+    - **Apply.** Graphs and loops are created and changed by applying their
+      resources (`kind: Graph`, `kind: Loop`, `apiVersion:
+      openengine.cc/v1alpha1`; see `resources/`), Kubernetes-style: a new name
+      creates the resource, a known one updates it, and an unchanged one is a
+      no-op. A Python LangGraph module can be applied as a graph instead.
+      Graph revisions are immutable.
+
+    ## Causal paths
+    Parallel branches publish sibling paths; at a join the path follows one
+    primary branch, and every other dependency is recorded in the step
+    instance's `entered_from` and the execution records.
+
+    ## Events
+    Job, execution and approval events are published on
+    `oe.v1.ge.events.jobs.{job_id}.{event_type}` and ordered per job; loop events on
+    `oe.v1.ge.events.loops.{loop_id}.{event_type}` and ordered per loop. Both are
+    captured by the existing `ge-events` stream.
+  license:
+    name: Apache-2.0
+defaultContentType: application/json
+
+servers:
+  local:
+    host: localhost:4222
+    protocol: nats
+    description: The NATS server `oe up` starts.
+
+channels:
+  graphsApply:
+    address: oe.v1.ge.control.graphs.apply
+    title: Apply a graph
+    messages:
+      ApplyGraphCommand: { $ref: '#/components/messages/ApplyGraphCommand' }
+  graphRun:
+    address: oe.v1.ge.control.graphs.{graph_id}.run
+    title: Run a graph
+    parameters:
+      graph_id: { $ref: '#/components/parameters/graph_id' }
+    messages:
+      RunGraphCommand: { $ref: '#/components/messages/RunGraphCommand' }
+  jobsSubmit:
+    address: oe.v1.ge.control.jobs.submit
+    title: Submit a job
+    messages:
+      SubmitJobCommand: { $ref: '#/components/messages/SubmitJobCommand' }
+  jobSteer:
+    address: oe.v1.ge.control.jobs.{job_id}.steer
+    title: Steer a job
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      SteerJobCommand: { $ref: '#/components/messages/SteerJobCommand' }
+  jobPause:
+    address: oe.v1.ge.control.jobs.{job_id}.pause
+    title: Pause a job
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      PauseJobCommand: { $ref: '#/components/messages/PauseJobCommand' }
+  jobResume:
+    address: oe.v1.ge.control.jobs.{job_id}.resume
+    title: Resume a job
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ResumeJobCommand: { $ref: '#/components/messages/ResumeJobCommand' }
+  jobCancel:
+    address: oe.v1.ge.control.jobs.{job_id}.cancel
+    title: Cancel a job
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      CancelJobCommand: { $ref: '#/components/messages/CancelJobCommand' }
+  approvalDecide:
+    address: oe.v1.ge.control.approvals.{approval_id}.decide
+    title: Decide a workflow approval
+    parameters:
+      approval_id: { $ref: '#/components/parameters/approval_id' }
+    messages:
+      DecideApprovalCommand: { $ref: '#/components/messages/DecideApprovalCommand' }
+  loopsApply:
+    address: oe.v1.ge.control.loops.apply
+    title: Apply a loop
+    messages:
+      ApplyLoopCommand: { $ref: '#/components/messages/ApplyLoopCommand' }
+  loopPause:
+    address: oe.v1.ge.control.loops.{loop_id}.pause
+    title: Pause a loop
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      PauseLoopCommand: { $ref: '#/components/messages/PauseLoopCommand' }
+  loopResume:
+    address: oe.v1.ge.control.loops.{loop_id}.resume
+    title: Resume a loop
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      ResumeLoopCommand: { $ref: '#/components/messages/ResumeLoopCommand' }
+  loopRemove:
+    address: oe.v1.ge.control.loops.{loop_id}.remove
+    title: Remove a loop
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      RemoveLoopCommand: { $ref: '#/components/messages/RemoveLoopCommand' }
+  graphsList:
+    address: oe.v1.ge.query.graphs.list
+    title: List graphs
+    messages:
+      ListGraphsQuery: { $ref: '#/components/messages/ListGraphsQuery' }
+  graphGet:
+    address: oe.v1.ge.query.graphs.{graph_id}.get
+    title: Get a graph
+    parameters:
+      graph_id: { $ref: '#/components/parameters/graph_id' }
+    messages:
+      GetGraphQuery: { $ref: '#/components/messages/GetGraphQuery' }
+  jobsList:
+    address: oe.v1.ge.query.jobs.list
+    title: List jobs
+    messages:
+      ListJobsQuery: { $ref: '#/components/messages/ListJobsQuery' }
+  jobGet:
+    address: oe.v1.ge.query.jobs.{job_id}.get
+    title: Get a job
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      GetJobQuery: { $ref: '#/components/messages/GetJobQuery' }
+  jobExecutionsList:
+    address: oe.v1.ge.query.jobs.{job_id}.executions.list
+    title: List a job's executions
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ListJobExecutionsQuery: { $ref: '#/components/messages/ListJobExecutionsQuery' }
+  jobWorkspacesList:
+    address: oe.v1.ge.query.jobs.{job_id}.workspaces.list
+    title: List a job's workspaces
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ListJobWorkspacesQuery: { $ref: '#/components/messages/ListJobWorkspacesQuery' }
+  jobApprovalsList:
+    address: oe.v1.ge.query.jobs.{job_id}.approvals.list
+    title: List a job's approvals
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ListJobApprovalsQuery: { $ref: '#/components/messages/ListJobApprovalsQuery' }
+  executionGet:
+    address: oe.v1.ge.query.executions.{execution_id}.get
+    title: Get an execution
+    parameters:
+      execution_id: { $ref: '#/components/parameters/execution_id' }
+    messages:
+      GetExecutionQuery: { $ref: '#/components/messages/GetExecutionQuery' }
+  executionStepsList:
+    address: oe.v1.ge.query.executions.{execution_id}.steps.list
+    title: List an execution's steps
+    parameters:
+      execution_id: { $ref: '#/components/parameters/execution_id' }
+    messages:
+      ListExecutionStepsQuery: { $ref: '#/components/messages/ListExecutionStepsQuery' }
+  loopsList:
+    address: oe.v1.ge.query.loops.list
+    title: List loops
+    messages:
+      ListLoopsQuery: { $ref: '#/components/messages/ListLoopsQuery' }
+  loopGet:
+    address: oe.v1.ge.query.loops.{loop_id}.get
+    title: Get a loop
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      GetLoopQuery: { $ref: '#/components/messages/GetLoopQuery' }
+  operationGet:
+    address: oe.v1.ge.query.operations.{operation_id}.get
+    title: Get an operation
+    parameters:
+      operation_id: { $ref: '#/components/parameters/operation_id' }
+    messages:
+      GetOperationQuery: { $ref: '#/components/messages/GetOperationQuery' }
+  replyInbox:
+    address: null
+    title: NATS reply inbox
+    description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
+    messages:
+      ApplyGraphResponse: { $ref: '#/components/messages/ApplyGraphResponse' }
+      RunGraphResponse: { $ref: '#/components/messages/RunGraphResponse' }
+      SubmitJobResponse: { $ref: '#/components/messages/SubmitJobResponse' }
+      SteerJobResponse: { $ref: '#/components/messages/SteerJobResponse' }
+      PauseJobResponse: { $ref: '#/components/messages/PauseJobResponse' }
+      ResumeJobResponse: { $ref: '#/components/messages/ResumeJobResponse' }
+      CancelJobResponse: { $ref: '#/components/messages/CancelJobResponse' }
+      DecideApprovalResponse: { $ref: '#/components/messages/DecideApprovalResponse' }
+      ApplyLoopResponse: { $ref: '#/components/messages/ApplyLoopResponse' }
+      PauseLoopResponse: { $ref: '#/components/messages/PauseLoopResponse' }
+      ResumeLoopResponse: { $ref: '#/components/messages/ResumeLoopResponse' }
+      RemoveLoopResponse: { $ref: '#/components/messages/RemoveLoopResponse' }
+      ListGraphsResponse: { $ref: '#/components/messages/ListGraphsResponse' }
+      GetGraphResponse: { $ref: '#/components/messages/GetGraphResponse' }
+      ListJobsResponse: { $ref: '#/components/messages/ListJobsResponse' }
+      GetJobResponse: { $ref: '#/components/messages/GetJobResponse' }
+      ListJobExecutionsResponse: { $ref: '#/components/messages/ListJobExecutionsResponse' }
+      ListJobWorkspacesResponse: { $ref: '#/components/messages/ListJobWorkspacesResponse' }
+      ListJobApprovalsResponse: { $ref: '#/components/messages/ListJobApprovalsResponse' }
+      GetExecutionResponse: { $ref: '#/components/messages/GetExecutionResponse' }
+      ListExecutionStepsResponse: { $ref: '#/components/messages/ListExecutionStepsResponse' }
+      ListLoopsResponse: { $ref: '#/components/messages/ListLoopsResponse' }
+      GetLoopResponse: { $ref: '#/components/messages/GetLoopResponse' }
+      GetOperationResponse: { $ref: '#/components/messages/GetOperationResponse' }
+
+  jobCreatedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.job.created
+    title: job.created
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      JobCreated: { $ref: '#/components/messages/JobCreated' }
+  jobCompletedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.job.completed
+    title: job.completed
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      JobCompleted: { $ref: '#/components/messages/JobCompleted' }
+  jobFailedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.job.failed
+    title: job.failed
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      JobFailed: { $ref: '#/components/messages/JobFailed' }
+  jobCancelledEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.job.cancelled
+    title: job.cancelled
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      JobCancelled: { $ref: '#/components/messages/JobCancelled' }
+  executionStartedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.started
+    title: execution.started
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionStarted: { $ref: '#/components/messages/ExecutionStarted' }
+  executionProgressedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.progressed
+    title: execution.progressed
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionProgressed: { $ref: '#/components/messages/ExecutionProgressed' }
+  executionAwaitingApprovalEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.awaiting_approval
+    title: execution.awaiting_approval
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionAwaitingApproval: { $ref: '#/components/messages/ExecutionAwaitingApproval' }
+  executionPausedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.paused
+    title: execution.paused
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionPaused: { $ref: '#/components/messages/ExecutionPaused' }
+  executionResumedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.resumed
+    title: execution.resumed
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionResumed: { $ref: '#/components/messages/ExecutionResumed' }
+  executionCompletedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.completed
+    title: execution.completed
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionCompleted: { $ref: '#/components/messages/ExecutionCompleted' }
+  executionFailedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.failed
+    title: execution.failed
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionFailed: { $ref: '#/components/messages/ExecutionFailed' }
+  executionCancelledEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.execution.cancelled
+    title: execution.cancelled
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ExecutionCancelled: { $ref: '#/components/messages/ExecutionCancelled' }
+  approvalRequestedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.approval.requested
+    title: approval.requested
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ApprovalRequested: { $ref: '#/components/messages/ApprovalRequested' }
+  approvalResolvedEvents:
+    address: oe.v1.ge.events.jobs.{job_id}.approval.resolved
+    title: approval.resolved
+    parameters:
+      job_id: { $ref: '#/components/parameters/job_id' }
+    messages:
+      ApprovalResolved: { $ref: '#/components/messages/ApprovalResolved' }
+  loopAppliedEvents:
+    address: oe.v1.ge.events.loops.{loop_id}.loop.applied
+    title: loop.applied
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      LoopApplied: { $ref: '#/components/messages/LoopApplied' }
+  loopPausedEvents:
+    address: oe.v1.ge.events.loops.{loop_id}.loop.paused
+    title: loop.paused
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      LoopPaused: { $ref: '#/components/messages/LoopPaused' }
+  loopResumedEvents:
+    address: oe.v1.ge.events.loops.{loop_id}.loop.resumed
+    title: loop.resumed
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      LoopResumed: { $ref: '#/components/messages/LoopResumed' }
+  loopRemovedEvents:
+    address: oe.v1.ge.events.loops.{loop_id}.loop.removed
+    title: loop.removed
+    parameters:
+      loop_id: { $ref: '#/components/parameters/loop_id' }
+    messages:
+      LoopRemoved: { $ref: '#/components/messages/LoopRemoved' }
+
+operations:
+  applyGraph:
+    action: receive
+    title: Apply a graph
+    summary: "Create or update a graph from a Graph resource, adding an immutable revision when it changed."
+    description: "Accepted once validated and recorded; `resource_id` is the graph ID. The operation result names the revision (or the existing one, for an unchanged graph)."
+    channel: { $ref: '#/channels/graphsApply' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyGraphResponse' }]
+  runGraph:
+    action: receive
+    title: Run a graph
+    summary: "Start an execution of a graph revision on a new job or an explicitly named existing job."
+    description: "Rejected with INVALID_STATE when the existing job already has an active execution or is cancelled. Completes with `execution.started` (and `job.created` for a new job)."
+    channel: { $ref: '#/channels/graphRun' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/RunGraphResponse' }]
+  submitJob:
+    action: receive
+    title: Submit a job
+    summary: "Create a job with a goal, context, optional parent and explicit execution intent."
+    description: "Completes with `job.created`, then `execution.started` when the intent is `run_graph`."
+    channel: { $ref: '#/channels/jobsSubmit' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/SubmitJobResponse' }]
+  steerJob:
+    action: receive
+    title: Steer a job
+    summary: "Record an instruction for the job, optionally targeting an execution, step attempt, workspace or session."
+    description: "`if_completed` is required: for finished work it selects a follow-up execution or a rejection. The operation result says which happened."
+    channel: { $ref: '#/channels/jobSteer' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/SteerJobResponse' }]
+  pauseJob:
+    action: receive
+    title: Pause a job
+    summary: "Stop new scheduling. Active tasks continue by default."
+    description: "Affects only the named job unless `scope` includes descendants. Completes with `execution.paused`."
+    channel: { $ref: '#/channels/jobPause' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/PauseJobResponse' }]
+  resumeJob:
+    action: receive
+    title: Resume a job
+    summary: "Resume a paused execution."
+    description: "Never approves pending approvals and never resurrects cancelled work. Completes with `execution.resumed`."
+    channel: { $ref: '#/channels/jobResume' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ResumeJobResponse' }]
+  cancelJob:
+    action: receive
+    title: Cancel a job
+    summary: "Stop the job's progression permanently and request cancellation of its active tasks."
+    description: "Completes with `execution.cancelled` (if one was active) and `job.cancelled`. Workspaces are retained."
+    channel: { $ref: '#/channels/jobCancel' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/CancelJobResponse' }]
+  decideApproval:
+    action: receive
+    title: Decide a workflow approval
+    summary: "Approve or reject a GE workflow approval."
+    description: "Rejected with STALE_APPROVAL when the approval is no longer `requested` for the named execution and step instance. Completes with `approval.resolved`."
+    channel: { $ref: '#/channels/approvalDecide' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/DecideApprovalResponse' }]
+  applyLoop:
+    action: receive
+    title: Apply a loop
+    summary: "Create or update a loop from a Loop resource: graph reference, schedule, concurrency and job template."
+    description: "Changes apply to future triggers only. Completes with `loop.applied`."
+    channel: { $ref: '#/channels/loopsApply' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyLoopResponse' }]
+  pauseLoop:
+    action: receive
+    title: Pause a loop
+    summary: "Stop future triggers."
+    description: "Existing jobs are not cancelled. Sets the loop's `spec.suspend`, so a later apply decides again. Completes with `loop.paused`."
+    channel: { $ref: '#/channels/loopPause' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/PauseLoopResponse' }]
+  resumeLoop:
+    action: receive
+    title: Resume a loop
+    summary: "Restart future triggers."
+    description: "Missed triggers are not replayed. Clears the loop's `spec.suspend`. Completes with `loop.resumed`."
+    channel: { $ref: '#/channels/loopResume' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ResumeLoopResponse' }]
+  removeLoop:
+    action: receive
+    title: Remove a loop
+    summary: "Remove a loop permanently."
+    description: "Existing jobs are not cancelled. Completes with `loop.removed`."
+    channel: { $ref: '#/channels/loopRemove' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/RemoveLoopResponse' }]
+  listGraphs:
+    action: receive
+    title: List graphs
+    summary: "Page through registered graphs."
+    channel: { $ref: '#/channels/graphsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListGraphsResponse' }]
+  getGraph:
+    action: receive
+    title: Get a graph
+    summary: "Return a graph and one revision (latest by default), with its verbatim source."
+    channel: { $ref: '#/channels/graphGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetGraphResponse' }]
+  listJobs:
+    action: receive
+    title: List jobs
+    summary: "Page through jobs by state, graph, parent and loop."
+    channel: { $ref: '#/channels/jobsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListJobsResponse' }]
+  getJob:
+    action: receive
+    title: Get a job
+    summary: "Return a job snapshot."
+    channel: { $ref: '#/channels/jobGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetJobResponse' }]
+  listJobExecutions:
+    action: receive
+    title: List a job's executions
+    summary: "The job's graph execution history."
+    channel: { $ref: '#/channels/jobExecutionsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListJobExecutionsResponse' }]
+  listJobWorkspaces:
+    action: receive
+    title: List a job's workspaces
+    summary: "Workspaces the job's step attempts used."
+    channel: { $ref: '#/channels/jobWorkspacesList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListJobWorkspacesResponse' }]
+  listJobApprovals:
+    action: receive
+    title: List a job's approvals
+    summary: "Workflow approvals raised in the job."
+    channel: { $ref: '#/channels/jobApprovalsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListJobApprovalsResponse' }]
+  getExecution:
+    action: receive
+    title: Get an execution
+    summary: "Return a graph execution snapshot."
+    channel: { $ref: '#/channels/executionGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetExecutionResponse' }]
+  listExecutionSteps:
+    action: receive
+    title: List an execution's steps
+    summary: "Step instances with attempts, evaluations, transitions and workspace references."
+    channel: { $ref: '#/channels/executionStepsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListExecutionStepsResponse' }]
+  listLoops:
+    action: receive
+    title: List loops
+    summary: "Page through loops."
+    channel: { $ref: '#/channels/loopsList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListLoopsResponse' }]
+  getLoop:
+    action: receive
+    title: Get a loop
+    summary: "Return a loop snapshot."
+    channel: { $ref: '#/channels/loopGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetLoopResponse' }]
+  getOperation:
+    action: receive
+    title: Get an operation
+    summary: "Return the status and typed result of an accepted GE command."
+    channel: { $ref: '#/channels/operationGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetOperationResponse' }]
+
+  publishJobCreated:
+    action: send
+    title: job.created
+    channel: { $ref: '#/channels/jobCreatedEvents' }
+    tags: [{ name: event }]
+  publishJobCompleted:
+    action: send
+    title: job.completed
+    channel: { $ref: '#/channels/jobCompletedEvents' }
+    tags: [{ name: event }]
+  publishJobFailed:
+    action: send
+    title: job.failed
+    channel: { $ref: '#/channels/jobFailedEvents' }
+    tags: [{ name: event }]
+  publishJobCancelled:
+    action: send
+    title: job.cancelled
+    channel: { $ref: '#/channels/jobCancelledEvents' }
+    tags: [{ name: event }]
+  publishExecutionStarted:
+    action: send
+    title: execution.started
+    channel: { $ref: '#/channels/executionStartedEvents' }
+    tags: [{ name: event }]
+  publishExecutionProgressed:
+    action: send
+    title: execution.progressed
+    channel: { $ref: '#/channels/executionProgressedEvents' }
+    tags: [{ name: event }]
+  publishExecutionAwaitingApproval:
+    action: send
+    title: execution.awaiting_approval
+    channel: { $ref: '#/channels/executionAwaitingApprovalEvents' }
+    tags: [{ name: event }]
+  publishExecutionPaused:
+    action: send
+    title: execution.paused
+    channel: { $ref: '#/channels/executionPausedEvents' }
+    tags: [{ name: event }]
+  publishExecutionResumed:
+    action: send
+    title: execution.resumed
+    channel: { $ref: '#/channels/executionResumedEvents' }
+    tags: [{ name: event }]
+  publishExecutionCompleted:
+    action: send
+    title: execution.completed
+    channel: { $ref: '#/channels/executionCompletedEvents' }
+    tags: [{ name: event }]
+  publishExecutionFailed:
+    action: send
+    title: execution.failed
+    channel: { $ref: '#/channels/executionFailedEvents' }
+    tags: [{ name: event }]
+  publishExecutionCancelled:
+    action: send
+    title: execution.cancelled
+    channel: { $ref: '#/channels/executionCancelledEvents' }
+    tags: [{ name: event }]
+  publishApprovalRequested:
+    action: send
+    title: approval.requested
+    channel: { $ref: '#/channels/approvalRequestedEvents' }
+    tags: [{ name: event }]
+  publishApprovalResolved:
+    action: send
+    title: approval.resolved
+    channel: { $ref: '#/channels/approvalResolvedEvents' }
+    tags: [{ name: event }]
+  publishLoopApplied:
+    action: send
+    title: loop.applied
+    channel: { $ref: '#/channels/loopAppliedEvents' }
+    tags: [{ name: event }]
+  publishLoopPaused:
+    action: send
+    title: loop.paused
+    channel: { $ref: '#/channels/loopPausedEvents' }
+    tags: [{ name: event }]
+  publishLoopResumed:
+    action: send
+    title: loop.resumed
+    channel: { $ref: '#/channels/loopResumedEvents' }
+    tags: [{ name: event }]
+  publishLoopRemoved:
+    action: send
+    title: loop.removed
+    channel: { $ref: '#/channels/loopRemovedEvents' }
+    tags: [{ name: event }]
+
+components:
+  parameters:
+    graph_id:
+      description: Graph ID, a single subject token `graph_…`.
+      x-oe-identifier: graph_id
+    job_id:
+      description: Job ID, a single subject token `job_…`.
+      x-oe-identifier: job_id
+    execution_id:
+      description: Graph execution ID, a single subject token `exec_…`.
+      x-oe-identifier: execution_id
+    approval_id:
+      description: Workflow approval ID, a single subject token `wfappr_…`.
+      x-oe-identifier: workflow_approval_id
+    loop_id:
+      description: Loop ID, a single subject token `loop_…`.
+      x-oe-identifier: loop_id
+    operation_id:
+      description: Operation ID, a single subject token `op_…`.
+      x-oe-identifier: operation_id
+
+  messageTraits:
+    eventHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/event.schema.json#/$defs/headers' }
+    commandHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/command.schema.json#/$defs/headers' }
+    queryHeaders:
+      headers:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: '../../common/v1/query.schema.json#/$defs/headers' }
+
+  messages:
+    ApplyGraphCommand:
+      name: ApplyGraphCommand
+      title: Apply a graph command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_graph_command' }
+      examples:
+        - name: graphs.apply.command
+          summary: "Apply a Graph resource. Applying it again unchanged returns the existing revision."
+          payload: { $ref: './examples/graphs.apply.command.json#/payload' }
+    ApplyGraphResponse:
+      name: ApplyGraphResponse
+      title: Apply a graph response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/graph_command_response' }
+      examples:
+        - name: graphs.apply.response
+          payload: { $ref: './examples/graphs.apply.response.json#/payload' }
+    RunGraphCommand:
+      name: RunGraphCommand
+      title: Run a graph command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/run_graph_command' }
+      examples:
+        - name: graphs.run.command
+          summary: "Run revision 3 on an existing job."
+          payload: { $ref: './examples/graphs.run.command.json#/payload' }
+    RunGraphResponse:
+      name: RunGraphResponse
+      title: Run a graph response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/job_command_response' }
+      examples:
+        - name: graphs.run.response.invalid-state
+          summary: "Rejected: the job already has an active execution, and a job runs at most one at a time."
+          payload: { $ref: './examples/graphs.run.response.invalid-state.json#/payload' }
+    SubmitJobCommand:
+      name: SubmitJobCommand
+      title: Submit a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/submit_job_command' }
+      examples:
+        - name: jobs.submit.command
+          summary: "CXN submits a job for a GitHub delivery. The root is a scoped external ID (provider, connection, delivery), so deliveries from different connections never collide."
+          payload: { $ref: './examples/jobs.submit.command.json#/payload' }
+        - name: jobs.submit.command.retry
+          summary: "The same submission resent after a timeout: same command ID, same path, same payload. GE returns the original response and operation ID."
+          payload: { $ref: './examples/jobs.submit.command.retry.json#/payload' }
+    SubmitJobResponse:
+      name: SubmitJobResponse
+      title: Submit a job response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/job_command_response' }
+      examples:
+        - name: jobs.submit.response
+          summary: "Accepted (and the identical reply to the retry). Completion: job.created, then execution.started."
+          payload: { $ref: './examples/jobs.submit.response.json#/payload' }
+    SteerJobCommand:
+      name: SteerJobCommand
+      title: Steer a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/steer_job_command' }
+      examples:
+        - name: jobs.steer.command.follow-up
+          summary: "Steer a job that already completed. `if_completed: follow_up` reopens it with a new execution instead of rejecting."
+          payload: { $ref: './examples/jobs.steer.command.follow-up.json#/payload' }
+    SteerJobResponse:
+      name: SteerJobResponse
+      title: Steer a job response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/job_command_response' }
+      examples:
+        - name: jobs.steer.response
+          payload: { $ref: './examples/jobs.steer.response.json#/payload' }
+    PauseJobCommand:
+      name: PauseJobCommand
+      title: Pause a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/pause_job_command' }
+      examples:
+        - name: jobs.pause.command
+          summary: "Pause scheduling; running reviewers finish."
+          payload: { $ref: './examples/jobs.pause.command.json#/payload' }
+    PauseJobResponse:
+      name: PauseJobResponse
+      title: Pause a job response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/job_command_response' }
+      examples:
+        - name: jobs.pause.response
+          payload: { $ref: './examples/jobs.pause.response.json#/payload' }
+    ResumeJobCommand:
+      name: ResumeJobCommand
+      title: Resume a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/resume_job_command' }
+      examples:
+        - name: jobs.resume.command
+          payload: { $ref: './examples/jobs.resume.command.json#/payload' }
+    ResumeJobResponse:
+      name: ResumeJobResponse
+      title: Resume a job response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/job_command_response' }
+      examples:
+        - name: jobs.resume.response.cancelled
+          summary: "Rejected: resuming never resurrects a cancelled job."
+          payload: { $ref: './examples/jobs.resume.response.cancelled.json#/payload' }
+    CancelJobCommand:
+      name: CancelJobCommand
+      title: Cancel a job command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/cancel_job_command' }
+      examples:
+        - name: jobs.cancel.command
+          summary: "Cancel the job and, explicitly, its descendants."
+          payload: { $ref: './examples/jobs.cancel.command.json#/payload' }
+    CancelJobResponse:
+      name: CancelJobResponse
+      title: Cancel a job response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/job_command_response' }
+      examples:
+        - name: jobs.cancel.response
+          payload: { $ref: './examples/jobs.cancel.response.json#/payload' }
+    DecideApprovalCommand:
+      name: DecideApprovalCommand
+      title: Decide a workflow approval command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/decide_approval_command' }
+      examples:
+        - name: approvals.decide.command
+          payload: { $ref: './examples/approvals.decide.command.json#/payload' }
+    DecideApprovalResponse:
+      name: DecideApprovalResponse
+      title: Decide a workflow approval response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/approval_command_response' }
+      examples:
+        - name: approvals.decide.response.stale
+          summary: "Rejected: a second decider answered after the approval was already decided."
+          payload: { $ref: './examples/approvals.decide.response.stale.json#/payload' }
+        - name: approvals.decide.response
+          payload: { $ref: './examples/approvals.decide.response.json#/payload' }
+    ApplyLoopCommand:
+      name: ApplyLoopCommand
+      title: Apply a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_loop_command' }
+      examples:
+        - name: loops.apply.command
+          payload: { $ref: './examples/loops.apply.command.json#/payload' }
+    ApplyLoopResponse:
+      name: ApplyLoopResponse
+      title: Apply a loop response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/loop_command_response' }
+      examples:
+        - name: loops.apply.response
+          payload: { $ref: './examples/loops.apply.response.json#/payload' }
+        - name: loops.apply.response.version-conflict
+          summary: "Rejected: the loop was changed after it was read."
+          payload: { $ref: './examples/loops.apply.response.version-conflict.json#/payload' }
+    PauseLoopCommand:
+      name: PauseLoopCommand
+      title: Pause a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/pause_loop_command' }
+      examples:
+        - name: loops.pause.command
+          payload: { $ref: './examples/loops.pause.command.json#/payload' }
+    PauseLoopResponse:
+      name: PauseLoopResponse
+      title: Pause a loop response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/loop_command_response' }
+      examples:
+        - name: loops.pause.response
+          payload: { $ref: './examples/loops.pause.response.json#/payload' }
+    ResumeLoopCommand:
+      name: ResumeLoopCommand
+      title: Resume a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/resume_loop_command' }
+      examples:
+        - name: loops.resume.command
+          payload: { $ref: './examples/loops.resume.command.json#/payload' }
+    ResumeLoopResponse:
+      name: ResumeLoopResponse
+      title: Resume a loop response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/loop_command_response' }
+      examples:
+        - name: loops.resume.response
+          payload: { $ref: './examples/loops.resume.response.json#/payload' }
+    RemoveLoopCommand:
+      name: RemoveLoopCommand
+      title: Remove a loop command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/remove_loop_command' }
+      examples:
+        - name: loops.remove.command
+          payload: { $ref: './examples/loops.remove.command.json#/payload' }
+    RemoveLoopResponse:
+      name: RemoveLoopResponse
+      title: Remove a loop response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/loop_command_response' }
+      examples:
+        - name: loops.remove.response
+          payload: { $ref: './examples/loops.remove.response.json#/payload' }
+    ListGraphsQuery:
+      name: ListGraphsQuery
+      title: List graphs query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_graphs_query' }
+      examples:
+        - name: graphs.list.query
+          payload: { $ref: './examples/graphs.list.query.json#/payload' }
+    ListGraphsResponse:
+      name: ListGraphsResponse
+      title: List graphs response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_graphs_response' }
+      examples:
+        - name: graphs.list.response
+          payload: { $ref: './examples/graphs.list.response.json#/payload' }
+    GetGraphQuery:
+      name: GetGraphQuery
+      title: Get a graph query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_graph_query' }
+      examples:
+        - name: graphs.get.query
+          payload: { $ref: './examples/graphs.get.query.json#/payload' }
+    GetGraphResponse:
+      name: GetGraphResponse
+      title: Get a graph response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_graph_response' }
+      examples:
+        - name: graphs.get.response
+          payload: { $ref: './examples/graphs.get.response.json#/payload' }
+    ListJobsQuery:
+      name: ListJobsQuery
+      title: List jobs query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_jobs_query' }
+      examples:
+        - name: jobs.list.query
+          summary: "Second page of open or paused jobs running the review graph, with the cursor the first page returned for the same filters."
+          payload: { $ref: './examples/jobs.list.query.json#/payload' }
+    ListJobsResponse:
+      name: ListJobsResponse
+      title: List jobs response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_jobs_response' }
+      examples:
+        - name: jobs.list.response
+          summary: "A page with a further cursor. Changing the filters while reusing this cursor is INVALID_CURSOR."
+          payload: { $ref: './examples/jobs.list.response.json#/payload' }
+    GetJobQuery:
+      name: GetJobQuery
+      title: Get a job query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_job_query' }
+      examples:
+        - name: jobs.get.query
+          payload: { $ref: './examples/jobs.get.query.json#/payload' }
+    GetJobResponse:
+      name: GetJobResponse
+      title: Get a job response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_job_response' }
+      examples:
+        - name: jobs.get.response
+          payload: { $ref: './examples/jobs.get.response.json#/payload' }
+    ListJobExecutionsQuery:
+      name: ListJobExecutionsQuery
+      title: List a job's executions query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_executions_query' }
+      examples:
+        - name: jobs.executions.list.query
+          summary: "Every execution the job has had: the completed first one and the follow-up."
+          payload: { $ref: './examples/jobs.executions.list.query.json#/payload' }
+    ListJobExecutionsResponse:
+      name: ListJobExecutionsResponse
+      title: List a job's executions response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_executions_response' }
+      examples:
+        - name: jobs.executions.list.response
+          payload: { $ref: './examples/jobs.executions.list.response.json#/payload' }
+    ListJobWorkspacesQuery:
+      name: ListJobWorkspacesQuery
+      title: List a job's workspaces query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_workspaces_query' }
+      examples:
+        - name: jobs.workspaces.list.query
+          payload: { $ref: './examples/jobs.workspaces.list.query.json#/payload' }
+    ListJobWorkspacesResponse:
+      name: ListJobWorkspacesResponse
+      title: List a job's workspaces response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_workspaces_response' }
+      examples:
+        - name: jobs.workspaces.list.response
+          payload: { $ref: './examples/jobs.workspaces.list.response.json#/payload' }
+    ListJobApprovalsQuery:
+      name: ListJobApprovalsQuery
+      title: List a job's approvals query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_approvals_query' }
+      examples:
+        - name: jobs.approvals.list.query
+          payload: { $ref: './examples/jobs.approvals.list.query.json#/payload' }
+    ListJobApprovalsResponse:
+      name: ListJobApprovalsResponse
+      title: List a job's approvals response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_job_approvals_response' }
+      examples:
+        - name: jobs.approvals.list.response
+          payload: { $ref: './examples/jobs.approvals.list.response.json#/payload' }
+    GetExecutionQuery:
+      name: GetExecutionQuery
+      title: Get an execution query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_execution_query' }
+      examples:
+        - name: executions.get.query
+          payload: { $ref: './examples/executions.get.query.json#/payload' }
+    GetExecutionResponse:
+      name: GetExecutionResponse
+      title: Get an execution response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_execution_response' }
+      examples:
+        - name: executions.get.response
+          payload: { $ref: './examples/executions.get.response.json#/payload' }
+    ListExecutionStepsQuery:
+      name: ListExecutionStepsQuery
+      title: List an execution's steps query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_execution_steps_query' }
+      examples:
+        - name: executions.steps.list.query
+          payload: { $ref: './examples/executions.steps.list.query.json#/payload' }
+    ListExecutionStepsResponse:
+      name: ListExecutionStepsResponse
+      title: List an execution's steps response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_execution_steps_response' }
+      examples:
+        - name: executions.steps.list.response
+          summary: "Execution \u2192 step instance \u2192 attempts \u2192 workspace. The first attempt's result failed a gate and GE retried it."
+          payload: { $ref: './examples/executions.steps.list.response.json#/payload' }
+    ListLoopsQuery:
+      name: ListLoopsQuery
+      title: List loops query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_loops_query' }
+      examples:
+        - name: loops.list.query
+          payload: { $ref: './examples/loops.list.query.json#/payload' }
+    ListLoopsResponse:
+      name: ListLoopsResponse
+      title: List loops response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_loops_response' }
+      examples:
+        - name: loops.list.response
+          payload: { $ref: './examples/loops.list.response.json#/payload' }
+    GetLoopQuery:
+      name: GetLoopQuery
+      title: Get a loop query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_loop_query' }
+      examples:
+        - name: loops.get.query
+          payload: { $ref: './examples/loops.get.query.json#/payload' }
+    GetLoopResponse:
+      name: GetLoopResponse
+      title: Get a loop response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_loop_response' }
+      examples:
+        - name: loops.get.response
+          payload: { $ref: './examples/loops.get.response.json#/payload' }
+    GetOperationQuery:
+      name: GetOperationQuery
+      title: Get an operation query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_operation_query' }
+      examples:
+        - name: operations.get.query
+          payload: { $ref: './examples/operations.get.query.json#/payload' }
+    GetOperationResponse:
+      name: GetOperationResponse
+      title: Get an operation response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/get_operation_response' }
+      examples:
+        - name: operations.get.response
+          summary: "The follow-up steer succeeded: the job was reopened with execution exec_42b. Operation status is not job status."
+          payload: { $ref: './examples/operations.get.response.json#/payload' }
+    JobCreated:
+      name: JobCreated
+      title: job.created
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/job_created_event' }
+      examples:
+        - name: job.created.event
+          payload: { $ref: './examples/job.created.event.json#/payload' }
+    JobCompleted:
+      name: JobCompleted
+      title: job.completed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/job_completed_event' }
+      examples:
+        - name: job.completed.event
+          payload: { $ref: './examples/job.completed.event.json#/payload' }
+    JobFailed:
+      name: JobFailed
+      title: job.failed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/job_failed_event' }
+      examples:
+        - name: job.failed.event
+          payload: { $ref: './examples/job.failed.event.json#/payload' }
+    JobCancelled:
+      name: JobCancelled
+      title: job.cancelled
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/job_cancelled_event' }
+      examples:
+        - name: job.cancelled.event
+          payload: { $ref: './examples/job.cancelled.event.json#/payload' }
+    ExecutionStarted:
+      name: ExecutionStarted
+      title: execution.started
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_started_event' }
+      examples:
+        - name: execution.started.event
+          payload: { $ref: './examples/execution.started.event.json#/payload' }
+    ExecutionProgressed:
+      name: ExecutionProgressed
+      title: execution.progressed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_progressed_event' }
+      examples:
+        - name: execution.progressed.event.branch-security
+          summary: "Parallel branch 1 of the review fan-out. Its sibling (branch 2) shares the path prefix and diverges only in the last element."
+          payload: { $ref: './examples/execution.progressed.event.branch-security.json#/payload' }
+        - name: execution.progressed.event.branch-bugs
+          summary: "Parallel branch 2: a sibling path of branch 1."
+          payload: { $ref: './examples/execution.progressed.event.branch-bugs.json#/payload' }
+        - name: execution.progressed.event.fan-in
+          summary: "Fan-in: the reranker joined both review branches. The causal path keeps one primary branch (the security branch, which finished last); the bugs branch dependency is recorded in `entered_from` and the execution records, not in the path."
+          payload: { $ref: './examples/execution.progressed.event.fan-in.json#/payload' }
+        - name: execution.progressed.event.attempt
+          summary: "GE evaluated the task result against the node's gates (pass) and took the join transition."
+          payload: { $ref: './examples/execution.progressed.event.attempt.json#/payload' }
+    ExecutionAwaitingApproval:
+      name: ExecutionAwaitingApproval
+      title: execution.awaiting_approval
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_awaiting_approval_event' }
+      examples:
+        - name: execution.awaiting_approval.event
+          payload: { $ref: './examples/execution.awaiting_approval.event.json#/payload' }
+    ExecutionPaused:
+      name: ExecutionPaused
+      title: execution.paused
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_paused_event' }
+      examples:
+        - name: execution.paused.event
+          summary: "Paused: no new steps are scheduled; the two running reviewers continue."
+          payload: { $ref: './examples/execution.paused.event.json#/payload' }
+    ExecutionResumed:
+      name: ExecutionResumed
+      title: execution.resumed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_resumed_event' }
+      examples:
+        - name: execution.resumed.event
+          payload: { $ref: './examples/execution.resumed.event.json#/payload' }
+    ExecutionCompleted:
+      name: ExecutionCompleted
+      title: execution.completed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_completed_event' }
+      examples:
+        - name: execution.completed.event
+          payload: { $ref: './examples/execution.completed.event.json#/payload' }
+    ExecutionFailed:
+      name: ExecutionFailed
+      title: execution.failed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_failed_event' }
+      examples:
+        - name: execution.failed.event
+          summary: "The execution failed. The steer operation that started it had already succeeded; the two are reported separately."
+          payload: { $ref: './examples/execution.failed.event.json#/payload' }
+    ExecutionCancelled:
+      name: ExecutionCancelled
+      title: execution.cancelled
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/execution_cancelled_event' }
+      examples:
+        - name: execution.cancelled.event
+          summary: "Cancelled as part of jobs.cancel, so `job_state` is cancelled. An execution cancelled any other way can leave the job open."
+          payload: { $ref: './examples/execution.cancelled.event.json#/payload' }
+    ApprovalRequested:
+      name: ApprovalRequested
+      title: approval.requested
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/approval_requested_event' }
+      examples:
+        - name: approval.requested.event
+          payload: { $ref: './examples/approval.requested.event.json#/payload' }
+    ApprovalResolved:
+      name: ApprovalResolved
+      title: approval.resolved
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/approval_resolved_event' }
+      examples:
+        - name: approval.resolved.event
+          payload: { $ref: './examples/approval.resolved.event.json#/payload' }
+    LoopApplied:
+      name: LoopApplied
+      title: loop.applied
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/loop_applied_event' }
+      examples:
+        - name: loop.applied.event
+          payload: { $ref: './examples/loop.applied.event.json#/payload' }
+    LoopPaused:
+      name: LoopPaused
+      title: loop.paused
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/loop_paused_event' }
+      examples:
+        - name: loop.paused.event
+          payload: { $ref: './examples/loop.paused.event.json#/payload' }
+    LoopResumed:
+      name: LoopResumed
+      title: loop.resumed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/loop_resumed_event' }
+      examples:
+        - name: loop.resumed.event
+          payload: { $ref: './examples/loop.resumed.event.json#/payload' }
+    LoopRemoved:
+      name: LoopRemoved
+      title: loop.removed
+      traits: [{ $ref: '#/components/messageTraits/eventHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/events.schema.json#/$defs/loop_removed_event' }
+      examples:
+        - name: loop.removed.event
+          summary: "Removing a loop leaves the jobs it created running."
+          payload: { $ref: './examples/loop.removed.event.json#/payload' }

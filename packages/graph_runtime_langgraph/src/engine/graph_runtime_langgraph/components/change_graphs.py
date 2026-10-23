@@ -3,7 +3,7 @@
 The public contract is creation inputs, never a stage to jump into.
 """
 from collections.abc import Mapping
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import json
 from typing import Any, cast
 
@@ -13,7 +13,9 @@ from langgraph_acp import ACPAgentRegistry
 
 from engine.domain import StepCompleted, ForgeMode, WorkspaceId, forge_mode
 from engine.graph_runtime.inputs import WorkflowInput, mode_input
-from engine.graph_runtime_langgraph import GraphWorkflow, State, TerminalMcpServer, graph_workflow
+from engine.graph_runtime_langgraph import (
+    CHEAPEST_TIER, DEFAULT_TIER, ELEVATED_TIER, GraphWorkflow, State, TerminalMcpServer, graph_workflow, on_runner,
+)
 from engine.graph_runtime_langgraph.components import (
     ACPNode, CICheck, REVIEW_FACETS, NameNode, RerankerNode, ReviewNode, WorkspaceNode, checkout,
 )
@@ -92,7 +94,7 @@ async def review_threads(state: Mapping[str, Any]) -> dict[str, object]:
     threads = json.loads(inputs.get('review_threads') or '[]')
     target = change_request(pr_url(state))
     if target and forge_mode(inputs) is ForgeMode.DISCONNECTED and not inputs.get('review_threads'):
-        message = 'unresolved threads are unavailable; supply -i review_threads=JSON or run engine connect github'
+        message = 'unresolved threads are unavailable; supply -i review_threads=JSON or run oe connect github'
         raise ValueError(message)
     if target and forge_mode(inputs) is ForgeMode.CONNECTED:
         source = current_execution().runtime.source_control
@@ -118,11 +120,13 @@ def review_data(state: Mapping[str, Any]) -> str:
 
 
 class RunnerInput:
+    model_tier = DEFAULT_TIER
+
     def _for_runner(self, runner: str) -> ACPNode:
-        node = cast(ACPNode, self)
-        return replace(node, agent=runner, mcp_server_bindings=tuple(
-            replace(binding, agent_id=runner) if isinstance(binding, TerminalMcpServer) else binding
-            for binding in node.mcp_server_bindings))
+        return on_runner(cast(ACPNode, self), runner, self._model_tier())
+
+    def _model_tier(self) -> str:
+        return self.model_tier
 
 
 class RunnerNode(RunnerInput, ACPNode):
@@ -132,6 +136,9 @@ class RunnerNode(RunnerInput, ACPNode):
 class FacetNode(RunnerInput, ReviewNode):
     graph_node_runner_input = 'review_runner'
 
+    def _model_tier(self) -> str:
+        return ELEVATED_TIER if self.facet == 'security' else DEFAULT_TIER
+
 
 class ReviewAgent(RunnerNode):
     graph_node_runner_input = 'review_runner'
@@ -139,6 +146,7 @@ class ReviewAgent(RunnerNode):
 
 class NamingNode(RunnerInput, NameNode):
     graph_node_runner_input = 'implementation_runner'
+    model_tier = CHEAPEST_TIER
 
 
 class RefuteNode(RunnerInput, RerankerNode):
@@ -249,8 +257,8 @@ def _workflow(builder: Any, name: str, runner: str, *inputs: WorkflowInput) -> G
         'review': 'Review an existing change, consolidate findings and report its impact.',
         'fix': 'Address unresolved review threads on an existing change.',
     }[name], inputs=(WorkflowInput('instruction', 'Instruction'), mode_input(),
-        WorkflowInput('implementation_runner', 'Implementation runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude')))),
-        WorkflowInput('review_runner', 'Review runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude')))), *inputs))
+        WorkflowInput('implementation_runner', 'Implementation runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude', 'opencode', 'round-robin', 'least-utilized')))),
+        WorkflowInput('review_runner', 'Review runner', default=runner, choices=tuple(dict.fromkeys((runner, 'codex', 'claude', 'opencode', 'round-robin', 'least-utilized')))), *inputs))
 
 
 def implement(components: Components) -> GraphWorkflow:

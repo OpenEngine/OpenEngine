@@ -20,16 +20,16 @@ test.describe(gettingStartedCategory, () => {
           // Playwright sets FORCE_COLOR in its workers, which colours argparse's help.
           const { FORCE_COLOR: _, ...env } = process.env
           const { stdout } = await run(engineBin, ["--help"], { env: { ...env, NO_COLOR: "1" } })
-          expect(stdout).toContain("usage: engine")
+          expect(stdout).toContain("usage: oe")
         })
 
         await test.step(
-          "OpenEngine has AI coding agents, such as Claude Code, work on your code for you, step by step, in the way you lay out. You use it by typing `engine` commands in a terminal: the window on your computer where you type commands.",
+          "OpenEngine has AI coding agents, such as Claude Code, work on your code for you, step by step, in the way you lay out. You use it by typing `oe` commands in a terminal: the window on your computer where you type commands.",
           async () => {},
         )
 
         await test.step(
-          "To follow these guides, you need OpenEngine installed. Open a terminal, type `engine --help` and press Enter. If you see a list of commands, you're ready. If you see *command not found*, install OpenEngine first, following the [Overview](/docs/).",
+          "To follow these guides, you need OpenEngine installed. Open a terminal, type `oe --help` and press Enter. If you see a list of commands, you're ready. If you see *command not found*, install OpenEngine first, following the [Overview](/docs/).",
           async () => {},
         )
 

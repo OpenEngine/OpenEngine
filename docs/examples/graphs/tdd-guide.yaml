@@ -1,7 +1,7 @@
 apiVersion: openengine.cc/v1
 kind: Graph
 name: tdd-guide
-description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them, then opens the pull request and waits for CI; a panel reviews the change for security, bugs, performance, conciseness, duplication and how its guides read, security findings count only once a test reproduces them, a reranker posts what matters on the pull request for another pass, and impact analysis posts its rating there. A person then approves it or sends it back with a note, and a comment on the pull request sends it back too.
+description: Work one issue test-first. One agent writes the failing tests and a fresh session makes them pass without weakening them, then opens the pull request and waits for CI; a panel reviews the change for security, bugs, performance, conciseness, duplication, how its guides read and whether the docs build, security findings count only once a test reproduces them, a reranker posts what matters on the pull request for another pass, and impact analysis posts its rating there. A person then approves it or sends it back with a note, and a comment on the pull request sends it back too.
 
 inputs:
   instruction:
@@ -10,10 +10,13 @@ inputs:
     description: The issue number to work; leave empty to pick the next unblocked issue in the milestone
     default: ""
   milestone:
-    description: The milestone to pick from when no issue is given
-    default: CLI e2e tests & generated guides
+    description: The milestone to pick from when no issue is given; empty means any open issue
+    default: ""
+  conventions:
+    description: "The repo's conventions file: setup, test and docs commands, guide-writing rules and commit types. Steps read it instead of discovering them; if it is missing, the run writes it first"
+    default: docs/tdd-conventions.md
   base:
-    description: "The branch to build on and open the pull request against, such as origin/agent/e2e-agent-mode; empty means main"
+    description: "The branch to build on and open the pull request against, such as origin/agent/my-feature; empty means main"
     default: ""
   runner:
     description: The runner that picks the issue and writes the tests
@@ -28,9 +31,13 @@ inputs:
     default: claude
     choices: [claude, codex, opencode, qwen, bazzite, coder]
   reviewer:
-    description: The runner that reviews the generated guide
+    description: "The runner that reviews the change: the review panel, security reproduction and impact analysis"
     default: claude
     choices: [claude, codex, opencode]
+  reranker:
+    description: "The runner that consolidates the review panel's findings and posts them on the pull request. It is a judgment call that must carry each finding's agent and facet through unchanged, so a stronger model than the implementer is the safer choice"
+    default: claude
+    choices: [claude, codex, opencode, qwen, bazzite, coder]
 
 # Names the run after the issue it picks, on the runner's cheapest model.
 naming:
@@ -49,9 +56,10 @@ plan:
 
       Issue given: "${inputs.issue}".
 
-      If an issue number is given, use it. Otherwise list the open issues in
-      the milestone "${inputs.milestone}" with
-      `gh issue list --milestone "${inputs.milestone}" --state open --json number,title,body`
+      If an issue number is given, use it. Otherwise list the open issues
+      (in the milestone "${inputs.milestone}" when one is named) with
+      `gh issue list --state open --json number,title,body`, adding
+      `--milestone "${inputs.milestone}"` when a milestone is named,
       and pick the lowest-numbered one that:
       - has every issue it "Depends on" closed (check with `gh issue view N --json state`),
         or already done in this checkout: on a branch that hasn't landed yet, a
@@ -60,17 +68,49 @@ plan:
         and no pushed `agent/issue-N-*` branch (`git ls-remote --heads origin "agent/issue-N-*"`).
 
       Read the chosen issue in full with `gh issue view N --comments`.
-      If nothing qualifies, set found to no and every other output to "none".
+      If nothing qualifies, set found to false and omit the other outputs.
+      Otherwise, set found to true and report all the other outputs.
 
       ${instruction}
-    # Every output is required text: complete_step accepts nothing else yet.
     outputs:
       found: {type: string, enum: ["yes", "no"], required: true, description: whether there is an issue to work}
       issue: {type: string, required: true, description: the issue number}
       title: {type: string, required: true, description: the issue title}
       brief: {type: string, required: true, description: "the issue's scope and acceptance criteria, with any decisions from its comments"}
       branch: {type: string, required: true, description: "agent/issue-N-short-slug, the branch the pull request will use"}
-      guide: {type: string, enum: ["yes", "no"], required: true, description: whether the issue adds or changes a guide spec under e2e/tests}
+
+  conventions:
+    name: Conventions
+    agent: {same: pick}
+    tools: [git_subcommand]
+    prompt: |
+      Make sure the repo's conventions file, `${inputs.conventions}`, exists.
+      Later steps read it instead of working out how the repo is set up.
+
+      If the file exists, change nothing and report status "exists".
+
+      If it is missing, write it from what the repo itself says: AGENTS.md,
+      CLAUDE.md, README, CONTRIBUTING, package and task scripts (`package.json`,
+      `pyproject.toml`, `Makefile`, `justfile`), and the CI workflows. Use these
+      sections, each short and exact, with commands to run, paths and rules:
+
+      - Setup: what a fresh checkout needs before anything runs.
+      - Tests: the unit and end-to-end commands, and where tests live.
+      - Guides: where user-facing guides come from, their writing rules, how
+        to generate and restore them; "None" if the repo has none.
+      - Docs site build: the generator and build steps CI runs, which paths
+        trigger them, and how to restore the output; "None" if there is none.
+      - Security reproduction tests: the kind of test that shows a problem
+        through what a user can reach.
+      - Other: commit and pull request title format, and rules the repo states
+        for git, branches or pull requests.
+
+      Record only what the repo says or what you ran and saw work. Write
+      "unknown" rather than guess a command. Commit the file with
+      git_subcommand as `docs: add conventions for agent runs` and report status
+      "created"; a person reviews it with the pull request.
+    outputs:
+      status: {type: string, enum: [exists, created], required: true, description: whether the conventions file was already there or this step wrote it}
 
 implementation:
   tdd:
@@ -81,28 +121,22 @@ implementation:
       Write the tests for issue #${outputs.pick.issue}, ${outputs.pick.title}, before any
       implementation exists. Change only test files and test fixtures.
 
-      This checkout is fresh. Prepare it first, for every step after this one too:
-      `uv sync --all-packages` and `npm ci --prefix e2e`. Read `e2e/README.md`
-      before writing a spec under `e2e/`: specs check what happened, not what an
-      agent said; example graphs stay tiny; and anything that needs precise
-      timing is scripted with `engine.script(...)`. A guide spec's titles and
-      steps are a user guide for someone new to OpenEngine and not deeply
-      technical: write them by `e2e/WRITING.md`, one task per guide, in plain
-      words, with its glossary's explanations.
+      Read the repo's conventions in `${inputs.conventions}` first; every step
+      does, and the Conventions step has made sure it exists. This checkout is fresh: run its Setup section before anything else,
+      for every step after this one too. Write the tests the way its Tests
+      section says, and any guide the way its Guides section says.
 
       ${outputs.pick.brief}
 
       ${instruction}
 
-      Cover every acceptance criterion in the issue. For a guide spec under
-      `e2e/tests`, the test is the guide: give each `test.step` a title that
-      tells a reader what to do ("Run `engine graphs list`."), keep setup and
-      cleanup in `[nodoc]` steps, and use `screenshot(testInfo, locator, {annotation})`
-      where a reader needs to see the screen.
+      Cover every acceptance criterion in the issue. Where the conventions
+      generate a guide from a test, the test is the guide: write its titles and
+      steps for the guide's reader, by the Guides section.
 
       Run the new tests and confirm they fail because the behaviour is missing,
       not because of a typo or a broken import. Commit them with git_subcommand
-      as a Conventional Commit (`test(...): ...`).
+      as a Conventional Commit, using the test commit type from the conventions.
     outputs:
       tests: {type: string, required: true, description: "the test files and test names written, one per line"}
       failure: {type: string, required: true, description: "why the tests fail now, from their output"}
@@ -140,13 +174,14 @@ implementation:
       make, say why with resolve=false so the thread stays open. The next
       step pushes your commits; don't push them yourself.
 
-      Run the tests touched by this change, and the e2e suite (`npm test` in `e2e/`)
-      when it exists. Commit with git_subcommand as Conventional Commits.
+      Read `${inputs.conventions}` and run the tests it names for this change,
+      including its full suite when it has one. Commit with git_subcommand as
+      Conventional Commits.
 
-      The site's guides are generated from the e2e specs and committed. If this
-      change touches `e2e/tests`, run `npm run doc` in `e2e/` (scripted agents,
-      the default) and commit everything it changed under `site/docs/guides/`
-      with the spec, as `docs(site): ...`. A reviewer reads those pages next.
+      If the conventions say guides are generated and committed, and this
+      change touches what they are generated from, regenerate them as its Guides
+      section says and commit everything that changed with the spec. A reviewer
+      reads those pages next.
 
       ${instruction}
 
@@ -195,26 +230,42 @@ review:
           name: Guides
           focus: |
             Whether the user-facing guides this change adds or changes read well
-            for their reader and are current. If it touches `e2e/tests`, read
-            `e2e/WRITING.md`, then every page the change adds or changes under
-            `site/docs/guides/`, each screenshot included, as that reader:
-            someone new to OpenEngine and not deeply technical. Flag anything
-            that breaks WRITING.md: a page that isn't one task in the reader's
-            words or doesn't say why before how; jargon, or an OpenEngine word
-            left unexplained or explained differently from its glossary; a
-            command with no screenshot or a label that doesn't say what it means;
-            anything that sounds like a test or leaks setup that belongs in a
-            `[nodoc]` step. Also flag an annotation on the wrong row, an
-            unreadable, cropped or mid-spinner screenshot, and machine-specific
-            paths, user names, tokens or ports. Then
-            run `npm run doc` in `e2e/`: if `git status --porcelain site/docs/guides`
-            isn't empty the committed guides are stale, which is a finding, and
-            put the directory back with `git restore --source=HEAD -- site/docs/guides`
-            and `git clean -fdq site/docs/guides`. If the change touches no guide,
-            there is nothing to find.
+            for their reader and are current. Read the Guides section of
+            the conventions file. If the change adds or changes a guide, or
+            what one is generated from, read the writing rules it names, then
+            every guide page the change adds or changes, each screenshot
+            included, as that guide's reader. Flag anything that breaks those
+            rules, and by default: a page that isn't one task in the reader's
+            words or doesn't say why before how; jargon, or a project term left
+            unexplained or explained differently from its glossary; a command
+            with no screenshot or output, or a label that doesn't say what it
+            means; anything that sounds like a test or leaks setup the reader
+            doesn't need. Also flag an annotation on the wrong row, an
+            unreadable, cropped or mid-load screenshot, and machine-specific
+            paths, user names, tokens or ports. Then run the section's generate
+            command: if `git status --porcelain` shows changes under the guides
+            directory the committed guides are stale, which is a finding. Put
+            the directory back with the section's restore commands afterwards;
+            that is the one edit you may make. If the conventions have no guides
+            or the change touches none, there is nothing to find here.
+      - facet:
+          id: docs-build
+          name: Docs build
+          focus: |
+            Whether the documentation site still builds. Read the Docs site
+            build section of the conventions file; if it says None, or the
+            change touches none of the sources it lists, there is nothing to find
+            here. Otherwise run its steps in order: if a generator step leaves
+            changes in `git status --porcelain`, the committed generated docs are
+            stale, which is a finding. A failed build is a finding: name the page
+            and the error. Put the files back with the section's restore
+            commands afterwards, and leave build output uncommitted; that is the
+            one edit you may make.
     prompt: |
       Review the change this run made for issue #${outputs.pick.issue},
       ${outputs.pick.title}, focusing only on **${item.facet.name}**.
+
+      The repo's conventions are in `${inputs.conventions}`.
 
       ${item.facet.focus}
 
@@ -224,7 +275,8 @@ review:
       ${outputs.pick.brief}
 
       Read the changed code and the code around it before judging. Inspect
-      only: do not edit or commit anything. Each finding names the file and
+      only: do not edit or commit anything, except to put generated files back
+      where your focus says to. Each finding names the file and
       line to change.
     outputs:
       findings: {type: findings, required: true}
@@ -244,15 +296,14 @@ review:
       If there are none, change nothing and report "none" for both outputs.
 
       For each security finding, write a test that shows the problem through
-      what a user or attacker can actually reach: an e2e spec under `e2e/tests`
-      driving the real CLI and daemon (read `e2e/README.md`; tag it `@skip-docs`
-      so it isn't published as a guide), or a pytest test when the problem
-      can't be reached from there. Run it. It reproduces the finding only if it
+      what a user or attacker can actually reach, in the kind of test the
+      Security reproduction tests section of `${inputs.conventions}` names,
+      and so it isn't published as a guide. Run it. It reproduces the finding only if it
       fails because of the problem the finding describes, not because of a
       typo, a broken import or a missing fixture.
 
       Commit each test that reproduces its finding with git_subcommand as
-      `test(security): ...`; the implementer makes it pass next. Delete each
+      the conventions' security test commit; the implementer makes it pass next. Delete each
       test that doesn't, and don't commit it. Don't change anything but tests.
     outputs:
       reproduced: {type: string, required: true, description: "each security finding a test reproduces, with the test's file and name, one per line; or none"}
@@ -260,7 +311,7 @@ review:
 
   reranker:
     name: Consolidate
-    agent: {same: implement}
+    agent: ${inputs.reranker}
     tools: [view_change_request, add_comment]
     prompt: |
       ${size(outputs.reviewers)} reviewers examined the same change, each from one
@@ -353,9 +404,12 @@ review:
 flow:
   - from: pick
     route:
-      - {when: "outputs.pick.found == 'yes' && inputs.tests_ready == 'yes'", to: implement}
-      - {when: "outputs.pick.found == 'yes'", to: tdd}
+      - {when: "outputs.pick.found == 'yes'", to: conventions}
       - {to: end}
+  - from: conventions
+    route:
+      - {when: "inputs.tests_ready == 'yes'", to: implement}
+      - {to: tdd}
   - from: reranker
     route:
       - {when: "size(outputs.reranker.findings) > 0 && visits.implement < 3", to: implement}

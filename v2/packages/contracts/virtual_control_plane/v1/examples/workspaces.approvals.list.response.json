@@ -1,0 +1,45 @@
+{
+  "summary": "A pending approval on generation 2 and an expired one from generation 1.",
+  "message": "ListApprovalsResponse",
+  "in_reply_to": "oe.v1.vcp.query.workspaces.ws_a1.approvals.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "approval_id": "rtappr_a2",
+          "binding": {
+            "workspace_id": "ws_a1",
+            "session_id": "session_a1",
+            "attempt_id": "attempt_a1",
+            "runtime_generation": 2
+          },
+          "state": "pending",
+          "request": {
+            "kind": "command",
+            "summary": "git push origin agent/fix-ssrf",
+            "details": { "command": "git push origin agent/fix-ssrf" }
+          },
+          "provider_handle": { "provider": "claude", "handle": "perm_req_7f3a" },
+          "requested_at": "2026-10-19T22:06:00Z",
+          "expires_at": "2026-10-20T22:06:00Z"
+        },
+        {
+          "approval_id": "rtappr_a1",
+          "binding": {
+            "workspace_id": "ws_a1",
+            "session_id": "session_a1",
+            "attempt_id": "attempt_a1",
+            "runtime_generation": 1
+          },
+          "state": "expired",
+          "request": { "kind": "network", "summary": "Fetch https://pypi.org/simple/requests/" },
+          "provider_handle": { "provider": "claude", "handle": "perm_req_19c0" },
+          "requested_at": "2026-10-19T21:40:00Z",
+          "expiry_reason": "runtime_generation_changed"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

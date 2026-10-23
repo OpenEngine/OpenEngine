@@ -1,0 +1,21 @@
+apiVersion: openengine.cc/v1alpha1
+kind: Connection
+metadata:
+  name: github-openengine
+  labels:
+    provider: github
+spec:
+  provider: github
+  displayName: OpenEngine on GitHub
+  externalAccount:
+    kind: Installation
+    id: "55012231"
+    name: spiralsoft
+  credentialRef:
+    store: vault
+    key: openengine/github/spiralsoft-app
+  scope:
+    mode: Selected
+    resources: [spiralsoft/openengine]
+  settings:
+    default_branch: main

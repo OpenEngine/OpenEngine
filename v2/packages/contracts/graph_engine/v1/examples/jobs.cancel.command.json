@@ -1,0 +1,10 @@
+{
+  "summary": "Cancel the job and, explicitly, its descendants.",
+  "message": "CancelJobCommand",
+  "subject": "oe.v1.ge.control.jobs.job_42.cancel",
+  "payload": {
+    "command_id": "cmd_cancel_42",
+    "causal_path": ["cmd_cancel_42"],
+    "payload": { "scope": "job_and_descendants", "reason": "Superseded by job_57" }
+  }
+}

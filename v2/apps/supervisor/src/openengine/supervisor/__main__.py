@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from openengine.supervisor.supervisor import Settings, run
+from openengine.telemetry import configure
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,16 +21,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
-    return run(
-        Settings(
-            state_directory=arguments.state_dir,
-            cache_directory=arguments.cache_dir,
-            host=arguments.host,
-            nats_port=arguments.nats_port,
-            nats_monitor_port=arguments.nats_monitor_port,
-            nats_server=arguments.nats_server,
+    telemetry = configure("supervisor")
+    try:
+        return run(
+            Settings(
+                state_directory=arguments.state_dir,
+                cache_directory=arguments.cache_dir,
+                host=arguments.host,
+                nats_port=arguments.nats_port,
+                nats_monitor_port=arguments.nats_monitor_port,
+                nats_server=arguments.nats_server,
+            )
         )
-    )
+    finally:
+        telemetry.shutdown()
 
 
 if __name__ == "__main__":

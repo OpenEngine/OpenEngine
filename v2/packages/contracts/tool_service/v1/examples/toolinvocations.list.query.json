@@ -1,0 +1,11 @@
+{
+  "message": "ListToolInvocationsQuery",
+  "subject": "oe.v1.toolinvocations.list",
+  "payload": {
+    "params": {
+      "namespace": "default",
+      "workspaceName": "review-job-88",
+      "stepAttemptId": "stepa_88_review_1"
+    }
+  }
+}

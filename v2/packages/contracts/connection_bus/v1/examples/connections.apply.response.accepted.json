@@ -1,0 +1,11 @@
+{
+  "summary": "Accepted: recorded durably, not yet complete. connection.applied announces completion.",
+  "message": "ApplyConnectionResponse",
+  "in_reply_to": "oe.v1.cxn.control.connections.apply",
+  "payload": {
+    "command_id": "cmd_01JAX4ADDGH",
+    "status": "accepted",
+    "operation_id": "op_01JAX4ADDGH",
+    "resource_id": "conn_acme_gh"
+  }
+}

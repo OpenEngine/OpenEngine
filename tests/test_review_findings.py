@@ -61,16 +61,16 @@ def test_review_rejects_invalid_output(value):
 
 
 @pytest.mark.parametrize("runner,reviewer,default,security", [
-    ("codex", "claude", "sonnet", "opus"),
-    ("claude", "codex", "gpt-5.6-terra", "gpt-5.6-sol"),
+    ("codex", "claude", None, None),
+    ("claude", "codex", None, None),
 ])
-def test_cross_provider_and_model_tiers(runner, reviewer, default, security):
+def test_default_reviews_use_provider_model(runner, reviewer, default, security):
     nodes = nodes_of(definition_module().pipeline(runner))
     assert nodes["implementation"].agent == runner
     for facet in ("security", "bugs", "performance", "conciseness", "dryness"):
         node = nodes[f"review-{facet}"]
         assert node.agent == reviewer
-        assert node.session_config["model"] == (security if facet == "security" else default)
+        assert (node.session_config or {}).get("model") == (security if facet == "security" else default)
 
 
 def test_parallel_findings_reach_reranker_once_with_deterministic_lineage():

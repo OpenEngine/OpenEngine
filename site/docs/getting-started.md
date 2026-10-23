@@ -1,5 +1,5 @@
 ---
-title: Getting started with engine go
+title: Getting started with oe go
 sidebar_label: Getting started guide
 ---
 

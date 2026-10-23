@@ -1,0 +1,10 @@
+{
+  "message": "ResumeLoopResponse",
+  "in_reply_to": "oe.v1.ge.control.loops.loop_nightly.resume",
+  "payload": {
+    "command_id": "cmd_resumeloop",
+    "status": "accepted",
+    "operation_id": "op_resumeloop",
+    "resource_id": "loop_nightly"
+  }
+}

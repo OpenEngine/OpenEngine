@@ -1,0 +1,28 @@
+{
+  "message": "ExecutionStarted",
+  "subject": "oe.v1.ge.events.jobs.job_42.execution.started",
+  "headers": { "Nats-Msg-Id": "evt_exec42a_started" },
+  "payload": {
+    "event_id": "evt_exec42a_started",
+    "event_type": "execution.started",
+    "occurred_at": "2026-10-19T21:30:02Z",
+    "producer": "ge",
+    "causal_path": ["gh-conn_acme_gh-dlv_4411", "cmd_submit_42", "evt_exec42a_started"],
+    "resources": { "job_id": "job_42", "execution_id": "exec_42a" },
+    "resource_version": 2,
+    "payload": {
+      "operation": { "operation_id": "op_submit_42", "command_id": "cmd_submit_42" },
+      "execution": {
+        "execution_id": "exec_42a",
+        "job_id": "job_42",
+        "graph": { "graph_id": "graph_review", "revision": 3 },
+        "inputs": { "instruction": "Address the security review" },
+        "status": "running",
+        "active_step_instance_ids": ["stepi_42_ws"],
+        "created_at": "2026-10-19T21:30:02Z",
+        "updated_at": "2026-10-19T21:30:02Z",
+        "started_at": "2026-10-19T21:30:02Z"
+      }
+    }
+  }
+}

@@ -1,0 +1,175 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Virtual Control Plane operations",
+  "description": "Operation snapshots returned by `oe.v1.vcp.query.operations.{operation_id}.get`. Operation status is separate from workspace and task state: a succeeded `workspaces.execute` operation means the attempt started, and a failed operation means the command could not be carried out.",
+  "$defs": {
+    "result_workspaces_apply": {
+      "type": "object",
+      "description": "For an update of a workspace that already has a runtime, the current one.",
+      "required": ["workspace_id", "created", "runtime_id", "runtime_generation"],
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id" },
+        "created": { "type": "boolean", "description": "True when the apply created the workspace." },
+        "runtime_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        }
+      }
+    },
+    "result_workspaces_ensure": {
+      "type": "object",
+      "required": ["runtime_id", "runtime_generation", "restored"],
+      "additionalProperties": false,
+      "properties": {
+        "runtime_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "restored": { "type": "boolean" }
+      }
+    },
+    "result_workspaces_execute": {
+      "description": "The attempt started. How the task ends is the attempt's state, reported by `task.*` events, not this operation.",
+      "type": "object",
+      "required": ["attempt_id", "session_id", "runtime_generation", "restored"],
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "restored": { "type": "boolean" }
+      }
+    },
+    "result_workspaces_steer": {
+      "type": "object",
+      "required": ["session_id", "runtime_generation", "restored"],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/session_id" },
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "restored": { "type": "boolean" }
+      }
+    },
+    "result_workspaces_cancel": {
+      "type": "object",
+      "required": ["attempt_id", "final_state"],
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+        "final_state": {
+          "description": "The attempt's state when cancellation finished. An attempt that ended before the cancel reached it keeps its own outcome.",
+          "type": "string",
+          "enum": ["cancelled", "completed", "failed"]
+        }
+      }
+    },
+    "result_workspaces_checkpoint": {
+      "type": "object",
+      "required": ["checkpoint"],
+      "additionalProperties": false,
+      "properties": { "checkpoint": { "$ref": "workspace.schema.json#/$defs/checkpoint" } }
+    },
+    "result_workspaces_suspend": {
+      "type": "object",
+      "required": ["cancelled_attempt_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": { "$ref": "workspace.schema.json#/$defs/checkpoint" },
+        "cancelled_attempt_ids": {
+          "type": "array",
+          "items": { "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "result_workspaces_destroy": {
+      "type": "object",
+      "required": ["retention"],
+      "additionalProperties": false,
+      "properties": { "retention": { "$ref": "workspace.schema.json#/$defs/retention" } }
+    },
+    "result_approvals_decide": {
+      "type": "object",
+      "required": ["approval_id", "decision", "runtime_generation"],
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_approval_id"
+        },
+        "decision": { "$ref": "approval.schema.json#/$defs/decision" },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        }
+      }
+    },
+    "operation": {
+      "description": "A VCP operation snapshot. `operation` names the command and fixes the shape of `result`.",
+      "allOf": [
+        { "$ref": "../../../common/v1/operation.schema.json" },
+        {
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "workspaces.apply",
+                "workspaces.ensure",
+                "workspaces.execute",
+                "workspaces.steer",
+                "workspaces.cancel",
+                "workspaces.checkpoint",
+                "workspaces.suspend",
+                "workspaces.destroy",
+                "approvals.decide"
+              ]
+            },
+            "resources": { "$ref": "workspace.schema.json#/$defs/vcp_resources" }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.apply" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_workspaces_apply" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.ensure" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_workspaces_ensure" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.execute" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_workspaces_execute" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.steer" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_workspaces_steer" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.cancel" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_workspaces_cancel" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.checkpoint" } } },
+          "then": {
+            "properties": { "result": { "$ref": "#/$defs/result_workspaces_checkpoint" } }
+          }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.suspend" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_workspaces_suspend" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "workspaces.destroy" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_workspaces_destroy" } } }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "approvals.decide" } } },
+          "then": { "properties": { "result": { "$ref": "#/$defs/result_approvals_decide" } } }
+        }
+      ]
+    }
+  }
+}

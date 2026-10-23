@@ -1,0 +1,18 @@
+{
+  "message": "ExecutionResumed",
+  "subject": "oe.v1.ge.events.jobs.job_42.execution.resumed",
+  "headers": { "Nats-Msg-Id": "evt_42_resumed" },
+  "payload": {
+    "event_id": "evt_42_resumed",
+    "event_type": "execution.resumed",
+    "occurred_at": "2026-10-19T22:20:00Z",
+    "producer": "ge",
+    "causal_path": ["cmd_resume_42b", "evt_42_resumed"],
+    "resources": { "job_id": "job_42", "execution_id": "exec_42a" },
+    "resource_version": 10,
+    "payload": {
+      "operation": { "operation_id": "op_resume_42b", "command_id": "cmd_resume_42b" },
+      "pending_approval_ids": []
+    }
+  }
+}

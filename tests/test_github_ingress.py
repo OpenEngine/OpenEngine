@@ -14,6 +14,7 @@ import pytest
 
 from engine.apps.web.github_ingress import (
     GithubIngress,
+    ci_from_payload,
     comment_from_payload,
     merge_from_payload,
     verify_signature,
@@ -1032,3 +1033,47 @@ def test_comment_webhook_resolves_login(event, author, expected):
     assert response.status_code == 200
     assert len(handled) == expected
     lookup.assert_awaited_once_with("acme/api")
+
+
+# --- CI waking a waiting step ------------------------------------------------
+
+
+@pytest.mark.parametrize(("event", "payload"), [
+    ("check_suite", {"action": "completed", "check_suite": {"head_sha": "abc"}}),
+    ("check_run", {"action": "completed", "check_run": {"head_sha": "abc"}}),
+    ("status", {"state": "failure", "sha": "abc"}),
+])
+def test_settled_ci_wakes_its_commit(event, payload) -> None:
+    woken = []
+    ingress = GithubIngress(repository="acme/api", handle_ci=lambda ci: woken.append(ci) or 1)
+    assert ingress.accept(event, {**payload, "repository": {"full_name": "Acme/API"}})
+    assert [(ci.repository, ci.sha) for ci in woken] == [("Acme/API", "abc")]
+
+
+def test_a_check_names_the_pull_requests_its_commit_heads() -> None:
+    payload = {"action": "completed", "repository": {"full_name": "acme/api"},
+               "check_suite": {"head_sha": "abc", "pull_requests": [{"number": 7}, {"url": "x"}]}}
+    ci = ci_from_payload("check_suite", payload)
+    assert ci is not None and ci.pull_requests == (7,)
+
+
+@pytest.mark.parametrize(("event", "payload"), [
+    ("check_suite", {"action": "requested", "check_suite": {"head_sha": "abc"}}),
+    ("check_run", {"action": "created", "check_run": {"head_sha": "abc"}}),
+    ("status", {"state": "pending", "sha": "abc"}),
+    ("check_suite", {"action": "completed", "check_suite": {}}),
+])
+def test_unsettled_ci_is_not_read(event, payload) -> None:
+    assert ci_from_payload(event, {**payload, "repository": {"full_name": "acme/api"}}) is None
+
+
+@pytest.mark.parametrize("repository", ["acme/api", "other/repo"])
+def test_ci_nobody_waits_on_is_acknowledged(repository) -> None:
+    woken = []
+    ingress = GithubIngress(repository="acme/api", handle_ci=lambda ci: woken.append(ci) or 0)
+    payload = {"action": "completed", "check_suite": {"head_sha": "abc"},
+               "repository": {"full_name": repository}}
+    assert ingress.accept("check_suite", payload)
+    assert len(woken) == (repository == "acme/api")
+    # Nor does an unwired deployment refuse it.
+    assert GithubIngress(repository="acme/api").accept("check_suite", payload)

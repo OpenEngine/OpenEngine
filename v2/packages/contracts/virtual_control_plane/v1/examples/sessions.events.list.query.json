@@ -1,0 +1,5 @@
+{
+  "message": "ListSessionEventsQuery",
+  "subject": "oe.v1.vcp.query.sessions.session_a1.events.list",
+  "payload": { "params": { "limit": 3 } }
+}

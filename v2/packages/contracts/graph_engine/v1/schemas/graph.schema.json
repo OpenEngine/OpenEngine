@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Graphs",
+  "description": "Registered graphs and their immutable revisions. A graph is applied as a Graph resource (`apiVersion: openengine.cc/v1alpha1`, `kind: Graph`; see `resources/graph.schema.yaml`) or as a Python LangGraph module exporting `workflow`. GE keeps what was applied verbatim.",
+  "$defs": {
+    "graph_name": {
+      "description": "Registry name of a graph, unique per GE instance.",
+      "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+    },
+    "graph_format": {
+      "description": "How the revision was applied. `resource`: a Graph resource, kept as the JSON that was applied. `python`: a Python LangGraph module, which executes on the backend and may be refused with UNSUPPORTED_CAPABILITY where Python graphs are disabled.",
+      "type": "string",
+      "enum": ["resource", "python"]
+    },
+    "graph_source": {
+      "description": "What was applied, verbatim: the Graph resource as JSON, or the Python source. At most 1 MiB.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1048576
+    },
+    "revision": {
+      "description": "Immutable revision number of a graph, starting at 1.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "graph_ref": {
+      "description": "An exact graph revision.",
+      "type": "object",
+      "required": ["graph_id", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+        "revision": { "$ref": "#/$defs/revision" }
+      }
+    },
+    "graph_selector": {
+      "description": "A graph, optionally pinned to a revision. Without `revision`, the latest revision at acceptance is used and recorded.",
+      "type": "object",
+      "required": ["graph_id"],
+      "additionalProperties": false,
+      "properties": {
+        "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+        "revision": { "$ref": "#/$defs/revision" }
+      }
+    },
+    "input_declaration": {
+      "description": "One input the revision declares.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "boolean", "default": false },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "graph": {
+      "description": "A registered graph.",
+      "type": "object",
+      "required": ["graph_id", "name", "latest_revision", "created_at", "updated_at"],
+      "additionalProperties": false,
+      "properties": {
+        "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+        "name": { "$ref": "#/$defs/graph_name" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "latest_revision": { "$ref": "#/$defs/revision" },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" },
+        "updated_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    },
+    "graph_revision": {
+      "description": "One immutable revision. `source` is omitted when the query asked for `include_source: false`.",
+      "type": "object",
+      "required": [
+        "graph_id",
+        "revision",
+        "format",
+        "source_sha256",
+        "inputs",
+        "nodes",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "format": { "$ref": "#/$defs/graph_format" },
+        "source": { "$ref": "#/$defs/graph_source" },
+        "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "inputs": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$" },
+          "additionalProperties": { "$ref": "#/$defs/input_declaration" }
+        },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "execution.schema.json#/$defs/node_id" },
+          "uniqueItems": true,
+          "description": "Node IDs the revision declares."
+        },
+        "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
+      }
+    }
+  }
+}

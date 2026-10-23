@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Operation snapshot",
+  "description": "Durable record of an accepted command's progress. Operation status is separate from the status of the job, task or workspace the operation acts on: a `succeeded` cancel operation means cancellation was carried out, not that anything succeeded. `operation` names the command (such as `jobs.cancel`) and discriminates `result`; service schemas narrow `result` per operation.",
+  "type": "object",
+  "required": [
+    "operation_id",
+    "command_id",
+    "operation",
+    "status",
+    "resources",
+    "created_at",
+    "updated_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "operation_id": { "$ref": "types.schema.json#/$defs/operation_id" },
+    "command_id": { "$ref": "types.schema.json#/$defs/command_id" },
+    "operation": {
+      "description": "The control operation, as the subject names it without the target ID, such as `jobs.submit` or `workspaces.execute`.",
+      "type": "string",
+      "pattern": "^[a-z][a-z_]*(\\.[a-z][a-z_]*)+$"
+    },
+    "status": { "$ref": "#/$defs/status" },
+    "resources": { "$ref": "types.schema.json#/$defs/resource_refs" },
+    "created_at": { "$ref": "types.schema.json#/$defs/utc_timestamp" },
+    "updated_at": { "$ref": "types.schema.json#/$defs/utc_timestamp" },
+    "result": { "type": "object", "description": "Typed result; present only when `succeeded`." },
+    "error": { "$ref": "error.schema.json" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "failed" } } },
+      "then": { "required": ["error"] },
+      "else": { "not": { "required": ["error"] } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "succeeded" } } },
+      "else": { "not": { "required": ["result"] } }
+    }
+  ],
+  "$defs": {
+    "status": {
+      "description": "pending: recorded, not started. running: in progress. succeeded / failed / cancelled: terminal.",
+      "type": "string",
+      "enum": ["pending", "running", "succeeded", "failed", "cancelled"]
+    }
+  }
+}
