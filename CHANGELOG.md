@@ -9,6 +9,32 @@
   still load with deprecation warnings and will be removed in the next release.
   Legacy string checkout paths remain accepted silently.
 
+## [1.11.0](https://github.com/OpenEngine/OpenEngine/compare/v1.10.0...v1.11.0) (2026-10-23)
+
+
+### Features
+
+* **contracts:** tool service contract, and apply resources across services ([#1013](https://github.com/OpenEngine/OpenEngine/issues/1013)) ([96b0ff1](https://github.com/OpenEngine/OpenEngine/commit/96b0ff1d27129e33e7bf282a2d621d4f8c0b828f))
+* **graph:** make tdd-guide's reranker runner an input ([#1107](https://github.com/OpenEngine/OpenEngine/issues/1107)) ([ce5f77a](https://github.com/OpenEngine/OpenEngine/commit/ce5f77af07a89bbfdd53b086d8ea3309703eeb13))
+* **graph:** wake the ci step from GitHub CI webhooks instead of polling ([#1031](https://github.com/OpenEngine/OpenEngine/issues/1031)) ([2d3c553](https://github.com/OpenEngine/OpenEngine/commit/2d3c553c12aa00d8d004ec5f984dbcdf7564aaf9))
+* **v2-cli:** validate Graph resources and print the graph specification ([#1135](https://github.com/OpenEngine/OpenEngine/issues/1135)) ([9690ed7](https://github.com/OpenEngine/OpenEngine/commit/9690ed749f03fd2fd1faa91473212b0df605c4a7))
+* **v2:** serve GE requests through NATS and supervise its lifecycle ([#1130](https://github.com/OpenEngine/OpenEngine/issues/1130)) ([b86f3a4](https://github.com/OpenEngine/OpenEngine/commit/b86f3a4027b2b6e3887d15b4331336474101d018))
+* **v2:** shared logging and tracing for every service ([#1108](https://github.com/OpenEngine/OpenEngine/issues/1108)) ([806a86a](https://github.com/OpenEngine/OpenEngine/commit/806a86a7d587839b7091a99a9b39103fc5626610))
+
+
+### Bug Fixes
+
+* **contracts:** use one API group and version for every resource ([#1043](https://github.com/OpenEngine/OpenEngine/issues/1043)) ([9a4fe85](https://github.com/OpenEngine/OpenEngine/commit/9a4fe859316102a734f5dc8653c89d403b332db9))
+* make starter runs work with a single usable coding agent ([#1029](https://github.com/OpenEngine/OpenEngine/issues/1029)) ([d192b56](https://github.com/OpenEngine/OpenEngine/commit/d192b56d3d5a9e5926b4232f383e1ca5870008d8))
+* **site:** use oe command in landing page install snippet and hero image ([#1109](https://github.com/OpenEngine/OpenEngine/issues/1109)) ([f3915eb](https://github.com/OpenEngine/OpenEngine/commit/f3915ebfeb7b0a611cd9d628cc48ece3a2ef3495))
+* **web:** cap the conversation header title at three lines ([#1127](https://github.com/OpenEngine/OpenEngine/issues/1127)) ([2fefbf8](https://github.com/OpenEngine/OpenEngine/commit/2fefbf812342d2daa89d930a04668cd575ce2772))
+
+
+### Documentation
+
+* **plans:** add the true end-to-end benchmark plan ([#1131](https://github.com/OpenEngine/OpenEngine/issues/1131)) ([6df2d91](https://github.com/OpenEngine/OpenEngine/commit/6df2d91a43841ee72e8392cab6f0abb996b35a2e))
+* restore README examples and use `oe` in the blog, quickstart and specs ([#1026](https://github.com/OpenEngine/OpenEngine/issues/1026)) ([fe7218b](https://github.com/OpenEngine/OpenEngine/commit/fe7218b9cc21d8afa6bd3f41d390279459a8f00b))
+
 ## [1.10.0](https://github.com/OpenEngine/OpenEngine/compare/v1.9.1...v1.10.0) (2026-10-22)
 
 
