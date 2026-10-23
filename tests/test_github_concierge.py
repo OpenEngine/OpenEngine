@@ -1713,6 +1713,8 @@ def _review_catalog():
             WorkflowInput("ref", "Ref"), WorkflowInput("pr_url", "Pull request"),
             WorkflowInput("branch", "Branch"), WorkflowInput("publish", "Publish"),
             WorkflowInput("auto_approve_green", "Approve Green"),
+            WorkflowInput("review_requester", "Review requester"),
+            WorkflowInput("review_requester_id", "Review requester id"),
         ),
     ),))
 
@@ -1772,6 +1774,8 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(
             "pr_url": "https://github.com/acme/api/pull/12", "branch": "feature",
             # Whoever asked reads the review on the pull request, not at triage.
             "publish": "true", "auto_approve_green": expected,
+            # The graph recheck's write-access authority, not just this gate's.
+            "review_requester": "maintainer", "review_requester_id": "7",
         }
         # Claimed, so the review may comment on the pull request it was given.
         record = runtime.store.claim_pull_request.await_args.args[0]

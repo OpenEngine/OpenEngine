@@ -221,6 +221,30 @@ Repeated assignments and redeliveries for the same issue are deduplicated in
 the bounded ingress memory. Failed handling can be retried by redelivery. As
 with comment ingress, this deduplication does not survive a process restart.
 
+## Requesting a review
+
+Requesting a review from Engine's account on an open pull request whose head
+branch lives on the repository itself starts the `review` graph named by
+`[github] review_request_workflow` (`review` by default), unless a work order
+is already running for that pull request. A request naming a different
+reviewer, a closed pull request, a fork's branch, or a bot sender is ignored,
+as is one from a sender without write access -- `github_sender_may_act` checks
+that before any handler runs, the same as for a comment or an assignment.
+
+The requester's login and account id are carried into the graph as the
+`review_requester` and `review_requester_id` inputs. The approval check
+rechecks that requester's access at decision time, through the same
+collaborator-permission lookup, rather than trusting the gate that let the run
+start: a requester who loses write access, or who is a bot or Engine's own
+account, is skipped with a visible reason. When that recheck passes, the
+requester authorizes approval on their own, so `[pull_requests]
+auto_approve_green` does not need to be enabled for this path -- every other
+gate still applies (Green impact, no surviving findings, the reviewed commit
+matching the PR head, CI not failed, and the approver not the PR's author).
+The approval body names who requested the review. A review started without a
+requester, such as `oe go review` or a manual graph run, keeps the existing
+`auto_approve_green` behavior.
+
 ## Merging as the human review
 
 A work order stops before it finishes and waits for a person to accept or

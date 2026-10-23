@@ -16,6 +16,18 @@ def target_url(state: Mapping[str, Any]) -> str:
     return str(state.get('pr_url') or state.get('inputs', {}).get('pr_url', ''))
 
 
+def review_requester(state: Mapping[str, Any]) -> str:
+    """The GitHub login that requested this review, or empty for a manual run."""
+    return str(state.get('inputs', {}).get('review_requester', '')).strip()
+
+
+def review_requester_id(state: Mapping[str, Any]) -> int | None:
+    try:
+        return int(str(state.get('inputs', {}).get('review_requester_id', '')).strip() or 0) or None
+    except ValueError:
+        return None
+
+
 def publishing(state: Mapping[str, Any]) -> bool:
     return enabled(state, 'publish') and forge_mode(state.get('inputs')) is ForgeMode.CONNECTED and bool(target_url(state))
 
@@ -41,8 +53,14 @@ class PublishReview:
 
 
 async def approval_reason(state: Mapping[str, Any]) -> str:
-    """Empty means eligible. Unknown forge data fails closed with a visible reason."""
-    if not enabled(state, 'auto_approve_green'):
+    """Empty means eligible. Unknown forge data fails closed with a visible reason.
+
+    A requester who still holds write access at decision time authorizes
+    approval on their own; with no requester (a manual or CLI run),
+    `auto_approve_green` is the only authority left.
+    """
+    requester = review_requester(state)
+    if not requester and not enabled(state, 'auto_approve_green'):
         return 'auto_approve_green is disabled'
     if forge_mode(state.get('inputs')) is ForgeMode.DISCONNECTED:
         return 'disconnected mode'
@@ -59,6 +77,13 @@ async def approval_reason(state: Mapping[str, Any]) -> str:
     if source is None:
         return 'source control is unavailable'
     try:
+        if requester:
+            # GitHub's own convention: every Bot-type account's login ends this way.
+            if requester.endswith('[bot]'):
+                return f'requester {requester} is a bot'
+            if not await source.can_write_repository(
+                target_url(state), requester, user_id=review_requester_id(state)):
+                return f'requester {requester} lacks write access'
         workspace = WorkspaceId(str(state['workspaceId']))
         change = await source.view_change_request(workspace, target.number)
         # The workspace-scoped lookup must name the exact PR we will approve.
@@ -72,6 +97,8 @@ async def approval_reason(state: Mapping[str, Any]) -> str:
             return 'approving identity or PR author is unavailable'
         if login.casefold() == change.author.casefold():
             return 'PR author is the approving identity'
+        if requester and login.casefold() == requester.casefold():
+            return f'requester {requester} is the approving identity'
         status = await source.list_pipeline_status(workspace, change_request_number=target.number)
         if status.ref != reviewed_sha:
             return 'CI commit does not match the reviewed commit'
@@ -88,7 +115,10 @@ async def approval_reason(state: Mapping[str, Any]) -> str:
 class ApprovalCheck:
     graph_node_name = 'Approval check'
     graph_node_kind = 'tool'
-    graph_node_description = 'Checks Green impact, findings, CI and identity; reports why approval is skipped.'
+    graph_node_description = (
+        'Checks Green impact, findings, CI and identity; reports why approval is skipped. '
+        'A review requester with write access authorizes approval even without auto_approve_green.'
+    )
 
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
         reason = await approval_reason(state)
@@ -100,18 +130,24 @@ class ApprovalCheck:
 class ApproveReview:
     graph_node_name = 'Auto-approve'
     graph_node_kind = 'tool'
-    graph_node_description = 'Approves the PR when impact is Green 🟢.'
+    graph_node_description = (
+        'Approves the PR when impact is Green 🟢, either because auto_approve_green is on '
+        'or because the person who requested this review has write access to the repository.'
+    )
 
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, object]:
         execution = current_execution()
-        # Recheck at the mutation boundary, including CI and self-approval.
+        # Recheck at the mutation boundary, including CI, identity and the requester's access.
         reason = await approval_reason(state)
         if reason:
             await execution.say(f'Auto-approval skipped: {reason}.')
             return {'approved': False, 'approval_reason': reason}
         target = change_request(target_url(state))
         assert target is not None and execution.runtime.source_control is not None
-        body = f"Approved automatically.\n\n{state['impact_rationale']}"
+        requester = review_requester(state)
+        opening = (f'Approved automatically: @{requester} requested this review and has write '
+                   f'access to the repository.\n\n' if requester else 'Approved automatically.\n\n')
+        body = f"{opening}{state['impact_rationale']}"
         await execution.runtime.source_control.approve_change_request(
             target.project, target.number, body, commit_sha=str(state['reviewed_sha']))
         await execution.say(body)

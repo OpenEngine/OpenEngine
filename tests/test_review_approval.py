@@ -215,3 +215,69 @@ def test_push_during_ci_lookup_skips(execution):
     result = asyncio.run(publish.ApproveReview()(state()))
     assert not result['approved']
     assert 'CI commit' in result['approval_reason']
+
+
+def _with_requester(login='maintainer', requester_id='7', **changes):
+    given = state(**changes)
+    given['inputs'].update(auto_approve_green='false', review_requester=login, review_requester_id=requester_id)
+    return given
+
+
+def test_requester_with_write_access_approves(execution):
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
+    result = asyncio.run(publish.ApproveReview()(_with_requester()))
+    assert result['approved'] is True
+    execution.runtime.source_control.can_write_repository.assert_awaited_once_with(URL, 'maintainer', user_id=7)
+    assert '@maintainer' in result['approval_reason'] and 'write access' in result['approval_reason']
+    execution.runtime.source_control.approve_change_request.assert_awaited_once()
+
+
+def test_requester_without_write_access_is_skipped_with_reason(execution):
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=False)
+    reason = asyncio.run(publish.approval_reason(_with_requester()))
+    assert 'maintainer' in reason and 'write access' in reason
+    execution.runtime.source_control.approve_change_request.assert_not_awaited()
+
+
+def test_requester_permission_lookup_error_fails_closed(execution):
+    execution.runtime.source_control.can_write_repository = AsyncMock(side_effect=RuntimeError('boom'))
+    reason = asyncio.run(publish.approval_reason(_with_requester()))
+    assert 'could not verify' in reason
+
+
+def test_requester_bot_is_blocked(execution):
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
+    reason = asyncio.run(publish.approval_reason(_with_requester(login='dependabot[bot]')))
+    assert 'bot' in reason
+    execution.runtime.source_control.can_write_repository.assert_not_awaited()
+
+
+def test_requester_matching_engines_own_login_is_blocked(execution):
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
+    reason = asyncio.run(publish.approval_reason(_with_requester(login='engine')))
+    assert 'engine' in reason and 'approving identity' in reason
+
+
+def test_no_requester_falls_back_to_auto_approve_green(execution):
+    given = state()
+    given['inputs']['auto_approve_green'] = 'false'
+    reason = asyncio.run(publish.approval_reason(given))
+    assert 'auto_approve_green is disabled' == reason
+
+
+@pytest.mark.parametrize('changes,reason', [
+    ({'impact_level': 'Orange'}, 'not Green'),
+    ({'review': [{'tagline': 'Bug', 'description': 'Wrong result.'}]}, 'survived'),
+])
+def test_requester_with_write_access_still_needs_other_gates(execution, changes, reason):
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
+    got = asyncio.run(publish.approval_reason(_with_requester(**changes)))
+    assert reason in got
+
+
+def test_requester_with_write_access_still_blocked_by_failing_ci(execution):
+    execution.runtime.source_control.can_write_repository = AsyncMock(return_value=True)
+    execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus(
+        'sha', (StatusCheck('test', 'completed', 'failure', ''),), ())
+    reason = asyncio.run(publish.approval_reason(_with_requester()))
+    assert 'CI has failed' in reason

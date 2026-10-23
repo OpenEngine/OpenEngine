@@ -318,6 +318,8 @@ def review(components: Components) -> GraphWorkflow:
                      WorkflowInput('branch', 'PR branch'),
                      WorkflowInput('publish', 'Publish review', default='false', choices=('false', 'true')),
                      WorkflowInput('auto_approve_green', 'Auto-approve Green (empty uses configuration)', choices=('', 'false', 'true')),
+                     WorkflowInput('review_requester', 'GitHub login that requested this review, if any'),
+                     WorkflowInput('review_requester_id', 'Requester account id, if known'),
                      WorkflowInput('adversarial', 'Refute findings', default='false', choices=('false', 'true')))
 
 

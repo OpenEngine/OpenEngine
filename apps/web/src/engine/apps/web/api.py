@@ -3916,7 +3916,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         repository = found.project
         url = pull_request_url(repository, requested.number)
         # Whether the requester can write to the repository was asked by the
-        # ingress before this was called; see `github_sender_may_act`.
+        # ingress before this was called; see `github_sender_may_act`. The
+        # graph rechecks it at decision time, since write access can change
+        # between the request and the run reaching its approval step.
         graph = surface.named_workflow(graph_workflows, repository, review_request_workflow)
         if graph is None:
             raise RuntimeError(f"review workflow {review_request_workflow!r} is unavailable")
@@ -3941,6 +3943,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 "pr_url": url, "branch": requested.branch, "publish": "true",
                 "auto_approve_green": pull_requests.default_for(
                     await github_checkout(repository), repository_registry.snapshot.repos),
+                "review_requester": requested.sender,
+                "review_requester_id": str(requested.sender_id),
             },
         )
 
