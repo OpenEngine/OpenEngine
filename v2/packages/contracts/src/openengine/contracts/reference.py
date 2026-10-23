@@ -34,6 +34,15 @@ NAMES = {
     "tool_service": ("Tool Service", "tools"),
     "virtual_control_plane": ("Virtual Control Plane", "vcp"),
 }
+# Where each service's subjects live: `oe.v1.{short}.` unless listed here.
+NAMESPACES = {
+    "tool_service": ("oe.v1.tools.", "oe.v1.toolgrants.", "oe.v1.toolinvocations.", "oe.v1.events.toolinvocations."),
+}
+
+
+def namespaces(service: str) -> tuple[str, ...]:
+    """The subject prefixes a service's contract uses."""
+    return NAMESPACES.get(service, (f"oe.v1.{NAMES[service][1]}.",))
 
 
 def _key(path: Path) -> str:
@@ -75,12 +84,6 @@ def self_contained(service: str) -> dict[str, Any]:
     return document
 
 
-# Services whose subjects are not all under `oe.v1.{short}.`.
-SUBJECTS = {
-    "tool_service": ("oe.v1.tools.", "oe.v1.toolgrants.", "oe.v1.toolinvocations.", "oe.v1.events.toolinvocations."),
-}
-
-
 def page(service: str) -> str:
     name, short = NAMES[service]
     contract = json.dumps(self_contained(service), separators=(",", ":"), ensure_ascii=False).replace("</", "<\\/")
@@ -104,7 +107,7 @@ def page(service: str) -> str:
 <body>
 <header class="banner">
   <strong>{html.escape(name)} ({short})</strong>
-  <span>Subjects {" ".join(f"<code>{prefix}…</code>" for prefix in SUBJECTS.get(service, (f"oe.v1.{short}.",)))}</span>
+  <span>Subjects {" ".join(f"<code>{prefix}…</code>" for prefix in namespaces(service))}</span>
   <span>Contract only: no service implements these subjects yet.</span>
 </header>
 <main id="contract-reference"></main>

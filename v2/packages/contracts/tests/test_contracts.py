@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 from openengine.contracts import reference, validate
+from openengine.contracts.reference import NAMES, namespaces
 from openengine.contracts.validate import CONTRACTS, SERVICES, load_contract, validate_message
 
 STREAMS = CONTRACTS.parent.parent / "infra" / "nats" / "streams"
@@ -84,15 +85,6 @@ REQUEST_SUBJECTS = {
         "oe.v1.vcp.query.operations.{operation_id}.get",
     },
 }
-SHORT = {"connection_bus": "cxn", "graph_engine": "ge", "tool_service": "tools", "virtual_control_plane": "vcp"}
-# Where each service's subjects live: `oe.v1.{short}.` unless listed here.
-NAMESPACES = {
-    "tool_service": ("oe.v1.tools.", "oe.v1.toolgrants.", "oe.v1.toolinvocations.", "oe.v1.events.toolinvocations."),
-}
-
-
-def namespaces(service: str) -> tuple[str, ...]:
-    return NAMESPACES.get(service, (f"oe.v1.{SHORT[service]}.",))
 
 
 def is_event(address: str) -> bool:
@@ -162,7 +154,7 @@ def test_events_land_in_their_stream_and_requests_in_none(service: str) -> None:
         concrete = ".".join("x" if token.startswith("{") else token for token in address.split("."))
         captured = [name for name, filters in streams.items() if any(nats_matches(f, concrete) for f in filters)]
         if is_event(address):
-            assert captured == [f"{SHORT[service]}-events"], address
+            assert captured == [f"{NAMES[service][1]}-events"], address
         else:
             assert captured == [], f"{address} is request/reply but a stream captures it"
 
