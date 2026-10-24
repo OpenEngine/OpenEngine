@@ -1793,3 +1793,76 @@ def test_invalid_model_is_excluded_from_auto_selection_but_explicit_choice_fails
             with pytest.raises(ValueError, match='Readiness checks:.*not supported when using Codex'):
                 await service.ready_runner_choices(declarations, inputs)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("structured_agent", [False, True])
+def test_loop_start_expired_oauth_pauses(tmp_path: Path, monkeypatch, structured_agent: bool) -> None:
+    async def scenario() -> None:
+        async with graph_service(tmp_path, clock=Clock()) as service:
+            await service.add_graph("default", source=single("locked", "x"))
+            loop = await service.add_loop(project="default", graph="locked", instruction="x", every="1h")
+
+            async def fail(*args):
+                message = (
+                    "agent 'claude' is not ready: the agent refused session/prompt: Internal error: "
+                    "Failed to authenticate: OAuth session expired and could not be refreshed "
+                    '(code -32603); data: {"errorKind": "authentication_failed"}'
+                )
+                raise ServiceError(message, **({"agent": "named"} if structured_agent else {}))
+
+            monkeypatch.setattr(service, "_start_version", fail)
+            await service.tick()
+            result = await service.loop_json(loop["loopId"])
+            agent = "named" if structured_agent else "claude"
+            assert result["state"] == "paused"
+            assert result["pauseReason"] == (
+                f"authentication required: agent {agent} is not signed in on this backend; run "
+                f"`oe agent signin {agent}` and retry"
+            )
+            assert result["lastErrorAt"]
+            assert result["consecutiveStartFailures"] == 1
+
+    asyncio.run(scenario())
+
+
+def test_loop_start_failures_pause_and_success_clears_error(tmp_path: Path, monkeypatch) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("retry", "x"))
+            loop = await service.add_loop(project="default", graph="retry", instruction="x", every="1h")
+            original = service._start_version
+
+            async def fail(*args):
+                raise ServiceError("backend unavailable")
+
+            monkeypatch.setattr(service, "_start_version", fail)
+            for count in range(1, 4):
+                await service.tick()
+                result = await service.loop_json(loop["loopId"])
+                assert result["lastError"] == "backend unavailable"
+                assert result["lastErrorAt"] == clock.now.isoformat(timespec="seconds")
+                assert result["consecutiveStartFailures"] == count
+                assert result["state"] == ("paused" if count == 3 else "active")
+                assert service.store.loop_runs(loop["loopId"]) == ()
+                clock.advance(hours=1)
+            assert result["pauseReason"] == "3 consecutive run start failures: backend unavailable"
+            await service.resume_loop("default", loop["loopId"])
+            monkeypatch.setattr(service, "_start_version", original)
+            await service.tick()
+            result = await service.loop_json(loop["loopId"])
+            assert result["activeRunId"]
+            assert result["lastError"] is None and result["lastErrorAt"] is None
+            assert result["consecutiveStartFailures"] == 0
+            await settled(service, result["activeRunId"])
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("message", [
+    "Failed to authenticate", "OAuth session expired", "could not be refreshed",
+    '{"errorKind": "authentication_failed"}',
+])
+def test_expired_auth_failure_messages(message: str) -> None:
+    from engine.graph_service.service import auth_required
+    assert auth_required(message, "claude")["command"] == "oe agent signin claude"

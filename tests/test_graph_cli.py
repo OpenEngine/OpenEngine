@@ -802,3 +802,20 @@ def test_review_backend_rejects_onboarding_credentials_before_submit(monkeypatch
     assert main(['repo', 'add', 'owner/repo', '--review-backend', 'onboarding']) == 2
     assert 'must use service credentials' in capsys.readouterr().err
     assert recorded.requests == []
+
+
+@pytest.mark.parametrize("command", [["loop", "get", "retry"], ["loops", "list"]])
+def test_loop_inspection_shows_start_error(monkeypatch, capsys, command) -> None:
+    loop = {
+        "loopId": "loop-1", "name": "retry", "state": "active", "pauseReason": None,
+        "graph": "retry", "version": 1, "everySeconds": 3600, "nextRunAt": "next",
+        "activeRunId": None, "prCount": 0,
+        "limits": {"maxPrs": None, "maxSpendUsd": None},
+        "spend": {"usd": 0, "enforceable": True, "complete": True},
+        "lastError": "backend unavailable", "lastErrorAt": "2026-10-24T12:00:00+00:00",
+    }
+    serve(monkeypatch, {"loops": [loop]} if command == ["loops", "list"] else loop)
+    assert main(command) == 0
+    output = capsys.readouterr().out
+    assert loop["lastError"] in output
+    assert loop["lastErrorAt"] in output

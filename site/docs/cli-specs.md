@@ -177,7 +177,13 @@ Limits are cumulative over the loop's lifetime and survive restarts.
   subscription usage. If usage is unpriced, `spendEnforceable` is false.
   The active run reserves the remaining budget and is cancelled when the
   loop's spend reaches the cap.
-- A loop also pauses when a run fails because a runner needs to sign in.
+- A loop pauses immediately when starting or running fails because an agent
+  needs to sign in, including an expired OAuth session.
+- Other run start failures retry at the next scheduled tick and pause after
+  three consecutive failed starts. The pause reason includes the error.
+  `lastError`, `lastErrorAt` and `consecutiveStartFailures` survive restarts
+  and are cleared when a run starts successfully. Both loop inspection
+  commands show the latest start error and its time.
 
 ### Inspection and lifecycle
 

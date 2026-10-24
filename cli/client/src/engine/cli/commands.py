@@ -653,6 +653,8 @@ def loops_list(arguments: argparse.Namespace) -> int:
             ("EVERY", lambda l: _duration(l["everySeconds"])),
             ("NEXT", lambda l: l["nextRunAt"] or "-"), ("ACTIVE RUN", lambda l: l["activeRunId"] or "-"),
             ("PRS", lambda l: f"{l['prCount']}/{l['limits']['maxPrs'] or '∞'}"),
+            ("LAST ERROR", lambda l: l.get("lastError") or "-"),
+            ("LAST ERROR AT", lambda l: l.get("lastErrorAt") or "-"),
             ("SPEND", _spend), ("PAUSED BECAUSE", lambda l: l["pauseReason"] or "-"),
         ])
     else:
@@ -1043,6 +1045,8 @@ def _loop_summary(loop: dict[str, Any]) -> str:
         f"graph {loop['graph']} v{loop['version']} every {_duration(loop['everySeconds'])}, next {loop['nextRunAt'] or '-'}",
         f"pull requests {loop['prCount']}/{loop['limits']['maxPrs'] or '∞'}, spend {_spend(loop)}",
     ]
+    if loop.get("lastError"):
+        lines.append(f"last start error ({loop.get('lastErrorAt') or '-'}): {loop['lastError']}")
     if loop.get("activeRunId"):
         lines.append(f"active run {loop['activeRunId']}")
     latest = loop.get("latestOutput")

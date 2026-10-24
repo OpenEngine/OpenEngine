@@ -101,6 +101,9 @@ class LoopRow:
     active_run_id: str | None
     created_at: str
     updated_at: str
+    last_error: str = ""
+    last_error_at: str | None = None
+    consecutive_start_failures: int = 0
 
 
 @dataclass(frozen=True)
@@ -344,20 +347,21 @@ class GraphServiceStore:
 
     def insert_loop(self, row: LoopRow) -> None:
         self._connection.execute(
-            "INSERT INTO cli_loops VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cli_loops VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.loop_id, row.project, row.name, row.graph_id, row.version_id,
                 row.instruction, row.repository, json.dumps(row.inputs),
                 row.interval_seconds, row.max_prs, row.max_spend_usd, row.state,
                 row.pause_reason, row.next_run_at, row.active_run_id,
-                row.created_at, row.updated_at,
+                row.created_at, row.updated_at, row.last_error, row.last_error_at,
+                row.consecutive_start_failures,
             ),
         )
 
     def update_loop(self, loop_id: str, **changes: object) -> None:
         allowed = {
             "state", "pause_reason", "next_run_at", "active_run_id", "updated_at",
-            "max_prs", "max_spend_usd",
+            "max_prs", "max_spend_usd", "last_error", "last_error_at", "consecutive_start_failures",
         }
         assert set(changes) <= allowed, changes
         columns = ", ".join(f"{name} = ?" for name in changes)
