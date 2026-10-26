@@ -1,7 +1,9 @@
 """`oe graph`: the graphs the Graph Engine has registered, asked over NATS, and offline checks of Graph files.
 
-`validate` and `spec` read only the Graph schema in openengine-contracts, so
-neither needs `oe up`, NATS or runner credentials.
+`validate` and `spec` read only the Graph schema and rules in
+openengine-contracts, so neither needs `oe up`, NATS or runner credentials.
+Runners and tools are checked when a run starts, so a valid file is not a
+promise that they exist.
 """
 
 from __future__ import annotations
@@ -15,11 +17,13 @@ import nats
 
 from openengine.cli.commands.status import running_state
 from openengine.cli.output.render import as_json, table
+from openengine.contracts import expressions
 from openengine.contracts.resources import load_documents, markdown, validate_text
 from openengine.messaging import Client, ServiceError, Unavailable
 
 KIND = "Graph"
 STDIN = "-"
+RUNTIME_NOTE = "note: runners and tools are not checked here; they are checked when a run starts"
 LIST_SUBJECT = "oe.v1.ge.query.graphs.list"
 CONNECT_TIMEOUT_SECONDS = 2.0
 EXIT_OK = 0
@@ -32,10 +36,10 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     listing = actions.add_parser("list", help="list the registered graphs")
     listing.add_argument("--json", action="store_true", help="print the query-response as JSON")
     listing.set_defaults(command=run_list)
-    validate = actions.add_parser("validate", help="check a Graph file against the Graph schema, offline")
+    validate = actions.add_parser("validate", help="check a Graph file against the Graph schema and rules, offline")
     validate.add_argument("file", metavar="FILE", help=f"the file to check, or {STDIN} to read standard input")
     validate.set_defaults(command=run_validate)
-    spec = actions.add_parser("spec", help="print the Graph resource reference as Markdown")
+    spec = actions.add_parser("spec", help="print the Graph resource reference and expression syntax as Markdown")
     spec.set_defaults(command=run_spec)
 
 
@@ -125,9 +129,10 @@ def run_validate(arguments: argparse.Namespace) -> int:
         return EXIT_FAILED
     for document in load_documents(text):
         print(f"{name}: valid {KIND} {document['metadata']['name']}")
+    print(RUNTIME_NOTE)
     return EXIT_OK
 
 
 def run_spec(arguments: argparse.Namespace) -> int:
-    print(markdown(KIND), end="")
+    print(markdown(KIND) + "\n" + expressions.markdown(), end="")
     return EXIT_OK
