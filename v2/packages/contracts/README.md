@@ -48,7 +48,8 @@ common/v1/                 envelopes and types every service shares
   schemas/                 typed payloads, grouped with $defs
   examples/                one JSON file per example message
   resources/               the resources people write, where the service has any
-src/openengine/contracts/  the openengine-contracts package: validate.py, resources.py, reference.py
+src/openengine/contracts/  the openengine-contracts package: validate.py, resources.py, graphs.py,
+                           expressions.py, reference.py
 tests/                     pytest suite run with the rest of v2
 tooling/                   pinned AsyncAPI parser, and scripts that run the package's modules
 ```
@@ -102,10 +103,18 @@ in `resources/examples/`. Those files are the single source of truth:
   is stale. `markdown(kind)` writes the same tables as Markdown, which
   `oe graph spec` prints for Graph.
 
-The schemas check structure. Rules that span fields or resources, such as
-unique step names, `flow` naming steps that exist, a Tool's connection
+The schemas check structure. A Graph's rules that span its fields are
+checked alongside its schema, by `openengine.contracts.graphs`, ported from
+V1's graph language: unique step names, not `start`, `end` or `naming`;
+`flow` naming steps that exist; every step reachable from `start` and able
+to reach `end`; every cycle passing through a `route`; at most one route
+from a step; and every `${...}`, `when` and `choose` parsing, by
+`openengine.contracts.expressions`, and reading only declared `inputs`,
+`outputs` and `visits`, and `item` only in a step with `facets`. Neither
+module evaluates an expression. Rules that need other resources or the
+running system, such as a runner or tool existing, a Tool's connection
 existing or an adapter supporting a `recovery`, are the owning service's to
-check when a resource is applied.
+check when a resource is applied or a run starts.
 
 ## Versions
 
