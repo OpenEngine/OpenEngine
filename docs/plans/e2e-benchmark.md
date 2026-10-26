@@ -383,8 +383,11 @@ OpenEngine did that time.
 - It is regenerated only by a release-time benchmark run, never by `npm run doc`
   on a developer machine. The benchmark spec carries a `@benchmark` Playwright
   tag. `npm run doc` already excludes tests with `--grep-invert @skip-docs`, so
-  it adds `@benchmark` to that exclusion, and a new script (name to be decided,
-  for example `oe-benchmark`) runs only the tests with that tag.
+  it adds `@benchmark` to that exclusion, and `npm run oe-benchmark` runs only
+  the tests with that tag (`npm test` skips it). Its page is written to
+  `site/docs/benchmark/`, apart from the guides. The bench repository is always
+  named `oe-bench`: a setup project deletes any existing one before each run, so
+  a failed run leaves its repo, folder and tunnel in place to inspect.
 - The release PR carries the diff, so a person reads it as part of the release
   review. Run IDs, ports and timestamps still use the terminal page's stable
   stand-ins, which cuts the noise to what the model actually did.

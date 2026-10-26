@@ -70,3 +70,26 @@ timestamps and ports on this computer's loopback address (`127.0.0.1:…`,
 values in the buffer, where `terminal.text()` and every assertion read them.
 Anything else that changes from run to run, such as a path on your machine,
 keep off screen.
+
+## The benchmark
+
+`tests/benchmark/` holds the end-to-end benchmark (`docs/plans/e2e-benchmark.md`). It uses
+real GitHub, real models and real tunnels, so it never runs in `npm test` or `npm run doc`:
+everything in it is tagged `@benchmark`.
+
+```sh
+npm run oe-benchmark         # the journey; writes its guide to site/docs/benchmark/
+npm run oe-benchmark:clean   # delete everything the last run left, once you have looked
+```
+
+It runs as the account `gh` is logged in as, with a token that has the `delete_repo` scope
+(`gh auth refresh -s delete_repo`). A setup project runs first: it deletes
+the `oe-bench` repository, its Pages site, the local folder (`OE_BENCH_DIR`, by default
+`<tmp>/oe-bench`) and any process the last run recorded. It never touches a repository whose name
+doesn't start with `oe-bench` or that lacks the `oe-bench` topic. After the run, pass or fail, a
+teardown project stops the tunnel and daemons the run recorded, but deletes nothing, so a failed
+run's repository and folder are left to inspect.
+
+`support/mask.ts` hides a secret in a guide screenshot. Pass `mask(locator)` among the targets
+of `screenshot()`; it draws an opaque box over the element, which the benchmark must do for every
+token or secret on screen.

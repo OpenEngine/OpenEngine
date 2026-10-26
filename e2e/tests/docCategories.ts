@@ -33,3 +33,15 @@ export const anotherComputerCategory = withDocCategory("Other Computers", {
     description: "Use OpenEngine on more than one computer, such as this one and a Mac mini.",
   },
 })
+
+// The benchmark guide is generated into its own directory by `npm run oe-benchmark`
+// (playwright-benchmark.config.ts), separate from the guides above.
+export const benchmarkCategory = withDocCategory("Benchmark", {
+  label: "Start to Finish",
+  position: 1,
+  link: {
+    type: "generated-index",
+    slug: "/start-to-finish/projects",
+    description: "How to have OpenEngine build a small project, from a list of issues to a finished result.",
+  },
+})
