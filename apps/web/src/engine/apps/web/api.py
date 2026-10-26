@@ -1250,7 +1250,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     surface = _GraphSurface()
     repository_registry = repos if isinstance(repos, RepositoryRegistry) else RepositoryRegistry(
         repos, repo_modes, trusted_repos,
-        projects=repository_projects or {}, login_repositories=login_repositories,
+        projects=repository_projects, login_repositories=login_repositories,
     )
 
     from engine.apps.web.onboarding import RepositoryOnboarding, register_starters
