@@ -3705,6 +3705,45 @@ def _as_user(writable):
     return stack
 
 
+@pytest.mark.parametrize("checkout", ["./checkout", "relative/checkout"])
+def test_normalized_relative_alias_runs_remain_visible(
+    checkout, tmp_path, monkeypatch, async_client, workflow_app,
+):
+    monkeypatch.chdir(tmp_path)
+    graph = _review_graph()
+    store = WebStores()
+    app = _graph_app_over(
+        store, ScriptedGraphRuntime(graph), graph,
+        repos={"local": checkout}, repository_projects={"local": "acme/repo"},
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback",
+        ),
+        workflow_app=workflow_app,
+    )
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            async with async_client(app, base_url="https://engine.test") as client:
+                response = await client.post("/api/runs", json={
+                    "workflowId": str(graph.graph_id), "repository": "local", "prompt": "Task",
+                })
+                assert response.status_code == 201, response.text
+                run_id = response.json()["runId"]
+                run = await store.runs.load(RunId(run_id))
+                assert run.repository == str(Path(checkout))
+                assert (await client.get(f"/api/runs/{run_id}")).status_code == 200
+                listed = (await client.get("/api/runs")).json()["runs"]
+                assert [run["runId"] for run in listed] == [run_id]
+
+    with _as_user({"acme/repo"}):
+        asyncio.run(scenario())
+    with _as_user({"other/repo"}):
+        async def hidden():
+            async with async_client(app, base_url="https://engine.test") as client:
+                assert (await client.get("/api/runs")).json()["runs"] == []
+        asyncio.run(hidden())
+
+
 @pytest.mark.parametrize("live", [False, True])
 def test_runs_are_scoped_to_the_repositories_a_user_can_write_to(
     async_client, tmp_path, live, *, workflow_app

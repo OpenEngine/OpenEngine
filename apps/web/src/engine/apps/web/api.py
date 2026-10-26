@@ -4376,7 +4376,10 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     # `[repos]` name, the checkout path the web form sends, or `.`. A run
     # started from GitHub already names its `owner/repo`.
     def run_project(repository: str) -> str | None:
-        project = repository_registry.snapshot.run_projects.get(repository)
+        projects = repository_registry.snapshot.run_projects
+        project = projects.get(repository)
+        if project is None:
+            project = projects.get(str(Path(repository).expanduser().resolve()))
         if project is None and "/" in repository and not repository.startswith(("/", ".", "~")):
             project = repository.lower()
         return project
