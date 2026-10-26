@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenEngine Cloud — privacy</title>
+<meta name="description" content="What the OpenEngine Cloud early access page collects, where it goes and how to be removed.">
+<meta name="robots" content="noindex">
+<link rel="canonical" href="https://openengine.cc/cloud/privacy/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #151514; --surface: #1f1f1e; --ink: #f4f3f1; --muted: #a3a39c; --faint: #8d8d86;
+  --rule: #2f2f2d; --accent: #e8452b; --radius: 0; --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; --head-weight: 800;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+@media (min-width: 720px) { .wrap { padding: 0 32px; } }
+header { border-bottom: 1px solid var(--rule); }
+header .wrap { display: flex; align-items: center; gap: 12px; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; letter-spacing: -.025em; text-decoration: none; }
+.brand small { font: 500 11px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--rule); border-radius: var(--radius); padding: 5px 7px; }
+svg.mark { width: 30px; height: 30px; }
+.qmark { font-size: 25px; font-weight: 550; letter-spacing: -3px; white-space: nowrap; width: 30px; }
+.qmark span { color: var(--accent); margin-left: 1px; }
+main.wrap { padding-top: 48px; padding-bottom: 64px; }
+h1 { font-size: clamp(32px, 5vw, 44px); font-weight: var(--head-weight); letter-spacing: -.035em; line-height: 1.05; margin: 0 0 8px; }
+h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 36px 0 8px; }
+p { margin: 0 0 14px; }
+.muted { color: var(--muted); }
+footer { border-top: 1px solid var(--rule); color: var(--faint); font-size: 13px; }
+footer .wrap { padding-top: 24px; padding-bottom: 32px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="brand" href="../"><svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" fill="#e8452b"/><path fill="#fff" fill-rule="evenodd" transform="translate(16 16) scale(0.68)" d="M24.28 11.73 L25.1 11.94 L29.2 17.98 L3.79 35.4 L0.0 28.84 L24.28 11.83 Z M75.1 11.73 L99.9 28.74 L99.9 29.56 L96.11 35.4 L70.8 17.98 L75.1 11.83 Z M28.59 20.85 L49.49 53.02 L50.51 52.92 L71.21 20.85 L93.34 36.01 L73.05 66.24 L73.05 69.83 L59.84 88.27 L39.86 88.17 L26.84 69.83 L26.74 66.03 L6.66 36.32 L28.59 20.95 Z M26.02 29.66 L14.55 37.76 L16.6 40.83 L28.28 32.84 L26.13 29.66 Z M73.57 29.66 L71.62 32.84 L83.3 40.83 L85.35 37.76 L73.67 29.66 Z M31.05 37.35 L19.67 45.24 L21.62 48.41 L33.3 40.52 L31.15 37.35 Z M68.65 37.35 L66.7 40.52 L78.28 48.41 L80.23 45.24 L68.75 37.35 Z M36.07 45.03 L24.69 52.92 L26.74 56.1 L38.22 48.21 L36.17 45.03 Z M63.73 45.03 L61.68 48.21 L73.16 56.1 L75.2 52.92 L63.83 45.03 Z M41.16 70.51a8.82 8.82 0 1 0 17.64 0a8.82 8.82 0 1 0 -17.64 0Z"/></svg>OpenEngine <small>Cloud</small></a>
+  </div>
+</header>
+
+<main class="wrap">
+  <h1>Privacy</h1>
+  <p class="muted">For the OpenEngine Cloud early access page. Last updated 2026-10-26.</p>
+
+  <h2>What the page collects</h2>
+  <p>When you request early access, the form sends us the email address you enter. It also sends the address of the page you signed up on and, if you arrived from an ad, the click identifiers in the link (UTM parameters, a Google click id or a LinkedIn click id) and the page that referred you, so we can tell which ad brought you here. Those identifiers are kept in your browser's session storage for the length of your visit and are sent only when you submit the form.</p>
+  <p>The page loads its fonts from Google Fonts, which sees your IP address when it serves them. Nothing else leaves the page until you submit the form.</p>
+
+  <h2>Where it goes</h2>
+  <p>The form is processed by <a href="https://formspree.io/legal/privacy-policy/">Formspree</a>, which delivers each submission to us by email and keeps a copy in its submission log.</p>
+  <p>When ad conversion tracking is switched on for this page, the LinkedIn Insight Tag and the Google Ads tag load with the page and record that a signup happened, so the ad platforms can count conversions. Those tags set cookies under <a href="https://www.linkedin.com/legal/privacy-policy">LinkedIn's</a> and <a href="https://policies.google.com/privacy">Google's</a> privacy policies.</p>
+
+  <h2>How we use it</h2>
+  <p>We use your email address only to contact you about OpenEngine Cloud early access: one message when a seat opens, and replies to anything you ask us. We do not sell it, share it for marketing or add it to any other list.</p>
+
+  <h2>Removing your address</h2>
+  <p>Reply to any email from us and ask. We will delete your address and the signup record.</p>
+</main>
+
+<footer>
+  <div class="wrap">© 2026 OpenEngine</div>
+</footer>
+</body>
+</html>

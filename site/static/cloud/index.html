@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenEngine Cloud — early access</title>
+<meta name="description" content="OpenEngine Cloud runs Claude Code and Codex through a review process you define once: implement, CI, five reviewers, rerank, one fix round, then a pull request for you to approve. Connect a repository. We run everything else.">
+<meta name="robots" content="noindex">
+<link rel="canonical" href="https://openengine.cc/cloud/">
+<meta property="og:title" content="OpenEngine Cloud — Your software factory, hosted.">
+<meta property="og:description" content="OpenEngine Cloud runs Claude Code and Codex through a review process you define once: implement, CI, five reviewers, rerank, one fix round, then a pull request for you to approve. Connect a repository. We run everything else.">
+<meta property="og:url" content="https://openengine.cc/cloud/">
+<meta property="og:image" content="https://openengine.cc/cloud/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="627">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #151514; --surface: #1f1f1e; --ink: #f4f3f1; --muted: #a3a39c; --faint: #8d8d86;
+  --rule: #2f2f2d; --accent: #e8452b; --accent-hover: #c9351d; --on-accent: #ffffff;
+  --radius: 0; --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; --head-weight: 800;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+@media (min-width: 720px) { .wrap { padding: 0 32px; } }
+
+header { border-bottom: 1px solid var(--rule); }
+header .wrap { display: flex; align-items: center; gap: 12px; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; letter-spacing: -.025em; text-decoration: none; }
+.brand small { font: 500 11px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--rule); border-radius: var(--radius); padding: 5px 7px; }
+svg.mark { width: 30px; height: 30px; }
+.qmark { font-size: 25px; font-weight: 550; letter-spacing: -3px; white-space: nowrap; width: 30px; }
+.qmark span { color: var(--accent-hover); margin-left: 1px; }
+
+.hero { display: grid; gap: 40px; padding: 64px 0 56px; }
+@media (min-width: 900px) { .hero { grid-template-columns: 1.15fr 1fr; align-items: center; padding: 96px 0 80px; } }
+.eyebrow { font: 500 11px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: clamp(38px, 6.4vw, 64px); font-weight: var(--head-weight); line-height: 1.02; letter-spacing: -.045em; margin: 18px 0 20px; }
+h1 em { font-style: normal; color: var(--accent); }
+.lede { color: var(--muted); font-size: 18px; max-width: 34em; margin: 0; }
+
+.signup { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 28px; }
+.signup label { display: block; font-weight: 600; margin-bottom: 12px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; }
+.row input { flex: 1 1 220px; min-width: 0; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: var(--radius); padding: 13px 14px; }
+.row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+.row button { flex: 1 1 auto; font: 600 15px/1 var(--sans); color: var(--on-accent); background: var(--accent); border: 0; border-radius: var(--radius); padding: 15px 20px; cursor: pointer; }
+.row button:hover { background: var(--accent-hover); }
+.row button[disabled] { opacity: .6; cursor: progress; }
+.fine { color: var(--faint); font-size: 13px; margin: 12px 0 0; }
+.status { margin: 12px 0 0; font-size: 14px; min-height: 1.4em; }
+.status.err { color: #f08a7a; }
+.done .row, .done label, .done .fine { display: none; }
+.done .status { font-size: 17px; font-weight: 600; margin: 0; }
+.hp { position: absolute; left: -9999px; }
+
+/* The run viewer: a loop's task list, the graph with node states, and a session pane. */
+.run { margin: 0 0 56px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.run figcaption { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 18px 20px 14px; }
+.run figcaption span:last-child { color: var(--faint); }
+.run-grid { display: grid; gap: 1px; background: var(--rule); border-top: 1px solid var(--rule); }
+.run-tasks, .run-graph, .run-session { background: var(--surface); min-width: 0; }
+.run-tasks { padding: 16px 18px 18px; order: 3; }
+@media (min-width: 720px) {
+  .run-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  .run-graph { grid-column: 1 / -1; }
+  .run-tasks { grid-column: 1; grid-row: 2; }
+  .run-session { grid-column: 2; grid-row: 2; }
+}
+.run-tasks-head { display: grid; gap: 6px; margin-bottom: 14px; }
+.run-limits { font: 11px var(--mono); color: var(--faint); }
+.run-spend { color: var(--muted); }
+.run-tasks ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.run-tasks li { display: grid; grid-template-columns: 16px 1fr; gap: 2px 8px; font-size: 13px; line-height: 1.35; }
+.run-task-glyph { font: 13px var(--mono); color: var(--faint); }
+.run-task-title { color: var(--ink); }
+.run-task-meta { grid-column: 2; font: 11px var(--mono); color: var(--faint); }
+.is-done .run-task-glyph, .is-running .run-task-glyph, .is-running .run-task-meta { color: var(--accent); }
+.is-queued .run-task-title { color: var(--muted); }
+.run-graph { padding: 14px 16px 12px; overflow-x: auto; }
+.run-status { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; min-width: 640px; margin-bottom: 8px; font: 11px var(--mono); color: var(--faint); letter-spacing: .02em; }
+.run-status > span { white-space: nowrap; }
+.run-state { color: var(--accent); }
+.run-now { color: var(--ink); }
+.run-graph svg { display: block; width: 100%; min-width: 640px; height: auto; }
+.run-session { display: flex; flex-direction: column; height: 320px; }
+@media (min-width: 720px) { .run-session { height: auto; min-height: 300px; } }
+.run-session-head { display: flex; justify-content: space-between; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--rule); font: 12px var(--mono); }
+.run-session-node { color: var(--accent); font-weight: 600; }
+.run-session-meta { color: var(--faint); text-align: right; }
+.run-session-body { flex: 1 1 0; height: 0; min-height: 0; overflow-y: auto; padding: 10px 16px; font: 12px/1.5 var(--mono); scroll-behavior: smooth; }
+.ln { display: grid; grid-template-columns: 14px 1fr; gap: 8px; padding: 3px 0; color: var(--muted); animation: ln-in .35s ease-out; overflow-wrap: anywhere; }
+.ln-g { color: var(--faint); }
+.ln-say, .ln-warn { color: var(--ink); }
+.ln-ok .ln-g, .ln-warn .ln-g { color: var(--accent); }
+.run-session-hint { padding: 8px 16px; border-top: 1px solid var(--rule); font: 11px var(--mono); color: var(--faint); }
+
+/* Graph nodes, edges and their states. */
+.g-node { cursor: pointer; outline: none; }
+.g-node rect { fill: var(--bg); stroke: var(--rule); stroke-width: 1.5; rx: 0; transition: stroke .3s, fill .3s; }
+.g-node text { fill: var(--ink); font: 500 13px var(--mono); opacity: .55; transition: opacity .3s; }
+.g-node .g-dot { fill: var(--rule); transition: fill .3s; }
+.g-node.is-provisioning rect { stroke: var(--accent); stroke-dasharray: 4 4; animation: dash 1s linear infinite; }
+.g-node.is-provisioning text { opacity: .8; }
+.g-node.is-provisioning .g-dot { fill: var(--accent); animation: blink .6s step-end infinite; }
+.g-node.is-running rect { stroke: var(--accent); }
+.g-node.is-running text, .g-node.is-done text { opacity: 1; }
+.g-node.is-running .g-dot, .g-node.is-done .g-dot { fill: var(--accent); }
+.g-node.is-running .g-dot { animation: dot 1s ease-in-out infinite; }
+.g-node.is-done rect { stroke: var(--faint); }
+.g-node.is-waiting rect { fill: var(--accent); stroke: var(--accent); animation: wait 1.8s ease-in-out infinite; }
+.g-node.is-waiting text { fill: var(--on-accent); opacity: 1; font-weight: 600; }
+.g-node.is-waiting .g-dot { fill: var(--on-accent); }
+.g-node:hover rect, .g-node:focus-visible rect, .g-node.is-pinned rect { stroke: var(--ink); }
+.g-node text.g-finding { font: 10.5px var(--mono); fill: var(--accent); opacity: 0; }
+.g-node text.g-finding.is-quiet { fill: var(--faint); }
+.g-node text.g-finding.is-in { animation: find-in .45s cubic-bezier(.2, .7, .2, 1) forwards; }
+.g-count { opacity: 0; transform: scale(.5); transform-box: fill-box; transform-origin: center; pointer-events: none; }
+.g-count.is-in { animation: pop .4s cubic-bezier(.2, .9, .3, 1.4) forwards; }
+.g-count rect { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.g-node .g-count text { fill: var(--on-accent); font: 700 10.5px var(--mono); opacity: 1; }
+.g-edge { fill: none; stroke: var(--rule); stroke-width: 1.5; transition: stroke .4s; }
+.g-edge.is-done { stroke: var(--faint); }
+.g-loop { stroke-dasharray: 4 5; }
+.g-pulse { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 18 2000; stroke-dashoffset: 18; opacity: 0; }
+.g-label-loop { fill: var(--faint); font: 12px var(--mono); }
+@keyframes ln-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes dash { to { stroke-dashoffset: -16; } }
+@keyframes blink { 50% { opacity: .2; } }
+@keyframes dot { 50% { opacity: .35; } }
+@keyframes wait { 50% { fill: var(--accent-hover); stroke: var(--accent-hover); } }
+@keyframes find-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes pop { to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .run *, .run *::before { animation: none !important; transition: none !important; }
+  .g-count.is-in { opacity: 1; transform: none; }
+  .g-node text.g-finding.is-in { opacity: 1; }
+  .run-session-body { scroll-behavior: auto; }
+}
+
+.today { margin-bottom: 56px; }
+.today h2 { font-size: clamp(28px, 4vw, 40px); font-weight: var(--head-weight); letter-spacing: -.035em; line-height: 1.1; margin: 0 0 28px; }
+.today ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 16px; }
+@media (min-width: 720px) { .today ul { grid-template-columns: repeat(2, 1fr); } }
+.today li { background: var(--surface); border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 22px 24px; }
+.today h3 { font-size: 18px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px; }
+.today p { color: var(--muted); margin: 0; font-size: 15px; }
+
+.pillars { display: grid; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; margin-bottom: 72px; }
+@media (min-width: 720px) { .pillars { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1000px) { .pillars { grid-template-columns: repeat(4, 1fr); } }
+.pillar { background: var(--bg); padding: 24px; }
+.pillar h2 { font-size: 20px; font-weight: var(--head-weight); letter-spacing: -.02em; margin: 14px 0 8px; }
+.pillar p { color: var(--muted); margin: 0; font-size: 15px; }
+
+.again { text-align: center; padding: 0 0 72px; }
+.again a { display: inline-block; font-weight: 600; color: var(--on-accent); background: var(--accent); border-radius: var(--radius); padding: 15px 22px; text-decoration: none; }
+.again a:hover { background: var(--accent-hover); }
+
+footer { border-top: 1px solid var(--rule); color: var(--faint); font-size: 13px; }
+footer .wrap { padding-top: 24px; padding-bottom: 32px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+</style>
+
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <span class="brand"><svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" fill="#e8452b"/><path fill="#fff" fill-rule="evenodd" transform="translate(16 16) scale(0.68)" d="M24.28 11.73 L25.1 11.94 L29.2 17.98 L3.79 35.4 L0.0 28.84 L24.28 11.83 Z M75.1 11.73 L99.9 28.74 L99.9 29.56 L96.11 35.4 L70.8 17.98 L75.1 11.83 Z M28.59 20.85 L49.49 53.02 L50.51 52.92 L71.21 20.85 L93.34 36.01 L73.05 66.24 L73.05 69.83 L59.84 88.27 L39.86 88.17 L26.84 69.83 L26.74 66.03 L6.66 36.32 L28.59 20.95 Z M26.02 29.66 L14.55 37.76 L16.6 40.83 L28.28 32.84 L26.13 29.66 Z M73.57 29.66 L71.62 32.84 L83.3 40.83 L85.35 37.76 L73.67 29.66 Z M31.05 37.35 L19.67 45.24 L21.62 48.41 L33.3 40.52 L31.15 37.35 Z M68.65 37.35 L66.7 40.52 L78.28 48.41 L80.23 45.24 L68.75 37.35 Z M36.07 45.03 L24.69 52.92 L26.74 56.1 L38.22 48.21 L36.17 45.03 Z M63.73 45.03 L61.68 48.21 L73.16 56.1 L75.2 52.92 L63.83 45.03 Z M41.16 70.51a8.82 8.82 0 1 0 17.64 0a8.82 8.82 0 1 0 -17.64 0Z"/></svg>OpenEngine <small>Cloud</small></span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Early access</p>
+      <h1>Your software factory, <em>hosted</em>.</h1>
+      <p class="lede">OpenEngine Cloud runs Claude Code and Codex through a review process you define once: implement, CI, five reviewers, rerank, one fix round, then a pull request for you to approve. Connect a repository. We run everything else.</p>
+    </div>
+    <form class="signup" id="signup" action="https://formspree.io/f/mvkkkvlv" method="POST" novalidate>
+      <label for="email">Get a seat when it opens</label>
+      <div class="row">
+        <input id="email" name="email" type="email" autocomplete="email" placeholder="you@company.com" required>
+        <button type="submit">Request early access</button>
+      </div>
+      <input class="hp" type="text" name="_gotcha" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <p class="fine">One email when your seat opens. Nothing else.</p>
+      <p class="status" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <figure class="run" id="run">
+  <figcaption><span class="eyebrow">One change, every check</span><span class="eyebrow">Hover a node to read its session</span></figcaption>
+  <div class="run-grid">
+    <div class="run-tasks">
+      <div class="run-tasks-head"><span class="eyebrow">Loop · nightly-upkeep</span><span class="run-limits">every 1d · PRs 2 / 5 · <span class="run-spend">$4.12 / $20</span></span></div>
+      <ol>
+        <li class="is-done"><span class="run-task-glyph">✓</span><span class="run-task-title">Fix the flaky scheduler test</span><span class="run-task-meta">PR #1168 · merged</span></li>
+        <li class="is-done"><span class="run-task-glyph">✓</span><span class="run-task-title">Bump langgraph to 1.2.16</span><span class="run-task-meta">PR #1166 · merged</span></li>
+        <li class="is-running run-task-running"><span class="run-task-glyph">⠋</span><span class="run-task-title">Retry webhook deliveries with backoff</span><span class="run-task-meta">run-7c1e30a9 · implement</span></li>
+        <li class="is-queued"><span class="run-task-glyph">○</span><span class="run-task-title">Triage new issues</span><span class="run-task-meta">next</span></li>
+        <li class="is-queued"><span class="run-task-glyph">○</span><span class="run-task-title">Remove the old starter names</span><span class="run-task-meta">queued</span></li>
+      </ol>
+    </div>
+    <div class="run-graph">
+      <div class="run-status"><span>run-7c1e30a9 · implementation-review-rerank v4 · <span class="run-state">running</span> · <span class="run-clock">0:00</span></span><span class="run-now"></span></div>
+      <svg viewBox="0 0 980 360" role="img" aria-label="One change moving through implement, CI, five parallel reviewers, rerank, impact analysis and human review">
+      <path class="g-edge" d="M130 154 H170"/><path class="g-pulse" data-edge="impl-ci" d="M130 154 H170"/>
+      <path class="g-edge" d="M260 154 C285 154 285 26 300 26"/><path class="g-pulse" data-edge="ci-r0" d="M260 154 C285 154 285 26 300 26"/>
+      <path class="g-edge" d="M470 26 C485 26 485 154 510 154"/><path class="g-pulse" data-edge="r0-rerank" d="M470 26 C485 26 485 154 510 154"/>
+      <path class="g-edge" d="M260 154 C285 154 285 90 300 90"/><path class="g-pulse" data-edge="ci-r1" d="M260 154 C285 154 285 90 300 90"/>
+      <path class="g-edge" d="M470 90 C485 90 485 154 510 154"/><path class="g-pulse" data-edge="r1-rerank" d="M470 90 C485 90 485 154 510 154"/>
+      <path class="g-edge" d="M260 154 C285 154 285 154 300 154"/><path class="g-pulse" data-edge="ci-r2" d="M260 154 C285 154 285 154 300 154"/>
+      <path class="g-edge" d="M470 154 C485 154 485 154 510 154"/><path class="g-pulse" data-edge="r2-rerank" d="M470 154 C485 154 485 154 510 154"/>
+      <path class="g-edge" d="M260 154 C285 154 285 218 300 218"/><path class="g-pulse" data-edge="ci-r3" d="M260 154 C285 154 285 218 300 218"/>
+      <path class="g-edge" d="M470 218 C485 218 485 154 510 154"/><path class="g-pulse" data-edge="r3-rerank" d="M470 218 C485 218 485 154 510 154"/>
+      <path class="g-edge" d="M260 154 C285 154 285 282 300 282"/><path class="g-pulse" data-edge="ci-r4" d="M260 154 C285 154 285 282 300 282"/>
+      <path class="g-edge" d="M470 282 C485 282 485 154 510 154"/><path class="g-pulse" data-edge="r4-rerank" d="M470 282 C485 282 485 154 510 154"/>
+      <path class="g-edge" d="M620 154 H660"/><path class="g-pulse" data-edge="rerank-impact" d="M620 154 H660"/>
+      <path class="g-edge" d="M780 154 H820"/><path class="g-pulse" data-edge="impact-human" d="M780 154 H820"/>
+      <path class="g-edge g-loop" d="M565 172 V344 H70 V172"/><path class="g-pulse" data-edge="loop" d="M565 172 V344 H70 V172"/>
+      <text class="g-label-loop" x="318" y="336" text-anchor="middle">findings go back for one fix-and-review round</text>
+      <g class="g-node" data-node="impl" tabindex="0" role="button" aria-label="implement session">
+        <rect x="10" y="136" width="120" height="36"/>
+        <circle class="g-dot" cx="23" cy="154" r="3.5"/>
+        <text class="g-label" x="76" y="154" text-anchor="middle" dominant-baseline="central">implement</text>
+        
+        <g transform="translate(122 136)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node" data-node="ci" tabindex="0" role="button" aria-label="CI session">
+        <rect x="170" y="136" width="90" height="36"/>
+        <circle class="g-dot" cx="183" cy="154" r="3.5"/>
+        <text class="g-label" x="221" y="154" text-anchor="middle" dominant-baseline="central">CI</text>
+        
+        <g transform="translate(252 136)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node g-reviewer" data-node="r0" tabindex="0" role="button" aria-label="security session">
+        <rect x="300" y="4" width="170" height="44"/>
+        <circle class="g-dot" cx="313" cy="26" r="3.5"/>
+        <text class="g-label" x="391" y="20" text-anchor="middle" dominant-baseline="central">security</text>
+        <text class="g-finding" x="391" y="37" text-anchor="middle" dominant-baseline="central"></text>
+        <g transform="translate(462 4)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node g-reviewer" data-node="r1" tabindex="0" role="button" aria-label="bugs session">
+        <rect x="300" y="68" width="170" height="44"/>
+        <circle class="g-dot" cx="313" cy="90" r="3.5"/>
+        <text class="g-label" x="391" y="84" text-anchor="middle" dominant-baseline="central">bugs</text>
+        <text class="g-finding" x="391" y="101" text-anchor="middle" dominant-baseline="central"></text>
+        <g transform="translate(462 68)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node g-reviewer" data-node="r2" tabindex="0" role="button" aria-label="performance session">
+        <rect x="300" y="132" width="170" height="44"/>
+        <circle class="g-dot" cx="313" cy="154" r="3.5"/>
+        <text class="g-label" x="391" y="148" text-anchor="middle" dominant-baseline="central">performance</text>
+        <text class="g-finding" x="391" y="165" text-anchor="middle" dominant-baseline="central"></text>
+        <g transform="translate(462 132)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node g-reviewer" data-node="r3" tabindex="0" role="button" aria-label="conciseness session">
+        <rect x="300" y="196" width="170" height="44"/>
+        <circle class="g-dot" cx="313" cy="218" r="3.5"/>
+        <text class="g-label" x="391" y="212" text-anchor="middle" dominant-baseline="central">conciseness</text>
+        <text class="g-finding" x="391" y="229" text-anchor="middle" dominant-baseline="central"></text>
+        <g transform="translate(462 196)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node g-reviewer" data-node="r4" tabindex="0" role="button" aria-label="duplication session">
+        <rect x="300" y="260" width="170" height="44"/>
+        <circle class="g-dot" cx="313" cy="282" r="3.5"/>
+        <text class="g-label" x="391" y="276" text-anchor="middle" dominant-baseline="central">duplication</text>
+        <text class="g-finding" x="391" y="293" text-anchor="middle" dominant-baseline="central"></text>
+        <g transform="translate(462 260)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node" data-node="rerank" tabindex="0" role="button" aria-label="rerank session">
+        <rect x="510" y="136" width="110" height="36"/>
+        <circle class="g-dot" cx="523" cy="154" r="3.5"/>
+        <text class="g-label" x="571" y="154" text-anchor="middle" dominant-baseline="central">rerank</text>
+        
+        <g transform="translate(612 136)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node" data-node="impact" tabindex="0" role="button" aria-label="impact session">
+        <rect x="660" y="136" width="120" height="36"/>
+        <circle class="g-dot" cx="673" cy="154" r="3.5"/>
+        <text class="g-label" x="726" y="154" text-anchor="middle" dominant-baseline="central">impact</text>
+        
+        <g transform="translate(772 136)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+      <g class="g-node" data-node="human" tabindex="0" role="button" aria-label="human review session">
+        <rect x="820" y="136" width="150" height="36"/>
+        <circle class="g-dot" cx="833" cy="154" r="3.5"/>
+        <text class="g-label" x="901" y="154" text-anchor="middle" dominant-baseline="central">human review</text>
+        
+        <g transform="translate(940 136)"><g class="g-count"><rect x="-10" y="-9" width="20" height="18" rx="9"/><text x="0" y="0" text-anchor="middle" dominant-baseline="central"></text></g></g>
+      </g>
+    </svg>
+    </div>
+    <div class="run-session">
+      <div class="run-session-head"><span class="run-session-node">session</span><span class="run-session-meta"></span></div>
+      <div class="run-session-body" aria-live="off"></div>
+      <div class="run-session-hint">Click a node to keep its session open</div>
+    </div>
+  </div>
+  <script>(function engine(D) {
+  var root = document.getElementById("run");
+  if (!root) return;
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var nodes = {}, pulses = {};
+  root.querySelectorAll(".g-node").forEach(function (g) { nodes[g.getAttribute("data-node")] = g; });
+  root.querySelectorAll(".g-pulse").forEach(function (p) { pulses[p.getAttribute("data-edge")] = p; });
+  var body = root.querySelector(".run-session-body");
+  var headNode = root.querySelector(".run-session-node");
+  var headMeta = root.querySelector(".run-session-meta");
+  var nowEl = root.querySelector(".run-now");
+  var clockEl = root.querySelector(".run-clock");
+  var stateEl = root.querySelector(".run-state");
+  var spendEl = root.querySelector(".run-spend");
+  var taskMeta = root.querySelector(".run-task-running .run-task-meta");
+  var taskGlyph = root.querySelector(".run-task-running .run-task-glyph");
+  var SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  var GLYPH = { tool: "⚙", say: "┃", ok: "✓", warn: "▲" };
+  var lines, attempt, focus, hover = null, sticky = null, spend, idx, t, shown = null;
+
+  function money(v) { return "$" + v.toFixed(2) + " / $" + D.budget; }
+  function clock(ms) { var s = Math.floor(ms / 1000 * 20); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
+  function current() { return sticky || hover || focus; }
+
+  function reset() {
+    lines = {}; attempt = {}; focus = null; spend = D.spend; idx = 0; t = 0;
+    Object.keys(nodes).forEach(function (id) {
+      var g = nodes[id];
+      Array.prototype.slice.call(g.classList).forEach(function (c) { if (c.indexOf("is-") === 0) g.classList.remove(c); });
+      var f = g.querySelector(".g-finding");
+      if (f) { f.textContent = ""; f.classList.remove("is-in", "is-quiet"); }
+      g.querySelector(".g-count").classList.remove("is-in");
+    });
+    root.querySelectorAll(".g-edge").forEach(function (e) { e.classList.remove("is-done"); });
+    stateEl.textContent = "running"; clockEl.textContent = "0:00"; nowEl.textContent = "";
+    spendEl.textContent = money(spend);
+    taskMeta.textContent = D.taskMeta;
+    render(true);
+  }
+
+  function setState(id, st) {
+    var g = nodes[id];
+    ["is-provisioning", "is-running", "is-done", "is-waiting"].forEach(function (c) { g.classList.remove(c); });
+    g.classList.add("is-" + st);
+  }
+
+  function pulse(id) {
+    var p = pulses[id];
+    p.previousElementSibling.classList.add("is-done");
+    if (reduce || !p.animate) return;
+    var L = p.getTotalLength();
+    p.style.strokeDasharray = "18 " + (L + 18);
+    p.animate([{ strokeDashoffset: 18, opacity: 1 }, { strokeDashoffset: -L, opacity: 1 }], { duration: Math.max(260, L * 1.8), easing: "linear" });
+  }
+
+  function badge(id, text) {
+    var c = nodes[id].querySelector(".g-count");
+    var tx = c.querySelector("text");
+    tx.textContent = text;
+    var w = Math.max(20, tx.getComputedTextLength() + 14);
+    var r = c.querySelector("rect");
+    r.setAttribute("width", w); r.setAttribute("x", -w / 2);
+    c.classList.add("is-in");
+  }
+
+  function lineEl(kind, text) {
+    var d = document.createElement("div");
+    d.className = "ln ln-" + kind;
+    var g = document.createElement("span"); g.className = "ln-g"; g.textContent = GLYPH[kind];
+    var s = document.createElement("span"); s.textContent = text;
+    d.appendChild(g); d.appendChild(s);
+    return d;
+  }
+
+  function renderHead() {
+    var id = shown;
+    if (!id) { headNode.textContent = "session"; headMeta.textContent = "waiting to start"; return; }
+    headNode.textContent = D.labels[id];
+    var a = D.agents[id];
+    headMeta.textContent = id === "human" ? a : id === "ci" ? a : a + " · attempt " + (attempt[id] || 1);
+  }
+
+  function render(force) {
+    var next = current();
+    if (next === shown && !force) return;
+    shown = next;
+    renderHead();
+    body.textContent = "";
+    (lines[shown] || []).forEach(function (l) { var e = lineEl(l[0], l[1]); e.style.animation = "none"; body.appendChild(e); });
+    body.scrollTop = body.scrollHeight;
+    Object.keys(nodes).forEach(function (id) { nodes[id].classList.toggle("is-pinned", id === sticky); });
+  }
+
+  function apply(ev) {
+    var k = ev[1];
+    if (k === "state") setState(ev[2], ev[3]);
+    else if (k === "focus") { focus = ev[2]; render(false); }
+    else if (k === "line") {
+      (lines[ev[2]] = lines[ev[2]] || []).push([ev[3], ev[4]]);
+      if (current() === ev[2]) { body.appendChild(lineEl(ev[3], ev[4])); body.scrollTop = body.scrollHeight; }
+      spend += 0.02; spendEl.textContent = money(spend);
+    }
+    else if (k === "pulse") pulse(ev[2]);
+    else if (k === "badge") badge(ev[2], ev[3]);
+    else if (k === "finding") { var f = nodes[ev[2]].querySelector(".g-finding"); f.textContent = ev[3]; if (ev[4]) f.classList.add("is-quiet"); f.classList.add("is-in"); }
+    else if (k === "now") nowEl.textContent = ev[2];
+    else if (k === "task") taskMeta.textContent = ev[2];
+    else if (k === "attempt") { attempt[ev[2]] = ev[3]; if (shown === ev[2]) renderHead(); }
+    else if (k === "run") stateEl.textContent = ev[2];
+  }
+
+  Object.keys(nodes).forEach(function (id) {
+    var g = nodes[id];
+    g.addEventListener("mouseenter", function () { hover = id; render(false); });
+    g.addEventListener("mouseleave", function () { hover = null; render(false); });
+    g.addEventListener("focus", function () { hover = id; render(false); });
+    g.addEventListener("blur", function () { hover = null; render(false); });
+    g.addEventListener("click", function (e) { e.preventDefault(); sticky = sticky === id ? null : id; render(true); });
+    g.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sticky = sticky === id ? null : id; render(true); } });
+  });
+
+  reset();
+  if (reduce) {
+    while (idx < D.events.length) apply(D.events[idx++]);
+    clockEl.textContent = clock(D.total - 5000);
+    taskGlyph.textContent = "⠴";
+    return;
+  }
+  var last = null;
+  function frame(now) {
+    if (last !== null) t += Math.min(now - last, 120); // a hidden tab pauses the scene instead of skipping it
+    last = now;
+    while (idx < D.events.length && D.events[idx][0] <= t) apply(D.events[idx++]);
+    clockEl.textContent = clock(Math.min(t, D.total - 5000));
+    taskGlyph.textContent = SPIN[Math.floor(t / 80) % SPIN.length];
+    if (t > D.total) reset();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})({"events":[[0,"run","running"],[0,"state","impl","provisioning"],[0,"now","provisioning implement · claude"],[0,"task","run-7c1e30a9 · implement"],[600,"state","impl","running"],[600,"focus","impl"],[600,"now","implement · claude · attempt 1"],[700,"line","impl","tool","Read engine/webhooks/deliver.py"],[1500,"line","impl","tool","Read engine/http/client.py"],[2300,"line","impl","say","Deliveries give up on the first 5xx. Adding exponential backoff with jitter, five attempts, then dead-letter."],[3400,"line","impl","tool","Edit engine/webhooks/deliver.py"],[4200,"line","impl","tool","Edit tests/test_webhook_delivery.py"],[5000,"line","impl","tool","Terminal  uv run pytest tests/test_webhook_delivery.py -q"],[6200,"line","impl","ok","7 passed in 2.4s"],[6800,"line","impl","say","Committed on engine/ws_42: feat(webhooks): retry deliveries with backoff"],[7000,"state","impl","done"],[7000,"pulse","impl-ci"],[7000,"state","ci","provisioning"],[7000,"now","waiting for CI"],[7300,"state","ci","running"],[7300,"focus","ci"],[7300,"task","run-7c1e30a9 · CI"],[7400,"line","ci","tool","Checks on engine/ws_42: lint · pyright · tests"],[8600,"line","ci","ok","lint · 41s"],[9400,"line","ci","ok","pyright · 1m02s"],[10400,"line","ci","ok","tests · 3m12s"],[10600,"state","ci","done"],[10600,"pulse","ci-r0"],[10800,"state","r0","provisioning"],[11300,"state","r0","running"],[10600,"pulse","ci-r1"],[10950,"state","r1","provisioning"],[11450,"state","r1","running"],[10600,"pulse","ci-r2"],[11100,"state","r2","provisioning"],[11600,"state","r2","running"],[10600,"pulse","ci-r3"],[11250,"state","r3","provisioning"],[11750,"state","r3","running"],[10600,"pulse","ci-r4"],[11400,"state","r4","provisioning"],[11900,"state","r4","running"],[10600,"now","provisioning 5 reviewers · codex"],[10600,"task","run-7c1e30a9 · review"],[11450,"focus","r1"],[11450,"now","review · 5 facets in parallel · codex"],[11600,"line","r0","tool","Read engine/webhooks/deliver.py"],[12400,"line","r0","tool","Read engine/webhooks/sign.py"],[13300,"line","r0","say","Retries re-send the body signed on attempt 1. A receiver that rejects stale timestamps drops every retry."],[14200,"line","r0","warn","medium · retries reuse a stale signature timestamp"],[14300,"state","r0","done"],[14300,"finding","r0","stale retry signature"],[14300,"badge","r0","1"],[11800,"line","r1","tool","Read engine/webhooks/deliver.py"],[12700,"line","r1","tool","Terminal  uv run pytest tests/test_webhook_delivery.py -q -k jitter"],[13600,"line","r1","say","jitter = uniform(-0.5, 0.5) * base goes negative on attempt 1, and asyncio.sleep raises ValueError."],[14500,"line","r1","warn","high · negative sleep on the first retry"],[15300,"line","r1","warn","low · attempts count from 1, so max_attempts=5 sends six"],[15400,"state","r1","done"],[15400,"finding","r1","negative sleep, +1 more"],[15400,"badge","r1","2"],[11900,"line","r2","tool","Read engine/webhooks/deliver.py"],[12900,"line","r2","say","Backoff is awaited per delivery, not per worker. The queue never blocks."],[13700,"line","r2","ok","no findings"],[13800,"state","r2","done"],[13800,"finding","r2","no findings","quiet"],[12100,"line","r3","tool","Read engine/webhooks/deliver.py"],[13200,"line","r3","say","Three nested try blocks do one job. One loop with one except reads better."],[14000,"line","r3","warn","low · collapse nested try blocks into one loop"],[14100,"state","r3","done"],[14100,"finding","r3","nested try blocks"],[14100,"badge","r3","1"],[12300,"line","r4","tool","Grep retry_after"],[13100,"line","r4","tool","Read engine/http/client.py"],[14100,"line","r4","say","_backoff() duplicates retry_after() in engine/http/client.py, jitter bug included."],[14900,"line","r4","warn","medium · duplicates retry_after() in http/client.py"],[15000,"state","r4","done"],[15000,"finding","r4","duplicates retry_after()"],[15000,"badge","r4","1"],[15600,"pulse","r0-rerank"],[15600,"pulse","r1-rerank"],[15600,"pulse","r2-rerank"],[15600,"pulse","r3-rerank"],[15600,"pulse","r4-rerank"],[15600,"state","rerank","provisioning"],[15600,"now","reranking 5 findings · claude"],[16000,"state","rerank","running"],[16000,"focus","rerank"],[16000,"task","run-7c1e30a9 · rerank"],[16100,"line","rerank","say","5 findings from 5 reviewers."],[16900,"line","rerank","say","Merging 'negative sleep' with 'duplicates retry_after()': one root cause. Dropping the off-by-one; attempts is documented as retries."],[17700,"line","rerank","ok","3 findings survive. Posted with lineage."],[17900,"state","rerank","done"],[17900,"badge","rerank","3 survive"],[17900,"pulse","loop"],[17900,"state","impl","provisioning"],[17900,"now","fix round · implement · claude · attempt 2"],[17900,"task","run-7c1e30a9 · fix"],[18400,"state","impl","running"],[18400,"attempt","impl",2],[18400,"focus","impl"],[18500,"line","impl","say","Fixing 3 findings."],[19100,"line","impl","tool","Edit engine/webhooks/deliver.py  use retry_after() from http/client"],[19800,"line","impl","tool","Edit engine/webhooks/sign.py  sign each attempt"],[20500,"line","impl","tool","Terminal  uv run pytest tests/test_webhook_delivery.py -q"],[21200,"line","impl","ok","9 passed in 2.6s"],[21300,"state","impl","done"],[21300,"pulse","impl-ci"],[21300,"state","ci","running"],[21500,"line","ci","ok","lint · pyright · tests"],[21700,"state","ci","done"],[21700,"pulse","ci-r0"],[21900,"state","r0","running"],[21900,"attempt","r0",2],[22700,"state","r0","done"],[22700,"pulse","r0-rerank"],[21700,"pulse","ci-r1"],[21900,"state","r1","running"],[21900,"attempt","r1",2],[22800,"state","r1","done"],[22800,"pulse","r1-rerank"],[21700,"pulse","ci-r4"],[21900,"state","r4","running"],[21900,"attempt","r4",2],[22900,"state","r4","done"],[22900,"pulse","r4-rerank"],[21900,"now","re-review · 3 facets · codex · attempt 2"],[21900,"task","run-7c1e30a9 · review"],[22100,"line","r0","ok","resolved: the signature is recomputed per attempt"],[22300,"line","r1","ok","resolved: jitter is clamped at 0"],[22500,"line","r4","ok","resolved: one helper"],[23100,"state","rerank","running"],[23100,"attempt","rerank",2],[23300,"line","rerank","ok","0 new findings."],[23500,"state","rerank","done"],[23500,"badge","rerank","0 new"],[23600,"pulse","rerank-impact"],[23600,"state","impact","provisioning"],[23600,"now","impact analysis · claude"],[23900,"state","impact","running"],[23900,"focus","impact"],[23900,"task","run-7c1e30a9 · impact"],[24000,"line","impact","tool","Read diff  +184 −61 · 3 files"],[24700,"line","impact","say","Changes webhook delivery for every connected repository, on failure paths only. Covered by tests."],[25400,"line","impact","warn","Orange · behaviour change on a shared path"],[25500,"state","impact","done"],[25500,"badge","impact","Orange"],[25500,"pulse","impact-human"],[25500,"state","human","waiting"],[25500,"focus","human"],[25500,"now","waiting for human review"],[25500,"run","waiting"],[25500,"task","PR #1174 · awaiting your review"],[25500,"badge","human","PR #1174"],[25700,"line","human","ok","PR #1174 opened · review requested"],[26200,"line","human","say","Waiting for a person. Approve on the PR or reply approve in Slack."]],"total":31500,"spend":4.12,"budget":20,"taskMeta":"run-7c1e30a9 · implement","agents":{"impl":"claude","ci":"github checks","r0":"codex","r1":"codex","r2":"codex","r3":"codex","r4":"codex","rerank":"claude","impact":"claude","human":"you"},"labels":{"impl":"implement","ci":"CI","r0":"security","r1":"bugs","r2":"performance","r3":"conciseness","r4":"duplication","rerank":"rerank","impact":"impact","human":"human review"}});</script>
+</figure>
+
+  <section class="today">
+    <h2>What it does</h2>
+    <ul>
+      <li><h3>Run on a schedule</h3><p>Put a graph on a cadence: nightly dependency upkeep, flaky-test fixes, issue triage. It runs while nobody is at the keyboard.</p></li>
+      <li><h3>Continuous security review</h3><p>A daily graph maps your public API surface, a second model tries to disprove each finding, and confirmed ones become scoped issues with a reproduction.</p></li>
+      <li><h3>Steer it from Slack or the PR</h3><p>Reply in the thread or comment on the pull request and the correction reaches the agent that is working. Ask for more afterwards and the same run resumes.</p></li>
+      <li><h3>Cap spend and pull requests</h3><p>Every loop has a budget and a limit on the pull requests it opens, so agents never get ahead of your reviewers.</p></li>
+    </ul>
+  </section>
+
+  <section class="pillars">
+    <div class="pillar"><span class="eyebrow">01</span><h2>Graphs</h2><p>Add a reviewer once and it checks every change. Review with a different model than the one that wrote the code.</p></div>
+    <div class="pillar"><span class="eyebrow">02</span><h2>Versioned</h2><p>A change to the process is as reviewable as a change to the code. Runs pin the version they started on.</p></div>
+    <div class="pillar"><span class="eyebrow">03</span><h2>Integrations</h2><p>Start, steer and approve work from Slack threads and pull request comments.</p></div>
+    <div class="pillar"><span class="eyebrow">04</span><h2>Hosted</h2><p>Connect a repository and go. Nothing to install, nothing to keep running.</p></div>
+  </section>
+
+  <div class="again"><a href="#signup" onclick="setTimeout(function(){document.getElementById('email').focus()},0)">Request early access</a></div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 OpenEngine</span>
+    <span>We use your email only to contact you about OpenEngine Cloud early access. <a href="privacy/">Privacy</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var VARIANT = "openengine";
+  var form = document.getElementById("signup");
+  var status = form.querySelector(".status");
+  var button = form.querySelector("button");
+  var params = new URLSearchParams(location.search);
+  var KEEP = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "gclid", "li_fat_id"];
+
+  // Remember the ad click across reloads so a later signup still credits it.
+  var attribution = {};
+  try { attribution = JSON.parse(sessionStorage.getItem("attribution") || "{}"); } catch (e) {}
+  KEEP.forEach(function (k) { if (params.get(k)) attribution[k] = params.get(k); });
+  if (!attribution.referrer && document.referrer) attribution.referrer = document.referrer;
+  try { sessionStorage.setItem("attribution", JSON.stringify(attribution)); } catch (e) {}
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var email = form.email.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      status.className = "status err";
+      status.textContent = "Enter a valid email address.";
+      form.email.focus();
+      return;
+    }
+    var data = new FormData(form);
+    data.set("email", email);
+    data.set("variant", VARIANT);
+    data.set("_subject", "OpenEngine Cloud early access: " + email);
+    data.set("landing_url", location.href.split("?")[0]);
+    Object.keys(attribution).forEach(function (k) { data.set(k, attribution[k]); });
+
+    button.disabled = true;
+    status.className = "status";
+    status.textContent = "Sending…";
+    fetch(form.action, { method: "POST", body: data, headers: { Accept: "application/json" } })
+      .then(function (r) {
+        if (!r.ok) return r.json().then(function (b) { throw new Error((b.errors || []).map(function (e) { return e.message; }).join(" ") || "Request failed"); });
+        form.classList.add("done");
+        status.textContent = "You're on the list. We'll email you when your seat opens.";
+        if (window.trackSignup) window.trackSignup();
+      })
+      .catch(function (err) {
+        status.className = "status err";
+        status.textContent = "Something went wrong (" + err.message + "). Please try again.";
+      })
+      .finally(function () { button.disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>
