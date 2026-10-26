@@ -827,3 +827,74 @@ def test_a_provider_that_answers_with_no_path_is_refused(tmp_path: Path) -> None
     assert failed.status.value == "failed"
     assert "Pathless provisioned a workspace with no path" in failed.error
     assert CHECKOUT not in failed.values
+
+
+@pytest.mark.parametrize("repository", ["~/checkout", "/absolute/checkout", "relative/checkout", "~/missing"])
+def test_normalized_repository_is_persisted_and_provisioned(tmp_path, monkeypatch, repository):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    expected = str(Path(repository).expanduser())
+    provider = RecordingWorkspaceProvider()
+    workflow = assembled(provider, [])
+
+    async def scenario():
+        async with running([workflow], tmp_path) as (runtime, log):
+            run = await runtime.start(workflow.graph_id, {"task": TASK, "repository": repository})
+            await until(log, run.run_id, "approval.requested")
+            record = await runtime.store.run(run.run_id)
+            assert record.metadata.repository == expected
+            assert (await runtime.snapshot(run.run_id)).values["repository"] == expected
+    asyncio.run(scenario())
+    assert provider.provisioned == [(expected, "HEAD")]
+
+
+def test_retry_legacy_checkpoint_expands_repository(tmp_path, monkeypatch):
+    from engine.runtime import repositories
+    from engine.graph_runtime_langgraph.components import workspace
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    class LegacyProvider(RecordingWorkspaceProvider):
+        async def provision(self, repository, base_ref, **kwargs):
+            if repository.startswith("~"):
+                raise FileNotFoundError(repository)
+            return await super().provision(repository, base_ref, **kwargs)
+
+    provider = LegacyProvider()
+    workflow = assembled(provider, [])
+
+    async def scenario():
+        async with running([workflow], tmp_path) as (runtime, log):
+            # Seed the persisted failure exactly as the pre-fix server did.
+            with monkeypatch.context() as old:
+                old.setattr(repositories, "normalize_repository", lambda value: value)
+                old.setattr(workspace, "normalize_repository", lambda value: value)
+                run = await runtime.start(workflow.graph_id, {"repository": "~/checkout"})
+                await until(log, run.run_id, "run.failed")
+            checkpoint = next(item for item in await runtime.history(run.run_id)
+                              if "workspace" in item.next_nodes)
+            await runtime.resume_from(run.run_id, checkpoint.checkpoint_id)
+            await until(log, run.run_id, "approval.requested")
+            assert (await runtime.store.run(run.run_id)).metadata.repository == "~/checkout"
+    asyncio.run(scenario())
+    assert provider.provisioned == [(str(tmp_path / "checkout"), "HEAD")]
+
+
+@pytest.mark.parametrize("checkout", ["missing", "directory", "file"])
+def test_invalid_local_repository_fails_workspace(tmp_path, monkeypatch, checkout):
+    from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "directory").mkdir()
+    (tmp_path / "file").write_text("not a checkout")
+    provider = GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
+    workflow = assembled(provider, [])
+
+    async def scenario():
+        async with running([workflow], tmp_path) as (runtime, log):
+            run = await runtime.start(workflow.graph_id, {"repository": f"~/{checkout}"})
+            await until(log, run.run_id, "run.failed")
+            snapshot = await runtime.snapshot(run.run_id)
+            assert snapshot.error
+            assert "workspace" not in snapshot.values
+            assert (await runtime.store.run(run.run_id)).metadata.repository == str(tmp_path / checkout)
+    asyncio.run(scenario())

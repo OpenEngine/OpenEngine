@@ -38,7 +38,7 @@ from urllib.parse import parse_qsl, urlsplit
 import yaml
 from langgraph_acp.readiness import AgentReadiness, AgentReadinessCache, missing_runtime
 from langgraph_acp._json import JSONValue
-from engine.runtime.repositories import RepositoryRegistry
+from engine.runtime.repositories import RepositoryRegistry, normalize_repository
 from engine.domain import MODE_INPUT, ApprovalDecision, ApprovalId, ForgeMode, RunId
 from engine.graph_runtime import (
     AmbiguousExecutionError,
@@ -1421,16 +1421,7 @@ class GraphService:
         What lets a CLI on another machine say which repository it is standing
         in: it cannot know this host's paths, but it knows the project.
         """
-        if not repository or repository == ".":
-            return repository
-        repos = self._repositories.snapshot.repos
-        if repository in repos:
-            return str(Path(repos[repository]).expanduser())
-        folded = repository.lower().removesuffix(".git")
-        for name, path in repos.items():
-            if name.lower() == folded:
-                return str(Path(path).expanduser())
-        return repository
+        return normalize_repository(repository, self._repositories.snapshot.repos)
 
     async def _run_context(
         self, run_id: str, *, include_selected: bool = True,

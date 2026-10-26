@@ -156,3 +156,17 @@ def test_registry_validates_nested_settings_without_deprecations(caplog):
     assert 'deprecated' not in caplog.text
     with pytest.raises(EngineConfigError):
         registry.trust('missing', True)
+
+
+@pytest.mark.parametrize("repository,expected", [
+    ("~/checkout", "{home}/checkout"), ("~", "{home}"),
+    ("/absolute/checkout", "/absolute/checkout"), ("relative/checkout", "relative/checkout"),
+    ("./checkout", "checkout"), ("/missing/checkout", "/missing/checkout"),
+    ("alias", "{home}/checkout"), ("OWNER/REPO.git", "{home}/checkout"),
+    ("unregistered/repo", "unregistered/repo"), ("", ""),
+])
+def test_normalize_repository_on_server(monkeypatch, tmp_path, repository, expected):
+    from engine.runtime.repositories import normalize_repository
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert normalize_repository(repository, {"alias": "~/checkout", "owner/repo": "~/checkout"}) == expected.format(home=tmp_path)

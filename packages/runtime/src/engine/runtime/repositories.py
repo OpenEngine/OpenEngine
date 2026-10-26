@@ -12,6 +12,21 @@ from engine.runtime.change_requests import remote_project
 from engine.runtime.config import EngineConfigError, parse_engine_config
 
 
+def normalize_repository(repository: str, repos: Mapping[str, str] | None = None) -> str:
+    """Expand a host-local checkout after resolving configured repository aliases.
+
+    Keep relative paths relative to the server and leave unregistered forge
+    slugs alone. Existence and git validity belong to workspace provisioning.
+    """
+    repos = repos or {}
+    if repository in repos:
+        repository = repos[repository]
+    else:
+        folded = repository.lower().removesuffix(".git")
+        repository = next((path for name, path in repos.items() if name.lower() == folded), repository)
+    return str(Path(repository).expanduser()) if repository else repository
+
+
 @dataclass(frozen=True)
 class RepositorySnapshot:
     repos: Mapping[str, str]

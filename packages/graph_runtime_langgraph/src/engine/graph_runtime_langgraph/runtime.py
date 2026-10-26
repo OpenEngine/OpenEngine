@@ -235,6 +235,10 @@ class LangGraphRuntime:
             raise ValueError(f"scheduled run belongs to another graph: {run_id}")
         from engine.graph_runtime_langgraph.forge import resolve_forge_context
 
+        from engine.runtime.repositories import normalize_repository
+
+        if values.get("repository"):
+            values = {**values, "repository": normalize_repository(str(values["repository"]))}
         supplied = values.get("inputs")
         inputs = dict(supplied) if isinstance(supplied, Mapping) else {}
         configured = None

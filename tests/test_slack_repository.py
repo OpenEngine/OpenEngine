@@ -58,12 +58,13 @@ def test_repository_limits_and_argument_validation(tmp_path):
     assert len(reader.call('list_repository_files', {}).splitlines()) == 201
 
 
-def test_repository_tools_over_mcp_and_permissions(tmp_path):
+def test_repository_tools_over_mcp_and_permissions(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / 'README.md').write_text('Repository guidance')
 
     async def scenario():
         create = AsyncMock()
-        async with ConciergeBroker(create_workorder=create, default_repository=str(tmp_path)) as broker:
+        async with ConciergeBroker(create_workorder=create, default_repository="~") as broker:
             config = broker.config
             args = config['args']
             port = int(args[args.index('--port') + 1])
@@ -109,3 +110,24 @@ def test_repository_tools_over_mcp_and_permissions(tmp_path):
                     options=(ACPPermissionOption('yes', kind='allow_once'),)))
                 assert permission.granted == (name in names)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("repository", ["~/checkout", "absolute", "checkout"])
+def test_reader_uses_server_checkout(monkeypatch, tmp_path, repository):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "README.md").write_text("correct checkout")
+    reader = RepositoryReader(str(checkout) if repository == "absolute" else repository)
+    assert reader.call("read_repository_file", {"path": "README.md"}) == "1: correct checkout"
+
+
+@pytest.mark.parametrize("repository", ["~/missing", "missing", "file"])
+def test_reader_invalid_checkout_does_not_fall_back(monkeypatch, tmp_path, repository):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "file").write_text("not a directory")
+    (tmp_path / "README.md").write_text("wrong checkout")
+    with pytest.raises(OSError):
+        RepositoryReader(repository).call("list_repository_files", {})

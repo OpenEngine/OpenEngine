@@ -36,7 +36,7 @@ REPOSITORY_TOOL_NAMES = frozenset(spec["name"] for spec in REPOSITORY_TOOL_SPECS
 
 class RepositoryReader:
     def __init__(self, repository: str) -> None:
-        self.root = Path(repository or ".").resolve()
+        self.root = Path(repository or ".").expanduser().resolve()
 
     def _path(self, value: object) -> Path:
         if not isinstance(value, str) or not value:

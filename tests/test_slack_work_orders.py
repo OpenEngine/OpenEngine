@@ -923,21 +923,24 @@ def test_reused_concierge_session_steers_as_current_sender():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("repository", ["~/checkout", "local"])
 @pytest.mark.parametrize("fail_after_create", [False, True])
 def test_thread_reply_creates_workorder_through_stdio_mcp(
-    tmp_path, fail_after_create, *, slack_app, client
+    tmp_path, fail_after_create, monkeypatch, repository, *, slack_app, client
 ):
     from engine.graph_runtime_langgraph.workflows import sqlite_runtime
 
+    monkeypatch.setenv("HOME", str(tmp_path))
     graph = _mention_graph()
     provider = FakeACPProvider(create=True, fail_after_create=fail_after_create)
     communications = RecordingCommunications()
     app, capabilities, _ = slack_app(
         communications,
         WorkOrdersConfig(
-            repository="acme/api", workflow="implementation-review-v1", runner="default"
+            repository=repository, workflow="implementation-review-v1", runner="default"
         ),
         _workflow_catalog(),
+        repos={"local": "~/checkout"},
         provider=provider,
         graph_runtime=sqlite_runtime((graph,), tmp_path / "graph"),
     )
@@ -958,6 +961,7 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(
         browser.portal.call(app.state.slack_ingress.drain)
         runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
+        assert runs[0].repository == str(tmp_path / "checkout")
         assert runs[0].origin.thread_id == "1"
         result = provider.clients[0].result
         assert not result.get("isError"), result
