@@ -245,10 +245,12 @@ class GraphService:
         self._start = start or self._start_directly
         self._session_config = session_config
         self._pull_requests = pull_requests
-        self._default_repository = default_repository
         self._repositories = (
             repositories if isinstance(repositories, RepositoryRegistry)
             else RepositoryRegistry(repositories, projects={})
+        )
+        self._default_repository = normalize_repository(
+            default_repository.strip(), self._repositories.snapshot.repos, configured=True,
         )
         self._default_base_ref = default_base_ref
         self._clock = clock or (lambda: datetime.now(timezone.utc))
