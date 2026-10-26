@@ -44,7 +44,8 @@ _ALLOWED = (
 
 
 class ExpressionError(ValueError):
-    pass
+    def __init__(self, source: str, problem: str) -> None:
+        super().__init__(f"{source!r}: {problem}" if source.strip() else problem)
 
 
 @dataclass(frozen=True)
@@ -67,26 +68,26 @@ class Expression:
 def parse(source: str) -> Expression:
     text = _translate(source.strip()).strip()
     if not text:
-        raise ExpressionError("empty expression")
+        raise ExpressionError(source, "empty expression")
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as error:
-        raise ExpressionError(f"cannot parse {source!r}: {error.msg}") from None
+        raise ExpressionError(source, f"cannot parse: {error.msg}") from None
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED):
-            raise ExpressionError(f"{source!r}: {type(node).__name__} is not allowed")
+            raise ExpressionError(source, f"{type(node).__name__} is not allowed")
         if isinstance(node, ast.Name) and node.id not in ROOTS and node.id not in FUNCTIONS:
             raise ExpressionError(
-                f"{source!r}: unknown name {node.id!r}; use instruction, repository, "
+                source, f"unknown name {node.id!r}; use instruction, repository, "
                 "inputs, outputs, visits or item"
             )
         if isinstance(node, ast.Call):
             if not isinstance(node.func, ast.Name) or node.func.id not in FUNCTIONS or node.keywords:
-                raise ExpressionError(f"{source!r}: only {', '.join(sorted(FUNCTIONS))} can be called")
+                raise ExpressionError(source, f"only {', '.join(sorted(FUNCTIONS))} can be called")
         if isinstance(node, ast.Name) and node.id in FUNCTIONS and not _is_called(node, tree):
-            raise ExpressionError(f"{source!r}: {node.id} is a function")
+            raise ExpressionError(source, f"{node.id} is a function")
         if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
-            raise ExpressionError(f"{source!r}: names cannot start with '_'")
+            raise ExpressionError(source, "names cannot start with '_'")
     return Expression(source, tree)
 
 
@@ -125,7 +126,7 @@ def _translate(source: str) -> str:
                 end += 1
             word = source[index:end]
             if word in ("and", "or", "not", "is", "lambda", "if", "else", "for"):
-                raise ExpressionError(f"{source!r}: use && || ! rather than Python's {word!r}")
+                raise ExpressionError(source, f"use && || ! rather than Python's {word!r}")
             out.append(_WORDS.get(word, word))
             index = end
             continue
@@ -133,7 +134,7 @@ def _translate(source: str) -> str:
             out.append(char)
         index += 1
     if quote:
-        raise ExpressionError(f"{source!r}: unterminated string")
+        raise ExpressionError(source, "unterminated string")
     return "".join(out)
 
 

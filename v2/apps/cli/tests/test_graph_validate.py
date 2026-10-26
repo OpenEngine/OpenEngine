@@ -250,7 +250,7 @@ def test_structure_problems(capsys: pytest.CaptureFixture[str], tmp_path: Path, 
     ("graph", "problems"),
     [
         (_graph(plan=[_agent("${outputs.a.x ==}"), *_steps("b")]),
-         ["spec.plan[0].agent.prompt: cannot parse 'outputs.a.x ==': invalid syntax"]),
+         ["spec.plan[0].agent.prompt: 'outputs.a.x ==': cannot parse: invalid syntax"]),
         (_graph(flow=[{"from": ["b"], "route": [{"when": "visits.a < 3 and true", "to": "a"}, {"to": "end"}]}]),
          ["spec.flow[0].route[0].when: 'visits.a < 3 and true': use && || ! rather than Python's 'and'"]),
         (_graph(plan=[_agent("${__import__('os')}"), *_steps("b")]),
