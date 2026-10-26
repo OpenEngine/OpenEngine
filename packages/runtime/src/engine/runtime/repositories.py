@@ -1,6 +1,7 @@
 """Live repository configuration. Updates publish one immutable snapshot."""
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ def normalize_repository(repository: str, repos: Mapping[str, str] | None = None
     else:
         folded = repository.lower().removesuffix(".git")
         repository = next((path for name, path in repos.items() if name.lower() == folded), repository)
-    return str(Path(repository).expanduser()) if repository else repository
+    return os.path.expanduser(repository)
 
 
 @dataclass(frozen=True)

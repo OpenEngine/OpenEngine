@@ -161,7 +161,7 @@ def test_registry_validates_nested_settings_without_deprecations(caplog):
 @pytest.mark.parametrize("repository,expected", [
     ("~/checkout", "{home}/checkout"), ("~", "{home}"),
     ("/absolute/checkout", "/absolute/checkout"), ("relative/checkout", "relative/checkout"),
-    ("./checkout", "checkout"), ("/missing/checkout", "/missing/checkout"),
+    ("./checkout", "./checkout"), ("/missing/checkout", "/missing/checkout"),
     ("alias", "{home}/checkout"), ("OWNER/REPO.git", "{home}/checkout"),
     ("unregistered/repo", "unregistered/repo"), ("", ""),
 ])
