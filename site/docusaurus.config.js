@@ -37,14 +37,14 @@ const config = {
         docs: {
           routeBasePath: 'docs',
           sidebarPath: './sidebars.js',
-          // The Guides category links to its landing page already; don't list it again among the guides.
+          // The Guides and Benchmark categories link to their landing pages already; don't list them again.
           async sidebarItemsGenerator({defaultSidebarItemsGenerator, ...args}) {
             const items = await defaultSidebarItemsGenerator(args);
-            return items.filter((item) => !(item.type === 'doc' && item.id === 'guides/index'));
+            return items.filter((item) => !(item.type === 'doc' && (item.id === 'guides/index' || item.id === 'benchmark/index')));
           },
           // Generated guides have no source here to edit; they come from e2e/tests.
           editUrl: ({versionDocsDirPath, docPath}) =>
-            docPath.startsWith('guides/test2doc-') ? undefined : `${REPO}/edit/main/site/${versionDocsDirPath}/${docPath}`,
+            (docPath.startsWith('guides/test2doc-') || docPath.startsWith('benchmark/test2doc-')) ? undefined : `${REPO}/edit/main/site/${versionDocsDirPath}/${docPath}`,
         },
         blog: {
           routeBasePath: 'blog',
