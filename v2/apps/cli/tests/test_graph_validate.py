@@ -12,6 +12,7 @@ from openengine.cli.__main__ import main
 
 EXAMPLES = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "graph_engine" / "v1" / "resources" / "examples"
 GRAPH = EXAMPLES / "implement-review.graph.yaml"
+NOTE = "note: runners and tools are not checked here; they are checked when a run starts"
 BAD = Path(__file__).resolve().parent / "bad.graph.yaml"
 
 
@@ -42,7 +43,7 @@ def test_every_independent_problem_is_reported_with_its_path(capsys: pytest.Capt
 
 def test_standard_input_is_read_for_a_dash(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO(GRAPH.read_text()))
-    assert _validate(capsys, "-") == (0, ["-: valid Graph implement-review"])
+    assert _validate(capsys, "-") == (0, ["-: valid Graph implement-review", NOTE])
     monkeypatch.setattr("sys.stdin", io.StringIO(BAD.read_text()))
     code, lines = _validate(capsys, "-")
     assert code == 1 and len(lines) == 5 and all(line.startswith("-: ") for line in lines)
