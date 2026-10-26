@@ -36,11 +36,14 @@ front and collected as the run goes, not a step of its own.
    OpenEngine in it, and the deployed site. Stop any leftover daemon or tunnel.
 1. **Clone OpenEngine** at the ref under test (the release commit, or the v1
    tag for the baseline), and record its SHA.
-2. **Set up OpenEngine.** Configure GitHub login, ideally by having it create a
-   GitHub App. Screenshot where each secret goes, with the secret masked by a
+2. **Set up OpenEngine.** Configure GitHub CLI access with the bench account's
+   token and isolated `gh_config_dir`. Reuse a pre-registered benchmark GitHub
+   App if app-backed webhooks are wanted; current setup does not create one
+   (see the #1137 findings below). Screenshot where each secret goes, with the secret masked by a
    test2doc highlight annotation. Start the Cloudflare Tunnel. Register the `tdd-guide` graph.
 3. **Create the calculator repo.**
-4. **Connect the repo to OpenEngine.** Install the app or add webhooks, and
+4. **Connect the repo to OpenEngine.** Grant the existing app access to the new
+   repo or add a repository webhook, and
    apply the repository settings below, including turning on Pages. The deploy
    workflow itself is one of the seeded issues.
 5. **Seed** the milestone and its issues.
@@ -246,11 +249,10 @@ wherever the test is not about login:
   own GitHub access, authenticate with a token (`gh` auth and `gh_config_dir`),
   which needs no browser. Use a dedicated bot account (OpenEngine-worker-bot or
   Rock-AI-bot) inside a bench org, so nothing in the journey needs an interactive
-  sign-in. If a step does need the browser, the bot signs in with a passkey
-  instead of a 2FA code. A person registers the passkey once, in a manual headed
-  Playwright step, and the harness reuses it. Spike whether the credential can be
-  saved and replayed (for example with a virtual authenticator) before relying on
-  it. The passkey is a secret like the tokens below and is never committed.
+  sign-in. For browser-only steps, a Chromium virtual authenticator can export
+  and import a passkey across fresh browsers, and GitHub accepted it in a manual
+  trial (see the #1137 findings). Browser-only steps may sign in this way, from a
+  local gitignored credential.
 - **Slack.** Use a dedicated test workspace. Anything that does not need the
   Slack UI (posting a message to the bot, reading its replies) goes through the
   Slack API with a bot or user token. Screenshots of the Slack UI, if wanted,
@@ -262,6 +264,94 @@ wherever the test is not about login:
   [highlight annotation](https://www.test2doc.com/docs/user-guide/screenshots/annotation#highlight-box-styling)
   and set `highlightFillStyle` to an opaque hex color, so the box covers the
   value instead of tinting it.
+
+### GitHub setup spike (#1137)
+
+Investigated from 2026-10-23 to 2026-10-26. Findings distinguish source inspection and documented
+API behavior from a live GitHub browser trial.
+
+**App registration.** Current `oe setup` installs and starts the daemon
+(`apps/cli/src/engine/apps/cli/daemon.py`); `oe connect gh` selects GitHub CLI,
+and `oe connect github` uses device authorization
+(`apps/cli/src/engine/apps/cli/connect.py`). There is no app-manifest creation
+flow in these setup paths. The assumption that current setup creates an app is
+false. Implementing it is outside this spike.
+
+GitHub's [manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
+could support a future setup: submit a form with JSON `manifest` to
+`https://github.com/settings/apps/new` (or the organization equivalent) in a
+signed-in browser, confirm the app name, and receive `code` at `redirect_url`.
+Validate a random `state`, then exchange the code with
+`POST /app-manifests/{code}/conversions` within one hour. The response contains
+the app ID, private key, webhook secret and client secret. This automates the
+configuration, but still requires browser registration and a separate app
+installation. No app was created in this investigation.
+
+**App lifecycle decision.** Reuse one dedicated benchmark app and its account
+installation. GitHub documents [registration deletion through Settings](https://docs.github.com/en/apps/maintaining-github-apps/deleting-a-github-app),
+and its [app REST endpoints](https://docs.github.com/en/rest/apps/apps) provide
+`DELETE /app/installations/{installation_id}` to uninstall, not delete the app
+registration. No supported REST registration-deletion endpoint was found; do
+not depend on an undocumented browser endpoint or create an app per trial.
+
+After repo recreation, grant access to its **new repository ID** with
+[`PUT /user/installations/{installation_id}/repositories/{repository_id}`](https://docs.github.com/en/rest/apps/installations#add-a-repository-to-an-app-installation),
+using an authorized repository admin credential with the endpoint's required
+permissions. Preserve the installation rather than uninstalling and requiring
+browser installation again. Update the quick tunnel URL through
+[`PATCH /app/hook/config`](https://docs.github.com/en/rest/apps/webhooks#update-a-webhook-configuration-for-an-app)
+using an app JWT. These lifecycle operations are documented, not live-tested
+against a benchmark app. For the first CLI baseline, use the existing `gh`
+provider and a repository webhook; it needs no GitHub browser session.
+
+**Passkey method.** The spike used a throwaway Playwright script, not kept; the
+setup step should reproduce these calls. Chromium launches with a Chrome
+DevTools Protocol [WebAuthn virtual authenticator](https://chromedevtools.github.io/devtools-protocol/tot/WebAuthn/)
+(`WebAuthn.enable` and `WebAuthn.addVirtualAuthenticator`: `ctap2`, `internal`
+transport, resident keys, user verification on, automatic presence simulation).
+A person signs in as the `gh` account (verified here as `rock-ai-bot`) in that
+headed browser and registers a passkey in GitHub's security settings. Read the
+credential with `WebAuthn.getCredentials`, close the browser, and in a fresh
+browser with no cookies add it back with `WebAuthn.addCredential`. GitHub's
+"Sign in with a passkey" then completes without a 2FA code.
+
+A local check, with no GitHub account, showed the mechanism is sound. It
+registered a resident credential on a locally intercepted HTTPS origin, exported
+it, imported it into a new browser, and requested an assertion with a new
+challenge and no allowed-credential list. The signature verified against the
+original public key, with the right challenge, origin, relying-party hash,
+user-presence and user-verification flags, and an increased counter. This proves
+credential persistence, not GitHub's acceptance of it.
+
+**Live result (2026-10-26).** A person enrolled as `rock-ai-bot` using a throwaway
+script: GitHub accepted the virtual authenticator's registration and the credential was saved.
+A replay then started a fresh browser with only that credential, and the
+passkey button signed in successfully. This is one manual trial. It does not
+show that GitHub keeps accepting the credential over time, that the counter
+stays in step across many replays, or that GitHub never asks for extra
+verification (new location, bot checks). A first attempt that closed the
+browser before saving left an orphaned passkey on the account, so remove any
+stray "OpenEngine benchmark spike" entries from the bot's security settings
+after a failed enrollment.
+
+**Credential decision and fallback.** Store the full CDP credential
+(including private key, user handle and counter) at
+`.engine/benchmark-github-passkey.json`, covered by the root `.gitignore`, with
+mode `0600`. Record no screenshots, traces, cookies or storage state.
+The credential is a virtual one registered inside the automated browser, not an
+existing OS or hardware passkey. Persist the updated counter after each replay;
+serialize reuse of this credential. CI would read it from a dedicated benchmark
+environment secret `BENCHMARK_GITHUB_PASSKEY_JSON`, materialized with the same
+permissions, and needs an explicit process for persisting updates. Until that
+exists, keep browser trials local. App keys and tokens also remain outside
+committed artifacts.
+
+If GitHub stops accepting the virtual passkey (the one manual trial passed), keep the baseline on token auth and
+repository webhooks. A browser-specific follow-up can use the bot password plus
+harness-computed TOTP from a separately stored seed (CI environment secrets or
+gitignored local files); TOTP is a proposed fallback, not tested here. Bot checks
+or recovery prompts still require an operator. Do not silently fall back to a
+personal account.
 
 ### Decision: the real run feeds the committed guide
 
@@ -300,8 +390,8 @@ Check these early and change the plan if any turn out wrong:
 - A loop with a short `--every` works a milestone cleanly: no overlapping runs
   on the same issue, and the shortest interval `oe loop add` accepts.
 - Merging a `tdd-guide` PR closes its issue, so Pick moves on to the next one.
-- OpenEngine can create its own GitHub App during setup.
-- A bot account's passkey can be saved and replayed under Playwright.
+- The bot's saved Chromium virtual passkey keeps working across repeated fresh
+  browser sign-ins (one manual replay passed; see #1137 findings).
 - `tdd-guide` gives its PRs Conventional Commits titles, so the changelog works.
   If commitlint fails a PR on its title, `tdd-guide`'s CI retry sends it back to
   the implementer, which may fix code rather than the title.
