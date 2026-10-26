@@ -11,18 +11,7 @@ from openengine.cli.__main__ import main
 
 EXAMPLES = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "graph_engine" / "v1" / "resources" / "examples"
 GRAPH = EXAMPLES / "implement-review.graph.yaml"
-MALFORMED = """\
-apiVersion: openengine.cc/v1alpha1
-kind: Graph
-metadata: {name: Bad_Name}
-spec:
-  plan:
-    - name: a
-      agent: {runner: {name: claude}}
-      human: {prompt: x}
-  flow:
-    - {from: []}
-"""
+BAD = Path(__file__).resolve().parent / "bad.graph.yaml"
 
 
 def _validate(capsys: pytest.CaptureFixture[str], target: str) -> tuple[int, list[str]]:
@@ -34,22 +23,20 @@ def test_a_valid_graph_is_named(capsys: pytest.CaptureFixture[str]) -> None:
     assert _validate(capsys, str(GRAPH)) == (0, [f"{GRAPH}: valid Graph implement-review"])
 
 
-def test_every_independent_problem_is_reported_with_its_path(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    path = tmp_path / "bad.graph.yaml"
-    path.write_text(MALFORMED)
-    code, lines = _validate(capsys, str(path))
+def test_every_independent_problem_is_reported_with_its_path(capsys: pytest.CaptureFixture[str]) -> None:
+    code, lines = _validate(capsys, str(BAD))
     assert code == 1
     assert [line.split(": ")[1] for line in lines] == [
         "metadata.name", "spec.flow[0]", "spec.flow[0].from", "spec.plan[0]", "spec.plan[0].agent",
     ]
-    assert all(line.startswith(f"{path}: ") for line in lines)
-    assert f"{path}: spec.plan[0]: set exactly one of agent, human, ci" in lines
+    assert all(line.startswith(f"{BAD}: ") for line in lines)
+    assert f"{BAD}: spec.plan[0]: set exactly one of agent, human, ci" in lines
 
 
 def test_standard_input_is_read_for_a_dash(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO(GRAPH.read_text()))
     assert _validate(capsys, "-") == (0, ["-: valid Graph implement-review"])
-    monkeypatch.setattr("sys.stdin", io.StringIO(MALFORMED))
+    monkeypatch.setattr("sys.stdin", io.StringIO(BAD.read_text()))
     code, lines = _validate(capsys, "-")
     assert code == 1 and len(lines) == 5 and all(line.startswith("-: ") for line in lines)
 
@@ -103,7 +90,7 @@ def test_bad_version_keeps_independent_schema_errors(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
     version: str | None, plan: str | None,
 ) -> None:
-    document = yaml.safe_load(MALFORMED)
+    document = yaml.safe_load(BAD.read_text())
     if version is None:
         del document["apiVersion"]
     else:
