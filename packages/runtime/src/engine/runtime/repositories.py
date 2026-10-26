@@ -13,19 +13,23 @@ from engine.runtime.change_requests import remote_project
 from engine.runtime.config import EngineConfigError, parse_engine_config
 
 
-def normalize_repository(repository: str, repos: Mapping[str, str] | None = None) -> str:
-    """Expand a host-local checkout after resolving configured repository aliases.
-
-    Keep relative paths relative to the server and leave unregistered forge
-    slugs alone. Existence and git validity belong to workspace provisioning.
-    """
+def normalize_repository(
+    repository: str, repos: Mapping[str, str] | None = None, *, configured: bool = False,
+) -> str:
+    """Resolve configured local directories on the server; preserve unregistered forge slugs."""
     repos = repos or {}
     if repository in repos:
         repository = repos[repository]
+        configured = True
     else:
         folded = repository.lower().removesuffix(".git")
-        repository = next((path for name, path in repos.items() if name.lower() == folded), repository)
-    return os.path.expanduser(repository)
+        for name, path in repos.items():
+            if name.lower() == folded or repository == path:
+                repository = path
+                configured = True
+                break
+    expanded = os.path.expanduser(repository)
+    return os.path.abspath(expanded) if configured and expanded else expanded
 
 
 @dataclass(frozen=True)

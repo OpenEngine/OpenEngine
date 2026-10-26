@@ -170,3 +170,12 @@ def test_normalize_repository_on_server(monkeypatch, tmp_path, repository, expec
 
     monkeypatch.setenv("HOME", str(tmp_path))
     assert normalize_repository(repository, {"alias": "~/checkout", "owner/repo": "~/checkout"}) == expected.format(home=tmp_path)
+
+
+@pytest.mark.parametrize("repository", ["local", "LOCAL.git", "owner/repo"])
+def test_configured_relative_repository_is_local(tmp_path, monkeypatch, repository):
+    from engine.runtime.repositories import normalize_repository
+
+    monkeypatch.chdir(tmp_path)
+    assert normalize_repository(repository, {"local": "owner/repo"}) == str(tmp_path / "owner/repo")
+    assert normalize_repository("other/repo", {"local": "owner/repo"}) == "other/repo"

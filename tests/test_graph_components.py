@@ -900,8 +900,8 @@ def test_invalid_local_repository_fails_workspace(tmp_path, monkeypatch, checkou
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("repository", ["./owner/repo", "local"])
-def test_missing_explicit_local_repository_never_clones(tmp_path, monkeypatch, repository):
+@pytest.mark.parametrize("repository,configured", [("./owner/repo", False), ("local", False), ("owner/repo", False), ("owner/repo", True)])
+def test_missing_explicit_local_repository_never_clones(tmp_path, monkeypatch, repository, configured):
     from engine.adapters.workspace_provider import git_worktree
     from engine.runtime.repositories import normalize_repository
 
@@ -917,8 +917,8 @@ def test_missing_explicit_local_repository_never_clones(tmp_path, monkeypatch, r
     monkeypatch.setattr(git_worktree, "_git", local_git)
     provider = git_worktree.GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees"))
     workflow = assembled(provider, [])
-    normalized = normalize_repository(repository, {"local": "./owner/repo"})
-    assert normalized == "./owner/repo"
+    normalized = normalize_repository(repository, {"local": "owner/repo"}, configured=configured)
+    assert normalized == ("./owner/repo" if repository.startswith("./") else str(tmp_path / "owner/repo"))
 
     async def scenario():
         async with running([workflow], tmp_path) as (runtime, log):
@@ -927,6 +927,6 @@ def test_missing_explicit_local_repository_never_clones(tmp_path, monkeypatch, r
             snapshot = await runtime.snapshot(run.run_id)
             assert snapshot.error
             assert "workspace" not in snapshot.values
-            assert (await runtime.store.run(run.run_id)).metadata.repository == "./owner/repo"
+            assert (await runtime.store.run(run.run_id)).metadata.repository == normalized
     asyncio.run(scenario())
-    assert calls == [("./owner/repo", ("rev-parse", "--show-toplevel"))]
+    assert calls == [(normalized, ("rev-parse", "--show-toplevel"))]

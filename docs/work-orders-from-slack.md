@@ -55,7 +55,9 @@ Repository selection stays on the host: Slack message text cannot select a
 checkout. Configured `[repos]` aliases resolve to their local paths on the OE
 server. Home paths such as `~/code/OpenEngine` expand using the server user's
 home directory before new work orders are persisted. Absolute paths stay
-absolute; relative paths use the server's working directory. Missing paths and
+absolute; configured relative paths (including `owner/repo`) become absolute
+using the server's working directory. Unregistered GitHub repository references
+remain supported. Missing paths and
 non-repositories still fail at Workspace provisioning; normalization does not
 create a checkout or substitute a different repository.
 

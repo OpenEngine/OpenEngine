@@ -3539,7 +3539,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         provider=concierge_provider or agent_provider(agent_config, "codex", permissions=tool_permission),
         create_workorder=concierge_create_workorder,
         reply=concierge_reply, default_repository=normalize_repository(
-            work_orders.repository, repository_registry.snapshot.repos,
+            work_orders.repository, repository_registry.snapshot.repos, configured=True,
         ),
         turn_finished=concierge_turn_finished,
         find_workorders=concierge_find_workorders,

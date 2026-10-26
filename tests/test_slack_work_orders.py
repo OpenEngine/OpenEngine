@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from provider_fakes import FakeACPProvider, call_mcp
@@ -923,7 +924,7 @@ def test_reused_concierge_session_steers_as_current_sender():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("repository", ["~/checkout", "local"])
+@pytest.mark.parametrize("repository", ["~/checkout", "local", "owner/repo"])
 @pytest.mark.parametrize("fail_after_create", [False, True])
 def test_thread_reply_creates_workorder_through_stdio_mcp(
     tmp_path, fail_after_create, monkeypatch, repository, *, slack_app, client
@@ -961,7 +962,7 @@ def test_thread_reply_creates_workorder_through_stdio_mcp(
         browser.portal.call(app.state.slack_ingress.drain)
         runs = browser.portal.call(app.state.run_reader.list_runs)
         assert len(runs) == 1
-        assert runs[0].repository == str(tmp_path / "checkout")
+        assert runs[0].repository == (str(tmp_path / "checkout") if repository != "owner/repo" else str((Path.cwd() / "owner/repo").resolve()))
         assert runs[0].origin.thread_id == "1"
         result = provider.clients[0].result
         assert not result.get("isError"), result
@@ -1471,3 +1472,60 @@ def test_ingress_qualifies_the_author_by_workspace():
 
     (message,) = asyncio.run(scenario())
     assert (message.origin.author, message.origin.requester) == ("U1", "slack:T1:U1")
+
+
+@pytest.mark.parametrize("repository", ["local", "owner/repo"])
+def test_missing_slack_default_checkout_never_clones(
+    tmp_path, monkeypatch, repository, *, slack_app, client,
+):
+    from engine.adapters.workspace_provider import git_worktree
+    from engine.graph_runtime_langgraph.workflows import sqlite_runtime
+    from test_graph_components import assembled
+    from engine.runtime import WorkflowCatalog
+
+    monkeypatch.chdir(tmp_path)
+    original_git = git_worktree._git
+    calls = []
+
+    async def local_git(root, *args):
+        calls.append((root, args))
+        assert "clone" not in args
+        return await original_git(root, *args)
+
+    monkeypatch.setattr(git_worktree, "_git", local_git)
+    graph = assembled(git_worktree.GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees")), [])
+    provider = FakeACPProvider(create=True)
+    runtime = sqlite_runtime((graph,), tmp_path / "graph")
+    app, _, _ = slack_app(
+        RecordingCommunications(),
+        WorkOrdersConfig(repository=repository, workflow=str(graph.graph_id), runner="default"),
+        WorkflowCatalog.from_graphs((graph,)),
+        repos={"local": "owner/repo"}, provider=provider,
+        graph_runtime=runtime,
+    )
+    with client(app) as browser:
+        body = json.dumps({"type": "event_callback", "event": {
+            "type": "app_mention", "channel": "C", "user": "U", "ts": "1",
+            "text": "<@BOT> new workorder please",
+        }}).encode()
+        browser.post("/api/slack/events", content=body, headers=_signed(body))
+        browser.portal.call(app.state.slack_ingress.drain)
+        body = json.dumps({"type": "event_callback", "event": {
+            "type": "message", "channel": "C", "user": "U", "ts": "2", "thread_ts": "1",
+            "text": "new workorder please",
+        }}).encode()
+        browser.post("/api/slack/events", content=body, headers=_signed(body))
+        browser.portal.call(app.state.slack_ingress.drain)
+
+        async def failed():
+            async with asyncio.timeout(10):
+                while True:
+                    runs = await app.state.run_reader.list_runs()
+                    if runs:
+                        snapshot = await app.state.run_reader.runtime.snapshot(runs[0].run_id)
+                        if snapshot.error:
+                            assert runs[0].repository == str(tmp_path / "owner/repo")
+                            return
+                    await asyncio.sleep(0.01)
+        browser.portal.call(failed)
+    assert calls == [(str(tmp_path / "owner/repo"), ("rev-parse", "--show-toplevel"))]
