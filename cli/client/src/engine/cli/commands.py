@@ -653,8 +653,6 @@ def loops_list(arguments: argparse.Namespace) -> int:
             ("EVERY", lambda l: _duration(l["everySeconds"])),
             ("NEXT", lambda l: l["nextRunAt"] or "-"), ("ACTIVE RUN", lambda l: l["activeRunId"] or "-"),
             ("PRS", lambda l: f"{l['prCount']}/{l['limits']['maxPrs'] or '∞'}"),
-            ("LAST ERROR", lambda l: l.get("lastError") or "-"),
-            ("LAST ERROR AT", lambda l: l.get("lastErrorAt") or "-"),
             ("SPEND", _spend), ("PAUSED BECAUSE", lambda l: l["pauseReason"] or "-"),
         ])
     else:

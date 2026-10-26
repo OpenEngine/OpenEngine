@@ -110,7 +110,6 @@ AgentFactory = Callable[[AgentRow], Any]
 DEFAULT_PROJECT = "default"
 TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED})
 DEFAULT_RUN_LIMIT = 20
-MAX_CONSECUTIVE_START_FAILURES = 3
 
 #: What a runner says when it has no credentials, across the agents ACP drives.
 #: Matched against a run's failure so the answer can be a sign-in instruction
@@ -119,7 +118,6 @@ _AUTH_FAILURE = re.compile(
     r"auth(?:entication|orization)?[ _-]?(?:is )?required|not (?:logged|signed) in|"
     r"(?:log|sign) ?in (?:first|again|required)|invalid (?:api[ _-]?key|credentials?)|"
     r"unauthori[sz]ed|\b401\b|credentials? (?:expired|missing|not found)|"
-    r"failed to authenticate|oauth session expired|could not be refreshed|authentication_failed|"
     r"please run [`'\"]?\S+ login",
     re.IGNORECASE,
 )
@@ -1170,15 +1168,8 @@ class GraphService:
                 row.loop_id, last_error=str(failed), last_error_at=now_iso(now),
                 consecutive_start_failures=failures, updated_at=now_iso(now),
             )
-            agent = failed.details.get("agent", "") if isinstance(failed, ServiceError) else ""
-            if not isinstance(agent, str):
-                agent = ""
-            if not agent and (match := re.search(r"""agent ['"]([a-z0-9][a-z0-9_-]{0,63})['"]""", str(failed))):
-                agent = match.group(1)
-            if auth := auth_required(str(failed), agent):
+            if auth := auth_required(str(failed), ""):
                 await self._pause(row.loop_id, _auth_reason(auth))
-            elif failures >= MAX_CONSECUTIVE_START_FAILURES:
-                await self._pause(row.loop_id, f"{failures} consecutive run start failures: {failed}")
             log.exception("loop %s could not start a run", row.loop_id)
             return
         self.store.set_tick_run(row.loop_id, tick, str(run_id))
