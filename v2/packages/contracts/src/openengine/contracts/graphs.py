@@ -14,11 +14,11 @@ are not looked up: whether they exist is known only when a run starts.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from openengine.contracts.expressions import Expression, ExpressionError, parse, template
+from openengine.contracts.expressions import ExpressionError, holes, parse
 
 START, END, NAMING = "start", "end", "naming"
 RESERVED = (START, END, NAMING)
@@ -62,11 +62,14 @@ def check(document: Any) -> list[tuple[str, str]]:
     def problem(path: str, message: str) -> None:
         found.append((path, message))
 
-    steps = _steps(spec, problem)
+    written = _written(spec)
+    if not written:
+        problem("spec", "the graph has no steps; add one to plan, implementation or review")
+    steps = _steps(written, problem)
     rules = _flow(spec.get("flow"), steps, problem)
     edges = _edges(list(steps), rules)
     _structure(steps, rules, edges, problem)
-    _references(spec, steps, rules, edges, problem)
+    _references(spec, written, steps, rules, edges, problem)
     return list(dict.fromkeys(found))
 
 
@@ -78,21 +81,26 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
-def _steps(spec: Mapping[str, Any], problem: Report) -> dict[str, _Step]:
-    """Each step by name, in the written order: stage by stage, then as written."""
+def _written(spec: Mapping[str, Any]) -> list[_Step]:
+    """Every named step in the written order, stage by stage, duplicates and reserved names included."""
+    return [
+        _Step(body["name"], f"spec.{stage}[{index}]", body)
+        for stage in STAGES
+        for index, body in enumerate(_list(spec.get(stage)))
+        if isinstance(body, Mapping) and isinstance(body.get("name"), str)
+    ]
+
+
+def _steps(written: list[_Step], problem: Report) -> dict[str, _Step]:
+    """Each step by name, the first of any duplicates, and none with a reserved name."""
     steps: dict[str, _Step] = {}
-    for stage in STAGES:
-        for index, body in enumerate(_list(spec.get(stage))):
-            name = _mapping(body).get("name")
-            if not isinstance(name, str):
-                continue
-            path = f"spec.{stage}[{index}]"
-            if name in RESERVED:
-                problem(f"{path}.name", f"'{name}' is reserved")
-            elif name in steps:
-                problem(f"{path}.name", f"duplicate step '{name}'; {steps[name].path} has the same name")
-            else:
-                steps[name] = _Step(name, path, body)
+    for step in written:
+        if step.name in RESERVED:
+            problem(f"{step.path}.name", f"'{step.name}' is reserved")
+        elif step.name in steps:
+            problem(f"{step.path}.name", f"duplicate step '{step.name}'; {steps[step.name].path} has the same name")
+        else:
+            steps[step.name] = step
     return steps
 
 
@@ -119,14 +127,14 @@ def _flow(raw: Any, steps: Mapping[str, _Step], problem: Report) -> list[_Rule]:
             problem(f"{path}.from", "start cannot be joined")
         written_targets = _list(entry.get("to"))
         targets = tuple(name for name in written_targets if known(name, f"{path}.to", source=False))
-        branches = [branch for branch in _list(entry.get("route")) if isinstance(branch, Mapping)]
         routes = tuple(
             _Branch(
                 branch.get("when") if isinstance(branch.get("when"), str) else None,
                 branch.get("to") if known(branch.get("to"), f"{path}.route[{position}].to", source=False) else None,
                 f"{path}.route[{position}]",
             )
-            for position, branch in enumerate(branches)
+            for position, branch in enumerate(_list(entry.get("route")))
+            if isinstance(branch, Mapping)
         )
         if routes:
             if len(written) != 1 or START in written:
@@ -206,18 +214,19 @@ def _structure(steps: Mapping[str, _Step], rules: list[_Rule], edges: _Edges, pr
 
 
 def _references(
-    spec: Mapping[str, Any], steps: Mapping[str, _Step], rules: list[_Rule], edges: _Edges, problem: Report,
+    spec: Mapping[str, Any], written: list[_Step], steps: Mapping[str, _Step], rules: list[_Rule], edges: _Edges,
+    problem: Report,
 ) -> None:
     """Every expression parses, and reads only inputs and steps that exist, and outputs that can have run."""
-    inputs = {_mapping(entry).get("name") for entry in _list(spec.get("inputs"))}
+    inputs = {name for entry in _list(spec.get("inputs")) if isinstance(name := _mapping(entry).get("name"), str)}
 
-    def check(read: Callable[[], Iterable[Expression]], where: str, at: str, *, item: bool) -> None:
+    def check(source: str, where: str, at: str, *, item: bool) -> None:
         try:
-            parsed = list(read())
+            expression = parse(source)
         except ExpressionError as error:
             problem(where, str(error))
             return
-        for path in (path for expression in parsed for path in expression.references):
+        for path in expression.references:
             root, name = path[0], path[1] if len(path) > 1 else ""
             if root in ("inputs", "outputs", "visits") and not name:
                 problem(where, f"{root} needs a name, such as {root}.{'NAME' if root == 'inputs' else 'STEP'}")
@@ -232,18 +241,20 @@ def _references(
 
     def text(owner: Mapping[str, Any], key: str, where: str, at: str, *, item: bool = False) -> None:
         if isinstance(owner.get(key), str):
-            check(lambda: template(owner[key]), f"{where}.{key}", at, item=item)
+            for hole in holes(owner[key]):
+                check(hole, f"{where}.{key}", at, item=item)
 
     def expression(owner: Mapping[str, Any], key: str, where: str, at: str) -> None:
         if isinstance(owner.get(key), str):
-            check(lambda: [parse(owner[key])], f"{where}.{key}", at, item=False)
+            check(owner[key], f"{where}.{key}", at, item=False)
 
     # The checkout and naming come before any step, so no step's output exists yet.
     text(_mapping(spec.get("workspace")), "ref", "spec.workspace", START)
     naming = _mapping(spec.get("naming"))
     text(naming, "model", "spec.naming", START)
     text(_mapping(naming.get("runner")), "name", "spec.naming.runner", START)
-    for step in steps.values():
+    # Duplicates and reserved names are already reported; their bodies are checked all the same.
+    for step in written:
         agent, human = _mapping(step.body.get("agent")), _mapping(step.body.get("human"))
         where = f"{step.path}.agent"
         faceted = bool(agent.get("facets"))
@@ -261,7 +272,7 @@ def _references(
     for rule in rules:
         for branch in rule.routes:
             if branch.when is not None and len(rule.sources) == 1:
-                check(lambda: [parse(branch.when)], f"{branch.path}.when", rule.sources[0], item=False)
+                check(branch.when, f"{branch.path}.when", rule.sources[0], item=False)
 
 
 def _reach(start: str, graph: Mapping[str, set[str]]) -> set[str]:

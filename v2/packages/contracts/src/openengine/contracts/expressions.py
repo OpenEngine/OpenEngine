@@ -91,9 +91,9 @@ def parse(source: str) -> Expression:
     return Expression(source, tree)
 
 
-def template(source: str) -> tuple[Expression, ...]:
-    """The expressions in each `${...}` hole of a template, in order."""
-    return tuple(parse(match.group(1)) for match in _TEMPLATE.finditer(source))
+def holes(source: str) -> tuple[str, ...]:
+    """The source of each `${...}` hole of a template, in order, unparsed."""
+    return tuple(match.group(1) for match in _TEMPLATE.finditer(source))
 
 
 def _translate(source: str) -> str:
