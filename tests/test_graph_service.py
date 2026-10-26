@@ -1793,3 +1793,35 @@ def test_invalid_model_is_excluded_from_auto_selection_but_explicit_choice_fails
             with pytest.raises(ValueError, match='Readiness checks:.*not supported when using Codex'):
                 await service.ready_runner_choices(declarations, inputs)
     asyncio.run(scenario())
+
+
+def test_loop_start_failures_are_recorded_and_success_clears_them(tmp_path: Path, monkeypatch) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("retry", "x"))
+            loop = await service.add_loop(project="default", graph="retry", instruction="x", every="1h")
+            original = service._start_version
+
+            async def fail(*args):
+                raise ServiceError("backend unavailable")
+
+            monkeypatch.setattr(service, "_start_version", fail)
+            for count in range(1, 5):
+                await service.tick()
+                result = await service.loop_json(loop["loopId"])
+                assert result["lastError"] == "backend unavailable"
+                assert result["lastErrorAt"] == clock.now.isoformat(timespec="seconds")
+                assert result["consecutiveStartFailures"] == count
+                assert result["state"] == "active"
+                assert service.store.loop_runs(loop["loopId"]) == ()
+                clock.advance(hours=1)
+            monkeypatch.setattr(service, "_start_version", original)
+            await service.tick()
+            result = await service.loop_json(loop["loopId"])
+            assert result["activeRunId"]
+            assert result["lastError"] is None and result["lastErrorAt"] is None
+            assert result["consecutiveStartFailures"] == 0
+            await settled(service, result["activeRunId"])
+
+    asyncio.run(scenario())

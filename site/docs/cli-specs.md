@@ -178,6 +178,10 @@ Limits are cumulative over the loop's lifetime and survive restarts.
   The active run reserves the remaining budget and is cancelled when the
   loop's spend reaches the cap.
 - A loop also pauses when a run fails because a runner needs to sign in.
+- Other run start failures do not pause the loop; it tries again at the next
+  scheduled tick. `lastError`, `lastErrorAt` and `consecutiveStartFailures`
+  survive restarts and are cleared when a run starts successfully.
+  `oe loop get` shows the latest start error and its time.
 
 ### Inspection and lifecycle
 

@@ -1043,6 +1043,8 @@ def _loop_summary(loop: dict[str, Any]) -> str:
         f"graph {loop['graph']} v{loop['version']} every {_duration(loop['everySeconds'])}, next {loop['nextRunAt'] or '-'}",
         f"pull requests {loop['prCount']}/{loop['limits']['maxPrs'] or '∞'}, spend {_spend(loop)}",
     ]
+    if loop.get("lastError"):
+        lines.append(f"last start error ({loop.get('lastErrorAt') or '-'}): {loop['lastError']}")
     if loop.get("activeRunId"):
         lines.append(f"active run {loop['activeRunId']}")
     latest = loop.get("latestOutput")
