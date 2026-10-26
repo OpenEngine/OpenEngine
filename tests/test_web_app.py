@@ -4023,8 +4023,9 @@ def test_onboarded_repository_can_be_selected_for_a_workorder(
     def clone(args, **kwargs):
         Path(args[-1]).mkdir()
 
-    monkeypatch.setattr("engine.apps.web.repositories.subprocess.run", clone)
-    ensure_repository_checkouts(repos)
+    with monkeypatch.context() as clone_patch:
+        clone_patch.setattr("engine.apps.web.repositories.subprocess.run", clone)
+        ensure_repository_checkouts(repos)
     graph = ScriptedGraph(
         GraphId("repo-edit"), "Edit repo",
         (ScriptedNode(NodeId("work"), (Say("Done"),)),),
