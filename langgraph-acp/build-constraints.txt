@@ -1,9 +1,9 @@
 # Hash-locked build backend for the PyPI release of langgraph-acp. Regenerate with:
 #   echo 'hatchling==<version>' | uv pip compile - --generate-hashes --universal \
 #     --python-version 3.11 --no-header -o build-constraints.txt
-hatchling==1.27.0 \
-    --hash=sha256:971c296d9819abb3811112fc52c7a9751c8d381898f36533bb16f9791e941fd6 \
-    --hash=sha256:d3a2f3567c4f926ea39849cdf924c7e99e6686c9c8e288ae1037c8fa2a5d937b
+hatchling==1.32.4 \
+    --hash=sha256:08ecf7548fb48205e7f213d70c71e67b8271b7242093dc3f1da578b42c734a2c \
+    --hash=sha256:c4468f73144c054d2aab4ef0f0378c43b9878bf07f8ffd6b79690e970d375f07
     # via build-system.requires
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
