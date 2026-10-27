@@ -1,0 +1,1134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Internal workspace runtime protocol v1",
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "runtime_id",
+        "runtime_generation"
+      ],
+      "properties": {
+        "workspace_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id"
+        },
+        "runtime_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_id"
+        },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        }
+      }
+    },
+    "attempt_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "runtime_id",
+        "runtime_generation",
+        "session_id",
+        "attempt_id"
+      ],
+      "properties": {
+        "workspace_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/workspace_id"
+        },
+        "runtime_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_id"
+        },
+        "runtime_generation": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/runtime_generation"
+        },
+        "session_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/session_id"
+        },
+        "attempt_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id"
+        }
+      }
+    },
+    "cause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "causal_path"
+      ],
+      "properties": {
+        "operation": {
+          "$ref": "../../../common/v1/event.schema.json#/$defs/operation_ref"
+        },
+        "causal_path": {
+          "allOf": [
+            {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/causal_path"
+            },
+            {
+              "maxItems": 31
+            }
+          ]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "cause"
+      ],
+      "properties": {
+        "command_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "cause": {
+          "$ref": "#/$defs/cause"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "INVALID_ARGUMENT",
+            "IDENTITY_MISMATCH",
+            "STALE_RUNTIME",
+            "COMMAND_ID_CONFLICT",
+            "ATTEMPT_CONFLICT",
+            "SESSION_BUSY",
+            "UNSUPPORTED_EXECUTOR",
+            "UNAVAILABLE",
+            "EVENT_GAP",
+            "EVENT_CONFLICT"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "UNAVAILABLE",
+                  "EVENT_GAP"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retryable": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "retryable": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "working_directory",
+        "instruction_files",
+        "references"
+      ],
+      "properties": {
+        "working_directory": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "instruction_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "maxItems": 100,
+          "uniqueItems": true
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "uri",
+              "sha256"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "uri": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          },
+          "maxItems": 100,
+          "uniqueItems": true
+        }
+      }
+    },
+    "execute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "kind",
+        "target",
+        "execution",
+        "payload"
+      ],
+      "properties": {
+        "command_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "execute"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agent",
+            "task",
+            "session_mode",
+            "context"
+          ],
+          "properties": {
+            "agent": {
+              "$ref": "../../../virtual_control_plane/v1/schemas/session.schema.json#/$defs/agent"
+            },
+            "task": {
+              "$ref": "../../../virtual_control_plane/v1/schemas/session.schema.json#/$defs/task"
+            },
+            "session_mode": {
+              "type": "string",
+              "enum": [
+                "new",
+                "continue"
+              ]
+            },
+            "context": {
+              "$ref": "#/$defs/context"
+            }
+          }
+        }
+      }
+    },
+    "cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "kind",
+        "target",
+        "execution",
+        "cause",
+        "payload"
+      ],
+      "properties": {
+        "command_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "cancel"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "cause": {
+          "$ref": "#/$defs/cause"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          }
+        }
+      }
+    },
+    "command_ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "target",
+        "status"
+      ],
+      "properties": {
+        "command_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "rejected"
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "target",
+        "attempt_ids"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "target": {
+          "$ref": "#/$defs/binding"
+        },
+        "attempt_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id"
+          },
+          "maxItems": 100,
+          "uniqueItems": true
+        }
+      }
+    },
+    "attempt_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "known"
+      ],
+      "properties": {
+        "attempt_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/attempt_id"
+        },
+        "known": {
+          "type": "boolean"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "recorded",
+            "launching",
+            "running",
+            "cancelling",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "last_event_sequence": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "known": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "target",
+              "execution",
+              "state",
+              "last_event_sequence"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "target"
+                  ]
+                },
+                {
+                  "required": [
+                    "execution"
+                  ]
+                },
+                {
+                  "required": [
+                    "state"
+                  ]
+                },
+                {
+                  "required": [
+                    "last_event_sequence"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "inspect_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "target",
+        "status"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "target": {
+          "$ref": "#/$defs/binding"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "error"
+          ]
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "boot_id",
+            "ready",
+            "last_event_sequence",
+            "attempts"
+          ],
+          "properties": {
+            "boot_id": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+            },
+            "ready": {
+              "type": "boolean"
+            },
+            "last_event_sequence": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "attempts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/attempt_snapshot"
+              },
+              "maxItems": 100,
+              "uniqueItems": true
+            }
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "ok"
+            }
+          },
+          "required": [
+            "result"
+          ],
+          "not": {
+            "required": [
+              "error"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "error"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "not": {
+            "required": [
+              "result"
+            ]
+          }
+        }
+      ]
+    },
+    "ready_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executors",
+        "max_concurrent_attempts",
+        "progress_kinds",
+        "journal_id"
+      ],
+      "properties": {
+        "executors": {
+          "type": "array",
+          "items": {
+            "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+          },
+          "maxItems": 100,
+          "uniqueItems": true
+        },
+        "max_concurrent_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "progress_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "conversation",
+              "usage",
+              "artifact"
+            ]
+          },
+          "maxItems": 100,
+          "uniqueItems": true
+        },
+        "journal_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        }
+      }
+    },
+    "progress_payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "message_id",
+            "role",
+            "text"
+          ],
+          "properties": {
+            "kind": {
+              "const": "conversation"
+            },
+            "message_id": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/message_id"
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "system"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 262144
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "usage",
+            "period_start",
+            "period_end"
+          ],
+          "properties": {
+            "kind": {
+              "const": "usage"
+            },
+            "usage": {
+              "$ref": "../../../virtual_control_plane/v1/schemas/session.schema.json#/$defs/usage"
+            },
+            "period_start": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+            },
+            "period_end": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "artifact"
+          ],
+          "properties": {
+            "kind": {
+              "const": "artifact"
+            },
+            "artifact": {
+              "$ref": "../../../virtual_control_plane/v1/schemas/artifact.schema.json#/$defs/artifact"
+            }
+          }
+        }
+      ]
+    },
+    "completed_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result"
+      ],
+      "properties": {
+        "result": {
+          "$ref": "../../../virtual_control_plane/v1/schemas/session.schema.json#/$defs/attempt_result"
+        }
+      }
+    },
+    "failed_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "reason"
+      ],
+      "properties": {
+        "error": {
+          "$ref": "../../../common/v1/error.schema.json"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "executor_failed",
+            "launch_failed",
+            "executor_lost"
+          ]
+        }
+      }
+    },
+    "cancelled_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      }
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "payload"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "runtime.ready"
+        },
+        "target": {
+          "$ref": "#/$defs/binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "payload": {
+          "$ref": "#/$defs/ready_payload"
+        }
+      }
+    },
+    "started": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "execution",
+        "payload",
+        "attempt_sequence"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "attempt.started"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        },
+        "attempt_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Contiguous sequence within this attempt; starts at 1 and survives restart."
+        }
+      }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "execution",
+        "payload",
+        "attempt_sequence"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "attempt.progress"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "payload": {
+          "$ref": "#/$defs/progress_payload"
+        },
+        "attempt_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Contiguous sequence within this attempt; starts at 1 and survives restart."
+        }
+      }
+    },
+    "completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "execution",
+        "termination",
+        "payload",
+        "attempt_sequence"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "attempt.completed"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "termination": {
+          "const": "exited"
+        },
+        "payload": {
+          "$ref": "#/$defs/completed_payload"
+        },
+        "attempt_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Contiguous sequence within this attempt; starts at 1 and survives restart."
+        }
+      }
+    },
+    "failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "execution",
+        "termination",
+        "payload",
+        "attempt_sequence"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "attempt.failed"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "termination": {
+          "type": "string",
+          "enum": [
+            "never_started",
+            "exited",
+            "killed"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/failed_payload"
+        },
+        "attempt_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Contiguous sequence within this attempt; starts at 1 and survives restart."
+        }
+      }
+    },
+    "cancelled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "execution",
+        "cancel_command_id",
+        "cause",
+        "termination",
+        "payload",
+        "attempt_sequence"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "attempt.cancelled"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "cancel_command_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "cause": {
+          "$ref": "#/$defs/cause"
+        },
+        "termination": {
+          "type": "string",
+          "enum": [
+            "never_started",
+            "exited",
+            "killed"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/cancelled_payload"
+        },
+        "attempt_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Contiguous sequence within this attempt; starts at 1 and survives restart."
+        }
+      }
+    },
+    "update": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ready"
+        },
+        {
+          "$ref": "#/$defs/started"
+        },
+        {
+          "$ref": "#/$defs/progress"
+        },
+        {
+          "$ref": "#/$defs/completed"
+        },
+        {
+          "$ref": "#/$defs/failed"
+        },
+        {
+          "$ref": "#/$defs/cancelled"
+        }
+      ]
+    },
+    "update_ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "target",
+        "sequence",
+        "status"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "target": {
+          "$ref": "#/$defs/binding"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "committed",
+            "rejected"
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        },
+        "expected_sequence": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "error"
+                  ]
+                },
+                {
+                  "required": [
+                    "expected_sequence"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "error"
+            ],
+            "properties": {
+              "error": {
+                "properties": {
+                  "code": {
+                    "const": "EVENT_GAP"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "expected_sequence"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "expected_sequence"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -22,3 +22,4 @@ packages = ["src/openengine"]
 "graph_engine" = "openengine/contracts/graph_engine"
 "tool_service" = "openengine/contracts/tool_service"
 "virtual_control_plane" = "openengine/contracts/virtual_control_plane"
+"internal" = "openengine/contracts/internal"

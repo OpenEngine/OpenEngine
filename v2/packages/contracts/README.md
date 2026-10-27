@@ -406,3 +406,12 @@ loads the renderer from jsDelivr.
   `reference.html`, rendered in the browser by the AsyncAPI React component.
   A test fails when a checked-in page is out of date, so regenerate it after
   changing a contract.
+
+## Internal workspace runtime
+
+The separately versioned [workspace runtime protocol](internal/workspace_runtime/v1/README.md)
+defines VCP-to-daemon traffic on `oe.internal.v1`. It is outside the public
+service discovery and event streams. Validate its examples and wire bindings
+with `uv run python -m openengine.contracts.runtime` from `v2/`; its validator
+and contract resources are also included in the installed contracts package.
+The reference generator and AsyncAPI parser include this internal document.

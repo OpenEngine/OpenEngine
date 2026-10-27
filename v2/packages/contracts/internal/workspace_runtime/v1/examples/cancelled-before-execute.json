@@ -1,0 +1,45 @@
+{
+  "definition": "cancelled",
+  "subject": "oe.internal.v1.vcp.runtimes.rt_demo.updates",
+  "payload": {
+    "event_id": "rte_cancelled_before_start",
+    "kind": "attempt.cancelled",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1,
+      "session_id": "session_demo",
+      "attempt_id": "attempt_demo"
+    },
+    "boot_id": "boot_1",
+    "sequence": 2,
+    "occurred_at": "2026-10-22T12:00:00Z",
+    "payload": {
+      "reason": "User cancelled"
+    },
+    "termination": "never_started",
+    "execution": {
+      "command_id": "rtc_execute",
+      "cause": {
+        "operation": {
+          "operation_id": "op_execute",
+          "command_id": "cmd_execute"
+        },
+        "causal_path": [
+          "cmd_execute"
+        ]
+      }
+    },
+    "cancel_command_id": "rtc_cancel",
+    "cause": {
+      "operation": {
+        "operation_id": "op_cancel",
+        "command_id": "cmd_cancel"
+      },
+      "causal_path": [
+        "cmd_cancel"
+      ]
+    },
+    "attempt_sequence": 1
+  }
+}

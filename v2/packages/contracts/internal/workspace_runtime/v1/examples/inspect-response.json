@@ -1,0 +1,45 @@
+{
+  "definition": "inspect_response",
+  "in_reply_to": "oe.internal.v1.runtime.runtimes.rt_demo.inspect",
+  "payload": {
+    "request_id": "inspect_1",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1
+    },
+    "status": "ok",
+    "result": {
+      "boot_id": "boot_2",
+      "ready": true,
+      "last_event_sequence": 2,
+      "attempts": [
+        {
+          "attempt_id": "attempt_demo",
+          "known": true,
+          "target": {
+            "workspace_id": "ws_demo",
+            "runtime_id": "rt_demo",
+            "runtime_generation": 1,
+            "session_id": "session_demo",
+            "attempt_id": "attempt_demo"
+          },
+          "execution": {
+            "command_id": "rtc_execute",
+            "cause": {
+              "operation": {
+                "operation_id": "op_execute",
+                "command_id": "cmd_execute"
+              },
+              "causal_path": [
+                "cmd_execute"
+              ]
+            }
+          },
+          "state": "running",
+          "last_event_sequence": 2
+        }
+      ]
+    }
+  }
+}

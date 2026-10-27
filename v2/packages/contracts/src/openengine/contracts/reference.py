@@ -38,6 +38,8 @@ NAMES = {
 
 def namespace(service: str) -> str:
     """The prefix every subject in a service's contract starts with: `oe.v1.{short}.`."""
+    if service == "internal/workspace_runtime":
+        return "oe.internal.v1."
     return f"oe.v1.{NAMES[service][1]}."
 
 
@@ -81,7 +83,7 @@ def self_contained(service: str) -> dict[str, Any]:
 
 
 def page(service: str) -> str:
-    name, short = NAMES[service]
+    name, short = ("Workspace Runtime (internal)", "runtime") if service == "internal/workspace_runtime" else NAMES[service]
     contract = json.dumps(self_contained(service), separators=(",", ":"), ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(f"{name} contract")
     return f"""<!doctype html>
@@ -125,7 +127,7 @@ def reference_path(service: str) -> Path:
 
 
 def main() -> int:
-    for service in SERVICES:
+    for service in (*SERVICES, "internal/workspace_runtime"):
         reference_path(service).write_text(page(service))
         print(f"wrote {reference_path(service).relative_to(CONTRACTS)}")
         if "--bundle" in sys.argv[1:]:
