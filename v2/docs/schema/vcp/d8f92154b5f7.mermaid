@@ -1,0 +1,22 @@
+---
+title: vcp at d8f92154b5f7 (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% REMOVED tables/columns are tombstones, absent from this revision's schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    workspaces["workspaces (CHANGED)"] {
+        VARCHAR(36) id PK "not null"
+        VARCHAR(32) provider "not null"
+        VARCHAR(32) status "not null"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+        JSON locator "ADDED; nullable"
+    }
+    class workspaces changed
