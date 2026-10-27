@@ -110,9 +110,9 @@ async def graph_service(
         runtime = LangGraphRuntime(store=store, checkpointer=saver, source_control=Forge())
         service = GraphService(
             runtime, tmp_path / DATABASE,
-            workspace_provider=Checkouts(tmp_path / "checkout"),
+            workspace_provider=options.pop("workspace_provider", Checkouts(tmp_path / "checkout")),
             registry=registry,
-            default_repository="example/repo",
+            default_repository=options.pop("default_repository", "example/repo"),
             agent_factory=lambda row: stub(row.name),
             clock=clock,
             **options,
@@ -1054,12 +1054,14 @@ workflow = replace(workflow, builder=builder)
                         assert service.claims_pull_request(version_id)
                         invalid = await client.post("/api/v1/runs", json={
                             "graph": "custom-change", "instruction": "it", "idempotencyKey": "invalid",
+                            "repository": "example/repo",
                             "inputs": {"pr_url": "https://github.com/other/repo/pull/855"},
                         })
                         assert invalid.status_code == 400, invalid.text
                     run = await client.post("/api/v1/runs", json={
                         "graph": "custom-change" if customized else mode or "pair",
                         "instruction": "it", "idempotencyKey": "k",
+                        "repository": "example/repo",
                         "inputs": {"pr_url": "https://github.com/example/repo/pull/855"} if mode else {},
                     })
                     assert run.status_code == 201, run.text
@@ -1793,6 +1795,48 @@ def test_invalid_model_is_excluded_from_auto_selection_but_explicit_choice_fails
             with pytest.raises(ValueError, match='Readiness checks:.*not supported when using Codex'):
                 await service.ready_runner_choices(declarations, inputs)
     asyncio.run(scenario())
+
+
+
+def test_cli_configured_default_is_local_without_repos(tmp_path, monkeypatch):
+    from engine.adapters.workspace_provider import git_worktree
+    from engine.runtime import load_engine_config
+
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "engine.toml"
+    config.write_text('[work_orders]\nrepository = "owner/repo"\n')
+    loaded = load_engine_config(config)
+    calls = []
+    original_git = git_worktree._git
+
+    async def local_git(root, *args):
+        calls.append((root, args))
+        assert "clone" not in args
+        return await original_git(root, *args)
+
+    monkeypatch.setattr(git_worktree, "_git", local_git)
+
+    async def scenario():
+        async with graph_service(
+            tmp_path, default_repository=loaded.config.work_orders.repository,
+            workspace_provider=git_worktree.GitWorktreeWorkspaceProvider(str(tmp_path / "worktrees")),
+        ) as service:
+            assert service.default_repository == str(tmp_path / "owner/repo")
+            assert service.resolve_repository("other/project") == "other/project"
+            await service.add_graph("default", source=single("solo", "${instruction}"))
+            run, _ = await service.submit_run(project="default", graph="solo", instruction="work")
+            assert (await settled(service, run["runId"]))["status"] == "failed"
+            snapshot = await service.runtime.snapshot(RunId(run["runId"]))
+            assert snapshot.values["repository"] == str(tmp_path / "owner/repo")
+            explicit, _ = await service.submit_run(
+                project="default", graph="solo", instruction="work", repository="other/project",
+            )
+            snapshot = await service.runtime.snapshot(RunId(explicit["runId"]))
+            assert snapshot.values["repository"] == "other/project"
+
+    asyncio.run(scenario())
+    assert calls
+    assert calls[0] == (str(tmp_path / "owner/repo"), ("rev-parse", "--show-toplevel"))
 
 
 def test_loop_start_failures_are_recorded_and_success_clears_them(tmp_path: Path, monkeypatch) -> None:

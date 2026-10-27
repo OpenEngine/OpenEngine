@@ -156,3 +156,51 @@ def test_registry_validates_nested_settings_without_deprecations(caplog):
     assert 'deprecated' not in caplog.text
     with pytest.raises(EngineConfigError):
         registry.trust('missing', True)
+
+
+@pytest.mark.parametrize("repository,expected", [
+    ("~/checkout", "{home}/checkout"), ("~", "{home}"),
+    ("/absolute/checkout", "/absolute/checkout"), ("relative/checkout", "relative/checkout"),
+    ("./checkout", "./checkout"), ("/missing/checkout", "/missing/checkout"),
+    ("alias", "{home}/checkout"), ("OWNER/REPO.git", "{home}/checkout"),
+    ("unregistered/repo", "unregistered/repo"), ("", ""),
+])
+def test_normalize_repository_on_server(monkeypatch, tmp_path, repository, expected):
+    from engine.runtime.repositories import normalize_repository
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert normalize_repository(repository, {"alias": "~/checkout", "owner/repo": "~/checkout"}) == expected.format(home=tmp_path)
+
+
+@pytest.mark.parametrize("repository", ["local", "LOCAL.git", "owner/repo"])
+def test_configured_relative_repository_is_local(tmp_path, monkeypatch, repository):
+    from engine.runtime.repositories import normalize_repository
+
+    monkeypatch.chdir(tmp_path)
+    assert normalize_repository(repository, {"local": "owner/repo"}) == str(tmp_path / "owner/repo")
+    assert normalize_repository("other/repo", {"local": "owner/repo"}) == "other/repo"
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+@pytest.mark.parametrize("alias", [False, True])
+def test_configured_symlink_parent_traversal(tmp_path, monkeypatch, absolute, alias):
+    from engine.runtime.repositories import normalize_repository
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "team/checkouts").mkdir(parents=True)
+    intended = tmp_path / "team/repo"
+    intended.mkdir()
+    (intended / "identity").write_text("intended")
+    (tmp_path / "repo").mkdir()
+    (tmp_path / "repo/identity").write_text("wrong")
+    (tmp_path / "link").symlink_to(tmp_path / "team/checkouts", target_is_directory=True)
+    path = "link/../repo"
+    if absolute:
+        path = str(tmp_path) + "/" + path
+    normalized = normalize_repository(
+        "local" if alias else path,
+        {"local": path} if alias else {},
+        configured=not alias,
+    )
+    assert normalized == str(tmp_path) + "/link/../repo"
+    assert (Path(normalized) / "identity").read_text() == "intended"

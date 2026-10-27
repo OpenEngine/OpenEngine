@@ -169,7 +169,7 @@ from engine.ports import (
     UserInputAnswer,
     WorkspaceState,
 )
-from engine.runtime.repositories import RepositoryRegistry
+from engine.runtime.repositories import RepositoryRegistry, normalize_repository
 from engine.runtime.change_requests import change_request, pull_request_url, remote_project
 from engine.runtime import (
     AgentSession,
@@ -1250,7 +1250,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     surface = _GraphSurface()
     repository_registry = repos if isinstance(repos, RepositoryRegistry) else RepositoryRegistry(
         repos, repo_modes, trusted_repos,
-        projects=repository_projects or {}, login_repositories=login_repositories,
+        projects=repository_projects, login_repositories=login_repositories,
     )
 
     from engine.apps.web.onboarding import RepositoryOnboarding, register_starters
@@ -2021,6 +2021,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         caller that got a graph out of `offered_graphs` has already established
         that the engine is running, and passing it on says so.
         """
+        repository = normalize_repository(repository, repository_registry.snapshot.repos)
         claim_target = (surface.service.claims_pull_request(str(graph.graph_id))
                         if surface.service is not None else graph.graph_id in ("fix", "review"))
         validate_started_pull_request(claim_target, inputs, run_project(repository))
@@ -3537,7 +3538,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     slack_concierge = SlackConcierge(
         provider=concierge_provider or agent_provider(agent_config, "codex", permissions=tool_permission),
         create_workorder=concierge_create_workorder,
-        reply=concierge_reply, default_repository=work_orders.repository,
+        reply=concierge_reply, default_repository=normalize_repository(
+            work_orders.repository, repository_registry.snapshot.repos, configured=True,
+        ),
         turn_finished=concierge_turn_finished,
         find_workorders=concierge_find_workorders,
         steer_workorder=concierge_steer_workorder,
@@ -4373,7 +4376,10 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     # `[repos]` name, the checkout path the web form sends, or `.`. A run
     # started from GitHub already names its `owner/repo`.
     def run_project(repository: str) -> str | None:
-        project = repository_registry.snapshot.run_projects.get(repository)
+        projects = repository_registry.snapshot.run_projects
+        project = projects.get(repository)
+        if project is None:
+            project = projects.get(str(Path(repository).expanduser().resolve()))
         if project is None and "/" in repository and not repository.startswith(("/", ".", "~")):
             project = repository.lower()
         return project

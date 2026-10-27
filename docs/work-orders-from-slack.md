@@ -49,6 +49,27 @@ A greeting needs no work-order configuration. Creating work requires a resolvabl
 checkout path, not a GitHub owner/name, and cannot be supplied by the agent. Missing configuration becomes a tool error so the
 concierge can explain what is needed.
 
+## Repository paths and retries
+
+Repository selection stays on the host: Slack message text cannot select a
+checkout. Configured `[repos]` aliases resolve to their local paths on the OE
+server. Home paths such as `~/code/OpenEngine` expand using the server user's
+home directory before new work orders are persisted. Absolute paths stay
+absolute; configured relative paths (including `owner/repo`) become absolute
+using the server's working directory. Unregistered GitHub repository references
+remain supported. Missing paths and
+non-repositories still fail at Workspace provisioning; normalization does not
+create a checkout or substitute a different repository.
+
+After upgrading and restarting the OE server, a work order that previously
+failed at Workspace with an unexpanded `~` can be retried from the checkpoint
+before Workspace using the work-order UI. Workspace expands legacy checkpoint
+paths before provisioning. Historical metadata and checkpoint values are not
+rewritten. Slack's `resume_workorder` is a follow-up at implementation, so use
+the UI checkpoint retry for this failure, or create a new work order in Slack.
+Recovery still requires that the checkout exists and is accessible to the OE
+server user. No production configuration or database migration is required.
+
 ## Code boundaries
 
 `packages/slack-concierge` installs `engine-slack-concierge`:

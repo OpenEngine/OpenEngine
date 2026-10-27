@@ -28,6 +28,7 @@ from engine.domain import ForgeMode, WorkState, forge_mode
 from engine.graph_runtime_langgraph.acp import NoWorkingDirectoryError
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.ports import WorkspaceProvider
+from engine.runtime.repositories import normalize_repository
 
 #: Where the checkout's path lands, and what an agent node reads for its `cwd`.
 CHECKOUT = "workspace"
@@ -75,7 +76,7 @@ class WorkspaceNode:
 
     async def __call__(self, state: Mapping[str, object]) -> dict[str, object]:
         execution = current_execution()
-        repository = self.repository or str(state.get(REPOSITORY) or ".")
+        repository = normalize_repository(self.repository or str(state.get(REPOSITORY) or "."))
         inputs = state.get("inputs")
         requested = inputs.get(self.ref_input) if self.ref_input and isinstance(inputs, Mapping) else ""
         requested = requested if isinstance(requested, str) and requested.strip() else ""
