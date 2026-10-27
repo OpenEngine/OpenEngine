@@ -77,9 +77,15 @@ def validate_wire_message(definition, data: bytes, subject):
 
 def validate_message(definition, payload, subject):
     """Check a decoded body; transport callers must use validate_wire_message."""
-    errors = [error.message for error in validator(definition).iter_errors(payload)]
-    if errors:
-        return errors
+    # Stop at the first error: maxItems rejects oversized arrays before
+    # uniqueItems can perform quadratic comparisons on their contents.
+    try:
+        error = next(validator(definition).iter_errors(payload), None)
+        if error is not None:
+            return [error.message]
+    except RecursionError:
+        return ["Message exceeds validation nesting limits"]
+    errors = []
     service, actions = DEFINITIONS[definition]
     expected = [
         f"oe.internal.v1.{service}.runtimes.{payload['target']['runtime_id']}.{action}"

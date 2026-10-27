@@ -393,3 +393,48 @@ def test_usage_period_preserves_nanosecond_precision(start, end, valid):
     progress["period_start"] = f"2026-10-22T12:00:{start}Z"
     progress["period_end"] = f"2026-10-22T12:00:{end}Z"
     assert errors(case) == ([] if valid else ["Usage period ends before it starts"])
+
+
+def test_nested_invalid_instruction_files_return_errors():
+    case = example("execute")
+    nested = 0
+    for _ in range(400):
+        nested = [nested]
+    case["payload"]["payload"]["context"]["instruction_files"] = [nested, nested]
+    wire = json.dumps(case["payload"]).encode()
+    assert len(wire) < runtime.MAX_WIRE_BYTES
+    assert errors(case)
+    assert runtime.validate_wire_message("execute", wire, case["subject"])
+
+
+def test_schema_recursion_returns_validation_error(monkeypatch):
+    class RecursiveValidator:
+        def iter_errors(self, payload):
+            raise RecursionError
+            yield
+
+    monkeypatch.setattr(runtime, "validator", lambda definition: RecursiveValidator())
+    case = example("execute")
+    assert errors(case) == ["Message exceeds validation nesting limits"]
+
+
+@pytest.mark.parametrize("count", [101, 4000, 8000])
+def test_oversized_references_skip_uniqueness_checks(monkeypatch, count):
+    from jsonschema import Draft7Validator
+
+    original = Draft7Validator.VALIDATORS["uniqueItems"]
+
+    def bounded_unique(validator, unique, instance, schema):
+        assert not isinstance(instance, list) or len(instance) <= 100
+        yield from original(validator, unique, instance, schema)
+
+    monkeypatch.setitem(Draft7Validator.VALIDATORS, "uniqueItems", bounded_unique)
+    case = example("execute")
+    case["payload"]["payload"]["context"]["references"] = [
+        {"name": str(index), "uri": "urn:reference", "sha256": "a" * 64}
+        for index in range(count)
+    ]
+    wire = json.dumps(case["payload"]).encode()
+    assert len(wire) < runtime.MAX_WIRE_BYTES
+    assert errors(case)
+    assert runtime.validate_wire_message("execute", wire, case["subject"])
