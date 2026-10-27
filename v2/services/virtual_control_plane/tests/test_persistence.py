@@ -37,17 +37,36 @@ def test_tracks_a_workspace_through_its_lifecycle(config: DatabaseConfig) -> Non
     async def scenario() -> None:
         workspaces = PERSISTENCE.open(config)
         try:
-            workspace = await workspaces.create(WorkspaceProvider.PROCESS)
+            workspace = await workspaces.create(WorkspaceProvider.PROCESS, {"path": "/work/ws-1"})
             other = await workspaces.create(WorkspaceProvider.SMOLVM)
             ready = await workspaces.set_status(workspace.id, WorkspaceStatus.READY)
 
             assert workspace.status is WorkspaceStatus.PROVISIONING
+            assert workspace.locator == {"path": "/work/ws-1"}
+            assert other.locator is None
             assert ready is not None and ready.status is WorkspaceStatus.READY
             assert ready.updated_at >= ready.created_at and ready.updated_at.tzinfo is UTC
             assert await workspaces.get(workspace.id) == ready
             assert await workspaces.list(WorkspaceStatus.READY) == [ready]
             assert await workspaces.list() == [ready, other]
             assert await workspaces.set_status("missing", WorkspaceStatus.STOPPED) is None
+        finally:
+            await workspaces.close()
+
+    asyncio.run(scenario())
+
+
+def test_recovering_ownership_updates_the_locator(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        workspaces = PERSISTENCE.open(config)
+        try:
+            workspace = await workspaces.create(WorkspaceProvider.SMOLVM, {"vm_id": "vm-1"})
+
+            recovered = await workspaces.set_locator(workspace.id, {"vm_id": "vm-1", "host": "node-2"})
+
+            assert recovered is not None and recovered.locator == {"vm_id": "vm-1", "host": "node-2"}
+            assert recovered.updated_at >= workspace.updated_at
+            assert await workspaces.set_locator("missing", {}) is None
         finally:
             await workspaces.close()
 

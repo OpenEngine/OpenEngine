@@ -676,12 +676,18 @@ name = "openengine-virtual-control-plane"
 version = "0.0.0"
 source = { editable = "services/virtual_control_plane" }
 dependencies = [
+    { name = "nats-py" },
+    { name = "openengine-contracts" },
+    { name = "openengine-messaging" },
     { name = "openengine-persistence" },
     { name = "openengine-telemetry" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "nats-py", specifier = ">=2.16.0" },
+    { name = "openengine-contracts", editable = "packages/contracts" },
+    { name = "openengine-messaging", editable = "packages/messaging" },
     { name = "openengine-persistence", editable = "packages/persistence" },
     { name = "openengine-telemetry", editable = "packages/telemetry" },
 ]
