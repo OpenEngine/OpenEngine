@@ -71,7 +71,7 @@ All services contain a persistence directory which holds all of that service's d
 | Service | Database | Tables |
 | -- | -- | -- |
 | connection_bus | `cxn` | connections |
-| graph_engine | `ge` | graphs |
+| graph_engine | `ge` | graphs, graph_revisions, operations, command_receipts |
 | tool_service | `tools` | tools, tool_grants, tool_invocations, tool_invocation_attempts |
 | virtual_control_plane | `vcp` | workspaces |
 

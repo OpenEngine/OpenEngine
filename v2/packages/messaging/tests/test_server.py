@@ -128,3 +128,20 @@ def test_local_operator_mode_judges_the_address_nats_listens_on(info: dict[str, 
     assert listen_address(connection) == address
     reply = _send("oe.v1.ge.query.graphs.list", {"params": {}}, listener=address)
     assert (reply["status"] == "ok") is allowed
+
+
+def test_a_route_key_names_subject_parameters_and_checks_their_type() -> None:
+    async def operation(request: Request) -> dict[str, Any]:
+        return {"parameters": dict(request.parameters)}
+
+    server = Server(None, "ge", LOOPBACK, queries={"operations.{operation_id}.get": Route(operation)})
+    body = json.dumps({"params": {}}).encode()
+
+    found = json.loads(asyncio.run(server.handle("oe.v1.ge.query.operations.op_1.get", body)))
+    malformed = json.loads(asyncio.run(server.handle("oe.v1.ge.query.operations.job_1.get", body)))
+    other = json.loads(asyncio.run(server.handle("oe.v1.ge.query.operations.op_1.cancel", body)))
+
+    assert found["result"] == {"parameters": {"operation_id": "op_1"}}
+    assert malformed["error"]["code"] == "INVALID_ARGUMENT"
+    assert malformed["error"]["details"]["violations"][0]["field"] == "subject.operation_id"
+    assert other["error"]["code"] == "UNSUPPORTED_CAPABILITY"

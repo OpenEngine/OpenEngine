@@ -8,6 +8,7 @@ uv run oe migrate # upgrade the services' databases, then create or update the N
 uv run oe status # what is running, and where (--json for scripts)
 uv run oe logs   # the supervisor's log, NATS included (-f to follow, --json for raw JSON lines)
 uv run oe graph list # the graphs GE has registered, over NATS (--json for the query-response)
+uv run oe graph apply FILE # register each Graph in FILE with GE (--json for each response and operation)
 uv run oe down   # stop everything `oe up` started
 
 uv run oe graph validate FILE  # check a Graph file (- reads standard input)
@@ -17,8 +18,17 @@ uv run oe graph spec           # the Graph resource reference and expression syn
 `oe status` shows each process's own status: `ready` once it passed its
 readiness check (NATS and GE), `running` for a service that has none yet.
 When OpenEngine cannot answer (no supervisor, NATS unreachable, or no reply
-from GE), `oe graph list` says so on stderr, points to `oe up` and `oe logs`,
-and exits 1.
+from GE), `oe graph list` and `oe graph apply` say so on stderr, point to
+`oe up` and `oe logs`, and exit 1.
+
+`oe graph apply FILE` checks the file as `validate` does, sends each Graph to
+GE's `graphs.apply`, reads the operation it recorded and prints one line per
+Graph: `created NAME revision 1 (graph ID)` for a new name, `updated NAME
+revision N (graph ID)` when the definition changed, or `unchanged NAME
+revision N (graph ID)` when it matches the latest revision. The graph ID never
+changes. A command that gets no reply in time is resent with the same command
+ID, so a lost reply never adds a revision. GE rejects a Python graph with
+`UNSUPPORTED_CAPABILITY`, and `apply` sends only Graph resources.
 
 `oe graph validate` and `oe graph spec` work offline: they read the Graph
 schema from openengine-contracts and need no `oe up`, NATS or runner

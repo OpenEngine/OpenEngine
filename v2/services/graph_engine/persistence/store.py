@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -11,22 +12,99 @@ from openengine.persistence import Store
 
 @dataclass(frozen=True)
 class Graph:
-    id: str
+    graph_id: str
     name: str
-    version: int
-    definition: dict[str, Any]
+    description: str | None
+    latest_revision: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class GraphRevision:
+    graph_id: str
+    revision: int
+    format: str
+    """`resource` or `python`, as the contract's `graph_format`."""
+    source: str
+    source_sha256: str
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class Operation:
+    operation_id: str
+    command_id: str
+    operation: str
+    status: str
+    resources: dict[str, str]
+    result: dict[str, Any] | None
+    error: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class Command:
+    """What a command's receipt is keyed and compared on."""
+
+    command_id: str
+    subject: str
+    fingerprint: str
+    """A digest of everything a retry must repeat: subject, payload, expected_version and causal_path."""
+
+
+@dataclass(frozen=True)
+class Definition:
+    """A graph as applied: its name, and the verbatim source a revision keeps."""
+
+    name: str
+    description: str | None
+    format: str
+    source: str
+
+    @property
+    def source_sha256(self) -> str:
+        return hashlib.sha256(self.source.encode()).hexdigest()
+
+
+class CommandIdConflict(Exception):
+    """The command ID already has a receipt for a different command."""
+
+    def __init__(self, command_id: str, subject: str, operation_id: str | None) -> None:
+        super().__init__(f"command {command_id} was already used for a different command")
+        self.command_id = command_id
+        self.subject = subject
+        self.operation_id = operation_id
+
+
+class VersionConflict(Exception):
+    """`expected_version` is not the graph's latest revision; `actual` is None when there is no such graph."""
+
+    def __init__(self, expected: int, actual: int | None) -> None:
+        super().__init__(f"expected revision {expected}, found {actual or 'no graph'}")
+        self.expected = expected
+        self.actual = actual
+
+
 class Graphs(Store, Protocol):
-    async def register(self, name: str, definition: dict[str, Any]) -> Graph:
-        """Store `definition` as the next version of `name`, starting at 1."""
+    async def apply(self, command: Command, definition: Definition, expected_version: int | None = None) -> dict[str, Any]:
+        """Accept `command` and return its command-response, all in one transaction.
+
+        A known command ID returns its receipt's response, or raises CommandIdConflict.
+        A definition identical to the latest revision is a no-op; a changed one adds the
+        next revision under the same graph ID, and a new name creates the graph at 1.
+        Either way an operation and the receipt are recorded. Raises VersionConflict
+        and records nothing when `expected_version` is not the latest revision.
+        """
         ...
 
-    async def get(self, id: str) -> Graph | None: ...
-
-    async def latest(self, name: str) -> Graph | None: ...
-
-    async def versions(self, name: str) -> list[Graph]:
-        """Every version of `name`, oldest first."""
+    async def reject(self, command: Command, response: dict[str, Any]) -> dict[str, Any]:
+        """Record a rejection as `command`'s receipt and return it, or the receipt it already has."""
         ...
+
+    async def graph(self, graph_id: str) -> Graph | None: ...
+
+    async def revision(self, graph_id: str, revision: int) -> GraphRevision | None: ...
+
+    async def operation(self, operation_id: str) -> Operation | None: ...

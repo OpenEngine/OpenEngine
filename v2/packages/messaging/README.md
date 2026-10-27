@@ -26,6 +26,12 @@ await server.drain()   # stop taking requests, answer the ones received
 | `client` | the bounded, retrying requester |
 | `server` | the subscription adapter, the `Authorizer` port and `LocalOperator` |
 
+A route's key may name subject parameters, such as
+`operations.{operation_id}.get`: the server checks each against
+the type `common/v1/types.schema.json` defines under its name, answers a
+malformed one with `INVALID_ARGUMENT` naming `subject.{name}`, and hands the
+rest to the handler as `Request.parameters`.
+
 The client raises `Unavailable` (`UNAVAILABLE`, retryable) when nothing
 serves a subject or when no reply arrives after the last attempt, and
 `ServiceError` for an error or rejected reply. The server answers every request
