@@ -14,6 +14,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+import yaml
 from jsonschema import Draft7Validator, FormatChecker
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
@@ -40,7 +41,8 @@ def _retrieve(uri: str) -> Resource:
     path = Path(uri.removeprefix("file://"))
     if not uri.startswith("file://") or not path.resolve().is_relative_to(CONTRACTS.resolve()):
         raise ForeignReference(uri)
-    return Resource.from_contents(json.loads(path.read_text()), default_specification=DRAFT7)
+    # Resource schemas, such as a Graph's, are YAML; YAML also reads every JSON schema.
+    return Resource.from_contents(yaml.safe_load(path.read_text()), default_specification=DRAFT7)
 
 
 @cache

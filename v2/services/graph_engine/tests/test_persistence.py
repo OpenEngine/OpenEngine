@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,13 @@ from openengine.persistence.migrations import downgrade
 
 from graph_engine.persistence import PERSISTENCE
 from graph_engine.persistence.schema import metadata
+from graph_engine.persistence.store import (
+    Command,
+    CommandIdConflict,
+    DeadlineExceeded,
+    Definition,
+    VersionConflict,
+)
 
 
 @pytest.fixture
@@ -31,19 +39,119 @@ def test_migrations_roll_back(config: DatabaseConfig) -> None:
     assert inspect(database.migration_engine()).get_table_names() == ["alembic_version"]
 
 
-def test_registering_a_graph_again_adds_a_version(config: DatabaseConfig) -> None:
+def _command(command_id: str, fingerprint: str = "f1") -> Command:
+    return Command(command_id, "oe.v1.ge.control.graphs.apply", fingerprint)
+
+
+def _definition(source: str, name: str = "triage") -> Definition:
+    return Definition(name, None, "resource", source)
+
+
+def test_an_unchanged_apply_keeps_the_revision_and_a_changed_one_adds_the_next(config: DatabaseConfig) -> None:
     async def scenario() -> None:
         graphs = PERSISTENCE.open(config)
         try:
-            first = await graphs.register("triage", {"nodes": ["read"]})
-            second = await graphs.register("triage", {"nodes": ["read", "label"]})
-            other = await graphs.register("deploy", {"nodes": []})
+            first = await graphs.apply(_command("cmd_1"), _definition('{"a":1}'))
+            again = await graphs.apply(_command("cmd_2"), _definition('{"a":1}'))
+            changed = await graphs.apply(_command("cmd_3"), _definition('{"a":2}'), expected_version=1)
 
-            assert (first.version, second.version, other.version) == (1, 2, 1)
-            assert await graphs.latest("triage") == second
-            assert await graphs.get(first.id) == first
-            assert await graphs.versions("triage") == [first, second]
-            assert await graphs.latest("missing") is None
+            graph_id = first["resource_id"]
+            assert again["resource_id"] == changed["resource_id"] == graph_id
+            results = [(await graphs.operation(reply["operation_id"])).result for reply in (first, again, changed)]
+            assert results == [
+                {"graph": {"graph_id": graph_id, "revision": 1}, "created": True},
+                {"graph": {"graph_id": graph_id, "revision": 1}, "created": False},
+                {"graph": {"graph_id": graph_id, "revision": 2}, "created": True},
+            ]
+            assert (await graphs.graph(graph_id)).latest_revision == 2
+            assert (await graphs.revision(graph_id, 1)).source == '{"a":1}'
+            assert (await graphs.revision(graph_id, 2)).source_sha256 == _definition('{"a":2}').source_sha256
+            assert await graphs.revision(graph_id, 3) is None
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_command_id_returns_its_receipt_or_conflicts(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            first = await graphs.apply(_command("cmd_1"), _definition('{"a":1}'))
+            assert await graphs.apply(_command("cmd_1"), _definition('{"a":1}')) == first
+            with pytest.raises(CommandIdConflict) as conflict:
+                await graphs.apply(_command("cmd_1", "f2"), _definition('{"a":2}'))
+            assert conflict.value.operation_id == first["operation_id"]
+
+            rejection = {"command_id": "cmd_2", "status": "rejected", "error": {"code": "X", "message": "x", "retryable": False}}
+            assert await graphs.reject(_command("cmd_2"), rejection) == rejection
+            # A rejected command stays rejected, even once it could be accepted.
+            assert await graphs.apply(_command("cmd_2"), _definition('{"a":3}')) == rejection
+            assert (await graphs.graph(first["resource_id"])).latest_revision == 1
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_expected_version_must_be_the_latest_revision(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            with pytest.raises(VersionConflict) as missing:
+                await graphs.apply(_command("cmd_1"), _definition('{"a":1}'), expected_version=1)
+            assert missing.value.actual is None
+            await graphs.apply(_command("cmd_2"), _definition('{"a":1}'))
+            with pytest.raises(VersionConflict) as stale:
+                await graphs.apply(_command("cmd_3"), _definition('{"a":2}'), expected_version=2)
+            assert (stale.value.expected, stale.value.actual) == (2, 1)
+            # A conflict records nothing, so the command ID is still free.
+            assert (await graphs.apply(_command("cmd_1"), _definition('{"a":1}')))["status"] == "accepted"
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_deadline_is_checked_once_the_apply_holds_the_lock(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            accepted = await graphs.apply(_command("cmd_1"), _definition("{}"))
+            # Waiting behind another write carries this apply past its deadline.
+            async with graphs._writing:  # noqa: SLF001
+                waiting = asyncio.create_task(graphs.apply(
+                    _command("cmd_2"), _definition("[]"), deadline=datetime.now(UTC) + timedelta(milliseconds=50)
+                ))
+                await asyncio.sleep(0.1)
+            with pytest.raises(DeadlineExceeded):
+                await waiting
+            assert (await graphs.graph(accepted["resource_id"])).latest_revision == 1
+            # An accepted command's receipt is replayed whatever its deadline.
+            past = datetime.now(UTC) - timedelta(days=1)
+            assert await graphs.apply(_command("cmd_1"), _definition("{}"), deadline=past) == accepted
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_applies_neither_duplicate_nor_skip_revisions(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            same = await asyncio.gather(*(graphs.apply(_command(f"cmd_same_{n}"), _definition("{}")) for n in range(8)))
+            changed = await asyncio.gather(
+                *(graphs.apply(_command(f"cmd_changed_{n}"), _definition(f'{{"n":{n}}}')) for n in range(8))
+            )
+            retried = await asyncio.gather(*(graphs.apply(_command("cmd_retried"), _definition("[]")) for _ in range(8)))
+
+            created = [(await graphs.operation(reply["operation_id"])).result["created"] for reply in same]
+            assert sorted(created) == [False] * 7 + [True]
+            revisions = [(await graphs.operation(reply["operation_id"])).result["graph"]["revision"] for reply in changed]
+            assert sorted(revisions) == list(range(2, 10))
+            assert len({reply["operation_id"] for reply in retried}) == 1
+            assert (await graphs.graph(same[0]["resource_id"])).latest_revision == 10
         finally:
             await graphs.close()
 

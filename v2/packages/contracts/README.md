@@ -20,9 +20,9 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 
 | Defined here | Implemented |
 | -- | -- |
-| Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.query.graphs.list` (an empty page until the registry exists) and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
+| Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.control.graphs.apply`, `oe.v1.ge.query.operations.{operation_id}.get` and `oe.v1.ge.query.graphs.list` (an empty page so far), and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
 | Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
-| Operation, job, execution, workspace, session and approval models | No persistence or state machine implements them. |
+| Operation, job, execution, workspace, session and approval models | GE records `graphs.apply` operations, graph revisions and command receipts. Nothing else implements them. |
 | Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
 
@@ -127,7 +127,7 @@ change together:
 | Subject namespace | `v1` in `oe.v1.…` | The wire API generation | a breaking change; `oe.v2` is served alongside `oe.v1` until callers move |
 | Contract directory | `{service}/v1/`, `common/v1/` | The files that define that generation | with the subject namespace: `oe.v2` lives in `{service}/v2/` |
 | Resource apiVersion | `apiVersion: openengine.cc/v1alpha1` on every kind | One API group, `openengine.cc`, for every service's resources, at the subject namespace's version plus a stability suffix | the `v1` part with the subject namespace; the suffix as `v1` matures: `v1alpha1`, `v1alpha2`, …, `v1beta1`, then `v1` once stable |
-| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.2`, GE's `1.0.0-draft.3`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
+| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.2`, GE's `1.0.0-draft.4`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
 | AsyncAPI format | `asyncapi: 3.1.0` in each document | The specification the documents are written in | the documents move to a newer AsyncAPI specification |
 
 The resource apiVersion is defined once, as `api_version` in

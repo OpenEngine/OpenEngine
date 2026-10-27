@@ -1,4 +1,4 @@
-"""`oe graph list` when OpenEngine cannot answer: an actionable message and a nonzero exit."""
+"""`oe graph list` and `oe graph apply` when OpenEngine cannot answer: an actionable message and a nonzero exit."""
 
 from __future__ import annotations
 
@@ -24,9 +24,12 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-def _graph_list(state_home: Path) -> subprocess.CompletedProcess[str]:
+EXAMPLE = Path(__file__).parents[3] / "packages/contracts/graph_engine/v1/resources/examples/implement-review.graph.yaml"
+
+
+def _graph_list(state_home: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "openengine.cli", "graph", "list"],
+        [sys.executable, "-m", "openengine.cli", "graph", *(arguments or ["list"])],
         env={**os.environ, "XDG_STATE_HOME": str(state_home)},
         capture_output=True,
         text=True,
@@ -47,6 +50,24 @@ def test_without_a_supervisor(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert result.stderr.strip() == f"OpenEngine is not running (no supervisor). {ADVICE}"
+    assert result.stdout == ""
+
+
+def test_apply_without_a_supervisor(tmp_path: Path) -> None:
+    result = _graph_list(tmp_path, "apply", str(EXAMPLE))
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == f"OpenEngine is not running (no supervisor). {ADVICE}"
+
+
+def test_apply_checks_the_file_before_sending_it(tmp_path: Path) -> None:
+    graph = tmp_path / "graph.yaml"
+    graph.write_text(EXAMPLE.read_text().replace("kind: Graph", "kind: Loop"))
+
+    result = _graph_list(tmp_path, "apply", str(graph))
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == f"{graph}: kind: is a Loop, not a Graph"
     assert result.stdout == ""
 
 

@@ -91,8 +91,8 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
         assert boot[2]["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
     # ge connects and serves before it is ready; integration_tests/test_ge.py covers it.
     ge = [json.loads(line) for line in raw.stdout.splitlines() if '"service.name": "openengine-ge"' in line]
-    assert ge[2]["body"] == "nats connected"
-    assert ge[2]["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
+    connected = next(line for line in ge if line["body"] == "nats connected")
+    assert connected["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
 
     down = oe("down")
     assert down.returncode == 0
@@ -124,7 +124,9 @@ def test_migrate_creates_the_databases_and_streams_once_and_updates_drifted_ones
     first = oe("migrate")
     assert first.returncode == 0, first.stderr
     databases, streams = first.stdout.split("\n\n")
-    assert databases.count("created") == 4
+    # GE brings its own database to head as it starts, so only the others are new.
+    assert databases.count("created") == 3
+    assert next(line for line in databases.splitlines() if line.startswith("ge ")).endswith("unchanged")
     assert streams.count("created") == 6
     assert "cxn-ingress" in streams
     for service in ("cxn", "ge", "tools", "vcp"):

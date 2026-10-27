@@ -52,8 +52,15 @@ flowchart LR
         ge_events["NATS events → stream ge-events<br/><b>oe.v1.ge.events.</b><br/>jobs.{job_id}.job.created<br/>jobs.{job_id}.job.completed<br/>jobs.{job_id}.job.failed<br/>jobs.{job_id}.job.cancelled<br/>jobs.{job_id}.execution.started<br/>jobs.{job_id}.execution.progressed<br/>jobs.{job_id}.execution.awaiting_approval<br/>jobs.{job_id}.execution.paused<br/>jobs.{job_id}.execution.resumed<br/>jobs.{job_id}.execution.completed<br/>jobs.{job_id}.execution.failed<br/>jobs.{job_id}.execution.cancelled<br/>jobs.{job_id}.approval.requested<br/>jobs.{job_id}.approval.resolved<br/>loops.{loop_id}.loop.applied<br/>loops.{loop_id}.loop.paused<br/>loops.{loop_id}.loop.resumed<br/>loops.{loop_id}.loop.removed"]
         class ge_events subjects
         subgraph ge_db["database ge"]
+            ge_t_command_receipts[("command_receipts")]
+            class ge_t_command_receipts table
+            ge_t_graph_revisions[("graph_revisions")]
+            class ge_t_graph_revisions table
             ge_t_graphs[("graphs")]
             class ge_t_graphs table
+            ge_t_operations[("operations")]
+            class ge_t_operations table
+            ge_t_graphs --- ge_t_graph_revisions
         end
     end
     subgraph tools["Tool Service (tools)"]

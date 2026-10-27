@@ -2,16 +2,18 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.3
+  version: 1.0.0-draft.4
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
     answers and the events it publishes.
 
-    > **Mostly contract only.** GE answers `oe.v1.ge.query.graphs.list`, with
-    > an empty page until the graph registry exists. Every other subject is a
-    > defined API that GE answers with `UNSUPPORTED_CAPABILITY`; see the
-    > package README's *Implementation status*.
+    > **Mostly contract only.** GE answers `oe.v1.ge.control.graphs.apply`
+    > (Graph resources only), `oe.v1.ge.query.operations.{operation_id}.get`
+    > for the operations it records, and `oe.v1.ge.query.graphs.list`, with an
+    > empty page so far. Every other subject is a defined API that GE answers
+    > with `UNSUPPORTED_CAPABILITY`; see the package README's *Implementation
+    > status*.
 
     ## Versions
     - AsyncAPI format: `3.1.0` (the `asyncapi` field).
@@ -434,7 +436,7 @@ operations:
     action: receive
     title: Apply a graph
     summary: "Create or update a graph from a Graph resource, adding an immutable revision when it changed."
-    description: "Accepted once validated and recorded; `resource_id` is the graph ID. The operation result names the revision (or the existing one, for an unchanged graph)."
+    description: "Accepted once validated and recorded; `resource_id` is the graph ID, which never changes for a name. A Graph resource is kept as its canonical JSON (sorted keys, no spacing), so an apply matching the latest revision's SHA-256 is unchanged: the operation result names the existing revision with `created: false`. A changed one adds the next revision. The revision, operation and receipt are recorded atomically, and the operation has succeeded once accepted. `expected_version` is the graph's latest revision; a mismatch is VERSION_CONFLICT, and naming one for a graph that does not exist is NOT_FOUND. A `python` payload is UNSUPPORTED_CAPABILITY. Any rejection of a command with a well-formed `command_id`, including a malformed envelope or a `deadline_at` passed before acceptance, is kept as its receipt."
     channel: { $ref: '#/channels/graphsApply' }
     tags: [{ name: control }]
     reply:

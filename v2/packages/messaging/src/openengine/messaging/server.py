@@ -4,16 +4,24 @@ The adapter subscribes to `oe.v1.{service}.query.>` and
 `oe.v1.{service}.control.>`, and for each request:
 
 1. decodes it and checks its envelope (and the route's own schema, if it
-   names one), replying INVALID_ARGUMENT when either is broken;
+   names one), replying INVALID_ARGUMENT when either is broken. A command
+   route that keeps receipts checks its envelope itself, once the request
+   has a well-formed `command_id`, so it can record rejecting it;
 2. asks the Authorizer, replying PERMISSION_DENIED when it refuses;
 3. runs the route's handler, replying with its result or the ServiceError it
    raises. A subject with no route is UNSUPPORTED_CAPABILITY, and any other
    exception INTERNAL.
+
+A route's key may name subject parameters, as in `operations.{operation_id}.get`.
+Each must be one token of the type `common/v1/types.schema.json` defines under
+its name, or the request is INVALID_ARGUMENT naming `subject.{name}`; the
+handler reads them from `Request.parameters`.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -25,8 +33,10 @@ from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
 
 from openengine.messaging import envelopes
-from openengine.messaging.errors import ErrorCode, ServiceError
+from openengine.messaging.errors import ErrorCode, ServiceError, invalid_argument
 from openengine.telemetry import receiving
+
+TYPES = "common/v1/types.schema.json"
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +51,8 @@ class Request:
     body: dict[str, Any]
     listener: str
     """The address the NATS server the request arrived through listens on."""
+    parameters: Mapping[str, str] = field(default_factory=dict)
+    """The subject's parameters, by the names its route's key gives them."""
 
 
 class Authorizer(Protocol):
@@ -97,6 +109,8 @@ class Route:
     """A query's `result`, or a command's whole command-response."""
     schema: str | None = None
     """The contract schema for the whole request, beyond its envelope."""
+    receipts: bool = False
+    """The handler checks a command's envelope itself, given only that its `command_id` is well formed."""
 
 
 @dataclass
@@ -137,11 +151,13 @@ class Server:
         with receiving(subject, headers, name=f"oe.v1.{self.service}.{kind}.{operation}"):
             try:
                 body = envelopes.decode(data)
-                envelopes.check(envelopes.COMMAND if kind == "control" else envelopes.QUERY, body)
+                if not self._keeps_receipt(kind, operation, body):
+                    envelopes.check(envelopes.COMMAND if kind == "control" else envelopes.QUERY, body)
                 request = Request(subject, kind, operation, body, self.listener)
                 log.info("%s request", operation, extra=_identity(body))
                 self.authorizer.authorize(request)
-                route = self._route(subject, kind, operation)
+                route, parameters = self._route(subject, kind, operation)
+                request = dataclasses.replace(request, parameters=parameters)
                 if route.schema:
                     envelopes.check(route.schema, body)
                 result = await route.handler(request)
@@ -154,14 +170,43 @@ class Server:
                 reply = _error_reply(kind, body, ServiceError(ErrorCode.INTERNAL, "unexpected service fault"))
         return envelopes.encode(reply)
 
-    def _route(self, subject: str, kind: str, operation: str) -> Route:
-        route = (self.commands if kind == "control" else self.queries).get(operation)
-        if route is None:
-            raise ServiceError(
-                ErrorCode.UNSUPPORTED_CAPABILITY, f"{self.service} does not serve {subject}",
-                details={"capability": f"{kind}.{operation}"},
-            )
-        return route
+    def _keeps_receipt(self, kind: str, operation: str, body: Any) -> bool:
+        """Whether a receipt-keeping route takes this command, its `command_id` being one to record."""
+        if kind != "control" or not isinstance(body, dict) or "command_id" not in body:
+            return False
+        if envelopes.violations(f"{TYPES}#/$defs/command_id", body["command_id"]):
+            return False
+        return any(route.receipts and _match(key, operation) is not None for key, route in self.commands.items())
+
+    def _route(self, subject: str, kind: str, operation: str) -> tuple[Route, dict[str, str]]:
+        for key, route in (self.commands if kind == "control" else self.queries).items():
+            if (parameters := _match(key, operation)) is not None:
+                found = [
+                    (f"subject.{name}", description)
+                    for name, value in parameters.items()
+                    for _, description in envelopes.violations(f"{TYPES}#/$defs/{name}", value)
+                ]
+                if found:
+                    raise invalid_argument(found)
+                return route, parameters
+        raise ServiceError(
+            ErrorCode.UNSUPPORTED_CAPABILITY, f"{self.service} does not serve {subject}",
+            details={"capability": f"{kind}.{operation}"},
+        )
+
+
+def _match(key: str, operation: str) -> dict[str, str] | None:
+    """The parameters `operation` gives `key`'s `{name}` tokens, or None when it does not fit `key`."""
+    names, tokens = key.split("."), operation.split(".")
+    if len(names) != len(tokens):
+        return None
+    parameters = {}
+    for name, token in zip(names, tokens):
+        if name.startswith("{") and name.endswith("}"):
+            parameters[name[1:-1]] = token
+        elif name != token:
+            return None
+    return parameters
 
 
 def _identity(body: Any) -> dict[str, Any]:

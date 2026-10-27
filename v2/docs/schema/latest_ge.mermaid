@@ -1,5 +1,5 @@
 ---
-title: ge at b552e26457cd (green added, red removed, amber changed)
+title: ge at 4925ef9f3b79 (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -11,11 +11,45 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    graphs["graphs (ADDED)"] {
-        VARCHAR(36) id PK "ADDED; not null"
-        VARCHAR(255) name UK "ADDED; not null"
-        INTEGER version UK "ADDED; not null"
-        JSON definition "ADDED; not null"
+    command_receipts["command_receipts (ADDED)"] {
+        VARCHAR(128) command_id PK "ADDED; not null"
+        VARCHAR(255) subject "ADDED; not null"
+        VARCHAR(64) fingerprint "ADDED; not null"
+        JSON response "ADDED; not null"
         DATETIME created_at "ADDED; not null"
     }
-    class graphs added
+    class command_receipts added
+    graph_revisions["graph_revisions (ADDED)"] {
+        VARCHAR(128) graph_id PK,FK "ADDED; not null"
+        INTEGER revision PK "ADDED; not null"
+        VARCHAR(16) format "ADDED; not null"
+        TEXT source "ADDED; not null"
+        VARCHAR(64) source_sha256 "ADDED; not null"
+        DATETIME created_at "ADDED; not null"
+    }
+    class graph_revisions added
+    graphs ||--o{ graph_revisions : "graph_id"
+    graphs["graphs (CHANGED)"] {
+        VARCHAR(128) graph_id PK "ADDED; not null"
+        VARCHAR(64) name UK "CHANGED; not null"
+        VARCHAR(2000) description "ADDED; nullable"
+        INTEGER latest_revision "ADDED; not null"
+        DATETIME created_at "not null"
+        DATETIME updated_at "ADDED; not null"
+        VARCHAR(36) id PK "REMOVED; not null"
+        INTEGER version UK "REMOVED; not null"
+        JSON definition "REMOVED; not null"
+    }
+    class graphs changed
+    operations["operations (ADDED)"] {
+        VARCHAR(128) operation_id PK "ADDED; not null"
+        VARCHAR(128) command_id UK "ADDED; not null"
+        VARCHAR(64) operation "ADDED; not null"
+        VARCHAR(16) status "ADDED; not null"
+        JSON resources "ADDED; not null"
+        JSON result "ADDED; nullable"
+        JSON error "ADDED; nullable"
+        DATETIME created_at "ADDED; not null"
+        DATETIME updated_at "ADDED; not null"
+    }
+    class operations added
