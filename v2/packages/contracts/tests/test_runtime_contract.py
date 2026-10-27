@@ -343,3 +343,53 @@ def test_wire_rejects_non_json_numbers_in_free_form_inputs(constant):
     assert runtime.validate_wire_message("execute", wire, case["subject"]) == [
         "Message must be valid UTF-8 JSON"
     ]
+
+
+def test_wire_rejects_excessive_json_nesting():
+    wire = b"[" * 100_000 + b"0" + b"]" * 100_000
+    assert len(wire) < runtime.MAX_WIRE_BYTES
+    assert runtime.validate_wire_message(
+        "progress", wire, example("progress")["subject"]
+    ) == ["Message must be valid UTF-8 JSON"]
+
+
+@pytest.mark.parametrize("number", ["1e400", "-1e400", "1.7976931348623159e308"])
+@pytest.mark.parametrize("name", ["usage", "execute"])
+def test_wire_rejects_numeric_overflow(number, name):
+    case = example(name)
+    if name == "usage":
+        case["payload"]["payload"]["usage"]["cost_usd"] = "placeholder"
+    else:
+        case["payload"]["payload"]["task"]["inputs"] = {"value": "placeholder"}
+    wire = json.dumps(case["payload"]).replace('"placeholder"', number).encode()
+    assert runtime.validate_wire_message(
+        case["definition"], wire, case["subject"]
+    ) == ["Message must be valid UTF-8 JSON"]
+
+
+def test_wire_accepts_large_finite_number():
+    case = example("usage")
+    case["payload"]["payload"]["usage"]["cost_usd"] = 1e308
+    assert runtime.validate_wire_message(
+        case["definition"], json.dumps(case["payload"]).encode(), case["subject"]
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "valid"),
+    [
+        ("00.123456789", "00.123456001", False),
+        ("00.123456001", "00.123456789", True),
+        ("00.123456789", "00.123456789", True),
+        ("00.1", "00.100000000", True),
+        ("00", "00.000000000", True),
+        ("00.999999999", "01", True),
+        ("01", "00.999999999", False),
+    ],
+)
+def test_usage_period_preserves_nanosecond_precision(start, end, valid):
+    case = example("usage")
+    progress = case["payload"]["payload"]
+    progress["period_start"] = f"2026-10-22T12:00:{start}Z"
+    progress["period_end"] = f"2026-10-22T12:00:{end}Z"
+    assert errors(case) == ([] if valid else ["Usage period ends before it starts"])

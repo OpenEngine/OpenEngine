@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from functools import cache
+from math import isfinite
 
 from openengine.contracts.validate import CONTRACTS, _validator
 
@@ -47,13 +47,30 @@ def _reject_constant(value):
     raise ValueError(value)
 
 
+def _finite_float(value):
+    number = float(value)
+    if not isfinite(number):
+        raise ValueError(value)
+    return number
+
+
+def _timestamp_key(value):
+    """Order schema-validated UTC timestamps without losing nanoseconds."""
+    seconds, _, fraction = value.removesuffix("Z").partition(".")
+    return seconds, fraction.ljust(9, "0")
+
+
 def validate_wire_message(definition, data: bytes, subject):
     """Validate received NATS payload bytes before decoding or parsing JSON."""
     if len(data) > MAX_WIRE_BYTES:
         return ["Message exceeds 1 MiB"]
     try:
-        payload = json.loads(data.decode("utf-8"), parse_constant=_reject_constant)
-    except ValueError:
+        payload = json.loads(
+            data.decode("utf-8"),
+            parse_constant=_reject_constant,
+            parse_float=_finite_float,
+        )
+    except (ValueError, RecursionError):
         return ["Message must be valid UTF-8 JSON"]
     return validate_message(definition, payload, subject)
 
@@ -89,9 +106,9 @@ def validate_message(definition, payload, subject):
             for key in ("workspace_id", "attempt_id"):
                 if progress["artifact"].get(key) != payload["target"][key]:
                     errors.append(f"Artifact {key} differs from attempt binding")
-        if progress["kind"] == "usage" and datetime.fromisoformat(
-            progress["period_start"].replace("Z", "+00:00")
-        ) > datetime.fromisoformat(progress["period_end"].replace("Z", "+00:00")):
+        if progress["kind"] == "usage" and _timestamp_key(
+            progress["period_start"]
+        ) > _timestamp_key(progress["period_end"]):
             errors.append("Usage period ends before it starts")
     if (
         definition == "update_ack"
