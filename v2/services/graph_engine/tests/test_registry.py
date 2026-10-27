@@ -269,3 +269,26 @@ def test_graphs_get_of_an_unknown_graph_or_revision_is_not_found(send) -> None:
         assert reply["error"]["code"] == "NOT_FOUND"
         assert reply["error"]["details"] == {"resource_type": "graph", "resource_id": subject_id}
     assert send("oe.v1.ge.query.graphs.op_1.get", {"params": {}})["error"]["code"] == "INVALID_ARGUMENT"
+
+
+def test_a_graph_too_large_to_read_back_is_invalid_argument(send) -> None:
+    # A quote is two bytes in the canonical source and four as a get reply carries it,
+    # so this fits a 600 KB request but its get reply would pass 1 MiB.
+    graph = copy.deepcopy(GRAPH)
+    graph["spec"]["implementation"][0]["agent"]["prompt"] = '"' * 300_000
+
+    reply = send(APPLY, _apply("cmd_1", {"graph": graph}))
+
+    assert reply["error"]["code"] == "INVALID_ARGUMENT"
+    assert reply["error"]["details"]["violations"][0]["field"] == "payload.graph"
+    assert send(LIST, {"params": {}})["result"]["items"] == []
+
+
+def test_a_whole_number_limit_given_as_a_float_pages_like_an_integer(send) -> None:
+    for name in ("deploy", "review"):
+        send(APPLY, _apply(f"cmd_{name}", {"graph": _named(name)}))
+
+    result = _listed(send, {"limit": 1.0})["result"]
+
+    assert [graph["name"] for graph in result["items"]] == ["deploy"]
+    assert result["next_cursor"] is not None

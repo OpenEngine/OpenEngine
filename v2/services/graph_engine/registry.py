@@ -13,6 +13,9 @@ has passed by the time the store would accept it, which is DEADLINE_EXCEEDED. A 
 `expected_version` and causal path gets that reply again; anything else with
 that ID is COMMAND_ID_CONFLICT. `expected_version` is the graph's latest
 revision, so naming it for a graph that does not exist yet is NOT_FOUND.
+A Graph whose source, JSON-encoded as `graphs.{graph_id}.get` replies with it,
+would pass MAX_SOURCE_BYTES is INVALID_ARGUMENT, so every revision GE keeps
+can be read back within NATS's default 1 MiB payload.
 
 `graphs.list` pages by key on (name, graph_id). Its cursor is the last
 graph's key and the `name_prefix` it was issued for, as base64url JSON, so it
@@ -50,6 +53,8 @@ from graph_engine.persistence.store import (
 SCHEMAS = "graph_engine/v1/schemas"
 APPLY = f"{SCHEMAS}/commands.schema.json#/$defs/apply_graph_command"
 DEFAULT_LIMIT = 50
+# Half of NATS's default max_payload, leaving the rest of a get reply room.
+MAX_SOURCE_BYTES = 512 * 1024
 
 
 def canonical(value: Any) -> str:
@@ -181,6 +186,10 @@ class Registry:
                 [(f"payload.graph.{problem.path}", problem.message) for problem in problems]
             ))
         definition = Definition(graph["metadata"]["name"], graph["spec"].get("description"), "resource", canonical(graph))
+        if (size := len(json.dumps(definition.source, ensure_ascii=False).encode())) > MAX_SOURCE_BYTES:
+            return await self._reject(command, invalid_argument(
+                [("payload.graph", f"its source is {size} bytes as a reply carries it; the most is {MAX_SOURCE_BYTES}")]
+            ))
         deadline = datetime.fromisoformat(body["deadline_at"]) if "deadline_at" in body else None
         try:
             # A retry of a command accepted in time is replayed by its receipt, not refused for its deadline.
@@ -211,7 +220,7 @@ class Registry:
 
     async def list(self, request: Request) -> dict[str, Any]:
         params = request.body["params"]
-        name_prefix, limit = params.get("name_prefix"), params.get("limit", DEFAULT_LIMIT)
+        name_prefix, limit = params.get("name_prefix"), int(params.get("limit", DEFAULT_LIMIT))
         after = _after(cursor, name_prefix) if (cursor := params.get("cursor")) is not None else None
         # One more than the page shows whether there is a next page.
         found = await self.store.graphs(limit + 1, name_prefix, after)
