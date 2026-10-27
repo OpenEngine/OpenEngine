@@ -87,15 +87,28 @@ class VersionConflict(Exception):
         self.actual = actual
 
 
+class DeadlineExceeded(Exception):
+    """The command's deadline passed before it could be accepted."""
+
+    def __init__(self, deadline: datetime, received: datetime) -> None:
+        super().__init__(f"the deadline {deadline.isoformat()} passed before the command was accepted")
+        self.deadline = deadline
+        self.received = received
+
+
 class Graphs(Store, Protocol):
-    async def apply(self, command: Command, definition: Definition, expected_version: int | None = None) -> dict[str, Any]:
+    async def apply(
+        self, command: Command, definition: Definition, expected_version: int | None = None,
+        deadline: datetime | None = None,
+    ) -> dict[str, Any]:
         """Accept `command` and return its command-response, all in one transaction.
 
         A known command ID returns its receipt's response, or raises CommandIdConflict.
         A definition identical to the latest revision is a no-op; a changed one adds the
         next revision under the same graph ID, and a new name creates the graph at 1.
         Either way an operation and the receipt are recorded. Raises VersionConflict
-        and records nothing when `expected_version` is not the latest revision.
+        when `expected_version` is not the latest revision, and DeadlineExceeded when
+        `deadline` has passed by the time the command would be accepted; both record nothing.
         """
         ...
 

@@ -8,8 +8,8 @@ refused with UNSUPPORTED_CAPABILITY until GE can load them.
 Every command gets a receipt: its acceptance, recorded in the same transaction
 as the revision and operation, or its rejection, unless the rejection was
 retryable. That includes a command breaking its schema, so the handler checks
-the schema rather than its route, and one whose `deadline_at` has passed before
-it was accepted, which is DEADLINE_EXCEEDED. A retry with the same command ID and the same subject, payload,
+the command envelope and schema rather than the server, and one whose `deadline_at`
+has passed by the time the store would accept it, which is DEADLINE_EXCEEDED. A retry with the same command ID and the same subject, payload,
 `expected_version` and causal path gets that reply again; anything else with
 that ID is COMMAND_ID_CONFLICT. `expected_version` is the graph's latest
 revision, so naming it for a graph that does not exist yet is NOT_FOUND.
@@ -19,14 +19,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from openengine.contracts.resources import validate_resource
 from openengine.messaging import ErrorCode, Request, Route, ServiceError, envelopes
 from openengine.messaging.errors import invalid_argument
 
-from graph_engine.persistence.store import Command, CommandIdConflict, Definition, Graphs, Operation, VersionConflict
+from graph_engine.persistence.store import (
+    Command,
+    CommandIdConflict,
+    DeadlineExceeded,
+    Definition,
+    Graphs,
+    Operation,
+    VersionConflict,
+)
 
 SCHEMAS = "graph_engine/v1/schemas"
 APPLY = f"{SCHEMAS}/commands.schema.json#/$defs/apply_graph_command"
@@ -65,7 +73,7 @@ class Registry:
         self.store = store
 
     def commands(self) -> dict[str, Route]:
-        return {"graphs.apply": Route(self.apply)}
+        return {"graphs.apply": Route(self.apply, receipts=True)}
 
     def queries(self) -> dict[str, Route]:
         return {
@@ -87,16 +95,10 @@ class Registry:
 
     async def _apply(self, command: Command, body: dict[str, Any]) -> dict[str, Any]:
         try:
+            envelopes.check(envelopes.COMMAND, body)
             envelopes.check(APPLY, body)
         except ServiceError as error:
             return await self._reject(command, error)
-        received = datetime.now(UTC)
-        if (deadline := body.get("deadline_at")) and datetime.fromisoformat(deadline) < received:
-            # A retry of a command accepted in time is replayed by the receipt, not refused here.
-            return await self._reject(command, ServiceError(
-                ErrorCode.DEADLINE_EXCEEDED, f"the deadline {deadline} passed before the command was accepted",
-                details={"deadline_at": deadline, "received_at": _timestamp(received)},
-            ))
         payload, expected_version = body["payload"], body.get("expected_version")
         if "python" in payload:
             return await self._reject(command, ServiceError(
@@ -110,8 +112,15 @@ class Registry:
                 [(f"payload.graph.{problem.path}", problem.message) for problem in problems]
             ))
         definition = Definition(graph["metadata"]["name"], graph["spec"].get("description"), "resource", canonical(graph))
+        deadline = datetime.fromisoformat(body["deadline_at"]) if "deadline_at" in body else None
         try:
-            return await self.store.apply(command, definition, expected_version)
+            # A retry of a command accepted in time is replayed by its receipt, not refused for its deadline.
+            return await self.store.apply(command, definition, expected_version, deadline)
+        except DeadlineExceeded as late:
+            return await self._reject(command, ServiceError(
+                ErrorCode.DEADLINE_EXCEEDED, str(late),
+                details={"deadline_at": body["deadline_at"], "received_at": _timestamp(late.received)},
+            ))
         except VersionConflict as conflict:
             if conflict.actual is None:
                 error = ServiceError(

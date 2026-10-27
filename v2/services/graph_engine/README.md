@@ -31,7 +31,10 @@ The acceptance, the revision, the operation and the command's receipt commit
 in one transaction, and applies take turns, so concurrent applies number no
 revision twice. A retry with the same command ID, subject, payload,
 `expected_version` and causal path gets the original reply, including a
-rejection; anything else with that ID is `COMMAND_ID_CONFLICT`. Receipts are
+rejection, even of a malformed envelope; anything else with that ID is
+`COMMAND_ID_CONFLICT`. `deadline_at` is checked inside the transaction, after
+replaying any receipt, so a command waiting its turn past it is
+`DEADLINE_EXCEEDED` rather than accepted late. Receipts are
 kept indefinitely so far, beyond the contract's 7 days.
 
 GE brings its database to the head of its Alembic migrations as it starts,

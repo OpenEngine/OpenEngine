@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,13 @@ from openengine.persistence.migrations import downgrade
 
 from graph_engine.persistence import PERSISTENCE
 from graph_engine.persistence.schema import metadata
-from graph_engine.persistence.store import Command, CommandIdConflict, Definition, VersionConflict
+from graph_engine.persistence.store import (
+    Command,
+    CommandIdConflict,
+    DeadlineExceeded,
+    Definition,
+    VersionConflict,
+)
 
 
 @pytest.fixture
@@ -100,6 +107,29 @@ def test_expected_version_must_be_the_latest_revision(config: DatabaseConfig) ->
             assert (stale.value.expected, stale.value.actual) == (2, 1)
             # A conflict records nothing, so the command ID is still free.
             assert (await graphs.apply(_command("cmd_1"), _definition('{"a":1}')))["status"] == "accepted"
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_deadline_is_checked_once_the_apply_holds_the_lock(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            accepted = await graphs.apply(_command("cmd_1"), _definition("{}"))
+            # Waiting behind another write carries this apply past its deadline.
+            async with graphs._writing:  # noqa: SLF001
+                waiting = asyncio.create_task(graphs.apply(
+                    _command("cmd_2"), _definition("[]"), deadline=datetime.now(UTC) + timedelta(milliseconds=50)
+                ))
+                await asyncio.sleep(0.1)
+            with pytest.raises(DeadlineExceeded):
+                await waiting
+            assert (await graphs.graph(accepted["resource_id"])).latest_revision == 1
+            # An accepted command's receipt is replayed whatever its deadline.
+            past = datetime.now(UTC) - timedelta(days=1)
+            assert await graphs.apply(_command("cmd_1"), _definition("{}"), deadline=past) == accepted
         finally:
             await graphs.close()
 

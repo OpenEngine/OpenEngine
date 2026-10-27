@@ -22,6 +22,7 @@ from graph_engine.persistence.schema import command_receipts, graph_revisions, g
 from graph_engine.persistence.store import (
     Command,
     CommandIdConflict,
+    DeadlineExceeded,
     Definition,
     Graph,
     GraphRevision,
@@ -41,11 +42,17 @@ class SqliteGraphs(DatabaseStore):
         super().__init__(database)
         self._writing = asyncio.Lock()
 
-    async def apply(self, command: Command, definition: Definition, expected_version: int | None = None) -> dict[str, Any]:
+    async def apply(
+        self, command: Command, definition: Definition, expected_version: int | None = None,
+        deadline: datetime | None = None,
+    ) -> dict[str, Any]:
         async with self._writing, self.database.transaction() as transaction:
             if (receipt := await _receipt(transaction, command)) is not None:
                 return receipt
             now = datetime.now(UTC)
+            # Checked once the lock is held, so waiting for it cannot carry an acceptance past the deadline.
+            if deadline is not None and deadline < now:
+                raise DeadlineExceeded(deadline, now)
             graph = (await transaction.execute(graphs.select().where(graphs.c.name == definition.name))).one_or_none()
             if expected_version is not None and (graph is None or graph.latest_revision != expected_version):
                 raise VersionConflict(expected_version, graph.latest_revision if graph else None)

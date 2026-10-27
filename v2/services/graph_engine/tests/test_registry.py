@@ -16,8 +16,7 @@ from openengine.contracts.validate import load_contract, validate_message
 from openengine.messaging import Server
 from openengine.persistence import DatabaseConfig
 
-from graph_engine.persistence import PERSISTENCE
-from graph_engine import registry
+from graph_engine.persistence import PERSISTENCE, sqlite
 from graph_engine.registry import Registry
 
 APPLY = "oe.v1.ge.control.graphs.apply"
@@ -156,6 +155,16 @@ def test_a_command_breaking_its_schema_is_rejected_durably(send) -> None:
     assert conflict["error"]["details"]["original_operation_id"] == accepted["operation_id"]
 
 
+def test_a_command_breaking_its_envelope_is_rejected_durably(send) -> None:
+    broken = send(APPLY, {"command_id": "cmd_1", "causal_path": [], "payload": []})
+    assert broken["error"]["code"] == "INVALID_ARGUMENT"
+    assert validate_message(load_contract("graph_engine"), "ApplyGraphResponse", broken, in_reply_to=APPLY) == []
+    assert send(APPLY, _apply("cmd_1", {"graph": GRAPH}))["error"]["code"] == "COMMAND_ID_CONFLICT"
+    # Without a well-formed command ID there is nothing to keep a receipt under.
+    unidentified = send(APPLY, {"command_id": "not a token", "payload": []})
+    assert unidentified["error"]["code"] == "INVALID_ARGUMENT"
+
+
 def test_a_passed_deadline_refuses_acceptance_but_not_a_replay(send) -> None:
     late = send(APPLY, _apply("cmd_1", {"graph": GRAPH}, deadline_at="2000-01-01T00:00:00Z"))
     assert late["error"]["code"] == "DEADLINE_EXCEEDED"
@@ -173,7 +182,7 @@ def test_an_accepted_command_is_replayed_after_its_deadline(send, monkeypatch) -
     command = _apply("cmd_1", {"graph": GRAPH}, deadline_at="2030-01-01T00:00:00Z")
     accepted = send(APPLY, command)
 
-    monkeypatch.setattr(registry, "datetime", _Later)
+    monkeypatch.setattr(sqlite, "datetime", _Later)
 
     assert send(APPLY, command) == accepted
 
