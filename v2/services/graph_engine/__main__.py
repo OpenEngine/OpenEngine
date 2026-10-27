@@ -7,8 +7,8 @@ subscribed. Once it is, it writes the health URL to
 `OE_GE_READY_FILE`, if set. On SIGTERM it stops taking requests, answers the
 ones it has, and exits 0.
 
-It serves `graphs.apply` and the operations it records (see registry.py), and
-`graphs.list`, still an empty page.
+It serves `graphs.apply`, `graphs.list`, `graphs.{graph_id}.get` and the
+operations it records (see registry.py).
 """
 
 from __future__ import annotations
@@ -19,12 +19,11 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlsplit
 
 import nats
 from alembic.util import CommandError
-from openengine.messaging import Request, Route, Server, listen_address
+from openengine.messaging import Server, listen_address
 from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
@@ -43,15 +42,6 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 
 log = logging.getLogger("graph_engine")
-
-
-async def list_graphs(request: Request) -> dict[str, Any]:
-    return {"items": [], "next_cursor": None}
-
-
-QUERIES = {
-    "graphs.list": Route(list_graphs, "graph_engine/v1/schemas/queries.schema.json#/$defs/list_graphs_query"),
-}
 
 
 async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -93,7 +83,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
     registry = Registry(store)
-    server = Server(connection, "ge", listener, queries=QUERIES | registry.queries(), commands=registry.commands())
+    server = Server(connection, "ge", listener, queries=registry.queries(), commands=registry.commands())
     await server.start()
     health = await asyncio.start_server(
         lambda reader, writer: _health(

@@ -1,4 +1,4 @@
-"""The graph registry's subjects: `graphs.apply`, and `operations.{operation_id}.get` for what it recorded.
+"""The graph registry's subjects: `graphs.apply`, `graphs.list`, `graphs.{graph_id}.get`, and `operations.{operation_id}.get`.
 
 A Graph resource is kept as the canonical JSON of what was applied (sorted keys,
 no spacing), so reformatting a file or reordering its keys changes nothing,
@@ -13,15 +13,24 @@ has passed by the time the store would accept it, which is DEADLINE_EXCEEDED. A 
 `expected_version` and causal path gets that reply again; anything else with
 that ID is COMMAND_ID_CONFLICT. `expected_version` is the graph's latest
 revision, so naming it for a graph that does not exist yet is NOT_FOUND.
+
+`graphs.list` pages by key on (name, graph_id). Its cursor is the last
+graph's key and the `name_prefix` it was issued for, as base64url JSON, so it
+never expires, and reusing it with another prefix is INVALID_CURSOR.
+A revision's `inputs` and `nodes` are read from its source when it is asked
+for: the inputs it declares, and its step names in stage order.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 from datetime import datetime
 from typing import Any
 
+from openengine.contracts.graphs import STAGES
 from openengine.contracts.resources import validate_resource
 from openengine.messaging import ErrorCode, Request, Route, ServiceError, envelopes
 from openengine.messaging.errors import invalid_argument
@@ -31,6 +40,8 @@ from graph_engine.persistence.store import (
     CommandIdConflict,
     DeadlineExceeded,
     Definition,
+    Graph,
+    GraphRevision,
     Graphs,
     Operation,
     VersionConflict,
@@ -38,6 +49,7 @@ from graph_engine.persistence.store import (
 
 SCHEMAS = "graph_engine/v1/schemas"
 APPLY = f"{SCHEMAS}/commands.schema.json#/$defs/apply_graph_command"
+DEFAULT_LIMIT = 50
 
 
 def canonical(value: Any) -> str:
@@ -68,6 +80,61 @@ def _snapshot(operation: Operation) -> dict[str, Any]:
     return snapshot | {key: value for key in ("result", "error") if (value := getattr(operation, key)) is not None}
 
 
+def _graph(graph: Graph) -> dict[str, Any]:
+    snapshot = {
+        "graph_id": graph.graph_id,
+        "name": graph.name,
+        "latest_revision": graph.latest_revision,
+        "created_at": _timestamp(graph.created_at),
+        "updated_at": _timestamp(graph.updated_at),
+    }
+    return snapshot | ({"description": graph.description} if graph.description is not None else {})
+
+
+def _revision(revision: GraphRevision, include_source: bool) -> dict[str, Any]:
+    spec = json.loads(revision.source)["spec"] if revision.format == "resource" else {}
+    inputs = {
+        declared["name"]: {key: declared[key] for key in ("required", "description") if key in declared}
+        for declared in spec.get("inputs", [])
+    }
+    snapshot = {
+        "graph_id": revision.graph_id,
+        "revision": revision.revision,
+        "format": revision.format,
+        "source_sha256": revision.source_sha256,
+        "inputs": inputs,
+        "nodes": [step["name"] for stage in STAGES for step in spec.get(stage, [])],
+        "created_at": _timestamp(revision.created_at),
+    }
+    return snapshot | ({"source": revision.source} if include_source else {})
+
+
+def _cursor(graph: Graph, name_prefix: str | None) -> str:
+    key = canonical({"after": [graph.name, graph.graph_id], "name_prefix": name_prefix})
+    return base64.urlsafe_b64encode(key.encode()).decode().rstrip("=")
+
+
+def _after(cursor: str, name_prefix: str | None) -> tuple[str, str]:
+    malformed = ServiceError(ErrorCode.INVALID_CURSOR, "the cursor is not one graphs.list issued",
+                             details={"reason": "malformed"})
+    try:
+        key = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        name, graph_id = key["after"]
+        issued_for = key["name_prefix"]
+    except (binascii.Error, ValueError, KeyError, TypeError):
+        raise malformed from None
+    if not (isinstance(name, str) and isinstance(graph_id, str)):
+        raise malformed
+    if issued_for != name_prefix:
+        raise ServiceError(ErrorCode.INVALID_CURSOR, "the cursor was issued for another name_prefix",
+                           details={"reason": "filters_changed"})
+    return name, graph_id
+
+
+def _not_found(graph_id: str, message: str) -> ServiceError:
+    return ServiceError(ErrorCode.NOT_FOUND, message, details={"resource_type": "graph", "resource_id": graph_id})
+
+
 class Registry:
     def __init__(self, store: Graphs) -> None:
         self.store = store
@@ -77,6 +144,8 @@ class Registry:
 
     def queries(self) -> dict[str, Route]:
         return {
+            "graphs.list": Route(self.list, f"{SCHEMAS}/queries.schema.json#/$defs/list_graphs_query"),
+            "graphs.{graph_id}.get": Route(self.get, f"{SCHEMAS}/queries.schema.json#/$defs/get_graph_query"),
             "operations.{operation_id}.get": Route(self.operation, f"{SCHEMAS}/queries.schema.json#/$defs/get_operation_query"),
         }
 
@@ -139,6 +208,27 @@ class Registry:
         return await self.store.reject(
             command, {"command_id": command.command_id, "status": "rejected", "error": error.to_dict()}
         )
+
+    async def list(self, request: Request) -> dict[str, Any]:
+        params = request.body["params"]
+        name_prefix, limit = params.get("name_prefix"), params.get("limit", DEFAULT_LIMIT)
+        after = _after(cursor, name_prefix) if (cursor := params.get("cursor")) is not None else None
+        # One more than the page shows whether there is a next page.
+        found = await self.store.graphs(limit + 1, name_prefix, after)
+        page = found[:limit]
+        return {
+            "items": [_graph(graph) for graph in page],
+            "next_cursor": _cursor(page[-1], name_prefix) if len(found) > limit else None,
+        }
+
+    async def get(self, request: Request) -> dict[str, Any]:
+        graph_id, params = request.parameters["graph_id"], request.body["params"]
+        if (graph := await self.store.graph(graph_id)) is None:
+            raise _not_found(graph_id, f"no graph {graph_id}")
+        number = params.get("revision", graph.latest_revision)
+        if (revision := await self.store.revision(graph_id, number)) is None:
+            raise _not_found(graph_id, f"graph {graph.name} has no revision {number}; its latest is {graph.latest_revision}")
+        return {"graph": _graph(graph), "revision": _revision(revision, params.get("include_source", True))}
 
     async def operation(self, request: Request) -> dict[str, Any]:
         operation_id = request.parameters["operation_id"]

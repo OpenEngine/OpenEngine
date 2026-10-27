@@ -2,17 +2,18 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.4
+  version: 1.0.0-draft.5
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
     answers and the events it publishes.
 
     > **Mostly contract only.** GE answers `oe.v1.ge.control.graphs.apply`
-    > (Graph resources only), `oe.v1.ge.query.operations.{operation_id}.get`
-    > for the operations it records, and `oe.v1.ge.query.graphs.list`, with an
-    > empty page so far. Every other subject is a defined API that GE answers
-    > with `UNSUPPORTED_CAPABILITY`; see the package README's *Implementation
+    > (Graph resources only), `oe.v1.ge.query.graphs.list`,
+    > `oe.v1.ge.query.graphs.{graph_id}.get`, and
+    > `oe.v1.ge.query.operations.{operation_id}.get` for the operations it
+    > records. Every other subject is a defined API that GE answers with
+    > `UNSUPPORTED_CAPABILITY`; see the package README's *Implementation
     > status*.
 
     ## Versions
@@ -556,6 +557,7 @@ operations:
     action: receive
     title: List graphs
     summary: "Page through registered graphs."
+    description: "Sorted by `name`, then `graph_id`; each graph shows its `latest_revision`. `name_prefix` keeps the graphs whose names start with it, compared exactly (case-sensitive, no wildcards). Pages by key: `next_cursor` is non-null while more graphs follow, and is bound to the `name_prefix` it was issued for, so reusing it with another is INVALID_CURSOR. Graph revisions are not listed; `graphs.{graph_id}.get` reads any one of them."
     channel: { $ref: '#/channels/graphsList' }
     tags: [{ name: query }]
     reply:
@@ -565,6 +567,7 @@ operations:
     action: receive
     title: Get a graph
     summary: "Return a graph and one revision (latest by default), with its verbatim source."
+    description: "`revision` defaults to the graph's `latest_revision`, and `include_source: false` leaves out `source`. Every revision stays readable once applied, across GE restarts. An unknown `graph_id`, or a `revision` the graph does not have, is NOT_FOUND with `resource_type: graph`. A Graph resource's `source` is the canonical JSON GE kept; `inputs` and `nodes` are the inputs and step names it declares."
     channel: { $ref: '#/channels/graphGet' }
     tags: [{ name: query }]
     reply:
@@ -1043,6 +1046,7 @@ components:
         schema: { $ref: './schemas/queries.schema.json#/$defs/list_graphs_query' }
       examples:
         - name: graphs.list.query
+          summary: "The first page of graphs whose names start with `re`, one per page."
           payload: { $ref: './examples/graphs.list.query.json#/payload' }
     ListGraphsResponse:
       name: ListGraphsResponse

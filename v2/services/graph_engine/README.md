@@ -6,15 +6,16 @@
 `python -m graph_engine` connects to the NATS at `OE_NATS_URL` and serves
 `oe.v1.ge.query.>` and `oe.v1.ge.control.>` through
 [`openengine-messaging`](../../packages/messaging/README.md). So far it
-answers `graphs.apply`, `operations.{operation_id}.get` for the operations
-it records, and `graphs.list`, still with an empty page. Every other subject
-gets `UNSUPPORTED_CAPABILITY`.
+answers `graphs.apply`, `graphs.list`, `graphs.{graph_id}.get`, and
+`operations.{operation_id}.get` for the operations it records. Every other
+subject gets `UNSUPPORTED_CAPABILITY`.
 
 ```bash
 uv run oe up
-uv run oe graph apply FILE     # created NAME revision 1 (graph graph_…)
-uv run oe graph list           # No graphs registered.
-uv run oe graph list --json    # the query-response
+uv run oe graph apply FILE        # created NAME revision 1 (graph graph_…)
+uv run oe graph list              # each graph's name, ID and latest revision
+uv run oe graph list --json       # the query-response, with next_cursor
+uv run oe graph get NAME[@REV]    # a revision, the latest by default, and its source
 ```
 
 ### Graph registry
@@ -36,6 +37,16 @@ rejection, even of a malformed envelope; anything else with that ID is
 replaying any receipt, so a command waiting its turn past it is
 `DEADLINE_EXCEEDED` rather than accepted late. Receipts are
 kept indefinitely so far, beyond the contract's 7 days.
+
+`graphs.list` sorts by name, then graph ID, and pages by that key, so a graph
+applied between pages is neither repeated nor skipped. `name_prefix` matches
+names exactly (case-sensitive, and `_` is no wildcard). The cursor carries the
+last graph's key and the prefix it was issued for, so it never expires and
+reusing it with another prefix is `INVALID_CURSOR`. `graphs.{graph_id}.get`
+returns the graph and one revision, the latest unless `revision` names
+another, with its source unless `include_source` is false. Its `inputs` and
+`nodes` are read from the source: the inputs it declares and its step names.
+An unknown graph or revision is `NOT_FOUND`.
 
 GE brings its database to the head of its Alembic migrations as it starts,
 so `oe up` alone is enough; `oe migrate` does the same for every service.

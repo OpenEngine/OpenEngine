@@ -94,7 +94,7 @@
           "type": "array",
           "items": { "$ref": "execution.schema.json#/$defs/node_id" },
           "uniqueItems": true,
-          "description": "Node IDs the revision declares."
+          "description": "Node IDs the revision declares: so far, a Graph resource's step names in stage order (plan, implementation, review)."
         },
         "created_at": { "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp" }
       }

@@ -527,6 +527,7 @@ dependencies = [
     { name = "openengine-telemetry" },
     { name = "openengine-tool-service" },
     { name = "openengine-virtual-control-plane" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -541,6 +542,7 @@ requires-dist = [
     { name = "openengine-telemetry", editable = "packages/telemetry" },
     { name = "openengine-tool-service", editable = "services/tool_service" },
     { name = "openengine-virtual-control-plane", editable = "services/virtual_control_plane" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [[package]]

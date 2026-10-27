@@ -158,6 +158,54 @@ def test_concurrent_applies_neither_duplicate_nor_skip_revisions(config: Databas
     asyncio.run(scenario())
 
 
+def test_graphs_are_listed_by_name_and_paged_after_a_key(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            for name in ("review", "triage", "review-fast", "Review", "re_view", "deploy"):
+                await graphs.apply(_command(f"cmd_{name}"), _definition("{}", name))
+
+            assert [graph.name for graph in await graphs.graphs(50)] == [
+                "Review", "deploy", "re_view", "review", "review-fast", "triage",
+            ]
+            # A prefix matches exactly: case counts, and `_` is no wildcard.
+            assert [graph.name for graph in await graphs.graphs(50, "review")] == ["review", "review-fast"]
+            assert [graph.name for graph in await graphs.graphs(50, "re_")] == ["re_view"]
+            assert await graphs.graphs(50, "x") == []
+
+            first = await graphs.graphs(2)
+            assert [graph.name for graph in first] == ["Review", "deploy"]
+            rest = await graphs.graphs(50, after=(first[-1].name, first[-1].graph_id))
+            assert [graph.name for graph in rest] == ["re_view", "review", "review-fast", "triage"]
+            assert [graph.name for graph in await graphs.graphs(50, "review", ("review", rest[1].graph_id))] == ["review-fast"]
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_any_revision_of_a_graph_is_read_back(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            graph_id = (await graphs.apply(_command("cmd_1"), _definition('{"a":1}')))["resource_id"]
+            await graphs.apply(_command("cmd_2"), _definition('{"a":2}'))
+
+            latest = await graphs.graph(graph_id)
+            assert (latest.name, latest.latest_revision) == ("triage", 2)
+            first, second = await graphs.revision(graph_id, 1), await graphs.revision(graph_id, latest.latest_revision)
+            assert (first.revision, first.format, first.source) == (1, "resource", '{"a":1}')
+            assert (second.revision, second.source) == (2, '{"a":2}')
+            assert first.source_sha256 != second.source_sha256
+            assert await graphs.graph("graph_missing") is None
+            assert await graphs.revision("graph_missing", 1) is None
+            assert await graphs.revision(graph_id, 3) is None
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
 def test_postgres_store_is_a_stub() -> None:
     with pytest.raises(BackendNotImplemented, match="graph engine's store"):
         PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES))
