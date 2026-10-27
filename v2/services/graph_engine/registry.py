@@ -7,7 +7,9 @@ refused with UNSUPPORTED_CAPABILITY until GE can load them.
 
 Every command gets a receipt: its acceptance, recorded in the same transaction
 as the revision and operation, or its rejection, unless the rejection was
-retryable. A retry with the same command ID and the same subject, payload,
+retryable. That includes a command breaking its schema, so the handler checks
+the schema rather than its route, and one whose `deadline_at` has passed before
+it was accepted, which is DEADLINE_EXCEEDED. A retry with the same command ID and the same subject, payload,
 `expected_version` and causal path gets that reply again; anything else with
 that ID is COMMAND_ID_CONFLICT. `expected_version` is the graph's latest
 revision, so naming it for a graph that does not exist yet is NOT_FOUND.
@@ -17,16 +19,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from openengine.contracts.resources import validate_resource
-from openengine.messaging import ErrorCode, Request, Route, ServiceError
+from openengine.messaging import ErrorCode, Request, Route, ServiceError, envelopes
 from openengine.messaging.errors import invalid_argument
 
 from graph_engine.persistence.store import Command, CommandIdConflict, Definition, Graphs, Operation, VersionConflict
 
 SCHEMAS = "graph_engine/v1/schemas"
+APPLY = f"{SCHEMAS}/commands.schema.json#/$defs/apply_graph_command"
 
 
 def canonical(value: Any) -> str:
@@ -62,7 +65,7 @@ class Registry:
         self.store = store
 
     def commands(self) -> dict[str, Route]:
-        return {"graphs.apply": Route(self.apply, f"{SCHEMAS}/commands.schema.json#/$defs/apply_graph_command")}
+        return {"graphs.apply": Route(self.apply)}
 
     def queries(self) -> dict[str, Route]:
         return {
@@ -71,9 +74,8 @@ class Registry:
 
     async def apply(self, request: Request) -> dict[str, Any]:
         command = _command(request)
-        payload = request.body["payload"]
         try:
-            response = await self._apply(command, payload, request.body.get("expected_version"))
+            response = await self._apply(command, request.body)
         except CommandIdConflict as conflict:
             details = {"command_id": conflict.command_id, "original_subject": conflict.subject}
             if conflict.operation_id:
@@ -83,7 +85,19 @@ class Registry:
             raise ServiceError.from_dict(response["error"])
         return response
 
-    async def _apply(self, command: Command, payload: dict[str, Any], expected_version: int | None) -> dict[str, Any]:
+    async def _apply(self, command: Command, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            envelopes.check(APPLY, body)
+        except ServiceError as error:
+            return await self._reject(command, error)
+        received = datetime.now(UTC)
+        if (deadline := body.get("deadline_at")) and datetime.fromisoformat(deadline) < received:
+            # A retry of a command accepted in time is replayed by the receipt, not refused here.
+            return await self._reject(command, ServiceError(
+                ErrorCode.DEADLINE_EXCEEDED, f"the deadline {deadline} passed before the command was accepted",
+                details={"deadline_at": deadline, "received_at": _timestamp(received)},
+            ))
+        payload, expected_version = body["payload"], body.get("expected_version")
         if "python" in payload:
             return await self._reject(command, ServiceError(
                 ErrorCode.UNSUPPORTED_CAPABILITY, "GE does not load Python graphs yet; apply a Graph resource",

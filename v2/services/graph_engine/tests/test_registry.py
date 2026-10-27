@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from openengine.messaging import Server
 from openengine.persistence import DatabaseConfig
 
 from graph_engine.persistence import PERSISTENCE
+from graph_engine import registry
 from graph_engine.registry import Registry
 
 APPLY = "oe.v1.ge.control.graphs.apply"
@@ -137,3 +139,46 @@ def test_operation_queries_name_a_known_well_formed_id(send) -> None:
     malformed = send("oe.v1.ge.query.operations.cmd_1.get", {"params": {}})
     assert malformed["error"]["code"] == "INVALID_ARGUMENT"
     assert [violation["field"] for violation in malformed["error"]["details"]["violations"]] == ["subject.operation_id"]
+
+
+def test_a_command_breaking_its_schema_is_rejected_durably(send) -> None:
+    broken = send(APPLY, _apply("cmd_1", {"graph": {}}))
+    assert broken["error"]["code"] == "INVALID_ARGUMENT"
+    assert validate_message(load_contract("graph_engine"), "ApplyGraphResponse", broken, in_reply_to=APPLY) == []
+
+    # Its ID is spent: a valid graph under it conflicts rather than being accepted.
+    assert send(APPLY, _apply("cmd_1", {"graph": GRAPH}))["error"]["code"] == "COMMAND_ID_CONFLICT"
+    assert send(APPLY, _apply("cmd_1", {"graph": {}})) == broken
+    # And a broken command reusing an accepted command's ID conflicts too.
+    accepted = send(APPLY, _apply("cmd_2", {"graph": GRAPH}))
+    conflict = send(APPLY, _apply("cmd_2", {"graph": {}}))
+    assert conflict["error"]["code"] == "COMMAND_ID_CONFLICT"
+    assert conflict["error"]["details"]["original_operation_id"] == accepted["operation_id"]
+
+
+def test_a_passed_deadline_refuses_acceptance_but_not_a_replay(send) -> None:
+    late = send(APPLY, _apply("cmd_1", {"graph": GRAPH}, deadline_at="2000-01-01T00:00:00Z"))
+    assert late["error"]["code"] == "DEADLINE_EXCEEDED"
+    assert late["error"]["details"]["deadline_at"] == "2000-01-01T00:00:00Z"
+    assert validate_message(load_contract("graph_engine"), "ApplyGraphResponse", late, in_reply_to=APPLY) == []
+    assert send(APPLY, _apply("cmd_1", {"graph": GRAPH}, deadline_at="2000-01-01T00:00:00Z")) == late
+
+    # Nothing was recorded, so a later apply creates revision 1.
+    created = send(APPLY, _apply("cmd_2", {"graph": GRAPH}, deadline_at="2999-01-01T00:00:00Z"))
+    assert created["status"] == "accepted"
+    assert _operation(send, created)["result"]["created"] is True
+
+
+def test_an_accepted_command_is_replayed_after_its_deadline(send, monkeypatch) -> None:
+    command = _apply("cmd_1", {"graph": GRAPH}, deadline_at="2030-01-01T00:00:00Z")
+    accepted = send(APPLY, command)
+
+    monkeypatch.setattr(registry, "datetime", _Later)
+
+    assert send(APPLY, command) == accepted
+
+
+class _Later(datetime):
+    @classmethod
+    def now(cls, tz=None):  # noqa: ANN001, ANN206
+        return datetime(2031, 1, 1, tzinfo=tz)
