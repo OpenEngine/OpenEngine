@@ -32,7 +32,10 @@ export async function show(terminal: Terminal, testInfo: TestInfo, highlight: Lo
   }
 }
 
-/** A step the page shows as a paragraph of its own (see another-computer.spec.ts). */
+/**
+ * A step the page shows as a paragraph of its own (see another-computer.spec.ts).
+ * A title starting with `[nodoc]` is left bare: test2doc only skips a title that starts with it.
+ */
 export function step<T>(text: string, body: () => Promise<T>): Promise<T> {
-  return test.step(`\n${text}\n`, body)
+  return test.step(text.startsWith("[nodoc]") ? text : `\n${text}\n`, body)
 }

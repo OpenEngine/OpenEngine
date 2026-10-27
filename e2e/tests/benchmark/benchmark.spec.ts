@@ -8,6 +8,8 @@ import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { startEngine, type Engine } from "../../fixtures/engine.ts"
 import { Terminal, test } from "../../fixtures/terminal.ts"
 import { BENCH_REPO, BENCH_TOPIC, benchDirectory, getRepo, gh, recordProcess, whoami } from "../../support/benchmark.ts"
+import { issues } from "../../fixtures/calculator/issues.ts"
+import { milestone } from "../../fixtures/calculator/milestone.ts"
 import { freePort } from "../../support/freePort.ts"
 import { show, step } from "../../support/show.ts"
 import { benchmarkCategory } from "../docCategories"
@@ -49,6 +51,9 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
     () => {
       test("The journey", async ({ terminal, context }, testInfo) => {
         const owner = await whoami()
+        // The calculator repository, as `gh` names it, and as GitHub's API addresses it.
+        const repo = `${owner}/${BENCH_REPO}`
+        const api = `repos/${repo}`
 
         await step("[nodoc] The terminal is signed in to GitHub as the same account as the harness", async () => {
           // They can differ: a `gh` wrapper may pick its account by directory, and the terminal starts somewhere
@@ -138,8 +143,40 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           await step(
             "Give it a topic, a label GitHub shows on the repository. OpenEngine's benchmark uses it to recognise this repository as its own.",
             async () => {
-              await terminal.run(`gh repo edit ${owner}/${BENCH_REPO} --add-topic ${BENCH_TOPIC}`)
+              await terminal.run(`gh repo edit ${repo} --add-topic ${BENCH_TOPIC}`)
               expect((await getRepo(owner, BENCH_REPO))?.topics, "GitHub lists the topic").toContain(BENCH_TOPIC)
+            },
+          )
+
+          await step(
+            "OpenEngine works from GitHub issues, so fill the repository with the plan: a milestone called Calculator, and one issue for each piece of the calculator. Each issue says which issue it depends on, in its text and as a link GitHub shows as blocked by, so OpenEngine takes them in order.",
+            async () => {
+              const number = (await gh("api", `${api}/milestones`, "-f", `title=${milestone.title}`, "-f", `description=${milestone.description}`, "--jq", ".number")).trim()
+              // Created in order, each depending on the one before it, so the previous issue is already known.
+              const numbers: string[] = []
+              let previousId = ""
+              for (const issue of issues) {
+                const body = [
+                  ...issue.description,
+                  "## Acceptance criteria",
+                  issue.criteria.map((criterion) => `- [ ] ${criterion}`).join("\n"),
+                  ...(numbers.length ? [`Depends on #${numbers.at(-1)}`] : []),
+                ].join("\n\n")
+                const created = JSON.parse(await gh("api", `${api}/issues`, "-f", `title=${issue.title}`, "-f", `body=${body}`, "-F", `milestone=${number}`)) as { number: number; id: number }
+                // The text above is what OpenEngine reads; the link is what GitHub shows, as "Blocked by #N" on the issue.
+                if (previousId) await gh("api", "-X", "POST", `${api}/issues/${created.number}/dependencies/blocked_by`, "-F", `issue_id=${previousId}`)
+                numbers.push(String(created.number))
+                previousId = String(created.id)
+              }
+              await terminal.run(`gh issue list --repo ${repo} --milestone ${milestone.title} --state open --limit 30`)
+              await show(terminal, testInfo, await terminal.row(/Scaffold the calculator page/), "The calculator's issues")
+              // GitHub's listing can trail the issues just created, so wait for it to show them all.
+              const listIssues = async () => JSON.parse(await gh("api", `${api}/issues?milestone=${number}&state=open&per_page=100`)) as { number: number; body: string }[]
+              await expect.poll(async () => (await listIssues()).length, { timeout: 30_000, message: "every issue is in the milestone" }).toBe(issues.length)
+              expect(await gh("api", `${api}/issues/${numbers.at(-1)}/dependencies/blocked_by`, "--jq", "[.[].number]"), "GitHub shows the last issue as blocked by the one before it").toContain(`${numbers.at(-2)}`)
+              expect((await listIssues()).find((issue) => issue.number === Number(numbers.at(-1)))?.body, "the last issue links to the one before it").toContain(
+                `Depends on #${numbers.at(-2)}`,
+              )
             },
           )
 
@@ -149,7 +186,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               // The secret reaches the command as an environment variable, so it never appears on screen.
               const events = EVENTS.map((event) => `-f 'events[]=${event}'`).join(" ")
               const { output } = await terminal.run(
-                `gh api repos/${owner}/${BENCH_REPO}/hooks -f name=web -F active=true -f 'config[url]=${tunnelUrl}/api/github/events' ` +
+                `gh api ${api}/hooks -f name=web -F active=true -f 'config[url]=${tunnelUrl}/api/github/events' ` +
                   `-f 'config[content_type]=json' -f 'config[secret]='"$ENGINE_GITHUB_WEBHOOK_SECRET" ${events} --jq .id`,
               )
               const id = output.trim().split("\n").at(-1)!.trim()
@@ -159,7 +196,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             },
           )
 
-          const hookPath = `repos/${owner}/${BENCH_REPO}/hooks/${hook}`
+          const hookPath = `${api}/hooks/${hook}`
           await step(
             "Check that it works. Ask GitHub to send a test message. GitHub keeps a log of every message it sends and the answer it got, so you can see whether OpenEngine accepted it.",
             async () => {
