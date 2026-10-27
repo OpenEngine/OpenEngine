@@ -1,0 +1,15 @@
+{
+  "definition": "command_ack",
+  "in_reply_to": "oe.internal.v1.runtime.runtimes.rt_demo.cancel",
+  "payload": {
+    "command_id": "rtc_cancel",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1,
+      "session_id": "session_demo",
+      "attempt_id": "attempt_demo"
+    },
+    "status": "accepted"
+  }
+}

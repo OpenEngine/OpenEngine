@@ -1,0 +1,26 @@
+{
+  "definition": "ready",
+  "subject": "oe.internal.v1.vcp.runtimes.rt_demo.updates",
+  "payload": {
+    "event_id": "rte_ready",
+    "kind": "runtime.ready",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1
+    },
+    "boot_id": "boot_1",
+    "sequence": 1,
+    "occurred_at": "2026-10-22T12:00:00Z",
+    "payload": {
+      "executors": [
+        "codex"
+      ],
+      "max_concurrent_attempts": 1,
+      "progress_kinds": [
+        "conversation"
+      ],
+      "journal_id": "journal_1"
+    }
+  }
+}

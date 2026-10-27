@@ -1,0 +1,46 @@
+{
+  "definition": "progress",
+  "subject": "oe.internal.v1.vcp.runtimes.rt_demo.updates",
+  "payload": {
+    "event_id": "rte_progress",
+    "kind": "attempt.progress",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1,
+      "session_id": "session_demo",
+      "attempt_id": "attempt_demo"
+    },
+    "boot_id": "boot_1",
+    "sequence": 3,
+    "occurred_at": "2026-10-22T12:00:00Z",
+    "payload": {
+      "kind": "artifact",
+      "artifact": {
+        "artifact_id": "artifact_a1_patch",
+        "workspace_id": "ws_demo",
+        "attempt_id": "attempt_demo",
+        "kind": "patch",
+        "name": "fix-ssrf.patch",
+        "media_type": "text/x-diff",
+        "size_bytes": 4182,
+        "sha256": "9f2c1e0b7a6d5c4b3a29180f7e6d5c4b3a2918007e6d5c4b3a2918f7e6d5c4b3",
+        "uri": "s3://openengine-artifacts/ws_a1/artifact_a1_patch",
+        "created_at": "2026-10-19T21:47:30Z"
+      }
+    },
+    "execution": {
+      "command_id": "rtc_execute",
+      "cause": {
+        "operation": {
+          "operation_id": "op_execute",
+          "command_id": "cmd_execute"
+        },
+        "causal_path": [
+          "cmd_execute"
+        ]
+      }
+    },
+    "attempt_sequence": 2
+  }
+}

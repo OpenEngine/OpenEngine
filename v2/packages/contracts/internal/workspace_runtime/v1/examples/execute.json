@@ -1,0 +1,43 @@
+{
+  "definition": "execute",
+  "subject": "oe.internal.v1.runtime.runtimes.rt_demo.execute",
+  "payload": {
+    "command_id": "rtc_execute",
+    "kind": "execute",
+    "target": {
+      "workspace_id": "ws_demo",
+      "runtime_id": "rt_demo",
+      "runtime_generation": 1,
+      "session_id": "session_demo",
+      "attempt_id": "attempt_demo"
+    },
+    "execution": {
+      "command_id": "rtc_execute",
+      "cause": {
+        "operation": {
+          "operation_id": "op_execute",
+          "command_id": "cmd_execute"
+        },
+        "causal_path": [
+          "cmd_execute"
+        ]
+      }
+    },
+    "payload": {
+      "agent": {
+        "runner": "codex"
+      },
+      "task": {
+        "instruction": "Fix the failing unit test."
+      },
+      "session_mode": "new",
+      "context": {
+        "working_directory": "repositories/0",
+        "instruction_files": [
+          "AGENTS.md"
+        ],
+        "references": []
+      }
+    }
+  }
+}

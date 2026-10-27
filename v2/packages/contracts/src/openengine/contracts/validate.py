@@ -302,10 +302,13 @@ def check(contract: Contract) -> list[str]:
 
 
 def main() -> int:
+    from openengine.contracts.runtime import check as check_runtime
+
     problems = [problem for service in SERVICES for problem in check(load_contract(service))]
+    problems += check_runtime()
     for problem in problems:
         print(problem, file=sys.stderr)
-    print(f"{len(problems)} problem(s) in {len(SERVICES)} contracts")
+    print(f"{len(problems)} problem(s) in {len(SERVICES)} public contracts and the internal runtime contract")
     return 1 if problems else 0
 
 

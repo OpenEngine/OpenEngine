@@ -256,4 +256,4 @@ def test_docs_name_only_the_one_api_version(doc: str) -> None:
 def test_the_wheel_carries_every_contract_directory() -> None:
     project = tomllib.loads((resources.CONTRACTS / "pyproject.toml").read_text())
     included = project["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
-    assert included == {name: f"openengine/contracts/{name}" for name in ("common", *SERVICES)}
+    assert included == {name: f"openengine/contracts/{name}" for name in ("common", "internal", *SERVICES)}
