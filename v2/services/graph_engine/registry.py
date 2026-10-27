@@ -13,13 +13,14 @@ has passed by the time the store would accept it, which is DEADLINE_EXCEEDED. A 
 `expected_version` and causal path gets that reply again; anything else with
 that ID is COMMAND_ID_CONFLICT. `expected_version` is the graph's latest
 revision, so naming it for a graph that does not exist yet is NOT_FOUND.
-A Graph whose source, JSON-encoded as `graphs.{graph_id}.get` replies with it,
-would pass MAX_SOURCE_BYTES is INVALID_ARGUMENT, so every revision GE keeps
+A Graph whose `graphs.{graph_id}.get` result, encoded as the reply carries it,
+would pass MAX_RESULT_BYTES is INVALID_ARGUMENT, so every revision GE keeps
 can be read back within NATS's default 1 MiB payload.
 
 `graphs.list` pages by key on (name, graph_id). Its cursor is the last
 graph's key and the `name_prefix` it was issued for, as base64url JSON, so it
-never expires, and reusing it with another prefix is INVALID_CURSOR.
+never expires, and reusing it with another prefix is INVALID_CURSOR. A page
+ends early rather than pass MAX_RESULT_BYTES.
 A revision's `inputs` and `nodes` are read from its source when it is asked
 for: the inputs it declares, and its step names in stage order.
 """
@@ -30,7 +31,7 @@ import base64
 import binascii
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from openengine.contracts.graphs import STAGES
@@ -53,8 +54,8 @@ from graph_engine.persistence.store import (
 SCHEMAS = "graph_engine/v1/schemas"
 APPLY = f"{SCHEMAS}/commands.schema.json#/$defs/apply_graph_command"
 DEFAULT_LIMIT = 50
-# Half of NATS's default max_payload, leaving the rest of a get reply room.
-MAX_SOURCE_BYTES = 512 * 1024
+# NATS's default max_payload, less room for the reply envelope around a result.
+MAX_RESULT_BYTES = 1024 * 1024 - 16 * 1024
 
 
 def canonical(value: Any) -> str:
@@ -136,6 +137,18 @@ def _after(cursor: str, name_prefix: str | None) -> tuple[str, str]:
     return name, graph_id
 
 
+def _size(value: dict[str, Any]) -> int:
+    return len(envelopes.encode(value))
+
+
+def _readable_size(definition: Definition) -> int:
+    """The bytes of the result `graphs.{graph_id}.get` would reply with for this definition's revision."""
+    now = datetime.now(UTC)
+    graph = Graph("", definition.name, definition.description, 0, now, now)
+    revision = GraphRevision("", 0, definition.format, definition.source, definition.source_sha256, now)
+    return _size({"graph": _graph(graph), "revision": _revision(revision, include_source=True)})
+
+
 def _not_found(graph_id: str, message: str) -> ServiceError:
     return ServiceError(ErrorCode.NOT_FOUND, message, details={"resource_type": "graph", "resource_id": graph_id})
 
@@ -186,9 +199,9 @@ class Registry:
                 [(f"payload.graph.{problem.path}", problem.message) for problem in problems]
             ))
         definition = Definition(graph["metadata"]["name"], graph["spec"].get("description"), "resource", canonical(graph))
-        if (size := len(json.dumps(definition.source, ensure_ascii=False).encode())) > MAX_SOURCE_BYTES:
+        if (size := _readable_size(definition)) > MAX_RESULT_BYTES:
             return await self._reject(command, invalid_argument(
-                [("payload.graph", f"its source is {size} bytes as a reply carries it; the most is {MAX_SOURCE_BYTES}")]
+                [("payload.graph", f"reading it back would take a {size}-byte reply; the most is {MAX_RESULT_BYTES}")]
             ))
         deadline = datetime.fromisoformat(body["deadline_at"]) if "deadline_at" in body else None
         try:
@@ -224,10 +237,18 @@ class Registry:
         after = _after(cursor, name_prefix) if (cursor := params.get("cursor")) is not None else None
         # One more than the page shows whether there is a next page.
         found = await self.store.graphs(limit + 1, name_prefix, after)
-        page = found[:limit]
+        items: list[dict[str, Any]] = []
+        size = 0
+        for graph in found[:limit]:
+            item = _graph(graph)
+            # Each item fits alone, as apply bounds its description; the page stops before the reply would not.
+            size += _size(item) + 1
+            if items and size > MAX_RESULT_BYTES:
+                break
+            items.append(item)
         return {
-            "items": [_graph(graph) for graph in page],
-            "next_cursor": _cursor(page[-1], name_prefix) if len(found) > limit else None,
+            "items": items,
+            "next_cursor": _cursor(found[len(items) - 1], name_prefix) if len(found) > len(items) else None,
         }
 
     async def get(self, request: Request) -> dict[str, Any]:

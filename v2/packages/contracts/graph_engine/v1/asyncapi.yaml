@@ -557,7 +557,7 @@ operations:
     action: receive
     title: List graphs
     summary: "Page through registered graphs."
-    description: "Sorted by `name`, then `graph_id`; each graph shows its `latest_revision`. `name_prefix` keeps the graphs whose names start with it, compared exactly (case-sensitive, no wildcards). Pages by key: `next_cursor` is non-null while more graphs follow, and is bound to the `name_prefix` it was issued for, so reusing it with another is INVALID_CURSOR. Graph revisions are not listed; `graphs.{graph_id}.get` reads any one of them."
+    description: "Sorted by `name`, then `graph_id`; each graph shows its `latest_revision`. `name_prefix` keeps the graphs whose names start with it, compared exactly (case-sensitive, no wildcards). Pages by key: `next_cursor` is non-null while more graphs follow, and is bound to the `name_prefix` it was issued for, so reusing it with another is INVALID_CURSOR. A page may hold fewer than `limit` graphs, ending early rather than let its reply pass 1 MiB. Graph revisions are not listed; `graphs.{graph_id}.get` reads any one of them."
     channel: { $ref: '#/channels/graphsList' }
     tags: [{ name: query }]
     reply:

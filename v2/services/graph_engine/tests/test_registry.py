@@ -271,17 +271,49 @@ def test_graphs_get_of_an_unknown_graph_or_revision_is_not_found(send) -> None:
     assert send("oe.v1.ge.query.graphs.op_1.get", {"params": {}})["error"]["code"] == "INVALID_ARGUMENT"
 
 
-def test_a_graph_too_large_to_read_back_is_invalid_argument(send) -> None:
-    # A quote is two bytes in the canonical source and four as a get reply carries it,
-    # so this fits a 600 KB request but its get reply would pass 1 MiB.
+def _wire_size(reply: dict[str, Any]) -> int:
+    return len(json.dumps(reply, separators=(",", ":")).encode())
+
+
+@pytest.mark.parametrize("prompt", ['"' * 300_000, "\N{GRINNING FACE}" * 90_000])
+def test_a_graph_too_large_to_read_back_is_invalid_argument(send, prompt: str) -> None:
+    # Each fits a 600 KB request, but a get reply escapes a quote to four bytes and an emoji to twelve, passing 1 MiB.
     graph = copy.deepcopy(GRAPH)
-    graph["spec"]["implementation"][0]["agent"]["prompt"] = '"' * 300_000
+    graph["spec"]["implementation"][0]["agent"]["prompt"] = prompt
 
     reply = send(APPLY, _apply("cmd_1", {"graph": graph}))
 
     assert reply["error"]["code"] == "INVALID_ARGUMENT"
     assert reply["error"]["details"]["violations"][0]["field"] == "payload.graph"
     assert send(LIST, {"params": {}})["result"]["items"] == []
+
+
+def test_the_largest_graph_apply_accepts_is_read_back_within_1_mib(send) -> None:
+    graph = _changed("\N{GRINNING FACE}" * 2_000)
+    graph["spec"]["implementation"][0]["agent"]["prompt"] = "\N{GRINNING FACE}" * 80_000
+    graph_id = send(APPLY, _apply("cmd_1", {"graph": graph}))["resource_id"]
+
+    reply = _get(send, graph_id, {})
+
+    assert reply["status"] == "ok"
+    assert _wire_size(reply) <= 1024 * 1024
+
+
+def test_graphs_list_ends_a_page_early_to_keep_its_reply_within_1_mib(send) -> None:
+    names = [f"graph-{index:02}" for index in range(50)]
+    for name in names:
+        send(APPLY, _apply(f"cmd_{name}", {"graph": _named(name, "\N{GRINNING FACE}" * 2_000)}))
+
+    listed, cursor = [], None
+    while True:
+        reply = _listed(send, {"limit": 50} | ({"cursor": cursor} if cursor else {}))
+        assert _wire_size(reply) <= 1024 * 1024
+        listed += [graph["name"] for graph in reply["result"]["items"]]
+        if (cursor := reply["result"]["next_cursor"]) is None:
+            break
+
+    assert listed == names
+    assert len(_listed(send, {"limit": 50})["result"]["items"]) < 50
 
 
 def test_a_whole_number_limit_given_as_a_float_pages_like_an_integer(send) -> None:
