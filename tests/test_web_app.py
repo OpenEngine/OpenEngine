@@ -3730,7 +3730,7 @@ def test_normalized_relative_alias_runs_remain_visible(
                 assert response.status_code == 201, response.text
                 run_id = response.json()["runId"]
                 run = await store.runs.load(RunId(run_id))
-                assert run.repository == str((tmp_path / checkout).resolve())
+                assert run.repository == str(tmp_path) + "/" + checkout
                 assert (await client.get(f"/api/runs/{run_id}")).status_code == 200
                 listed = (await client.get("/api/runs")).json()["runs"]
                 assert [run["runId"] for run in listed] == [run_id]

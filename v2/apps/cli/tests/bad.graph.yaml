@@ -1,0 +1,10 @@
+apiVersion: openengine.cc/v1alpha1
+kind: Graph
+metadata: {name: Bad_Name}
+spec:
+  plan:
+    - name: a
+      agent: {runner: {name: claude}}
+      human: {prompt: x}
+  flow:
+    - {from: []}

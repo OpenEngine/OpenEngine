@@ -29,7 +29,8 @@ def normalize_repository(
                 configured = True
                 break
     expanded = os.path.expanduser(repository)
-    return os.path.abspath(expanded) if configured and expanded else expanded
+    # Prefix the server cwd without collapsing symlink/.. traversal.
+    return os.path.join(os.getcwd(), expanded) if configured and expanded else expanded
 
 
 @dataclass(frozen=True)

@@ -323,7 +323,7 @@ def test_graph_migration_creates_an_independent_schema_and_downgrades(tmp_path: 
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
         assert tables == {"events", "runs", "sessions", "approvals", "github_comments", "github_pull_requests", "cli_graphs", "cli_graph_versions", "cli_run_submissions", "cli_loops", "cli_loop_runs", "cli_node_executions", "cli_steering", "cli_agents", "cli_projects", "sqlite_sequence", "alembic_version"}
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("3293d6fa005f",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("20636cbc9979",)
         connection.execute("INSERT INTO runs (run_id, graph_id) VALUES ('run', 'graph')")
         assert connection.execute("SELECT auto_approve_nodes FROM runs").fetchone() == ("[]",)
         for table, index in (("events", "events_by_run"), ("approvals", "approvals_by_run")):
@@ -392,7 +392,7 @@ def test_graph_migration_adopts_existing_data(tmp_path: Path, has_auto_approve: 
         assert connection.execute("SELECT graph_id, auto_approve_nodes FROM runs").fetchone() == (
             "graph", '["coder"]' if has_auto_approve else "[]"
         )
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("3293d6fa005f",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("20636cbc9979",)
 
 
 def test_github_comments_migration_preserves_graph_data_and_downgrades(
@@ -699,3 +699,24 @@ def test_verb_graph_migration_preserves_custom_bindings(tmp_path):
             verb: verb if verb in {"review", "fix"} and graph == "implementation-review-rerank" else graph
             for verb, graph in verbs.items()
         }
+
+
+
+def test_loop_start_failure_migration_preserves_existing_loops(tmp_path: Path) -> None:
+    url = f"sqlite:///{tmp_path / 'loops.sqlite3'}"
+    config = alembic_config(url, store="graph")
+    command.upgrade(config, "3293d6fa005f")
+    with sqlite3.connect(tmp_path / "loops.sqlite3") as connection:
+        connection.execute(
+            "INSERT INTO cli_loops VALUES "
+            "('loop', 'default', 'name', 'graph', 'version', 'x', 'repo', '{}', "
+            "3600, NULL, NULL, 'active', '', '2026-10-24', NULL, 'now', 'now')"
+        )
+    command.upgrade(config, "head")
+    with sqlite3.connect(tmp_path / "loops.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT state, last_error, last_error_at, consecutive_start_failures FROM cli_loops"
+        ).fetchone() == ("active", "", None, 0)
+    command.downgrade(config, "3293d6fa005f")
+    with sqlite3.connect(tmp_path / "loops.sqlite3") as connection:
+        assert connection.execute("SELECT state FROM cli_loops").fetchone() == ("active",)

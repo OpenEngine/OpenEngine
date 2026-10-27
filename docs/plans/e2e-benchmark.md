@@ -36,18 +36,26 @@ front and collected as the run goes, not a step of its own.
    OpenEngine in it, and the deployed site. Stop any leftover daemon or tunnel.
 1. **Clone OpenEngine** at the ref under test (the release commit, or the v1
    tag for the baseline), and record its SHA.
-2. **Set up OpenEngine.** Configure GitHub login, ideally by having it create a
-   GitHub App. Screenshot where each secret goes, with the secret masked by a
+2. **Set up OpenEngine.** Configure GitHub CLI access with the bench account's
+   token and isolated `gh_config_dir`. Reuse a pre-registered benchmark GitHub
+   App if app-backed webhooks are wanted; current setup does not create one
+   (see the #1137 findings below). Screenshot where each secret goes, with the secret masked by a
    test2doc highlight annotation. Start the Cloudflare Tunnel. Register the `tdd-guide` graph.
-3. **Create the calculator repo.**
-4. **Connect the repo to OpenEngine.** Install the app or add webhooks, and
+   Check every runner is signed in (`oe agents`), so a missing sign-in fails
+   here rather than minutes into a run.
+3. **Create the calculator repo** under the account `gh` is logged in as, and
+   clone it locally.
+4. **Connect the repo to OpenEngine.** Grant the existing app access to the new
+   repo or add a repository webhook, and
    apply the repository settings below, including turning on Pages. The deploy
    workflow itself is one of the seeded issues.
 5. **Seed** the milestone and its issues.
 6. **Run `tdd-guide`** on the milestone until it is done, through both CLI entry
    points:
    1. **One run.** Work the first issue with `oe graph run tdd-guide --repo
-      OWNER/REPO -i milestone=NAME`, so a single run is covered end to end.
+      PATH -i milestone=NAME --trust`, so a single run is covered end to end.
+      `--repo` takes the local clone (or a configured name), not `OWNER/REPO`,
+      and `--trust` lets agents run commands without asking.
    2. **A loop.** Then `oe loop add tdd-guide` with `--every` short enough to
       keep the run moving (the graph's default is 1h), and `--max-spend` and
       `--max-prs` as the budget cap. The loop works the rest of the milestone.
@@ -77,11 +85,17 @@ The harness owns only what must stay outside the thing being measured:
 
 - **Reset.** Delete and recreate the bench repo, wipe local OpenEngine state,
   and tear down the deployed site, so every run starts clean and is idempotent.
-  Deletion needs a bench-only token and refuses any repo without the bench
-  prefix or topic. Then apply the repository settings below.
-- **Merge loop.** Approve each run's `human_review` step, then merge its PR once
-  CI is green (`gh pr merge --squash`). It merges whatever the impact rating,
-  including Red, and records the rating in the report.
+  The repo lives under the account `gh` is logged in as, which owns it and so
+  can delete it (its token needs the `delete_repo` scope). Teardown refuses any
+  repo without the bench prefix and `oe-bench` topic. Then apply the repository
+  settings below.
+- **Merge loop.** Approve each run's `human_review` step through the API
+  (`POST /runs/{id}/approvals/{approvalId}`), then merge its PR once CI is green
+  (`gh pr merge --squash`). It merges whatever the impact rating, including
+  Red, and records the rating in the report. Approve first: OpenEngine ignores
+  the merge webhook when the merger is its own login, by design, so a merge by
+  the same account does not release `human_review`. If the issue is still open
+  after the merge, the harness records that and closes it.
 - **Verifier.** A fixed Playwright spec the agent never sees. It runs against the
   Pages URL and checks add, subtract, multiply, divide, divide by zero and
   clear. It finds things by visible text (`getByText`, or role and name), not
@@ -179,8 +193,8 @@ inspects the run, cost and per-node tokens.
   `reviewer`), Codex for implementation and reranking (`implementer` and
   `reranker`). Comparing other runners comes later.
 - Results are noisy, so run several trials and compare medians.
-- Credentials: a bench-only GitHub account or org and token, and model
-  credentials for the runners under test.
+- Credentials: the GitHub account `gh` is logged in as, with `repo` and
+  `delete_repo` scopes, and model credentials for the runners under test.
 
 ### Release gate
 
@@ -242,15 +256,20 @@ Driving a real GitHub or Slack sign-in page from automation is fragile (2FA,
 bot checks, magic links, SSO), so the approach is to avoid the interactive page
 wherever the test is not about login:
 
-- **GitHub.** Use a dedicated bench account. For the CLI and for OpenEngine's
-  own GitHub access, authenticate with a token (`gh` auth and `gh_config_dir`),
-  which needs no browser. Use a dedicated bot account (OpenEngine-worker-bot or
-  Rock-AI-bot) inside a bench org, so nothing in the journey needs an interactive
-  sign-in. If a step does need the browser, the bot signs in with a passkey
-  instead of a 2FA code. A person registers the passkey once, in a manual headed
-  Playwright step, and the harness reuses it. Spike whether the credential can be
-  saved and replayed (for example with a virtual authenticator) before relying on
-  it. The passkey is a secret like the tokens below and is never committed.
+- **GitHub.** The benchmark runs as whatever account `gh` is logged in as, read
+  at the start with `gh api user`, so it can run on any machine that runs
+  OpenEngine: rock-ai-bot on one Mac mini, OpenEngine-worker-bot on another.
+  The harness and OpenEngine use the same account and token (`gh` auth and
+  `gh_config_dir`), which needs no browser. Bench repos are created under that
+  account's own user, so it owns them and can delete them, and nothing in an
+  org has to grant it access. One account is enough because the harness
+  approves `human_review` itself before merging. Testing that a person's merge
+  releases `human_review` needs a second account and belongs to the GitHub
+  integration layer. How CI provides the account is decided later. For
+  browser-only steps, a Chromium virtual authenticator can export and import a
+  passkey across fresh browsers, and GitHub accepted it in a manual trial (see
+  the #1137 findings). Browser-only steps may sign in this way, from a local
+  gitignored credential.
 - **Slack.** Use a dedicated test workspace. Anything that does not need the
   Slack UI (posting a message to the bot, reading its replies) goes through the
   Slack API with a bot or user token. Screenshots of the Slack UI, if wanted,
@@ -262,6 +281,94 @@ wherever the test is not about login:
   [highlight annotation](https://www.test2doc.com/docs/user-guide/screenshots/annotation#highlight-box-styling)
   and set `highlightFillStyle` to an opaque hex color, so the box covers the
   value instead of tinting it.
+
+### GitHub setup spike (#1137)
+
+Investigated from 2026-10-23 to 2026-10-26. Findings distinguish source inspection and documented
+API behavior from a live GitHub browser trial.
+
+**App registration.** Current `oe setup` installs and starts the daemon
+(`apps/cli/src/engine/apps/cli/daemon.py`); `oe connect gh` selects GitHub CLI,
+and `oe connect github` uses device authorization
+(`apps/cli/src/engine/apps/cli/connect.py`). There is no app-manifest creation
+flow in these setup paths. The assumption that current setup creates an app is
+false. Implementing it is outside this spike.
+
+GitHub's [manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
+could support a future setup: submit a form with JSON `manifest` to
+`https://github.com/settings/apps/new` (or the organization equivalent) in a
+signed-in browser, confirm the app name, and receive `code` at `redirect_url`.
+Validate a random `state`, then exchange the code with
+`POST /app-manifests/{code}/conversions` within one hour. The response contains
+the app ID, private key, webhook secret and client secret. This automates the
+configuration, but still requires browser registration and a separate app
+installation. No app was created in this investigation.
+
+**App lifecycle decision.** Reuse one dedicated benchmark app and its account
+installation. GitHub documents [registration deletion through Settings](https://docs.github.com/en/apps/maintaining-github-apps/deleting-a-github-app),
+and its [app REST endpoints](https://docs.github.com/en/rest/apps/apps) provide
+`DELETE /app/installations/{installation_id}` to uninstall, not delete the app
+registration. No supported REST registration-deletion endpoint was found; do
+not depend on an undocumented browser endpoint or create an app per trial.
+
+After repo recreation, grant access to its **new repository ID** with
+[`PUT /user/installations/{installation_id}/repositories/{repository_id}`](https://docs.github.com/en/rest/apps/installations#add-a-repository-to-an-app-installation),
+using an authorized repository admin credential with the endpoint's required
+permissions. Preserve the installation rather than uninstalling and requiring
+browser installation again. Update the quick tunnel URL through
+[`PATCH /app/hook/config`](https://docs.github.com/en/rest/apps/webhooks#update-a-webhook-configuration-for-an-app)
+using an app JWT. These lifecycle operations are documented, not live-tested
+against a benchmark app. For the first CLI baseline, use the existing `gh`
+provider and a repository webhook; it needs no GitHub browser session.
+
+**Passkey method.** The spike used a throwaway Playwright script, not kept; the
+setup step should reproduce these calls. Chromium launches with a Chrome
+DevTools Protocol [WebAuthn virtual authenticator](https://chromedevtools.github.io/devtools-protocol/tot/WebAuthn/)
+(`WebAuthn.enable` and `WebAuthn.addVirtualAuthenticator`: `ctap2`, `internal`
+transport, resident keys, user verification on, automatic presence simulation).
+A person signs in as the `gh` account (verified here as `rock-ai-bot`) in that
+headed browser and registers a passkey in GitHub's security settings. Read the
+credential with `WebAuthn.getCredentials`, close the browser, and in a fresh
+browser with no cookies add it back with `WebAuthn.addCredential`. GitHub's
+"Sign in with a passkey" then completes without a 2FA code.
+
+A local check, with no GitHub account, showed the mechanism is sound. It
+registered a resident credential on a locally intercepted HTTPS origin, exported
+it, imported it into a new browser, and requested an assertion with a new
+challenge and no allowed-credential list. The signature verified against the
+original public key, with the right challenge, origin, relying-party hash,
+user-presence and user-verification flags, and an increased counter. This proves
+credential persistence, not GitHub's acceptance of it.
+
+**Live result (2026-10-26).** A person enrolled as `rock-ai-bot` using a throwaway
+script: GitHub accepted the virtual authenticator's registration and the credential was saved.
+A replay then started a fresh browser with only that credential, and the
+passkey button signed in successfully. This is one manual trial. It does not
+show that GitHub keeps accepting the credential over time, that the counter
+stays in step across many replays, or that GitHub never asks for extra
+verification (new location, bot checks). A first attempt that closed the
+browser before saving left an orphaned passkey on the account, so remove any
+stray "OpenEngine benchmark spike" entries from the bot's security settings
+after a failed enrollment.
+
+**Credential decision and fallback.** Store the full CDP credential
+(including private key, user handle and counter) at
+`.engine/benchmark-github-passkey.json`, covered by the root `.gitignore`, with
+mode `0600`. Record no screenshots, traces, cookies or storage state.
+The credential is a virtual one registered inside the automated browser, not an
+existing OS or hardware passkey. Persist the updated counter after each replay;
+serialize reuse of this credential. CI would read it from a dedicated benchmark
+environment secret `BENCHMARK_GITHUB_PASSKEY_JSON`, materialized with the same
+permissions, and needs an explicit process for persisting updates. Until that
+exists, keep browser trials local. App keys and tokens also remain outside
+committed artifacts.
+
+If GitHub stops accepting the virtual passkey (the one manual trial passed), keep the baseline on token auth and
+repository webhooks. A browser-specific follow-up can use the bot password plus
+harness-computed TOTP from a separately stored seed (CI environment secrets or
+gitignored local files); TOTP is a proposed fallback, not tested here. Bot checks
+or recovery prompts still require an operator. Do not silently fall back to a
+personal account.
 
 ### Decision: the real run feeds the committed guide
 
@@ -276,8 +383,11 @@ OpenEngine did that time.
 - It is regenerated only by a release-time benchmark run, never by `npm run doc`
   on a developer machine. The benchmark spec carries a `@benchmark` Playwright
   tag. `npm run doc` already excludes tests with `--grep-invert @skip-docs`, so
-  it adds `@benchmark` to that exclusion, and a new script (name to be decided,
-  for example `oe-benchmark`) runs only the tests with that tag.
+  it adds `@benchmark` to that exclusion, and `npm run oe-benchmark` runs only
+  the tests with that tag (`npm test` skips it). Its page is written to
+  `site/docs/benchmark/`, apart from the guides. The bench repository is always
+  named `oe-bench`: a setup project deletes any existing one before each run, so
+  a failed run leaves its repo, folder and tunnel in place to inspect.
 - The release PR carries the diff, so a person reads it as part of the release
   review. Run IDs, ports and timestamps still use the terminal page's stable
   stand-ins, which cuts the noise to what the model actually did.
@@ -300,8 +410,8 @@ Check these early and change the plan if any turn out wrong:
 - A loop with a short `--every` works a milestone cleanly: no overlapping runs
   on the same issue, and the shortest interval `oe loop add` accepts.
 - Merging a `tdd-guide` PR closes its issue, so Pick moves on to the next one.
-- OpenEngine can create its own GitHub App during setup.
-- A bot account's passkey can be saved and replayed under Playwright.
+- The bot's saved Chromium virtual passkey keeps working across repeated fresh
+  browser sign-ins (one manual replay passed; see #1137 findings).
 - `tdd-guide` gives its PRs Conventional Commits titles, so the changelog works.
   If commitlint fails a PR on its title, `tdd-guide`'s CI retry sends it back to
   the implementer, which may fix code rather than the title.

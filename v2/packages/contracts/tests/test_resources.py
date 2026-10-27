@@ -129,8 +129,8 @@ def test_resources_are_closed() -> None:
 
 def test_a_step_sets_exactly_one_kind() -> None:
     graph = _example("Graph")
-    graph["spec"]["review"][0] = {"name": "both", "ci": {}, "human": {"prompt": "x"}}
-    graph["spec"]["review"][1] = {"name": "neither"}
+    graph["spec"]["review"][0] = {"name": "reviewers", "ci": {}, "human": {"prompt": "x"}}
+    graph["spec"]["review"][1] = {"name": "consolidate"}
     assert _problems(graph) == [
         "spec.review[0]: set exactly one of agent, human, ci",
         "spec.review[1]: set exactly one of agent, human, ci",
@@ -146,7 +146,12 @@ def test_runner_choices_only_with_different_from() -> None:
 def test_step_names_must_work_in_expressions() -> None:
     graph = _example("Graph")
     graph["spec"]["implementation"][2]["name"] = "ci-check"
-    assert _problems(graph) == ["spec.implementation[2].name: 'ci-check' does not match '^[a-z][a-z0-9_]{0,62}$'"]
+    assert _problems(graph) == [
+        "spec.implementation[2].name: 'ci-check' does not match '^[a-z][a-z0-9_]{0,62}$'",
+        # The graph's own rules are checked too, so what still names `ci` is reported with it.
+        "spec.flow[0].from: unknown step 'ci'",
+        "spec.implementation[0].agent.prompt: unknown step 'ci' in outputs.ci",
+    ]
 
 
 @pytest.mark.parametrize(("interval", "ok"), [("1m", True), ("1h30m", True), ("365d", True), ("59s", False),

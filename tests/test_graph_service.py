@@ -1837,3 +1837,35 @@ def test_cli_configured_default_is_local_without_repos(tmp_path, monkeypatch):
     asyncio.run(scenario())
     assert calls
     assert calls[0] == (str(tmp_path / "owner/repo"), ("rev-parse", "--show-toplevel"))
+
+
+def test_loop_start_failures_are_recorded_and_success_clears_them(tmp_path: Path, monkeypatch) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        async with graph_service(tmp_path, clock=clock) as service:
+            await service.add_graph("default", source=single("retry", "x"))
+            loop = await service.add_loop(project="default", graph="retry", instruction="x", every="1h")
+            original = service._start_version
+
+            async def fail(*args):
+                raise ServiceError("backend unavailable")
+
+            monkeypatch.setattr(service, "_start_version", fail)
+            for count in range(1, 5):
+                await service.tick()
+                result = await service.loop_json(loop["loopId"])
+                assert result["lastError"] == "backend unavailable"
+                assert result["lastErrorAt"] == clock.now.isoformat(timespec="seconds")
+                assert result["consecutiveStartFailures"] == count
+                assert result["state"] == "active"
+                assert service.store.loop_runs(loop["loopId"]) == ()
+                clock.advance(hours=1)
+            monkeypatch.setattr(service, "_start_version", original)
+            await service.tick()
+            result = await service.loop_json(loop["loopId"])
+            assert result["activeRunId"]
+            assert result["lastError"] is None and result["lastErrorAt"] is None
+            assert result["consecutiveStartFailures"] == 0
+            await settled(service, result["activeRunId"])
+
+    asyncio.run(scenario())

@@ -1006,6 +1006,9 @@ class GraphService:
             "everySeconds": row.interval_seconds,
             "state": row.state,
             "pauseReason": row.pause_reason or None,
+            "lastError": row.last_error or None,
+            "lastErrorAt": row.last_error_at,
+            "consecutiveStartFailures": row.consecutive_start_failures,
             "nextRunAt": row.next_run_at if row.state == "active" else None,
             "activeRunId": row.active_run_id,
             "runs": accounting.runs,
@@ -1161,12 +1164,21 @@ class GraphService:
             )
         except Exception as failed:
             self.store.release_tick(row.loop_id, tick)
+            fresh = self.store.loop(row.loop_id)
+            failures = (fresh.consecutive_start_failures if fresh else 0) + 1
+            self.store.update_loop(
+                row.loop_id, last_error=str(failed), last_error_at=now_iso(now),
+                consecutive_start_failures=failures, updated_at=now_iso(now),
+            )
             if auth := auth_required(str(failed), ""):
                 await self._pause(row.loop_id, _auth_reason(auth))
             log.exception("loop %s could not start a run", row.loop_id)
             return
         self.store.set_tick_run(row.loop_id, tick, str(run_id))
-        self.store.update_loop(row.loop_id, active_run_id=str(run_id), updated_at=self._now_iso())
+        self.store.update_loop(
+            row.loop_id, active_run_id=str(run_id), updated_at=self._now_iso(),
+            last_error="", last_error_at=None, consecutive_start_failures=0,
+        )
         # Stop may have arrived while starting the run awaited the runtime.
         fresh = self.store.loop(row.loop_id)
         if fresh is not None and fresh.state == "stopped":

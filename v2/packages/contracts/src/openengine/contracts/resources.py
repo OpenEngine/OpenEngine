@@ -32,6 +32,7 @@ from jsonschema.exceptions import best_match
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
 
+from openengine.contracts import graphs
 from openengine.contracts.validate import CONTRACTS, _load
 from openengine.contracts.validate import _retrieve as _retrieve_file
 
@@ -166,6 +167,7 @@ def validate_resource(document: Any, kind: str | None = None) -> list[Problem]:
     """Every problem with one resource, each with the path it was found at.
 
     With `kind`, the resource must be of that kind; any other is a problem, never validated as itself.
+    A Graph is also checked against the rules that span its fields (`graphs.check`), alongside its schema.
     """
     if not isinstance(document, Mapping):
         return [Problem("", "a resource is a mapping with apiVersion, kind, metadata and spec")]
@@ -190,7 +192,7 @@ def validate_resource(document: Any, kind: str | None = None) -> list[Problem]:
         for error in errors
         if list(error.absolute_path) != ["apiVersion"]
         and not (error.validator == "required" and error.message == "'apiVersion' is a required property")
-    ]
+    ] + [Problem(path, message) for path, message in (graphs.check(document) if kind == "Graph" else ())]
 
 
 def validate_text(text: str, kind: str | None = None) -> list[Problem]:

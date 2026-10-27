@@ -41,6 +41,8 @@ export const webServerConfig = {
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
+  // The benchmark spends real money and uses real GitHub: it runs on demand (`npm run oe-benchmark`).
+  grepInvert: /@benchmark/,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,

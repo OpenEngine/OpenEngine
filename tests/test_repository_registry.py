@@ -179,3 +179,28 @@ def test_configured_relative_repository_is_local(tmp_path, monkeypatch, reposito
     monkeypatch.chdir(tmp_path)
     assert normalize_repository(repository, {"local": "owner/repo"}) == str(tmp_path / "owner/repo")
     assert normalize_repository("other/repo", {"local": "owner/repo"}) == "other/repo"
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+@pytest.mark.parametrize("alias", [False, True])
+def test_configured_symlink_parent_traversal(tmp_path, monkeypatch, absolute, alias):
+    from engine.runtime.repositories import normalize_repository
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "team/checkouts").mkdir(parents=True)
+    intended = tmp_path / "team/repo"
+    intended.mkdir()
+    (intended / "identity").write_text("intended")
+    (tmp_path / "repo").mkdir()
+    (tmp_path / "repo/identity").write_text("wrong")
+    (tmp_path / "link").symlink_to(tmp_path / "team/checkouts", target_is_directory=True)
+    path = "link/../repo"
+    if absolute:
+        path = str(tmp_path) + "/" + path
+    normalized = normalize_repository(
+        "local" if alias else path,
+        {"local": path} if alias else {},
+        configured=not alias,
+    )
+    assert normalized == str(tmp_path) + "/link/../repo"
+    assert (Path(normalized) / "identity").read_text() == "intended"

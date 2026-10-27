@@ -11,7 +11,7 @@ uv run oe graph list # the graphs GE has registered, over NATS (--json for the q
 uv run oe down   # stop everything `oe up` started
 
 uv run oe graph validate FILE  # check a Graph file (- reads standard input)
-uv run oe graph spec           # the Graph resource reference, as Markdown
+uv run oe graph spec           # the Graph resource reference and expression syntax, as Markdown
 ```
 
 `oe status` shows each process's own status: `ready` once it passed its
@@ -23,11 +23,17 @@ and exits 1.
 `oe graph validate` and `oe graph spec` work offline: they read the Graph
 schema from openengine-contracts and need no `oe up`, NATS or runner
 credentials. `validate` prints each problem as `FILE: PATH: message`, such as
-`-: spec.plan[0]: set exactly one of agent, human, ci`, and exits 1; a valid
-file prints `FILE: valid Graph NAME` for each Graph and exits 0. Any other
-kind, such as a Loop, and V1 manifests (`apiVersion: openengine.cc/v1`) are
-refused. The checks are the schema's; rules that span fields, such as unique
-step names and `flow` naming steps that exist, are not checked yet.
+`-: spec.plan[0]: set exactly one of agent, human, ci` or
+`bad.graph.yaml: spec.flow[2].to: unknown step 'nowhere'`, and exits 1. It
+reports every independent problem at once: the schema's, and the graph's own
+rules (unique and unreserved step names, `flow` naming steps that exist,
+every step reachable from `start` and reaching `end`, cycles passing through
+a `route`, one route per step, and the syntax and names of every expression).
+A valid file prints `FILE: valid Graph NAME` for each Graph and a note that
+runners and tools are checked when a run starts, since an offline check
+cannot know them, and exits 0. Any other kind, such as a Loop, and V1
+manifests (`apiVersion: openengine.cc/v1`) are refused. `oe graph spec` ends
+with the expression syntax: roots, operators, functions and examples.
 
 ```
 commands/   one module per command
