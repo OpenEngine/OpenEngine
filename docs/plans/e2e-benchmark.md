@@ -144,6 +144,15 @@ steps for anyone running OpenEngine against a real repo:
   teardown stops it. A fresh URL each run means nothing outside a run knows
   where to send traffic. The real protection is still the webhook secret:
   OpenEngine checks each delivery's signature and drops anything unsigned.
+  Three things the first run of this found:
+  OpenEngine answers only requests whose host it knows (loopback and `public_url`),
+  so it must start after the tunnel with the tunnel's address as `public_url`, and
+  the port is chosen first because the tunnel needs it; the tunnel runs with an empty
+  `HOME`, since a named tunnel's `~/.cloudflared/config.yml` makes a quick tunnel
+  answer 404; and the terminal's `gh` and the harness's must be the same account
+  (a `gh` that picks its account by directory can differ), so the run checks that
+  before creating anything. A machine with one `gh` login needs nothing more; where
+  they can differ, set `GH_CONFIG_DIR` to the bench account's config directory.
 
 The harness applies these through the API right after recreating the repo, so
 every trial is automated. Because the harness is doing what a user would do by

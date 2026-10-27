@@ -82,12 +82,15 @@ npm run oe-benchmark         # the journey; writes its guide to site/docs/benchm
 npm run oe-benchmark:clean   # delete everything the last run left, once you have looked
 ```
 
-It runs as the account `gh` is logged in as, with a token that has the `delete_repo` scope
+It runs as the account `gh` is logged in as, and the terminal steps must be signed in as the same
+account: if your `gh` picks its account by directory, set `GH_CONFIG_DIR` to the account's config
+directory for the run, and the benchmark stops before creating anything if the two disagree. The
+token needs the `delete_repo` scope
 (`gh auth refresh -s delete_repo`). A setup project runs first: it deletes
 the `oe-bench` repository, its Pages site, the local folder (`OE_BENCH_DIR`, by default
 `<tmp>/oe-bench`) and any process the last run recorded. It never touches a repository whose name
 doesn't start with `oe-bench` or that lacks the `oe-bench` topic. After the run, pass or fail, a
-teardown project stops the tunnel and daemons the run recorded, but deletes nothing, so a failed
+global teardown stops the tunnel and daemons the run recorded, but deletes nothing, so a failed
 run's repository and folder are left to inspect.
 
 `support/mask.ts` hides a secret in a guide screenshot. Pass `mask(locator)` among the targets

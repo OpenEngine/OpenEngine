@@ -187,7 +187,21 @@ export async function startEngine({
   agentMode = resolveAgentMode(),
   requireCommandApproval = false,
   token = randomBytes(24).toString("hex"),
-}: { keepRoot?: () => boolean; agentMode?: AgentMode; token?: string; requireCommandApproval?: boolean } = {}): Promise<Engine> {
+  env = {},
+  port = 0,
+  beforeStart,
+}: {
+  keepRoot?: () => boolean
+  agentMode?: AgentMode
+  token?: string
+  requireCommandApproval?: boolean
+  /** More environment for the daemon, such as `ENGINE_GITHUB_WEBHOOK_SECRET`. */
+  env?: Record<string, string>
+  /** A port to serve on, when something must know it before the daemon starts (a tunnel to it); otherwise the OS picks. */
+  port?: number
+  /** Runs once the configuration is written and before the daemon starts: a spec edits `config` here, as a person would. */
+  beforeStart?: (paths: { root: string; config: string }) => Promise<void>
+} = {}): Promise<Engine> {
   const root = mkdtempSync(path.join(os.tmpdir(), "openengine-e2e-"))
   const repository = fixtureRepository(root, agentMode === "real" && requireCommandApproval)
   const scriptPath = path.join(root, "agent-script.json")
@@ -206,6 +220,12 @@ export async function startEngine({
       : []),
     "",
   ].join("\n"))
+  try {
+    await beforeStart?.({ root, config })
+  } catch (error) {
+    rmSync(root, { recursive: true, force: true })
+    throw error
+  }
 
   const passed = agentMode === "real" ? [...INHERITED, ...AGENT_LOGINS] : INHERITED
   const inherited = Object.fromEntries(passed.flatMap((name) => (process.env[name] ? [[name, process.env[name]!]] : [])))
@@ -214,13 +234,14 @@ export async function startEngine({
     ENGINE_CONFIG: config,
     ENGINE_HOST: "127.0.0.1",
     // The OS picks the port and the daemon reports it, so parallel tests never race for one.
-    ENGINE_PORT: "0",
+    ENGINE_PORT: String(port),
     ENGINE_STATE_DIRECTORY: path.join(root, "state"),
     ENGINE_SERVICE_TOKEN: token,
     // An empty gh configuration and no token: the daemon must never act on GitHub as whoever runs the tests.
     GH_CONFIG_DIR: githubConfig,
     // A step that names no model runs the one Claude Code is told to default to.
     ...(agentMode === "stub" ? { ENGINE_FAKE_SCRIPT: scriptPath } : { ANTHROPIC_MODEL: model }),
+    ...env,
   }
   // Started in the repository: with no [repos] configured, that is what a run checks out.
   const [command, ...args] =

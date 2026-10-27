@@ -33,12 +33,12 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
+  // After every project, pass or fail: stops the tunnel and daemons the run started.
+  globalTeardown: "./tests/benchmark/stop.global.ts",
   projects: [
     // Clears what the last run left (repo, folder, tunnel) before this one starts. Nothing is
-    // deleted afterwards, so a failed run leaves its repo and folder to look at; but its
-    // "stop" teardown always stops the tunnel and daemons it started, pass or fail.
-    { ...projects[0]!, name: "setup", testDir: "./tests/benchmark", testMatch: /.*\.setup\.ts/, teardown: "stop" },
-    { ...projects[0]!, name: "stop", testDir: "./tests/benchmark", testMatch: /.*\.teardown\.ts/ },
+    // deleted afterwards, so a failed run leaves its repo and folder to look at.
+    { ...projects[0]!, name: "setup", testDir: "./tests/benchmark", testMatch: /.*\.setup\.ts/ },
     { ...projects[0]!, name: "benchmark", grep: /@benchmark/, dependencies: ["setup"] },
   ],
   webServer: webServerConfig,
