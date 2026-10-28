@@ -120,46 +120,55 @@ class CICheck:
             raise ValueError("CICheck needs a pull request URL in pr_url")
         number = found.number
         await execution.say(f"Waiting for CI on {url}.")
-        async with asyncio.timeout(self.timeout):
-            with _waiting(found.project, number) as waiter:
-                while True:
-                    # Cleared before reading, so a delivery during the read
-                    # wakes the next wait rather than being lost.
-                    waiter.woken.clear()
-                    status = await source_control.list_pipeline_status(
-                        WorkspaceId(workspace), change_request_number=number,
-                    )
-                    waiter.ref = status.ref.lower()
-                    known_requirements = status.required_checks is not None
-                    jobs = (
-                        status.required_checks if known_requirements
-                        else (*status.checks, *status.pipelines)
-                    )
-                    # GitHub supplies a conclusion; GitLab uses terminal statuses.
-                    if (known_requirements or jobs) and all(
-                        job.status.lower() in _TERMINAL for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
-                    ):
-                        failed = [
-                            job for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
-                            if (job.conclusion or job.status).lower()
-                            not in _PASSING
-                        ]
-                        details = "\n".join(
-                            f"- {job.name}: {job.conclusion or job.status} "
-                            f"{getattr(job, 'details_url', getattr(job, 'url', ''))}"
-                            for job in failed
+        deadline = asyncio.timeout(self.timeout)
+        try:
+            async with deadline:
+                with _waiting(found.project, number) as waiter:
+                    while True:
+                        # Cleared before reading, so a delivery during the read
+                        # wakes the next wait rather than being lost.
+                        waiter.woken.clear()
+                        status = await source_control.list_pipeline_status(
+                            WorkspaceId(workspace), change_request_number=number,
                         )
-                        summary = (
-                            f"CI failed for {url} at {status.ref}:\n{details}"
-                            if failed else f"CI passed for {url} at {status.ref}."
+                        waiter.ref = status.ref.lower()
+                        known_requirements = status.required_checks is not None
+                        jobs = (
+                            status.required_checks if known_requirements
+                            else (*status.checks, *status.pipelines)
                         )
-                        await execution.say(summary)
-                        return {self.output_key: {
-                            "passed": not failed, "pr_url": url,
-                            "ref": status.ref, "summary": summary,
-                        }}
-                    with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(waiter.woken.wait(), self.poll_interval)
+                        # GitHub supplies a conclusion; GitLab uses terminal statuses.
+                        if (known_requirements or jobs) and all(
+                            job.status.lower() in _TERMINAL for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
+                        ):
+                            failed = [
+                                job for job in jobs  # pyright: ignore[reportOptionalIterable]  # Baseline: see docs/pyright.md
+                                if (job.conclusion or job.status).lower()
+                                not in _PASSING
+                            ]
+                            details = "\n".join(
+                                f"- {job.name}: {job.conclusion or job.status} "
+                                f"{getattr(job, 'details_url', getattr(job, 'url', ''))}"
+                                for job in failed
+                            )
+                            summary = (
+                                f"CI failed for {url} at {status.ref}:\n{details}"
+                                if failed else f"CI passed for {url} at {status.ref}."
+                            )
+                            await execution.say(summary)
+                            return {self.output_key: {
+                                "passed": not failed, "pr_url": url,
+                                "ref": status.ref, "summary": summary,
+                            }}
+                        with contextlib.suppress(TimeoutError):
+                            await asyncio.wait_for(waiter.woken.wait(), self.poll_interval)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            raise TimeoutError(
+                f"Timed out after {self.timeout:g} seconds waiting for CI on {url}. "
+                "Check the PR for pending or missing required checks, then retry this step."
+            ) from error
 
 
 __all__ = ["CICheck", "wake_ci"]

@@ -20,6 +20,8 @@ import {
   graphConversationId,
 } from "./graph-conversation";
 
+import { RunDetailPage } from "./runs";
+
 const NODE = "implementation";
 
 /** Published approvals are global and never forgotten, which is the point of
@@ -1010,6 +1012,41 @@ it("shows the node default without writing and saves only a changed runner", asy
 it("displays a saved override when the conversation is reopened", async () => {
   await open([], graphRun({ runnerOverrides: { [NODE]: "claude" } }));
   expect(await screen.findByRole("combobox", { name: "Runner" })).toHaveValue("claude");
+});
+
+it("opens the failed CI tool node from its WorkOrder and retries it", async () => {
+  const nodeId = "ci_check";
+  const message = "Timed out after 3600 seconds waiting for CI on https://github.com/owner/repo/pull/42. Check the PR for pending or missing required checks, then retry this step.";
+  const events = [event({ nodeId, type: "run.failed", payload: { error: message } })];
+  const run = graphRun({ status: "failed", activeExecutions: [], error: message });
+  const fetch = serve(events, run);
+  const serveRequest = fetch.getMockImplementation()!;
+  fetch.mockImplementation(async (input) => {
+    const path = String(input);
+    if (path === `/api/runs/${runId}`)
+      return json({ runId, name: "CI timeout", workflowId: run.graphId, workflowName: "Implementation review",
+        taskId: "task-1", taskPrompt: "Fix CI", repository: ".", repositoryContext: { repository: "." },
+        phase: "failed", terminalOutcome: "failed", failureReason: message });
+    if (path === `/graph/api/graphs/${run.graphId}`)
+      return json({ graphId: run.graphId, nodes: [{ nodeId, name: "CI Check", kind: "tool", sidebar: false }] });
+    return serveRequest(input);
+  });
+  const page = render(<RunDetailPage runId={runId} />);
+  const link = await screen.findByRole("link", { name: /Open conversation/ });
+  expect(link).toHaveAttribute("href", `/runs/${runId}/conversations/graph--${nodeId}`);
+  // Follow the stage link through the application's conversation route.
+  const targetNode = link.getAttribute("href")!.split("graph--")[1];
+  page.unmount();
+  render(<GraphConversationPage runId={runId} nodeId={targetNode} />);
+
+  expect(await screen.findByText(message)).toBeVisible();
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  expect(retry).toBeEnabled();
+  await userEvent.setup().click(retry);
+  expect(fetch).toHaveBeenCalledWith(
+    `/graph/api/runs/${runId}/transitions`,
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ node: nodeId }) }),
+  );
 });
 
 it("retries a failed node after saving a runner change and prevents duplicate retries", async () => {

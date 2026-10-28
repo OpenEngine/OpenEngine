@@ -63,16 +63,17 @@ def test_waits_for_other_jobs_even_after_failure(execution):
     assert execution.runtime.source_control.list_pipeline_status.await_count == 2
 
 
-@pytest.mark.parametrize("error", [RuntimeError("API unavailable"), asyncio.CancelledError()])
+@pytest.mark.parametrize("error", [RuntimeError("API unavailable"), TimeoutError("provider timed out"), asyncio.CancelledError()])
 def test_provider_errors_and_cancellation_propagate(execution, error):
     execution.runtime.source_control.list_pipeline_status.side_effect = error
-    with pytest.raises(type(error)):
+    with pytest.raises(type(error)) as raised:
         asyncio.run(CICheck()(STATE))
+    assert raised.value is error
 
 
 def test_no_checks_times_out_instead_of_passing(execution):
     execution.runtime.source_control.list_pipeline_status.return_value = PipelineStatus("head", (), ())
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError, match="Timed out after 0.01 seconds waiting for CI on " + PR):
         asyncio.run(CICheck(poll_interval=0, timeout=0.01)(STATE))
 
 
@@ -176,7 +177,7 @@ def test_missing_required_check_times_out(execution):
         "head", status().checks, (),
         required_checks=(StatusCheck("security", "pending", None, ""),),
     )
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError, match="Timed out after 0.01 seconds waiting for CI on " + PR):
         asyncio.run(CICheck(poll_interval=0, timeout=0.01)(STATE))
 
 
