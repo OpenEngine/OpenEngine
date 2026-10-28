@@ -140,7 +140,8 @@ def diagram(title: str, current: Tables, previous: Tables, comments: Mapping[str
     for name in sorted(current.keys() | previous.keys()):
         now, old = current.get(name), previous.get(name)
         status = "added" if old is None else "removed" if now is None else "changed" if now != old else ""
-        label = f"{name}<br/>{comments[name]}" if comments.get(name) else name
+        comment = comments.get(name, "").replace('"', "'")
+        label = f"{name}<br/>{comment}" if comment else name
         lines.append(f'    {name}["{label}{f" ({status.upper()})" if status else ""}"] {{')
         table = now or old
         assert table is not None

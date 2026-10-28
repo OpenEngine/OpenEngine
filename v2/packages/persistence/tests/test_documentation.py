@@ -95,3 +95,12 @@ def test_a_tables_comment_is_drawn_into_its_entity() -> None:
     output = diagram("jobs", tables, {}, {"jobs": "Queued units of work."})
 
     assert '    jobs["jobs<br/>Queued units of work. (ADDED)"] {' in output
+
+
+def test_a_quote_in_a_tables_comment_does_not_corrupt_its_label() -> None:
+    tables = {"jobs": {"columns": {"id": {"type": "INTEGER", "nullable": False, "default": None, "keys": ["PK"]}},
+                       "foreign_keys": [], "unique": [], "indexes": [], "checks": []}}
+
+    output = diagram("jobs", tables, {}, {"jobs": 'The "queue" of work.'})
+
+    assert '    jobs["jobs<br/>The \'queue\' of work. (ADDED)"] {' in output
