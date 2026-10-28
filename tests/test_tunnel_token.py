@@ -9,6 +9,7 @@ else stands in their way, so the service token must.
 
 import asyncio
 import subprocess
+from unittest.mock import AsyncMock
 from pathlib import Path
 
 import httpx
@@ -179,3 +180,48 @@ def test_the_token_cannot_be_traded_for_a_session_that_marks_repositories_truste
             assert "trusted = true" not in config.read_text()
 
     asyncio.run(scenario())
+
+
+def test_a_token_session_cannot_mark_a_repository_trusted_through_onboarding(tunnelled, tmp_path, monkeypatch) -> None:
+    """The bar on trust writes must hold on every route that writes trust, onboarding included.
+
+    Setup: a tunnelled daemon (public_url, no GitHub login) with a registered,
+    undecided repository; onboarding's preflight and starter registration are
+    stubbed. The caller holds only the service token, signs in with it, and
+    asks onboarding to re-add the checkout with {"trusted": true}.
+    Expected: refused, and engine.toml records no trust decision.
+    """
+    from engine.apps.web import onboarding
+
+    monkeypatch.setattr(onboarding, "preflight", lambda: ([], "codex"))
+    monkeypatch.setattr(onboarding, "register_starters", AsyncMock())
+
+    async def scenario():
+        tunnelled()  # Sets the daemon's environment; rebuilt below with a repository.
+        checkout = tmp_path / "checkout"
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+        subprocess.run(["git", "-C", str(checkout), "remote", "add", "origin", "git@github.com:owner/repo.git"], check=True)
+        config = tmp_path / "engine.toml"
+        config.write_text(f'public_url = "https://{PUBLIC_HOST}"\n[repos]\n"owner/repo" = "{checkout}"\n')
+        app = build_app(config)
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=f"https://{PUBLIC_HOST}"
+        ) as client:
+            origin = {"Origin": f"https://{PUBLIC_HOST}"}
+            signed_in = await client.post("/api/auth/token/login", data={"token": TOKEN}, headers=origin)
+            assert signed_in.status_code == 303
+            response = await client.post("/api/repositories/onboard",
+                                         json={"repository": str(checkout), "trusted": True}, headers=origin)
+            if response.status_code == 202:
+                job = response.json()
+                for _ in range(200):
+                    job = (await client.get(f"/api/repositories/onboard/{job['id']}")).json()
+                    if job["status"] in {"complete", "failed"}:
+                        break
+                    await asyncio.sleep(0.01)
+                assert job["status"] == "complete", job["problems"]
+            assert "trusted = true" not in config.read_text(), config.read_text()
+            assert response.status_code in {401, 403}, (response.status_code, response.text)
+
+    asyncio.run(scenario())
+
