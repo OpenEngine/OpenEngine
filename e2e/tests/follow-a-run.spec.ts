@@ -199,7 +199,7 @@ The first time you run a graph in a folder, OpenEngine asks whether to trust it.
             // Only an unanswered line can represent the next question.
             const unanswered = /^Allow\? \[y\/n\][ \t]*$/m
             await terminal.waitForText(unanswered)
-            await show("follow-a-run__terminal--trust-question.png", terminal, engine, testInfo, await terminal.row(unanswered), "Read the question before allowing the command")
+            await show(`follow-a-run__terminal--trust-question-${answered.size + 1}.png`, terminal, engine, testInfo, await terminal.row(unanswered), "Read the question before allowing the command")
             const answeredPrompts = (await terminal.text()).match(/^Allow\? \[y\/n\] y$/gm)?.length ?? 0
             await terminal.type("y")
             await terminal.press("Enter")
