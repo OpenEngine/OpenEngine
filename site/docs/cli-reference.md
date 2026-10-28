@@ -890,7 +890,7 @@ oe disconnect [-h] [--server URL] [--backend NAME] [--origin ORIGIN] {github,git
 Run the local OpenEngine service in the background.
 
 ```text
-oe daemon [-h] [--no-browser] {open,setup,start,stop,status,logs,doctor} ...
+oe daemon [-h] [--no-browser] {open,setup,start,stop,restart,update,status,logs,doctor} ...
 ```
 
 | Argument | Meaning |
@@ -931,6 +931,22 @@ Stop the service gracefully.
 
 ```text
 oe daemon stop [-h]
+```
+
+### `oe daemon restart`
+
+Stop then start the service.
+
+```text
+oe daemon restart [-h]
+```
+
+### `oe daemon update`
+
+Install the latest release, then restart.
+
+```text
+oe daemon update [-h]
 ```
 
 ### `oe daemon status`
