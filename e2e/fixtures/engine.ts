@@ -296,7 +296,7 @@ async function waitUntilServing(daemon: ChildProcess, output: string[], failure:
     const url = output.join("").match(/Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/)?.[1]
     if (url) {
       try {
-        if ((await fetch(`${url}/api/config`)).ok) return url
+        if ((await fetch(`${url}/api/health`)).ok) return url
       } catch {
         // Bound but not answering yet.
       }

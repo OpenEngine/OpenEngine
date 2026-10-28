@@ -96,8 +96,52 @@ def test_tunnel_token_also_works_with_github_login(tunnelled) -> None:
 
 
 def test_direct_local_cli_still_works_without_github_login(tunnelled) -> None:
-    assert ask(tunnelled(), host="127.0.0.1") == 200
+    assert ask(tunnelled(public_url=False), host="127.0.0.1") == 200
 
 
 def test_forwarding_cannot_bypass_auth_by_omitting_public_url(tunnelled) -> None:
     assert ask(tunnelled(public_url=False), host="127.0.0.1", headers={"X-Forwarded-For": "203.0.113.7"}) == 401
+
+
+def test_public_browser_can_sign_in_with_token_and_sign_out(tunnelled) -> None:
+    async def scenario():
+        app = tunnelled()
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=f"https://{PUBLIC_HOST}"
+        ) as client:
+            status = (await client.get("/api/auth/github/status")).json()
+            assert status["loginRequired"] and status["tokenLogin"]
+            assert not status["authenticated"]
+            assert (await client.get("/api/config")).status_code == 401
+            assert (await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                      headers={"Origin": "https://attacker.example"})).status_code == 403
+            wrong = await client.post("/api/auth/token/login", data={"token": "wrong"},
+                                      headers={"Origin": f"https://{PUBLIC_HOST}"})
+            assert "error=token" in wrong.headers["location"]
+            signed_in = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                          headers={"Origin": f"https://{PUBLIC_HOST}"})
+            assert signed_in.status_code == 303
+            assert "Secure" in signed_in.headers["set-cookie"]
+            assert "HttpOnly" in signed_in.headers["set-cookie"]
+            assert (await client.get("/api/auth/github/status")).json()["authenticated"]
+            assert (await client.get("/api/config")).status_code == 200
+            cookie = client.cookies.get("engine_token_session")
+            await client.post("/api/auth/github/logout")
+            assert (await client.get("/api/config")).status_code == 401
+            assert (await client.get("/api/config", headers={"Cookie": f"engine_token_session={cookie}"})).status_code == 401
+
+    asyncio.run(scenario())
+
+
+def test_token_browser_session_ends_when_token_rotates(tunnelled, monkeypatch) -> None:
+    async def scenario():
+        app = tunnelled()
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=f"https://{PUBLIC_HOST}"
+        ) as client:
+            await client.post("/api/auth/token/login", data={"token": TOKEN},
+                              headers={"Origin": f"https://{PUBLIC_HOST}"})
+            monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "r" * 40)
+            assert (await client.get("/api/config")).status_code == 401
+
+    asyncio.run(scenario())
