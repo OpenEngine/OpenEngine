@@ -37,9 +37,11 @@ def test_every_table_is_drawn_under_its_service(service: str) -> None:
     short = NAMES[service][1]
     tables = architecture.tables(short)
     assert tables, f"{short} has no tables"
+    comments = architecture.comments(short)
     block = DIAGRAM.split(f'subgraph {short}_db["database {short}"]', 1)[1].split("end", 1)[0]
     for table in tables:
-        assert f'{short}_t_{table}[("{table}")]' in block
+        assert comments.get(table), f"{short}.{table} has no comment"
+        assert f'{short}_t_{table}[("{table}<br/>{comments[table]}")]' in block
 
 
 def test_every_stream_is_drawn() -> None:

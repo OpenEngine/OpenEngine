@@ -16,7 +16,6 @@ metadata = sa.MetaData()
 NAME = 63
 """Namespaces, names and uids are one NATS subject token of at most 63 characters."""
 
-# An invocable capability bound to one connection, as last applied.
 tools = sa.Table(
     "tools",
     metadata,
@@ -34,10 +33,9 @@ tools = sa.Table(
     sa.Column("updated_at", UtcDateTime(), nullable=False),
     sa.UniqueConstraint("namespace", "name", name="uq_tools_namespace_name"),
     sa.Index("ix_tools_connection_name", "connection_name"),
+    comment="An invocable capability bound to one connection, as last applied.",
 )
 
-# Who may call which tool. `tool_uid` is the tool the grant was bound to when
-# applied; a grant whose tool has since been replaced denies every call.
 tool_grants = sa.Table(
     "tool_grants",
     metadata,
@@ -58,11 +56,10 @@ tool_grants = sa.Table(
     sa.Column("updated_at", UtcDateTime(), nullable=False),
     sa.UniqueConstraint("namespace", "name", name="uq_tool_grants_namespace_name"),
     sa.Index("ix_tool_grants_subject", "namespace", "workspace_name", "tool_name"),
+    comment="Who may call which tool. tool_uid is the tool the grant was bound to when applied; "
+    "a grant whose tool has since been replaced denies every call.",
 )
 
-# One accepted call. The resolved tool definition is copied in, so changing or
-# deleting the Tool cannot change accepted work; `grant_refs` names the grants
-# (by uid) that allowed it, which are checked again before every dispatch.
 tool_invocations = sa.Table(
     "tool_invocations",
     metadata,
@@ -90,11 +87,10 @@ tool_invocations = sa.Table(
     sa.UniqueConstraint("namespace", "name", name="uq_tool_invocations_namespace_name"),
     sa.Index("ix_tool_invocations_caller", "namespace", "workspace_name", "step_attempt_id"),
     sa.Index("ix_tool_invocations_phase", "phase"),
+    comment="One accepted call. The resolved tool definition is copied in, so changing or deleting the "
+    "Tool cannot change accepted work; grant_refs names the grants that allowed it, checked again before every dispatch.",
 )
 
-# Each try at an invocation. `idempotency_key` is what a provider-idempotent
-# tool repeats on every attempt; `outcome` stays null while an attempt runs or
-# when an interrupted one could not be reconciled.
 tool_invocation_attempts = sa.Table(
     "tool_invocation_attempts",
     metadata,
@@ -109,4 +105,6 @@ tool_invocation_attempts = sa.Table(
     sa.Column("outcome", sa.String(16), nullable=True),
     sa.Column("started_at", UtcDateTime(), nullable=False),
     sa.Column("finished_at", UtcDateTime(), nullable=True),
+    comment="Each try at an invocation. idempotency_key is what a provider-idempotent tool repeats on every "
+    "attempt; outcome stays null while an attempt runs or when an interrupted one could not be reconciled.",
 )
