@@ -15,7 +15,6 @@
 // real agents run the cheapest one (see claudeModel).
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
-import { randomBytes } from "node:crypto"
 import http from "node:http"
 import type { Duplex } from "node:stream"
 import tls from "node:tls"
@@ -187,7 +186,9 @@ export async function startEngine({
   keepRoot = () => false,
   agentMode = resolveAgentMode(),
   requireCommandApproval = false,
-  token = randomBytes(24).toString("hex"),
+  // Local trust walkthroughs use an uncredentialed loopback daemon. Tunnel
+  // callers must explicitly supply their own token before exposing a port.
+  token = "",
   env = {},
   port = 0,
   beforeStart,

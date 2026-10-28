@@ -692,7 +692,8 @@ other = true
     assert '# preserve' in config.read_text()
 
 
-def test_onboarding_credential_can_clone_and_trust_but_service_cannot(tmp_path, monkeypatch):
+@pytest.mark.parametrize("github_login", [True, False])
+def test_onboarding_credential_can_clone_and_trust_but_service_cannot(tmp_path, monkeypatch, github_login):
     from test_web_app import ConcurrentRunner, _session
     from engine.apps.web.api import create_app
     from engine.apps.web.github_login import GitHubLoginConfig
@@ -709,7 +710,9 @@ def test_onboarding_credential_can_clone_and_trust_but_service_cannot(tmp_path, 
     runner = ConcurrentRunner()
     app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
                      workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=config,
-                     github_login_config=GitHubLoginConfig('client', 'secret', 'http://localhost/api/auth/github/callback'),
+                     github_login_config=(GitHubLoginConfig('client', 'secret', 'http://localhost/api/auth/github/callback')
+                                          if github_login else None),
+                     public_url='https://engine.example',
                      service_token=lambda: 's' * 40, onboarding_token=lambda: 'o' * 40)
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:

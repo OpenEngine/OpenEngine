@@ -27,6 +27,8 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from engine.apps.web.request_security import RequestSecurity
+
 log = logging.getLogger(__name__)
 
 _PATH = "/api/auth/github"
@@ -398,8 +400,8 @@ class GitHubLogin:
     async def token_login(self, request: Request) -> Response:
         # Native browser forms send Origin. Refuse cross-site login, including
         # attempts to replace another browser's credentials (login CSRF).
-        origin = self.public_url.rstrip("/") or str(request.base_url).rstrip("/")
-        if self.configured or request.headers.get("origin") != origin:
+        security = RequestSecurity(self.public_url or str(request.base_url).rstrip("/"))
+        if self.configured or not security.matches_public_origin(request.headers.get("origin", "")):
             return JSONResponse({"error": "sign-in is not allowed"}, 403, headers=_HEADERS)
         body = bytearray()
         async for chunk in request.stream():
@@ -559,9 +561,9 @@ class GitHubLogin:
         body: dict[str, object] = {
             "authenticated": user is not None or self._token_session(request),
             "user": user,
-            "loginRequired": self.config is not None or bool(self.public_url),
+            "loginRequired": self.config is not None or bool(self.public_url or self.service_token()),
         }
-        if self.config is None and self.public_url:
+        if self.config is None and (self.public_url or self.service_token()):
             body["tokenLogin"] = True
         if user is not None:
             # Whoever is signed in may be able to fix the server's connection;
@@ -597,7 +599,7 @@ class GitHubLogin:
         `/api/v1/` graph API (except trust writes), for a CLI pointed at this server.
         A distinct onboarding token admits only job creation and polling.
         Without GitHub login, public and forwarded requests still need a token;
-        deployments without a public URL retain direct access.
+        deployments without a public URL or service token retain direct access.
         """
         return _SessionAuthMiddleware(app, self)
 
@@ -636,7 +638,7 @@ class _SessionAuthMiddleware:
             forwarded = any(name in request.headers for name in (
                 "forwarded", "x-forwarded-for", "x-forwarded-host", "cf-connecting-ip",
             ))
-            if not forwarded and not self.login.public_url:
+            if not forwarded and not self.login.public_url and not self.login.service_token():
                 await self.app(scope, receive, send)
                 return
         if self.login._token_session(request):

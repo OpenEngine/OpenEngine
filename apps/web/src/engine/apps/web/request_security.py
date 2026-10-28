@@ -52,6 +52,9 @@ class RequestSecurity:
             {self.public_origin[1]} if self.public_origin else set()
         )
 
+    def matches_public_origin(self, value: str) -> bool:
+        return self.public_origin is not None and _origin(value) == self.public_origin
+
     def trusted_host(self, headers: Headers) -> bool:
         hosts = headers.getlist("host")
         authority = _origin(f"http://{hosts[0]}") if len(hosts) == 1 else None

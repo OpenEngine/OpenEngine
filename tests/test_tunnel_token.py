@@ -25,7 +25,7 @@ TOKEN = "t" * 40
 def tunnelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Build the daemon as `engine-web` would, with `public_url` set to a tunnel's address and no GitHub login."""
 
-    def build(*, token: str | None = TOKEN, github_login: bool = False, public_url: bool = True):
+    def build(*, token: str | None = TOKEN, github_login: bool = False, public_url: bool | str = True):
         for name in (
             "ENGINE_HOST", "ENGINE_PORT", "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
             "ENGINE_GITHUB_LOGIN_CLIENT_ID", "ENGINE_GITHUB_LOGIN_REDIRECT_URI",
@@ -41,7 +41,8 @@ def tunnelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ENGINE_STATE_DIRECTORY", str(tmp_path / "state"))
         monkeypatch.chdir(tmp_path)
         config = tmp_path / "engine.toml"
-        config.write_text((f'public_url = "https://{PUBLIC_HOST}"\n' if public_url else "")
+        address = public_url if isinstance(public_url, str) else f"https://{PUBLIC_HOST}"
+        config.write_text((f'public_url = "{address}"\n' if public_url else "")
                           + ("[access]\noperators = [42]\n" if github_login else ""))
         return build_app(config)
 
@@ -98,7 +99,23 @@ def test_tunnel_token_also_works_with_github_login(tunnelled) -> None:
 
 
 def test_direct_local_cli_still_works_without_github_login(tunnelled) -> None:
-    assert ask(tunnelled(public_url=False), host="127.0.0.1") == 200
+    assert ask(tunnelled(public_url=False, token=None), host="127.0.0.1") == 200
+
+
+def test_a_local_token_protected_browser_is_offered_sign_in(tunnelled) -> None:
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=tunnelled(public_url=False)),
+            base_url="http://127.0.0.1",
+        ) as client:
+            status = (await client.get("/api/auth/github/status")).json()
+            assert status["loginRequired"] and status["tokenLogin"]
+            response = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                         headers={"Origin": "http://127.0.0.1"})
+            assert response.status_code == 303
+            assert (await client.get("/api/config")).status_code == 200
+
+    asyncio.run(scenario())
 
 
 def test_forwarding_cannot_bypass_auth_by_omitting_public_url(tunnelled) -> None:
@@ -238,7 +255,7 @@ def test_signing_out_ends_a_token_sessions_open_stream(tunnelled, tmp_path, monk
     monkeypatch.setattr("engine.apps.web.github_login._STREAM_RECHECK", 0.01)
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # The daemon's working checkout.
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "--allow-empty", "-m", "start"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-q", "--allow-empty", "-m", "start"], check=True)
 
     async def scenario():
         app = tunnelled()
@@ -291,4 +308,16 @@ def test_signing_out_ends_a_token_sessions_open_stream(tunnelled, tmp_path, monk
                 group.cancel_scope.cancel()
             assert ended, "the stream kept running after sign-out"
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("public_url", ["https://openengine.example.com/engine", "https://openengine.example.com:443/engine"])
+def test_token_login_accepts_the_deployment_origin(tunnelled, public_url):
+    app = tunnelled(public_url=public_url)
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=f"https://{PUBLIC_HOST}") as client:
+            response = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                         headers={"Origin": f"https://{PUBLIC_HOST}"})
+            assert response.status_code == 303
+            assert "engine_token_session" in response.cookies
     asyncio.run(scenario())

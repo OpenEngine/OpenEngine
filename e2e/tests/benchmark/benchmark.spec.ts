@@ -100,6 +100,16 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           },
         )
 
+        await step(
+          "Repository setup uses a separate onboarding token because it can grant repository trust. Keep it private too.\n\n```sh\nexport ENGINE_ONBOARDING_TOKEN=$(openssl rand -hex 32)\nprintf 'ENGINE_ONBOARDING_TOKEN=%s\\n' \"$ENGINE_ONBOARDING_TOKEN\" >> ~/.config/openengine/.env\noe backend add onboarding http://127.0.0.1:4364 --token-env ENGINE_ONBOARDING_TOKEN\n```",
+          async () => {
+            await terminal.run("export ENGINE_ONBOARDING_TOKEN=$(openssl rand -hex 32)")
+            await terminal.run(`printf 'ENGINE_ONBOARDING_TOKEN=%s\\n' "$ENGINE_ONBOARDING_TOKEN" >> ~/.config/openengine/.env`)
+            await terminal.run("oe backend add onboarding http://127.0.0.1:4364 --token-env ENGINE_ONBOARDING_TOKEN")
+            await show("benchmark__terminal--onboarding-backend.png", terminal, testInfo, await terminal.row(/onboarding/), "A separate credential for repository setup")
+          },
+        )
+
         const tunnelCommand = `cloudflared tunnel --url http://127.0.0.1:${port}`
         const tunnelUrl = await step(
           "OpenEngine runs on your computer, and GitHub can't reach your computer directly. A Cloudflare quick tunnel gives it a temporary public address. Open a second terminal for it, because the tunnel keeps running, and start the tunnel there. It needs no Cloudflare account.\n\n" +
@@ -236,10 +246,10 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
 
           await step(
             "Tell OpenEngine about the repository. `oe repo add` downloads it onto your computer and remembers where it is, so OpenEngine knows which folder to work in. It takes effect straight away.\n\n" +
-              "```sh\noe repo add https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + "\n```",
+              "```sh\noe repo add --backend onboarding https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + "\n```",
             async () => {
               await terminal.run("clear")
-              await terminal.run(`oe repo add https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
+              await terminal.run(`oe repo add --backend onboarding https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
               await terminal.run(`ls ~/${BENCH_REPO}`)
               await show("benchmark__terminal--repository-cloned.png", terminal, testInfo, await terminal.row(/^README\.md$/), "The repository is on your computer")
             },
