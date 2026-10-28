@@ -357,7 +357,7 @@ def test_a_send_scheduled_mid_superstep_announces_its_start() -> None:
 RUNTIME_LOGGER = "engine.graph_runtime_langgraph.runtime"
 
 
-async def _one_node(node: Any) -> tuple[LangGraphRuntime, EventLog]:
+async def _one_node(node: Any, *, source_control: Any = None) -> tuple[LangGraphRuntime, EventLog]:
     builder: StateGraph = StateGraph(State)
     builder.add_node(str(FAST), node)
     builder.add_edge(START, str(FAST))
@@ -367,11 +367,70 @@ async def _one_node(node: Any) -> tuple[LangGraphRuntime, EventLog]:
             graph_id=GRAPH,
             name="One node",
             graph=builder.compile(checkpointer=InMemorySaver()),
-        )
+        ),
+        source_control=source_control,
     )
     log = EventLog()
     runtime.observe(log.append)
     return runtime, log
+
+
+@pytest.mark.parametrize("exception", [TimeoutError(), RuntimeError(), ValueError("  ")])
+def test_empty_message_exceptions_leave_a_failed_run(exception: Exception) -> None:
+    async def explode(_state: dict[str, Any]) -> dict[str, Any]:
+        raise exception
+
+    async def scenario() -> None:
+        runtime, log = await _one_node(explode)
+        try:
+            run = await runtime.start(GRAPH, {})
+            await _drain(runtime, log, run.run_id)
+            snapshot = await runtime.snapshot(run.run_id)
+            assert snapshot.status.value == "failed"
+            assert snapshot.error == type(exception).__name__
+            assert not snapshot.active_executions
+            failures = [event for event in log.since(run.run_id) if event.kind is EventKind.RUN_FAILED]
+            assert len(failures) == 1
+            assert failures[0].node_id == FAST
+            assert failures[0].payload["error"] == snapshot.error
+        finally:
+            await runtime.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_ci_timeout_through_runtime_leaves_an_actionable_failure() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from engine.graph_runtime_langgraph.components import CICheck
+    from engine.ports import PipelineStatus
+
+    url = "https://github.com/owner/repo/pull/42"
+    source = SimpleNamespace(
+        list_pipeline_status=AsyncMock(return_value=PipelineStatus("head", (), ())),
+        authenticated_login=AsyncMock(return_value="operator"),
+        can_write_repository=AsyncMock(return_value=True),
+    )
+
+    async def scenario() -> None:
+        runtime, log = await _one_node(CICheck(timeout=0.01), source_control=source)
+        try:
+            run = await runtime.start(GRAPH, {"repository": "owner/repo", "workspaceId": "ws-test", "pr_url": url})
+            await _drain(runtime, log, run.run_id)
+            snapshot = await runtime.snapshot(run.run_id)
+            assert snapshot.status.value == "failed"
+            assert not snapshot.active_executions
+            assert url in snapshot.error
+            assert "0.01 seconds" in snapshot.error
+            assert "retry" in snapshot.error
+            failure = next(event for event in log.since(run.run_id) if event.kind is EventKind.RUN_FAILED)
+            assert failure.node_id == FAST
+            assert failure.payload["error"] == snapshot.error
+        finally:
+            await runtime.aclose()
+
+    asyncio.run(scenario())
 
 
 def test_a_run_that_fails_writes_the_whole_failure_to_the_process_log(

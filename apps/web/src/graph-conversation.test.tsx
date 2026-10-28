@@ -1012,6 +1012,23 @@ it("displays a saved override when the conversation is reopened", async () => {
   expect(await screen.findByRole("combobox", { name: "Runner" })).toHaveValue("claude");
 });
 
+it("shows a CI timeout and offers retry for the failed step", async () => {
+  const message = "Timed out after 3600 seconds waiting for CI on https://github.com/owner/repo/pull/42. Check the PR for pending or missing required checks, then retry this step.";
+  const events = [event({ type: "run.failed", payload: { error: message } })];
+  const run = graphRun({ status: "failed", activeExecutions: [] });
+  const fetch = serve(events, run);
+  render(<GraphConversationPage runId={runId} nodeId={NODE} />);
+
+  expect(await screen.findByText(message)).toBeVisible();
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  expect(retry).toBeEnabled();
+  await userEvent.setup().click(retry);
+  expect(fetch).toHaveBeenCalledWith(
+    `/graph/api/runs/${runId}/transitions`,
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ node: NODE }) }),
+  );
+});
+
 it("retries a failed node after saving a runner change and prevents duplicate retries", async () => {
   const user = userEvent.setup();
   const events = [event({ type: "run.failed", payload: { error: "You've hit your limit" } })];
