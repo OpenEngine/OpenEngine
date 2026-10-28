@@ -70,7 +70,7 @@ function step(text: string, body: () => Promise<void> = async () => {}) {
 }
 
 /** Screenshot the screen down to its last row in use once it has stopped changing, with `highlight` labelled. */
-async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string) {
+async function show(filename: string, terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string) {
   await terminal.waitForQuiet()
   await expect(terminal.screen()).not.toContainText(`:${new URL(engine.url).port}`)
   // The page is the same on every run: no path on this computer, such as where a run's work is, may show.
@@ -95,7 +95,7 @@ async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, high
         text: label, position: "below", showArrow: false,
         highlightStrokeStyle: "transparent", highlightFillStyle: "transparent",
       } } },
-    ], { clip: await terminal.usedArea({ labelBelow: true }) })
+    ], { annotation: { filename }, clip: await terminal.usedArea({ labelBelow: true }) })
   } finally {
     await anchor.evaluate((element) => element.remove())
   }
@@ -175,7 +175,7 @@ ${GRAPH}\`\`\`
           async () => {
             writeFileSync(path.join(engine.repository, "describe-project.yaml"), GRAPH)
             await terminal.run("oe graph add describe-project.yaml")
-            await show(terminal, engine, testInfo, await terminal.row(/^registered describe-project v1\s/), "Your graph is saved")
+            await show("follow-a-run__terminal--graph-saved.png", terminal, engine, testInfo, await terminal.row(/^registered describe-project v1\s/), "Your graph is saved")
           },
         )
 
@@ -199,7 +199,7 @@ The first time you run a graph in a folder, OpenEngine asks whether to trust it.
             // Only an unanswered line can represent the next question.
             const unanswered = /^Allow\? \[y\/n\][ \t]*$/m
             await terminal.waitForText(unanswered)
-            await show(terminal, engine, testInfo, await terminal.row(unanswered), "Read the question before allowing the command")
+            await show(`follow-a-run__terminal--trust-question-${answered.size + 1}.png`, terminal, engine, testInfo, await terminal.row(unanswered), "Read the question before allowing the command")
             const answeredPrompts = (await terminal.text()).match(/^Allow\? \[y\/n\] y$/gm)?.length ?? 0
             await terminal.type("y")
             await terminal.press("Enter")
@@ -236,7 +236,7 @@ If you see *cannot reach backend*, OpenEngine's background program isn't running
             await answerQuestions(await run(engine, running.runId))
             if (engine.agentMode === "real") return // Real agents can finish or ask again at any point.
             await expect.poll(async () => (await run(engine, running.runId)).status).toBe("running")
-            await show(terminal, engine, testInfo, await terminal.rows(STAGES, /^\s+Graph\s+/), "The plan stage is in progress; its step, read, is running")
+            await show("follow-a-run__terminal--stages-running.png", terminal, engine, testInfo, await terminal.rows(STAGES, /^\s+Graph\s+/), "The plan stage is in progress; its step, read, is running")
             // The screen settled part way through the run, not only once it had ended.
             expect((await run(engine, running.runId)).status).toBe("running")
             await expect(terminal.screen()).toContainText(" · running · ")
@@ -260,7 +260,7 @@ If an agent asks to run a command, read the question. To allow it, type \`y\` an
             expect(exitCode).toBe(0)
             const { runId } = await onlyRun(engine)
             expect((await run(engine, runId)).status).toBe("completed")
-            await show(terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "Every stage and step is done")
+            await show("follow-a-run__terminal--stages-completed.png", terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "Every stage and step is done")
           },
         )
 
@@ -273,7 +273,7 @@ You'll see one row for each run, newest first, with the graph it ran and its sta
           async () => {
             const { output } = await terminal.run("oe runs list")
             expect(output).toMatch(/^run-\S+\s.*\sdescribe-project v1\s+completed\s/m)
-            await show(terminal, engine, testInfo, await terminal.row(/^run-\S+\s.*\sdescribe-project v1\s+completed\s/), "Your run, and that it finished")
+            await show("follow-a-run__terminal--completed-list.png", terminal, engine, testInfo, await terminal.row(/^run-\S+\s.*\sdescribe-project v1\s+completed\s/), "Your run, and that it finished")
           },
         )
       })
@@ -309,7 +309,7 @@ Type \`y\` and press Enter to let it, or \`n\` to say no. If you say no, the com
             await terminal.waitForText(ALLOW)
             const { runId } = await onlyRun(engine)
             expect((await run(engine, runId)).pendingApprovals ?? []).toHaveLength(1)
-            await show(terminal, engine, testInfo, await terminal.rows(QUESTION, ALLOW), "An agent is asking to run a command")
+            await show("follow-a-run__terminal--approval-question.png", terminal, engine, testInfo, await terminal.rows(QUESTION, ALLOW), "An agent is asking to run a command")
             await terminal.type("y")
             await terminal.press("Enter")
           },
@@ -323,7 +323,7 @@ Type \`y\` and press Enter to let it, or \`n\` to say no. If you say no, the com
             const ended = await run(engine, runId)
             expect(ended.status).toBe("completed")
             expect(ended.pendingApprovals ?? []).toHaveLength(0)
-            await show(terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "Your answer let the run finish")
+            await show("follow-a-run__terminal--approval-completed.png", terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "Your answer let the run finish")
           },
         )
       })
@@ -353,7 +353,7 @@ Start the graph with \`oe graph run describe-project\`, and answer \`n\` if you'
             await start(terminal)
             await terminal.waitForText(ALLOW)
             runId = (await onlyRun(engine)).runId
-            await show(terminal, engine, testInfo, await terminal.row(/^\s+Graph\s+/), "Your graph is running")
+            await show("follow-a-run__terminal--detach-running.png", terminal, engine, testInfo, await terminal.row(/^\s+Graph\s+/), "Your graph is running")
           },
         )
 
@@ -364,7 +364,7 @@ The screen stops and asks what you want: *d* to detach, which closes this screen
           async () => {
             await terminal.press("Control+C")
             await terminal.waitForText(INTERRUPTED)
-            await show(terminal, engine, testInfo, await terminal.row(INTERRUPTED), "Choose what happens to the run")
+            await show("follow-a-run__terminal--interrupt-menu.png", terminal, engine, testInfo, await terminal.row(INTERRUPTED), "Choose what happens to the run")
           },
         )
 
@@ -381,7 +381,7 @@ The screen says *Detached* and gives you the command to come back with, which in
             const waiting = await run(engine, runId)
             expect(["running", "awaiting_approval"]).toContain(waiting.status)
             expect(waiting.pendingApprovals ?? []).toHaveLength(1)
-            await show(terminal, engine, testInfo, await terminal.row(detached), "The run goes on; this is how to come back to it")
+            await show("follow-a-run__terminal--detached.png", terminal, engine, testInfo, await terminal.row(detached), "The run goes on; this is how to come back to it")
           },
         )
 
@@ -397,7 +397,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
             // Asked again, below the command that came back to it.
             await expect.poll(async () => (await terminal.text()).split("$ oe run watch").at(-1)).toMatch(ALLOW)
             expect((await run(engine, runId)).pendingApprovals ?? []).toHaveLength(1)
-            await show(terminal, engine, testInfo, await terminal.rows(STAGES, ALLOW), "You're back, and the question is waiting")
+            await show("follow-a-run__terminal--reattached.png", terminal, engine, testInfo, await terminal.rows(STAGES, ALLOW), "You're back, and the question is waiting")
           },
         )
 
@@ -408,7 +408,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
             await terminal.press("Enter")
             expect(await terminal.waitForPrompt({ timeout: 60_000 })).toBe(0)
             expect((await run(engine, runId)).status).toBe("completed")
-            await show(terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "Your run finished after you came back")
+            await show("follow-a-run__terminal--reattached-completed.png", terminal, engine, testInfo, await terminal.rows(STAGES, graphRow("✓", "✓")), "Your run finished after you came back")
           },
         )
       })
@@ -436,7 +436,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
           async () => {
             await start(terminal)
             await terminal.waitForText(ALLOW)
-            await show(terminal, engine, testInfo, await terminal.row(ALLOW), "The agent asks before reading the file")
+            await show("follow-a-run__terminal--cancel-approval.png", terminal, engine, testInfo, await terminal.row(ALLOW), "The agent asks before reading the file")
           },
         )
 
@@ -447,7 +447,7 @@ The same screen comes back, showing where the run is now. Since the agent is sti
             await terminal.press("Enter")
             await terminal.waitForText(/┃ ⚙ cat README\.md/)
             runId = (await onlyRun(engine)).runId
-            await show(terminal, engine, testInfo, await terminal.row(/^\s+Graph\s+/), "Your graph is running")
+            await show("follow-a-run__terminal--cancel-running.png", terminal, engine, testInfo, await terminal.row(/^\s+Graph\s+/), "Your graph is running")
           },
         )
 
@@ -463,7 +463,7 @@ OpenEngine stops the agent and ends the run. Below the last view of its progress
             await terminal.waitForPrompt({ timeout: 60_000 })
             await expect.poll(async () => (await run(engine, runId)).status, { timeout: 30_000 }).toBe("cancelled")
             await terminal.waitForText(new RegExp(`^${runId} · cancelled$`, "m"))
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(`^${runId} · cancelled$`)), "The run is stopped")
+            await show("follow-a-run__terminal--cancelled.png", terminal, engine, testInfo, await terminal.row(new RegExp(`^${runId} · cancelled$`)), "The run is stopped")
           },
         )
 
@@ -475,7 +475,7 @@ OpenEngine stops the agent and ends the run. Below the last view of its progress
             const { output } = await terminal.run("oe runs list")
             const row = new RegExp(`^${runId}\\s.*\\sdescribe-project v1\\s+cancelled\\s`, "m")
             expect(output).toMatch(row)
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "The run you stopped")
+            await show("follow-a-run__terminal--cancelled-list.png", terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "The run you stopped")
           },
         )
 

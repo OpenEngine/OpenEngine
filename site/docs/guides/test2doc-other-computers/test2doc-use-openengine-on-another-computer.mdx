@@ -11,7 +11,7 @@ slug: /guides/other-computers/use-another-computer
 
 OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. It has a background program that does the work, and that program can run on more than one computer: this one, and another such as a Mac mini that stays on all day. This is so your long-running agents can work 24/7 on the tasks you set out for them, even after you close your laptop. Each computer it runs on is called a **backend**. In this example, your laptop is called `local`, and it's there from the start.
 
-This guide shows how to tell OpenEngine about another computer, check you can reach it, and choose which computer your `oe` commands go to. You'll need OpenEngine already running on the other computer, and an address that reaches it from this one. Here, it's `https://mac-mini.local:4364`.
+This guide shows how to tell OpenEngine about another computer, check you can reach it, and choose which computer your `engine` commands go to. You'll need OpenEngine already running on the other computer, and an address that reaches it from this one. Here, it's `https://mac-mini.local:4364`.
 
 OpenEngine on the other computer only answers programs on that computer itself, so it needs a safe way in from this one, such as a private network between your computers ([Tailscale](https://tailscale.com/kb/1017/install) is one) or an SSH tunnel. If someone else set up the Mac mini, ask them for the address that reaches it from here.
 
@@ -20,7 +20,7 @@ Give the other computer a name and tell OpenEngine its address. Type `oe backend
 
 OpenEngine saves the Mac mini under the name `mac-mini` and shows what it saved: the name, the address, and a project setting you can leave alone. Your commands still go to this computer for now.
 
-![screenshot](./test2doc-4473ecaa4de6.png)
+![screenshot](./another-computer__terminal--backend-added.png)
 
 Check that OpenEngine can reach it. Type `oe backends list --check` and press Enter.
 
@@ -28,37 +28,37 @@ You'll see every computer OpenEngine knows about, with *up* beside each one it c
 
 If you see *down* beside the Mac mini instead, check that it's switched on, that OpenEngine is running on it, that the private network or tunnel to it is working, and that you typed its address correctly. If it says the Mac mini *requires a token*, it was given a token of its own: see [`oe backend add`](../../cli-reference.md#engine-backend-add) for how to send it.
 
-![screenshot](./test2doc-fce424be9c8a.png)
+![screenshot](./another-computer__terminal--backends-checked.png)
 
 Switch to the Mac mini, so your commands go there from now on. Type `oe backend use mac-mini` and press Enter.
 
 OpenEngine shows the computer you switched to, with a star to say your commands go there now.
 
-![screenshot](./test2doc-dca53289a235.png)
+![screenshot](./another-computer__terminal--backend-selected.png)
 
 Each computer keeps its own graphs: recipes for a piece of work, saying its steps, which agent does each one, and in what order. To see that your commands now go to the Mac mini, save a graph there. Here, your project has one in a file called `hello.yaml`. Type `oe graph add hello.yaml` and press Enter.
 
 OpenEngine saves the graph, called `hello`, on the Mac mini. The screen says *registered*, OpenEngine's word for saved, followed by labels OpenEngine uses to tell graphs and their versions apart, and the project it's saved under. You can leave those alone.
 
-![screenshot](./test2doc-0ddb8f32c43b.png)
+![screenshot](./another-computer__terminal--graph-saved.png)
 
 Type `oe graphs list` and press Enter.
 
 You'll see the Mac mini's graphs, with `hello` among them.
 
-![screenshot](./test2doc-8c0cdd45cef6.png)
+![screenshot](./another-computer__terminal--remote-graphs.png)
 
 To use another computer for a single command without switching, add `--backend` and its name. Type `oe graphs list --backend local` and press Enter.
 
 You'll see this computer's graphs instead, and `hello` isn't among them: you saved it on the Mac mini. Your other commands still go to the Mac mini.
 
-![screenshot](./test2doc-3be79704846b.png)
+![screenshot](./another-computer__terminal--local-graphs.png)
 
 When you want your commands to go to this computer again, switch back the same way. Type `oe backend use local` and press Enter.
 
 OpenEngine shows `local` with the star: your commands go to this computer again.
 
-![screenshot](./test2doc-cc8a07be047f.png)
+![screenshot](./another-computer__terminal--local-selected.png)
 
 Next, write and save your first graph: see [Save Your First Graph](../test2doc-graphs/test2doc-save-your-first-graph.mdx).
 

@@ -67,7 +67,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             expect(sha, "git answers with a commit").toMatch(/^[0-9a-f]{40}$/)
             // The version under test, for the report.
             testInfo.annotations.push({ type: "openengine-sha", description: sha })
-            await show(terminal, testInfo, await terminal.row(new RegExp(`^${sha}$`)), "The exact version of OpenEngine")
+            await show("benchmark__terminal--version.png", terminal, testInfo, await terminal.row(new RegExp(`^${sha}$`)), "The exact version of OpenEngine")
           },
         )
 
@@ -80,7 +80,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             testInfo.annotations.push({ type: "install-seconds", description: String(Math.round((Date.now() - started) / 1000)) })
             await terminal.run("clear")
             await terminal.run("oe --version")
-            await show(terminal, testInfo, await terminal.row(/^\d+\.\d+\.\d+$/), "OpenEngine is installed")
+            await show("benchmark__terminal--installed.png", terminal, testInfo, await terminal.row(/^\d+\.\d+\.\d+$/), "OpenEngine is installed")
           },
         )
 
@@ -99,7 +99,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             await tunnel.waitForText(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/, { timeout: 90_000 })
             const url = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(await tunnel.text())![0]
             // Shown now, while the address is still on screen: the tunnel's log scrolls it away.
-            await show(tunnel, testInfo, await tunnel.row(new RegExp(url.replace(/\./g, "\\."))), "Your temporary public address")
+            await show("benchmark__terminal--tunnel.png", tunnel, testInfo, await tunnel.row(new RegExp(url.replace(/\./g, "\\."))), "Your temporary public address")
             // The address prints before the tunnel is connected: wait for the connection too.
             await tunnel.waitForText(/Registered tunnel connection/, { timeout: 90_000 })
             return url
@@ -117,6 +117,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             await terminal.type(`public_url = "${tunnelUrl}"`)
             await terminal.press("Escape")
             await show(
+              "benchmark__terminal--public-url.png",
               terminal,
               testInfo,
               await terminal.row(/public_url = "https/),
@@ -135,7 +136,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             await terminal.run(`printf 'ENGINE_GITHUB_WEBHOOK_SECRET=%s\\n' "$ENGINE_GITHUB_WEBHOOK_SECRET" > ~/.config/openengine/.env`)
             await terminal.run("chmod 600 ~/.config/openengine/.env")
             await terminal.run("ls -la ~/.config/openengine")
-            await show(terminal, testInfo, await terminal.row(/-rw-------.* \.env$/), "The secret is in a file only you can read")
+            await show("benchmark__terminal--secret-file.png", terminal, testInfo, await terminal.row(/-rw-------.* \.env$/), "The secret is in a file only you can read")
           },
         )
 
@@ -145,7 +146,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             async () => {
               await terminal.run("oe daemon start", { timeout: 120_000 })
               await terminal.run("oe daemon status")
-              await show(terminal, testInfo, await terminal.row(/health: ready/), "OpenEngine is running")
+              await show("benchmark__terminal--health.png", terminal, testInfo, await terminal.row(/health: ready/), "OpenEngine is running")
             },
           )
 
@@ -153,7 +154,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             "Connect OpenEngine to GitHub. It uses the `gh` command you are already signed in with, so there is nothing to paste.\n\n```sh\noe connect gh\n```",
             async () => {
               await terminal.run("oe connect gh")
-              await show(terminal, testInfo, await terminal.row(/GitHub CLI selected/), "OpenEngine will use your GitHub login")
+              await show("benchmark__terminal--github-login.png", terminal, testInfo, await terminal.row(/GitHub CLI selected/), "OpenEngine will use your GitHub login")
             },
           )
 
@@ -166,7 +167,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               expect(login, "Claude is not signed in where OpenEngine runs. Sign in with `claude /login`, then run the benchmark again.").toMatch(/^\s*ok\s/)
               expect(output, "oe doctor found a problem").not.toMatch(/^\s*error\s/m)
               // The line names the Claude account, which has no place in a guide: it is covered, and the line before is shown.
-            await show(terminal, testInfo, await terminal.row(/ok\s+claude:/), "Claude is installed and signed in; the account is hidden", {
+            await show("benchmark__terminal--claude-login.png", terminal, testInfo, await terminal.row(/ok\s+claude:/), "Claude is installed and signed in; the account is hidden", {
               masked: [await terminal.row(/claude login/)],
             })
             },
@@ -179,7 +180,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run("codex login status").catch(() => {
                 throw new Error("Codex is not signed in where OpenEngine runs. Sign in with `codex login`, then run the benchmark again.")
               })
-              await show(terminal, testInfo, await terminal.row(/logged in/i), "Codex is signed in")
+              await show("benchmark__terminal--codex-login.png", terminal, testInfo, await terminal.row(/logged in/i), "Codex is signed in")
             },
           )
 
@@ -188,7 +189,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             async () => {
               await terminal.run("oe graph add docs/examples/graphs/tdd-guide.yaml")
               await terminal.run("oe graphs")
-              await show(terminal, testInfo, await terminal.row(/^tdd-guide\s/), "tdd-guide is registered")
+              await show("benchmark__terminal--graph-registered.png", terminal, testInfo, await terminal.row(/^tdd-guide\s/), "tdd-guide is registered")
             },
           )
 
@@ -197,7 +198,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               "```sh\ngh repo create " + BENCH_REPO + " --public --add-readme --description \"A calculator, built by OpenEngine.\"\n```",
             async () => {
               await terminal.run(`gh repo create ${BENCH_REPO} --public --add-readme --description "A calculator, built by OpenEngine."`)
-              await show(terminal, testInfo, await terminal.row(/github\.com\/[^/\s]+\/oe-bench/), "Your new repository")
+              await show("benchmark__terminal--repository-created.png", terminal, testInfo, await terminal.row(/github\.com\/[^/\s]+\/oe-bench/), "Your new repository")
             },
           )
 
@@ -219,7 +220,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run(`git config --global user.email "${owner}@users.noreply.github.com"`)
               await terminal.run("clear")
               await terminal.run("git config --global --list")
-              await show(terminal, testInfo, await terminal.row(/^user\.name=/), "Git knows who you are, and uses your GitHub login")
+              await show("benchmark__terminal--git-identity.png", terminal, testInfo, await terminal.row(/^user\.name=/), "Git knows who you are, and uses your GitHub login")
             },
           )
 
@@ -230,7 +231,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run("clear")
               await terminal.run(`oe repo add https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
               await terminal.run(`ls ~/${BENCH_REPO}`)
-              await show(terminal, testInfo, await terminal.row(/^README\.md$/), "The repository is on your computer")
+              await show("benchmark__terminal--repository-cloned.png", terminal, testInfo, await terminal.row(/^README\.md$/), "The repository is on your computer")
             },
           )
 
@@ -241,7 +242,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run("clear")
               await terminal.run(`gh api -X POST ${api}/pages -f build_type=workflow --jq .build_type`)
               expect(await gh("api", `${api}/pages`, "--jq", ".build_type"), "Pages publishes from GitHub Actions").toBe("workflow\n")
-              await show(terminal, testInfo, await terminal.row(/^workflow$/), "Pages publishes from GitHub Actions")
+              await show("benchmark__terminal--pages-workflow.png", terminal, testInfo, await terminal.row(/^workflow$/), "Pages publishes from GitHub Actions")
             },
           )
 
@@ -254,7 +255,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run(`gh api ${api}/actions/permissions/workflow`)
               const permissions = JSON.parse(await gh("api", `${api}/actions/permissions/workflow`)) as { default_workflow_permissions: string; can_approve_pull_request_reviews: boolean }
               expect(permissions, "workflows can write, and can approve pull requests").toEqual({ default_workflow_permissions: "write", can_approve_pull_request_reviews: true })
-              await show(terminal, testInfo, await terminal.row(/default_workflow_permissions/), "Workflows can write and open pull requests")
+              await show("benchmark__terminal--workflow-permissions.png", terminal, testInfo, await terminal.row(/default_workflow_permissions/), "Workflows can write and open pull requests")
             },
           )
 
@@ -268,7 +269,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               )
               const settings = JSON.parse(await gh("api", api)) as { allow_squash_merge: boolean; squash_merge_commit_title: string }
               expect(settings, "squash merging is allowed, titled by the pull request").toMatchObject({ allow_squash_merge: true, squash_merge_commit_title: "PR_TITLE" })
-              await show(terminal, testInfo, await terminal.row(/allow_squash_merge/), "Squash merging is on")
+              await show("benchmark__terminal--squash-merge.png", terminal, testInfo, await terminal.row(/allow_squash_merge/), "Squash merging is on")
             },
           )
 
@@ -294,7 +295,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
                 previousId = String(created.id)
               }
               await terminal.run(`gh issue list --repo ${repo} --milestone ${milestone.title} --state open --limit 30`)
-              await show(terminal, testInfo, await terminal.row(/Scaffold the calculator page/), "The calculator's issues")
+              await show("benchmark__terminal--issues.png", terminal, testInfo, await terminal.row(/Scaffold the calculator page/), "The calculator's issues")
               // GitHub's listing can trail the issues just created, so wait for it to show them all.
               const listIssues = async () => JSON.parse(await gh("api", `${api}/issues?milestone=${number}&state=open&per_page=100`)) as { number: number; body: string }[]
               await expect.poll(async () => (await listIssues()).length, { timeout: 30_000, message: "every issue is in the milestone" }).toBe(issues.length)
@@ -320,7 +321,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               )
               const id = output.trim().split("\n").at(-1)!.trim()
               expect(id, "GitHub answers with the new webhook's number").toMatch(/^\d+$/)
-              await show(terminal, testInfo, await terminal.row(new RegExp(`^${id}$`)), "The webhook's number")
+              await show("benchmark__terminal--webhook.png", terminal, testInfo, await terminal.row(new RegExp(`^${id}$`)), "The webhook's number")
               return id
             },
           )
@@ -350,7 +351,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
                 .poll(async () => (await deliveries()).map((d) => d.status_code), { timeout: 90_000, message: "waiting for GitHub to record OpenEngine's answer" })
                 .toContain(200)
               await terminal.run(`gh api ${hookPath}/deliveries --jq '.[] | "\\(.event) \\(.status_code)"'`)
-              await show(terminal, testInfo, await terminal.row(/ping 200/), "OpenEngine accepted the message")
+              await show("benchmark__terminal--webhook-accepted.png", terminal, testInfo, await terminal.row(/ping 200/), "OpenEngine accepted the message")
             },
           )
 
@@ -360,7 +361,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             async () => {
               const { output } = await terminal.run(`curl -s -o /dev/null -w '%{http_code}\\n' -X POST ${tunnelUrl}/api/github/events`)
               expect(output.trim().split("\n").at(-1)).toBe("401")
-              await show(terminal, testInfo, await terminal.row(/^401$/), "OpenEngine refuses it")
+              await show("benchmark__terminal--webhook-rejected.png", terminal, testInfo, await terminal.row(/^401$/), "OpenEngine refuses it")
             },
           )
         } finally {

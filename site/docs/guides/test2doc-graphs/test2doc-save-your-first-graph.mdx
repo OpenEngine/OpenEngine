@@ -13,14 +13,14 @@ OpenEngine is a tool that has AI coding agents work on your code, step by step, 
 
 The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. You write it once in a small text file and save it to OpenEngine, so you can find it and use it again whenever you need that piece of work done, instead of explaining it from scratch each time.
 
-This guide shows how to write a graph, save it, find it again, and what happens when you change it. You'll use `oe`, the command you type in a terminal to use OpenEngine. Running a graph comes in the next guide.
+This guide shows how to write a graph, save it, find it again, and what happens when you change it. You'll use `engine`, the command you type in a terminal to use OpenEngine. Running a graph comes in the next guide.
 
 
 Every graph file follows the same layout. To see it, with an example, type `oe graph spec | head -n 30` and press Enter. `oe graph spec` describes everything a graph file can say, which is long; `| head -n 30` shows only its first 30 lines, where the example is.
 
 You'll see a short example graph. It has more in it than a first graph needs: the next step shows the few lines yours needs. This works even when OpenEngine isn't running, so you can write a graph anywhere.
 
-![screenshot](./test2doc-869dfa7858d5.png)
+![screenshot](./first-graph__terminal--example.png)
 
 Write your graph. In your project's folder, make a file called `describe-project.yaml` with any text editor, and copy this into it:
 
@@ -45,37 +45,37 @@ The screen says *registered*, OpenEngine's word for saved, then the graph's name
 
 If you see *cannot reach backend*, the command can't reach OpenEngine's background program. A **backend** is a computer where that program runs: this one, or another one such as a Mac mini. If you're using this computer, follow the [instructions to start OpenEngine](../../cli-reference.md#engine-daemon-start), then try saving again. If OpenEngine finds a mistake in the file, it lists what's wrong and where in the file; fix it and run the command again.
 
-![screenshot](./test2doc-8973e6d3ca7c.png)
+![screenshot](./first-graph__terminal--saved-v1.png)
 
 Later, to find the graphs you've saved, type `oe graphs list` and press Enter.
 
 You'll see one row for each graph, with its name and latest version. You can leave the other columns alone.
 
-![screenshot](./test2doc-5875b2b52b38.png)
+![screenshot](./first-graph__terminal--list.png)
 
 To see what a saved graph says, type `oe graph get describe-project` and press Enter.
 
 You'll see the graph's name and version, the versions OpenEngine has of it, and then the file exactly as you saved it.
 
-![screenshot](./test2doc-39aa5824eabe.png)
+![screenshot](./first-graph__terminal--saved-definition.png)
 
 Now change the graph. In `describe-project.yaml`, change *one sentence* in the prompt to *two sentences*, and save the file. Then type `oe graph add describe-project.yaml` and press Enter again.
 
 This time the screen says `v2`: OpenEngine saved your change as a new version. It keeps the old one too, so a change never overwrites what you had.
 
-![screenshot](./test2doc-7cd9e851e9e6.png)
+![screenshot](./first-graph__terminal--saved-v2.png)
 
 Type `oe graph get describe-project` and press Enter.
 
 The line starting *versions* lists both versions, and below it is the file as it is now, with *two sentences*. When you use a graph by its name, OpenEngine uses its latest version.
 
-![screenshot](./test2doc-ae89d41484c9.png)
+![screenshot](./first-graph__terminal--versions.png)
 
 If you save a graph again without changing it, nothing new is made. Type `oe graph add describe-project.yaml` and press Enter once more, without touching the file.
 
 The screen says *unchanged* and `v2`: OpenEngine already has this exact graph, so it keeps the version it had. You can save as often as you like; only a real change makes a new version.
 
-![screenshot](./test2doc-0816ea3f35ce.png)
+![screenshot](./first-graph__terminal--unchanged.png)
 
 Next, to learn everything else a graph file can say, such as more steps or one agent checking another's work, see [Graphs](../../graphs.md).
 
