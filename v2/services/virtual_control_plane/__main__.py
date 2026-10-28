@@ -106,25 +106,31 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
     server = Server(connection, "vcp", listener, queries=QUERIES)
-    await server.start()
-    health = await asyncio.start_server(
-        lambda reader, writer: _health(
-            lambda: connection.is_connected and not stopping.is_set(), reader, writer
-        ),
-        HEALTH_HOST,
-        health_port,
-    )
-    url = f"http://{HEALTH_HOST}:{health.sockets[0].getsockname()[1]}/healthz"
-    if ready_file:
-        ready_file.write_text(url)
-    log.info("ready", extra={"url.full": url})
-    await stopping.wait()
-    log.info("draining")
-    await server.drain()
-    await connection.drain()
-    health.close()
-    if ready_file:
-        ready_file.unlink(missing_ok=True)
+    health = None
+    try:
+        await server.start()
+        health = await asyncio.start_server(
+            lambda reader, writer: _health(
+                lambda: connection.is_connected and not stopping.is_set(), reader, writer
+            ),
+            HEALTH_HOST,
+            health_port,
+        )
+        url = f"http://{HEALTH_HOST}:{health.sockets[0].getsockname()[1]}/healthz"
+        if ready_file:
+            ready_file.write_text(url)
+        log.info("ready", extra={"url.full": url})
+        await stopping.wait()
+        log.info("draining")
+    finally:
+        try:
+            await server.close()
+        finally:
+            if health is not None:
+                health.close()
+                await health.wait_closed()
+            if ready_file:
+                ready_file.unlink(missing_ok=True)
     log.info("stopped")
     return EXIT_OK
 

@@ -156,3 +156,24 @@ def test_a_route_key_names_subject_parameters_and_checks_their_type() -> None:
     assert malformed["error"]["code"] == "INVALID_ARGUMENT"
     assert malformed["error"]["details"]["violations"][0]["field"] == "subject.operation_id"
     assert other["error"]["code"] == "UNSUPPORTED_CAPABILITY"
+
+
+@pytest.mark.parametrize(
+    ("info", "connected"),
+    [({}, True), ({"host": "0.0.0.0", "port": 4222}, True),
+     ({"host": "127.0.0.1", "port": 4222}, False)],
+)
+def test_live_connection_cannot_reuse_a_trusted_startup_listener(info, connected) -> None:
+    connection = type("Connection", (), {"_server_info": info, "is_connected": connected, "is_draining": False})()
+    called = False
+
+    async def handler(request: Request) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        return {}
+
+    server = Server(connection, "ge", LOOPBACK, queries={"graphs.list": Route(handler)})
+    reply = json.loads(asyncio.run(server.handle("oe.v1.ge.query.graphs.list", b'{"params": {}}')))
+
+    assert reply["error"]["code"] == "PERMISSION_DENIED"
+    assert not called

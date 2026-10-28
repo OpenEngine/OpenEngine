@@ -16,7 +16,7 @@ await client.command("oe.v1.ge.control.graphs.apply", payload, command_id=..., c
 server = Server(nats_connection, "ge", nats_url, queries={"graphs.list": Route(handler, schema_reference)})
 await server.start()
 ...
-await server.drain()   # stop taking requests, answer the ones received
+await server.close()   # drain replies for up to 5 seconds, then close the dedicated connection
 ```
 
 | Module | |
@@ -48,3 +48,14 @@ serves a subject or when no reply arrives after the last attempt, and
 `ServiceError` for an error or rejected reply. The server answers every request
 with a typed response, including malformed ones. It never puts an exception's
 text in an `INTERNAL` reply.
+
+With a live connection, authorization reads the current broker listening address
+for each request, including after reconnect. Local-operator mode rejects an
+unknown address or a broker listening beyond loopback. The constructor's
+`listener` argument is only used for transport-free calls (`nats=None`).
+
+`Server.close(timeout=5.0)` drains owned subscriptions and flushes replies when
+connected. A broker outage or expired drain deadline falls back to closing the
+connection. Services must also close their health listeners and remove readiness
+files in unconditional cleanup. `Server.drain()` alone leaves the connection
+open and has no overall deadline.

@@ -20,6 +20,7 @@ handler reads them from `Request.parameters`.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import dataclasses
 import logging
@@ -31,6 +32,7 @@ from urllib.parse import urlsplit
 from nats.aio.client import Client as NATS
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
+from nats.errors import Error as NatsError
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ErrorCode, ServiceError, invalid_argument
@@ -152,6 +154,27 @@ class Server:
             await subscription.drain()
         self._subscriptions.clear()
 
+    async def close(self, timeout: float = 5.0) -> None:
+        """Drain replies, then close this server's dedicated NATS connection.
+
+        A broker outage must not prevent shutdown. Bound the entire drain
+        below the supervisor's stop deadline, and close even if the broker
+        disappears during it. Callers still own their other resources.
+        """
+        try:
+            if self.nats.is_connected:
+                await asyncio.wait_for(self._drain_connection(), timeout=timeout)
+        except (TimeoutError, NatsError):
+            log.warning("NATS drain incomplete; closing %s", self.service, exc_info=True)
+        finally:
+            await self.nats.close()
+            self._subscriptions.clear()
+
+    async def _drain_connection(self) -> None:
+        await self.drain()
+        # All owned subscriptions have drained; flush their final replies.
+        await self.nats.flush()
+
     async def _receive(self, message: Msg) -> None:
         reply = await self.handle(message.subject, message.data, message.headers)
         if message.reply:
@@ -166,7 +189,16 @@ class Server:
                 body = envelopes.decode(data)
                 if not self._keeps_receipt(kind, operation, body):
                     envelopes.check(envelopes.COMMAND if kind == "control" else envelopes.QUERY, body)
-                request = Request(subject, kind, operation, body, self.listener)
+                # A reconnect may reach a differently exposed broker. Never
+                # authorize using the listening address captured at startup.
+                # The explicit listener remains useful for transport-free tests.
+                listener = self.listener
+                if self.nats is not None:
+                    listener = (
+                        listen_address(self.nats)
+                        if self.nats.is_connected or self.nats.is_draining else ""
+                    )
+                request = Request(subject, kind, operation, body, listener)
                 log.info("%s request", operation, extra=_identity(body))
                 self.authorizer.authorize(request)
                 route, parameters = self._route(subject, kind, operation)
