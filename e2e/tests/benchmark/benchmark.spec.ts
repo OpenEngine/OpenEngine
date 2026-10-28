@@ -211,6 +211,68 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
+            "Git needs two things to work on your behalf: permission to use your GitHub login, and a name and email to put on the commits OpenEngine makes.\n\n" +
+              "```sh\ngh auth setup-git\ngit config --global user.name \"<your name>\"\ngit config --global user.email \"<your email>\"\n```",
+            async () => {
+              await terminal.run("gh auth setup-git")
+              await terminal.run(`git config --global user.name "${owner}"`)
+              await terminal.run(`git config --global user.email "${owner}@users.noreply.github.com"`)
+              await terminal.run("clear")
+              await terminal.run("git config --global --list")
+              await show(terminal, testInfo, await terminal.row(/^user\.name=/), "Git knows who you are, and uses your GitHub login")
+            },
+          )
+
+          await step(
+            "Tell OpenEngine about the repository. `oe repo add` downloads it onto your computer and remembers where it is, so OpenEngine knows which folder to work in. It takes effect straight away.\n\n" +
+              "```sh\noe repo add https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + "\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(`oe repo add https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
+              await terminal.run(`ls ~/${BENCH_REPO}`)
+              await show(terminal, testInfo, await terminal.row(/^README\.md$/), "The repository is on your computer")
+            },
+          )
+
+          await step(
+            "OpenEngine's deploy workflow will publish the calculator with GitHub Pages, so turn Pages on, with GitHub Actions as its source.\n\n" +
+              "```sh\ngh api -X POST repos/<your-account>/" + BENCH_REPO + "/pages -f build_type=workflow --jq .build_type\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(`gh api -X POST ${api}/pages -f build_type=workflow --jq .build_type`)
+              expect(await gh("api", `${api}/pages`, "--jq", ".build_type"), "Pages publishes from GitHub Actions").toBe("workflow\n")
+              await show(terminal, testInfo, await terminal.row(/^workflow$/), "Pages publishes from GitHub Actions")
+            },
+          )
+
+          await step(
+            "The workflows OpenEngine adds need to write to the repository, to publish releases, and to open pull requests. Allow both.\n\n" +
+              "```sh\ngh api -X PUT repos/<your-account>/" + BENCH_REPO + "/actions/permissions/workflow \\\n  -f default_workflow_permissions=write -F can_approve_pull_request_reviews=true\ngh api repos/<your-account>/" + BENCH_REPO + "/actions/permissions/workflow\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(`gh api -X PUT ${api}/actions/permissions/workflow -f default_workflow_permissions=write -F can_approve_pull_request_reviews=true`)
+              await terminal.run(`gh api ${api}/actions/permissions/workflow`)
+              const permissions = JSON.parse(await gh("api", `${api}/actions/permissions/workflow`)) as { default_workflow_permissions: string; can_approve_pull_request_reviews: boolean }
+              expect(permissions, "workflows can write, and can approve pull requests").toEqual({ default_workflow_permissions: "write", can_approve_pull_request_reviews: true })
+              await show(terminal, testInfo, await terminal.row(/default_workflow_permissions/), "Workflows can write and open pull requests")
+            },
+          )
+
+          await step(
+            "OpenEngine merges its pull requests by squashing them into one commit. Allow that, and make the commit's title the pull request's title, which is what the releases are built from.\n\n" +
+              "```sh\ngh api -X PATCH repos/<your-account>/" + BENCH_REPO + " -F allow_squash_merge=true \\\n  -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY \\\n  --jq '{allow_squash_merge, squash_merge_commit_title}'\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(
+                `gh api -X PATCH ${api} -F allow_squash_merge=true -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY --jq '{allow_squash_merge, squash_merge_commit_title}'`,
+              )
+              const settings = JSON.parse(await gh("api", api)) as { allow_squash_merge: boolean; squash_merge_commit_title: string }
+              expect(settings, "squash merging is allowed, titled by the pull request").toMatchObject({ allow_squash_merge: true, squash_merge_commit_title: "PR_TITLE" })
+              await show(terminal, testInfo, await terminal.row(/allow_squash_merge/), "Squash merging is on")
+            },
+          )
+
+          await step(
             "OpenEngine works from GitHub issues. To give it something to build, this guide uses an example: a small calculator app, written as a milestone called Calculator with an issue for each piece of it. Each issue depends on the one before, in its text and as a link GitHub shows as blocked by, so OpenEngine takes them in order. With your own project you would use your own issues. List the example ones with:\n\n" +
               "```sh\ngh issue list --repo <your-account>/" + BENCH_REPO + " --milestone " + milestone.title + "\n```",
             async () => {
