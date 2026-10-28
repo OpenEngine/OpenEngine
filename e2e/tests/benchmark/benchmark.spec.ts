@@ -96,7 +96,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             await terminal.run("chmod 600 ~/.config/openengine/.env")
             await terminal.run(`printf 'ENGINE_SERVICE_TOKEN=%s\\n' "$ENGINE_SERVICE_TOKEN" >> ~/.config/openengine/.env`)
             await terminal.run("ls -l ~/.config/openengine/.env")
-            await show(terminal, testInfo, await terminal.row(/-rw-------/), "Only you can read the token file")
+            await show("benchmark__terminal--token-permissions.png", terminal, testInfo, await terminal.row(/-rw-------/), "Only you can read the token file")
           },
         )
 
