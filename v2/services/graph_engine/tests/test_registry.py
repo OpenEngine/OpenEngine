@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 import yaml
 
 from openengine.contracts.validate import load_contract, validate_message
@@ -17,7 +19,7 @@ from openengine.messaging import ErrorCode, LocalOperator, Request, Server, Serv
 from openengine.persistence import DatabaseConfig
 
 from graph_engine.persistence import PERSISTENCE, sqlite
-from graph_engine.registry import Registry
+from graph_engine.registry import Registry, canonical
 
 APPLY = "oe.v1.ge.control.graphs.apply"
 LIST = "oe.v1.ge.query.graphs.list"
@@ -391,3 +393,46 @@ def test_every_project_scoped_request_is_authorized_for_its_project(send) -> Non
     assert send(LIST, {"params": {}})["error"]["code"] == "PERMISSION_DENIED"
     assert _get(send, allowed["resource_id"], {})["result"]["graph"]["project"] == "alpha"
     assert _operation(send, allowed)["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("authorizer", [ProjectsOnly("alpha")])
+def test_a_refused_command_neither_reads_nor_keeps_a_receipt(send, authorizer: ProjectsOnly) -> None:
+    accepted = send(APPLY, _apply("cmd_1", {"project": "alpha", "graph": GRAPH}))
+    refused = send(APPLY, _apply("cmd_2", {"project": "beta", "graph": GRAPH}))
+    assert refused["error"]["code"] == "PERMISSION_DENIED"
+
+    authorizer.allowed = ("beta",)
+    # Once alpha is revoked, its receipt is neither replayed nor revealed by a changed retry.
+    for graph in (GRAPH, _changed("Changed.")):
+        retried = send(APPLY, _apply("cmd_1", {"project": "alpha", "graph": graph}))
+        assert retried["error"]["code"] == "PERMISSION_DENIED"
+        assert accepted["operation_id"] not in json.dumps(retried)
+    # The refusal held nothing back, so the authorized retry is accepted.
+    assert send(APPLY, _apply("cmd_2", {"project": "beta", "graph": GRAPH}))["status"] == "accepted"
+
+
+def test_a_receipt_kept_before_projects_still_replays(tmp_path: Path) -> None:
+    config = DatabaseConfig(sqlite_directory=tmp_path)
+    PERSISTENCE.upgrade(config, "4925ef9f3b79")
+    command = _apply("cmd_old", {"graph": GRAPH})
+    # How revision 4925ef9f3b79's registry fingerprinted a command.
+    fingerprint = hashlib.sha256(canonical({
+        "subject": APPLY, **{key: command.get(key) for key in ("payload", "expected_version", "causal_path")},
+    }).encode()).hexdigest()
+    response = {"command_id": "cmd_old", "status": "accepted", "operation_id": "op_1"}
+    with PERSISTENCE.database(config).migration_engine().begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO command_receipts VALUES ('cmd_old', :subject, :fingerprint, :response, '2026-10-27 00:00:00.000000')"
+        ), {"subject": APPLY, "fingerprint": fingerprint, "response": json.dumps(response)})
+    PERSISTENCE.upgrade(config)
+
+    store = PERSISTENCE.open(config)
+    registry = Registry(store)
+    server = Server(None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands())
+    loop = asyncio.new_event_loop()
+    try:
+        retried = loop.run_until_complete(server.handle(APPLY, json.dumps(command).encode()))
+        assert json.loads(retried) == response
+    finally:
+        loop.run_until_complete(store.close())
+        loop.close()

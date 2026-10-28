@@ -12,7 +12,8 @@ refused with UNSUPPORTED_CAPABILITY until GE can load them.
 
 Every command gets a receipt: its acceptance, recorded in the same transaction
 as the revision and operation, or its rejection, unless the rejection was
-retryable. That includes a command breaking its schema, so the handler checks
+retryable or the actor may not act in its project, which is refused before
+any receipt is read. That includes a command breaking its schema, so the handler checks
 the command envelope and schema rather than the server, and one whose `deadline_at`
 has passed by the time the store would accept it, which is DEADLINE_EXCEEDED. A retry with the same command ID and the same subject, payload,
 `expected_version` and causal path gets that reply again; anything else with
@@ -77,12 +78,12 @@ def _project(body: dict[str, Any]) -> str:
 
 
 def _command(request: Request) -> Command:
-    body, project = request.body, _project(request.body)
+    # The receipt is keyed by the project, and the payload names it, so the fingerprint is the one
+    # receipts kept before projects existed have, and their retries still replay.
+    body = request.body
     repeated = {key: body.get(key) for key in ("payload", "expected_version", "causal_path")}
-    fingerprint = hashlib.sha256(
-        canonical({"project": project, "subject": request.subject, **repeated}).encode()
-    ).hexdigest()
-    return Command(project, body["command_id"], request.subject, fingerprint)
+    fingerprint = hashlib.sha256(canonical({"subject": request.subject, **repeated}).encode()).hexdigest()
+    return Command(_project(body), body["command_id"], request.subject, fingerprint)
 
 
 def _timestamp(when: datetime) -> str:
@@ -187,6 +188,8 @@ class Registry:
 
     async def apply(self, request: Request) -> dict[str, Any]:
         command = _command(request)
+        # Before any receipt is read or kept, so one actor's refusal neither reveals nor holds another's command.
+        self.authorizer.authorize_project(request, command.project)
         try:
             response = await self._apply(command, request)
         except CommandIdConflict as conflict:
@@ -203,7 +206,6 @@ class Registry:
         try:
             envelopes.check(envelopes.COMMAND, body)
             envelopes.check(APPLY, body)
-            self.authorizer.authorize_project(request, command.project)
         except ServiceError as error:
             return await self._reject(command, error)
         payload, expected_version = body["payload"], body.get("expected_version")

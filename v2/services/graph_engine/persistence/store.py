@@ -58,7 +58,7 @@ class Command:
     command_id: str
     subject: str
     fingerprint: str
-    """A digest of everything a retry must repeat: project, subject, payload, expected_version and causal_path."""
+    """A digest of everything a retry must repeat: subject, payload (which names any project), expected_version and causal_path."""
 
 
 @dataclass(frozen=True)
