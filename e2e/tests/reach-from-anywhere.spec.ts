@@ -57,13 +57,38 @@ chmod 600 ~/.config/openengine/.env
 printf 'ENGINE_SERVICE_TOKEN=%s\\n' "$(openssl rand -hex 32)" >> ~/.config/openengine/.env
 \`\`\`
 
-OpenEngine also only answers addresses it knows, so tell it the tunnel's. Open \`~/.config/openengine/engine.toml\` in a text editor and add this line at the top:
+The commands finish without printing the secret. Type \`ls -l ~/.config/openengine/.env\`: the line must start with \`-rw-------\`, meaning only you can read it.`,
+  )
+  await step(
+    `OpenEngine also only answers addresses it knows, so tell it the tunnel's. Open \`~/.config/openengine/engine.toml\` in a text editor and add this line at the top:
 
 \`\`\`toml
 public_url = "${address}"
 \`\`\`
 
-Then start OpenEngine again with \`oe daemon start\`. To see the token, so you can copy it to this computer, type \`grep ENGINE_SERVICE_TOKEN ~/.config/openengine/.env\`: it's everything after the \`=\`. Keep it secret, as you would a password. To open the web page at the https address, choose sign in and paste this same token. Closing the browser does not sign you out; use Sign out when you finish. If GitHub login is configured instead, sign in with GitHub.`,
+`,
+  )
+  await step(
+    `Start OpenEngine again with \`oe daemon start\`, then type \`oe daemon status\`. Look for \`health: ready\`; if it is missing, check the configuration line and start again.
+
+For commands on the Mac mini, load the token into each new terminal before using OpenEngine:
+
+\`\`\`sh
+set -a
+. ~/.config/openengine/.env
+set +a
+\`\`\`
+
+`,
+  )
+  await step(
+    `To copy the token to this computer, type \`grep ENGINE_SERVICE_TOKEN ~/.config/openengine/.env\`. The output has this shape (your secret will be different):
+
+\`\`\`text
+ENGINE_SERVICE_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+\`\`\`
+
+Copy everything after the \`=\`. Keep it secret, as you would a password. For browser access on either computer, open the tunnel’s https address shown above, including when you are sitting at the Mac mini. Then choose sign in and paste this same token. Closing the browser does not sign you out; use Sign out when you finish. If GitHub login is configured instead, sign in with GitHub.`,
     async () => {
       // The Mac mini as this step leaves it: a token of its own, and the tunnel's address as public_url.
       expect(computer.daemonEnv.ENGINE_SERVICE_TOKEN).toBe(computer.token)
@@ -168,25 +193,25 @@ test.describe(anotherComputerCategory, () => {
           )
 
           await step(
-            "On the Mac mini, install `cloudflared`, Cloudflare's tunnel program. With [Homebrew](https://brew.sh), type `brew install cloudflared`; for other ways, see [Cloudflare's downloads](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).",
+            "On the Mac mini, install `cloudflared`, Cloudflare's tunnel program. With [Homebrew](https://brew.sh), type `brew install cloudflared`; for other ways, see [Cloudflare's downloads](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). Run `cloudflared --version` afterwards: it should print `cloudflared version` followed by a version number.",
           )
 
           await step(
-            "Sign in to Cloudflare. Type `cloudflared tunnel login` and press Enter. A browser window opens: sign in, and choose the domain the Mac mini's address will be on.",
+            "Sign in to Cloudflare. Type `cloudflared tunnel login` and press Enter. A browser window opens: sign in, and choose the domain the Mac mini's address will be on. Return to the terminal and look for `You have successfully logged in`. If it does not appear, complete the browser sign-in before continuing.",
           )
 
           await step(
-            "Create a tunnel for OpenEngine. Type `cloudflared tunnel create openengine` and press Enter. A **tunnel** is a private way in from Cloudflare to the Mac mini, which the Mac mini opens itself.",
+            "Create a tunnel for OpenEngine. Type `cloudflared tunnel create openengine` and press Enter. A **tunnel** is a private way in from Cloudflare to the Mac mini, which the Mac mini opens itself. Look for `Created tunnel openengine with id` followed by a long identifier.",
           )
 
           await step(
-            `Give the tunnel its address. Type \`cloudflared tunnel route dns openengine ${GUIDE_ADDRESS.cloudflare}\` and press Enter, with your own domain in place of \`example.com\`.`,
+            `Give the tunnel its address. Type \`cloudflared tunnel route dns openengine ${GUIDE_ADDRESS.cloudflare}\` and press Enter, with your own domain in place of \`example.com\`. Look for \`Added CNAME\` followed by your hostname.`,
           )
 
           await protectTheMacMini("cloudflare", computer, engine)
 
           await step(
-            "Start the tunnel, sending what arrives to OpenEngine. Type `cloudflared tunnel run --url http://127.0.0.1:4364 openengine` and press Enter. Leave that terminal open: the tunnel works while it's running. To have it start by itself, see [Cloudflare's guide to running a tunnel as a service](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/local-management/as-a-service/).",
+            "Start the tunnel, sending what arrives to OpenEngine. Type `cloudflared tunnel run --url http://127.0.0.1:4364 openengine` and press Enter. Look for `Registered tunnel connection`, which means Cloudflare is connected. If it is missing, check your sign-in and tunnel name. Leave that terminal open: the tunnel works while it's running. To have it start by itself, see [Cloudflare's guide to running a tunnel as a service](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/local-management/as-a-service/).",
           )
 
           await addTheMacMini("cloudflare", { engine, terminal, computer, testInfo })
@@ -214,7 +239,7 @@ test.describe(anotherComputerCategory, () => {
           await protectTheMacMini("tailscale", computer, engine)
 
           await step(
-            `On the Mac mini, give OpenEngine an https address on your tailnet. Type \`tailscale serve --bg 4364\` and press Enter. Tailscale shows the address, such as \`https://${GUIDE_ADDRESS.tailscale}\`, and keeps serving it, even after a restart, until you type \`tailscale serve reset\`.`,
+            `On the Mac mini, give OpenEngine an https address on your tailnet. Type \`tailscale serve --bg 4364\` and press Enter. Look for \`Available within your tailnet\` and the address, such as \`https://${GUIDE_ADDRESS.tailscale}\`. Tailscale keeps serving it, even after a restart, until you type \`tailscale serve reset\`.`,
           )
 
           await addTheMacMini("tailscale", { engine, terminal, computer, testInfo })
