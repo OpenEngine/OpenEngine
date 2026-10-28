@@ -26,6 +26,7 @@ import path from "node:path"
 import { startEngine, startProxy, type Engine } from "./engine.ts"
 import { Terminal } from "./terminal.ts"
 import { recordTunnel } from "../support/tunnel-cleanup.ts"
+import { launchQuickTunnel } from "../support/quick-tunnel.ts"
 import { freePort } from "../support/freePort.ts"
 import { test as engineTest } from "./engine.ts"
 
@@ -121,7 +122,8 @@ export const test = engineTest.extend<{
       await use(undefined)
       return
     }
-    const mode = resolveTunnelMode()
+    const selected = resolveTunnelMode()
+    const mode = selected === tunnel ? selected : "local"
     const kind = tunnel
     const real = mode !== "local"
     if (real) testInfo.setTimeout(180_000)
@@ -144,13 +146,13 @@ export const test = engineTest.extend<{
         await other.stop()
         if (mode === "cloudflare") {
           tunnelTerminal = await Terminal.open(await context.newPage(), { env: { HOME: home }, cols: 160, rows: 60 })
-          await tunnelTerminal.type(`exec cloudflared tunnel --url http://127.0.0.1:${port}`)
-          const pid = await tunnelTerminal.page.evaluate(() => window.__term!.pid!)
-          forgetTunnel = recordTunnel({ pid })
-          await tunnelTerminal.press("Enter")
-          await tunnelTerminal.waitForText(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/, { timeout: 90_000 })
-          host = /https:\/\/([a-z0-9-]+\.trycloudflare\.com)/.exec(await tunnelTerminal.text())![1]!
-          await tunnelTerminal.waitForText(/Registered tunnel connection/, { timeout: 90_000 })
+          const opened = await launchQuickTunnel(tunnelTerminal, port, {
+            beforeLaunch: async () => {
+              const pid = await tunnelTerminal!.page.evaluate(() => window.__term!.pid!)
+              forgetTunnel = recordTunnel({ pid })
+            },
+          })
+          host = new URL(opened).hostname
         } else {
           // Do not overwrite a developer's existing Serve configuration.
           const config = JSON.parse(execFileSync("tailscale", ["serve", "status", "--json"], { encoding: "utf8" }))

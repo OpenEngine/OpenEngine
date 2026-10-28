@@ -384,6 +384,8 @@ class GitHubLogin:
     def _token_session(self, request: Request) -> bool:
         if self.configured:
             return False
+        if request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
+            return False
         session = self._token_sessions.get(request.cookies.get(_TOKEN_COOKIE, ""))
         token = self.service_token()
         return bool(session and session[1] > time.time() and valid_service_token(token)
