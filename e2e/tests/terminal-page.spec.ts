@@ -91,8 +91,9 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
       await page.locator("#terminal").click()
       await page.keyboard.type(`echo "${ids[0]} ${ids[1]} ${ids[0]} | ${time}"`)
       await page.keyboard.press("Enter")
-      await expect.poll(() => bufferText(page)).toContain(`${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
-      const row = page.locator(".xterm-rows > div").filter({ hasText: "|" }).last()
+      await expect.poll(() => bufferText(page)).toContain(`\n${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^g-[0-9a-f]+ run-/ }).last()
+      await expect(row).toBeVisible()
       const text = (await row.textContent())!.trim()
       await page.close()
       return text

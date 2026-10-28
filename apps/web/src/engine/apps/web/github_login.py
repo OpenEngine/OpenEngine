@@ -639,7 +639,10 @@ class _SessionAuthMiddleware:
             if not forwarded and not self.login.public_url:
                 await self.app(scope, receive, send)
                 return
-        if self.login._token_session(request) or self.login._has_service_token(request) or self.login._has_onboarding_token(request):
+        if self.login._token_session(request):
+            await self._serve(request, scope, receive, send, token_session=True)
+            return
+        if self.login._has_service_token(request) or self.login._has_onboarding_token(request):
             await self.app(scope, receive, send)
             return
         user = self.login._read_session(request)
@@ -661,7 +664,9 @@ class _SessionAuthMiddleware:
             )
         await response(scope, receive, send)
 
-    async def _serve(self, request: Request, scope: Scope, receive: Receive, send: Send) -> None:
+    async def _serve(
+        self, request: Request, scope: Scope, receive: Receive, send: Send, *, token_session: bool = False,
+    ) -> None:
         """Run the app, ending its response if access ends while it streams."""
         started = finished = revoked = False
         error: Exception | None = None
@@ -688,10 +693,13 @@ class _SessionAuthMiddleware:
             while True:
                 await anyio.sleep(_STREAM_RECHECK)
                 user = self.login._read_session(request)
+                authenticated = (
+                    self.login._token_session(request) if token_session
+                    else user is not None and await self.login.has_access(user)
+                )
                 still_visible = scope.get(STREAM_ACCESS)
                 if (
-                    user is None
-                    or not await self.login.has_access(user)
+                    not authenticated
                     or (still_visible is not None and not await still_visible())
                 ):
                     revoked = True
