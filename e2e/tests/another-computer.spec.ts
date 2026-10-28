@@ -69,7 +69,7 @@ test.describe(anotherComputerCategory, () => {
 
 This guide shows how to tell OpenEngine about another computer, check you can reach it, and choose which computer your \`engine\` commands go to. You'll need OpenEngine already running on the other computer, and an address that reaches it from this one. Here, it's \`https://${MAC_MINI}\`.
 
-OpenEngine on the other computer only answers programs on that computer itself, so it needs a safe way in from this one, such as a private network between your computers ([Tailscale](https://tailscale.com/kb/1017/install) is one) or an SSH tunnel. If someone else set up the Mac mini, ask them for the address that reaches it from here.`,
+OpenEngine on the other computer only answers programs on that computer itself, so it needs a safe way in from this one, such as a private network between your computers ([Tailscale](https://tailscale.com/kb/1017/install) is one) or an SSH tunnel. If the Mac mini isn't on the same network as this computer, see [Reach Your OpenEngine From Anywhere](./test2doc-reach-your-openengine-from-anywhere.mdx) to give it a safe https address first. If someone else set up the Mac mini, ask them for the address that reaches it from here.`,
         )
 
         await step(
