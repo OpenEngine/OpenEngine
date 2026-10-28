@@ -9,7 +9,7 @@ slug: /guides/graphs/run-your-graph-and-watch-it-work
 ## Start your graph and watch it
 
 
-The `engine` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order.
+The `oe` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order.
 
 In [Save Your First Graph](./test2doc-save-your-first-graph.mdx) you saved a graph. Now you'll use it. Each time a graph is carried out, from its first step to its last, is called a **run**. While a run goes on, your terminal shows which step it's on and what the agent is saying, so you can see the work happen instead of waiting in the dark. You can also answer an agent that stops to ask you something, walk away and come back, or stop a run you no longer want.
 
@@ -59,7 +59,7 @@ Keep watching until the run ends. When the last step is done, every mark turns t
 If an agent asks to run a command, read the question. To allow it, type `y` and press Enter. Answer any further questions the same way when you want to allow the requested action. Once the work is done, the run ends on its own.
 
 ![screenshot](./test2doc-70bad05b1769.png)
-![screenshot](./test2doc-713a96b6b400.png)
+![screenshot](./test2doc-1c5448e3d1e2.png)
 
 To see your runs afterwards, type `oe runs list` and press Enter.
 
@@ -83,7 +83,7 @@ Type `y` and press Enter to let it, or `n` to say no. If you say no, the command
 
 The run picks up where it was and goes on to the end, as before.
 
-![screenshot](./test2doc-3d62b77865da.png)
+![screenshot](./test2doc-1c5889eee08b.png)
 
 ## Step away and come back
 
@@ -125,13 +125,13 @@ If you started the wrong graph, or no longer need what it's doing, you can stop 
 
 Read the question. Type y and press Enter to let the agent read README.md before you stop its work.
 
-![screenshot](./test2doc-75472a2577da.png)
+![screenshot](./test2doc-2a97576872da.png)
 
 While it's running, press Ctrl-C. When the screen asks what you want, type `c` and press Enter.
 
 OpenEngine stops the agent and ends the run. Below the last view of its progress, a summary shows the run ID and *cancelled*.
 
-![screenshot](./test2doc-a42b06942937.png)
+![screenshot](./test2doc-4c36bb77ded6.png)
 
 Type `oe runs list` and press Enter. Your run is there with the status *cancelled*. A cancelled run can't be picked up again; to do the work after all, start the graph again.
 
