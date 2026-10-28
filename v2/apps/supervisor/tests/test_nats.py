@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import socket
 import tarfile
 from pathlib import Path
 
@@ -74,3 +75,55 @@ def test_pins_every_supported_platform() -> None:
 def test_packages_the_infra_nats_configuration() -> None:
     infra = Path(__file__).parents[3] / "infra" / "nats" / "nats-server.conf"
     assert nats.nats_config().read_text() == infra.read_text()
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_refuses_a_port_another_process_listens_on() -> None:
+    with socket.create_server(("127.0.0.1", 0)) as taken:
+        port = taken.getsockname()[1]
+
+        with pytest.raises(nats.PortInUse, match=rf"127\.0\.0\.1:{port} \(the NATS client port\) is already in use"):
+            nats.ensure_ports_free("127.0.0.1", port=port, monitor_port=_free_port())
+        with pytest.raises(nats.PortInUse, match=rf"127\.0\.0\.1:{port} \(the NATS monitoring port\)"):
+            nats.ensure_ports_free("127.0.0.1", port=_free_port(), monitor_port=port)
+
+
+def test_counts_a_stopped_servers_lingering_connections_as_free() -> None:
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        port = server.getsockname()[1]
+        with socket.create_connection(("127.0.0.1", port)) as client:
+            accepted, _ = server.accept()
+            # The server closes first, so its side of the connection lingers in TIME_WAIT, as a
+            # stopped nats-server's client connections do when `oe up` follows `oe down`.
+            accepted.close()
+            client.recv(1)
+
+    nats.ensure_ports_free("127.0.0.1", port=port, monitor_port=port)
+
+
+def test_names_the_ports_file_after_the_binary_and_pid(tmp_path: Path) -> None:
+    binary = tmp_path / "bin" / "nats-server"
+
+    assert nats.ports_file(tmp_path, binary, 42) == tmp_path / "nats-server_42.ports"
+    command = nats.server_command(binary, host="127.0.0.1", port=1, monitor_port=2, store=tmp_path, ports=tmp_path)
+    assert command[-2:] == ["--ports_file_dir", str(tmp_path)]
+    assert "--ports_file_dir" not in nats.server_command(binary, host="127.0.0.1", port=1, monitor_port=2, store=tmp_path)
+
+
+def test_removes_only_the_binarys_stale_ports_files(tmp_path: Path) -> None:
+    stale = tmp_path / "nats-server_42.ports"
+    stale.write_text("{}")
+    other = tmp_path / "other_42.ports"
+    other.write_text("{}")
+    (tmp_path / "ge.ready").write_text("http://127.0.0.1:1/healthz")
+
+    nats.remove_stale_ports_files(tmp_path, tmp_path / "nats-server")
+
+    assert not stale.exists()
+    assert other.exists()
+    assert (tmp_path / "ge.ready").exists()

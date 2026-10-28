@@ -104,7 +104,7 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     assert oe("status").returncode == 1
 
 
-def test_up_reports_why_nats_could_not_start(oe) -> None:
+def test_up_reports_a_port_another_process_holds(oe) -> None:
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
         taken.listen()
@@ -113,8 +113,25 @@ def test_up_reports_why_nats_could_not_start(oe) -> None:
         up = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(_free_port()))
 
     assert up.returncode == 1
-    assert "nats-server exited with status" in up.stderr
+    assert f"oe up: 127.0.0.1:{port} (the NATS client port) is already in use" in up.stderr
     assert oe("status").returncode == 1
+
+
+def test_up_refuses_the_ports_of_another_openengine(oe, tmp_path: Path) -> None:
+    """A second OpenEngine, under another state directory, must not report ready on the first one's NATS."""
+    port, monitor_port = _free_port(), _free_port()
+    assert oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port)).returncode == 0
+    other = {"XDG_STATE_HOME": str(tmp_path / "other")}
+
+    try:
+        again = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port), env=other)
+    finally:
+        oe("down", env=other)
+
+    assert again.returncode == 1
+    assert f"127.0.0.1:{port} (the NATS client port) is already in use, perhaps by another OpenEngine" in again.stderr
+    assert oe("status", env=other).returncode == 1
+    assert oe("status").returncode == 0
 
 
 def test_migrate_creates_the_databases_and_streams_once_and_updates_drifted_ones(oe, tmp_path: Path) -> None:

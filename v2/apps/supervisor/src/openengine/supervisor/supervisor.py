@@ -1,9 +1,12 @@
 """Start OpenEngine V2's local processes, wait for them, and keep them running.
 
-NATS first, then the services, which are stopped before it. A service with
-a readiness check (only ge so far) names its health URL in a ready file; the
-supervisor is READY only once that URL answers 200. If it never does, the
-supervisor writes FAILED with the reason and stops everything.
+NATS first, then the services, which are stopped before it. NATS is ready once
+it has recorded the ports it bound in its ports file, so that a stranger's
+nats-server on the same ports cannot answer the health check for it, and its
+health URL answers 200. A service with a readiness check (only ge so far) names
+its health URL in a ready file; the supervisor is READY only once that URL
+answers 200. If it never does, the supervisor writes FAILED with the reason and
+stops everything.
 """
 
 from __future__ import annotations
@@ -69,17 +72,27 @@ def run(settings: Settings) -> int:
     children: dict[str, subprocess.Popen] = {}
     processes: list[ProcessState] = []
     try:
+        nats.ensure_ports_free(settings.host, port=settings.nats_port, monitor_port=settings.nats_monitor_port)
         binary = settings.nats_server or nats.install_nats_server(settings.cache_directory)
         store = settings.state_directory / "nats"
         store.mkdir(parents=True, exist_ok=True)
+        nats.remove_stale_ports_files(settings.state_directory, binary)
         command = nats.server_command(
             binary,
             host=settings.host,
             port=settings.nats_port,
             monitor_port=settings.nats_monitor_port,
             store=store,
+            ports=settings.state_directory,
         )
         children["nats"] = nats.start(command, sys.stdout.buffer)
+        wait_for_ready_file(
+            "nats-server",
+            children["nats"],
+            nats.ports_file(settings.state_directory, binary, children["nats"].pid),
+            timeout=READY_TIMEOUT_SECONDS,
+            cancelled=shutdown.requested,
+        )
         wait_until_healthy(
             "nats-server",
             children["nats"],

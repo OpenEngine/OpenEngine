@@ -7,10 +7,12 @@ and caches the extracted binary per version. Later starts use the cache.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import os
 import platform
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -55,6 +57,14 @@ class ChecksumMismatch(NatsError):
 class MissingBinary(NatsError):
     def __init__(self, url: str, member: str) -> None:
         super().__init__(f"{url} does not contain {member}")
+
+
+class PortInUse(NatsError):
+    def __init__(self, host: str, port: int, role: str) -> None:
+        super().__init__(
+            f"{host}:{port} (the {role}) is already in use, perhaps by another OpenEngine; stop it with `oe down`"
+            " or choose other ports with `oe up --nats-port` and `--nats-monitor-port`"
+        )
 
 
 def current_platform() -> tuple[str, str]:
@@ -110,8 +120,38 @@ def nats_config() -> Path:
         return path
 
 
-def server_command(binary: Path, *, host: str, port: int, monitor_port: int, store: Path) -> list[str]:
-    return [
+def ensure_ports_free(host: str, *, port: int, monitor_port: int) -> None:
+    """Raise PortInUse rather than start a nats-server that cannot bind `port` or `monitor_port`.
+
+    nats-server exits when a port is taken, but a stranger's nats-server on the
+    monitoring port answers the health check in its place. The probe binds as
+    nats-server does, with SO_REUSEADDR, so connections a stopped server left in
+    TIME_WAIT do not count as in use.
+    """
+    for role, number in (("NATS client port", port), ("NATS monitoring port", monitor_port)):
+        try:
+            socket.create_server((host, number)).close()
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE:
+                raise
+            raise PortInUse(host, number, role) from None
+
+
+def ports_file(directory: Path, binary: Path, pid: int) -> Path:
+    """Where a nats-server from `binary`, given `--ports_file_dir directory`, records its addresses once it listens."""
+    return directory / f"{binary.name}_{pid}.ports"
+
+
+def remove_stale_ports_files(directory: Path, binary: Path) -> None:
+    """Drop ports files a killed nats-server left behind, so none can pass for a new server's."""
+    for stale in directory.glob(f"{binary.name}_*.ports"):
+        stale.unlink(missing_ok=True)
+
+
+def server_command(
+    binary: Path, *, host: str, port: int, monitor_port: int, store: Path, ports: Path | None = None
+) -> list[str]:
+    command = [
         str(binary),
         "--config", str(nats_config()),
         "--addr", host,
@@ -119,6 +159,9 @@ def server_command(binary: Path, *, host: str, port: int, monitor_port: int, sto
         "--http_port", str(monitor_port),
         "--store_dir", str(store),
     ]
+    if ports is not None:
+        command += ["--ports_file_dir", str(ports)]
+    return command
 
 
 def start(command: list[str], log: IO[bytes]) -> subprocess.Popen:

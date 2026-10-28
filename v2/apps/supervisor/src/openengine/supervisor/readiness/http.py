@@ -1,4 +1,4 @@
-"""Wait for a started process to report itself healthy over HTTP, at the URL it names in its ready file."""
+"""Wait for a started process to write its ready file, and to report itself healthy over HTTP."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def wait_for_ready_file(
     timeout: float,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> str:
-    """The health URL a process writes to `path` once it serves; raise as `wait_until_healthy` does."""
+    """The text a process writes to `path` once it serves, such as its health URL; raise as `wait_until_healthy` does."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cancelled():
