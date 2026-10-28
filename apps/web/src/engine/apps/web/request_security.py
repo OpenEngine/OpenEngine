@@ -107,6 +107,11 @@ class TrustedDaemonHostMiddleware:
             content_type = (
                 request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             )
+            if (scope["path"] == "/api/auth/token/login"
+                    and content_type == "application/x-www-form-urlencoded"):
+                # The native sign-in form also checks an exact, mandatory Origin.
+                await self.app(scope, receive, send)
+                return
             if not content_type:
                 # Inspect the ASGI body rather than trusting Content-Length:
                 # streamed requests may omit it, while bodyless mutations are valid.

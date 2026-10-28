@@ -127,6 +127,8 @@ def web_app():
 
     Session dependencies are keyword overrides; remaining options go directly
     to create_app. Each call gets a fresh in-memory store unless supplied.
+    browser_token opts public, non-GitHub integration apps into an operator
+    token; client factories sign in through the public endpoint for these apps.
     """
     from engine.adapters.state_store.memory import InMemoryStateStore
     from engine.apps.web import api
@@ -142,6 +144,7 @@ def web_app():
         workspaces=None,
         communications=None,
         workspace_repository=None,
+        browser_token=False,
         **overrides,
     ):
         if session is None:
@@ -168,10 +171,16 @@ def web_app():
             )
         if runners is None:
             runners = session.runners
+        browser_auth = browser_token and overrides.get("public_url") and not overrides.get("github_login_config")
+        token = "test-browser-operator-token-" + "x" * 32
+        if browser_auth:
+            overrides.setdefault("service_token", lambda: token)
         app = api.create_app(session, runners, *args, **overrides)
         inner = app
         while not hasattr(inner, "state"):
             inner = inner.app
+        if browser_auth:
+            inner.state.test_browser_auth = (overrides["public_url"], token)
         if inner.state.run_reader.store is None:
             from engine.graph_runtime_langgraph.store import InMemoryGraphRuntimeStore
             inner.state.run_reader.store = InMemoryGraphRuntimeStore()
@@ -189,7 +198,16 @@ def client(web_app):
 
     def build(app=None, **options):
         options.setdefault("base_url", "http://localhost")
-        return TestClient(app if app is not None else web_app(), **options)
+        app = app if app is not None else web_app()
+        browser = TestClient(app, **options)
+        auth = getattr(getattr(app, "state", None), "test_browser_auth", None)
+        if auth:
+            response = browser.post("/api/auth/token/login", data={"token": auth[1]},
+                                    headers={"Origin": auth[0]}, follow_redirects=False)
+            assert response.status_code == 303, response.text
+            # ASGI tests use HTTP localhost even when the deployment uses HTTPS.
+            browser.headers["Cookie"] = f"engine_token_session={response.cookies['engine_token_session']}"
+        return browser
 
     return build
 
@@ -199,10 +217,23 @@ def async_client():
     """Async ASGI clients; the caller controls lifespan and async cleanup."""
     import httpx
 
+    class BrowserClient(httpx.AsyncClient):
+        async def __aenter__(self):
+            await super().__aenter__()
+            if self.browser_auth:
+                origin, token = self.browser_auth
+                response = await self.post("/api/auth/token/login", data={"token": token},
+                                           headers={"Origin": origin}, follow_redirects=False)
+                assert response.status_code == 303, response.text
+                self.headers["Cookie"] = f"engine_token_session={response.cookies['engine_token_session']}"
+            return self
+
     def build(app, *, base_url="http://localhost", **options):
-        return httpx.AsyncClient(
+        browser = BrowserClient(
             transport=httpx.ASGITransport(app=app), base_url=base_url, **options
         )
+        browser.browser_auth = getattr(getattr(app, "state", None), "test_browser_auth", None)
+        return browser
 
     return build
 
@@ -272,6 +303,7 @@ def slack_app(web_app):
                 slack_credential_store=slack_store,
                 github_login_config=github_login_config,
                 public_url="https://engine.example",
+                browser_token=True,
                 work_orders=work_orders,
                 repos=repos,
                 credential_store=MagicMock(),
@@ -336,6 +368,7 @@ def workflow_app(web_app):
     ):
         """Wire the app the way the composition root does."""
         app = web_app(
+            browser_token=True,
             state_store=store,
             runner=runner,
             runners=dict(runners or {"test": runner}),
@@ -376,6 +409,7 @@ def github_auth_app(web_app, sqlite_store, tmp_path):
             github_client_id=client_id,
             github_login_config=login_config,
             public_url="https://engine.test",
+            browser_token=True,
             source_control_preferences=SourceControlPreferences(
                 tmp_path / "settings.json"
             ),

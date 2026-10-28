@@ -8,14 +8,14 @@ test.use({ terminalSession: { cols: 100, rows: 46 } })
 test.describe(gettingStartedCategory, () => {
   test.describe(
     withDocMeta("Getting Help", {
-      description: "How to see everything the engine command can do, and get help with any part of it.",
+      description: "How to see everything the oe command can do, and get help with any part of it.",
       sidebar_position: 2,
       slug: "/guides/getting-started/getting-help",
     }),
     () => {
       test("See what you can do", async ({ terminal }, testInfo) => {
         await test.step(
-          `Every OpenEngine command starts with \`engine\`. To see all of them, type \`oe --help\` and press Enter.
+          `Every OpenEngine command starts with \`oe\`. To see all of them, type \`oe --help\` and press Enter.
 
 You'll see a list of commands, each with a short note on what it does.`,
           async () => {
