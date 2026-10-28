@@ -1613,7 +1613,13 @@ select:disabled { cursor: default; }
   .rail-item { border: 1px solid var(--night-rule); }
   .rail-scroll > .rail-group:last-child { border-bottom: 0; }
   .panel-head { grid-template-columns: minmax(0, 1fr); }
-  .panel-head-graph { gap: 12px; padding-block: 12px; }
+  .panel-head-graph {
+    gap: 12px;
+    padding-block: 12px;
+    /* Expanded controls must leave room for the conversation and composer. */
+    max-height: 25vh;
+    overflow-y: auto;
+  }
   .graph-header-mobile { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .graph-header-mobile .btn { min-height: 44px; flex-shrink: 0; }
   .graph-header-details[data-expanded="false"] { display: none; }
