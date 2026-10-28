@@ -909,19 +909,38 @@ def command_stop(_arguments: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def command_restart(_arguments: argparse.Namespace) -> int:
+def command_restart(arguments: argparse.Namespace) -> int:
     try:
         stop_service()
-        _state, body, url = start_service()
     except (OSError, RuntimeError, ValueError) as error:
         return _fail(error)
-    print(f"OpenEngine {(body or {}).get('version', 'unknown')} is running at {url}")
-    return EXIT_OK
+    return command_start(arguments)
 
 
 # Published alongside the release archive; see docs/releases.md. Rerunning it
 # is safe: an already-installed version is reused, and config/state are not touched.
 INSTALLER_URL = "https://openengine.cc/install.sh"
+
+
+@contextmanager
+def _update_lock() -> Iterator[None]:
+    """One update at a time for this user, failing fast rather than queuing.
+
+    A separate lock from `instance_lock`: the installer's own `oe daemon
+    setup` takes that one, and it runs as a child while this lock is held.
+    """
+    import fcntl
+
+    prepare_directories()
+    with open(state_directory() / "update.lock", "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise RuntimeError("an update is already running") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def command_update(_arguments: argparse.Namespace) -> int:
@@ -932,12 +951,16 @@ def command_update(_arguments: argparse.Namespace) -> int:
     sh = shutil.which("sh")
     if curl is None or sh is None:
         return _fail(RuntimeError("curl and sh are required to update"))
-    fetch = subprocess.Popen([curl, "-LsSf", INSTALLER_URL], stdout=subprocess.PIPE)
-    assert fetch.stdout is not None
-    install = subprocess.run([sh], stdin=fetch.stdout, check=False)
-    fetch.stdout.close()
-    if fetch.wait() != 0 or install.returncode != 0:
-        return _fail(RuntimeError("the installer failed; see its output"))
+    try:
+        with _update_lock():
+            fetch = subprocess.Popen([curl, "-LsSf", INSTALLER_URL], stdout=subprocess.PIPE)
+            assert fetch.stdout is not None
+            install = subprocess.run([sh], stdin=fetch.stdout, check=False)
+            fetch.stdout.close()
+            if fetch.wait() != 0 or install.returncode != 0:
+                return _fail(RuntimeError("the installer failed; see its output"))
+    except RuntimeError as error:
+        return _fail(error)
     return EXIT_OK
 
 

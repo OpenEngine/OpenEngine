@@ -1191,32 +1191,75 @@ def _engine_executable() -> str | None:
     return shutil.which("engine")
 
 
-async def _daemon_command(is_local_request: bool, *args: str, status: str) -> JSONResponse:
-    # Restarting or updating stops this very process from outside, so it is
-    # held to the same origin check as other endpoints that change state.
-    if not is_local_request:
-        return _error("forbidden", 403)
+_daemon_command_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _log_daemon_command(process: asyncio.subprocess.Process, label: str) -> None:
+    """Report what the detached command did, so a failed update is not silent.
+
+    Lost once this very process is the one the command restarts: its output
+    up to that point has already reached the log, same as any other crash.
+    """
+    output, _ = await process.communicate()
+    text = output.decode(errors="replace").strip()
+    if process.returncode == 0:
+        log.info("%s: %s", label, text or "ok")
+    else:
+        log.error("%s failed (exit %s): %s", label, process.returncode, text)
+
+
+def _detached_command(*args: str) -> tuple[str, ...]:
+    """`args`, moved to its own systemd scope when this process is one systemd manages.
+
+    A child inherits its parent's cgroup even with start_new_session=True, so
+    systemd's default KillMode=control-group kills it too when this process's
+    unit is stopped -- including the restart or update this handler spawns.
+    systemd sets INVOCATION_ID only for units it manages; anything else
+    (launchd, a bare process, a developer's shell) has no such unit to escape.
+    """
+    if os.environ.get("INVOCATION_ID") and shutil.which("systemd-run"):
+        return ("systemd-run", "--user", "--scope", "--quiet", "--", *args)
+    return args
+
+
+async def _daemon_command(*args: str, status: str) -> JSONResponse:
     executable = _engine_executable()
     if executable is None:
         return _error("the engine CLI is not installed alongside this service", 500)
     try:
         # Detached: the child outlives the response, and outlives this
         # process once the restart or update it runs reaches it.
-        await asyncio.create_subprocess_exec(
-            executable, "daemon", *args,
+        process = await asyncio.create_subprocess_exec(
+            *_detached_command(executable, "daemon", *args),
             stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,
         )
     except OSError as error:
         return _error(f"could not start {status}: {error}", 500)
+    task = asyncio.create_task(_log_daemon_command(process, f"daemon {' '.join(args)}"))
+    _daemon_command_tasks.add(task)
+    task.add_done_callback(_daemon_command_tasks.discard)
     return JSONResponse({"status": status})
 
 
-def _daemon_route(is_local_request: Callable[[Request], bool], *args: str, status: str) -> Callable[[Request], Awaitable[JSONResponse]]:
+def _daemon_route(
+    is_local_request: Callable[[Request], bool],
+    visible_repositories: Callable[[Request], Awaitable[frozenset[str] | None]],
+    *args: str,
+    status: str,
+) -> Callable[[Request], Awaitable[JSONResponse]]:
     async def handler(request: Request) -> JSONResponse:
-        return await _daemon_command(is_local_request(request), *args, status=status)
+        # Restarting or updating stops this very process from outside, so it
+        # is held to the same origin check as other endpoints that change
+        # state, and -- since it affects everyone's runs, not just this
+        # user's repositories -- to operators only, like the graph API.
+        if not is_local_request(request):
+            return _error("forbidden", 403)
+        if await visible_repositories(request) is not None:
+            return _error("daemon control is for operators", 403)
+        return await _daemon_command(*args, status=status)
     return handler
 
 
@@ -4379,8 +4422,13 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         readings = await _utilization.refresh(tuple(runners))
         return JSONResponse(utilization_json(readings))
 
-    daemon_restart = _daemon_route(_is_local_request, "restart", status="restarting")
-    daemon_update = _daemon_route(_is_local_request, "update", status="updating")
+    # `github_login` is defined further down, so looked up when called.
+    daemon_restart = _daemon_route(
+        _is_local_request, lambda request: github_login.visible_repositories(request), "restart", status="restarting",
+    )
+    daemon_update = _daemon_route(
+        _is_local_request, lambda request: github_login.visible_repositories(request), "update", status="updating",
+    )
 
     # Anyone who can push to one of the repositories this deployment works on
     # may sign in: the webhook repository and the configured checkouts. What

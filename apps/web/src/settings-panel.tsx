@@ -534,33 +534,49 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     }
   }, []);
 
-  const restartService = useCallback(async () => {
-    if (!window.confirm("Restart the OpenEngine daemon? Runs in progress will be interrupted.")) return;
-    setService({ phase: "restarting" });
-    try {
-      await restartDaemon();
-      setService({ phase: "idle" });
-    } catch (err) {
-      setService({
-        phase: "error",
-        message: err instanceof Error ? err.message : "Could not restart the daemon.",
-      });
-    }
-  }, []);
+  const runServiceAction = useCallback(
+    async (
+      phase: "restarting" | "updating",
+      confirmMessage: string,
+      action: () => Promise<{ status: string }>,
+      fallbackMessage: string,
+    ) => {
+      if (!window.confirm(confirmMessage)) return;
+      setService({ phase });
+      try {
+        await action();
+        setService({ phase: "idle" });
+      } catch (err) {
+        setService({
+          phase: "error",
+          message: err instanceof Error ? err.message : fallbackMessage,
+        });
+      }
+    },
+    [],
+  );
 
-  const updateService = useCallback(async () => {
-    if (!window.confirm("Download and install the latest OpenEngine release, then restart? Runs in progress will be interrupted.")) return;
-    setService({ phase: "updating" });
-    try {
-      await updateDaemon();
-      setService({ phase: "idle" });
-    } catch (err) {
-      setService({
-        phase: "error",
-        message: err instanceof Error ? err.message : "Could not update the daemon.",
-      });
-    }
-  }, []);
+  const restartService = useCallback(
+    () =>
+      runServiceAction(
+        "restarting",
+        "Restart the OpenEngine daemon? Runs in progress will be interrupted.",
+        restartDaemon,
+        "Could not restart the daemon.",
+      ),
+    [runServiceAction],
+  );
+
+  const updateService = useCallback(
+    () =>
+      runServiceAction(
+        "updating",
+        "Download and install the latest OpenEngine release, then restart? Runs in progress will be interrupted.",
+        updateDaemon,
+        "Could not update the daemon.",
+      ),
+    [runServiceAction],
+  );
 
   return (
     <div className="settings-panel">

@@ -661,7 +661,10 @@ def test_daemon_restart_spawns_the_installed_engine_executable(
 
     async def fake_exec(*args, **_kwargs):
         calls.append(args)
-        return MagicMock()
+        process = MagicMock()
+        process.communicate = AsyncMock(return_value=(b"", None))
+        process.returncode = 0
+        return process
 
     monkeypatch.setattr(web_api.asyncio, "create_subprocess_exec", fake_exec)
     app = workflow_app(WebStores(), ConcurrentRunner(), runners={"claude": ConcurrentRunner()})
@@ -724,6 +727,84 @@ def test_daemon_restart_fails_loudly_when_no_engine_executable_is_installed(
     response = asyncio.run(scenario())
 
     assert response.status_code == 500
+
+
+def test_daemon_restart_refuses_a_signed_in_user_who_is_not_an_operator(
+    async_client, monkeypatch, *, workflow_app
+) -> None:
+    """Restarting or updating stops the service for everyone, so it is not
+    enough to have write access to some repository -- unlike most endpoints,
+    this one is for operators only, same as the graph API."""
+    import engine.apps.web.api as web_api
+
+    called = False
+
+    async def fake_exec(*args, **_kwargs):
+        nonlocal called
+        called = True
+        return MagicMock()
+
+    monkeypatch.setattr(web_api.asyncio, "create_subprocess_exec", fake_exec)
+    app = workflow_app(
+        WebStores(), ConcurrentRunner(), runners={"claude": ConcurrentRunner()},
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback",
+        ),
+    )
+
+    async def scenario():
+        with patch.object(
+            GitHubLogin, "_read_session", return_value={"id": 7, "login": "bob"}
+        ), patch.object(
+            GitHubLogin, "writable_repositories", AsyncMock(return_value=frozenset({"acme/api"}))
+        ):
+            async with async_client(app, base_url="http://localhost") as client:
+                return await client.post("/api/daemon/restart")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 403
+    assert not called
+
+
+def test_daemon_restart_allows_an_operator(
+    async_client, tmp_path, monkeypatch, *, workflow_app
+) -> None:
+    import engine.apps.web.api as web_api
+
+    monkeypatch.setattr(web_api.sys, "executable", str(tmp_path / "bin" / "python"))
+    real_which = shutil.which
+    monkeypatch.setattr(web_api.shutil, "which", lambda name, **kw: "/opt/openengine/bin/engine" if name == "engine" else real_which(name, **kw))
+    called = False
+
+    async def fake_exec(*args, **_kwargs):
+        nonlocal called
+        called = True
+        process = MagicMock()
+        process.communicate = AsyncMock(return_value=(b"", None))
+        process.returncode = 0
+        return process
+
+    monkeypatch.setattr(web_api.asyncio, "create_subprocess_exec", fake_exec)
+    app = workflow_app(
+        WebStores(), ConcurrentRunner(), runners={"claude": ConcurrentRunner()},
+        github_login_config=GitHubLoginConfig(
+            "client", "secret", "https://engine.test/api/auth/github/callback",
+        ),
+        login_operators=(7,),
+    )
+
+    async def scenario():
+        with patch.object(
+            GitHubLogin, "_read_session", return_value={"id": 7, "login": "bob"}
+        ):
+            async with async_client(app, base_url="http://localhost") as client:
+                return await client.post("/api/daemon/restart")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert called
 
 
 def test_run_list_leaves_the_prose_to_the_run_it_names(

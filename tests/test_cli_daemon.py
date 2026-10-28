@@ -297,7 +297,9 @@ server.serve_forever()
 """
 
 
-def test_start_status_stop_lifecycle_with_a_detached_process(home: Path, monkeypatch, capsys):
+@pytest.fixture
+def detached_service(home: Path) -> int:
+    """Register a fake `engine-web`, listening on a free port, as the current process record."""
     with socket.socket() as free:
         free.bind(("127.0.0.1", 0))
         port = free.getsockname()[1]
@@ -310,6 +312,11 @@ def test_start_status_stop_lifecycle_with_a_detached_process(home: Path, monkeyp
     spec = daemon.ServiceSpec(str(program), str(config), port, str(daemon.log_path()), {})
     daemon.prepare_directories()
     daemon.write_record(daemon.Record("process", spec))
+    return port
+
+
+def test_start_status_stop_lifecycle_with_a_detached_process(detached_service: int, monkeypatch, capsys):
+    port = detached_service
 
     assert cli.main(["daemon", "status"]) == 1
     assert "health: down" in capsys.readouterr().out
@@ -342,19 +349,8 @@ def test_start_status_stop_lifecycle_with_a_detached_process(home: Path, monkeyp
     assert "health: down" in capsys.readouterr().out
 
 
-def test_restart_stops_and_starts_a_detached_process(home: Path, capsys):
-    with socket.socket() as free:
-        free.bind(("127.0.0.1", 0))
-        port = free.getsockname()[1]
-    program = home / f"fake-engine-web-{port}"
-    program.write_text(f"#!{sys.executable}\n{FAKE_SERVICE}")
-    program.chmod(0o755)
-    config = home / "config" / "openengine" / "engine.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text(f"[server]\nport = {port}\n")
-    spec = daemon.ServiceSpec(str(program), str(config), port, str(daemon.log_path()), {})
-    daemon.prepare_directories()
-    daemon.write_record(daemon.Record("process", spec))
+def test_restart_stops_and_starts_a_detached_process(detached_service: int, capsys):
+    port = detached_service
 
     assert cli.main(["daemon", "start"]) == 0
     capsys.readouterr()
@@ -369,19 +365,8 @@ def test_restart_stops_and_starts_a_detached_process(home: Path, capsys):
     assert not daemon.process_alive(pid)
 
 
-def test_restart_starts_the_service_when_it_was_not_running(home: Path, capsys):
-    with socket.socket() as free:
-        free.bind(("127.0.0.1", 0))
-        port = free.getsockname()[1]
-    program = home / f"fake-engine-web-{port}"
-    program.write_text(f"#!{sys.executable}\n{FAKE_SERVICE}")
-    program.chmod(0o755)
-    config = home / "config" / "openengine" / "engine.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text(f"[server]\nport = {port}\n")
-    spec = daemon.ServiceSpec(str(program), str(config), port, str(daemon.log_path()), {})
-    daemon.prepare_directories()
-    daemon.write_record(daemon.Record("process", spec))
+def test_restart_starts_the_service_when_it_was_not_running(detached_service: int, capsys):
+    port = detached_service
 
     assert cli.main(["daemon", "restart"]) == 0
     assert f"OpenEngine 9.9.9 is running at http://127.0.0.1:{port}" in capsys.readouterr().out
@@ -862,7 +847,7 @@ class _FakeStdout:
         pass
 
 
-def test_update_pipes_curl_into_sh(monkeypatch):
+def test_update_pipes_curl_into_sh(home: Path, monkeypatch):
     calls = []
 
     class FakePopen:
@@ -887,7 +872,20 @@ def test_update_pipes_curl_into_sh(monkeypatch):
     assert calls[1][0] == "run" and calls[1][1] == ["/usr/bin/sh"]
 
 
-def test_update_fails_loudly_when_the_installer_exits_nonzero(monkeypatch, capsys):
+def test_update_refuses_to_run_while_another_update_holds_the_lock(home: Path, monkeypatch, capsys):
+    monkeypatch.setattr(daemon.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        daemon.subprocess, "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not download twice")),
+    )
+
+    with daemon._update_lock():
+        assert cli.main(["daemon", "update"]) == 1
+
+    assert "already running" in capsys.readouterr().err
+
+
+def test_update_fails_loudly_when_the_installer_exits_nonzero(home: Path, monkeypatch, capsys):
     class FakePopen:
         def __init__(self, args, stdout=None):
             self.stdout = _FakeStdout()
