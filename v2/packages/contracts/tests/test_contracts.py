@@ -351,3 +351,14 @@ def test_bundled_documents_resolve_every_file_reference() -> None:
     for service in SERVICES:
         text = json.dumps(reference.self_contained(service))
         assert ".schema.json" not in text and "/examples/" not in text, service
+
+
+@pytest.mark.parametrize(
+    ("name", "graph"),
+    [
+        ("graphs.list.response.json", ("payload", "result", "items", 0, "project")),
+        ("graphs.get.response.json", ("payload", "result", "graph", "project")),
+    ],
+)
+def test_a_graph_snapshot_without_a_project_is_valid(name: str, graph: tuple[Any, ...]) -> None:
+    assert errors_for("graph_engine", mutated(example("graph_engine", name), drop(*graph))) == []

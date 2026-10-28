@@ -284,6 +284,76 @@ def test_list_pages_through_every_graph_until_next_cursor_is_null(ge_url: str) -
     asyncio.run(_session(ge_url, scenario))
 
 
+def test_project_scopes_names_so_the_same_name_is_two_graphs(ge_url: str) -> None:
+    async def scenario(connection) -> None:
+        client = Client(connection, timeout=5)
+        alpha = await client.command(APPLY, {"project": "alpha", "graph": _graph("project-same")})
+        beta = await client.command(APPLY, {"project": "beta", "graph": _graph("project-same", "Beta.")})
+        assert alpha["resource_id"] != beta["resource_id"]
+        assert (await _result(client, beta))["created"] is True
+        again = await client.command(APPLY, {"project": "alpha", "graph": _graph("project-same")})
+        assert await _result(client, again) == {"graph": {"graph_id": alpha["resource_id"], "revision": 1}, "created": False}
+
+        for project, reply, description in (("alpha", alpha, None), ("beta", beta, "Beta.")):
+            listed = await client.query(LIST, {"project": project, "name_prefix": "project-same"})
+            assert validate_message(load_contract("graph_engine"), "ListGraphsResponse", listed, in_reply_to=LIST) == []
+            assert [(graph["project"], graph["graph_id"]) for graph in listed["result"]["items"]] == [(project, reply["resource_id"])]
+            got = await client.query(f"oe.v1.ge.query.graphs.{reply['resource_id']}.get")
+            assert got["result"]["graph"]["project"] == project
+            assert json.loads(got["result"]["revision"]["source"]) == _graph("project-same", description)
+
+    asyncio.run(_session(ge_url, scenario))
+
+
+def test_project_scopes_command_id_dedup(ge_url: str) -> None:
+    async def scenario(connection) -> None:
+        client = Client(connection, timeout=5)
+        alpha = await client.command(APPLY, {"project": "alpha", "graph": _graph("project-dedup")}, command_id="cmd_project_dedup")
+        # The same command ID in another project is another command, not a conflict.
+        beta = await client.command(APPLY, {"project": "beta", "graph": _graph("project-dedup", "Other.")}, command_id="cmd_project_dedup")
+        assert beta["operation_id"] != alpha["operation_id"]
+        assert await client.command(
+            APPLY, {"project": "alpha", "graph": _graph("project-dedup")}, command_id="cmd_project_dedup") == alpha
+        with pytest.raises(ServiceError) as conflict:
+            await client.command(APPLY, {"project": "beta", "graph": _graph("project-dedup")}, command_id="cmd_project_dedup")
+        assert conflict.value.code == "COMMAND_ID_CONFLICT"
+        assert conflict.value.details["original_operation_id"] == beta["operation_id"]
+
+    asyncio.run(_session(ge_url, scenario))
+
+
+def test_project_binds_the_list_cursor(ge_url: str) -> None:
+    async def scenario(connection) -> None:
+        client = Client(connection, timeout=5)
+        for name in ("project-page-a", "project-page-b"):
+            await client.command(APPLY, {"project": "alpha", "graph": _graph(name)})
+        issued = (await client.query(LIST, {"project": "alpha", "name_prefix": "project-page", "limit": 1}))["result"]["next_cursor"]
+        rest = await client.query(LIST, {"project": "alpha", "name_prefix": "project-page", "cursor": issued})
+        assert [graph["name"] for graph in rest["result"]["items"]] == ["project-page-b"]
+        with pytest.raises(ServiceError) as changed:
+            await client.query(LIST, {"project": "beta", "name_prefix": "project-page", "cursor": issued})
+        assert (changed.value.code, changed.value.details) == ("INVALID_CURSOR", {"reason": "filters_changed"})
+
+    asyncio.run(_session(ge_url, scenario))
+
+
+def test_project_omitted_is_the_default_project(ge_url: str) -> None:
+    async def scenario(connection) -> None:
+        client = Client(connection, timeout=5)
+        unscoped = await client.command(APPLY, {"graph": _graph("project-default")})
+        named = await client.command(APPLY, {"project": "default", "graph": _graph("project-default")})
+        assert named["resource_id"] == unscoped["resource_id"]
+        assert (await _result(client, named))["created"] is False
+        for params in ({}, {"project": "default"}):
+            listed = await client.query(LIST, {**params, "name_prefix": "project-default"})
+            assert [(graph["project"], graph["graph_id"]) for graph in listed["result"]["items"]] == [
+                ("default", unscoped["resource_id"]),
+            ]
+        assert (await client.query(LIST, {"project": "alpha", "name_prefix": "project-default"}))["result"]["items"] == []
+
+    asyncio.run(_session(ge_url, scenario))
+
+
 async def _revisions(url: str, graph_id: str) -> list[dict]:
     """graphs.{graph_id}.get of revision 1 and of the latest, each checked against the contract."""
     async def scenario(connection) -> list[dict]:
@@ -304,9 +374,9 @@ def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
 
     created = oe("graph", "apply", str(EXAMPLE))
     graph_id = created.stdout.split("(graph ")[1].rstrip(")\n")
-    assert created.stdout == f"created implement-review revision 1 (graph {graph_id})\n", created.stderr
-    assert oe("graph", "apply", str(EXAMPLE)).stdout == f"unchanged implement-review revision 1 (graph {graph_id})\n"
-    assert oe("graph", "apply", str(changed)).stdout == f"updated implement-review revision 2 (graph {graph_id})\n"
+    assert created.stdout == f"created implement-review revision 1 in project default (graph {graph_id})\n", created.stderr
+    assert oe("graph", "apply", str(EXAMPLE)).stdout == f"unchanged implement-review revision 1 in project default (graph {graph_id})\n"
+    assert oe("graph", "apply", str(changed)).stdout == f"updated implement-review revision 2 in project default (graph {graph_id})\n"
     retried = asyncio.run(_session(f"nats://127.0.0.1:{port}", lambda connection: Client(connection).command(
         APPLY, {"graph": _graph("restarted")}, command_id="cmd_before_restart")))
     before = asyncio.run(_revisions(f"nats://127.0.0.1:{port}", graph_id))
@@ -327,5 +397,5 @@ def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
     assert json.loads(first["revision"]["source"]) == _graph("implement-review")
     assert json.loads(latest["revision"]["source"])["spec"]["description"] == "Changed."
     rows = [row.split() for row in oe("graph", "list").stdout.splitlines()[1:]]
-    assert [(row[0], row[2]) for row in rows] == [("implement-review", "2"), ("restarted", "1")]
-    assert rows[0][1] == graph_id
+    assert [(row[0], row[1], row[3]) for row in rows] == [("default", "implement-review", "2"), ("default", "restarted", "1")]
+    assert rows[0][2] == graph_id

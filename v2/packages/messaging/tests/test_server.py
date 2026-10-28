@@ -88,6 +88,17 @@ def test_local_operator_mode_allows_loopback_listeners(listener: str) -> None:
     LocalOperator().authorize(Request("oe.v1.ge.query.graphs.list", "query", "graphs.list", {"params": {}}, listener))
 
 
+def test_local_operator_mode_allows_every_project_on_loopback_only() -> None:
+    def request(listener: str) -> Request:
+        return Request("oe.v1.ge.query.graphs.list", "query", "graphs.list", {"params": {"project": "beta"}}, listener)
+
+    for project in ("default", "alpha", "beta"):
+        LocalOperator().authorize_project(request(LOOPBACK), project)
+    with pytest.raises(ServiceError) as denied:
+        LocalOperator().authorize_project(request("nats://10.0.0.5:4222"), "beta")
+    assert denied.value.code == "PERMISSION_DENIED"
+
+
 def test_an_unserved_subject_is_unsupported_capability() -> None:
     reply = _send("oe.v1.ge.query.jobs.list", {"params": {}})
 

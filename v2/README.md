@@ -16,7 +16,7 @@ uv sync             # install the workspace
 uv run oe up        # start the supervisor and NATS in the background (downloads nats-server on first run)
 uv run oe migrate   # bring every service's database to head and create the NATS streams
 uv run oe status    # what is running, and where (--json for scripts)
-uv run oe graph list # the graphs GE serves over NATS (--json for scripts)
+uv run oe graph list # the graphs GE serves over NATS (--project or OE_PROJECT; --json for scripts)
 uv run oe graph get NAME[@REVISION] # one revision of a graph and its source
 uv run oe logs -f   # follow the log, JSON lines shown in console form (--json for raw)
 uv run oe down      # stop everything `oe up` started

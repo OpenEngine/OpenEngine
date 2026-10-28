@@ -11,10 +11,11 @@
       ]
     },
     "list_graphs_params": {
-      "description": "Sorted by `name` ascending, then `graph_id`.",
+      "description": "One project's graphs, sorted by `name` ascending, then `graph_id`.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "project": { "$ref": "graph.schema.json#/$defs/project" },
         "name_prefix": { "type": "string", "minLength": 1, "maxLength": 64 },
         "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
         "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }

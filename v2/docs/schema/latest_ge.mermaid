@@ -1,5 +1,5 @@
 ---
-title: ge at 4925ef9f3b79 (green added, red removed, amber changed)
+title: ge at d75ffe6cc5ed (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -11,45 +11,44 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    command_receipts["command_receipts (ADDED)"] {
-        VARCHAR(128) command_id PK "ADDED; not null"
-        VARCHAR(255) subject "ADDED; not null"
-        VARCHAR(64) fingerprint "ADDED; not null"
-        JSON response "ADDED; not null"
-        DATETIME created_at "ADDED; not null"
+    command_receipts["command_receipts (CHANGED)"] {
+        VARCHAR(64) project PK "ADDED; not null"
+        VARCHAR(128) command_id PK "not null"
+        VARCHAR(255) subject "not null"
+        VARCHAR(64) fingerprint "not null"
+        JSON response "not null"
+        DATETIME created_at "not null"
     }
-    class command_receipts added
-    graph_revisions["graph_revisions (ADDED)"] {
-        VARCHAR(128) graph_id PK,FK "ADDED; not null"
-        INTEGER revision PK "ADDED; not null"
-        VARCHAR(16) format "ADDED; not null"
-        TEXT source "ADDED; not null"
-        VARCHAR(64) source_sha256 "ADDED; not null"
-        DATETIME created_at "ADDED; not null"
+    class command_receipts changed
+    graph_revisions["graph_revisions"] {
+        VARCHAR(128) graph_id PK,FK "not null"
+        INTEGER revision PK "not null"
+        VARCHAR(16) format "not null"
+        TEXT source "not null"
+        VARCHAR(64) source_sha256 "not null"
+        DATETIME created_at "not null"
     }
-    class graph_revisions added
     graphs ||--o{ graph_revisions : "graph_id"
     graphs["graphs (CHANGED)"] {
-        VARCHAR(128) graph_id PK "ADDED; not null"
-        VARCHAR(64) name UK "CHANGED; not null"
-        VARCHAR(2000) description "ADDED; nullable"
-        INTEGER latest_revision "ADDED; not null"
+        VARCHAR(128) graph_id PK "not null"
+        VARCHAR(64) name UK "not null"
+        VARCHAR(2000) description "nullable"
+        INTEGER latest_revision "not null"
         DATETIME created_at "not null"
-        DATETIME updated_at "ADDED; not null"
-        VARCHAR(36) id PK "REMOVED; not null"
-        INTEGER version UK "REMOVED; not null"
-        JSON definition "REMOVED; not null"
+        DATETIME updated_at "not null"
+        VARCHAR(64) project UK "ADDED; not null"
     }
     class graphs changed
-    operations["operations (ADDED)"] {
-        VARCHAR(128) operation_id PK "ADDED; not null"
-        VARCHAR(128) command_id UK "ADDED; not null"
-        VARCHAR(64) operation "ADDED; not null"
-        VARCHAR(16) status "ADDED; not null"
-        JSON resources "ADDED; not null"
-        JSON result "ADDED; nullable"
-        JSON error "ADDED; nullable"
-        DATETIME created_at "ADDED; not null"
-        DATETIME updated_at "ADDED; not null"
+    operations["operations (CHANGED)"] {
+        VARCHAR(128) operation_id PK "not null"
+        VARCHAR(128) command_id UK "not null"
+        VARCHAR(64) operation "not null"
+        VARCHAR(16) status "not null"
+        JSON resources "not null"
+        JSON result "nullable"
+        JSON error "nullable"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+        VARCHAR(64) project UK "ADDED; not null"
     }
-    class operations added
+    class operations changed
