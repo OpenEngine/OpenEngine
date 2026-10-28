@@ -8,6 +8,7 @@ else stands in their way, so the service token must.
 """
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -143,5 +144,38 @@ def test_token_browser_session_ends_when_token_rotates(tunnelled, monkeypatch) -
                               headers={"Origin": f"https://{PUBLIC_HOST}"})
             monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "r" * 40)
             assert (await client.get("/api/config")).status_code == 401
+
+    asyncio.run(scenario())
+
+
+def test_the_token_cannot_be_traded_for_a_session_that_marks_repositories_trusted(tunnelled, tmp_path) -> None:
+    """The service token is barred from trust writes; signing in with it must not lift that bar.
+
+    Setup: a tunnelled daemon (public_url, no GitHub login) with a registered,
+    undecided repository. The caller holds only the service token and is a
+    script, so it sets any Origin it likes.
+    """
+
+    async def scenario():
+        tunnelled()  # Sets the daemon's environment; rebuilt below with a repository.
+        subprocess.run(["git", "init", "-q", str(tmp_path / "checkout")], check=True)
+        config = tmp_path / "engine.toml"
+        config.write_text(f'public_url = "https://{PUBLIC_HOST}"\n[repos]\n"owner/repo" = "{tmp_path / "checkout"}"\n')
+        app = build_app(config)
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=f"https://{PUBLIC_HOST}"
+        ) as client:
+            bearer = {"Authorization": f"Bearer {TOKEN}"}
+            trust = {"repository": "owner/repo", "trusted": True}
+            origin = {"Origin": f"https://{PUBLIC_HOST}"}
+            # The token alone is refused, by design.
+            assert (await client.post("/api/v1/repositories/trust", json=trust,
+                                      headers={**bearer, **origin})).status_code == 401
+            # Trade it for a browser session with a forged Origin, and try again.
+            signed_in = await client.post("/api/auth/token/login", data={"token": TOKEN}, headers=origin)
+            assert signed_in.status_code == 303
+            response = await client.post("/api/v1/repositories/trust", json=trust, headers=origin)
+            assert response.status_code == 401, response.text
+            assert "trusted = true" not in config.read_text()
 
     asyncio.run(scenario())
