@@ -415,6 +415,27 @@ container, which also stops the tunnel.
   only when its Dockerfile changes, so later runs need neither. The same locked
   keychain makes `claude` and `codex` hang when launched from such a session.
 
+### Repository setup findings (#1144)
+
+- `oe repo add <url> --path DIR` clones the repository, registers it with the
+  running daemon (no restart) and adds the starter graphs for its project, so one
+  documented command covers "clone it locally" and "connect it to OpenEngine".
+  Cloning uses the daemon account's git credentials, so the journey first runs
+  `gh auth setup-git`, and sets a git name and email for the commits OpenEngine
+  will make later.
+- Each setting is one `gh api` call with its result read back through the API:
+  Pages with `build_type=workflow` (`POST /pages`, which works before any
+  workflow exists), workflow permissions `write` with
+  `can_approve_pull_request_reviews` (`PUT /actions/permissions/workflow`), and
+  squash merging allowed.
+- Squash merging also sets `squash_merge_commit_title=PR_TITLE`. By default
+  GitHub titles a squash commit with the pull request's title only when the pull
+  request has several commits, and with its one commit's message when it has one,
+  so without this the "the title is the commit message" the commitlint and
+  releases issues rely on would sometimes not hold.
+- The repository webhook, not a GitHub App, connects the repository, as the
+  #1137 findings decided; its steps are unchanged.
+
 ### Decision: the real run feeds the committed guide
 
 The real run's test2doc output and screenshots are committed as a guide, and the
