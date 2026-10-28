@@ -35,9 +35,12 @@ export class StandIns {
 
   /** `text` with every ID, timestamp and loopback port replaced, or `text` itself if it has none. */
   apply(text: string): string {
+    if (this.tunnelAddress) {
+      text = text
+        .replace(/\b[a-z0-9-]+\.trycloudflare\.com\b/g, this.tunnelAddress)
+        .replace(/\b[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\b/g, this.tunnelAddress)
+    }
     return text
-      .replace(/\b[a-z0-9-]+\.trycloudflare\.com\b/g, this.tunnelAddress ?? "openengine.example.com")
-      .replace(/\b[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\b/g, this.tunnelAddress ?? "mac-mini.tail1234.ts.net")
       .replace(IDENTIFIER, (id) => this.standInFor(id))
       .replace(LOOPBACK_PORT, (_address, host: string, port: string) => host + this.portFor(port))
       .replace(
