@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from typing import IO
 
-# Start order; the supervisor stops them in reverse.
+# Start order; the supervisor stops them in reverse. vcp is last, so it starts
+# after NATS and every other service, and stops before all of them.
 SERVICES = (
     ("cxn", "connection_bus"),
     ("ge", "graph_engine"),
@@ -16,7 +17,10 @@ SERVICES = (
     ("vcp", "virtual_control_plane"),
 )
 # The services the supervisor waits for: each writes its health URL to this variable's file once ready.
-READY_FILE_VARIABLES = {"ge": "OE_GE_READY_FILE"}
+READY_FILE_VARIABLES = {"ge": "OE_GE_READY_FILE", "vcp": "OE_VCP_READY_FILE"}
+# Workspace-owning services that need an exclusive directory of their own; each
+# writes its output and worktrees under the path this variable names.
+STATE_DIR_VARIABLES = {"vcp": "OE_VCP_STATE_DIR"}
 NATS_URL_VARIABLE = "OE_NATS_URL"
 
 

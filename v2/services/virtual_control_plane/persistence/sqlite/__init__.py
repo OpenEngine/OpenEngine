@@ -9,7 +9,7 @@ from typing import Any
 from openengine.persistence import DatabaseStore
 
 from virtual_control_plane.persistence.schema import workspaces
-from virtual_control_plane.persistence.store import Workspace, WorkspaceProvider, WorkspaceStatus
+from virtual_control_plane.persistence.store import Locator, Workspace, WorkspaceProvider, WorkspaceStatus
 
 
 def _workspace(row: Any) -> Workspace:
@@ -20,13 +20,14 @@ def _workspace(row: Any) -> Workspace:
         status=WorkspaceStatus(values["status"]),
         created_at=values["created_at"],
         updated_at=values["updated_at"],
+        locator=values["locator"],
     )
 
 
 class SqliteWorkspaces(DatabaseStore):
-    async def create(self, provider: WorkspaceProvider) -> Workspace:
+    async def create(self, provider: WorkspaceProvider, locator: Locator | None = None) -> Workspace:
         now = datetime.now(UTC)
-        workspace = Workspace(str(uuid.uuid4()), provider, WorkspaceStatus.PROVISIONING, now, now)
+        workspace = Workspace(str(uuid.uuid4()), provider, WorkspaceStatus.PROVISIONING, now, now, locator)
         async with self.database.transaction() as transaction:
             await transaction.execute(workspaces.insert().values(**vars(workspace)))
         return workspace
@@ -41,6 +42,17 @@ class SqliteWorkspaces(DatabaseStore):
             workspaces.update()
             .where(workspaces.c.id == id)
             .values(status=status, updated_at=datetime.now(UTC))
+            .returning(*workspaces.c)
+        )
+        async with self.database.transaction() as transaction:
+            row = (await transaction.execute(update)).one_or_none()
+        return _workspace(row) if row else None
+
+    async def set_locator(self, id: str, locator: Locator) -> Workspace | None:
+        update = (
+            workspaces.update()
+            .where(workspaces.c.id == id)
+            .values(locator=locator, updated_at=datetime.now(UTC))
             .returning(*workspaces.c)
         )
         async with self.database.transaction() as transaction:

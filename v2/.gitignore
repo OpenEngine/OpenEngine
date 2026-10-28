@@ -2,3 +2,5 @@
 .pytest_cache/
 __pycache__/
 *.py[cod]
+# virtual_control_plane's default standalone state directory, when run outside the supervisor.
+.openengine/
