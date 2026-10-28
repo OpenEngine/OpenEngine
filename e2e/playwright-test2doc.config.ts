@@ -10,6 +10,7 @@ mkdirSync(outputDir, { recursive: true })
 
 export default defineConfig({
   testDir: "./tests",
+  globalTeardown: "./support/tunnel-cleanup.ts",
   expect: expectConfig,
   use: {
     ...sharedUse,

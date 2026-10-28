@@ -27,11 +27,17 @@ export class StandIns {
   private readonly standIns = new Map<string, string>()
   private readonly used = new Set<string>()
   private readonly ports = new Map<string, string>()
+  private readonly tunnelAddress?: string
+
+  constructor(tunnelAddress?: string) { this.tunnelAddress = tunnelAddress }
+
   private seed = 0x2f6e2b1
 
   /** `text` with every ID, timestamp and loopback port replaced, or `text` itself if it has none. */
   apply(text: string): string {
     return text
+      .replace(/\b[a-z0-9-]+\.trycloudflare\.com\b/g, this.tunnelAddress ?? "openengine.example.com")
+      .replace(/\b[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\b/g, this.tunnelAddress ?? "mac-mini.tail1234.ts.net")
       .replace(IDENTIFIER, (id) => this.standInFor(id))
       .replace(LOOPBACK_PORT, (_address, host: string, port: string) => host + this.portFor(port))
       .replace(
