@@ -438,6 +438,56 @@ async function openConversation(page: Page, runUrl: string): Promise<void> {
   await expect(page).toHaveURL(/\/conversations\//);
 }
 
+test("long WorkOrder titles keep the conversation composer accessible", async ({
+  page,
+  engine,
+}, testInfo) => {
+  const longTitle = Array.from({ length: 8 }, (_, index) =>
+    `Instruction ${index + 1}: ${"Keep the conversation accessible while implementing the requested change. ".repeat(8)}`
+  ).join("\n\n").trim();
+  engine.script({
+    ...ASKING_SCRIPT,
+    // Failed naming leaves the original multi-paragraph prompt as the title.
+    scenarios: ASKING_SCRIPT.scenarios.map((scenario) => scenario.when === NAMING_REQUEST
+      ? { ...scenario, steps: [{ type: "say", text: "{}" }] }
+      : scenario),
+  });
+  await page.goto("/runs/new");
+  await page.getByLabel("Workflow definition").selectOption({ label: WORKFLOW });
+  await page.getByLabel("Repository").selectOption({ label: "Test repository" });
+  await page.getByLabel("Task prompt").fill(longTitle);
+  await page.getByRole("button", { name: "Create WorkOrder" }).click();
+  await expect(page).toHaveURL(/\/runs\/run-/);
+  const runUrl = new URL(page.url()).pathname;
+  await expect.poll(async () => (await graphRun(page, runUrl)).pendingApprovals?.length ?? 0, {
+    timeout: 60_000,
+  }).toBe(1);
+  await openConversation(page, runUrl);
+  await expect(page.locator(".message-user").first()).toContainText(longTitle);
+
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    if (viewport.width < 760) {
+      await expect(page.getByLabel("Message the agent")).toBeInViewport({ ratio: 1 });
+      await expect(page.getByRole("button", { name: "Send", exact: true })).toBeInViewport({ ratio: 1 });
+      await page.getByRole("button", { name: "Expand header" }).click();
+    }
+    const heading = page.locator(".panel-head h1");
+    await expect(heading).toHaveAttribute("title", longTitle);
+    const height = await heading.evaluate((element) => ({
+      actual: element.getBoundingClientRect().height,
+      line: parseFloat(getComputedStyle(element).lineHeight),
+    }));
+    expect(height.actual).toBeLessThanOrEqual(3 * height.line + 1);
+    const input = page.getByLabel("Message the agent");
+    await expect(input).toBeInViewport({ ratio: 1 });
+    await input.fill("Follow-up guidance");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+    await shot(page, testInfo, `long title at ${viewport.width}px`);
+  }
+});
+
 test("an agent's conversation is readable from the WorkOrder page", async ({
   page,
   engine,
