@@ -36,12 +36,23 @@ export class Terminal {
 
   /**
    * Open the terminal page on a new session, and size the page to the terminal.
-   * `oe` on the session's PATH is always this checkout's.
+   * `oe` on the session's PATH is this checkout's, unless `checkoutEngine` is false: a session
+   * that installs OpenEngine itself (the benchmark) runs the one it installed.
+   *
+   * A session waits for its first prompt before it is handed over, so what a test types is never typed ahead of the
+   * shell. That is every session without a `command`; one whose command starts a shell (`docker exec ... bash`) says
+   * so with `shell`.
    */
-  static async open(page: Page, session: TerminalSession = {}): Promise<Terminal> {
-    session = {
-      ...session,
-      env: { ...session.env, PATH: `${engineBinDir()}:${session.env?.PATH ?? process.env.PATH}` },
+  static async open(
+    page: Page,
+    session: TerminalSession = {},
+    { checkoutEngine = true, shell = !session.command }: { checkoutEngine?: boolean; shell?: boolean } = {},
+  ): Promise<Terminal> {
+    if (checkoutEngine) {
+      session = {
+        ...session,
+        env: { ...session.env, PATH: `${engineBinDir()}:${session.env?.PATH ?? process.env.PATH}` },
+      }
     }
     const params = new URLSearchParams({ token: process.env.E2E_TERMINAL_TOKEN ?? "" })
     if (session.command) params.set("cmd", session.command)
@@ -60,7 +71,7 @@ export class Terminal {
     // the terminal and nothing else.
     const box = (await terminal.screen().boundingBox())!
     await page.setViewportSize({ width: Math.ceil(box.width), height: Math.ceil(box.height) })
-    if (!session.command) await terminal.waitForPromptCount(1)
+    if (shell) await terminal.waitForPromptCount(1)
     await page.locator(".xterm-helper-textarea").focus()
     return terminal
   }
@@ -194,12 +205,18 @@ export class Terminal {
 
 export const test = base.extend<{
   terminalSession: TerminalSession
+  checkoutEngine: boolean
+  shell: boolean | undefined
   terminalEnv: Record<string, string>
   terminalCwd: string | undefined
   terminal: Terminal
 }>({
   /** How the `terminal` fixture's session starts; override with `test.use({ terminalSession: ... })`. */
   terminalSession: [{}, { option: true }],
+  /** Whether `oe` in the session is this checkout's. The benchmark turns it off and installs its own. */
+  checkoutEngine: [true, { option: true }],
+  /** Whether the session's command starts a shell to wait for; unset, that is whether there is no command. */
+  shell: [undefined, { option: true }],
   /** Environment other fixtures add to the session (the engine daemon's, for one), under the spec's own. */
   terminalEnv: async ({}, use) => {
     await use({})
@@ -208,13 +225,17 @@ export const test = base.extend<{
   terminalCwd: async ({}, use) => {
     await use(undefined)
   },
-  terminal: async ({ page, terminalSession, terminalEnv, terminalCwd }, use) => {
+  terminal: async ({ page, terminalSession, checkoutEngine, shell, terminalEnv, terminalCwd }, use) => {
     await use(
-      await Terminal.open(page, {
-        cwd: terminalCwd,
-        ...terminalSession,
-        env: { ...terminalEnv, ...terminalSession.env },
-      }),
+      await Terminal.open(
+        page,
+        {
+          cwd: terminalCwd,
+          ...terminalSession,
+          env: { ...terminalEnv, ...terminalSession.env },
+        },
+        { checkoutEngine, ...(shell === undefined ? {} : { shell }) },
+      ),
     )
   },
 })

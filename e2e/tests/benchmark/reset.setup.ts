@@ -1,7 +1,9 @@
 import { test as setup } from "@playwright/test"
-import { teardown } from "../../support/benchmark.ts"
+import { startContainer, teardown } from "../../support/benchmark.ts"
 
-setup("clear what the last benchmark run left", async () => {
-  // Delete the previous run's repository, folder and processes. Safe on a clean machine.
+setup("start the benchmark from a clean computer", async () => {
+  // Delete the previous run's repository and container. Safe on a clean machine.
   console.log("teardown:", await teardown())
+  // The computer the journey happens on. Built the first time, then cached by Docker.
+  await startContainer()
 })
