@@ -151,6 +151,16 @@ def test_list_and_revision_render_for_people() -> None:
     ]
 
 
+def test_a_graph_without_a_project_renders_in_the_default_project() -> None:
+    graph = {"graph_id": "graph_1", "name": "review", "latest_revision": 1,
+             "created_at": "2026-10-01T00:00:00.000000Z", "updated_at": "2026-10-01T00:00:00.000000Z"}
+    assert render([graph]).splitlines()[1].split()[:3] == ["default", "review", "graph_1"]
+    revision = {"graph_id": "graph_1", "revision": 1, "format": "resource", "source_sha256": "ab" * 32,
+                "inputs": {}, "nodes": [], "created_at": "2026-10-01T00:00:00.000000Z"}
+    assert render_revision({"graph": graph, "revision": revision}).splitlines()[0] == (
+        "review revision 1 of 1 in project default (graph graph_1)")
+
+
 def test_the_project_is_the_flag_then_oe_project_then_default(monkeypatch) -> None:
     monkeypatch.delenv("OE_PROJECT", raising=False)
     assert project(argparse.Namespace(project=None)) == "default"

@@ -185,7 +185,7 @@ def render(graphs: list[dict[str, Any]]) -> str:
     if not graphs:
         return "No graphs registered."
     rows = [
-        [graph["project"], graph["name"], graph["graph_id"], str(graph["latest_revision"]), graph["updated_at"]]
+        [graph.get("project", DEFAULT_PROJECT), graph["name"], graph["graph_id"], str(graph["latest_revision"]), graph["updated_at"]]
         for graph in graphs
     ]
     return table(["PROJECT", "NAME", "GRAPH ID", "REVISION", "UPDATED"], rows)
@@ -202,7 +202,7 @@ _Literal.add_representer(str, lambda dumper, text: dumper.represent_scalar(
 def render_revision(result: dict[str, Any]) -> str:
     graph, revision = result["graph"], result["revision"]
     lines = [
-        f"{graph['name']} revision {revision['revision']} of {graph['latest_revision']} in project {graph['project']}"
+        f"{graph['name']} revision {revision['revision']} of {graph['latest_revision']} in project {graph.get('project', DEFAULT_PROJECT)}"
         f" (graph {graph['graph_id']})",
         table(["format", revision["format"]], [["digest", f"sha256:{revision['source_sha256']}"],
                                                ["created", revision["created_at"]]]),

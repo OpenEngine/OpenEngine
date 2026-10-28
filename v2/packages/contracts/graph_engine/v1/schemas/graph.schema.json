@@ -58,9 +58,9 @@
       }
     },
     "graph": {
-      "description": "A registered graph.",
+      "description": "A registered graph. A snapshot without `project` belongs to the default project, `default`.",
       "type": "object",
-      "required": ["graph_id", "project", "name", "latest_revision", "created_at", "updated_at"],
+      "required": ["graph_id", "name", "latest_revision", "created_at", "updated_at"],
       "additionalProperties": false,
       "properties": {
         "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
