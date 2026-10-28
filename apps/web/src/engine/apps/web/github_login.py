@@ -354,7 +354,9 @@ class GitHubLogin:
             and not request.url.path.startswith(_SERVICE_PREFIX)
         ):
             return False
-        if request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
+        if request.method == "POST" and request.url.path.rstrip("/") in {
+            "/api/v1/repositories/trust", "/api/repositories/onboard",
+        }:
             return False
         expected = self.service_token()
         if not valid_service_token(expected):
@@ -384,7 +386,9 @@ class GitHubLogin:
     def _token_session(self, request: Request) -> bool:
         if self.configured:
             return False
-        if request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
+        if request.method == "POST" and request.url.path.rstrip("/") in {
+            "/api/v1/repositories/trust", "/api/repositories/onboard",
+        }:
             return False
         session = self._token_sessions.get(request.cookies.get(_TOKEN_COOKIE, ""))
         token = self.service_token()
