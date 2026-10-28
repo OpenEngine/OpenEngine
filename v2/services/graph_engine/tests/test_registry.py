@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from openengine.contracts.validate import load_contract, validate_message
-from openengine.messaging import Server
+from openengine.messaging import ErrorCode, LocalOperator, Request, Server, ServiceError
 from openengine.persistence import DatabaseConfig
 
 from graph_engine.persistence import PERSISTENCE, sqlite
@@ -25,13 +25,31 @@ EXAMPLE = Path(__file__).parents[3] / "packages/contracts/graph_engine/v1/resour
 GRAPH = yaml.safe_load(EXAMPLE.read_text())
 
 
+class ProjectsOnly(LocalOperator):
+    """An authorizer allowing only some projects, as one deciding from a verified identity would."""
+
+    def __init__(self, *allowed: str) -> None:
+        self.allowed = allowed
+
+    def authorize_project(self, request: Request, project: str) -> None:
+        if project not in self.allowed:
+            raise ServiceError(ErrorCode.PERMISSION_DENIED, f"not {project}", details={"permission": request.operation})
+
+
 @pytest.fixture
-def send(tmp_path: Path):
+def authorizer() -> LocalOperator:
+    return LocalOperator()
+
+
+@pytest.fixture
+def send(tmp_path: Path, authorizer: LocalOperator):
     config = DatabaseConfig(sqlite_directory=tmp_path)
     PERSISTENCE.upgrade(config)
     store = PERSISTENCE.open(config)
-    registry = Registry(store)
-    server = Server(None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands())
+    registry = Registry(store, authorizer)
+    server = Server(
+        None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands(), authorizer=authorizer,
+    )
     loop = asyncio.new_event_loop()
 
     def send(subject: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -324,3 +342,52 @@ def test_a_whole_number_limit_given_as_a_float_pages_like_an_integer(send) -> No
 
     assert [graph["name"] for graph in result["items"]] == ["deploy"]
     assert result["next_cursor"] is not None
+
+
+def test_the_same_name_in_two_projects_is_two_graphs_listed_and_read_apart(send) -> None:
+    alpha = send(APPLY, _apply("cmd_1", {"project": "alpha", "graph": GRAPH}))
+    beta = send(APPLY, _apply("cmd_1", {"project": "beta", "graph": _changed("Beta.")}))
+    unscoped = send(APPLY, _apply("cmd_2", {"graph": GRAPH}))
+
+    assert len({alpha["resource_id"], beta["resource_id"], unscoped["resource_id"]}) == 3
+    assert [_operation(send, reply)["result"]["created"] for reply in (alpha, beta, unscoped)] == [True] * 3
+    # Each command ID is remembered in its own project, and an unchanged apply there is a no-op.
+    assert send(APPLY, _apply("cmd_1", {"project": "alpha", "graph": GRAPH})) == alpha
+    again = send(APPLY, _apply("cmd_3", {"project": "alpha", "graph": GRAPH}))
+    assert _operation(send, again)["result"] == {"graph": {"graph_id": alpha["resource_id"], "revision": 1}, "created": False}
+    stale = send(APPLY, _apply("cmd_4", {"project": "gamma", "graph": GRAPH}, expected_version=1))
+    assert stale["error"]["code"] == "NOT_FOUND"
+
+    for project, reply in (("alpha", alpha), ("beta", beta), ("default", unscoped)):
+        items = _listed(send, {"project": project})["result"]["items"]
+        assert [(graph["project"], graph["graph_id"]) for graph in items] == [(project, reply["resource_id"])]
+        assert _get(send, reply["resource_id"], {"include_source": False})["result"]["graph"]["project"] == project
+    # Omitting the project lists the default project's graphs.
+    assert _listed(send, {})["result"]["items"] == _listed(send, {"project": "default"})["result"]["items"]
+
+
+def test_a_list_cursor_is_bound_to_its_project(send) -> None:
+    for project in ("alpha", "beta"):
+        for name in ("deploy", "review"):
+            send(APPLY, _apply(f"cmd_{name}", {"project": project, "graph": _named(name)}))
+
+    issued = _listed(send, {"project": "alpha", "limit": 1})["result"]["next_cursor"]
+    rest = _listed(send, {"project": "alpha", "cursor": issued})["result"]["items"]
+    assert [(graph["project"], graph["name"]) for graph in rest] == [("alpha", "review")]
+    for other in ({"project": "beta"}, {}):
+        reused = send(LIST, {"params": {**other, "cursor": issued}})
+        assert reused["error"]["code"] == "INVALID_CURSOR"
+        assert reused["error"]["details"] == {"reason": "filters_changed"}
+
+
+@pytest.mark.parametrize("authorizer", [ProjectsOnly("alpha")])
+def test_every_project_scoped_request_is_authorized_for_its_project(send) -> None:
+    allowed = send(APPLY, _apply("cmd_1", {"project": "alpha", "graph": GRAPH}))
+    assert allowed["status"] == "accepted"
+
+    denied = send(APPLY, _apply("cmd_1", {"project": "beta", "graph": GRAPH}))
+    assert denied["error"]["code"] == "PERMISSION_DENIED"
+    assert send(LIST, {"params": {"project": "beta"}})["error"]["code"] == "PERMISSION_DENIED"
+    assert send(LIST, {"params": {}})["error"]["code"] == "PERMISSION_DENIED"
+    assert _get(send, allowed["resource_id"], {})["result"]["graph"]["project"] == "alpha"
+    assert _operation(send, allowed)["status"] == "succeeded"

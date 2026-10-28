@@ -9,6 +9,10 @@ created, updated with a new revision, or unchanged.
 with `graphs.list` and reads the revision, the latest by default, from
 `graphs.{graph_id}.get`.
 
+Each of the three acts in one project: `--project`, else `OE_PROJECT`, else
+`default`. Graph names are unique only within a project, so `get` looks the
+name up there alone.
+
 `validate` and `spec` read only the Graph schema and rules in
 openengine-contracts, so neither needs `oe up`, NATS or runner credentials.
 Runners and tools are checked when a run starts, so a valid file is not a
@@ -20,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -40,6 +45,8 @@ LIST_SUBJECT = "oe.v1.ge.query.graphs.list"
 GET_SUBJECT = "oe.v1.ge.query.graphs.{graph_id}.get"
 APPLY_SUBJECT = "oe.v1.ge.control.graphs.apply"
 OPERATION_SUBJECT = "oe.v1.ge.query.operations.{operation_id}.get"
+PROJECT_VARIABLE = "OE_PROJECT"
+DEFAULT_PROJECT = "default"
 CONNECT_TIMEOUT_SECONDS = 2.0
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -51,20 +58,35 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     listing = actions.add_parser("list", help="list the registered graphs")
     listing.add_argument("--json", action="store_true", help="print one page's query-response as JSON")
     listing.add_argument("--cursor", help="start from this next_cursor of an earlier page")
+    _add_project(listing)
     listing.set_defaults(command=run_list)
     get = actions.add_parser("get", help="show a revision of a registered graph and its source")
     get.add_argument("graph", metavar="NAME[@REVISION]", help="the graph's name, and a revision if not the latest")
     get.add_argument("--json", action="store_true", help="print the query-response as JSON")
+    _add_project(get)
     get.set_defaults(command=run_get)
     apply = actions.add_parser("apply", help="register each Graph in a file, adding a revision when it changed")
     apply.add_argument("file", metavar="FILE", help=f"the Graph file to apply, or {STDIN} to read standard input")
     apply.add_argument("--json", action="store_true", help="print each command-response and its operation as JSON")
+    _add_project(apply)
     apply.set_defaults(command=run_apply)
     validate = actions.add_parser("validate", help="check a Graph file against the Graph schema and rules, offline")
     validate.add_argument("file", metavar="FILE", help=f"the file to check, or {STDIN} to read standard input")
     validate.set_defaults(command=run_validate)
     spec = actions.add_parser("spec", help="print the Graph resource reference and expression syntax as Markdown")
     spec.set_defaults(command=run_spec)
+
+
+def _add_project(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--project", metavar="NAME",
+        help=f"the project whose graphs to use (default: ${PROJECT_VARIABLE}, else {DEFAULT_PROJECT})",
+    )
+
+
+def project(arguments: argparse.Namespace) -> str:
+    """The project a command acts in: --project, else OE_PROJECT, else the default project."""
+    return arguments.project or os.environ.get(PROJECT_VARIABLE) or DEFAULT_PROJECT
 
 
 class NotServing(Exception):
@@ -104,11 +126,11 @@ async def _ask(nats_url: str, ask: Callable[[Client], Awaitable[T]]) -> T:
         await connection.close()
 
 
-async def _pages(nats_url: str, cursor: str | None, every: bool) -> list[dict[str, Any]]:
+async def _pages(nats_url: str, project_: str, cursor: str | None, every: bool) -> list[dict[str, Any]]:
     async def pages(client: Client) -> list[dict[str, Any]]:
-        replies = [await client.query(LIST_SUBJECT, {"cursor": cursor} if cursor else {})]
+        replies = [await client.query(LIST_SUBJECT, {"project": project_} | ({"cursor": cursor} if cursor else {}))]
         while every and (cursor_ := replies[-1]["result"]["next_cursor"]) is not None:
-            replies.append(await client.query(LIST_SUBJECT, {"cursor": cursor_}))
+            replies.append(await client.query(LIST_SUBJECT, {"project": project_, "cursor": cursor_}))
         return replies
 
     return await _ask(nats_url, pages)
@@ -127,23 +149,24 @@ def parse_reference(reference: str) -> tuple[str, int | None]:
     return name, int(revision) if at else None
 
 
-async def _get(nats_url: str, name: str, revision: int | None) -> dict[str, Any]:
+async def _get(nats_url: str, project_: str, name: str, revision: int | None) -> dict[str, Any]:
     async def get(client: Client) -> dict[str, Any]:
         # Names sort before every longer name they prefix, so the graph named NAME, if any, comes first.
-        found = (await client.query(LIST_SUBJECT, {"name_prefix": name, "limit": 1}))["result"]["items"]
+        params = {"project": project_, "name_prefix": name, "limit": 1}
+        found = (await client.query(LIST_SUBJECT, params))["result"]["items"]
         if not found or found[0]["name"] != name:
-            raise ServiceError(ErrorCode.NOT_FOUND, f"no graph named {name}")
+            raise ServiceError(ErrorCode.NOT_FOUND, f"no graph named {name} in project {project_}")
         params = {} if revision is None else {"revision": revision}
         return await client.query(GET_SUBJECT.format(graph_id=found[0]["graph_id"]), params)
 
     return await _ask(nats_url, get)
 
 
-async def _apply(nats_url: str, graphs: list[Any]) -> list[dict[str, Any]]:
+async def _apply(nats_url: str, project_: str, graphs: list[Any]) -> list[dict[str, Any]]:
     async def apply(client: Client) -> list[dict[str, Any]]:
         applied = []
         for graph in graphs:
-            response = await client.command(APPLY_SUBJECT, {"graph": graph})
+            response = await client.command(APPLY_SUBJECT, {"project": project_, "graph": graph})
             operation = await client.query(OPERATION_SUBJECT.format(operation_id=response["operation_id"]))
             applied.append({"response": response, "operation": operation["result"]["operation"]})
         return applied
@@ -161,8 +184,11 @@ def outcome(operation: dict[str, Any]) -> str:
 def render(graphs: list[dict[str, Any]]) -> str:
     if not graphs:
         return "No graphs registered."
-    rows = [[graph["name"], graph["graph_id"], str(graph["latest_revision"]), graph["updated_at"]] for graph in graphs]
-    return table(["NAME", "GRAPH ID", "REVISION", "UPDATED"], rows)
+    rows = [
+        [graph["project"], graph["name"], graph["graph_id"], str(graph["latest_revision"]), graph["updated_at"]]
+        for graph in graphs
+    ]
+    return table(["PROJECT", "NAME", "GRAPH ID", "REVISION", "UPDATED"], rows)
 
 
 class _Literal(yaml.SafeDumper):
@@ -176,7 +202,8 @@ _Literal.add_representer(str, lambda dumper, text: dumper.represent_scalar(
 def render_revision(result: dict[str, Any]) -> str:
     graph, revision = result["graph"], result["revision"]
     lines = [
-        f"{graph['name']} revision {revision['revision']} of {graph['latest_revision']} (graph {graph['graph_id']})",
+        f"{graph['name']} revision {revision['revision']} of {graph['latest_revision']} in project {graph['project']}"
+        f" (graph {graph['graph_id']})",
         table(["format", revision["format"]], [["digest", f"sha256:{revision['source_sha256']}"],
                                                ["created", revision["created_at"]]]),
     ]
@@ -201,7 +228,7 @@ def run_list(arguments: argparse.Namespace) -> int:
     if (nats_url := _nats_url()) is None:
         return _not_running("no supervisor")
     try:
-        replies = asyncio.run(_pages(nats_url, arguments.cursor, every=not arguments.json))
+        replies = asyncio.run(_pages(nats_url, project(arguments), arguments.cursor, every=not arguments.json))
     except NotServing as reason:
         return _not_running(str(reason))
     except ServiceError as error:
@@ -220,7 +247,7 @@ def run_get(arguments: argparse.Namespace) -> int:
     if (nats_url := _nats_url()) is None:
         return _not_running("no supervisor")
     try:
-        reply = asyncio.run(_get(nats_url, name, revision))
+        reply = asyncio.run(_get(nats_url, project(arguments), name, revision))
     except NotServing as reason:
         return _not_running(str(reason))
     except ServiceError as error:
@@ -268,9 +295,9 @@ def run_apply(arguments: argparse.Namespace) -> int:
         return EXIT_FAILED
     if (nats_url := _nats_url()) is None:
         return _not_running("no supervisor")
-    documents = load_documents(text)
+    documents, project_ = load_documents(text), project(arguments)
     try:
-        applied = asyncio.run(_apply(nats_url, documents))
+        applied = asyncio.run(_apply(nats_url, project_, documents))
     except NotServing as reason:
         return _not_running(str(reason))
     except ServiceError as error:
@@ -279,7 +306,8 @@ def run_apply(arguments: argparse.Namespace) -> int:
     for graph, document in zip(applied, documents):
         result = graph["operation"]["result"]["graph"]
         print(as_json(graph) if arguments.json else
-              f"{outcome(graph['operation'])} {document['metadata']['name']} revision {result['revision']} (graph {result['graph_id']})")
+              f"{outcome(graph['operation'])} {document['metadata']['name']} revision {result['revision']}"
+              f" in project {project_} (graph {result['graph_id']})")
     return EXIT_OK
 
 

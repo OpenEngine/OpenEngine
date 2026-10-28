@@ -3,8 +3,13 @@
   "title": "Graphs",
   "description": "Registered graphs and their immutable revisions. A graph is applied as a Graph resource (`apiVersion: openengine.cc/v1alpha1`, `kind: Graph`; see `resources/graph.schema.yaml`) or as a Python LangGraph module exporting `workflow`. GE keeps what was applied verbatim.",
   "$defs": {
+    "project": {
+      "description": "The project a graph belongs to. Graph names, command IDs and listings are scoped to it; a command or query that names none uses the default project, `default`, which holds every graph applied before projects existed. A project name says where to act and grants nothing by itself: each request is authorized for its project from the actor's verified identity (under `oe up`, the local operator may use every project).",
+      "default": "default",
+      "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+    },
     "graph_name": {
-      "description": "Registry name of a graph, unique per GE instance.",
+      "description": "Registry name of a graph, unique per project.",
       "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
     },
     "graph_format": {
@@ -55,10 +60,11 @@
     "graph": {
       "description": "A registered graph.",
       "type": "object",
-      "required": ["graph_id", "name", "latest_revision", "created_at", "updated_at"],
+      "required": ["graph_id", "project", "name", "latest_revision", "created_at", "updated_at"],
       "additionalProperties": false,
       "properties": {
         "graph_id": { "$ref": "../../../common/v1/types.schema.json#/$defs/graph_id" },
+        "project": { "$ref": "#/$defs/project" },
         "name": { "$ref": "#/$defs/graph_name" },
         "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "latest_revision": { "$ref": "#/$defs/revision" },

@@ -36,6 +36,13 @@ A command route built with `Route(handler, receipts=True)` keeps receipts, so
 the server checks only that a command's `command_id` is well formed and leaves
 the rest of its envelope to the handler, which can then record rejecting it.
 
+A handler whose resources belong to a project asks the `Authorizer` again,
+through `authorize_project(request, project)`, with the project the request
+names or the resource it reached belongs to. A project name in a payload only
+says where to act; it grants nothing by itself, so an authorizer decides from
+the actor's verified identity. `LocalOperator` allows every project to the
+loopback operator.
+
 The client raises `Unavailable` (`UNAVAILABLE`, retryable) when nothing
 serves a subject or when no reply arrives after the last attempt, and
 `ServiceError` for an error or rejected reply. The server answers every request

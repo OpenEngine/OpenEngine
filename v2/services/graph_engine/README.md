@@ -12,15 +12,17 @@ subject gets `UNSUPPORTED_CAPABILITY`.
 
 ```bash
 uv run oe up
-uv run oe graph apply FILE        # created NAME revision 1 (graph graph_…)
-uv run oe graph list              # each graph's name, ID and latest revision
+uv run oe graph apply FILE        # created NAME revision 1 in project default (graph graph_…)
+uv run oe graph list              # each graph's project, name, ID and latest revision
+uv run oe graph list --project P  # another project's graphs (or set OE_PROJECT)
 uv run oe graph list --json       # the query-response, with next_cursor
 uv run oe graph get NAME[@REV]    # a revision, the latest by default, and its source
 ```
 
 ### Graph registry
-[`registry.py`](registry.py) serves `graphs.apply`. Each graph name has a
-stable graph ID and immutable revisions numbered from 1, each keeping its
+[`registry.py`](registry.py) serves `graphs.apply`. Graphs belong to a
+project: a command or query acts in the `project` it names, or in `default`
+when it names none. Each graph name in a project has a stable graph ID and immutable revisions numbered from 1, each keeping its
 source, its format (`resource`) and the source's SHA-256. A Graph resource's
 source is the canonical JSON of what was applied, so an apply whose
 definition matches the latest revision is a no-op that returns that revision
@@ -31,22 +33,26 @@ is `VERSION_CONFLICT`, and one for a name not yet applied is `NOT_FOUND`.
 The acceptance, the revision, the operation and the command's receipt commit
 in one transaction, and applies take turns, so concurrent applies number no
 revision twice. A retry with the same command ID, subject, payload,
-`expected_version` and causal path gets the original reply, including a
+`expected_version` and causal path in the same project gets the original reply, including a
 rejection, even of a malformed envelope; anything else with that ID is
-`COMMAND_ID_CONFLICT`. `deadline_at` is checked inside the transaction, after
+`COMMAND_ID_CONFLICT`. Receipts are keyed on (project, command ID), so two
+projects may each use a command ID. `deadline_at` is checked inside the transaction, after
 replaying any receipt, so a command waiting its turn past it is
 `DEADLINE_EXCEEDED` rather than accepted late. Receipts are
 kept indefinitely so far, beyond the contract's 7 days.
 
-`graphs.list` sorts by name, then graph ID, and pages by that key, so a graph
+`graphs.list` lists one project's graphs. It sorts by name, then graph ID, and pages by that key, so a graph
 applied between pages is neither repeated nor skipped. `name_prefix` matches
 names exactly (case-sensitive, and `_` is no wildcard). The cursor carries the
-last graph's key and the prefix it was issued for, so it never expires and
-reusing it with another prefix is `INVALID_CURSOR`. `graphs.{graph_id}.get`
-returns the graph and one revision, the latest unless `revision` names
+last graph's key and the project and prefix it was issued for, so it never
+expires and reusing it with another of either is `INVALID_CURSOR`.
+`graphs.{graph_id}.get` returns the graph, with its project, and one revision, the latest unless `revision` names
 another, with its source unless `include_source` is false. Its `inputs` and
 `nodes` are read from the source: the inputs it declares and its step names.
 An unknown graph or revision is `NOT_FOUND`.
+
+Projects arrived in migration `d75ffe6cc5ed`, which moved every existing
+graph, operation and receipt into `default`, keeping graph IDs and revisions.
 
 GE brings its database to the head of its Alembic migrations as it starts,
 so `oe up` alone is enough; `oe migrate` does the same for every service.
@@ -83,3 +89,10 @@ address from the server's INFO, not from `OE_NATS_URL`: a server bound to
 `0.0.0.0` is reachable from other hosts even when GE dials `127.0.0.1`, so
 GE logs a warning at connect and refuses every request. Remote access
 needs a different authorizer, which does not exist yet.
+
+Every project-scoped request also goes through `Authorizer.authorize_project`:
+`graphs.apply` and `graphs.list` with the project they name, and
+`graphs.{graph_id}.get` and `operations.{operation_id}.get` with the project
+the graph or operation belongs to. A project name is only where to act; it
+grants nothing by itself. `LocalOperator` allows the loopback operator every
+project; an authorizer for verified identities will decide per actor.

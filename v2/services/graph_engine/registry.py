@@ -1,5 +1,10 @@
 """The graph registry's subjects: `graphs.apply`, `graphs.list`, `graphs.{graph_id}.get`, and `operations.{operation_id}.get`.
 
+Graph names, command IDs and visibility are per project: the `project` a
+command or query names, `default` when it names none. Each request is
+authorized for its project, or the project of the graph or operation it
+reads, through the server's Authorizer; the name alone grants nothing.
+
 A Graph resource is kept as the canonical JSON of what was applied (sorted keys,
 no spacing), so reformatting a file or reordering its keys changes nothing,
 and its SHA-256 decides whether an apply is unchanged. Python graphs are
@@ -11,15 +16,15 @@ retryable. That includes a command breaking its schema, so the handler checks
 the command envelope and schema rather than the server, and one whose `deadline_at`
 has passed by the time the store would accept it, which is DEADLINE_EXCEEDED. A retry with the same command ID and the same subject, payload,
 `expected_version` and causal path gets that reply again; anything else with
-that ID is COMMAND_ID_CONFLICT. `expected_version` is the graph's latest
+that ID in its project is COMMAND_ID_CONFLICT. `expected_version` is the graph's latest
 revision, so naming it for a graph that does not exist yet is NOT_FOUND.
 A Graph whose `graphs.{graph_id}.get` result, encoded as the reply carries it,
 would pass MAX_RESULT_BYTES is INVALID_ARGUMENT, so every revision GE keeps
 can be read back within NATS's default 1 MiB payload.
 
-`graphs.list` pages by key on (name, graph_id). Its cursor is the last
-graph's key and the `name_prefix` it was issued for, as base64url JSON, so it
-never expires, and reusing it with another prefix is INVALID_CURSOR. A page
+`graphs.list` pages by key on (name, graph_id) within a project. Its cursor is
+the last graph's key and the project and `name_prefix` it was issued for, as
+base64url JSON, so it never expires, and reusing it with another is INVALID_CURSOR. A page
 ends early rather than pass MAX_RESULT_BYTES.
 A revision's `inputs` and `nodes` are read from its source when it is asked
 for: the inputs it declares, and its step names in stage order.
@@ -36,10 +41,11 @@ from typing import Any
 
 from openengine.contracts.graphs import STAGES
 from openengine.contracts.resources import validate_resource
-from openengine.messaging import ErrorCode, Request, Route, ServiceError, envelopes
+from openengine.messaging import Authorizer, ErrorCode, LocalOperator, Request, Route, ServiceError, envelopes
 from openengine.messaging.errors import invalid_argument
 
 from graph_engine.persistence.store import (
+    DEFAULT_PROJECT,
     Command,
     CommandIdConflict,
     DeadlineExceeded,
@@ -53,6 +59,7 @@ from graph_engine.persistence.store import (
 
 SCHEMAS = "graph_engine/v1/schemas"
 APPLY = f"{SCHEMAS}/commands.schema.json#/$defs/apply_graph_command"
+PROJECT = f"{SCHEMAS}/graph.schema.json#/$defs/project"
 DEFAULT_LIMIT = 50
 # NATS's default max_payload, less room for the reply envelope around a result.
 MAX_RESULT_BYTES = 1024 * 1024 - 16 * 1024
@@ -62,11 +69,20 @@ def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _project(body: dict[str, Any]) -> str:
+    """The project a command acts in; the default, which keeps its receipt, for one too malformed to name one."""
+    payload = body.get("payload")
+    project = payload.get("project", DEFAULT_PROJECT) if isinstance(payload, dict) else DEFAULT_PROJECT
+    return DEFAULT_PROJECT if envelopes.violations(PROJECT, project) else project
+
+
 def _command(request: Request) -> Command:
-    body = request.body
+    body, project = request.body, _project(request.body)
     repeated = {key: body.get(key) for key in ("payload", "expected_version", "causal_path")}
-    fingerprint = hashlib.sha256(canonical({"subject": request.subject, **repeated}).encode()).hexdigest()
-    return Command(body["command_id"], request.subject, fingerprint)
+    fingerprint = hashlib.sha256(
+        canonical({"project": project, "subject": request.subject, **repeated}).encode()
+    ).hexdigest()
+    return Command(project, body["command_id"], request.subject, fingerprint)
 
 
 def _timestamp(when: datetime) -> str:
@@ -89,6 +105,7 @@ def _snapshot(operation: Operation) -> dict[str, Any]:
 def _graph(graph: Graph) -> dict[str, Any]:
     snapshot = {
         "graph_id": graph.graph_id,
+        "project": graph.project,
         "name": graph.name,
         "latest_revision": graph.latest_revision,
         "created_at": _timestamp(graph.created_at),
@@ -116,23 +133,23 @@ def _revision(revision: GraphRevision, include_source: bool) -> dict[str, Any]:
 
 
 def _cursor(graph: Graph, name_prefix: str | None) -> str:
-    key = canonical({"after": [graph.name, graph.graph_id], "name_prefix": name_prefix})
+    key = canonical({"after": [graph.name, graph.graph_id], "project": graph.project, "name_prefix": name_prefix})
     return base64.urlsafe_b64encode(key.encode()).decode().rstrip("=")
 
 
-def _after(cursor: str, name_prefix: str | None) -> tuple[str, str]:
+def _after(cursor: str, project: str, name_prefix: str | None) -> tuple[str, str]:
     malformed = ServiceError(ErrorCode.INVALID_CURSOR, "the cursor is not one graphs.list issued",
                              details={"reason": "malformed"})
     try:
         key = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
         name, graph_id = key["after"]
-        issued_for = key["name_prefix"]
+        issued_for = key["project"], key["name_prefix"]
     except (binascii.Error, ValueError, KeyError, TypeError):
         raise malformed from None
     if not (isinstance(name, str) and isinstance(graph_id, str)):
         raise malformed
-    if issued_for != name_prefix:
-        raise ServiceError(ErrorCode.INVALID_CURSOR, "the cursor was issued for another name_prefix",
+    if issued_for != (project, name_prefix):
+        raise ServiceError(ErrorCode.INVALID_CURSOR, "the cursor was issued for another project or name_prefix",
                            details={"reason": "filters_changed"})
     return name, graph_id
 
@@ -144,7 +161,7 @@ def _size(value: dict[str, Any]) -> int:
 def _readable_size(definition: Definition) -> int:
     """The bytes of the result `graphs.{graph_id}.get` would reply with for this definition's revision."""
     now = datetime.now(UTC)
-    graph = Graph("", definition.name, definition.description, 0, now, now)
+    graph = Graph("", DEFAULT_PROJECT, definition.name, definition.description, 0, now, now)
     revision = GraphRevision("", 0, definition.format, definition.source, definition.source_sha256, now)
     return _size({"graph": _graph(graph), "revision": _revision(revision, include_source=True)})
 
@@ -154,8 +171,9 @@ def _not_found(graph_id: str, message: str) -> ServiceError:
 
 
 class Registry:
-    def __init__(self, store: Graphs) -> None:
+    def __init__(self, store: Graphs, authorizer: Authorizer | None = None) -> None:
         self.store = store
+        self.authorizer = authorizer or LocalOperator()
 
     def commands(self) -> dict[str, Route]:
         return {"graphs.apply": Route(self.apply, receipts=True)}
@@ -170,7 +188,7 @@ class Registry:
     async def apply(self, request: Request) -> dict[str, Any]:
         command = _command(request)
         try:
-            response = await self._apply(command, request.body)
+            response = await self._apply(command, request)
         except CommandIdConflict as conflict:
             details = {"command_id": conflict.command_id, "original_subject": conflict.subject}
             if conflict.operation_id:
@@ -180,10 +198,12 @@ class Registry:
             raise ServiceError.from_dict(response["error"])
         return response
 
-    async def _apply(self, command: Command, body: dict[str, Any]) -> dict[str, Any]:
+    async def _apply(self, command: Command, request: Request) -> dict[str, Any]:
+        body = request.body
         try:
             envelopes.check(envelopes.COMMAND, body)
             envelopes.check(APPLY, body)
+            self.authorizer.authorize_project(request, command.project)
         except ServiceError as error:
             return await self._reject(command, error)
         payload, expected_version = body["payload"], body.get("expected_version")
@@ -215,7 +235,8 @@ class Registry:
         except VersionConflict as conflict:
             if conflict.actual is None:
                 error = ServiceError(
-                    ErrorCode.NOT_FOUND, f"no graph named {definition.name} to be at revision {conflict.expected}",
+                    ErrorCode.NOT_FOUND,
+                    f"no graph named {definition.name} in project {command.project} to be at revision {conflict.expected}",
                     details={"resource_type": "graph", "resource_id": definition.name},
                 )
             else:
@@ -233,10 +254,12 @@ class Registry:
 
     async def list(self, request: Request) -> dict[str, Any]:
         params = request.body["params"]
-        name_prefix, limit = params.get("name_prefix"), int(params.get("limit", DEFAULT_LIMIT))
-        after = _after(cursor, name_prefix) if (cursor := params.get("cursor")) is not None else None
+        project, name_prefix = params.get("project", DEFAULT_PROJECT), params.get("name_prefix")
+        limit = int(params.get("limit", DEFAULT_LIMIT))
+        self.authorizer.authorize_project(request, project)
+        after = _after(cursor, project, name_prefix) if (cursor := params.get("cursor")) is not None else None
         # One more than the page shows whether there is a next page.
-        found = await self.store.graphs(limit + 1, name_prefix, after)
+        found = await self.store.graphs(project, limit + 1, name_prefix, after)
         items: list[dict[str, Any]] = []
         size = 0
         for graph in found[:limit]:
@@ -255,6 +278,7 @@ class Registry:
         graph_id, params = request.parameters["graph_id"], request.body["params"]
         if (graph := await self.store.graph(graph_id)) is None:
             raise _not_found(graph_id, f"no graph {graph_id}")
+        self.authorizer.authorize_project(request, graph.project)
         number = params.get("revision", graph.latest_revision)
         if (revision := await self.store.revision(graph_id, number)) is None:
             raise _not_found(graph_id, f"graph {graph.name} has no revision {number}; its latest is {graph.latest_revision}")
@@ -267,4 +291,5 @@ class Registry:
                 ErrorCode.NOT_FOUND, f"no operation {operation_id}",
                 details={"resource_type": "operation", "resource_id": operation_id},
             )
+        self.authorizer.authorize_project(request, operation.project)
         return {"operation": _snapshot(operation)}

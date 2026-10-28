@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import inspect
 
 from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig
@@ -39,8 +40,8 @@ def test_migrations_roll_back(config: DatabaseConfig) -> None:
     assert inspect(database.migration_engine()).get_table_names() == ["alembic_version"]
 
 
-def _command(command_id: str, fingerprint: str = "f1") -> Command:
-    return Command(command_id, "oe.v1.ge.control.graphs.apply", fingerprint)
+def _command(command_id: str, fingerprint: str = "f1", project: str = "default") -> Command:
+    return Command(project, command_id, "oe.v1.ge.control.graphs.apply", fingerprint)
 
 
 def _definition(source: str, name: str = "triage") -> Definition:
@@ -165,19 +166,94 @@ def test_graphs_are_listed_by_name_and_paged_after_a_key(config: DatabaseConfig)
             for name in ("review", "triage", "review-fast", "Review", "re_view", "deploy"):
                 await graphs.apply(_command(f"cmd_{name}"), _definition("{}", name))
 
-            assert [graph.name for graph in await graphs.graphs(50)] == [
+            assert [graph.name for graph in await graphs.graphs("default", 50)] == [
                 "Review", "deploy", "re_view", "review", "review-fast", "triage",
             ]
             # A prefix matches exactly: case counts, and `_` is no wildcard.
-            assert [graph.name for graph in await graphs.graphs(50, "review")] == ["review", "review-fast"]
-            assert [graph.name for graph in await graphs.graphs(50, "re_")] == ["re_view"]
-            assert await graphs.graphs(50, "x") == []
+            assert [graph.name for graph in await graphs.graphs("default", 50, "review")] == ["review", "review-fast"]
+            assert [graph.name for graph in await graphs.graphs("default", 50, "re_")] == ["re_view"]
+            assert await graphs.graphs("default", 50, "x") == []
 
-            first = await graphs.graphs(2)
+            first = await graphs.graphs("default", 2)
             assert [graph.name for graph in first] == ["Review", "deploy"]
-            rest = await graphs.graphs(50, after=(first[-1].name, first[-1].graph_id))
+            rest = await graphs.graphs("default", 50, after=(first[-1].name, first[-1].graph_id))
             assert [graph.name for graph in rest] == ["re_view", "review", "review-fast", "triage"]
-            assert [graph.name for graph in await graphs.graphs(50, "review", ("review", rest[1].graph_id))] == ["review-fast"]
+            assert [graph.name for graph in await graphs.graphs("default", 50, "review", ("review", rest[1].graph_id))] == ["review-fast"]
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_names_command_ids_and_listings_are_per_project(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            alpha = await graphs.apply(_command("cmd_1", project="alpha"), _definition('{"a":1}'))
+            # The same name and command ID in another project are another graph and another command.
+            beta = await graphs.apply(_command("cmd_1", "f2", project="beta"), _definition('{"b":1}'))
+            assert alpha["resource_id"] != beta["resource_id"]
+            assert await graphs.apply(_command("cmd_1", project="alpha"), _definition('{"a":1}')) == alpha
+            with pytest.raises(CommandIdConflict):
+                await graphs.apply(_command("cmd_1", "f3", project="beta"), _definition('{"b":2}'))
+
+            again = await graphs.apply(_command("cmd_2", project="alpha"), _definition('{"a":1}'))
+            assert (await graphs.operation(again["operation_id"])).result["created"] is False
+            # expected_version names the latest revision of the graph in the command's project.
+            with pytest.raises(VersionConflict) as missing:
+                await graphs.apply(_command("cmd_3", project="gamma"), _definition('{"a":1}'), expected_version=1)
+            assert missing.value.actual is None
+
+            assert [(graph.project, graph.graph_id) for graph in await graphs.graphs("alpha", 50)] == [
+                ("alpha", alpha["resource_id"]),
+            ]
+            assert [graph.graph_id for graph in await graphs.graphs("beta", 50)] == [beta["resource_id"]]
+            assert await graphs.graphs("default", 50) == []
+            assert (await graphs.graph(beta["resource_id"])).project == "beta"
+            assert (await graphs.operation(beta["operation_id"])).project == "beta"
+        finally:
+            await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_project_migration_keeps_existing_graphs_under_default(tmp_path: Path) -> None:
+    config = DatabaseConfig(sqlite_directory=tmp_path)
+    PERSISTENCE.upgrade(config, "4925ef9f3b79")
+    now = "2026-10-27 00:00:00.000000"  # as SQLite keeps a timestamp
+    with PERSISTENCE.database(config).migration_engine().begin() as connection:
+        for graph_id, name, latest in (("graph_a", "triage", 2), ("graph_b", "review", 1)):
+            connection.execute(sa.text(
+                "INSERT INTO graphs VALUES (:graph_id, :name, NULL, :latest, :now, :now)"
+            ), {"graph_id": graph_id, "name": name, "latest": latest, "now": now})
+            for revision in range(1, latest + 1):
+                connection.execute(sa.text(
+                    "INSERT INTO graph_revisions VALUES (:graph_id, :revision, 'resource', :source, :sha, :now)"
+                ), {"graph_id": graph_id, "revision": revision, "source": f'{{"r":{revision}}}',
+                    "sha": _definition(f'{{"r":{revision}}}').source_sha256, "now": now})
+        connection.execute(sa.text(
+            "INSERT INTO operations VALUES ('op_1', 'cmd_old', 'graphs.apply', 'succeeded', '{}', NULL, NULL, :now, :now)"
+        ), {"now": now})
+        connection.execute(sa.text(
+            "INSERT INTO command_receipts VALUES ('cmd_old', 'oe.v1.ge.control.graphs.apply', 'f1', :response, :now)"
+        ), {"response": '{"command_id": "cmd_old", "status": "accepted", "operation_id": "op_1"}', "now": now})
+
+    PERSISTENCE.upgrade(config)
+
+    async def scenario() -> None:
+        graphs = PERSISTENCE.open(config)
+        try:
+            listed = await graphs.graphs("default", 50)
+            assert [(graph.graph_id, graph.project, graph.name, graph.latest_revision) for graph in listed] == [
+                ("graph_b", "default", "review", 1), ("graph_a", "default", "triage", 2),
+            ]
+            assert (await graphs.revision("graph_a", 2)).source == '{"r":2}'
+            assert (await graphs.operation("op_1")).project == "default"
+            # The receipt is still the default project's, and an unchanged apply there is still a no-op.
+            assert (await graphs.apply(_command("cmd_old"), _definition("{}")))["operation_id"] == "op_1"
+            unchanged = await graphs.apply(_command("cmd_new"), _definition('{"r":2}', "triage"))
+            assert unchanged["resource_id"] == "graph_a"
+            assert (await graphs.operation(unchanged["operation_id"])).result["created"] is False
         finally:
             await graphs.close()
 

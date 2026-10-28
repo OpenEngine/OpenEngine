@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 import nats
 from alembic.util import CommandError
-from openengine.messaging import Server, listen_address
+from openengine.messaging import LocalOperator, Server, listen_address
 from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
@@ -82,8 +82,12 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     if not is_loopback(urlsplit(listener).hostname):
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
-    registry = Registry(store)
-    server = Server(connection, "ge", listener, queries=registry.queries(), commands=registry.commands())
+    # One authorizer for every request, and again for the project each one reaches.
+    authorizer = LocalOperator()
+    registry = Registry(store, authorizer)
+    server = Server(
+        connection, "ge", listener, queries=registry.queries(), commands=registry.commands(), authorizer=authorizer,
+    )
     await server.start()
     health = await asyncio.start_server(
         lambda reader, writer: _health(

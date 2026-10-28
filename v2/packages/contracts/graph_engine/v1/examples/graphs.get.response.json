@@ -6,6 +6,7 @@
     "result": {
       "graph": {
         "graph_id": "graph_review",
+        "project": "acme",
         "name": "review",
         "description": "Plan, implement, review in parallel, then ask a person.",
         "latest_revision": 3,

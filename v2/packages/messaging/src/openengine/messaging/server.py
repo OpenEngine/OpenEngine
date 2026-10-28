@@ -59,6 +59,15 @@ class Authorizer(Protocol):
     def authorize(self, request: Request) -> None:
         """Return if the request may proceed; raise a PERMISSION_DENIED ServiceError if not."""
 
+    def authorize_project(self, request: Request, project: str) -> None:
+        """Return if the request's actor may act on `project`'s resources; raise a PERMISSION_DENIED ServiceError if not.
+
+        Handlers call it with the project a request names or the resource it reaches
+        belongs to, after `authorize` has allowed the request. The project name comes
+        from the payload, so it says where to act, never who may: only the actor's
+        verified identity can grant that.
+        """
+
 
 class LocalOperator:
     """Loopback-only local-operator mode, the one `oe up` runs.
@@ -68,7 +77,8 @@ class LocalOperator:
     allowed only when the server it arrived through listens on loopback alone,
     as `listen_address` reports it; a server bound to any other address, such
     as 0.0.0.0, is reachable from off the machine, so its requests are
-    PERMISSION_DENIED until a non-loopback authorizer exists.
+    PERMISSION_DENIED until a non-loopback authorizer exists. The local
+    operator may act on every project.
     """
 
     def authorize(self, request: Request) -> None:
@@ -78,6 +88,9 @@ class LocalOperator:
                 f"local-operator mode serves loopback requests only, not ones through {request.listener}",
                 details={"permission": f"{request.kind}.{request.operation}"},
             )
+
+    def authorize_project(self, request: Request, project: str) -> None:
+        self.authorize(request)
 
 
 def listen_address(nats: NATS) -> str:
