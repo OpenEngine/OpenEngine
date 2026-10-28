@@ -655,6 +655,9 @@ def test_daemon_restart_spawns_the_installed_engine_executable(
     # No `engine` beside this fake interpreter, so resolution falls through
     # to PATH, which the test controls below.
     monkeypatch.setattr(web_api.sys, "executable", str(tmp_path / "bin" / "python"))
+    # Unset so this runs the plain path regardless of whether the host
+    # running the suite is itself a systemd unit (see `_detached_command`).
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
     real_which = shutil.which
     monkeypatch.setattr(web_api.shutil, "which", lambda name, **kw: "/opt/openengine/bin/engine" if name == "engine" else real_which(name, **kw))
     calls = []
