@@ -76,10 +76,21 @@ jobs:
             v2/docs/schema
             v2/docs/architecture.*
       # Never execute fork code with a privileged pull_request_target token.
+      # Commit as the bot app when it is configured: a push made with GITHUB_TOKEN
+      # arrives as github-actions[bot], and GitHub holds every workflow run that
+      # identity triggers on a pull request until a maintainer approves it.
+      - name: Mint a bot token
+        id: bot
+        if: vars.BOT_APP_ID != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - name: Commit changed schemas and comment on open PRs
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v9
         with:
+          github-token: ${{ steps.bot.outputs.token || github.token }}
           script: |
             const publish = require('./.github/scripts/dist/publish-service-schemas.js').default;
             await publish({github, context, core});
