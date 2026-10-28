@@ -8,7 +8,7 @@ import { mask } from "./mask.ts"
  * `highlight` labelled. The label goes beneath all the output, whichever rows are highlighted.
  * Rows in `masked` are covered by a solid box: a secret, or anything that identifies a person.
  */
-export async function show(terminal: Terminal, testInfo: TestInfo, highlight: Locator, label: string, { masked = [] }: { masked?: Locator[] } = {}) {
+export async function show(filename: string, terminal: Terminal, testInfo: TestInfo, highlight: Locator, label: string, { masked = [] }: { masked?: Locator[] } = {}) {
   await terminal.waitForQuiet()
   const area = await terminal.usedArea()
   const anchor = terminal.page.locator("#guide-label-anchor")
@@ -29,7 +29,7 @@ export async function show(terminal: Terminal, testInfo: TestInfo, highlight: Lo
         text: label, position: "below", showArrow: false,
         highlightStrokeStyle: "transparent", highlightFillStyle: "transparent",
       } } },
-    ], { clip: await terminal.usedArea({ labelBelow: true }) })
+    ], { annotation: { filename }, clip: await terminal.usedArea({ labelBelow: true }) })
   } finally {
     await anchor.evaluate((element) => element.remove())
   }
