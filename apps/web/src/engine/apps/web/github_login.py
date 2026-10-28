@@ -108,7 +108,9 @@ class GitHubLogin:
         authorize_user: Callable[[str], Awaitable[Mapping[str, bool | None]]] | None = None,
         access_timeout: float = 10,
         onboarding_token: Callable[[], str] = lambda: "",
+        public_url: str = "",
     ) -> None:
+        self.public_url = public_url
         self.config = config
         # Which of the deployment's repositories a verified GitHub account
         # (id, login) can write to: repository -> GitHub's answer, or None
@@ -545,9 +547,9 @@ class GitHubLogin:
         service token admits `POST /api/runs`, for the MCP gateway, and the
         `/api/v1/` graph API (except trust writes), for a CLI pointed at this server.
         A distinct onboarding token admits only job creation and polling.
+        Without GitHub login, public and forwarded requests still need a token;
+        direct local requests retain access.
         """
-        if not self.configured:
-            return app
         return _SessionAuthMiddleware(app, self)
 
 
@@ -578,6 +580,17 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
+        if not self.login.configured:
+            # A local reverse proxy can deliver an internet request over loopback.
+            # Neither its peer address nor a rewritten Host makes it local.
+            forwarded = any(name in request.headers for name in (
+                "forwarded", "x-forwarded-for", "x-forwarded-host", "cf-connecting-ip",
+            ))
+            if not forwarded and (
+                not self.login.public_url or request.url.hostname in {"localhost", "127.0.0.1", "::1"}
+            ):
+                await self.app(scope, receive, send)
+                return
         if self.login._has_service_token(request) or self.login._has_onboarding_token(request):
             await self.app(scope, receive, send)
             return

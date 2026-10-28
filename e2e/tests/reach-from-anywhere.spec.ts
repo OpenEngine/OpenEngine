@@ -10,6 +10,9 @@ import { anotherComputerCategory } from "./docCategories"
 // The Mac mini is reached at an https address, through local TLS unless E2E_TUNNEL asks for a real tunnel
 // (see fixtures/tunnel.ts). Either way the page shows the address in GUIDE_ADDRESS, so the guide is the same.
 
+// Tailscale Serve belongs to the machine, so the two sections take turns.
+test.describe.configure({ mode: "default" })
+
 test.use({ terminalSession: { cols: 120, rows: 30 } })
 
 /** The Mac mini as this computer's backends file records it. */
@@ -39,20 +42,10 @@ async function show(terminal: Terminal, testInfo: TestInfo, engine: Engine, macM
   })
 }
 
-/**
- * The OpenEngine half of either section: protect the Mac mini with a token, then add it from
- * this computer with that token and check it's up.
- */
-async function addTheMacMini(
-  kind: TunnelKind,
-  { engine, terminal, computer, testInfo }: { engine: Engine; terminal: Terminal; computer: TunnelledComputer; testInfo: TestInfo },
-) {
+async function protectTheMacMini(kind: TunnelKind, computer: TunnelledComputer, engine: Engine) {
   const address = `https://${GUIDE_ADDRESS[kind]}`
-  const typed = computer.publicUrl
-  const clear = () => test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
-
   await step(
-    `Now protect OpenEngine on the Mac mini with a **token**: a long, secret password that every request to it must carry. This matters. Until now, only programs on the Mac mini itself could reach OpenEngine there. The tunnel makes it reachable from outside your home network, and OpenEngine runs AI agents and commands on the Mac mini for whoever reaches it. With a token, anyone without it is turned away.
+    `Before starting a tunnel, protect OpenEngine on the Mac mini with a **token**: a long, secret password that every request to it must carry. This matters. Keep OpenEngine private until this is set. A tunnel makes it reachable from outside your home network, and OpenEngine runs AI agents and commands on the Mac mini for whoever reaches it. With a token, anyone without it is turned away.
 
 On the Mac mini, stop OpenEngine, make a token, and keep it in a file only you can read:
 
@@ -78,6 +71,19 @@ Then start OpenEngine again with \`oe daemon start\`. To see the token, so you c
       await requireToken(computer.url, computer.host)
     },
   )
+}
+
+/**
+ * The OpenEngine half of either section: protect the Mac mini with a token, then add it from
+ * this computer with that token and check it's up.
+ */
+async function addTheMacMini(
+  kind: TunnelKind,
+  { engine, terminal, computer, testInfo }: { engine: Engine; terminal: Terminal; computer: TunnelledComputer; testInfo: TestInfo },
+) {
+  const address = `https://${GUIDE_ADDRESS[kind]}`
+  const typed = computer.publicUrl
+  const clear = () => test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
 
   await step(
     `Back on this computer, tell OpenEngine about the Mac mini: its name, its address, and the name of the place its token will be kept, \`MAC_MINI_TOKEN\`. Type \`oe backend add mac-mini ${address} --token-env MAC_MINI_TOKEN\` and press Enter.
@@ -147,7 +153,7 @@ test.describe(anotherComputerCategory, () => {
       slug: "/guides/other-computers/reach-from-anywhere",
     }),
     () => {
-      test.describe(() => {
+      test.describe("Cloudflare Tunnel", () => {
         test.use({ tunnel: "cloudflare" })
 
         test("Reach it through Cloudflare Tunnel", async ({ engine, terminal, tunnelledComputer }, testInfo) => {
@@ -175,6 +181,8 @@ test.describe(anotherComputerCategory, () => {
             `Give the tunnel its address. Type \`cloudflared tunnel route dns openengine ${GUIDE_ADDRESS.cloudflare}\` and press Enter, with your own domain in place of \`example.com\`.`,
           )
 
+          await protectTheMacMini("cloudflare", computer, engine)
+
           await step(
             "Start the tunnel, sending what arrives to OpenEngine. Type `cloudflared tunnel run --url http://127.0.0.1:4364 openengine` and press Enter. Leave that terminal open: the tunnel works while it's running. To have it start by itself, see [Cloudflare's guide to running a tunnel as a service](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/local-management/as-a-service/).",
           )
@@ -183,7 +191,7 @@ test.describe(anotherComputerCategory, () => {
         })
       })
 
-      test.describe(() => {
+      test.describe("Tailscale", () => {
         test.use({ tunnel: "tailscale" })
 
         test("Reach it through Tailscale", async ({ engine, terminal, tunnelledComputer }, testInfo) => {
@@ -198,8 +206,10 @@ test.describe(anotherComputerCategory, () => {
           )
 
           await step(
-            "Sign in to Tailscale on both computers, with the same account, so they join the same tailnet. Then turn on https for your tailnet: see [Enabling HTTPS](https://tailscale.com/kb/1153/enabling-https).",
+            "Sign in to Tailscale on both computers, with the same account, so they join the same tailnet. Then turn on https for your tailnet: see [Enabling HTTPS](https://tailscale.com/kb/1153/enabling-https). In Tailscale's admin console, open the Machines page, choose the Mac mini, and copy its full DNS name. Put `https://` in front of it: that is your address. Use it wherever this guide shows `https://mac-mini.tail1234.ts.net`.",
           )
+
+          await protectTheMacMini("tailscale", computer, engine)
 
           await step(
             `On the Mac mini, give OpenEngine an https address on your tailnet. Type \`tailscale serve --bg 4364\` and press Enter. Tailscale shows the address, such as \`https://${GUIDE_ADDRESS.tailscale}\`, and keeps serving it, even after a restart, until you type \`tailscale serve reset\`.`,

@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { recordTunnel } from "../support/tunnel-cleanup.ts"
 import { engineBin } from "../support/engine.ts"
 import type { TestInfo } from "@playwright/test"
 import { test as terminalTest } from "./terminal.ts"
@@ -249,14 +250,19 @@ export async function startEngine({
       ? [path.join(path.dirname(engineBin), "python"), STUB_DAEMON, path.join(root, "bin")]
       : [engineWebBin()]
   const daemon = spawn(command!, args, { cwd: repository, env: daemonEnv, stdio: ["ignore", "pipe", "pipe"] })
+  const forgetProcess = daemon.pid && process.env.E2E_TUNNEL_CLEANUP ? recordTunnel({ pid: daemon.pid }) : undefined
   const output: string[] = []
   daemon.stdout!.on("data", (chunk: Buffer) => output.push(chunk.toString()))
   daemon.stderr!.on("data", (chunk: Buffer) => output.push(chunk.toString()))
   let failure: string | undefined
   daemon.on("error", (error) => (failure = `${command} could not be started: ${error.message}`))
 
+  let stopped = false
   const stop = async () => {
+    if (stopped) return
     await terminate(daemon)
+    stopped = true
+    forgetProcess?.()
     if (keepRoot()) return
     removeWorkspaces(root)
     rmSync(root, { recursive: true, force: true })
@@ -335,11 +341,14 @@ function selfSignedCertificate(host: string) {
  * rather than a port the OS picked. It answers HTTPS itself, with a certificate
  * for `address` saved at `certificate`, so the sessions must trust that file.
  */
-async function startProxy(address: string, target: string) {
+export async function startProxy(address: string, target: string, publicHost = false) {
   const forward = (request: http.IncomingMessage, response: http.ServerResponse, url: URL) => {
     const forwarded = http.request(
       new URL(url.pathname + url.search, target),
-      { method: request.method, headers: { ...request.headers, host: new URL(target).host } },
+      { method: request.method, headers: {
+        ...request.headers, host: publicHost ? address : new URL(target).host,
+        ...(publicHost ? { "x-forwarded-for": "203.0.113.7" } : {}),
+      } },
       (answer) => {
         response.writeHead(answer.statusCode ?? 502, answer.headers)
         answer.on("error", () => response.destroy())
@@ -369,7 +378,7 @@ async function startProxy(address: string, target: string) {
   const secure = http.createServer((request, response) => forward(request, response, new URL(request.url ?? "/", `https://${address}`)))
   const context = tls.createSecureContext({ cert: certificate.cert, key: certificate.key })
   server.on("connect", (request: http.IncomingMessage, socket: Duplex) => {
-    if (request.url !== address) {
+    if (request.url !== address && request.url !== `${address}:443`) {
       socket.end(`HTTP/1.1 502 Bad Gateway\r\n\r\nno computer at ${request.url}`)
       return
     }
