@@ -28,7 +28,14 @@ export default defineConfig({
       },
     },
   },
-  reporter: [["list"], ["@test2doc/playwright", { outputDir }]],
+  // `list` for the run as it goes; the summary for what the run noted about itself (see summaryReporter.ts); the JSON for
+  // whatever reads the results next, such as the benchmark report; test2doc for the guide.
+  reporter: [
+    ["list"],
+    ["./support/summaryReporter.ts"],
+    ["json", { outputFile: "benchmark-results/results.json" }],
+    ["@test2doc/playwright", { outputDir }],
+  ],
   // One worker, in order: the run owns one GitHub account's repository.
   fullyParallel: false,
   workers: 1,

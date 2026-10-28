@@ -1,8 +1,11 @@
 import { execFile } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { existsSync, readFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
+import type { TerminalSession } from "../fixtures/terminal.ts"
 
 const run = promisify(execFile)
 
@@ -11,8 +14,12 @@ export const BENCH_REPO = "oe-bench"
 /** A repository is only ever deleted if its name starts with `BENCH_REPO` and it carries this topic. */
 export const BENCH_TOPIC = "oe-bench"
 
-/** The local folder holding OpenEngine and the run's state; `OE_BENCH_DIR` moves it. */
-export const benchDirectory = () => process.env.OE_BENCH_DIR ?? path.join(os.tmpdir(), "oe-bench")
+/** The Docker image and container the journey runs in: a clean computer, with nothing of this one's setup in it. */
+export const BENCH_IMAGE = "oe-bench"
+export const BENCH_CONTAINER = "oe-bench"
+
+/** The container user's home, where a person's own configuration and logins live. */
+const CONTAINER_HOME = "/home/node"
 
 export class GhError extends Error {
   status?: number
@@ -60,72 +67,95 @@ export async function getRepo(owner: string, name: string): Promise<RepoInfo | u
   }
 }
 
-type Tracked = { pid: number; command: string }
+const docker = (...args: string[]) => run("docker", args, { maxBuffer: 16 * 1024 * 1024 })
 
-const stateFile = (directory: string) => path.join(directory, "processes.json")
-
-/** The command line of a running process, or undefined if there is none. */
-async function commandOf(pid: number): Promise<string | undefined> {
-  try {
-    return (await run("ps", ["-o", "command=", "-p", String(pid)])).stdout.trim() || undefined
-  } catch {
-    return undefined
-  }
+/** Stop and delete the benchmark's computer, and with it anything running on it. True if there was one. */
+export async function removeContainer(): Promise<boolean> {
+  const { stdout } = await docker("ps", "-aq", "--filter", `name=^${BENCH_CONTAINER}$`)
+  if (!stdout.trim()) return false
+  await docker("rm", "-f", BENCH_CONTAINER)
+  return true
 }
 
 /**
- * Remember a process this run started (a tunnel, a daemon) so teardown can stop it.
- * Teardown stops only these, found by the state file, never by process name, so a
- * tunnel of the user's own is left alone.
+ * Start a new clean computer for the journey. Docker caches the image, so only the first run builds it.
+ *
+ * The logins it needs come from this computer, each given where a person's own would be: GitHub's, Claude's and
+ * Codex's. They are mounted read-only and copied in, so a token the container refreshes never changes this
+ * computer's, and removing the container can never remove them.
  */
-export async function recordProcess(pid: number, directory = benchDirectory()) {
-  const command = await commandOf(pid)
-  if (command === undefined) throw new Error(`Process ${pid} is not running, so it can't be recorded.`)
-  mkdirSync(directory, { recursive: true })
-  const tracked: Tracked[] = existsSync(stateFile(directory)) ? JSON.parse(readFileSync(stateFile(directory), "utf8")) : []
-  writeFileSync(stateFile(directory), JSON.stringify([...tracked, { pid, command }]))
+export async function startContainer() {
+  // Built only when the Dockerfile has changed: a build asks the registry about its base image even when nothing
+  // changed, which needs the credentials helper (and, on a Mac over SSH, an unlocked keychain), for no reason.
+  const context = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "benchmark")
+  const version = createHash("sha256").update(readFileSync(path.join(context, "Dockerfile"))).digest("hex").slice(0, 16)
+  const built = await docker("image", "inspect", "-f", '{{ index .Config.Labels "oe.bench.dockerfile" }}', BENCH_IMAGE).then(
+    ({ stdout }) => stdout.trim(),
+    () => "",
+  )
+  if (built !== version) await docker("build", "--label", `oe.bench.dockerfile=${version}`, "-t", BENCH_IMAGE, context)
+  const real = os.homedir()
+  const logins = [
+    ["gh", process.env.GH_CONFIG_DIR ?? path.join(real, ".config", "gh")],
+    ["claude", process.env.CLAUDE_CONFIG_DIR ?? path.join(real, ".claude")],
+    ["codex", process.env.CODEX_HOME ?? path.join(real, ".codex")],
+  ].filter(([, directory]) => existsSync(directory!))
+  await docker("run", "-d", "--init", "--name", BENCH_CONTAINER, ...logins.flatMap(([name, directory]) => ["-v", `${directory}:/logins/${name}:ro`]), BENCH_IMAGE)
+  const copy = [
+    "mkdir -p ~/.config ~/.claude ~/.codex",
+    "[ -d /logins/gh ] && cp -a /logins/gh ~/.config/gh",
+    // Only what signs the agents in, not the history and caches around it. Claude keeps its settings file beside its
+    // login when it has its own folder, and in the home folder when it doesn't.
+    "[ -f /logins/claude/.credentials.json ] && cp /logins/claude/.credentials.json ~/.claude/",
+    "{ [ -f /logins/claude/.claude.json ] && cp /logins/claude/.claude.json ~/.claude.json; } || true",
+    "[ -f /logins/codex/auth.json ] && cp /logins/codex/auth.json ~/.codex/",
+    "true",
+  ].join("; ")
+  await docker("exec", BENCH_CONTAINER, "sh", "-c", copy)
 }
 
 /**
- * Stop every recorded process that is still the process that was recorded, and leave
- * everything else (the repository, the folder) for a person to look at. Returns how many
- * were stopped. A run does this when it ends, however it ends.
+ * A terminal session inside the benchmark's computer, shown to the guide as a shell on a clean machine. The
+ * terminal's own base environment (a plain prompt, and the marker that tells a test a command is done) is
+ * given to the shell inside, since it can't reach through `docker exec`.
  */
-export async function stopProcesses(directory = benchDirectory()): Promise<number> {
-  if (!existsSync(stateFile(directory))) return 0
-  let stopped = 0
-  for (const { pid, command } of JSON.parse(readFileSync(stateFile(directory), "utf8")) as Tracked[]) {
-    // The pid may have been reused by something else since: only stop the same command.
-    if ((await commandOf(pid)) !== command) continue
-    process.kill(pid, "SIGTERM")
-    for (let waited = 0; (await commandOf(pid)) === command && waited < 5_000; waited += 100) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    }
-    if ((await commandOf(pid)) === command) process.kill(pid, "SIGKILL")
-    stopped++
+export function containerSession({ cols = 140, rows = 40, env = {} }: { cols?: number; rows?: number; env?: Record<string, string> } = {}): TerminalSession {
+  const inside = {
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    LANG: "C.UTF-8",
+    PS1: "$ ",
+    PROMPT_COMMAND: 'printf "\\033]133;D;%s\\007" "$?"',
+    HISTFILE: "/dev/null",
+    GH_NO_UPDATE_NOTIFIER: "1",
+    // The tunnel's startup checks print a screenful a second after its address, which scrolls the address out of view.
+    TUNNEL_NO_PRECHECKS: "true",
+    // Vim as it comes, so the screenshot is the same everywhere.
+    VIMINIT: "set nocompatible number ttimeout ttimeoutlen=50",
+    ...env,
   }
-  return stopped
+  return {
+    command: "docker",
+    args: [
+      "exec", "-it", "-w", CONTAINER_HOME,
+      ...Object.entries(inside).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
+      BENCH_CONTAINER, "bash", "--noprofile", "--norc", "-i",
+    ],
+    cols,
+    rows,
+  }
 }
 
-/** A folder safe to delete wholesale: named for the benchmark, and not a place the user lives. */
-function assertRemovable(directory: string) {
-  const resolved = path.resolve(directory)
-  if (!path.basename(resolved).startsWith(BENCH_REPO) || resolved === os.homedir() || resolved === path.parse(resolved).root) {
-    throw new TeardownRefused(`Refusing to delete ${resolved}: the benchmark folder must be named ${BENCH_REPO}…`)
-  }
-}
-
-export type TeardownResult = { owner: string; deletedRepo: boolean; removedDirectory: boolean; stoppedProcesses: number }
+export type TeardownResult = { owner: string; deletedRepo: boolean; removedContainer: boolean }
 
 /**
- * Remove everything a benchmark run leaves behind: the calculator repository
- * (and its Pages site), the local folder, and any process the run recorded.
- * Safe to run twice, and on a machine with nothing to remove.
+ * Remove everything a benchmark run leaves behind: the calculator repository (and its Pages site) and the
+ * container, with the daemon and tunnel running in it. Safe to run twice, and on a machine with nothing to remove.
  *
  * It refuses, changing nothing, a repository whose name doesn't start with
  * `oe-bench` or that lacks the `oe-bench` topic.
  */
-export async function teardown({ repo = BENCH_REPO, directory = benchDirectory() } = {}): Promise<TeardownResult> {
+export async function teardown({ repo = BENCH_REPO } = {}): Promise<TeardownResult> {
   const owner = await whoami()
   const found = await getRepo(owner, repo)
   if (found && !found.name.startsWith(BENCH_REPO)) {
@@ -134,12 +164,11 @@ export async function teardown({ repo = BENCH_REPO, directory = benchDirectory()
   if (found && !found.topics.includes(BENCH_TOPIC)) {
     throw new TeardownRefused(`Refusing to delete ${owner}/${found.name}: it doesn't have the ${BENCH_TOPIC} topic.`)
   }
-  assertRemovable(directory)
   if (found && !((await tokenScopes()) ?? ["delete_repo"]).includes("delete_repo")) {
     throw new Error("The gh token needs the delete_repo scope to delete the benchmark repository: run `gh auth refresh -s delete_repo`.")
   }
 
-  const stoppedProcesses = await stopProcesses(directory)
+  const removedContainer = await removeContainer()
   if (found) {
     try {
       await gh("api", "-X", "DELETE", `repos/${owner}/${found.name}/pages`)
@@ -152,7 +181,5 @@ export async function teardown({ repo = BENCH_REPO, directory = benchDirectory()
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
   }
-  const removedDirectory = existsSync(directory)
-  rmSync(directory, { recursive: true, force: true })
-  return { owner, deletedRepo: found !== undefined, removedDirectory, stoppedProcesses }
+  return { owner, deletedRepo: found !== undefined, removedContainer }
 }

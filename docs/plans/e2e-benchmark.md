@@ -32,8 +32,8 @@ OpenEngine's job. We do not care how it gets there, only that it does.
 One config runs the whole benchmark. The report (see below) is configured up
 front and collected as the run goes, not a step of its own.
 
-0. **Teardown.** Delete the calculator repo, the local test directory with
-   OpenEngine in it, and the deployed site. Stop any leftover daemon or tunnel.
+0. **Teardown.** Delete the calculator repo, the deployed site and the
+   container the last run happened in, with the daemon and tunnel running in it.
 1. **Clone OpenEngine** at the ref under test (the release commit, or the v1
    tag for the baseline), and record its SHA.
 2. **Set up OpenEngine.** Configure GitHub CLI access with the bench account's
@@ -41,8 +41,8 @@ front and collected as the run goes, not a step of its own.
    App if app-backed webhooks are wanted; current setup does not create one
    (see the #1137 findings below). Screenshot where each secret goes, with the secret masked by a
    test2doc highlight annotation. Start the Cloudflare Tunnel. Register the `tdd-guide` graph.
-   Check every runner is signed in (`oe agents`), so a missing sign-in fails
-   here rather than minutes into a run.
+   Check every runner is signed in (`oe doctor` for Claude, `codex login status`
+   for Codex), so a missing sign-in fails here rather than minutes into a run.
 3. **Create the calculator repo** under the account `gh` is logged in as, and
    clone it locally.
 4. **Connect the repo to OpenEngine.** Grant the existing app access to the new
@@ -378,6 +378,42 @@ harness-computed TOTP from a separately stored seed (CI environment secrets or
 gitignored local files); TOTP is a proposed fallback, not tested here. Bot checks
 or recovery prompts still require an operator. Do not silently fall back to a
 personal account.
+
+### Setup findings (#1143)
+
+The whole journey runs in a Docker container, a clean Linux machine, and not on
+the developer's computer. Setup written against the host first showed why:
+`oe daemon` registers its background service under one fixed name per user (the
+launchd label `sh.openengine.engine`, or the systemd unit `openengine.service`),
+so installing the benchmark's OpenEngine would take over a developer's own;
+`oe`'s `local` backend is always port 4364, so a daemon on any other port is
+invisible to `oe agent` and `oe graph`, which would quietly act on whatever else
+is on 4364; and the installer writes into the home folder. In the container the
+daemon uses its process backend, 4364 is free, and teardown is removing the
+container, which also stops the tunnel.
+
+- The image installs Linux `claude`, `codex`, `gh` and `cloudflared`; the
+  host's are macOS programs a Linux container cannot run. It holds nothing of
+  OpenEngine, which the journey clones and installs from `main`, timed apart
+  from the run and recorded with its SHA.
+- Logins are mounted read-only and copied to where a person's own would be: the
+  `gh` config directory, Claude's `.credentials.json` and `.claude.json`, and
+  Codex's `auth.json`. A token the container refreshes never changes the
+  host's. `[claude] config_dir` and `[github] gh_config_dir` exist, but the
+  defaults suffice once the logins are where a new user's would be.
+- `oe agents` lists runners but not whether they are signed in, and `oe agent
+  signin` waits for a person. `oe doctor` runs `claude auth status` and reports
+  it without prompting; it does not check Codex, so the journey runs `codex
+  login status` as well. Both fail the run early with a message saying what to
+  sign in to. `oe doctor` prints the Claude account's email, so that row is
+  masked in the screenshot.
+- The tunnel's startup checks (`TUNNEL_NO_PRECHECKS=true`) are skipped, or their
+  output scrolls the public address off a 40-row terminal within a second.
+- `docker build` asks the registry about its base image even when nothing
+  changed, which needs Docker's credentials helper, and on a Mac over SSH that
+  needs an unlocked keychain (`security unlock-keychain`). The image is built
+  only when its Dockerfile changes, so later runs need neither. The same locked
+  keychain makes `claude` and `codex` hang when launched from such a session.
 
 ### Decision: the real run feeds the committed guide
 
