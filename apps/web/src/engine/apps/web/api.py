@@ -27,6 +27,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import sys
 import time
 from collections.abc import (
     AsyncIterator,
@@ -1179,6 +1181,43 @@ async def _ready_runner_choices(
     # Validate before saving even a dependent run, without advancing rotation.
     choose_runners(declarations, inputs, usage=dict, turns={}, available=available)
     return available
+
+
+def _engine_executable() -> str | None:
+    """`engine` beside this interpreter, where the installer puts both wheels."""
+    sibling = Path(sys.executable).parent / "engine"
+    if sibling.is_file():
+        return str(sibling)
+    return shutil.which("engine")
+
+
+async def _daemon_command(is_local_request: bool, *args: str, status: str) -> JSONResponse:
+    # Restarting or updating stops this very process from outside, so it is
+    # held to the same origin check as other endpoints that change state.
+    if not is_local_request:
+        return _error("forbidden", 403)
+    executable = _engine_executable()
+    if executable is None:
+        return _error("the engine CLI is not installed alongside this service", 500)
+    try:
+        # Detached: the child outlives the response, and outlives this
+        # process once the restart or update it runs reaches it.
+        await asyncio.create_subprocess_exec(
+            executable, "daemon", *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as error:
+        return _error(f"could not start {status}: {error}", 500)
+    return JSONResponse({"status": status})
+
+
+def _daemon_route(is_local_request: Callable[[Request], bool], *args: str, status: str) -> Callable[[Request], Awaitable[JSONResponse]]:
+    async def handler(request: Request) -> JSONResponse:
+        return await _daemon_command(is_local_request(request), *args, status=status)
+    return handler
 
 
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
@@ -4340,6 +4379,9 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         readings = await _utilization.refresh(tuple(runners))
         return JSONResponse(utilization_json(readings))
 
+    daemon_restart = _daemon_route(_is_local_request, "restart", status="restarting")
+    daemon_update = _daemon_route(_is_local_request, "update", status="updating")
+
     # Anyone who can push to one of the repositories this deployment works on
     # may sign in: the webhook repository and the configured checkouts. What
     # they see is the WorkOrders of the repositories they can push to.
@@ -4561,6 +4603,8 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         Route("/api/loops/{loop_id}", delete_loop, methods=["DELETE"]),
         Route("/api/utilization", read_utilization),
         Route("/api/utilization/refresh", refresh_utilization, methods=["POST"]),
+        Route("/api/daemon/restart", daemon_restart, methods=["POST"]),
+        Route("/api/daemon/update", daemon_update, methods=["POST"]),
         Route("/api/runs", list_runs),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run),

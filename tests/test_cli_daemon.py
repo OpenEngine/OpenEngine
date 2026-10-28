@@ -342,6 +342,52 @@ def test_start_status_stop_lifecycle_with_a_detached_process(home: Path, monkeyp
     assert "health: down" in capsys.readouterr().out
 
 
+def test_restart_stops_and_starts_a_detached_process(home: Path, capsys):
+    with socket.socket() as free:
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+    program = home / f"fake-engine-web-{port}"
+    program.write_text(f"#!{sys.executable}\n{FAKE_SERVICE}")
+    program.chmod(0o755)
+    config = home / "config" / "openengine" / "engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f"[server]\nport = {port}\n")
+    spec = daemon.ServiceSpec(str(program), str(config), port, str(daemon.log_path()), {})
+    daemon.prepare_directories()
+    daemon.write_record(daemon.Record("process", spec))
+
+    assert cli.main(["daemon", "start"]) == 0
+    capsys.readouterr()
+    pid = daemon.ProcessBackend.pid()
+    assert pid is not None
+
+    assert cli.main(["daemon", "restart"]) == 0
+    assert f"OpenEngine 9.9.9 is running at http://127.0.0.1:{port}" in capsys.readouterr().out
+    new_pid = daemon.ProcessBackend.pid()
+    assert new_pid is not None
+    assert new_pid != pid
+    assert not daemon.process_alive(pid)
+
+
+def test_restart_starts_the_service_when_it_was_not_running(home: Path, capsys):
+    with socket.socket() as free:
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+    program = home / f"fake-engine-web-{port}"
+    program.write_text(f"#!{sys.executable}\n{FAKE_SERVICE}")
+    program.chmod(0o755)
+    config = home / "config" / "openengine" / "engine.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f"[server]\nport = {port}\n")
+    spec = daemon.ServiceSpec(str(program), str(config), port, str(daemon.log_path()), {})
+    daemon.prepare_directories()
+    daemon.write_record(daemon.Record("process", spec))
+
+    assert cli.main(["daemon", "restart"]) == 0
+    assert f"OpenEngine 9.9.9 is running at http://127.0.0.1:{port}" in capsys.readouterr().out
+    assert daemon.ProcessBackend.pid() is not None
+
+
 def test_start_refuses_a_port_held_by_another_service(home: Path, monkeypatch, capsys):
     config = home / "config" / "openengine" / "engine.toml"
     config.parent.mkdir(parents=True)
@@ -809,3 +855,59 @@ def test_healed_shared_directory_does_not_shadow_recorded_git(home, directory):
     path = _spec(home, tools=tools).environment()["PATH"]
     assert path.split(os.pathsep)[:4] == ["/usr/bin", "/agents/bin", directory, "/mise/shims"]
     assert daemon.shutil.which("git", path=path) == "/usr/bin/git"
+
+
+class _FakeStdout:
+    def close(self) -> None:
+        pass
+
+
+def test_update_pipes_curl_into_sh(monkeypatch):
+    calls = []
+
+    class FakePopen:
+        def __init__(self, args, stdout=None):
+            calls.append(("popen", args))
+            self.stdout = _FakeStdout()
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    def fake_run(args, stdin=None, check=False):
+        calls.append(("run", args, stdin))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(daemon.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(daemon.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(daemon.subprocess, "run", fake_run)
+
+    assert cli.main(["daemon", "update"]) == 0
+    assert calls[0] == ("popen", ["/usr/bin/curl", "-LsSf", daemon.INSTALLER_URL])
+    assert calls[1][0] == "run" and calls[1][1] == ["/usr/bin/sh"]
+
+
+def test_update_fails_loudly_when_the_installer_exits_nonzero(monkeypatch, capsys):
+    class FakePopen:
+        def __init__(self, args, stdout=None):
+            self.stdout = _FakeStdout()
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(daemon.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(daemon.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(
+        daemon.subprocess, "run", lambda args, **kwargs: subprocess.CompletedProcess(args, 1)
+    )
+
+    assert cli.main(["daemon", "update"]) == 1
+    assert "installer failed" in capsys.readouterr().err
+
+
+def test_update_requires_curl_and_sh(monkeypatch, capsys):
+    monkeypatch.setattr(daemon.shutil, "which", lambda _name: None)
+
+    assert cli.main(["daemon", "update"]) == 1
+    assert "curl and sh are required" in capsys.readouterr().err

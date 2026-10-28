@@ -24,6 +24,9 @@ vi.mock("./api", () => ({
   disconnectSlack: vi.fn(),
   getSlackStatus: vi.fn(),
   setSlackCredentials: vi.fn(),
+  getDaemonHealth: vi.fn(),
+  restartDaemon: vi.fn(),
+  updateDaemon: vi.fn(),
 }));
 
 describe("SettingsPanel Slack connection", () => {
@@ -41,6 +44,7 @@ describe("SettingsPanel Slack connection", () => {
       clientIdConfigured: false,
     });
     vi.mocked(api.getSlackStatus).mockResolvedValue({ configured: false, connected: false });
+    vi.mocked(api.getDaemonHealth).mockResolvedValue({ version: "1.2.3", ready: true });
     vi.mocked(api.getSourceControlProvider).mockResolvedValue({
       provider: "gh-cli",
       autoSelected: false,
@@ -142,5 +146,56 @@ describe("SettingsPanel Slack connection", () => {
       ),
     );
     expect(await screen.findByText("GitLab OAuth client ID saved")).toBeVisible();
+  });
+
+  it("shows the running version", async () => {
+    vi.mocked(api.getDaemonHealth).mockResolvedValue({ version: "4.5.6", ready: true });
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+
+    expect(await screen.findByText("Running OpenEngine 4.5.6")).toBeVisible();
+  });
+
+  it("restarts the daemon after confirmation", async () => {
+    vi.mocked(api.restartDaemon).mockResolvedValue({ status: "restarting" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+
+    await waitFor(() => expect(api.restartDaemon).toHaveBeenCalled());
+  });
+
+  it("does not restart the daemon without confirmation", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+
+    expect(api.restartDaemon).not.toHaveBeenCalled();
+  });
+
+  it("shows an error when restarting the daemon fails", async () => {
+    vi.mocked(api.restartDaemon).mockRejectedValue(new Error("Could not reach the daemon"));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+
+    expect(await screen.findByText("Could not reach the daemon")).toBeVisible();
+  });
+
+  it("updates to the latest release after confirmation", async () => {
+    vi.mocked(api.updateDaemon).mockResolvedValue({ status: "updating" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<SettingsPanel onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Update to latest" }));
+
+    await waitFor(() => expect(api.updateDaemon).toHaveBeenCalled());
   });
 });

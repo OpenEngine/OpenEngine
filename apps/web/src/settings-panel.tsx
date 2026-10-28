@@ -24,6 +24,9 @@ import {
   getSlackStatus,
   setSlackCredentials,
   setSlackSigningSecret,
+  getDaemonHealth,
+  restartDaemon,
+  updateDaemon,
   type GitHubConnectResponse,
   type GitLabDeviceFlow,
   type SlackStatus,
@@ -85,6 +88,12 @@ type SourceControlState =
       } | null;
     };
 
+type ServiceState =
+  | { phase: "idle" }
+  | { phase: "restarting" }
+  | { phase: "updating" }
+  | { phase: "error"; message: string };
+
 type GitLabState = {
   origin: string;
   clientId: string;
@@ -127,6 +136,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     clientSecret: "",
     signingSecret: "",
   });
+  const [service, setService] = useState<ServiceState>({ phase: "idle" });
+  const [version, setVersion] = useState<string | null>(null);
   // Holds the next-poll timeout ID, not a fixed interval.
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Holds the device flow expiry timeout ID.
@@ -187,6 +198,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         setConnection({ phase: "disconnected" });
       });
     loadClientId();
+    getDaemonHealth()
+      .then((health) => setVersion(health.version))
+      .catch(() => {});
     getSourceControlProvider().then((status) => {
       setSourceControl({
         phase: "ready",
@@ -517,6 +531,34 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         loading: false,
         error: err instanceof Error ? err.message : "Could not disconnect Slack.",
       }));
+    }
+  }, []);
+
+  const restartService = useCallback(async () => {
+    if (!window.confirm("Restart the OpenEngine daemon? Runs in progress will be interrupted.")) return;
+    setService({ phase: "restarting" });
+    try {
+      await restartDaemon();
+      setService({ phase: "idle" });
+    } catch (err) {
+      setService({
+        phase: "error",
+        message: err instanceof Error ? err.message : "Could not restart the daemon.",
+      });
+    }
+  }, []);
+
+  const updateService = useCallback(async () => {
+    if (!window.confirm("Download and install the latest OpenEngine release, then restart? Runs in progress will be interrupted.")) return;
+    setService({ phase: "updating" });
+    try {
+      await updateDaemon();
+      setService({ phase: "idle" });
+    } catch (err) {
+      setService({
+        phase: "error",
+        message: err instanceof Error ? err.message : "Could not update the daemon.",
+      });
     }
   }, []);
 
@@ -1063,6 +1105,43 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               </p>
             </>
           )}
+        </section>
+        <section className="settings-section">
+          <h2 className="settings-section-title">Service</h2>
+          {version && (
+            <p className="settings-status settings-status-muted">Running OpenEngine {version}</p>
+          )}
+          {service.phase === "error" && (
+            <p className="settings-status settings-status-error">{service.message}</p>
+          )}
+          {service.phase === "restarting" && (
+            <p className="settings-status settings-status-muted">
+              <span aria-hidden="true" className="settings-spinner" /> Restarting…
+            </p>
+          )}
+          {service.phase === "updating" && (
+            <p className="settings-status settings-status-muted">
+              <span aria-hidden="true" className="settings-spinner" /> Downloading and installing the latest release…
+            </p>
+          )}
+          <div className="settings-actions">
+            <button
+              className="settings-button"
+              type="button"
+              disabled={service.phase === "restarting" || service.phase === "updating"}
+              onClick={() => void restartService()}
+            >
+              Restart daemon
+            </button>
+            <button
+              className="settings-button"
+              type="button"
+              disabled={service.phase === "restarting" || service.phase === "updating"}
+              onClick={() => void updateService()}
+            >
+              Update to latest
+            </button>
+          </div>
         </section>
       </div>
     </div>

@@ -909,6 +909,38 @@ def command_stop(_arguments: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def command_restart(_arguments: argparse.Namespace) -> int:
+    try:
+        stop_service()
+        _state, body, url = start_service()
+    except (OSError, RuntimeError, ValueError) as error:
+        return _fail(error)
+    print(f"OpenEngine {(body or {}).get('version', 'unknown')} is running at {url}")
+    return EXIT_OK
+
+
+# Published alongside the release archive; see docs/releases.md. Rerunning it
+# is safe: an already-installed version is reused, and config/state are not touched.
+INSTALLER_URL = "https://openengine.cc/install.sh"
+
+
+def command_update(_arguments: argparse.Namespace) -> int:
+    """Fetch and run the published installer, which installs the latest
+    release (or reuses it) and then runs `oe daemon setup` to move the
+    running service onto it."""
+    curl = shutil.which("curl")
+    sh = shutil.which("sh")
+    if curl is None or sh is None:
+        return _fail(RuntimeError("curl and sh are required to update"))
+    fetch = subprocess.Popen([curl, "-LsSf", INSTALLER_URL], stdout=subprocess.PIPE)
+    assert fetch.stdout is not None
+    install = subprocess.run([sh], stdin=fetch.stdout, check=False)
+    fetch.stdout.close()
+    if fetch.wait() != 0 or install.returncode != 0:
+        return _fail(RuntimeError("the installer failed; see its output"))
+    return EXIT_OK
+
+
 def command_status(arguments: argparse.Namespace) -> int:
     try:
         backend, spec = current()
@@ -1098,6 +1130,8 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     setup.add_argument("--no-browser", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     actions.add_parser("start", help="start the service if it is not running")
     actions.add_parser("stop", help="stop the service gracefully")
+    actions.add_parser("restart", help="stop then start the service")
+    actions.add_parser("update", help="install the latest release, then restart")
     status = actions.add_parser("status", help="show version, health and URL")
     status.add_argument("--json", action="store_true")
     logs = actions.add_parser("logs", help="print the service log")
@@ -1114,6 +1148,8 @@ def main(arguments: argparse.Namespace) -> int:
         "setup": command_setup,
         "start": command_start,
         "stop": command_stop,
+        "restart": command_restart,
+        "update": command_update,
         "status": command_status,
         "logs": command_logs,
         "doctor": command_doctor,

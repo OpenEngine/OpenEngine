@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import re
+import shutil
 import time
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -641,6 +642,88 @@ def test_utilization_refresh_refuses_a_cross_origin_page(
 
     assert refused.status_code == 403
     assert not asked
+
+
+def test_daemon_restart_spawns_the_installed_engine_executable(
+    async_client, tmp_path, monkeypatch, *, workflow_app
+) -> None:
+    """`engine-web` has no self-supervision in production -- see
+    `apps/cli/.../daemon.py` -- so restarting means asking the sibling
+    `engine` executable to stop and start it from outside this process."""
+    import engine.apps.web.api as web_api
+
+    # No `engine` beside this fake interpreter, so resolution falls through
+    # to PATH, which the test controls below.
+    monkeypatch.setattr(web_api.sys, "executable", str(tmp_path / "bin" / "python"))
+    real_which = shutil.which
+    monkeypatch.setattr(web_api.shutil, "which", lambda name, **kw: "/opt/openengine/bin/engine" if name == "engine" else real_which(name, **kw))
+    calls = []
+
+    async def fake_exec(*args, **_kwargs):
+        calls.append(args)
+        return MagicMock()
+
+    monkeypatch.setattr(web_api.asyncio, "create_subprocess_exec", fake_exec)
+    app = workflow_app(WebStores(), ConcurrentRunner(), runners={"claude": ConcurrentRunner()})
+
+    async def scenario():
+        async with async_client(app, base_url="http://localhost") as client:
+            return await client.post("/api/daemon/restart")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "restarting"}
+    assert calls == [("/opt/openengine/bin/engine", "daemon", "restart")]
+
+
+def test_daemon_update_refuses_a_cross_origin_page(
+    async_client, tmp_path, monkeypatch, *, workflow_app
+) -> None:
+    import engine.apps.web.api as web_api
+
+    monkeypatch.setattr(web_api.sys, "executable", str(tmp_path / "bin" / "python"))
+    real_which = shutil.which
+    monkeypatch.setattr(web_api.shutil, "which", lambda name, **kw: "/opt/openengine/bin/engine" if name == "engine" else real_which(name, **kw))
+    called = False
+
+    async def fake_exec(*args, **_kwargs):
+        nonlocal called
+        called = True
+        return MagicMock()
+
+    monkeypatch.setattr(web_api.asyncio, "create_subprocess_exec", fake_exec)
+    app = workflow_app(WebStores(), ConcurrentRunner(), runners={"claude": ConcurrentRunner()})
+
+    async def scenario():
+        async with async_client(app, base_url="http://localhost") as client:
+            return await client.post(
+                "/api/daemon/update", headers={"origin": "https://elsewhere.example"}
+            )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 403
+    assert not called
+
+
+def test_daemon_restart_fails_loudly_when_no_engine_executable_is_installed(
+    async_client, tmp_path, monkeypatch, *, workflow_app
+) -> None:
+    import engine.apps.web.api as web_api
+
+    monkeypatch.setattr(web_api.sys, "executable", str(tmp_path / "bin" / "python"))
+    real_which = shutil.which
+    monkeypatch.setattr(web_api.shutil, "which", lambda name, **kw: None if name == "engine" else real_which(name, **kw))
+    app = workflow_app(WebStores(), ConcurrentRunner(), runners={"claude": ConcurrentRunner()})
+
+    async def scenario():
+        async with async_client(app, base_url="http://localhost") as client:
+            return await client.post("/api/daemon/restart")
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 500
 
 
 def test_run_list_leaves_the_prose_to_the_run_it_names(

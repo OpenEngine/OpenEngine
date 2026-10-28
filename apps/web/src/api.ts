@@ -741,6 +741,27 @@ export function refreshUtilization(
   });
 }
 
+/** Stops then starts the OpenEngine service; the response returns before the
+ *  service does, since the restart reaches this very process. */
+export function restartDaemon(): Promise<{ status: string }> {
+  return api<{ status: string }>("/api/daemon/restart", { method: "POST" });
+}
+
+/** Installs the latest release and restarts onto it; `oe daemon logs` shows
+ *  the installer's progress. */
+export function updateDaemon(): Promise<{ status: string }> {
+  return api<{ status: string }>("/api/daemon/update", { method: "POST" });
+}
+
+/** The `/api/health` envelope. A 503 (not ready yet) is a normal reply while
+ *  polling through a restart, not a failure, so this bypasses `api()`'s
+ *  throw-on-non-2xx. */
+export async function getDaemonHealth(): Promise<{ version: string; ready: boolean }> {
+  const response = await fetch("/api/health", { headers: { Accept: "application/json" } });
+  const body = await response.json();
+  return { version: body.version, ready: body.ready === true };
+}
+
 /** The settings every loop runs under. Active hours, `maxPrs` and
  *  `maxDailySpend` are exit criteria each loop is held to on its own: equal
  *  active hours mean any time of day, and a zero `maxDailySpend` is no limit. The two runners are only set
