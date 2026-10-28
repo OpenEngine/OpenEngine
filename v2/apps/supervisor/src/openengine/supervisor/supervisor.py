@@ -1,10 +1,9 @@
 """Start OpenEngine V2's local processes, wait for them, and keep them running.
 
 NATS first, then the services, which are stopped before it. A service with
-a readiness check (ge and, when enabled, vcp) names its health URL in a ready
+a readiness check (ge and vcp) names its health URL in a ready
 file; the supervisor is READY only once that URL answers 200. If it never
-does, the supervisor writes FAILED with the reason and stops everything. vcp
-is opt-in: `Settings.vcp_enabled` decides whether it starts at all.
+does, the supervisor writes FAILED with the reason and stops everything.
 """
 
 from __future__ import annotations
@@ -38,7 +37,6 @@ class Settings:
     nats_port: int
     nats_monitor_port: int
     nats_server: Path | None = None
-    vcp_enabled: bool = False
 
 
 class ProcessExited(RuntimeError):
@@ -91,7 +89,7 @@ def run(settings: Settings) -> int:
         )
         nats_url = f"nats://{settings.host}:{settings.nats_port}"
         processes.append(ProcessState("nats", children["nats"].pid, nats_url, Status.READY))
-        started = services.enabled(vcp=settings.vcp_enabled)
+        started = services.SERVICES
         ready_files: dict[str, Path] = {}
         for name, module in started:
             environment = {}

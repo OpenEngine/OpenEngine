@@ -65,8 +65,7 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     assert status.returncode == 0
     state = json.loads(status.stdout)
     assert state["status"] == "ready"
-    # vcp is opt-in; test_up_can_enable_the_virtual_control_plane covers it enabled.
-    assert [process["name"] for process in state["processes"]] == ["nats", "cxn", "ge", "tools"]
+    assert [process["name"] for process in state["processes"]] == ["nats", "cxn", "ge", "tools", "vcp"]
 
     again = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port))
     assert again.returncode == 0
@@ -105,10 +104,10 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     assert oe("status").returncode == 1
 
 
-def test_up_can_enable_the_virtual_control_plane(oe, tmp_path: Path) -> None:
+def test_up_starts_the_virtual_control_plane_by_default(oe, tmp_path: Path) -> None:
     port, monitor_port = _free_port(), _free_port()
 
-    up = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port), "--enable-vcp")
+    up = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port))
     assert up.returncode == 0, up.stderr
 
     status = oe("status", "--json")

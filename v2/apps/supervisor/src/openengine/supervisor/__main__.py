@@ -16,7 +16,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nats-port", type=int, required=True)
     parser.add_argument("--nats-monitor-port", type=int, required=True)
     parser.add_argument("--nats-server", type=Path, help="use this nats-server binary instead of the pinned download")
-    parser.add_argument("--enable-vcp", action="store_true", help="start the virtual control plane (opt-in)")
     return parser
 
 
@@ -32,7 +31,6 @@ def main(argv: list[str] | None = None) -> int:
                 nats_port=arguments.nats_port,
                 nats_monitor_port=arguments.nats_monitor_port,
                 nats_server=arguments.nats_server,
-                vcp_enabled=arguments.enable_vcp,
             )
         )
     finally:

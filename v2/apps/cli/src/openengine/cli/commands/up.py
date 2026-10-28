@@ -32,7 +32,6 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     parser.add_argument("--nats-port", type=int, default=NATS_PORT, help="NATS client port")
     parser.add_argument("--nats-monitor-port", type=int, default=NATS_MONITOR_PORT, help="NATS monitoring port")
     parser.add_argument("--nats-server", type=Path, help="use this nats-server binary instead of the pinned download")
-    parser.add_argument("--enable-vcp", action="store_true", help="start the virtual control plane (opt-in)")
     parser.set_defaults(command=run)
 
 
@@ -47,8 +46,6 @@ def supervisor_command(arguments: argparse.Namespace) -> list[str]:
     ]
     if arguments.nats_server:
         command += ["--nats-server", str(arguments.nats_server.absolute())]
-    if arguments.enable_vcp:
-        command += ["--enable-vcp"]
     return command
 
 

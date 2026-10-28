@@ -8,8 +8,8 @@ Approval | A request for approval awaiting decision.
 
 ## Service skeleton (this slice)
 
-VCP is opt-in: the supervisor starts it only when `oe up --enable-vcp` (or
-`oe-supervisor --enable-vcp`) asks for it, after every other service and NATS;
+VCP starts on every `oe up` and direct `oe-supervisor` invocation,
+after every other service and NATS;
 it is stopped first, and stopping it never destroys a workspace. It connects
 to NATS, serves its subjects through the shared `openengine.messaging`
 `Server`, and answers `GET /healthz` only once it actually holds its state
