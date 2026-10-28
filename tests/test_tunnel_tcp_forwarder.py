@@ -37,8 +37,13 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """The daemon on loopback with the tunnel's address as public_url, a token, and no GitHub login."""
+def daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+    """The daemon on loopback with the tunnel's address as public_url, a token, and no GitHub login.
+
+    Parametrize indirectly with False to leave public_url unset, as a reader who
+    skips that step of the guide would.
+    """
+    public_url = getattr(request, "param", True)
     for name in (
         "ENGINE_HOST", "ENGINE_PORT", "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
         "ENGINE_GITHUB_LOGIN_CLIENT_ID", "ENGINE_GITHUB_LOGIN_REDIRECT_URI",
@@ -49,7 +54,7 @@ def daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ENGINE_STATE_DIRECTORY", str(tmp_path / "state"))
     monkeypatch.chdir(tmp_path)
     config = tmp_path / "engine.toml"
-    config.write_text(f'public_url = "https://{PUBLIC_HOST}"\n')
+    config.write_text(f'public_url = "https://{PUBLIC_HOST}"\n' if public_url else "")
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(build_app(config), host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -107,4 +112,27 @@ def test_a_tcp_forwarder_does_not_let_a_loopback_host_skip_the_token(tcp_forward
     )
     assert response.status_code == 401, (
         f"through a TCP forwarder, Host: 127.0.0.1 with no token got {response.status_code}"
+    )
+
+
+@pytest.mark.parametrize("daemon", [False], indirect=True)
+def test_a_tcp_forwarder_needs_the_token_even_without_public_url(tcp_forwarder: int) -> None:
+    """With a service token configured but no public_url, a remote caller behind a header-less forwarder is refused.
+
+    Setup: as above, but engine.toml leaves public_url unset (`ssh -R`,
+    `socat` or `tailscale serve --tcp` work without it), and ENGINE_SERVICE_TOKEN
+    is configured.
+    Request: through the forwarder, `GET /api/v1/graphs` with `Host: 127.0.0.1`
+    and no Authorization header.
+    Expected: 401, because a token is configured and the caller may be anywhere.
+    Actual: 200, because with no public_url and no forwarding header the
+    daemon treats the request as local, and the remote caller controls both.
+    """
+    response = httpx.get(
+        f"http://127.0.0.1:{tcp_forwarder}/api/v1/graphs",
+        headers={"Host": "127.0.0.1"},
+        timeout=30,
+    )
+    assert response.status_code == 401, (
+        f"with no public_url, through a TCP forwarder, Host: 127.0.0.1 with no token got {response.status_code}"
     )
