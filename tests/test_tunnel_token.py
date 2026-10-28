@@ -23,19 +23,24 @@ TOKEN = "t" * 40
 def tunnelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Build the daemon as `engine-web` would, with `public_url` set to a tunnel's address and no GitHub login."""
 
-    def build(*, token: str | None = TOKEN):
+    def build(*, token: str | None = TOKEN, github_login: bool = False, public_url: bool = True):
         for name in (
             "ENGINE_HOST", "ENGINE_PORT", "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
             "ENGINE_GITHUB_LOGIN_CLIENT_ID", "ENGINE_GITHUB_LOGIN_REDIRECT_URI",
             "ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "ENGINE_SERVICE_TOKEN", "ENGINE_ONBOARDING_TOKEN",
         ):
             monkeypatch.delenv(name, raising=False)
+        if github_login:
+            monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "example-client")
+            monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "example-secret")
+            monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI", f"https://{PUBLIC_HOST}/api/auth/github/callback")
         if token is not None:
             monkeypatch.setenv("ENGINE_SERVICE_TOKEN", token)
         monkeypatch.setenv("ENGINE_STATE_DIRECTORY", str(tmp_path / "state"))
         monkeypatch.chdir(tmp_path)
         config = tmp_path / "engine.toml"
-        config.write_text(f'public_url = "https://{PUBLIC_HOST}"\n')
+        config.write_text((f'public_url = "https://{PUBLIC_HOST}"\n' if public_url else "")
+                          + ("[access]\noperators = [42]\n" if github_login else ""))
         return build_app(config)
 
     return build
@@ -82,3 +87,17 @@ def test_a_tunnelled_request_is_refused_even_when_it_names_a_loopback_host(tunne
     """A tunnel may hand the daemon `Host: 127.0.0.1`; what it forwarded still came from outside."""
     assert ask(tunnelled(), host="127.0.0.1", headers=forwarded) == 401
     assert ask(tunnelled(), host="127.0.0.1", headers={**forwarded, "Authorization": f"Bearer {TOKEN}"}) == 200
+
+
+def test_tunnel_token_also_works_with_github_login(tunnelled) -> None:
+    assert ask(tunnelled(github_login=True)) == 401
+    assert ask(tunnelled(github_login=True), headers={"Authorization": "Bearer wrong-" + TOKEN}) == 401
+    assert ask(tunnelled(github_login=True), headers={"Authorization": f"Bearer {TOKEN}"}) == 200
+
+
+def test_direct_local_cli_still_works_without_github_login(tunnelled) -> None:
+    assert ask(tunnelled(), host="127.0.0.1") == 200
+
+
+def test_forwarding_cannot_bypass_auth_by_omitting_public_url(tunnelled) -> None:
+    assert ask(tunnelled(public_url=False), host="127.0.0.1", headers={"X-Forwarded-For": "203.0.113.7"}) == 401
