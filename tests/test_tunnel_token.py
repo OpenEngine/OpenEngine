@@ -225,3 +225,70 @@ def test_a_token_session_cannot_mark_a_repository_trusted_through_onboarding(tun
 
     asyncio.run(scenario())
 
+
+def test_signing_out_ends_a_token_sessions_open_stream(tunnelled, tmp_path, monkeypatch) -> None:
+    """Signing out must end what the session already has open, not only what it opens next.
+
+    Setup: a tunnelled daemon (public_url, no GitHub login); a browser signs in
+    with the service token, creates a chat and opens its approval-events stream.
+    It then signs out. Expected: the open stream ends within a few rechecks.
+    """
+    import anyio
+
+    monkeypatch.setattr("engine.apps.web.github_login._STREAM_RECHECK", 0.01)
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # The daemon's working checkout.
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "--allow-empty", "-m", "start"], check=True)
+
+    async def scenario():
+        app = tunnelled()
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=f"https://{PUBLIC_HOST}"
+        ) as client:
+            origin = {"Origin": f"https://{PUBLIC_HOST}"}
+            assert (await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                      headers=origin)).status_code == 303
+            cookie = client.cookies.get("engine_token_session")
+            config = (await client.get("/api/config")).json()
+            agent = config["agents"][0]["id"]
+            runner = config["runners"][0] if isinstance(config["runners"][0], str) else config["runners"][0]["id"]
+            created = await client.post("/api/threads", json={"agentId": agent, "runner": runner}, headers=origin)
+            assert created.status_code == 201, created.text
+            thread = created.json()["id"]
+
+            # Open the stream as the browser's EventSource would, and keep it open.
+            sent: list[dict] = []
+            disconnect = anyio.Event()
+            scope = {
+                "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+                "scheme": "https", "server": (PUBLIC_HOST, 443), "client": ("203.0.113.7", 50000),
+                "path": f"/api/threads/{thread}/approval-events", "raw_path": b"", "query_string": b"",
+                "root_path": "",
+                "headers": [(b"host", PUBLIC_HOST.encode()), (b"accept", b"text/event-stream"),
+                            (b"cookie", f"engine_token_session={cookie}".encode())],
+            }
+
+            async def receive():
+                await disconnect.wait()
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                sent.append(message)
+
+            async with anyio.create_task_group() as group:
+                group.start_soon(app, scope, receive, send)
+                with anyio.fail_after(5):
+                    while not any(m.get("body", b"").startswith(b": connected") for m in sent):
+                        await anyio.sleep(0.01)
+                assert sent[0]["status"] == 200
+
+                await client.post("/api/auth/github/logout", headers=origin)
+                assert (await client.get("/api/config")).status_code == 401
+
+                await anyio.sleep(1)  # 100 rechecks.
+                ended = any(m["type"] == "http.response.body" and not m.get("more_body", False) for m in sent)
+                disconnect.set()
+                group.cancel_scope.cancel()
+            assert ended, "the stream kept running after sign-out"
+
+    asyncio.run(scenario())
