@@ -62,8 +62,13 @@ def nats_binary() -> Path:
     return install_nats_server(cache)
 
 
+@pytest.fixture
+def service_hook(request):
+    return getattr(request, "param", None)
+
+
 @pytest.fixture(params=[("ge", "graph_engine", "graphs.list"), ("vcp", "virtual_control_plane", "capabilities.get")])
-def service(request, tmp_path: Path, nats_binary: Path):
+def service(request, tmp_path: Path, nats_binary: Path, service_hook):
     name, module, operation = request.param
     port = _port()
     children = []
@@ -108,7 +113,11 @@ def service(request, tmp_path: Path, nats_binary: Path):
 
     try:
         initial_broker = broker()
-        process = spawn([sys.executable, "-m", module], environment)
+        arguments = [sys.executable, "-m", module]
+        if service_hook:
+            fixture = Path(__file__).parent / "fixtures" / "shutdown_service.py"
+            arguments = [sys.executable, str(fixture), module, operation, service_hook, str(tmp_path)]
+        process = spawn(arguments, environment)
         _wait(lambda: ready.exists())
         url = ready.read_text()
         _wait(lambda: _health(url) == 200)
@@ -151,9 +160,9 @@ def test_sigterm_during_broker_outage_cleans_up(service) -> None:
 
 
 @pytest.mark.parametrize("finish_handler", [True, False], ids=["pending-reply", "stuck-handler"])
-def test_shared_shutdown_drains_or_times_out(service, finish_handler: bool) -> None:
+def test_shared_shutdown_drains_or_times_out(broker_url, finish_handler: bool) -> None:
     async def scenario() -> None:
-        url = service[-1]
+        url = broker_url
         connection = await nats.connect(url)
         client = await nats.connect(url)
         entered = asyncio.Event()
@@ -185,3 +194,112 @@ def test_shared_shutdown_drains_or_times_out(service, finish_handler: bool) -> N
             await client.close()
 
     asyncio.run(scenario())
+
+
+@pytest.fixture
+def broker_url(tmp_path, nats_binary):
+    port = _port()
+    with (tmp_path / "broker.log").open("w") as log:
+        process = subprocess.Popen([str(nats_binary), "-a", "127.0.0.1", "-p", str(port)], stdout=log, stderr=log)
+        try:
+            def listening():
+                assert process.poll() is None
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                        return True
+                except OSError:
+                    return False
+            _wait(listening)
+            yield f"nats://127.0.0.1:{port}"
+        finally:
+            _stop(process)
+
+
+@pytest.mark.parametrize("phase", ["drain", "wait_closed", "cancel-suppressed"])
+def test_close_deadline_aborts_stalled_transport(broker_url, monkeypatch, phase):
+    async def scenario():
+        connection = await nats.connect(broker_url)
+        transport = connection._transport
+        entered = asyncio.Event()
+
+        async def stall():
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if phase != "cancel-suppressed":
+                    raise
+                # Model Client.close() swallowing cancellation during reconnect.
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(transport, "wait_closed" if phase == "cancel-suppressed" else phase, stall)
+        if phase == "drain":
+            # Leave bytes for Client.close() to flush, after its flusher has stopped.
+            connection._flusher_task.cancel()
+            await asyncio.gather(connection._flusher_task, return_exceptions=True)
+            connection._pending = [b"PING\r\n"]
+            connection._pending_data_size = 6
+        server = Server(connection, "shutdown-test", broker_url)
+        # Skip subscription drain so the injected stall is in Client.close().
+        monkeypatch.setattr(server, "_drain_connection", lambda: asyncio.sleep(0))
+        task = asyncio.create_task(server.close(timeout=0.1))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            done, _ = await asyncio.wait([task], timeout=1)
+            assert task in done, "final connection close exceeded the shutdown budget"
+            with pytest.raises(TimeoutError):
+                task.result()
+            assert transport._io_writer.transport.is_closing()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            transport._io_writer.transport.abort()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("service_hook", ["pending"], indirect=True)
+@pytest.mark.parametrize("finish_handler", [True, False], ids=["reply", "cancel"])
+def test_sigterm_during_active_request(service, tmp_path, finish_handler):
+    name, process, _, _, _, health, ready, state, url = service
+    operation = "capabilities.get" if name == "vcp" else "graphs.list"
+
+    async def scenario():
+        client = await nats.connect(url)
+        pending = asyncio.create_task(client.request(f"oe.v1.{name}.query.{operation}", b'{"params": {}}', timeout=10))
+        try:
+            await asyncio.to_thread(_wait, lambda: (tmp_path / "entered").exists())
+            process.terminate()
+            await asyncio.to_thread(_wait, lambda: _health(health) == 503)
+            assert not ready.exists(), "readiness must be withdrawn before waiting for the handler"
+            if name == "vcp":
+                from virtual_control_plane.exclusion import AlreadyRunning
+                with pytest.raises(AlreadyRunning):
+                    StateDirectory(state).acquire()
+            if finish_handler:
+                (tmp_path / "release").touch()
+                assert json.loads((await pending).data)["status"] == "ok"
+            assert await asyncio.to_thread(process.wait, timeout=8) == 0
+            assert (tmp_path / "handler-stopped").exists()
+            assert _health(health) is None
+            if name == "vcp":
+                with StateDirectory(state):
+                    pass
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            await client.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("service_hook", ["stalled-close", "close-error"], indirect=True)
+def test_failed_close_exits_nonzero_and_releases_resources(service, tmp_path, service_hook):
+    name, process, _, _, _, health, ready, state, _ = service
+    process.terminate()
+    assert process.wait(timeout=8) == 1
+    if service_hook == "stalled-close":
+        assert (tmp_path / "closing").exists()
+    assert not ready.exists()
+    assert _health(health) is None
+    if name == "vcp":
+        with StateDirectory(state):
+            pass

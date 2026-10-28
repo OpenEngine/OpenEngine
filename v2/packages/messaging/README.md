@@ -16,7 +16,7 @@ await client.command("oe.v1.ge.control.graphs.apply", payload, command_id=..., c
 server = Server(nats_connection, "ge", nats_url, queries={"graphs.list": Route(handler, schema_reference)})
 await server.start()
 ...
-await server.close()   # drain replies for up to 5 seconds, then close the dedicated connection
+await server.close()   # drain and close the dedicated connection within a 5-second budget
 ```
 
 | Module | |
@@ -54,8 +54,19 @@ for each request, including after reconnect. Local-operator mode rejects an
 unknown address or a broker listening beyond loopback. The constructor's
 `listener` argument is only used for transport-free calls (`nats=None`).
 
-`Server.close(timeout=5.0)` drains owned subscriptions and flushes replies when
-connected. A broker outage or expired drain deadline falls back to closing the
-connection. Services must also close their health listeners and remove readiness
-files in unconditional cleanup. `Server.drain()` alone leaves the connection
-open and has no overall deadline.
+`Server.close(timeout=5.0)` shares one budget between draining (at most four
+fifths) and connection close. An outage or expired drain window proceeds to
+close. If final close fails or exceeds the remaining budget, TCP transport is
+aborted and the error propagates; the service exits non-zero. Normal outage
+shutdown exits zero when close succeeds. This does not guarantee completion of
+a handler's side effects or make interrupted operations safe to retry.
+
+Services withdraw their ready file before draining and close their health
+listener in cleanup. Their event loop cancels remaining tasks before VCP
+releases its state-directory lock. Cancellation-resistant or blocking handlers
+still require the supervisor's process-stop deadline; no Python timeout can
+preempt them. Forced transport abort is covered for TCP, not WebSockets.
+
+Local-operator mode assumes a trusted managed broker with no remote ingress.
+Its listener check is not publisher identity; authenticated remote callers and
+broker permissions are tracked in #1051.

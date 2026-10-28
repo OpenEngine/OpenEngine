@@ -1,0 +1,36 @@
+name: V2 tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  v2:
+    name: V2 tests (Linux, Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UV_PYTHON: "3.12"
+      UV_MANAGED_PYTHON: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+          enable-cache: true
+      - name: Install Python
+        run: uv python install "$UV_PYTHON"
+      - name: Lint V2
+        run: uvx --from ruff==0.17.0 ruff check v2
+      # V2 has its own workspace and test configuration; root pytest omits it.
+      - name: Test V2, including real NATS recovery
+        run: uv run --project v2 --frozen pytest v2
