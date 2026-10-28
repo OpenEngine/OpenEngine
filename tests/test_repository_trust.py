@@ -170,13 +170,15 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path, login_configur
                                               headers={'Origin': 'https://engine.example'})
                 assert signed_in.status_code == 303
                 client.headers['Cookie'] = f"engine_token_session={signed_in.cookies['engine_token_session']}"
+                # An allowed Origin cannot grant a token session the trust-write
+                # privilege that its bearer credential is explicitly denied.
                 for origin in (None, 'http://localhost:4364', 'https://engine.example'):
                     response = await client.post('/api/v1/repositories/trust',
                         json={'repository': 'owner/repo', 'trusted': True},
                         headers={'Origin': origin} if origin else {})
-                    assert response.status_code == 200
-                    assert registry.lookup('owner/repo')[1] is True
-                    assert tomllib.loads(config_path.read_text())['repos']['owner/repo']['trusted'] is True
+                    assert response.status_code == 401
+                    assert registry.lookup('owner/repo')[1] is None
+                    assert not config_path.exists()
     asyncio.run(run())
 
 
