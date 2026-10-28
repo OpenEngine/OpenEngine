@@ -65,7 +65,7 @@ test.describe(graphsCategory, () => {
 
 The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. You write it once in a small text file and save it to OpenEngine, so you can find it and use it again whenever you need that piece of work done, instead of explaining it from scratch each time.
 
-This guide shows how to write a graph, save it, find it again, and what happens when you change it. You'll use \`engine\`, the command you type in a terminal to use OpenEngine. Running a graph comes in the next guide.`,
+This guide shows how to write a graph, save it, find it again, and what happens when you change it. You'll use \`oe\`, the command you type in a terminal to use OpenEngine. Running a graph comes in the next guide.`,
         )
 
         await step(

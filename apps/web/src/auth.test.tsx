@@ -40,6 +40,25 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("AuthGate", () => {
+  it("offers a password form for a public server without GitHub login", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...signedOut, tokenLogin: true });
+    renderGate();
+    const input = await screen.findByLabelText("Service token");
+    expect(input).toHaveAttribute("type", "password");
+    expect(input.closest("form")).toHaveAttribute("method", "post");
+    expect(input.closest("form")).toHaveAttribute("action", "/api/auth/token/login");
+    expect(screen.queryByText("Protected application")).not.toBeInTheDocument();
+  });
+
+  it("lets a signed-in token holder sign out", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...signedOut, authenticated: true, tokenLogin: true });
+    renderGate();
+    expect(await screen.findByText("Protected application")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(logout).toHaveBeenCalled();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
+  });
+
   it("keeps the application unmounted until the status check finishes", async () => {
     let resolve!: (status: AuthStatus) => void;
     vi.mocked(getAuthStatus).mockReturnValue(new Promise((done) => { resolve = done; }));

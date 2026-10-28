@@ -51,8 +51,10 @@ On the Mac mini, stop OpenEngine, make a token, and keep it in a file only you c
 
 \`\`\`sh
 oe daemon stop
-printf 'ENGINE_SERVICE_TOKEN=%s\\n' "$(openssl rand -hex 32)" >> ~/.config/openengine/.env
+mkdir -p ~/.config/openengine
+(umask 077; touch ~/.config/openengine/.env)
 chmod 600 ~/.config/openengine/.env
+printf 'ENGINE_SERVICE_TOKEN=%s\\n' "$(openssl rand -hex 32)" >> ~/.config/openengine/.env
 \`\`\`
 
 OpenEngine also only answers addresses it knows, so tell it the tunnel's. Open \`~/.config/openengine/engine.toml\` in a text editor and add this line at the top:
@@ -61,7 +63,7 @@ OpenEngine also only answers addresses it knows, so tell it the tunnel's. Open \
 public_url = "${address}"
 \`\`\`
 
-Then start OpenEngine again with \`oe daemon start\`. To see the token, so you can copy it to this computer, type \`grep ENGINE_SERVICE_TOKEN ~/.config/openengine/.env\`: it's everything after the \`=\`. Keep it secret, as you would a password.`,
+Then start OpenEngine again with \`oe daemon start\`. To see the token, so you can copy it to this computer, type \`grep ENGINE_SERVICE_TOKEN ~/.config/openengine/.env\`: it's everything after the \`=\`. Keep it secret, as you would a password. To open the web page at the https address, choose sign in and paste this same token. Closing the browser does not sign you out; use Sign out when you finish. If GitHub login is configured instead, sign in with GitHub.`,
     async () => {
       // The Mac mini as this step leaves it: a token of its own, and the tunnel's address as public_url.
       expect(computer.daemonEnv.ENGINE_SERVICE_TOKEN).toBe(computer.token)

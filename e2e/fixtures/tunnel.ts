@@ -84,7 +84,7 @@ export function resolveTunnelMode(
  * address) and without a token, turns the request away; throw otherwise.
  */
 export async function requireToken(url: string, host: string): Promise<void> {
-  for (const headers of [{ host }, { host: "127.0.0.1", "x-forwarded-for": "203.0.113.7" }] as Record<string, string>[]) {
+  for (const headers of [{ host }, { host: "127.0.0.1" }, { host: "127.0.0.1", "x-forwarded-for": "203.0.113.7" }] as Record<string, string>[]) {
     const status = await new Promise<number>((resolve, reject) => {
       const request = http.get(`${url}/api/v1/graphs`, { headers, timeout: 10_000 }, (answer) => {
         answer.resume()
