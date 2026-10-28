@@ -735,9 +735,9 @@ function StepCard({ step, current }: { step: ApiRunStep; current: boolean }) {
             ))}
           </dl>
         )}
-        {step.agentId && (
+        {(step.agentId || step.conversationUrl) && (
           <div className="step-agent">
-            <span>Agent {step.agentId}</span>
+            {step.agentId && <span>Agent {step.agentId}</span>}
             {step.conversationUrl ? (
               <a className="link-flame" href={step.conversationUrl}>
                 Open conversation →
@@ -1012,7 +1012,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           outcome: completed.has(node.nodeId) ? "completed" : null,
           agentId: node.kind === "agent" ? baseRun.workflowId.split("-").at(-1) ?? null : null,
           conversationUrl: graphEvents.some((event) => event.nodeId === node.nodeId && (
-            event.type === "conversation.started" || event.type === "transcript"
+            event.type === "conversation.started" || event.type === "transcript" || event.type === "run.failed"
           ))
             ? graphConversationUrl(runId, node.nodeId) : null,
           waiting: waiting.has(node.nodeId),
