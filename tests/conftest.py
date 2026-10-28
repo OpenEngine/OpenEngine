@@ -48,6 +48,10 @@ def _engine_config_is_not_inherited(monkeypatch, tmp_path):
 
     monkeypatch.delenv(CONFIG_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    # Tests supply synthetic credentials explicitly. Empty overrides also keep
+    # a developer's server-local .env from authenticating a test application.
+    monkeypatch.setenv("ENGINE_SERVICE_TOKEN", "")
+    monkeypatch.setenv("ENGINE_ONBOARDING_TOKEN", "")
 
 
 @pytest.fixture(autouse=True)
