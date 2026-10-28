@@ -106,6 +106,18 @@ class SqliteGraphs(DatabaseStore):
             row = (await connection.execute(graphs.select().where(graphs.c.graph_id == graph_id))).one_or_none()
         return Graph(**row._mapping) if row else None
 
+    async def graphs(self, limit: int, name_prefix: str | None = None, after: tuple[str, str] | None = None) -> list[Graph]:
+        query = graphs.select().order_by(graphs.c.name, graphs.c.graph_id).limit(limit)
+        if name_prefix is not None:
+            # Not LIKE, which SQLite compares case-insensitively and which would read `_` as a wildcard.
+            query = query.where(sa.func.substr(graphs.c.name, 1, len(name_prefix)) == name_prefix)
+        if after is not None:
+            name, graph_id = after
+            query = query.where(sa.or_(graphs.c.name > name, sa.and_(graphs.c.name == name, graphs.c.graph_id > graph_id)))
+        async with self.database.connect() as connection:
+            rows = (await connection.execute(query)).all()
+        return [Graph(**row._mapping) for row in rows]
+
     async def revision(self, graph_id: str, revision: int) -> GraphRevision | None:
         query = graph_revisions.select().where(
             graph_revisions.c.graph_id == graph_id, graph_revisions.c.revision == revision

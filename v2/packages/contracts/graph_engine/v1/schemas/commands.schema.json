@@ -10,7 +10,7 @@
       ]
     },
     "apply_graph_payload": {
-      "description": "Create or update a graph by name. `graph` is a Graph resource, named by its `metadata.name`; `python` is a Python LangGraph module exporting `workflow`. A new name creates the graph at revision 1, a changed definition adds the next revision, and an unchanged one returns the existing revision. Invalid input is rejected with INVALID_ARGUMENT listing every problem.",
+      "description": "Create or update a graph by name. `graph` is a Graph resource, named by its `metadata.name`; `python` is a Python LangGraph module exporting `workflow`. A new name creates the graph at revision 1, a changed definition adds the next revision, and an unchanged one returns the existing revision. Invalid input is rejected with INVALID_ARGUMENT listing every problem, as is a graph whose `graphs.{graph_id}.get` result, encoded as the reply carries it (non-ASCII escaped), would pass 1008 KiB, so every revision stays readable within a 1 MiB NATS payload.",
       "type": "object",
       "additionalProperties": false,
       "oneOf": [{ "required": ["graph"] }, { "required": ["python"] }],

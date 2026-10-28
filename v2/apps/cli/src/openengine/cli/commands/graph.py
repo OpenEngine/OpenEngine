@@ -5,6 +5,10 @@ resends an unanswered command with the same command ID, so a lost reply never
 applies a graph twice. It then reads the operation to say whether the graph was
 created, updated with a new revision, or unchanged.
 
+`list` pages through `graphs.list`. `get NAME[@REVISION]` finds NAME's graph ID
+with `graphs.list` and reads the revision, the latest by default, from
+`graphs.{graph_id}.get`.
+
 `validate` and `spec` read only the Graph schema and rules in
 openengine-contracts, so neither needs `oe up`, NATS or runner credentials.
 Runners and tools are checked when a run starts, so a valid file is not a
@@ -15,22 +19,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 import nats
+import yaml
 
 from openengine.cli.commands.status import running_state
 from openengine.cli.output.render import as_json, table
 from openengine.contracts import expressions
 from openengine.contracts.resources import load_documents, markdown, validate_text
-from openengine.messaging import Client, ServiceError, Unavailable
+from openengine.messaging import Client, ErrorCode, ServiceError, Unavailable
 
 KIND = "Graph"
 STDIN = "-"
 RUNTIME_NOTE = "note: runners and tools are not checked here; they are checked when a run starts"
 LIST_SUBJECT = "oe.v1.ge.query.graphs.list"
+GET_SUBJECT = "oe.v1.ge.query.graphs.{graph_id}.get"
 APPLY_SUBJECT = "oe.v1.ge.control.graphs.apply"
 OPERATION_SUBJECT = "oe.v1.ge.query.operations.{operation_id}.get"
 CONNECT_TIMEOUT_SECONDS = 2.0
@@ -42,8 +49,13 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     parser = commands.add_parser("graph", help="work with registered graphs")
     actions = parser.add_subparsers(required=True, metavar="action")
     listing = actions.add_parser("list", help="list the registered graphs")
-    listing.add_argument("--json", action="store_true", help="print the query-response as JSON")
+    listing.add_argument("--json", action="store_true", help="print one page's query-response as JSON")
+    listing.add_argument("--cursor", help="start from this next_cursor of an earlier page")
     listing.set_defaults(command=run_list)
+    get = actions.add_parser("get", help="show a revision of a registered graph and its source")
+    get.add_argument("graph", metavar="NAME[@REVISION]", help="the graph's name, and a revision if not the latest")
+    get.add_argument("--json", action="store_true", help="print the query-response as JSON")
+    get.set_defaults(command=run_get)
     apply = actions.add_parser("apply", help="register each Graph in a file, adding a revision when it changed")
     apply.add_argument("file", metavar="FILE", help=f"the Graph file to apply, or {STDIN} to read standard input")
     apply.add_argument("--json", action="store_true", help="print each command-response and its operation as JSON")
@@ -92,8 +104,39 @@ async def _ask(nats_url: str, ask: Callable[[Client], Awaitable[T]]) -> T:
         await connection.close()
 
 
-async def _query(nats_url: str, subject: str) -> dict[str, Any]:
-    return await _ask(nats_url, lambda client: client.query(subject))
+async def _pages(nats_url: str, cursor: str | None, every: bool) -> list[dict[str, Any]]:
+    async def pages(client: Client) -> list[dict[str, Any]]:
+        replies = [await client.query(LIST_SUBJECT, {"cursor": cursor} if cursor else {})]
+        while every and (cursor_ := replies[-1]["result"]["next_cursor"]) is not None:
+            replies.append(await client.query(LIST_SUBJECT, {"cursor": cursor_}))
+        return replies
+
+    return await _ask(nats_url, pages)
+
+
+class BadReference(ValueError):
+    def __init__(self, reference: str) -> None:
+        super().__init__(f"{reference!r} is not NAME or NAME@REVISION with a revision from 1")
+
+
+def parse_reference(reference: str) -> tuple[str, int | None]:
+    """`NAME` or `NAME@REVISION`, as the name and the revision; BadReference unless REVISION is a positive integer."""
+    name, at, revision = reference.partition("@")
+    if not name or (at and not (revision.isdigit() and int(revision) >= 1)):
+        raise BadReference(reference)
+    return name, int(revision) if at else None
+
+
+async def _get(nats_url: str, name: str, revision: int | None) -> dict[str, Any]:
+    async def get(client: Client) -> dict[str, Any]:
+        # Names sort before every longer name they prefix, so the graph named NAME, if any, comes first.
+        found = (await client.query(LIST_SUBJECT, {"name_prefix": name, "limit": 1}))["result"]["items"]
+        if not found or found[0]["name"] != name:
+            raise ServiceError(ErrorCode.NOT_FOUND, f"no graph named {name}")
+        params = {} if revision is None else {"revision": revision}
+        return await client.query(GET_SUBJECT.format(graph_id=found[0]["graph_id"]), params)
+
+    return await _ask(nats_url, get)
 
 
 async def _apply(nats_url: str, graphs: list[Any]) -> list[dict[str, Any]]:
@@ -115,14 +158,33 @@ def outcome(operation: dict[str, Any]) -> str:
     return "created" if result["graph"]["revision"] == 1 else "updated"
 
 
-def render(page: dict[str, Any]) -> str:
-    if not page["items"]:
+def render(graphs: list[dict[str, Any]]) -> str:
+    if not graphs:
         return "No graphs registered."
-    rows = [
-        [graph["name"], str(graph["latest_revision"]), graph["updated_at"], graph.get("description", "")]
-        for graph in page["items"]
+    rows = [[graph["name"], graph["graph_id"], str(graph["latest_revision"]), graph["updated_at"]] for graph in graphs]
+    return table(["NAME", "GRAPH ID", "REVISION", "UPDATED"], rows)
+
+
+class _Literal(yaml.SafeDumper):
+    """Writes multi-line strings, such as prompts, as YAML literal blocks."""
+
+
+_Literal.add_representer(str, lambda dumper, text: dumper.represent_scalar(
+    "tag:yaml.org,2002:str", text, style="|" if "\n" in text else None))
+
+
+def render_revision(result: dict[str, Any]) -> str:
+    graph, revision = result["graph"], result["revision"]
+    lines = [
+        f"{graph['name']} revision {revision['revision']} of {graph['latest_revision']} (graph {graph['graph_id']})",
+        table(["format", revision["format"]], [["digest", f"sha256:{revision['source_sha256']}"],
+                                               ["created", revision["created_at"]]]),
     ]
-    return table(["NAME", "REVISION", "UPDATED", "DESCRIPTION"], rows)
+    if (source := revision.get("source")) is not None:
+        # A Graph resource is kept as canonical JSON; it reads better as the YAML it was most likely written in.
+        lines += ["", yaml.dump(json.loads(source), Dumper=_Literal, sort_keys=False, width=1 << 30).rstrip()
+                  if revision["format"] == "resource" else source.rstrip()]
+    return "\n".join(lines)
 
 
 def _not_running(reason: str) -> int:
@@ -139,13 +201,32 @@ def run_list(arguments: argparse.Namespace) -> int:
     if (nats_url := _nats_url()) is None:
         return _not_running("no supervisor")
     try:
-        reply = asyncio.run(_query(nats_url, LIST_SUBJECT))
+        replies = asyncio.run(_pages(nats_url, arguments.cursor, every=not arguments.json))
     except NotServing as reason:
         return _not_running(str(reason))
     except ServiceError as error:
         print(f"oe graph list: {error}", file=sys.stderr)
         return EXIT_FAILED
-    print(as_json(reply) if arguments.json else render(reply["result"]))
+    print(as_json(replies[0]) if arguments.json else render([graph for reply in replies for graph in reply["result"]["items"]]))
+    return EXIT_OK
+
+
+def run_get(arguments: argparse.Namespace) -> int:
+    try:
+        name, revision = parse_reference(arguments.graph)
+    except BadReference as error:
+        print(f"oe graph get: {error}", file=sys.stderr)
+        return EXIT_FAILED
+    if (nats_url := _nats_url()) is None:
+        return _not_running("no supervisor")
+    try:
+        reply = asyncio.run(_get(nats_url, name, revision))
+    except NotServing as reason:
+        return _not_running(str(reason))
+    except ServiceError as error:
+        print(f"oe graph get: {error}", file=sys.stderr)
+        return EXIT_FAILED
+    print(as_json(reply) if arguments.json else render_revision(reply["result"]))
     return EXIT_OK
 
 

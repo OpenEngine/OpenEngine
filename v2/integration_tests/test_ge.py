@@ -1,4 +1,4 @@
-"""GE started by the supervisor (`oe up`), queried and applied to over real NATS, drained on stop, and refused when it cannot be ready."""
+"""GE started by the supervisor (`oe up`), applied to, listed and read over real NATS, drained on stop, and refused when it cannot be ready."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from openengine.messaging import Client, ServiceError
 pytestmark = pytest.mark.integration
 
 APPLY = "oe.v1.ge.control.graphs.apply"
+LIST = "oe.v1.ge.query.graphs.list"
 EXAMPLE = Path(__file__).parents[1] / "packages/contracts/graph_engine/v1/resources/examples/implement-review.graph.yaml"
 
 
@@ -254,6 +255,47 @@ def test_apply_rejects_an_expected_version_mismatch(ge_url: str) -> None:
     asyncio.run(_session(ge_url, scenario))
 
 
+def test_list_pages_through_every_graph_until_next_cursor_is_null(ge_url: str) -> None:
+    async def scenario(connection) -> None:
+        client = Client(connection, timeout=5)
+        applied = {}
+        for name in ("page-d", "page-b", "page-e", "page-a", "page-c"):
+            applied[name] = (await client.command(APPLY, {"graph": _graph(name)}))["resource_id"]
+
+        pages, cursor = [], None
+        while True:
+            reply = await client.query(LIST, {"name_prefix": "page-", "limit": 2, "cursor": cursor})
+            assert validate_message(load_contract("graph_engine"), "ListGraphsResponse", reply, in_reply_to=LIST) == []
+            pages.append([(graph["name"], graph["graph_id"]) for graph in reply["result"]["items"]])
+            if (cursor := reply["result"]["next_cursor"]) is None:
+                break
+        assert pages == [
+            [("page-a", applied["page-a"]), ("page-b", applied["page-b"])],
+            [("page-c", applied["page-c"]), ("page-d", applied["page-d"])],
+            [("page-e", applied["page-e"])],
+        ]
+
+        # A cursor is bound to the name_prefix it was issued for.
+        issued = (await client.query(LIST, {"name_prefix": "page-", "limit": 1}))["result"]["next_cursor"]
+        with pytest.raises(ServiceError) as changed:
+            await client.query(LIST, {"name_prefix": "page-a", "cursor": issued})
+        assert changed.value.code == "INVALID_CURSOR"
+
+    asyncio.run(_session(ge_url, scenario))
+
+
+async def _revisions(url: str, graph_id: str) -> list[dict]:
+    """graphs.{graph_id}.get of revision 1 and of the latest, each checked against the contract."""
+    async def scenario(connection) -> list[dict]:
+        client, subject = Client(connection, timeout=5), f"oe.v1.ge.query.graphs.{graph_id}.get"
+        replies = [await client.query(subject, {"revision": 1}), await client.query(subject)]
+        for reply in replies:
+            assert validate_message(load_contract("graph_engine"), "GetGraphResponse", reply, in_reply_to=subject) == []
+        return [reply["result"] for reply in replies]
+
+    return await _session(url, scenario)
+
+
 def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
     changed = tmp_path / "changed.graph.yaml"
     changed.write_text(EXAMPLE.read_text().replace(_graph("x")["spec"]["description"], "Changed."))
@@ -267,6 +309,7 @@ def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
     assert oe("graph", "apply", str(changed)).stdout == f"updated implement-review revision 2 (graph {graph_id})\n"
     retried = asyncio.run(_session(f"nats://127.0.0.1:{port}", lambda connection: Client(connection).command(
         APPLY, {"graph": _graph("restarted")}, command_id="cmd_before_restart")))
+    before = asyncio.run(_revisions(f"nats://127.0.0.1:{port}", graph_id))
 
     assert oe("down").returncode == 0
     port = _free_port()
@@ -277,3 +320,12 @@ def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
     assert applied["operation"]["result"] == {"graph": {"graph_id": graph_id, "revision": 2}, "created": False}
     assert asyncio.run(_session(f"nats://127.0.0.1:{port}", lambda connection: Client(connection).command(
         APPLY, {"graph": _graph("restarted")}, command_id="cmd_before_restart"))) == retried
+
+    first, latest = asyncio.run(_revisions(f"nats://127.0.0.1:{port}", graph_id))
+    assert [first, latest] == before
+    assert (first["revision"]["revision"], latest["revision"]["revision"]) == (1, 2)
+    assert json.loads(first["revision"]["source"]) == _graph("implement-review")
+    assert json.loads(latest["revision"]["source"])["spec"]["description"] == "Changed."
+    rows = [row.split() for row in oe("graph", "list").stdout.splitlines()[1:]]
+    assert [(row[0], row[2]) for row in rows] == [("implement-review", "2"), ("restarted", "1")]
+    assert rows[0][1] == graph_id

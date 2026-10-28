@@ -1,4 +1,4 @@
-"""graphs.apply and operations.{operation_id}.get through the server adapter, request bytes in, reply bytes out."""
+"""graphs.apply, graphs.list, graphs.{graph_id}.get and operations.{operation_id}.get through the server adapter, request bytes in, reply bytes out."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from graph_engine.persistence import PERSISTENCE, sqlite
 from graph_engine.registry import Registry
 
 APPLY = "oe.v1.ge.control.graphs.apply"
+LIST = "oe.v1.ge.query.graphs.list"
 EXAMPLE = Path(__file__).parents[3] / "packages/contracts/graph_engine/v1/resources/examples/implement-review.graph.yaml"
 GRAPH = yaml.safe_load(EXAMPLE.read_text())
 
@@ -191,3 +192,135 @@ class _Later(datetime):
     @classmethod
     def now(cls, tz=None):  # noqa: ANN001, ANN206
         return datetime(2031, 1, 1, tzinfo=tz)
+
+
+def _named(name: str, description: str | None = None) -> dict[str, Any]:
+    graph = _changed(description or GRAPH["spec"]["description"])
+    graph["metadata"]["name"] = name
+    return graph
+
+
+def _listed(send, params: dict[str, Any]) -> dict[str, Any]:
+    reply = send(LIST, {"params": params})
+    assert validate_message(load_contract("graph_engine"), "ListGraphsResponse", reply, in_reply_to=LIST) == []
+    return reply
+
+
+def test_graphs_list_pages_by_name_with_a_cursor_bound_to_its_prefix(send) -> None:
+    for name in ("triage", "review-b", "review-a", "deploy", "review-c"):
+        send(APPLY, _apply(f"cmd_{name}", {"graph": _named(name)}))
+    send(APPLY, _apply("cmd_changed", {"graph": _named("review-a", "Changed.")}))
+
+    names, cursor, pages = [], None, 0
+    while True:
+        result = _listed(send, {"name_prefix": "review", "limit": 2, "cursor": cursor})["result"]
+        names += [graph["name"] for graph in result["items"]]
+        pages += 1
+        if (cursor := result["next_cursor"]) is None:
+            break
+    assert (names, pages) == (["review-a", "review-b", "review-c"], 2)
+
+    everything = _listed(send, {})["result"]
+    assert [graph["name"] for graph in everything["items"]] == ["deploy", "review-a", "review-b", "review-c", "triage"]
+    assert everything["next_cursor"] is None
+    assert everything["items"][1]["latest_revision"] == 2
+    assert everything["items"][1]["description"] == "Changed."
+
+    issued = _listed(send, {"name_prefix": "review", "limit": 1})["result"]["next_cursor"]
+    changed = send(LIST, {"params": {"limit": 1, "cursor": issued}})
+    assert changed["error"]["code"] == "INVALID_CURSOR"
+    assert changed["error"]["details"] == {"reason": "filters_changed"}
+    for malformed in ("not-a-cursor", "e30", "W10"):
+        assert send(LIST, {"params": {"cursor": malformed}})["error"]["details"] == {"reason": "malformed"}
+
+
+def _get(send, graph_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    subject = f"oe.v1.ge.query.graphs.{graph_id}.get"
+    reply = send(subject, {"params": params})
+    assert validate_message(load_contract("graph_engine"), "GetGraphResponse", reply, in_reply_to=subject) == []
+    return reply
+
+
+def test_graphs_get_returns_the_latest_or_a_named_revision(send) -> None:
+    graph_id = send(APPLY, _apply("cmd_1", {"graph": GRAPH}))["resource_id"]
+    send(APPLY, _apply("cmd_2", {"graph": _changed("Changed.")}))
+
+    latest = _get(send, graph_id, {})["result"]
+    assert latest["graph"]["latest_revision"] == latest["revision"]["revision"] == 2
+    assert json.loads(latest["revision"]["source"])["spec"]["description"] == "Changed."
+    first = _get(send, graph_id, {"revision": 1})["result"]
+    assert json.loads(first["revision"]["source"]) == GRAPH
+    assert first["revision"]["source_sha256"] != latest["revision"]["source_sha256"]
+    assert first["revision"]["format"] == "resource"
+    assert first["revision"]["inputs"] == {
+        "instruction": {"required": True, "description": "The change to make"},
+        "base": {"description": "The branch to build on; empty means main"},
+        "runner": {},
+    }
+    assert first["revision"]["nodes"] == ["implement", "publish", "ci", "reviewers", "consolidate", "approve"]
+    assert "source" not in _get(send, graph_id, {"include_source": False})["result"]["revision"]
+
+
+def test_graphs_get_of_an_unknown_graph_or_revision_is_not_found(send) -> None:
+    graph_id = send(APPLY, _apply("cmd_1", {"graph": GRAPH}))["resource_id"]
+
+    for subject_id, params in (("graph_missing", {}), (graph_id, {"revision": 9})):
+        reply = _get(send, subject_id, params)
+        assert reply["error"]["code"] == "NOT_FOUND"
+        assert reply["error"]["details"] == {"resource_type": "graph", "resource_id": subject_id}
+    assert send("oe.v1.ge.query.graphs.op_1.get", {"params": {}})["error"]["code"] == "INVALID_ARGUMENT"
+
+
+def _wire_size(reply: dict[str, Any]) -> int:
+    return len(json.dumps(reply, separators=(",", ":")).encode())
+
+
+@pytest.mark.parametrize("prompt", ['"' * 300_000, "\N{GRINNING FACE}" * 90_000])
+def test_a_graph_too_large_to_read_back_is_invalid_argument(send, prompt: str) -> None:
+    # Each fits a 600 KB request, but a get reply escapes a quote to four bytes and an emoji to twelve, passing 1 MiB.
+    graph = copy.deepcopy(GRAPH)
+    graph["spec"]["implementation"][0]["agent"]["prompt"] = prompt
+
+    reply = send(APPLY, _apply("cmd_1", {"graph": graph}))
+
+    assert reply["error"]["code"] == "INVALID_ARGUMENT"
+    assert reply["error"]["details"]["violations"][0]["field"] == "payload.graph"
+    assert send(LIST, {"params": {}})["result"]["items"] == []
+
+
+def test_the_largest_graph_apply_accepts_is_read_back_within_1_mib(send) -> None:
+    graph = _changed("\N{GRINNING FACE}" * 2_000)
+    graph["spec"]["implementation"][0]["agent"]["prompt"] = "\N{GRINNING FACE}" * 80_000
+    graph_id = send(APPLY, _apply("cmd_1", {"graph": graph}))["resource_id"]
+
+    reply = _get(send, graph_id, {})
+
+    assert reply["status"] == "ok"
+    assert _wire_size(reply) <= 1024 * 1024
+
+
+def test_graphs_list_ends_a_page_early_to_keep_its_reply_within_1_mib(send) -> None:
+    names = [f"graph-{index:02}" for index in range(50)]
+    for name in names:
+        send(APPLY, _apply(f"cmd_{name}", {"graph": _named(name, "\N{GRINNING FACE}" * 2_000)}))
+
+    listed, cursor = [], None
+    while True:
+        reply = _listed(send, {"limit": 50} | ({"cursor": cursor} if cursor else {}))
+        assert _wire_size(reply) <= 1024 * 1024
+        listed += [graph["name"] for graph in reply["result"]["items"]]
+        if (cursor := reply["result"]["next_cursor"]) is None:
+            break
+
+    assert listed == names
+    assert len(_listed(send, {"limit": 50})["result"]["items"]) < 50
+
+
+def test_a_whole_number_limit_given_as_a_float_pages_like_an_integer(send) -> None:
+    for name in ("deploy", "review"):
+        send(APPLY, _apply(f"cmd_{name}", {"graph": _named(name)}))
+
+    result = _listed(send, {"limit": 1.0})["result"]
+
+    assert [graph["name"] for graph in result["items"]] == ["deploy"]
+    assert result["next_cursor"] is not None

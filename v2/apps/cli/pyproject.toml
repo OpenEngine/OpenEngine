@@ -15,6 +15,7 @@ dependencies = [
     "openengine-telemetry",
     "openengine-tool-service",
     "openengine-virtual-control-plane",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

@@ -9,6 +9,7 @@ uv run oe status # what is running, and where (--json for scripts)
 uv run oe logs   # the supervisor's log, NATS included (-f to follow, --json for raw JSON lines)
 uv run oe graph list # the graphs GE has registered, over NATS (--json for the query-response)
 uv run oe graph apply FILE # register each Graph in FILE with GE (--json for each response and operation)
+uv run oe graph get NAME[@REVISION] # a graph's revision, the latest by default, and its source (--json)
 uv run oe down   # stop everything `oe up` started
 
 uv run oe graph validate FILE  # check a Graph file (- reads standard input)
@@ -18,8 +19,21 @@ uv run oe graph spec           # the Graph resource reference and expression syn
 `oe status` shows each process's own status: `ready` once it passed its
 readiness check (NATS and GE), `running` for a service that has none yet.
 When OpenEngine cannot answer (no supervisor, NATS unreachable, or no reply
-from GE), `oe graph list` and `oe graph apply` say so on stderr, point to
+from GE), `oe graph list`, `get` and `apply` say so on stderr, point to
 `oe up` and `oe logs`, and exit 1.
+
+`oe graph list` shows every graph, following `next_cursor` through each page:
+its name, graph ID, latest revision and when it was last updated. `--json`
+prints one page's query-response, `next_cursor` included; pass that to
+`--cursor` for the next page.
+
+`oe graph get NAME[@REVISION]` finds NAME's graph ID through `graphs.list`
+(its `name_prefix`, then the exact name) and reads the revision from
+`graphs.{graph_id}.get`. It prints the revision, its format, its source's
+SHA-256 digest and when it was created, then the source: a Graph resource as
+YAML, from the canonical JSON GE keeps. `--json` prints the query-response.
+An unknown name or revision prints `oe graph get: NOT_FOUND: …` on stderr and
+exits 1.
 
 `oe graph apply FILE` checks the file as `validate` does, sends each Graph to
 GE's `graphs.apply`, reads the operation it recorded and prints one line per

@@ -1,15 +1,18 @@
-"""`oe graph list` and `oe graph apply` when OpenEngine cannot answer: an actionable message and a nonzero exit."""
+"""`oe graph list`, `get` and `apply`: against a real NATS and GE, and when OpenEngine cannot answer, an actionable message and a nonzero exit."""
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
+from openengine.cli.commands.graph import BadReference, parse_reference, render, render_revision
 from openengine.cli.config.local import cache_directory
 from openengine.supervisor.processes import nats
 from openengine.supervisor.readiness.http import wait_until_healthy
@@ -100,3 +103,133 @@ def test_when_nats_runs_but_ge_does_not(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert result.stderr.strip() == f"OpenEngine is not running (no reply from ge). {ADVICE}"
+
+
+def test_get_without_a_supervisor(tmp_path: Path) -> None:
+    result = _graph_list(tmp_path, "get", "implement-review")
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == f"OpenEngine is not running (no supervisor). {ADVICE}"
+
+
+def test_a_reference_is_a_name_and_an_optional_revision(tmp_path: Path) -> None:
+    assert parse_reference("implement-review") == ("implement-review", None)
+    assert parse_reference("implement-review@12") == ("implement-review", 12)
+    for bad in ("review@", "review@0", "review@-1", "review@latest", "@2"):
+        with pytest.raises(BadReference):
+            parse_reference(bad)
+
+    result = _graph_list(tmp_path, "get", "review@latest")
+    assert result.returncode == 1
+    assert result.stderr.strip() == "oe graph get: 'review@latest' is not NAME or NAME@REVISION with a revision from 1"
+
+
+def test_list_and_revision_render_for_people() -> None:
+    graph = {"graph_id": "graph_1", "name": "review", "latest_revision": 3,
+             "created_at": "2026-10-01T00:00:00.000000Z", "updated_at": "2026-10-02T00:00:00.000000Z"}
+    assert render([]) == "No graphs registered."
+    assert render([graph]).splitlines() == [
+        "NAME    GRAPH ID  REVISION  UPDATED",
+        "review  graph_1   3         2026-10-02T00:00:00.000000Z",
+    ]
+    revision = {"graph_id": "graph_1", "revision": 2, "format": "resource", "source_sha256": "ab" * 32,
+                "inputs": {}, "nodes": [], "created_at": "2026-10-01T00:00:00.000000Z",
+                "source": '{"kind":"Graph","spec":{"prompt":"one\\ntwo"}}'}
+    assert render_revision({"graph": graph, "revision": revision}).splitlines() == [
+        "review revision 2 of 3 (graph graph_1)",
+        "format   resource",
+        f"digest   sha256:{'ab' * 32}",
+        "created  2026-10-01T00:00:00.000000Z",
+        "",
+        "kind: Graph",
+        "spec:",
+        "  prompt: |-",
+        "    one",
+        "    two",
+    ]
+
+
+@pytest.fixture(scope="module")
+def serving(tmp_path_factory: pytest.TempPathFactory):
+    """A real NATS and GE, recorded as a running supervisor's, with the example applied and then changed."""
+    home = tmp_path_factory.mktemp("serving")
+    port, monitor_port = _free_port(), _free_port()
+    command = nats.server_command(
+        nats.install_nats_server(cache_directory()), host="127.0.0.1", port=port,
+        monitor_port=monitor_port, store=home / "nats",
+    )
+    server = nats.start(command, subprocess.DEVNULL)
+    ready = home / "ge.ready"
+    ge = subprocess.Popen(
+        [sys.executable, "-m", "graph_engine"],
+        env={**os.environ, "XDG_STATE_HOME": str(home), "OE_NATS_URL": f"nats://127.0.0.1:{port}",
+             "OE_GE_READY_FILE": str(ready)},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        wait_until_healthy("nats-server", server, f"http://127.0.0.1:{monitor_port}/healthz", timeout=30)
+        deadline = time.monotonic() + 30
+        while not ready.exists() and time.monotonic() < deadline and ge.poll() is None:
+            time.sleep(0.05)
+        wait_until_healthy("ge", ge, ready.read_text(), timeout=30)
+        _recorded(home, f"nats://127.0.0.1:{port}")
+        changed = home / "changed.graph.yaml"
+        changed.write_text(EXAMPLE.read_text().replace("description: Implement an issue", "description: Changed. Implement an issue"))
+        created = _graph_list(home, "apply", str(EXAMPLE))
+        assert created.returncode == 0, created.stderr
+        assert _graph_list(home, "apply", str(changed)).stdout.startswith("updated implement-review revision 2 ")
+        yield home, created.stdout.split("(graph ")[1].rstrip(")\n")
+    finally:
+        for process in (ge, server):
+            process.terminate()
+            process.wait()
+
+
+@pytest.mark.integration
+def test_list_shows_each_graph_and_its_latest_revision(serving) -> None:
+    home, graph_id = serving
+
+    listed = _graph_list(home, "list")
+    assert listed.returncode == 0, listed.stderr
+    header, row = listed.stdout.splitlines()
+    assert header.split() == ["NAME", "GRAPH", "ID", "REVISION", "UPDATED"]
+    assert row.split()[:3] == ["implement-review", graph_id, "2"]
+
+    reply = json.loads(_graph_list(home, "list", "--json").stdout)
+    assert reply["status"] == "ok"
+    assert reply["result"]["next_cursor"] is None
+    assert [(graph["name"], graph["graph_id"], graph["latest_revision"]) for graph in reply["result"]["items"]] == [
+        ("implement-review", graph_id, 2),
+    ]
+
+
+@pytest.mark.integration
+def test_get_shows_the_latest_or_a_named_revision(serving) -> None:
+    home, graph_id = serving
+
+    latest = _graph_list(home, "get", "implement-review")
+    assert latest.returncode == 0, latest.stderr
+    lines = latest.stdout.splitlines()
+    assert lines[0] == f"implement-review revision 2 of 2 (graph {graph_id})"
+    assert lines[1] == "format   resource"
+    assert "description: Changed. Implement an issue" in latest.stdout
+
+    first = _graph_list(home, "get", "implement-review@1")
+    assert first.stdout.splitlines()[0] == f"implement-review revision 1 of 2 (graph {graph_id})"
+    assert "Changed." not in first.stdout
+    assert first.stdout.splitlines()[2] != lines[2]  # another digest
+
+    reply = json.loads(_graph_list(home, "get", "implement-review@1", "--json").stdout)
+    assert reply["result"]["revision"]["revision"] == 1
+    assert reply["result"]["graph"]["graph_id"] == graph_id
+
+
+@pytest.mark.integration
+def test_get_of_an_unknown_name_or_revision_is_not_found(serving) -> None:
+    home, _ = serving
+
+    for reference in ("missing", "implement", "implement-review@9"):
+        result = _graph_list(home, "get", reference)
+        assert result.returncode == 1
+        assert result.stderr.startswith("oe graph get: NOT_FOUND: "), result.stderr
+        assert result.stdout == ""
