@@ -5,6 +5,9 @@ waits for each to be ready, records what it is doing in
 first, on SIGTERM. If a process exits, the supervisor stops the rest and exits
 too.
 
+VCP starts on every `oe up` and direct `oe-supervisor` invocation, alongside
+cxn, ge, and tools; no opt-in flag is required. It starts last and stops first.
+
 ```
 processes/  how each process is fetched and started (NATS today)
 readiness/  how the supervisor knows a process is ready
