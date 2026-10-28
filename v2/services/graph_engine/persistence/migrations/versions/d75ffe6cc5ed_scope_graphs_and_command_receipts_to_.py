@@ -23,6 +23,13 @@ depends_on: Union[str, Sequence[str], None] = None
 DEFAULT_PROJECT = 'default'
 
 
+class RowsOutsideDefaultProject(RuntimeError):
+    """A downgrade would merge projects whose graph names or command IDs may collide."""
+
+    def __init__(self, table: str) -> None:
+        super().__init__(f"{table} has rows outside the {DEFAULT_PROJECT} project; remove them to downgrade")
+
+
 def _add_project(table: str) -> None:
     """Add `project` to `table`, filled with the default project for the rows it has."""
     with op.batch_alter_table(table) as batch_op:
@@ -73,7 +80,7 @@ def downgrade() -> None:
     bind = op.get_bind()
     for table in ('graphs', 'operations', 'command_receipts'):
         if bind.scalar(sa.text(f"SELECT COUNT(*) FROM {table} WHERE project != :default"), {'default': DEFAULT_PROJECT}):
-            raise RuntimeError(f"{table} has rows outside the {DEFAULT_PROJECT} project; remove them to downgrade")
+            raise RowsOutsideDefaultProject(table)
 
     _rebuild_receipts(['command_id'])
 
