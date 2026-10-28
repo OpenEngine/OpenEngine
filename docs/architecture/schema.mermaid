@@ -61,7 +61,7 @@ erDiagram
         TEXT started_at "not null"
     }
     %% graph_cli_loops schema fingerprint: 821281d27fdbd020b6cec22604a943ce20027dd14d55a78ebe4984361f848386
-    graph_cli_loops["graph_cli_loops (CHANGED)"] {
+    graph_cli_loops["graph_cli_loops"] {
         TEXT loop_id PK "not null"
         TEXT project UK "not null"
         TEXT name UK "not null"
@@ -79,11 +79,10 @@ erDiagram
         TEXT active_run_id "nullable"
         TEXT created_at "not null"
         TEXT updated_at "not null"
-        TEXT last_error "ADDED; not null; default: ''"
-        TEXT last_error_at "ADDED; nullable"
-        INTEGER consecutive_start_failures "ADDED; not null; default: '0'"
+        TEXT last_error "not null; default: ''"
+        TEXT last_error_at "nullable"
+        INTEGER consecutive_start_failures "not null; default: '0'"
     }
-    class graph_cli_loops changed
     %% graph_cli_node_executions schema fingerprint: a5576b947c9ed79c878d5923e9cf011e44ed0022c95bce89bc42f3f911d708d2
     graph_cli_node_executions["graph_cli_node_executions"] {
         TEXT execution_id PK "not null"
