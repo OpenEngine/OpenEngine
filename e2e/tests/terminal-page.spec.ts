@@ -132,6 +132,26 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(first).not.toContain("51234")
   })
 
+  test("shows a real tunnel's changing address as the guide's address", async ({ browser }) => {
+    const shown = async (cloudflare: string, tailscale: string) => {
+      const page = await browser.newPage()
+      await openTerminal(page, { cols: 120 })
+      await page.locator("#terminal").click()
+      await page.keyboard.type(`echo "tunnel https://${cloudflare} | https://${tailscale}/api/v1"`)
+      await page.keyboard.press("Enter")
+      await expect.poll(() => bufferText(page)).toMatch(new RegExp(`^tunnel https://${cloudflare.replace(/\./g, "\\.")} \\|`, "m"))
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^tunnel https/ }).last()
+      const text = (await row.textContent())!.trim()
+      await page.close()
+      return text
+    }
+    // A quick tunnel's address is new every time; a tailnet's names a computer and its tailnet.
+    const first = await shown("brave-otter-lamp-sky.trycloudflare.com", "build-box.tail9f3c2a.ts.net")
+    const second = await shown("quiet-river-maps-delight.trycloudflare.com", "studio.tailab12cd.ts.net")
+    expect(first).toBe(second)
+    expect(first).toBe("tunnel https://openengine.example.com | https://mac-mini.tail1234.ts.net/api/v1")
+  })
+
   test("says so when the server refuses the session", async ({ page }) => {
     await page.goto("/?token=wrong")
     await page.waitForFunction(() => window.__term?.error !== undefined)
