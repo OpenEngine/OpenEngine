@@ -133,9 +133,9 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
   })
 
   test("shows a real tunnel's changing address as the guide's address", async ({ browser }) => {
-    const shown = async (cloudflare: string, tailscale: string) => {
+    const shown = async (cloudflare: string, tailscale: string, guideAddress?: string) => {
       const page = await browser.newPage()
-      await openTerminal(page, { cols: 120 })
+      await openTerminal(page, { cols: 120, env: guideAddress ? { E2E_GUIDE_ADDRESS: guideAddress } : {} })
       await page.locator("#terminal").click()
       await page.keyboard.type(`echo "tunnel https://${cloudflare} | https://${tailscale}/api/v1"`)
       await page.keyboard.press("Enter")
@@ -146,10 +146,12 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
       return text
     }
     // A quick tunnel's address is new every time; a tailnet's names a computer and its tailnet.
-    const first = await shown("brave-otter-lamp-sky.trycloudflare.com", "build-box.tail9f3c2a.ts.net")
-    const second = await shown("quiet-river-maps-delight.trycloudflare.com", "studio.tailab12cd.ts.net")
+    const first = await shown("brave-otter-lamp-sky.trycloudflare.com", "build-box.tail9f3c2a.ts.net", "openengine.example.com")
+    const second = await shown("quiet-river-maps-delight.trycloudflare.com", "studio.tailab12cd.ts.net", "openengine.example.com")
+    const unchanged = await shown("brave-otter-lamp-sky.trycloudflare.com", "build-box.tail9f3c2a.ts.net")
+    expect(unchanged).toBe("tunnel https://brave-otter-lamp-sky.trycloudflare.com | https://build-box.tail9f3c2a.ts.net/api/v1")
     expect(first).toBe(second)
-    expect(first).toBe("tunnel https://openengine.example.com | https://mac-mini.tail1234.ts.net/api/v1")
+    expect(first).toBe("tunnel https://openengine.example.com | https://openengine.example.com/api/v1")
   })
 
   test("says so when the server refuses the session", async ({ page }) => {
