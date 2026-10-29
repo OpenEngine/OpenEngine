@@ -24,6 +24,10 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.28 /uv /usr/local/bin/uv
 
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
+# Where the agents keep their logins. The benchmark mounts a Docker volume on each, so a login made once lasts; a new
+# volume takes the ownership of the directory it is mounted on, so they must belong to the user.
+RUN mkdir -p /home/node/.claude /home/node/.codex && chown node:node /home/node/.claude /home/node/.codex
+
 USER node
 ENV HOME=/home/node
 ENV PATH=/home/node/.local/bin:$PATH

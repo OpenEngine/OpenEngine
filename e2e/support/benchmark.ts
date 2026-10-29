@@ -18,6 +18,13 @@ export const BENCH_TOPIC = "oe-bench"
 export const BENCH_IMAGE = "oe-bench"
 export const BENCH_CONTAINER = "oe-bench"
 
+/**
+ * The agents' logins live in Docker volumes, not on this computer: a subscription login can't be copied (on a Mac it
+ * is in the keychain, which a script can't read), and one made inside the container is kept there, tokens refreshes
+ * and all, without touching this computer's. They outlive the container; `npm run oe-benchmark:login` fills them.
+ */
+export const LOGIN_VOLUMES = { claude: "oe-bench-claude", codex: "oe-bench-codex" }
+
 /** The container user's home, where a person's own configuration and logins live. */
 const CONTAINER_HOME = "/home/node"
 
@@ -56,6 +63,23 @@ export async function tokenScopes(): Promise<string[] | undefined> {
 
 export type RepoInfo = { name: string; topics: string[] }
 
+/**
+ * What the run needs of the GitHub token, checked before anything is made: `repo` for the repository and its settings,
+ * `workflow` because the seeded issues add workflow files (CI, the commit message check, deploy, releases) and GitHub
+ * refuses a push of one without it (the first agent's run would fail at its last step), and `delete_repo` for teardown.
+ */
+export async function assertTokenScopes() {
+  const scopes = await tokenScopes()
+  if (scopes === undefined) return // a fine-grained token reports none: GitHub will say if something is missing
+  const missing = ["repo", "workflow", "delete_repo"].filter((scope) => !scopes.includes(scope))
+  if (missing.length > 0) {
+    throw new Error(
+      `The gh token needs the ${missing.map((scope) => `\`${scope}\``).join(", ")} scope${missing.length > 1 ? "s" : ""}: run \`gh auth refresh -h github.com -s ${missing.join(",")}\` ` +
+        `(with GH_CONFIG_DIR set, if you use one), then run the benchmark again.`,
+    )
+  }
+}
+
 /** The repository, or undefined if there is no such repository. */
 export async function getRepo(owner: string, name: string): Promise<RepoInfo | undefined> {
   try {
@@ -69,6 +93,11 @@ export async function getRepo(owner: string, name: string): Promise<RepoInfo | u
 
 const docker = (...args: string[]) => run("docker", args, { maxBuffer: 16 * 1024 * 1024 })
 
+/** Forget the agents' logins, so the next run asks for `npm run oe-benchmark:login` again. Teardown never does this. */
+export async function removeLogins() {
+  await docker("volume", "rm", "-f", ...Object.values(LOGIN_VOLUMES))
+}
+
 /** Stop and delete the benchmark's computer, and with it anything running on it. True if there was one. */
 export async function removeContainer(): Promise<boolean> {
   const { stdout } = await docker("ps", "-aq", "--filter", `name=^${BENCH_CONTAINER}$`)
@@ -77,16 +106,10 @@ export async function removeContainer(): Promise<boolean> {
   return true
 }
 
-/**
- * Start a new clean computer for the journey. Docker caches the image, so only the first run builds it.
- *
- * The logins it needs come from this computer, each given where a person's own would be: GitHub's, Claude's and
- * Codex's. They are mounted read-only and copied in, so a token the container refreshes never changes this
- * computer's, and removing the container can never remove them.
- */
-export async function startContainer() {
-  // Built only when the Dockerfile has changed: a build asks the registry about its base image even when nothing
-  // changed, which needs the credentials helper (and, on a Mac over SSH, an unlocked keychain), for no reason.
+/** Build the image if it isn't built, or its Dockerfile has changed. Docker caches the layers either way. */
+export async function ensureImage() {
+  // A build asks the registry about its base image even when nothing changed, which needs the credentials helper (and,
+  // on a Mac over SSH, an unlocked keychain), for no reason.
   const context = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "benchmark")
   const version = createHash("sha256").update(readFileSync(path.join(context, "Dockerfile"))).digest("hex").slice(0, 16)
   const built = await docker("image", "inspect", "-f", '{{ index .Config.Labels "oe.bench.dockerfile" }}', BENCH_IMAGE).then(
@@ -94,24 +117,43 @@ export async function startContainer() {
     () => "",
   )
   if (built !== version) await docker("build", "--label", `oe.bench.dockerfile=${version}`, "-t", BENCH_IMAGE, context)
-  const real = os.homedir()
-  const logins = [
-    ["gh", process.env.GH_CONFIG_DIR ?? path.join(real, ".config", "gh")],
-    ["claude", process.env.CLAUDE_CONFIG_DIR ?? path.join(real, ".claude")],
-    ["codex", process.env.CODEX_HOME ?? path.join(real, ".codex")],
-  ].filter(([, directory]) => existsSync(directory!))
-  await docker("run", "-d", "--init", "--name", BENCH_CONTAINER, ...logins.flatMap(([name, directory]) => ["-v", `${directory}:/logins/${name}:ro`]), BENCH_IMAGE)
-  const copy = [
-    "mkdir -p ~/.config ~/.claude ~/.codex",
-    "[ -d /logins/gh ] && cp -a /logins/gh ~/.config/gh",
-    // Only what signs the agents in, not the history and caches around it. Claude keeps its settings file beside its
-    // login when it has its own folder, and in the home folder when it doesn't.
-    "[ -f /logins/claude/.credentials.json ] && cp /logins/claude/.credentials.json ~/.claude/",
-    "{ [ -f /logins/claude/.claude.json ] && cp /logins/claude/.claude.json ~/.claude.json; } || true",
-    "[ -f /logins/codex/auth.json ] && cp /logins/codex/auth.json ~/.codex/",
-    "true",
-  ].join("; ")
-  await docker("exec", BENCH_CONTAINER, "sh", "-c", copy)
+}
+
+/**
+ * Start a new clean computer for the journey.
+ *
+ * GitHub's login comes from this computer: mounted read-only and copied in, so a token the container refreshes never
+ * changes this computer's, and removing the container can never remove it. Claude's and Codex's are in their volumes,
+ * made once by `npm run oe-benchmark:login`; the run stops here if either is missing, not minutes in.
+ */
+export async function startContainer() {
+  await ensureImage()
+  const ghConfig = process.env.GH_CONFIG_DIR ?? path.join(os.homedir(), ".config", "gh")
+  await docker(
+    "run", "-d", "--init", "--name", BENCH_CONTAINER,
+    ...(existsSync(ghConfig) ? ["-v", `${ghConfig}:/logins/gh:ro`] : []),
+    "-v", `${LOGIN_VOLUMES.claude}:/home/node/.claude`,
+    "-v", `${LOGIN_VOLUMES.codex}:/home/node/.codex`,
+    BENCH_IMAGE,
+  )
+  await docker("exec", BENCH_CONTAINER, "sh", "-c", "mkdir -p ~/.config; if [ -d /logins/gh ]; then cp -a /logins/gh ~/.config/gh; fi")
+  const ghWorks = await docker("exec", BENCH_CONTAINER, "gh", "api", "user", "--jq", ".login").then(() => true, () => false)
+  if (!ghWorks) {
+    throw new Error(
+      "gh is not signed in in the benchmark's container. The container gets a copy of gh's config directory, so the token has to be " +
+        "in a file there: gh keeps it in the system keyring (the macOS keychain) when it can, which a container can't read. " +
+        "Store it in the file instead: `gh auth refresh -h github.com --insecure-storage` (with GH_CONFIG_DIR set, if you use one).",
+    )
+  }
+  for (const [agent, file, command] of [
+    ["Claude", "/home/node/.claude/.credentials.json", "claude auth login"],
+    ["Codex", "/home/node/.codex/auth.json", "codex login --device-auth"],
+  ]) {
+    const signedIn = await docker("exec", BENCH_CONTAINER, "test", "-s", file).then(() => true, () => false)
+    if (!signedIn) {
+      throw new Error(`${agent} is not signed in in the benchmark's container. Sign in once with \`npm run oe-benchmark:login\` (it runs \`${command}\` there); the login is kept for later runs.`)
+    }
+  }
 }
 
 /**
@@ -182,4 +224,9 @@ export async function teardown({ repo = BENCH_REPO } = {}): Promise<TeardownResu
     }
   }
   return { owner, deletedRepo: found !== undefined, removedContainer }
+}
+
+/** Run a command inside the benchmark's computer and return its output. */
+export async function inContainer(...command: string[]): Promise<string> {
+  return (await docker("exec", BENCH_CONTAINER, ...command)).stdout
 }
