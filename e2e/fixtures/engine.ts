@@ -151,6 +151,8 @@ export type Engine = {
   daemonEnv: Record<string, string>
   /** Everything the daemon has printed. */
   log(): string
+  /** Stop serving while keeping its directory, so a guide can start it again in a terminal. */
+  stopServing(): Promise<void>
   stop(): Promise<void>
 }
 
@@ -281,6 +283,7 @@ export async function startEngine({
       env: { ENGINE_BACKENDS_FILE: backendsFile, ENGINE_SERVICE_TOKEN: token },
       daemonEnv,
       log: () => output.join(""),
+      stopServing: () => terminate(daemon),
       stop,
     }
   } catch (error) {

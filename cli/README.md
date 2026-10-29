@@ -87,7 +87,8 @@ something you trust — an SSH tunnel (`ssh -NL 4365:127.0.0.1:4364 mac-mini`,
 then add `http://127.0.0.1:4365`) or a tailnet. If the daemon has GitHub login
 configured, the CLI authenticates with its `ENGINE_SERVICE_TOKEN`; `/api/v1`
 accepts that token and operators, and refuses users who see only some
-repositories.
+repositories. Without GitHub login, a daemon with `ENGINE_SERVICE_TOKEN` set
+also refuses CLI requests that lack it.
 
 ## Graphs
 
