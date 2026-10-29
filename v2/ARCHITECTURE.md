@@ -47,7 +47,7 @@ Each service with its NATS subjects (control, query and events) and its tables, 
 
 Open the image in a new tab if it appears too small to read. 
 ## Database schemas
-Each service owns its database (see [packages/persistence](packages/persistence/README.md)). These ERDs show each service's latest schema and are regenerated, with each migration revision's own ERD and SQL, under [docs/schema](docs/schema) whenever a migration changes. Highlights mark what the latest revision added, removed or changed.
+Each service owns its database (see [packages/persistence](packages/persistence/README.md)). Tables are declared tenant-scoped (the existing ones move over in #1227-#1229): `tenant_id` leads its key, uniques and foreign keys, and stores are only reached for one tenant at a time; the few global tables are listed in [global_tables.toml](packages/persistence/global_tables.toml). See [Tenancy](packages/persistence/README.md#tenancy). These ERDs show each service's latest schema and are regenerated, with each migration revision's own ERD and SQL, under [docs/schema](docs/schema) whenever a migration changes. Highlights mark what the latest revision added, removed or changed.
 
 | Service | Latest ERD |
 | -- | -- |

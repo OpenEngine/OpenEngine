@@ -15,11 +15,11 @@ concurrency:
 
 jobs:
   v2:
-    name: V2 tests (Linux, Python 3.12)
+    name: V2 tests (Linux, Python 3.14)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      UV_PYTHON: "3.12"
+      UV_PYTHON: "3.14"
       UV_MANAGED_PYTHON: "true"
     steps:
       - uses: actions/checkout@v7

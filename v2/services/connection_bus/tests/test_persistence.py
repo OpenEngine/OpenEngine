@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
-from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig
 from openengine.persistence.migrations import downgrade
 
 from connection_bus.persistence import PERSISTENCE
@@ -34,7 +34,7 @@ def test_migrations_roll_back(config: DatabaseConfig) -> None:
 
 def test_finds_the_connection_a_webhook_belongs_to(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        connections = PERSISTENCE.open(config)
+        connections = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             github = await connections.create("github", "4021", "acme")
             await connections.create("slack", "4021", "acme")
@@ -53,4 +53,4 @@ def test_finds_the_connection_a_webhook_belongs_to(config: DatabaseConfig) -> No
 
 def test_postgres_store_is_a_stub() -> None:
     with pytest.raises(BackendNotImplemented, match="connection bus's store"):
-        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES))
+        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES)).scoped(LOCAL_TENANT)

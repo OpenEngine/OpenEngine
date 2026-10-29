@@ -26,7 +26,7 @@ import nats
 from alembic.util import CommandError
 from openengine.messaging import LocalOperator, Server, listen_address
 from openengine.messaging.server import is_loopback
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, DatabaseConfig
 from openengine.telemetry import configure
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -150,7 +150,8 @@ def main() -> int:
                 os.environ.get(NATS_URL_VARIABLE, "nats://127.0.0.1:4222"),
                 int(os.environ.get(HEALTH_PORT_VARIABLE, "0")),
                 Path(ready_file) if ready_file else None,
-                PERSISTENCE.store(database),
+                # One local tenant until tenants come from credentials (#1233).
+                PERSISTENCE.open(config).scoped(LOCAL_TENANT),
             )
         )
     except (OSError, CommandError, SQLAlchemyError, nats.errors.Error):
