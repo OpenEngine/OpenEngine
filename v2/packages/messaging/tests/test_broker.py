@@ -275,9 +275,12 @@ def test_reconnect_retains_launch_identity_after_genuine_restart_and_takeover(tm
             await asyncio.sleep(0.1)
             assert received["impostor"] == []
         finally:
-            # A rejected reconnect can leave nats-py's close waiter pending.
-            # Bound fixture cleanup; the authentication assertions above have
-            # already established whether any protocol reached the impostor.
+            # Authentication assertions finish before teardown. Abort the
+            # rejected transport and discard the queued marker: native close
+            # otherwise tries to flush it through the failed TLS transport.
+            client._transport._io_writer.transport.abort()
+            client._pending.clear()
+            client._pending_data_size = 0
             try:
                 await asyncio.wait_for(client.close(), 0.2)
             except TimeoutError:
