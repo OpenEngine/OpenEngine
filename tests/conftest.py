@@ -189,7 +189,14 @@ def client(web_app):
 
     def build(app=None, **options):
         options.setdefault("base_url", "http://localhost")
-        return TestClient(app if app is not None else web_app(), **options)
+        app = app if app is not None else web_app()
+        browser = TestClient(app, **options)
+        # Concierge fixtures expose a public URL, so their browser needs a session.
+        token = getattr(app.state, "test_service_token", None)
+        if token is not None:
+            response = browser.post("/api/auth/github/token", json={"token": token})
+            assert response.status_code == 200
+        return browser
 
     return build
 
@@ -257,37 +264,38 @@ def slack_app(web_app):
         slack_store.credentials.return_value = SlackCredentials("client", "secret")
         slack_store.token.return_value = "xoxb-token"
         slack_store.signing_secret.return_value = SIGNING_SECRET
-        return (
-            web_app(
-                session,
-                runners,
-                workflow_catalog=(
-                    catalog if catalog is not None else WorkflowCatalog.from_graphs(())
-                ),
-                **(
-                    {}
-                    if approval_policy is None
-                    else {"approval_policy": approval_policy}
-                ),
-                slack_credential_store=slack_store,
-                github_login_config=github_login_config,
-                public_url="https://engine.example",
-                work_orders=work_orders,
-                repos=repos,
-                credential_store=MagicMock(),
-                concierge_provider=provider or FakeACPProvider(),
-                graph_runtime=graph_runtime,
-                github_comment_handler=github_comment_handler,
-                github_webhook_secret=lambda: github_webhook_secret,
-                github_repository="acme/api",
-                github_repositories=github_repositories,
-                review_request_workflow=review_request_workflow,
-                **({"pull_requests": pull_requests} if pull_requests is not None else {}),
-                **({"graph_service": graph_service} if graph_service is not None else {}),
+        token = "concierge-test-service-token-" * 2
+        app = web_app(
+            session,
+            runners,
+            workflow_catalog=(
+                catalog if catalog is not None else WorkflowCatalog.from_graphs(())
             ),
-            capabilities,
-            slack_store,
+            **(
+                {}
+                if approval_policy is None
+                else {"approval_policy": approval_policy}
+            ),
+            slack_credential_store=slack_store,
+            github_login_config=github_login_config,
+            public_url="https://engine.example",
+            service_token=lambda: token,
+            work_orders=work_orders,
+            repos=repos,
+            credential_store=MagicMock(),
+            concierge_provider=provider or FakeACPProvider(),
+            graph_runtime=graph_runtime,
+            github_comment_handler=github_comment_handler,
+            github_webhook_secret=lambda: github_webhook_secret,
+            github_repository="acme/api",
+            github_repositories=github_repositories,
+            review_request_workflow=review_request_workflow,
+            **({"pull_requests": pull_requests} if pull_requests is not None else {}),
+            **({"graph_service": graph_service} if graph_service is not None else {}),
         )
+        if github_login_config is None:
+            app.state.test_service_token = token
+        return app, capabilities, slack_store
 
     return build
 

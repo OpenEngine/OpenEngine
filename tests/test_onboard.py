@@ -397,10 +397,11 @@ def test_trusted_hosts_can_onboard(tmp_path, monkeypatch, base_url, public_url):
     runner = ConcurrentRunner()
     app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
                      workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=tmp_path / 'config.toml',
-                     public_url=public_url)
+                     public_url=public_url, service_token=lambda: "s" * 32)
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base_url) as client:
+            assert (await client.post('/api/auth/github/token', json={'token': 's' * 32})).status_code == 200
             assert (await client.get('/api/config')).status_code == 200
             response = await client.post('/api/repositories/onboard', headers={'Origin': base_url},
                                          json={'repository': 'owner/repo'})

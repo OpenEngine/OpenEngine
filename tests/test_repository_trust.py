@@ -122,6 +122,7 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path, login_configur
     app = create_web_app(_session(runner), {'test': runner}, repos=registry,
                          workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=config_path,
                          public_url='https://engine.example', github_login_config=login,
+                         service_token=lambda: 's' * 32,
                          graph_runtime=build_graph_runtime(settings, ()),
                          graph_service=build_graph_service(settings, repositories=registry))
 
@@ -165,6 +166,7 @@ def test_trust_api_checks_origin_before_mutating_config(tmp_path, login_configur
                     assert not config_path.exists()
                 if login_configured:
                     return  # Allowed origins still require a session in login mode.
+                assert (await client.post('/api/auth/github/token', json={'token': 's' * 32})).status_code == 200
                 for origin in (None, 'http://localhost:4364', 'https://engine.example'):
                     response = await client.post('/api/v1/repositories/trust',
                         json={'repository': 'owner/repo', 'trusted': True},
