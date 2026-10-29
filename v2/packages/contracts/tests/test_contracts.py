@@ -400,10 +400,11 @@ def test_tenant_id_accepts_a_v7_uuid() -> None:
         "not-a-uuid",
         "0192f1c47a3e7c2d9b1f3e4a5b6c7d8e",
         "0192f1c4-7a3e-4c2d-9b1f-3e4a5b6c7d8e",
+        "0192f1c4-7a3e-7c2d-9b1f-3e4a5b6c7d8e\n",
         "",
         42,
     ],
-    ids=["nil", "upper-case", "non-uuid", "unhyphenated", "v4", "empty", "integer"],
+    ids=["nil", "upper-case", "non-uuid", "unhyphenated", "v4", "trailing-newline", "empty", "integer"],
 )
 def test_tenant_id_rejects(value: Any) -> None:
     assert not type_accepts("tenant_id", value)
@@ -425,8 +426,8 @@ def test_account_accepts_an_account_public_key() -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["U" + ACCOUNT_KEY[1:], ACCOUNT_KEY.lower(), ACCOUNT_KEY[:-1], ACCOUNT_KEY + "A", ACCOUNT_KEY[:-1] + "1", ""],
-    ids=["user-key", "lower-case", "short", "long", "not-base32", "empty"],
+    ["U" + ACCOUNT_KEY[1:], ACCOUNT_KEY.lower(), ACCOUNT_KEY[:-1], ACCOUNT_KEY + "A", ACCOUNT_KEY[:-1] + "1", ACCOUNT_KEY + "\n", ""],
+    ids=["user-key", "lower-case", "short", "long", "not-base32", "trailing-newline", "empty"],
 )
 def test_account_rejects(value: str) -> None:
     assert not type_accepts("account", value)
