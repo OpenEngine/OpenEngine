@@ -37,6 +37,7 @@ from nats.errors import Error as NatsError
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ErrorCode, ServiceError, invalid_argument
+from openengine.messaging.identity import CallerAuthorizerRequired, CallerIngress, Principal
 from openengine.telemetry import receiving
 
 TYPES = "common/v1/types.schema.json"
@@ -56,6 +57,8 @@ class Request:
     """The address the NATS server the request arrived through listens on."""
     parameters: Mapping[str, str] = field(default_factory=dict)
     """The subject's parameters, by the names its route's key gives them."""
+    principal: Principal | None = None
+    """Broker-bound caller identity; None in the explicit legacy/local profile."""
 
 
 class Authorizer(Protocol):
@@ -139,13 +142,18 @@ class Server:
     queries: Mapping[str, Route] = field(default_factory=dict)
     commands: Mapping[str, Route] = field(default_factory=dict)
     authorizer: Authorizer = field(default_factory=LocalOperator)
+    caller_ingress: CallerIngress | None = None
     _subscriptions: list[Subscription] = field(default_factory=list)
 
     @property
     def subjects(self) -> list[str]:
+        if self.caller_ingress is not None:
+            return self.caller_ingress.subjects(self.service)
         return [f"oe.v1.{self.service}.query.>", f"oe.v1.{self.service}.control.>"]
 
     async def start(self) -> None:
+        if self.caller_ingress is not None and isinstance(self.authorizer, LocalOperator):
+            raise CallerAuthorizerRequired()
         for subject in self.subjects:
             self._subscriptions.append(await self.nats.subscribe(subject, cb=self._receive))
             log.info("serving %s", subject)
@@ -200,16 +208,28 @@ class Server:
         await self.nats.flush()
 
     async def _receive(self, message: Msg) -> None:
-        reply = await self.handle(message.subject, message.data, message.headers)
+        subject, principal = message.subject, None
+        if self.caller_ingress is not None:
+            try:
+                principal, subject = self.caller_ingress.verify(self.service, subject, message.reply)
+            except ServiceError:
+                # Even an error reply would exercise service publishing authority
+                # on an attacker-chosen subject. Reject before decoding or effects.
+                log.info("caller ingress rejected a request")
+                return
+        reply = await self.handle(subject, message.data, message.headers, principal=principal)
         if message.reply:
             await message.respond(reply)
 
-    async def handle(self, subject: str, data: bytes, headers: Mapping[str, str] | None = None) -> bytes:
-        """The encoded reply to one request."""
+    async def handle(self, subject: str, data: bytes, headers: Mapping[str, str] | None = None,
+                     *, principal: Principal | None = None) -> bytes:
+        """The encoded reply; principal is supplied only by trusted in-process ingress."""
         kind, _, operation = subject.removeprefix(f"oe.v1.{self.service}.").partition(".")
         body: Any = None
         with receiving(subject, headers, name=f"oe.v1.{self.service}.{kind}.{operation}"):
             try:
+                if self.caller_ingress is not None:
+                    self.caller_ingress.admit(principal)
                 body = envelopes.decode(data)
                 if not self._keeps_receipt(kind, operation, body):
                     envelopes.check(envelopes.COMMAND if kind == "control" else envelopes.QUERY, body)
@@ -222,7 +242,7 @@ class Server:
                         listen_address(self.nats)
                         if self.nats.is_connected or self.nats.is_draining else ""
                     )
-                request = Request(subject, kind, operation, body, listener)
+                request = Request(subject, kind, operation, body, listener, principal=principal)
                 log.info("%s request", operation, extra=_identity(body))
                 self.authorizer.authorize(request)
                 route, parameters = self._route(subject, kind, operation)
