@@ -4531,6 +4531,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         authorize_user=github_user_repository_access,
         access_timeout=GITHUB_LOGIN_TIMEOUT_SECONDS,
         onboarding_token=onboarding_token,
+        public_url=public_url,
     )
     routes = [
         *onboarding.routes(github_login.visible_repositories, _is_local_request),

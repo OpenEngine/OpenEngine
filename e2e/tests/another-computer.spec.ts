@@ -67,9 +67,9 @@ test.describe(anotherComputerCategory, () => {
         await step(
           `OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. It has a background program that does the work, and that program can run on more than one computer: this one, and another such as a Mac mini that stays on all day. This is so your long-running agents can work 24/7 on the tasks you set out for them, even after you close your laptop. Each computer it runs on is called a **backend**. In this example, your laptop is called \`local\`, and it's there from the start.
 
-This guide shows how to tell OpenEngine about another computer, check you can reach it, and choose which computer your \`engine\` commands go to. You'll need OpenEngine already running on the other computer, and an address that reaches it from this one. Here, it's \`https://${MAC_MINI}\`.
+This guide shows how to tell OpenEngine about another computer, check you can reach it, and choose which computer your \`oe\` commands go to. You'll need OpenEngine already running on the other computer, and an address that reaches it from this one. Here, it's \`https://${MAC_MINI}\`.
 
-OpenEngine on the other computer only answers programs on that computer itself, so it needs a safe way in from this one, such as a private network between your computers ([Tailscale](https://tailscale.com/kb/1017/install) is one) or an SSH tunnel. If someone else set up the Mac mini, ask them for the address that reaches it from here.`,
+OpenEngine on the other computer only answers programs on that computer itself, so it needs a safe way in from this one, such as a private network between your computers ([Tailscale](https://tailscale.com/kb/1017/install) is one) or an SSH tunnel. If the Mac mini isn't on the same network as this computer, see [Reach Your OpenEngine From Anywhere](./test2doc-reach-your-openengine-from-anywhere.mdx) to give it a safe https address first. If someone else set up the Mac mini, ask them for the address that reaches it from here.`,
         )
 
         await step(

@@ -6,6 +6,7 @@ import { BENCH_REPO, BENCH_TOPIC, containerSession, getRepo, gh, whoami } from "
 import { issues } from "../../fixtures/calculator/issues.ts"
 import { milestone } from "../../fixtures/calculator/milestone.ts"
 import { show, step } from "../../support/show.ts"
+import { launchQuickTunnel } from "../../support/quick-tunnel.ts"
 import { benchmarkCategory } from "../docCategories"
 
 // The end-to-end benchmark (docs/plans/e2e-benchmark.md). It runs only through `npm run oe-benchmark`,
@@ -87,6 +88,28 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
         // OpenEngine's default port: the guide uses the defaults, as a new user would.
         const port = 4364
 
+        await step(
+          "Before opening a tunnel, protect OpenEngine with a token. A tunnel makes it reachable outside your network. Make a secret token and save it in a file only you can read. Export it too, so commands in this terminal can authenticate. Keep this terminal open.\n\n```sh\nexport ENGINE_SERVICE_TOKEN=$(openssl rand -hex 32)\n(umask 077; touch ~/.config/openengine/.env)\nchmod 600 ~/.config/openengine/.env\nprintf 'ENGINE_SERVICE_TOKEN=%s\\n' \"$ENGINE_SERVICE_TOKEN\" >> ~/.config/openengine/.env\nls -l ~/.config/openengine/.env\n```",
+          async () => {
+            await terminal.run("export ENGINE_SERVICE_TOKEN=$(openssl rand -hex 32)")
+            await terminal.run("(umask 077; touch ~/.config/openengine/.env)")
+            await terminal.run("chmod 600 ~/.config/openengine/.env")
+            await terminal.run(`printf 'ENGINE_SERVICE_TOKEN=%s\\n' "$ENGINE_SERVICE_TOKEN" >> ~/.config/openengine/.env`)
+            await terminal.run("ls -l ~/.config/openengine/.env")
+            await show("benchmark__terminal--token-permissions.png", terminal, testInfo, await terminal.row(/-rw-------/), "Only you can read the token file")
+          },
+        )
+
+        await step(
+          "Repository setup uses a separate onboarding token because it can grant repository trust. Keep it private too.\n\n```sh\nexport ENGINE_ONBOARDING_TOKEN=$(openssl rand -hex 32)\nprintf 'ENGINE_ONBOARDING_TOKEN=%s\\n' \"$ENGINE_ONBOARDING_TOKEN\" >> ~/.config/openengine/.env\noe backend add onboarding http://127.0.0.1:4364 --token-env ENGINE_ONBOARDING_TOKEN\n```",
+          async () => {
+            await terminal.run("export ENGINE_ONBOARDING_TOKEN=$(openssl rand -hex 32)")
+            await terminal.run(`printf 'ENGINE_ONBOARDING_TOKEN=%s\\n' "$ENGINE_ONBOARDING_TOKEN" >> ~/.config/openengine/.env`)
+            await terminal.run("oe backend add onboarding http://127.0.0.1:4364 --token-env ENGINE_ONBOARDING_TOKEN")
+            await show("benchmark__terminal--onboarding-backend.png", terminal, testInfo, await terminal.row(/onboarding/), "A separate credential for repository setup")
+          },
+        )
+
         const tunnelCommand = `cloudflared tunnel --url http://127.0.0.1:${port}`
         const tunnelUrl = await step(
           "OpenEngine runs on your computer, and GitHub can't reach your computer directly. A Cloudflare quick tunnel gives it a temporary public address. Open a second terminal for it, because the tunnel keeps running, and start the tunnel there. It needs no Cloudflare account.\n\n" +
@@ -94,15 +117,12 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           async () => {
             // Tall enough that the address stays in view while the tunnel's log fills the screen.
             const tunnel = await Terminal.open(await context.newPage(), containerSession(), { checkoutEngine: false, shell: true })
-            await tunnel.type(tunnelCommand)
-            await tunnel.press("Enter")
-            await tunnel.waitForText(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/, { timeout: 90_000 })
-            const url = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(await tunnel.text())![0]
-            // Shown now, while the address is still on screen: the tunnel's log scrolls it away.
-            await show("benchmark__terminal--tunnel.png", tunnel, testInfo, await tunnel.row(new RegExp(url.replace(/\./g, "\\."))), "Your temporary public address")
-            // The address prints before the tunnel is connected: wait for the connection too.
-            await tunnel.waitForText(/Registered tunnel connection/, { timeout: 90_000 })
-            return url
+            return launchQuickTunnel(tunnel, port, {
+              onAddress: async (url) => {
+                await show("benchmark__terminal--tunnel.png", tunnel, testInfo, await tunnel.row(new RegExp(url.replace(/\./g, "\\."))), "Your temporary public address")
+              },
+            })
+
           },
         )
 
@@ -131,9 +151,9 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
         )
 
         await step(
-          "OpenEngine reads the webhook secret from a file named `.env`, kept next to `engine.toml` and readable only by you. Here the secret is in an environment variable named `ENGINE_GITHUB_WEBHOOK_SECRET`, so it never appears on screen.\n\n```sh\nprintf 'ENGINE_GITHUB_WEBHOOK_SECRET=%s\\n' \"$ENGINE_GITHUB_WEBHOOK_SECRET\" > ~/.config/openengine/.env\nchmod 600 ~/.config/openengine/.env\nls -la ~/.config/openengine\n```",
+          "OpenEngine reads the webhook secret from a file named `.env`, kept next to `engine.toml` and readable only by you. Here the secret is in an environment variable named `ENGINE_GITHUB_WEBHOOK_SECRET`, so it never appears on screen.\n\n```sh\nprintf 'ENGINE_GITHUB_WEBHOOK_SECRET=%s\\n' \"$ENGINE_GITHUB_WEBHOOK_SECRET\" >> ~/.config/openengine/.env\nchmod 600 ~/.config/openengine/.env\nls -la ~/.config/openengine\n```",
           async () => {
-            await terminal.run(`printf 'ENGINE_GITHUB_WEBHOOK_SECRET=%s\\n' "$ENGINE_GITHUB_WEBHOOK_SECRET" > ~/.config/openengine/.env`)
+            await terminal.run(`printf 'ENGINE_GITHUB_WEBHOOK_SECRET=%s\\n' "$ENGINE_GITHUB_WEBHOOK_SECRET" >> ~/.config/openengine/.env`)
             await terminal.run("chmod 600 ~/.config/openengine/.env")
             await terminal.run("ls -la ~/.config/openengine")
             await show("benchmark__terminal--secret-file.png", terminal, testInfo, await terminal.row(/-rw-------.* \.env$/), "The secret is in a file only you can read")
@@ -226,10 +246,10 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
 
           await step(
             "Tell OpenEngine about the repository. `oe repo add` downloads it onto your computer and remembers where it is, so OpenEngine knows which folder to work in. It takes effect straight away.\n\n" +
-              "```sh\noe repo add https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + "\n```",
+              "```sh\noe repo add --backend onboarding https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + "\n```",
             async () => {
               await terminal.run("clear")
-              await terminal.run(`oe repo add https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
+              await terminal.run(`oe repo add --backend onboarding https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
               await terminal.run(`ls ~/${BENCH_REPO}`)
               await show("benchmark__terminal--repository-cloned.png", terminal, testInfo, await terminal.row(/^README\.md$/), "The repository is on your computer")
             },

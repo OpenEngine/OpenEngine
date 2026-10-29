@@ -107,3 +107,16 @@ install took, whether the webhook ping had to be sent twice), and the same notes
 `support/mask.ts` hides a secret in a guide screenshot. Pass `mask(locator)` among the targets
 of `screenshot()`; it draws an opaque box over the element, which the benchmark must do for every
 token or secret on screen.
+
+## Real tunnels (opt in)
+
+The anywhere guide uses local TLS by default and never looks for tunnel tools.
+Run `E2E_TUNNEL=cloudflare npm test -- tests/reach-from-anywhere.spec.ts` for a
+Cloudflare quick tunnel (install `cloudflared`; no account needed), or
+`E2E_TUNNEL=tailscale npm test -- tests/reach-from-anywhere.spec.ts --workers=1`
+on a dedicated machine signed in to Tailscale with HTTPS enabled. Existing
+Tailscale Serve configuration is refused; the test removes only its own setup.
+Missing tools or login fail the run, with no fallback. Agent selection remains
+independent (`E2E_AGENT=stub` or `real`). The test checks the daemon refuses
+unauthenticated API requests before exposing it, and records tunnel resources
+for teardown. Generate committed guides with `E2E_TUNNEL` unset.
