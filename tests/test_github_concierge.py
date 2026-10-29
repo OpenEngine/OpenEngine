@@ -1779,6 +1779,41 @@ def test_requesting_a_review_from_engine_starts_an_engine_review(
             "acme/api", 12, RunId(runtime.started_run_id))
 
 
+def test_a_review_requested_on_a_fork_reviews_its_pull_request_head(
+    tmp_path, *, github_app, git_repo, client
+):
+    from test_github_ingress import _review_requested, _signed as github_signed
+
+    runtime, opened = _graph_runtime(pr_number=99)
+    app, capabilities, _ = github_app(
+        RecordingCommunications(),
+        WorkOrdersConfig(repository="acme/api", workflow="implementation-review-v1"),
+        _review_catalog(),
+        provider=FakeACPProvider(create=True),
+        github_webhook_secret=SIGNING_SECRET,
+        review_request_workflow="custom-review",
+        graph_runtime=opened,
+        repos={"acme/api": str(git_repo(tmp_path / "api", origin="git@github.com:Acme/API.git"))},
+    )
+    source = MagicMock(can_write_repository=AsyncMock(return_value=True),
+                       authenticated_login=AsyncMock(return_value="OpenEngineBot"))
+    object.__setattr__(capabilities, "source_control", source)
+    payload = _review_requested()
+    payload["pull_request"]["head"]["repo"] = {"full_name": "contributor/api"}
+    body = json.dumps(payload).encode()
+    headers = dict(github_signed(body), **{"x-github-event": "pull_request"})
+    with client(app) as browser:
+        assert browser.post("/api/github/events", content=body, headers=headers).status_code == 200
+        browser.portal.call(app.state.github_ingress.drain)
+        # The maintainer who asked can write; the fork's author is not asked.
+        source.can_write_repository.assert_awaited_once_with(
+            "https://github.com/acme/api/pull/1", "maintainer", user_id=7)
+        runtime.start.assert_awaited_once()
+        inputs = runtime.start.await_args.args[1]["inputs"]
+        # The fork's branch is not on origin, so the review checks out the PR's head.
+        assert (inputs["ref"], inputs["branch"]) == ("origin/refs/pull/12/head", "feature")
+
+
 def test_a_review_request_leaves_a_pull_request_to_its_running_work_order(
     tmp_path, caplog, *, github_app, git_repo, client
 ):

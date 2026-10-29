@@ -174,6 +174,37 @@ def test_webhook_resolves_review_name_in_repository_project(tmp_path):
     asyncio.run(scenario())
 
 
+def test_webhook_resolves_review_name_in_default_project(tmp_path):
+    from engine.apps.web.api import _GraphSurface
+    from engine.cli import starters
+    from test_graph_service import graph_service
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            await service.add_graph('default', source=starters.source('review'), format='python')
+            surface = _GraphSurface(runtime=service.runtime, service=service)
+            workflow = surface.named_workflow({}, 'owner/repo', 'review')
+            _, version = service.resolve('default', 'review')
+            assert str(workflow.graph_id) == version.version_id
+    asyncio.run(scenario())
+
+
+def test_webhook_registers_the_built_in_review_graph_when_missing(tmp_path):
+    from engine.apps.web.api import _GraphSurface
+    from test_graph_service import graph_service
+
+    async def scenario():
+        async with graph_service(tmp_path) as service:
+            surface = _GraphSurface(runtime=service.runtime, service=service)
+            assert surface.named_workflow({}, 'owner/repo', 'review') is None
+            workflow = await surface.starter_workflow({}, 'owner/repo', 'review')
+            _, version = service.resolve('default', 'review')
+            assert str(workflow.graph_id) == version.version_id
+            # Not a built-in: nothing is registered under a name nobody wrote.
+            assert await surface.starter_workflow({}, 'owner/repo', 'custom-review') is None
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('reviewed_sha', ['', 'different-ref'])
 def test_missing_or_unreviewed_head_skips(execution, reviewed_sha):
     result = asyncio.run(publish.ApproveReview()(state(reviewed_sha=reviewed_sha)))
