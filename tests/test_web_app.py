@@ -1754,7 +1754,8 @@ def _graph_app_over(
 
     if isinstance(store, WebStores):
         store.bind(runtime)
-    options.setdefault("public_url", "https://engine.test")
+    if github_login_config is not None:
+        options.setdefault("public_url", "https://engine.test")
     return workflow_app(
         store,
         ConcurrentRunner(),

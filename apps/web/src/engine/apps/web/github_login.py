@@ -30,6 +30,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 log = logging.getLogger(__name__)
 
 _PATH = "/api/auth/github"
+# Populate once the remote-access guide from #1213 is published.
+REMOTE_ACCESS_DOCS_URL: str | None = None
+REMOTE_ACCESS_GUIDANCE = (
+    "Remote access needs ENGINE_SERVICE_TOKEN (at least 32 characters, no whitespace). "
+    "Set it and restart."
+)
 _COOKIE = "engine_github_login"
 _SESSION_COOKIE = "engine_session"
 _TTL = 600
@@ -108,8 +114,10 @@ class GitHubLogin:
         authorize_user: Callable[[str], Awaitable[Mapping[str, bool | None]]] | None = None,
         access_timeout: float = 10,
         onboarding_token: Callable[[], str] = lambda: "",
+        public_url: str = "",
     ) -> None:
         self.config = config
+        self.public_url = public_url
         # Which of the deployment's repositories a verified GitHub account
         # (id, login) can write to: repository -> GitHub's answer, or None
         # where that lookup failed. Write access to any one admits a session.
@@ -150,10 +158,40 @@ class GitHubLogin:
     def routes(self) -> list[Route]:
         return [
             Route(f"{_PATH}/login", self.login),
+            Route(f"{_PATH}/token", self.token_login, methods=["POST"]),
             Route(f"{_PATH}/callback", self.callback),
             Route(f"{_PATH}/status", self.status),
             Route(f"{_PATH}/logout", self.logout, methods=["POST"]),
         ]
+
+    def login_required(self, request: Request) -> bool:
+        return bool(self.config or self.service_token() or self.public_url or any(
+            name == "forwarded" or name.startswith("x-forwarded-") or name == "cf-connecting-ip"
+            for name in request.headers
+        ))
+
+    def _token_session_id(self) -> str:
+        return hashlib.sha256(self.service_token().encode()).hexdigest()
+
+    async def token_login(self, request: Request) -> Response:
+        if self.config is not None:
+            return JSONResponse({"error": "Use GitHub login"}, 400, headers=_HEADERS)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        expected = self.service_token()
+        if not valid_service_token(expected):
+            return JSONResponse({"error": REMOTE_ACCESS_GUIDANCE}, 503, headers=_HEADERS)
+        supplied = body.get("token") if isinstance(body, dict) else None
+        if not isinstance(supplied, str) or not secrets.compare_digest(supplied.encode(), expected.encode()):
+            return JSONResponse({"error": "Invalid service token"}, 401, headers=_HEADERS)
+        response = JSONResponse({"ok": True}, headers=_HEADERS)
+        session_id = hashlib.sha256(expected.encode()).hexdigest()
+        response.set_cookie(_SESSION_COOKIE, self._make_session_cookie(1, "operator", session_id),
+                            max_age=_SESSION_TTL, path="/", secure=request.url.scheme == "https",
+                            httponly=True, samesite="lax")
+        return response
 
     @property
     def configured(self) -> bool:
@@ -195,6 +233,11 @@ class GitHubLogin:
             return None
         if expires <= time.time() or user_id <= 0 or not login or not session_id:
             return None
+        if self.config is None and (
+            not valid_service_token(self.service_token())
+            or not secrets.compare_digest(session_id, self._token_session_id())
+        ):
+            return None
         return {"id": user_id, "login": login}, session_id
 
     def _drop_expired_user_tokens(self) -> None:
@@ -235,7 +278,7 @@ class GitHubLogin:
         # Swept on every check, operators' included, so a token outlives its
         # session only until the next request from anyone.
         self._drop_expired_user_tokens()
-        if self.authorize is None or user["id"] in self.operators:
+        if self.config is None or self.authorize is None or user["id"] in self.operators:
             return True
         writable = await self.writable_repositories(user, fresh=fresh)
         return None if writable is None else bool(writable)
@@ -515,8 +558,14 @@ class GitHubLogin:
         body: dict[str, object] = {
             "authenticated": user is not None,
             "user": user,
-            "loginRequired": self.config is not None,
+            "loginRequired": self.login_required(request),
         }
+        if self.config is None and self.login_required(request):
+            body["tokenLogin"] = valid_service_token(self.service_token())
+        if self.config is None and self.login_required(request) and not valid_service_token(self.service_token()):
+            body["loginMessage"] = REMOTE_ACCESS_GUIDANCE
+            if REMOTE_ACCESS_DOCS_URL:
+                body["loginDocsUrl"] = REMOTE_ACCESS_DOCS_URL
         if user is not None:
             # Whoever is signed in may be able to fix the server's connection;
             # anyone it cannot vouch for is refused while this is true.
@@ -546,8 +595,6 @@ class GitHubLogin:
         `/api/v1/` graph API (except trust writes), for a CLI pointed at this server.
         A distinct onboarding token admits only job creation and polling.
         """
-        if not self.configured:
-            return app
         return _SessionAuthMiddleware(app, self)
 
 
@@ -555,6 +602,7 @@ class GitHubLogin:
 # the login flow itself can work.
 _AUTH_EXEMPT = frozenset({
     "/api/health",  # Public service identity and readiness; no user data.
+    f"{_PATH}/token",
     f"{_PATH}/login",
     f"{_PATH}/callback",
     f"{_PATH}/status",
@@ -578,6 +626,9 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
+        if not self.login.login_required(request):
+            await self.app(scope, receive, send)
+            return
         if self.login._has_service_token(request) or self.login._has_onboarding_token(request):
             await self.app(scope, receive, send)
             return
@@ -594,7 +645,8 @@ class _SessionAuthMiddleware:
             )
         else:
             response = JSONResponse(
-                {"error": "authentication required"},
+                {"error": REMOTE_ACCESS_GUIDANCE if self.login.config is None
+                 and not valid_service_token(self.login.service_token()) else "authentication required"},
                 status_code=401,
                 headers=_HEADERS,
             )
