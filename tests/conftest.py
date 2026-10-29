@@ -375,7 +375,7 @@ def github_auth_app(web_app, sqlite_store, tmp_path):
             credential_store=credential_store or GitHubCredentialStore(),
             github_client_id=client_id,
             github_login_config=login_config,
-            public_url="https://engine.test",
+            public_url="https://engine.test" if login_config else "",
             source_control_preferences=SourceControlPreferences(
                 tmp_path / "settings.json"
             ),

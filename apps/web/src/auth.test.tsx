@@ -3,12 +3,13 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getAuthStatus, logout, type AuthStatus } from "./api";
+import { getAuthStatus, logout, tokenLogin, type AuthStatus } from "./api";
 import { AuthGate } from "./auth";
 
 vi.mock("./api", () => ({
   getAuthStatus: vi.fn(),
   logout: vi.fn(),
+  tokenLogin: vi.fn(),
 }));
 
 const signedOut: AuthStatus = {
@@ -40,6 +41,27 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("AuthGate", () => {
+  it("shows remote setup guidance without an unusable login form", async () => {
+    const message = "Remote access needs ENGINE_SERVICE_TOKEN (at least 32 characters, no whitespace). Set it and restart.";
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...signedOut, tokenLogin: false, loginMessage: message });
+    renderGate();
+    expect(await screen.findByText(message)).toBeVisible();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+  });
+
+  it("signs in with a configured token and keeps the destination", async () => {
+    visit("/runs/run-123");
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...signedOut, tokenLogin: true });
+    vi.mocked(tokenLogin).mockResolvedValue(undefined);
+    renderGate();
+    fireEvent.change(await screen.findByLabelText("Service token"), { target: { value: "s".repeat(32) } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/runs/run-123"));
+    expect(tokenLogin).toHaveBeenCalledWith("s".repeat(32));
+  });
+
   it("keeps the application unmounted until the status check finishes", async () => {
     let resolve!: (status: AuthStatus) => void;
     vi.mocked(getAuthStatus).mockReturnValue(new Promise((done) => { resolve = done; }));

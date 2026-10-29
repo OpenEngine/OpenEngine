@@ -1191,3 +1191,46 @@ def test_separate_onboarding_token_scope(method, path, allowed):
         assert client.request(method, path, headers={'Authorization': f'Bearer {SERVICE_TOKEN}'}).status_code == 401
     token = SERVICE_TOKEN
     assert client.request(method, path, headers={'Authorization': f'Bearer {token}'}).status_code == (200 if path in ['/api/runs', '/api/v1/graphs'] else 401)
+
+
+REMOTE_GUIDANCE = (
+    "Remote access needs ENGINE_SERVICE_TOKEN (at least 32 characters, no whitespace). "
+    "Set it and restart."
+)
+
+
+@pytest.mark.parametrize("token", ["", "short", "s" * 32 + " "])
+@pytest.mark.parametrize("headers,public_url", [
+    ({"Forwarded": "for=203.0.113.1"}, ""),
+    ({"X-Forwarded-Proto": "https"}, ""),
+    ({"CF-Connecting-IP": "203.0.113.1"}, ""),
+    ({}, "https://engine.example"),
+])
+def test_remote_without_valid_token_explains_setup(token, headers, public_url):
+    flow = GitHubLogin(None, service_token=lambda: token, public_url=public_url)
+    client = _app_with_middleware(flow)
+    response = client.get("/api/data", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["error"] == REMOTE_GUIDANCE
+    status = client.get("/api/auth/github/status", headers=headers).json()
+    assert status["loginRequired"] is True
+    assert status["tokenLogin"] is False
+    assert status["loginMessage"] == REMOTE_GUIDANCE
+    response = client.post("/api/auth/github/token", headers=headers, json={"token": "anything"})
+    assert response.status_code == 503
+    assert response.json()["error"] == REMOTE_GUIDANCE
+
+
+def test_plain_localhost_stays_open_without_token():
+    client = _app_with_middleware(GitHubLogin(None))
+    assert client.get("/api/data").status_code == 200
+    assert client.get("/api/auth/github/status").json()["loginRequired"] is False
+
+
+def test_explicit_token_guards_localhost_and_allows_browser_login():
+    client = _app_with_middleware(GitHubLogin(None, service_token=lambda: "s" * 32))
+    assert client.get("/api/data").status_code == 401
+    assert client.get("/api/auth/github/status").json()["tokenLogin"] is True
+    assert client.post("/api/auth/github/token", json={"token": "wrong"}).status_code == 401
+    assert client.post("/api/auth/github/token", json={"token": "s" * 32}).status_code == 200
+    assert client.get("/api/data").status_code == 200

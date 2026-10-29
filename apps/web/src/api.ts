@@ -450,12 +450,19 @@ export type AuthStatus = {
   authenticated: boolean;
   user: { id: number; login: string } | null;
   loginRequired: boolean;
+  tokenLogin?: boolean;
+  loginMessage?: string;
+  loginDocsUrl?: string;
   /** Sent to operators only: whether the server's repository access checks are failing. */
   accessCheckFailing?: boolean;
 };
 
 export function getAuthStatus(): Promise<AuthStatus> {
   return api<AuthStatus>("/api/auth/github/status");
+}
+
+export function tokenLogin(token: string): Promise<void> {
+  return api<void>("/api/auth/github/token", { method: "POST", body: JSON.stringify({ token }) });
 }
 
 export function logout(): Promise<void> {
