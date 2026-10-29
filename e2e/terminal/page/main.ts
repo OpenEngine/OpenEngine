@@ -63,9 +63,11 @@ const rowsElement = document.querySelector("#terminal .xterm-rows")!
 const drawStandIns = new MutationObserver(() => {
   drawStandIns.disconnect()
   const walker = document.createTreeWalker(rowsElement, NodeFilter.SHOW_TEXT)
+  let before = ""
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const shown = standIns.apply(node.nodeValue ?? "")
+    const shown = standIns.apply(node.nodeValue ?? "", before)
     if (shown !== node.nodeValue) node.nodeValue = shown
+    before = shown
   }
   drawStandIns.observe(rowsElement, { childList: true, subtree: true, characterData: true })
 })

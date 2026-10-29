@@ -23,7 +23,7 @@ function pattern(text: Text): Pattern {
 }
 
 /** Room below a row for test2doc's label: its arrow's 24px margin, a 14px line and 4px padding each side, and some to spare. */
-const LABEL_ROOM = 48
+export const LABEL_ROOM = 48
 
 export class Terminal {
   readonly page: Page

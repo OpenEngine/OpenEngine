@@ -11,11 +11,20 @@ const HEX = "0123456789abcdef"
 /** Engine IDs (g-…, gv-…, run-…) and UUIDs, as they appear in CLI output. */
 const IDENTIFIER = /\b(?:[a-z]+-[0-9a-f]{12}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/g
 
-/** ISO 8601 date-times, with or without seconds' fractions; the offset is kept as it is. */
-const TIMESTAMP = /\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})?/g
+/** ISO 8601 date-times, with or without seconds' fractions (after a comma in Python's logs); the offset is kept as it is. */
+const TIMESTAMP = /\b(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:[.,]\d+)?)(Z|[+-]\d{2}:\d{2})?/g
 
 /** A port on this computer's loopback address, where a test daemon listens on a port the OS picked. */
 const LOOPBACK_PORT = /(?<![\w.])((?:127\.0\.0\.1|localhost|\[::1\]):)(\d{2,5})\b/g
+
+/** The random end of a test daemon's temporary directory name, which the daemon prints when it starts. */
+const TEMPORARY_ROOT = /(?<=\bopenengine-e2e-)(?!bin-)[A-Za-z0-9]{6}\b/g
+
+/** The process ID a daemon reports when it starts; one stand-in whatever its length, since nothing follows it on the line. */
+const SERVER_PROCESS = /(?<=\bStarted server process \[)\d+(?=\])/g
+
+/** What precedes that process ID when it is drawn in a colour of its own, and so in a text node of its own. */
+const BEFORE_SERVER_PROCESS = /\bStarted server process \[$/
 
 /** The first port drawn in their place; the nth new one of a length gets the nth after it, cut to that length. */
 const FIRST_PORT = 54321
@@ -33,14 +42,20 @@ export class StandIns {
 
   private seed = 0x2f6e2b1
 
-  /** `text` with every ID, timestamp and loopback port replaced, or `text` itself if it has none. */
-  apply(text: string): string {
+  /**
+   * `text` with every ID, timestamp, loopback port, temporary directory and daemon process ID replaced, or `text` itself if it has none.
+   * `before` is the text drawn just before it, for a value coloured on its own.
+   */
+  apply(text: string, before = ""): string {
+    if (/^\d+$/.test(text) && BEFORE_SERVER_PROCESS.test(before)) return "4242"
     if (this.tunnelAddress) {
       text = text
         .replace(/\b[a-z0-9-]+\.trycloudflare\.com\b/g, this.tunnelAddress)
         .replace(/\b[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\b/g, this.tunnelAddress)
     }
     return text
+      .replace(TEMPORARY_ROOT, "Xq3sT7")
+      .replace(SERVER_PROCESS, "4242")
       .replace(IDENTIFIER, (id) => this.standInFor(id))
       .replace(LOOPBACK_PORT, (_address, host: string, port: string) => host + this.portFor(port))
       .replace(

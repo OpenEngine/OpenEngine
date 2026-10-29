@@ -155,6 +155,29 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(first).toBe("tunnel https://openengine.example.com | https://openengine.example.com/api/v1")
   })
 
+  test("shows a daemon's log time, temporary directory and process as stand-ins that are the same on every run", async ({ browser }) => {
+    const shown = async (time: string, root: string, pid: number) => {
+      const page = await browser.newPage()
+      await openTerminal(page, { cols: 120 })
+      await page.locator("#terminal").click()
+      // The process ID coloured, as the daemon prints it.
+      await page.keyboard.type(`printf '/tmp/openengine-e2e-${root}/engine.toml | ${time} | Started server process [\\033[36m${pid}\\033[0m]\\n'`)
+      await page.keyboard.press("Enter")
+      await expect.poll(() => bufferText(page)).toMatch(new RegExp(`^/tmp/openengine-e2e-${root}/`, "m"))
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^\/tmp\/openengine-e2e-/ }).last()
+      const text = (await row.textContent())!.trim()
+      await page.close()
+      return text
+    }
+    const first = await shown("2026-10-12 23:04:01,521", "a1B2c3", 85701)
+    const second = await shown("2027-03-01 08:15:59,004", "Zz9Yy8", 447)
+    expect(first).toBe(second)
+    expect(first).toMatch(
+      /^\/tmp\/openengine-e2e-[A-Za-z0-9]{6}\/engine\.toml \| \d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \| Started server process \[\d+\]$/,
+    )
+    expect(first).not.toContain("a1B2c3")
+  })
+
   test("says so when the server refuses the session", async ({ page }) => {
     await page.goto("/?token=wrong")
     await page.waitForFunction(() => window.__term?.error !== undefined)
