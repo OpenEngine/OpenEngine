@@ -1,9 +1,8 @@
 """Commit internal update identity, lifecycle state and public events together."""
-from datetime import datetime
 from virtual_control_plane.application.steering_updates import project_steering, fail_pending_steers
 from virtual_control_plane.application.commands.cancellation import complete_cancels
 from virtual_control_plane.domain.execution import transition
-from virtual_control_plane.domain.lifecycle import Rejected, event, now
+from virtual_control_plane.domain.lifecycle import Rejected, event, now, parse_time
 from virtual_control_plane.domain.runtime import binding, digest, error
 
 
@@ -89,10 +88,10 @@ async def project(tx, message):
         elif kind == 'attempt.progress' and payload['kind'] == 'usage':
             if attempt['state'] not in ('running', 'cancelling') or 'started_at' not in attempt:
                 reject('EVENT_CONFLICT', 'Usage requires a running attempt')
-            start, end = (datetime.fromisoformat(payload[key].replace('Z', '+00:00')) for key in ('period_start', 'period_end'))
+            start, end = (parse_time(payload[key]) for key in ('period_start', 'period_end'))
             periods = item.get('usage_periods', [])
-            if start > end or any(start < datetime.fromisoformat(period[1].replace('Z', '+00:00'))
-                                  and end > datetime.fromisoformat(period[0].replace('Z', '+00:00')) for period in periods):
+            if start > end or any(start < parse_time(period[1])
+                                  and end > parse_time(period[0]) for period in periods):
                 reject('EVENT_CONFLICT', 'Usage delta periods overlap or are reversed')
             item['usage_periods'] = [*periods, [payload['period_start'], payload['period_end']]]
             total = attempt.setdefault('usage', {})

@@ -8,6 +8,10 @@ def now() -> str:
     return datetime.now(UTC).isoformat().replace('+00:00', 'Z')
 
 
+def parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
 def identity(prefix: str) -> str:
     return f'{prefix}_{uuid4().hex}'
 

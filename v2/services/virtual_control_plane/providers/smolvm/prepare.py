@@ -25,7 +25,7 @@ def prepare(specification, runtime_id):
                 shutil.rmtree(destination)
             subprocess.run(['git', 'clone', '--', repository['url'], str(destination)], check=True)
         if repository.get('ref'):
-            subprocess.run(['git', '-C', str(destination), 'checkout', '--detach', repository['ref'], '--'], check=True)
+            subprocess.run(['git', '-C', str(destination), 'checkout', '--detach', '--end-of-options', repository['ref']], check=True)
     files = list(context.get('files', []))
     if context.get('instructions'):
         files.append({'path': 'AGENTS.md', 'content': context['instructions']})
@@ -40,4 +40,4 @@ def prepare(specification, runtime_id):
 
 
 if __name__ == '__main__':
-    prepare(json.loads(sys.argv[1]), sys.argv[2])
+    prepare(json.loads(sys.stdin.read()), sys.argv[1])

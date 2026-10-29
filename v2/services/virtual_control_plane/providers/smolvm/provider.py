@@ -22,10 +22,11 @@ class Smolvm:
         if specification.get('resources', {}).get('cpu_millis', 1000) % 1000:
             unsupported('fractional_cpu', 'smolvm')
 
-    async def command(self, *arguments):
+    async def command(self, *arguments, stdin=None):
         environment = {key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR', 'XDG_DATA_HOME',
                        'XDG_CACHE_HOME', 'DYLD_LIBRARY_PATH', 'SMOLVM_DATA_DIR', 'SMOLVM_LIB_DIR', 'SMOLVM_CONFIG') if key in os.environ}
         spawning = asyncio.create_task(asyncio.create_subprocess_exec(self.executable, *arguments, env=environment,
+                    stdin=asyncio.subprocess.PIPE if stdin is not None else None,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True))
         try:
             process = await asyncio.shield(spawning)
@@ -37,6 +38,10 @@ class Smolvm:
                 pass
             await process.communicate()
             raise
+        if stdin is not None:
+            process.stdin.write(stdin)
+            await process.stdin.drain()
+            process.stdin.close()
         async def read(stream):
             result = bytearray()
             while chunk := await stream.read(65536):
@@ -106,7 +111,7 @@ class Smolvm:
         await self.command('machine', 'start', '--name', name)
         script = Path(__file__).with_name('prepare.py').read_text()
         await self.command('machine', 'exec', '--name', name, '--', 'python3', '-c', script,
-                           json.dumps(specification), ownership['runtime_id'])
+                           ownership['runtime_id'], stdin=json.dumps(specification).encode())
         if self.runtime:
             await self.runtime.provision(self, ownership)
         if not await self.inspect(ownership):

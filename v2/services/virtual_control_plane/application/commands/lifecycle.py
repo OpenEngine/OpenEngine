@@ -1,19 +1,16 @@
 """Durable acceptance; no provider calls occur on the reply path."""
-import hashlib
-import json
-from datetime import datetime
-
 from virtual_control_plane.application.ports import Authorizer, Compute, ExecutionContext, RuntimeCommandEncoder, Storage
 from virtual_control_plane.application.commands.execution import accept_execute
 from virtual_control_plane.application.commands.cancellation import accept_cancel
 from virtual_control_plane.application.commands.steering import accept_steer
-from virtual_control_plane.domain.lifecycle import Rejected, check_action, event, identity, now, unsupported, validate_create
+from virtual_control_plane.domain.lifecycle import Rejected, check_action, event, identity, now, parse_time, unsupported, validate_create
+from virtual_control_plane.domain.runtime import digest
 
 
 def fingerprint(subject, request):
     # deadline_at is an acceptance constraint, deliberately not retry identity.
     content = {key: request.get(key) for key in ('payload', 'expected_version', 'causal_path')}
-    return hashlib.sha256(json.dumps([subject, content], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return digest([subject, content])
 
 
 class Commands:
@@ -53,7 +50,7 @@ class Commands:
         if validation_error:
             raise validation_error
         timestamp = now()
-        if request.get('deadline_at') and datetime.fromisoformat(request['deadline_at'].replace('Z', '+00:00')) <= datetime.fromisoformat(timestamp.replace('Z', '+00:00')):
+        if request.get('deadline_at') and parse_time(request['deadline_at']) <= parse_time(timestamp):
             raise Rejected('DEADLINE_EXCEEDED', 'Acceptance deadline passed',
                            deadline_at=request['deadline_at'], received_at=timestamp)
         if len(request['causal_path']) >= 32:
@@ -84,7 +81,7 @@ class Commands:
                 raise Rejected('UNAVAILABLE', 'Another workspace operation is in progress')
             if action in ('cancel', 'steer'):
                 handler = accept_cancel if action == 'cancel' else accept_steer
-                response = await handler(tx, record, request, actor, timestamp, self.runtime_encoder)
+                response = await handler(tx, record, request, actor, timestamp, self.runtime_encoder, self.authorizer, subject)
                 await tx.put('command_receipts', command_id, {'owner': actor, 'fingerprint': digest,
                              'response': response, 'created_at': timestamp})
                 return response

@@ -2,12 +2,11 @@
 from virtual_control_plane.domain.lifecycle import Rejected, identity
 
 
-async def snapshot(tx, record):
+def snapshot(record, attempts):
     session = dict(record['session'])
-    attempts = [item for item in await tx.all('attempts')
-                if item['attempt']['session_id'] == session['session_id']]
-    attempts.sort(key=lambda item: (item['created_at'], item['attempt']['attempt_id']), reverse=True)
-    session['attempts'] = [item['attempt'] for item in attempts[:20]]
+    matching = [item for item in attempts if item['attempt']['session_id'] == session['session_id']]
+    matching.sort(key=lambda item: (item['created_at'], item['attempt']['attempt_id']), reverse=True)
+    session['attempts'] = [item['attempt'] for item in matching[:20]]
     return session
 
 
@@ -17,7 +16,7 @@ async def read_sessions(tx, kind, target, params, actor, authorizer, subject):
         if record is None:
             raise Rejected('NOT_FOUND', 'Session does not exist')
         await authorizer.authorize(actor, subject, record['owner'])
-        return {'session': await snapshot(tx, record)}
+        return {'session': snapshot(record, await tx.all('attempts'))}
     workspace = await tx.get('workspace_records', target)
     if workspace is None:
         raise Rejected('NOT_FOUND', 'Workspace does not exist')
@@ -40,7 +39,8 @@ async def read_sessions(tx, kind, target, params, actor, authorizer, subject):
             records.append(record)
     records.sort(key=lambda item: (item['session']['created_at'], item['session']['session_id']), reverse=True)
     limit = params.get('limit', 50)
-    page = [await snapshot(tx, record) for record in records[:limit]]
+    attempts = await tx.all('attempts')
+    page = [snapshot(record, attempts) for record in records[:limit]]
     next_cursor = None
     if len(records) > limit:
         next_cursor = identity('cursor')

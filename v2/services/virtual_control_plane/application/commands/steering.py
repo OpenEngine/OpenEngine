@@ -2,12 +2,13 @@
 from virtual_control_plane.domain.lifecycle import Rejected, identity, unsupported
 
 
-async def accept_steer(tx, record, request, actor, timestamp, encoder):
+async def accept_steer(tx, record, request, actor, timestamp, encoder, authorizer, subject):
     workspace = record['workspace']
     session_id = request['payload']['session_id']
     stored = await tx.get('sessions', session_id)
     if not stored or stored['session']['workspace_id'] != workspace['workspace_id']:
         raise Rejected('NOT_FOUND', 'Session does not exist in this workspace')
+    await authorizer.authorize(actor, subject, stored['owner'])
     session = stored['session']
     if workspace['state'] == 'suspended' and request['payload'].get('restore', 'allow') == 'allow':
         unsupported('restore')

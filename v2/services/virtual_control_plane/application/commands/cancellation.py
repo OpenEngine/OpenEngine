@@ -5,13 +5,14 @@ from virtual_control_plane.domain.lifecycle import Rejected, identity
 TERMINAL = ('completed', 'failed', 'cancelled')
 
 
-async def accept_cancel(tx, record, request, actor, timestamp, encoder):
+async def accept_cancel(tx, record, request, actor, timestamp, encoder, authorizer, subject):
     workspace = record['workspace']
     attempt_id = request['payload']['attempt_id']
     item = await tx.get('attempts', attempt_id)
     bound = await tx.get('attempt_bindings', attempt_id)
     if not item or not bound or bound['workspace_id'] != workspace['workspace_id']:
         raise Rejected('NOT_FOUND', 'Attempt does not exist in this workspace')
+    await authorizer.authorize(actor, subject, item['owner'])
     attempt = item['attempt']
     terminal = attempt['state'] in TERMINAL
     runtime = workspace.get('runtime', {})

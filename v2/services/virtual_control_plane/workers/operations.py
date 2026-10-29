@@ -5,14 +5,14 @@ from virtual_control_plane.domain.lifecycle import event, now
 logger = logging.getLogger(__name__)
 
 
-class ProviderUnavailable(RuntimeError):
+class ProviderNotConfigured(RuntimeError):
     def __init__(self, provider):
         super().__init__(f"Provider {provider!r} is not configured; restore its configuration and submit a new command")
 
 
 async def execute(provider, action, ownership, workspace_record, request):
     if provider is None:
-        raise ProviderUnavailable(workspace_record['workspace']['provider'])
+        raise ProviderNotConfigured(workspace_record['workspace']['provider'])
     if action == 'create':
         await provider.provision(ownership, workspace_record['specification'])
     elif action == 'ensure':
@@ -48,7 +48,7 @@ class OperationWorker:
         failure = None
         try:
             await execute(provider, action, ownership, workspace_record, record['request'])
-        except ProviderUnavailable as error:
+        except ProviderNotConfigured as error:
             logger.exception('provider unavailable', extra={'workspace_id': workspace_id, 'operation_id': operation['operation_id']})
             failure = {'code': 'PROVIDER_ERROR', 'message': str(error), 'retryable': False}
         except Exception:

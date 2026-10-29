@@ -10,6 +10,16 @@ from virtual_control_plane.domain.runtime import digest, error
 TERMINAL = ('completed', 'failed', 'cancelled')
 
 
+async def check_idempotent(tx, command_id, fingerprint, response):
+    """Return a cached/conflict response for a repeated command_id, else None."""
+    previous = await tx.get('daemon_commands', command_id)
+    if not previous:
+        return None
+    if previous['digest'] == fingerprint:
+        return previous['response']
+    return {**response, 'status': 'rejected', 'error': error('COMMAND_ID_CONFLICT', 'Command identity changed')}
+
+
 class Journal:
     def __init__(self, storage, target, workspace_root, *, max_pending=1000, backends=None):
         self.storage, self.target = storage, target
@@ -115,11 +125,9 @@ class Journal:
             return {**response, 'status': 'rejected', 'error': mismatch}
         fingerprint = digest([subject, command])
         async with self.storage.transaction() as tx:
-            previous = await tx.get('daemon_commands', command['command_id'])
-            if previous:
-                if previous['digest'] == fingerprint:
-                    return previous['response']
-                return {**response, 'status': 'rejected', 'error': error('COMMAND_ID_CONFLICT', 'Command identity changed')}
+            cached = await check_idempotent(tx, command['command_id'], fingerprint, response)
+            if cached is not None:
+                return cached
             meta = await tx.get('daemon_meta', 'runtime')
             attempt = await tx.get('daemon_attempts', command['target']['attempt_id'])
             session_id = command['target']['session_id']
@@ -167,11 +175,9 @@ class Journal:
             return {**response, 'status': 'rejected', 'error': mismatch}
         fingerprint = digest([subject, command])
         async with self.storage.transaction() as tx:
-            previous = await tx.get('daemon_commands', command['command_id'])
-            if previous:
-                if previous['digest'] == fingerprint:
-                    return previous['response']
-                return {**response, 'status': 'rejected', 'error': error('COMMAND_ID_CONFLICT', 'Command identity changed')}
+            cached = await check_idempotent(tx, command['command_id'], fingerprint, response)
+            if cached is not None:
+                return cached
             meta = await tx.get('daemon_meta', 'runtime')
             pending = sum(row.get('state') == 'steer_pending' for row in await tx.all('daemon_commands'))
             updates = sum(not row['acknowledged'] for row in await tx.all('daemon_updates'))
@@ -190,11 +196,9 @@ class Journal:
             return {**response, 'status': 'rejected', 'error': mismatch}
         fingerprint = digest([subject, command])
         async with self.storage.transaction() as tx:
-            previous = await tx.get('daemon_commands', command['command_id'])
-            if previous:
-                if previous['digest'] == fingerprint:
-                    return previous['response']
-                return {**response, 'status': 'rejected', 'error': error('COMMAND_ID_CONFLICT', 'Command identity changed')}
+            cached = await check_idempotent(tx, command['command_id'], fingerprint, response)
+            if cached is not None:
+                return cached
             execution_receipt = await tx.get('daemon_commands', command['execution']['command_id'])
             if execution_receipt and execution_receipt['response']['target'] != command['target']:
                 return {**response, 'status': 'rejected', 'error': error('ATTEMPT_CONFLICT', 'Execute target differs')}
