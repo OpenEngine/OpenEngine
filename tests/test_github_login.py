@@ -1234,3 +1234,27 @@ def test_explicit_token_guards_localhost_and_allows_browser_login():
     assert client.post("/api/auth/github/token", json={"token": "wrong"}).status_code == 401
     assert client.post("/api/auth/github/token", json={"token": "s" * 32}).status_code == 200
     assert client.get("/api/data").status_code == 200
+
+
+@pytest.mark.parametrize("use_rotated_token", [False, True])
+def test_token_login_uses_token_after_reading_body(monkeypatch, use_rotated_token):
+    from starlette.requests import Request
+
+    old_token = "s" * 32
+    new_token = "t" * 32
+    current = {"token": old_token}
+    flow = GitHubLogin(None, service_token=lambda: current["token"])
+    client = _app_with_middleware(flow)
+    original_json = Request.json
+
+    async def read_body_and_rotate(request):
+        body = await original_json(request)
+        current["token"] = new_token
+        return body
+
+    monkeypatch.setattr(Request, "json", read_body_and_rotate)
+    response = client.post("/api/auth/github/token", json={
+        "token": new_token if use_rotated_token else old_token,
+    })
+    assert response.status_code == (200 if use_rotated_token else 401)
+    assert client.get("/api/data").status_code == (200 if use_rotated_token else 401)

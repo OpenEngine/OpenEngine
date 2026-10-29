@@ -176,18 +176,19 @@ class GitHubLogin:
     async def token_login(self, request: Request) -> Response:
         if self.config is not None:
             return JSONResponse({"error": "Use GitHub login"}, 400, headers=_HEADERS)
-        expected = self.service_token()
-        if not valid_service_token(expected):
-            return JSONResponse({"error": REMOTE_ACCESS_GUIDANCE}, 503, headers=_HEADERS)
         try:
             body = await request.json()
         except ValueError:
             body = None
+        expected = self.service_token()
+        if not valid_service_token(expected):
+            return JSONResponse({"error": REMOTE_ACCESS_GUIDANCE}, 503, headers=_HEADERS)
         supplied = body.get("token") if isinstance(body, dict) else None
         if not isinstance(supplied, str) or not secrets.compare_digest(supplied.encode(), expected.encode()):
             return JSONResponse({"error": "Invalid service token"}, 401, headers=_HEADERS)
         response = JSONResponse({"ok": True}, headers=_HEADERS)
-        response.set_cookie(_SESSION_COOKIE, self._make_session_cookie(1, "operator", self._token_session_id()),
+        session_id = hashlib.sha256(expected.encode()).hexdigest()
+        response.set_cookie(_SESSION_COOKIE, self._make_session_cookie(1, "operator", session_id),
                             max_age=_SESSION_TTL, path="/", secure=request.url.scheme == "https",
                             httponly=True, samesite="lax")
         return response
