@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.dialects import sqlite
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.schema import CreateIndex, CreateTable
 
@@ -31,7 +31,7 @@ from openengine.persistence import (
     parse_tenant,
     tenant_table,
 )
-from openengine.persistence.tenancy import REGISTRY, MissingReason
+from openengine.persistence.tenancy import REGISTRY, MissingReason, UnscopableAction
 from openengine.persistence.tenancy.__main__ import main
 
 NIL = uuid.UUID(int=0)
@@ -146,6 +146,58 @@ def test_a_global_table_may_be_declared_after_the_tables_that_reference_it(tmp_p
 
     assert "FOREIGN KEY(external_id) REFERENCES routes (external_id)" in _ddl(events)
     assert len(events.foreign_key_constraints) == 1
+    assert assert_tenant_scoped(metadata, "test", _registry(tmp_path, ("test", "routes"))) == []
+
+
+def test_scoping_keeps_column_keys_and_constraint_options() -> None:
+    metadata, _, _ = _schema()
+    links = tenant_table(
+        "links", metadata,
+        sa.Column("link_id", sa.String(32), key="id"),
+        sa.Column("parent_id", sa.String(32), key="parent"),
+        sa.Column("slug", sa.String(32), key="handle"),
+        sa.PrimaryKeyConstraint("id", name="pk_links", deferrable=True, initially="DEFERRED", info={"k": 1}),
+        sa.UniqueConstraint("handle", name="uq_links_slug"),
+        sa.ForeignKeyConstraint(["parent"], ["parents.parent_id"], match="FULL", postgresql_not_valid=True),
+    )
+    ddl = " ".join(str(CreateTable(links).compile(dialect=postgresql.dialect())).split())
+
+    assert "CONSTRAINT pk_links PRIMARY KEY (tenant_id, link_id) DEFERRABLE INITIALLY DEFERRED" in ddl
+    assert links.primary_key.info == {"k": 1}
+    assert "CONSTRAINT uq_links_slug UNIQUE (tenant_id, slug)" in ddl
+    assert ("FOREIGN KEY(tenant_id, parent_id) REFERENCES parents (tenant_id, parent_id) MATCH FULL NOT VALID"
+            in ddl)
+    assert assert_tenant_scoped(metadata, "test") == []
+
+
+@pytest.mark.parametrize(("ondelete", "onupdate"), [("SET NULL", None), (None, "set default")])
+def test_a_foreign_key_to_a_tenants_table_cannot_clear_the_tenant(ondelete: str | None, onupdate: str | None) -> None:
+    metadata, _, _ = _schema()
+    reference = sa.ForeignKey("parents.parent_id", ondelete=ondelete, onupdate=onupdate)
+
+    with pytest.raises(UnscopableAction):
+        tenant_table("orphans", metadata, sa.Column("orphan_id", sa.String(32), primary_key=True),
+                     sa.Column("parent_id", sa.String(32), reference))
+
+
+@pytest.mark.parametrize("global_first", [True, False])
+def test_a_global_table_is_found_in_the_metadatas_default_schema(global_first: bool, tmp_path: Path) -> None:
+    metadata = sa.MetaData(schema="svc")
+
+    def routes() -> None:
+        global_table("routes", metadata, sa.Column("external_id", sa.String, primary_key=True), reason="routing")
+
+    if global_first:
+        routes()
+    events = tenant_table(
+        "events", metadata, sa.Column("event_id", sa.String, primary_key=True),
+        sa.Column("external_id", sa.String, sa.ForeignKey("routes.external_id", match="FULL")),
+    )
+    if not global_first:
+        routes()
+
+    assert "FOREIGN KEY(external_id) REFERENCES svc.routes (external_id) MATCH FULL" in " ".join(
+        str(CreateTable(events).compile(dialect=postgresql.dialect())).split())
     assert assert_tenant_scoped(metadata, "test", _registry(tmp_path, ("test", "routes"))) == []
 
 
@@ -270,6 +322,23 @@ def test_scoped_stores_tag_every_transaction_with_their_tenant(tmp_path: Path) -
     # The pool hands the same connection back without the last scope's tenant.
     assert mine == [LOCAL_TENANT, LOCAL_TENANT, None]
     assert theirs == [other, other, None]
+
+
+def test_an_invalidated_connection_keeps_its_original_error(tmp_path: Path) -> None:
+    persistence = ServicePersistence[Seen]("seen", tmp_path, {Backend.SQLITE: Seen})
+    opened = persistence.open(DatabaseConfig(sqlite_directory=tmp_path))
+
+    async def scenario() -> None:
+        try:
+            async with opened.scoped(LOCAL_TENANT).database.transaction() as connection:
+                await connection.execute(sa.text("SELECT 1"))
+                await connection.invalidate()
+                raise ValueError("original")
+        finally:
+            await opened.close()
+
+    with pytest.raises(ValueError, match="original"):
+        asyncio.run(scenario())
 
 
 def test_open_offers_no_store_without_a_tenant(tmp_path: Path) -> None:

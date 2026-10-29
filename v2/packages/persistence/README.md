@@ -46,7 +46,9 @@ and deliberately not the nil UUID).
   adds `tenant_id` (`TenantId`, NOT NULL) and puts it first in the primary key,
   every unique constraint and unique index, and every foreign key. Foreign keys
   become `(tenant_id, ...) -> parent (tenant_id, ...)`, so a child row cannot
-  point at another tenant's parent.
+  point at another tenant's parent. Such a key cannot `ON DELETE`/`ON UPDATE`
+  `SET NULL` or `SET DEFAULT`, which would clear `tenant_id` too;
+  `tenant_table()` raises `UnscopableAction` instead.
 - A table that holds no tenant's data is declared with
   `global_table(..., reason=...)` and listed, by service and table, in
   [`global_tables.toml`](src/openengine/persistence/tenancy/global_tables.toml),

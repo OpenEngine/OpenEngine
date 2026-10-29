@@ -60,6 +60,12 @@ class NotCanonical(InvalidTenant):
         super().__init__(f"{text!r} is not a UUID in lower-case canonical form")
 
 
+class UnscopableAction(ValueError):
+    def __init__(self, table: str, action: str) -> None:
+        super().__init__(f"{table!r}: a foreign key to a tenant's table cannot {action}, "
+                         f"which would also clear its NOT NULL {TENANT_COLUMN}")
+
+
 class MissingReason(ValueError):
     def __init__(self, table: str) -> None:
         super().__init__(f"global table {table!r} needs a reason")
@@ -110,11 +116,17 @@ def _leading(columns: Sequence[str]) -> list[str]:
     return [TENANT_COLUMN, *(name for name in columns if name != TENANT_COLUMN)]
 
 
+def _options(constraint: sa.Constraint) -> dict[str, Any]:
+    """What a rebuilt constraint keeps of the one it replaces, other than its columns."""
+    return {"name": constraint.name, "deferrable": constraint.deferrable, "initially": constraint.initially,
+            "info": constraint.info, **constraint.dialect_kwargs}
+
+
 def _scope_primary_key(table: sa.Table) -> None:
     key = table.primary_key
     # Flagged first, so the new key matches the columns marked primary and SQLAlchemy does not warn.
     _tenant_column(table).primary_key = True
-    table.append_constraint(sa.PrimaryKeyConstraint(*_leading([c.name for c in key.columns]), name=key.name))
+    table.append_constraint(sa.PrimaryKeyConstraint(*_leading([c.key for c in key.columns]), **_options(key)))
 
 
 def _scope_uniques(table: sa.Table) -> None:
@@ -123,8 +135,7 @@ def _scope_uniques(table: sa.Table) -> None:
         for column in constraint.columns:
             column.unique = False
         table.append_constraint(sa.UniqueConstraint(
-            *_leading([c.name for c in constraint.columns]), name=constraint.name, deferrable=constraint.deferrable,
-            initially=constraint.initially, info=constraint.info, **constraint.dialect_kwargs,
+            *_leading([c.key for c in constraint.columns]), **_options(constraint),
         ))
     for index in [i for i in table.indexes if i.unique]:
         table.indexes.discard(index)
@@ -138,6 +149,14 @@ def _parent(constraint: sa.ForeignKeyConstraint) -> str:
     return constraint.elements[0].target_fullname.rsplit(".", 1)[0]
 
 
+def _parent_key(constraint: sa.ForeignKeyConstraint, metadata: sa.MetaData) -> str:
+    """The referenced table's key in `metadata`, which puts an unqualified name in its default schema."""
+    parent = _parent(constraint)
+    if parent not in metadata.tables and metadata.schema is not None and "." not in parent:
+        return f"{metadata.schema}.{parent}"
+    return parent
+
+
 def _replace_foreign_key(
     table: sa.Table, constraint: sa.ForeignKeyConstraint, local: list[str], remote: list[str], info: dict[str, Any],
 ) -> None:
@@ -146,17 +165,21 @@ def _replace_foreign_key(
         element.parent.foreign_keys.discard(element)
         table.foreign_keys.discard(element)
     table.append_constraint(sa.ForeignKeyConstraint(
-        local, remote, name=constraint.name, onupdate=constraint.onupdate, ondelete=constraint.ondelete,
-        deferrable=constraint.deferrable, initially=constraint.initially, use_alter=constraint.use_alter, info=info,
+        local, remote, onupdate=constraint.onupdate, ondelete=constraint.ondelete, use_alter=constraint.use_alter,
+        link_to_name=constraint.link_to_name, match=constraint.match, comment=constraint.comment,
+        **{**_options(constraint), "info": info},
     ))
 
 
 def _scope_foreign_keys(table: sa.Table) -> None:
     for constraint in list(table.foreign_key_constraints):
         parent = _parent(constraint)
-        referenced = table.metadata.tables.get(parent)
+        referenced = table.metadata.tables.get(_parent_key(constraint, table.metadata))
         if referenced is not None and GLOBAL_INFO in referenced.info:
             continue  # a global parent has no tenant to match
+        for action in (constraint.ondelete, constraint.onupdate):
+            if action is not None and action.upper() in ("SET NULL", "SET DEFAULT"):
+                raise UnscopableAction(table.name, action)
         local, remote = constraint.column_keys, [e.target_fullname for e in constraint.elements]
         # A key that already names tenant_id on both sides keeps one pair of it, at the front.
         pairs = [(key, target) for key, target in zip(local, remote) if key != TENANT_COLUMN]
@@ -170,7 +193,7 @@ def _unscope_foreign_keys_to(global_: sa.Table) -> None:
     """Foreign keys declared before `global_` was known to be global: back to the columns they named."""
     for table in list(global_.metadata.tables.values()):
         for constraint in list(table.foreign_key_constraints):
-            if UNSCOPED_INFO in constraint.info and _parent(constraint) == global_.key:
+            if UNSCOPED_INFO in constraint.info and _parent_key(constraint, table.metadata) == global_.key:
                 local, remote = constraint.info[UNSCOPED_INFO]
                 info = {k: v for k, v in constraint.info.items() if k != UNSCOPED_INFO}
                 _replace_foreign_key(table, constraint, local, remote, info)
@@ -286,7 +309,10 @@ class TenantDatabase(Database):
             try:
                 yield connection
             finally:
-                connection.info.pop(TENANT_COLUMN, None)
+                # An invalidated connection's DBAPI connection is discarded, info and all, and touching
+                # info now would raise over the error that invalidated it.
+                if not connection.invalidated:
+                    connection.info.pop(TENANT_COLUMN, None)
 
     def connect(self) -> Any:
         return self._scoped(self.database.connect())
