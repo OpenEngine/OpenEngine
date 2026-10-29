@@ -106,13 +106,13 @@ flowchart LR
             class vcp_t_daemon_meta table
             vcp_t_daemon_sessions[("daemon_sessions<br/>The daemon's durable session-to-executor mapping, for session continuation.")]
             class vcp_t_daemon_sessions table
-            vcp_t_daemon_updates[("daemon_updates<br/>The daemon's durable outbox of updates pending VCP's acknowledgement.")]
+            vcp_t_daemon_updates[("daemon_updates<br/>The daemon's durable outbox of updates awaiting VCP's acknowledgement.")]
             class vcp_t_daemon_updates table
             vcp_t_operations[("operations<br/>The durable record of each accepted command's progress, returned by operations.{operation_id}.get.")]
             class vcp_t_operations table
-            vcp_t_outbox[("outbox<br/>Public events accepted atomically with their causing state change, pending publication.")]
+            vcp_t_outbox[("outbox<br/>Public events accepted atomically with their causing state change, not yet published.")]
             class vcp_t_outbox table
-            vcp_t_runtime_outbox[("runtime_outbox<br/>Internal runtime commands (execute, cancel, steer) pending delivery to the daemon.")]
+            vcp_t_runtime_outbox[("runtime_outbox<br/>Internal runtime commands (execute, cancel, steer) not yet delivered to the daemon.")]
             class vcp_t_runtime_outbox table
             vcp_t_runtime_ownership[("runtime_ownership<br/>Which runtime currently owns a workspace, and at which generation.")]
             class vcp_t_runtime_ownership table

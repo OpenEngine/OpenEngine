@@ -33,11 +33,11 @@ erDiagram
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
-    outbox["outbox<br/>Public events accepted atomically with their causing state change, pending publication."] {
+    outbox["outbox<br/>Public events accepted atomically with their causing state change, not yet published."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
-    runtime_outbox["runtime_outbox<br/>Internal runtime commands (execute, cancel, steer) pending delivery to the daemon. (ADDED)"] {
+    runtime_outbox["runtime_outbox<br/>Internal runtime commands (execute, cancel, steer) not yet delivered to the daemon. (ADDED)"] {
         VARCHAR(128) key PK "ADDED; not null"
         JSON body "ADDED; not null"
     }

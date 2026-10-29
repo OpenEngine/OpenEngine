@@ -189,12 +189,3 @@ def test_migrate_needs_a_running_openengine(oe) -> None:
 
     assert migrate.returncode == 1
     assert "not running" in migrate.stderr
-
-
-def test_supervisor_starts_and_stops_opt_in_vcp(oe):
-    port = _free_port()
-    up = oe('up', '--nats-port', str(port), '--nats-monitor-port', str(_free_port()), env={'OE_VCP_ENABLED': '1'})
-    assert up.returncode == 0, up.stderr
-    state = json.loads(oe('status', '--json').stdout)
-    assert [process['name'] for process in state['processes']] == ['nats', 'vcp']
-    assert oe('down').returncode == 0

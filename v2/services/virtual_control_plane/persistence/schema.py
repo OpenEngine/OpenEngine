@@ -33,12 +33,12 @@ DOCUMENT_COMMENTS = {
     'command_receipts': 'Public command idempotency: a retry with the same command ID returns the original receipt.',
     'operations': "The durable record of each accepted command's progress, returned by operations.{operation_id}.get.",
     'runtime_ownership': 'Which runtime currently owns a workspace, and at which generation.',
-    'outbox': 'Public events accepted atomically with their causing state change, pending publication.',
+    'outbox': 'Public events accepted atomically with their causing state change, not yet published.',
     'cursors': 'Durable, opaque keyset positions bound to the filters a paginated query was issued with.',
     'sessions': 'One conversation with an agent inside a workspace, and its current attempt binding.',
     'attempts': 'One execution attempt of a session, from acceptance through its terminal outcome.',
     'attempt_bindings': "An attempt's immutable binding to the internal execute command the daemon accepted.",
-    'runtime_outbox': 'Internal runtime commands (execute, cancel, steer) pending delivery to the daemon.',
+    'runtime_outbox': 'Internal runtime commands (execute, cancel, steer) not yet delivered to the daemon.',
     'runtime_updates': 'Durable identity/digest of each internal runtime update, so a duplicate is detected, not reapplied.',
     'runtime_status': "A runtime's last known readiness, registered executors and steering support.",
     'session_history': 'The durable, ordered log of a session: messages, steering and status changes.',
@@ -46,7 +46,7 @@ DOCUMENT_COMMENTS = {
     'daemon_commands': "The daemon's durable inbox of accepted commands, keyed by their command ID.",
     'daemon_attempts': "The daemon's durable record of one attempt's execution state and per-attempt sequence.",
     'daemon_sessions': "The daemon's durable session-to-executor mapping, for session continuation.",
-    'daemon_updates': "The daemon's durable outbox of updates pending VCP's acknowledgement.",
+    'daemon_updates': "The daemon's durable outbox of updates awaiting VCP's acknowledgement.",
 }
 documents = {}
 for name, comment in DOCUMENT_COMMENTS.items():
