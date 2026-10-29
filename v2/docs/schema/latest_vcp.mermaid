@@ -1,5 +1,5 @@
 ---
-title: vcp at d8f92154b5f7 (green added, red removed, amber changed)
+title: vcp at fb1b363f0773 (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -11,12 +11,41 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    workspaces["workspaces<br/>A place an agent does its work, on whichever provider supplied it. (CHANGED)"] {
+    command_receipts["command_receipts<br/>Public command idempotency: a retry with the same command ID returns the original receipt. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class command_receipts added
+    cursors["cursors<br/>Durable, opaque keyset positions bound to the filters a paginated query was issued with. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class cursors added
+    operations["operations<br/>The durable record of each accepted command's progress, returned by operations.{operation_id}.get. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class operations added
+    outbox["outbox<br/>Public events accepted atomically with their causing state change, not yet published. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class outbox added
+    runtime_ownership["runtime_ownership<br/>Which runtime currently owns a workspace, and at which generation. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class runtime_ownership added
+    workspace_records["workspace_records<br/>The durable workspace lifecycle projection: state, runtime binding and version. (ADDED)"] {
+        VARCHAR(128) key PK "ADDED; not null"
+        JSON body "ADDED; not null"
+    }
+    class workspace_records added
+    workspaces["workspaces<br/>A place an agent does its work, on whichever provider supplied it."] {
         VARCHAR(36) id PK "not null"
         VARCHAR(32) provider "not null"
         VARCHAR(32) status "not null"
         DATETIME created_at "not null"
         DATETIME updated_at "not null"
-        JSON locator "ADDED; nullable"
+        JSON locator "nullable"
     }
-    class workspaces changed

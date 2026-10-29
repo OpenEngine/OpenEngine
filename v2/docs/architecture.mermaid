@@ -90,6 +90,18 @@ flowchart LR
         vcp_events["NATS events → stream vcp-events<br/><b>oe.v1.vcp.events.workspaces.{workspace_id}.</b><br/>workspace.provisioning<br/>workspace.ready<br/>workspace.restored<br/>workspace.checkpointed<br/>workspace.suspended<br/>workspace.destroyed<br/>workspace.failed<br/>task.started<br/>task.completed<br/>task.failed<br/>task.cancelled<br/>approval.requested<br/>approval.resolved<br/>approval.expired<br/>steering.applied<br/>steering.failed<br/>conversation.message<br/>usage.reported<br/>artifact.created"]
         class vcp_events subjects
         subgraph vcp_db["database vcp"]
+            vcp_t_command_receipts[("command_receipts<br/>Public command idempotency: a retry with the same command ID returns the original receipt.")]
+            class vcp_t_command_receipts table
+            vcp_t_cursors[("cursors<br/>Durable, opaque keyset positions bound to the filters a paginated query was issued with.")]
+            class vcp_t_cursors table
+            vcp_t_operations[("operations<br/>The durable record of each accepted command's progress, returned by operations.{operation_id}.get.")]
+            class vcp_t_operations table
+            vcp_t_outbox[("outbox<br/>Public events accepted atomically with their causing state change, not yet published.")]
+            class vcp_t_outbox table
+            vcp_t_runtime_ownership[("runtime_ownership<br/>Which runtime currently owns a workspace, and at which generation.")]
+            class vcp_t_runtime_ownership table
+            vcp_t_workspace_records[("workspace_records<br/>The durable workspace lifecycle projection: state, runtime binding and version.")]
+            class vcp_t_workspace_records table
             vcp_t_workspaces[("workspaces<br/>A place an agent does its work, on whichever provider supplied it.")]
             class vcp_t_workspaces table
         end
