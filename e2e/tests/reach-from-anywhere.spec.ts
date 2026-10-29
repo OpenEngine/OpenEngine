@@ -88,7 +88,7 @@ set +a
 ENGINE_SERVICE_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 \`\`\`
 
-Copy everything after the \`=\`. Keep it secret, as you would a password. For browser access on either computer, open the tunnel’s https address shown above, including when you are sitting at the Mac mini. Then choose sign in and paste this same token. Closing the browser does not sign you out; use Sign out when you finish. If GitHub login is configured instead, sign in with GitHub.`,
+Copy everything after the \`=\`. Keep it secret, as you would a password.`,
     async () => {
       // The Mac mini as this step leaves it: a token of its own, and the tunnel's address as public_url.
       expect(computer.daemonEnv.ENGINE_SERVICE_TOKEN).toBe(computer.token)
@@ -111,6 +111,12 @@ async function addTheMacMini(
   const address = `https://${GUIDE_ADDRESS[kind]}`
   const typed = computer.publicUrl
   const clear = () => test.step("[nodoc] Clear the screen", async () => void (await terminal.run("clear")))
+
+  await step(
+    `The tunnel is now running. For browser access on either computer, open \`${address}\`, including when you are sitting at the Mac mini. Choose sign in and paste the token you copied earlier. Closing the browser does not sign you out; use Sign out when you finish. If GitHub login is configured instead, sign in with GitHub.
+
+If the page does not open, check that OpenEngine and the tunnel are running on the Mac mini before continuing.`,
+  )
 
   await step(
     `Back on this computer, tell OpenEngine about the Mac mini: its name, its address, and the name of the place its token will be kept, \`MAC_MINI_TOKEN\`. Type \`oe backend add mac-mini ${address} --token-env MAC_MINI_TOKEN\` and press Enter.
