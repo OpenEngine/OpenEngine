@@ -10,7 +10,7 @@ from langgraph_acp.elicitation import ACPElicitationHandler
 from langgraph_acp.permissions import ACPPermissionHandler
 
 # Upgrade deliberately and pass the adapter contract check in test_adapter_compatibility.py.
-CLAUDE_ACP_VERSION = "0.81.0"
+CLAUDE_ACP_VERSION = "0.95.0"
 CLAUDE_ACP_COMMAND = (
     "npx",
     "--yes",

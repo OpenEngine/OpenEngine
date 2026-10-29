@@ -45,6 +45,7 @@ Each service with its NATS subjects (control, query and events) and its tables, 
 
 ![OpenEngine V2 architecture](docs/architecture.svg)
 
+Open the image in a new tab if it appears too small to read. 
 ## Database schemas
 Each service owns its database (see [packages/persistence](packages/persistence/README.md)). These ERDs show each service's latest schema and are regenerated, with each migration revision's own ERD and SQL, under [docs/schema](docs/schema) whenever a migration changes. Highlights mark what the latest revision added, removed or changed.
 

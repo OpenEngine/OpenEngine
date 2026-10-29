@@ -88,6 +88,17 @@ def test_local_operator_mode_allows_loopback_listeners(listener: str) -> None:
     LocalOperator().authorize(Request("oe.v1.ge.query.graphs.list", "query", "graphs.list", {"params": {}}, listener))
 
 
+def test_local_operator_mode_allows_every_project_on_loopback_only() -> None:
+    def request(listener: str) -> Request:
+        return Request("oe.v1.ge.query.graphs.list", "query", "graphs.list", {"params": {"project": "beta"}}, listener)
+
+    for project in ("default", "alpha", "beta"):
+        LocalOperator().authorize_project(request(LOOPBACK), project)
+    with pytest.raises(ServiceError) as denied:
+        LocalOperator().authorize_project(request("nats://10.0.0.5:4222"), "beta")
+    assert denied.value.code == "PERMISSION_DENIED"
+
+
 def test_an_unserved_subject_is_unsupported_capability() -> None:
     reply = _send("oe.v1.ge.query.jobs.list", {"params": {}})
 
@@ -145,3 +156,24 @@ def test_a_route_key_names_subject_parameters_and_checks_their_type() -> None:
     assert malformed["error"]["code"] == "INVALID_ARGUMENT"
     assert malformed["error"]["details"]["violations"][0]["field"] == "subject.operation_id"
     assert other["error"]["code"] == "UNSUPPORTED_CAPABILITY"
+
+
+@pytest.mark.parametrize(
+    ("info", "connected"),
+    [({}, True), ({"host": "0.0.0.0", "port": 4222}, True),
+     ({"host": "127.0.0.1", "port": 4222}, False)],
+)
+def test_live_connection_cannot_reuse_a_trusted_startup_listener(info, connected) -> None:
+    connection = type("Connection", (), {"_server_info": info, "is_connected": connected, "is_draining": False})()
+    called = False
+
+    async def handler(request: Request) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        return {}
+
+    server = Server(connection, "ge", LOOPBACK, queries={"graphs.list": Route(handler)})
+    reply = json.loads(asyncio.run(server.handle("oe.v1.ge.query.graphs.list", b'{"params": {}}')))
+
+    assert reply["error"]["code"] == "PERMISSION_DENIED"
+    assert not called

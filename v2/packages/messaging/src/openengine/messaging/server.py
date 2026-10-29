@@ -20,6 +20,7 @@ handler reads them from `Request.parameters`.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import dataclasses
 import logging
@@ -31,6 +32,8 @@ from urllib.parse import urlsplit
 from nats.aio.client import Client as NATS
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
+from nats.aio.transport import TcpTransport
+from nats.errors import Error as NatsError
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ErrorCode, ServiceError, invalid_argument
@@ -59,16 +62,28 @@ class Authorizer(Protocol):
     def authorize(self, request: Request) -> None:
         """Return if the request may proceed; raise a PERMISSION_DENIED ServiceError if not."""
 
+    def authorize_project(self, request: Request, project: str) -> None:
+        """Return if the request's actor may act on `project`'s resources; raise a PERMISSION_DENIED ServiceError if not.
+
+        Handlers call it with the project a request names or the resource it reaches
+        belongs to, after `authorize` has allowed the request. The project name comes
+        from the payload, so it says where to act, never who may: only the actor's
+        verified identity can grant that.
+        """
+
 
 class LocalOperator:
     """Loopback-only local-operator mode, the one `oe up` runs.
 
+    This development mode trusts the managed broker and local machine. It
+    does not identify publishers or support remotely bridged subjects.
     NATS has no accounts here: the local nats-server listens only on loopback,
     so whoever reaches it is the operator on this machine. A request is
     allowed only when the server it arrived through listens on loopback alone,
     as `listen_address` reports it; a server bound to any other address, such
     as 0.0.0.0, is reachable from off the machine, so its requests are
-    PERMISSION_DENIED until a non-loopback authorizer exists.
+    PERMISSION_DENIED until a non-loopback authorizer exists. The local
+    operator may act on every project.
     """
 
     def authorize(self, request: Request) -> None:
@@ -79,12 +94,15 @@ class LocalOperator:
                 details={"permission": f"{request.kind}.{request.operation}"},
             )
 
+    def authorize_project(self, request: Request, project: str) -> None:
+        self.authorize(request)
+
 
 def listen_address(nats: NATS) -> str:
     """The address the connected NATS server listens on, from its INFO.
 
-    This, not the URL used to reach it, is what bounds who else can reach it:
-    a server bound to 0.0.0.0 still answers on 127.0.0.1.
+    A server bound to 0.0.0.0 still answers on 127.0.0.1. This describes its
+    client listener, not publisher identity or other ingress paths.
     """
     info = nats._server_info  # noqa: SLF001 -- nats-py exposes INFO only here
     host = str(info.get("host", ""))
@@ -139,6 +157,48 @@ class Server:
             await subscription.drain()
         self._subscriptions.clear()
 
+    async def close(self, timeout: float = 5.0) -> None:
+        """Drain and close within one budget; raise if final close cannot finish.
+
+        Reserve one fifth of the budget for close, even when a handler stalls.
+        The owner must stop its event loop after a failed close so remaining
+        callbacks finish cancellation before it releases owned resources.
+        """
+        closing = asyncio.create_task(self._close_connection(timeout * 0.8))
+        try:
+            # Client.close() can suppress cancellation while reconnecting.
+            # Observe its deadline without waiting for cancellation to finish.
+            done, _ = await asyncio.wait([closing], timeout=timeout)
+            if not done:
+                raise TimeoutError("nats-close-timeout")  # noqa: TRY301 -- share abort cleanup with close errors
+            await closing
+        except BaseException:
+            closing.cancel()
+            closing.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+            # nats-py has no public abort. A TCP close may wait for buffered
+            # bytes, so discard them on failure instead of waiting again.
+            transport = self.nats._transport
+            if isinstance(transport, TcpTransport) and transport._io_writer is not None:
+                transport._io_writer.transport.abort()
+            elif transport is not None:
+                transport.close()
+            raise
+        finally:
+            self._subscriptions.clear()
+
+    async def _close_connection(self, drain_timeout: float) -> None:
+        try:
+            if self.nats.is_connected:
+                await asyncio.wait_for(self._drain_connection(), timeout=drain_timeout)
+        except (TimeoutError, NatsError):
+            log.warning("NATS drain incomplete; closing %s", self.service, exc_info=True)
+        await self.nats.close()
+
+    async def _drain_connection(self) -> None:
+        await self.drain()
+        # All owned subscriptions have drained; flush their final replies.
+        await self.nats.flush()
+
     async def _receive(self, message: Msg) -> None:
         reply = await self.handle(message.subject, message.data, message.headers)
         if message.reply:
@@ -153,7 +213,16 @@ class Server:
                 body = envelopes.decode(data)
                 if not self._keeps_receipt(kind, operation, body):
                     envelopes.check(envelopes.COMMAND if kind == "control" else envelopes.QUERY, body)
-                request = Request(subject, kind, operation, body, self.listener)
+                # A reconnect may reach a differently exposed broker. Never
+                # authorize using the listening address captured at startup.
+                # The explicit listener remains useful for transport-free tests.
+                listener = self.listener
+                if self.nats is not None:
+                    listener = (
+                        listen_address(self.nats)
+                        if self.nats.is_connected or self.nats.is_draining else ""
+                    )
+                request = Request(subject, kind, operation, body, listener)
                 log.info("%s request", operation, extra=_identity(body))
                 self.authorizer.authorize(request)
                 route, parameters = self._route(subject, kind, operation)

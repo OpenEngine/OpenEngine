@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Daemon authentication
+
+Configuring `ENGINE_SERVICE_TOKEN` now requires authentication even without
+`public_url`. Public URLs and forwarding headers also require authentication
+when GitHub login is disabled. Export the service token for local CLI commands;
+use the HTTPS address for browser token sign-in. Repository onboarding requires
+a distinct `ENGINE_ONBOARDING_TOKEN` and a backend configured with
+`--token-env ENGINE_ONBOARDING_TOKEN`.
+
 - Consolidate repository settings in `[repos."owner/name"]` tables. Slug keys
   accept webhooks by default; set `webhooks = false` to opt out.
 - Legacy `[repo_modes]`, `[trusted_repos]`, `[pull_requests.repos]`,

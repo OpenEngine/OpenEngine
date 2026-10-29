@@ -22,13 +22,20 @@ When OpenEngine cannot answer (no supervisor, NATS unreachable, or no reply
 from GE), `oe graph list`, `get` and `apply` say so on stderr, point to
 `oe up` and `oe logs`, and exit 1.
 
-`oe graph list` shows every graph, following `next_cursor` through each page:
-its name, graph ID, latest revision and when it was last updated. `--json`
+Graph names are unique per project. `oe graph list`, `get` and `apply` act in
+one project: `--project NAME`, else `$OE_PROJECT`, else `default`, which holds
+every graph applied before projects existed. A project name selects graphs; it
+grants no access by itself (under `oe up` the local operator may use every
+project).
+
+`oe graph list` shows every graph in the project, following `next_cursor`
+through each page: its project, name, graph ID, latest revision and when it
+was last updated. `--json`
 prints one page's query-response, `next_cursor` included; pass that to
 `--cursor` for the next page.
 
 `oe graph get NAME[@REVISION]` finds NAME's graph ID through `graphs.list`
-(its `name_prefix`, then the exact name) and reads the revision from
+in the project alone (its `name_prefix`, then the exact name) and reads the revision from
 `graphs.{graph_id}.get`. It prints the revision, its format, its source's
 SHA-256 digest and when it was created, then the source: a Graph resource as
 YAML, from the canonical JSON GE keeps. `--json` prints the query-response.
@@ -37,10 +44,11 @@ exits 1.
 
 `oe graph apply FILE` checks the file as `validate` does, sends each Graph to
 GE's `graphs.apply`, reads the operation it recorded and prints one line per
-Graph: `created NAME revision 1 (graph ID)` for a new name, `updated NAME
-revision N (graph ID)` when the definition changed, or `unchanged NAME
-revision N (graph ID)` when it matches the latest revision. The graph ID never
-changes. A command that gets no reply in time is resent with the same command
+Graph: `created NAME revision 1 in project P (graph ID)` for a name new to the
+project, `updated NAME revision N in project P (graph ID)` when the definition
+changed, or `unchanged NAME revision N in project P (graph ID)` when it matches
+the latest revision. The graph ID never changes; the same name in another
+project is another graph. A command that gets no reply in time is resent with the same command
 ID, so a lost reply never adds a revision. GE rejects a Python graph with
 `UNSUPPORTED_CAPABILITY`, and `apply` sends only Graph resources.
 

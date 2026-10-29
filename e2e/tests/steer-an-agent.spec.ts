@@ -70,7 +70,7 @@ function step(text: string, body: () => Promise<void> = async () => {}) {
 }
 
 /** Screenshot the screen down to its last row in use once it has stopped changing, with `highlight` labelled. */
-async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string) {
+async function show(filename: string, terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string) {
   await terminal.waitForQuiet()
   await expect(terminal.screen()).not.toContainText(`:${new URL(engine.url).port}`)
   // The page is the same on every run: no path on this computer may show.
@@ -95,7 +95,7 @@ async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, high
         text: label, position: "below", showArrow: false,
         highlightStrokeStyle: "transparent", highlightFillStyle: "transparent",
       } } },
-    ], { clip: await terminal.usedArea({ labelBelow: true }) })
+    ], { annotation: { filename }, clip: await terminal.usedArea({ labelBelow: true }) })
   } finally {
     await anchor.evaluate((element) => element.remove())
   }
@@ -145,7 +145,7 @@ test.describe(graphsCategory, () => {
         })
 
         await step(
-          `The \`engine\` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
+          `The \`oe\` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
 
 While a run goes on, you may want to know which step it's on and how each agent is getting along. And sometimes an agent sets off in the wrong direction: it misread what you wanted, or you've thought of something it should know. Rather than stopping the run and starting it all over again, you can send that agent a message while it works, and it changes course from where it is. This guide uses the \`describe-project\` graph from [Run Your Graph and Watch It Work](./test2doc-run-your-graph-and-watch-it-work.mdx).`,
         )
@@ -158,7 +158,7 @@ Your terminal comes straight back, and the run goes on in OpenEngine's backgroun
             const { output } = await terminal.run("oe graph run describe-project --no-watch")
             runId = (await onlyRun(engine)).runId
             expect(output).toContain(runId)
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(runId)), "Your run has started; this is its ID")
+            await show("steer-an-agent__terminal--started.png", terminal, engine, testInfo, await terminal.row(new RegExp(runId)), "Your run has started; this is its ID")
           },
         )
 
@@ -173,7 +173,7 @@ If you declined repository trust in the previous guide, the read step may be wai
             await terminal.press("Enter")
             await terminal.waitForText(/^Allow\? \[y\/n\][ \t]*$/m)
             expect((await run(engine, runId)).pendingApprovals).toHaveLength(1)
-            await show(terminal, engine, testInfo, await terminal.row(/^Allow\? \[y\/n\][ \t]*$/),
+            await show("steer-an-agent__terminal--approval.png", terminal, engine, testInfo, await terminal.row(/^Allow\? \[y\/n\][ \t]*$/),
               "The agent is waiting for permission to read the file")
           },
         )
@@ -187,7 +187,7 @@ Answer any further permission questions the same way if you want to allow the ac
             await terminal.press("Enter")
             await terminal.waitForText(/┃.*I'll suggest a new name for the project\./)
             expect((await run(engine, runId)).pendingApprovals ?? []).toHaveLength(0)
-            await show(terminal, engine, testInfo,
+            await show("steer-an-agent__terminal--stages.png", terminal, engine, testInfo,
               await terminal.row(/┃.*I'll suggest a new name for the project\./),
               "The agent is planning a rename; you want clearer wording")
           },
@@ -199,7 +199,7 @@ Answer any further permission questions the same way if you want to allow the ac
             await terminal.press("Control+C")
             const question = /\[d\]etach and leave it running, \[c\]ancel the run, or keep \[w\]atching\?/
             await terminal.waitForText(question)
-            await show(terminal, engine, testInfo, await terminal.row(question),
+            await show("steer-an-agent__terminal--question.png", terminal, engine, testInfo, await terminal.row(question),
               "Choose whether to leave the run going")
           },
         )
@@ -211,7 +211,7 @@ Answer any further permission questions the same way if you want to allow the ac
             await terminal.press("Enter")
             expect(await terminal.waitForPrompt()).toBe(0)
             expect((await run(engine, runId)).status).toBe("running")
-            await show(terminal, engine, testInfo, await terminal.row(/^Detached\./),
+            await show("steer-an-agent__terminal--detached.png", terminal, engine, testInfo, await terminal.row(/^Detached\./),
               "The live screen is closed; the agent is still working")
           },
         )
@@ -233,7 +233,7 @@ Here \`read\` is done and \`suggest\` is working. If you see only \`read\`, the 
             const row = new RegExp(`^suggest\\s+${suggest.executionId}\\s+\\d+\\s+running\\s+claude\\b`, "m")
             expect(output).toMatch(row)
             expect(output).toMatch(new RegExp(`^read\\s+${read.executionId}\\s+\\d+\\s+completed\\s+claude\\b`, "m"))
-            await show(terminal, engine, testInfo, await terminal.rows(/^NODE\s+EXECUTION\s/, new RegExp(row.source)),
+            await show("steer-an-agent__terminal--executions.png", terminal, engine, testInfo, await terminal.rows(/^NODE\s+EXECUTION\s/, new RegExp(row.source)),
               "read is done; suggest is still working, and this is its ID")
           },
         )
@@ -248,7 +248,7 @@ You'll see the same row on its own. It's a quick way to check on one agent while
             const { output } = await terminal.run(`oe node get ${suggest!.executionId}`)
             const row = new RegExp(`^suggest\\s+${suggest!.executionId}\\s+\\d+\\s+running\\s+claude\\b`, "m")
             expect(output).toMatch(row)
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "suggest is still running")
+            await show("steer-an-agent__terminal--running.png", terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "suggest is still running")
           },
         )
 
@@ -271,7 +271,7 @@ If you see *only a running attempt can be steered*, the step is no longer runnin
             expect(sent).toHaveLength(1)
             expect(sent[0]!.message).toBe(NUDGE)
             expect(output).toMatch(new RegExp(`^${sent[0]!.steeringId} accepted$`, "m"))
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(`^${sent[0]!.steeringId} accepted$`)),
+            await show("steer-an-agent__terminal--message-accepted.png", terminal, engine, testInfo, await terminal.row(new RegExp(`^${sent[0]!.steeringId} accepted$`)),
               "OpenEngine has your message for the agent")
           },
         )
@@ -294,7 +294,7 @@ If a message says *undelivered*, it never reached the agent: for example, the st
             expect(output).toMatch(row)
             const messageRow = await terminal.row(new RegExp(row.source))
             expect(await terminal.textAt(messageRow)).toContain(NUDGE)
-            await show(terminal, engine, testInfo, messageRow, "The agent acted on your message")
+            await show("steer-an-agent__terminal--message-applied.png", terminal, engine, testInfo, messageRow, "The agent acted on your message")
           },
         )
 
@@ -313,7 +313,7 @@ There's still just the one run, and once \`suggest\` is done it says *completed*
             const { output } = await terminal.run("oe runs list")
             const row = new RegExp(`^${runId}\\s.*\\sdescribe-project v1\\s+completed\\s`)
             expect(output).toMatch(new RegExp(row.source, "m"))
-            await show(terminal, engine, testInfo, await terminal.row(row), "The same run, finished")
+            await show("steer-an-agent__terminal--completed.png", terminal, engine, testInfo, await terminal.row(row), "The same run, finished")
           },
         )
       })
@@ -331,7 +331,7 @@ You'll see one row for each agent. **NAME** is what a graph calls it, and **KIND
             for (const name of ["claude", "codex", "opencode"]) {
               expect(output).toMatch(new RegExp(`^${name}\\s+${name}\\s.*built in$`, "m"))
             }
-            await show(terminal, engine, testInfo, await terminal.rows(/^NAME\s+KIND\s/, /^opencode\s+opencode\s/),
+            await show("steer-an-agent__terminal--agents.png", terminal, engine, testInfo, await terminal.rows(/^NAME\s+KIND\s/, /^opencode\s+opencode\s/),
               "The agents your graphs can use")
           },
         )

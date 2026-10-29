@@ -23,6 +23,10 @@ to. They came to get one thing done.
 - **Show what success looks like.** Every command they run gets a screenshot,
   with the part that matters highlighted and a label saying what it means in
   plain words ("Your graph is saved", not "registration row").
+- **Give screenshots stable filenames.** Set `annotation.filename` (or pass the
+  filename to `show`) using BEM: `guide__terminal--state.png`, for example
+  `follow-a-run__terminal--stages-completed.png`. Keep each name unique across
+  guides and steps so regeneration updates the same image.
 - **Say what to do if it doesn't work** when there's a common way for it to
   go wrong ("If you see *cannot reach backend*, OpenEngine isn't running;
   start it with …").

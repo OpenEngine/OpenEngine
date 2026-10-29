@@ -17,7 +17,7 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 import anyio
 import httpx
@@ -27,11 +27,14 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from engine.apps.web.request_security import RequestSecurity
+
 log = logging.getLogger(__name__)
 
 _PATH = "/api/auth/github"
 _COOKIE = "engine_github_login"
 _SESSION_COOKIE = "engine_session"
+_TOKEN_COOKIE = "engine_token_session"
 _TTL = 600
 _SESSION_TTL = 86400  # 24 hours
 # How long GitHub's answer about a user's repository access is trusted before a
@@ -108,7 +111,10 @@ class GitHubLogin:
         authorize_user: Callable[[str], Awaitable[Mapping[str, bool | None]]] | None = None,
         access_timeout: float = 10,
         onboarding_token: Callable[[], str] = lambda: "",
+        public_url: str = "",
     ) -> None:
+        self.public_url = public_url
+        self._token_sessions: dict[str, tuple[str, float]] = {}
         self.config = config
         # Which of the deployment's repositories a verified GitHub account
         # (id, login) can write to: repository -> GitHub's answer, or None
@@ -149,6 +155,7 @@ class GitHubLogin:
 
     def routes(self) -> list[Route]:
         return [
+            Route("/api/auth/token/login", self.token_login, methods=["POST"]),
             Route(f"{_PATH}/login", self.login),
             Route(f"{_PATH}/callback", self.callback),
             Route(f"{_PATH}/status", self.status),
@@ -349,7 +356,9 @@ class GitHubLogin:
             and not request.url.path.startswith(_SERVICE_PREFIX)
         ):
             return False
-        if request.method == "POST" and request.url.path.rstrip("/") == "/api/v1/repositories/trust":
+        if request.method == "POST" and request.url.path.rstrip("/") in {
+            "/api/v1/repositories/trust", "/api/repositories/onboard",
+        }:
             return False
         expected = self.service_token()
         if not valid_service_token(expected):
@@ -376,8 +385,45 @@ class GitHubLogin:
             headers[0].encode(), f"Bearer {expected}".encode()
         )
 
+    def _token_session(self, request: Request) -> bool:
+        if self.configured:
+            return False
+        if request.method == "POST" and request.url.path.rstrip("/") in {
+            "/api/v1/repositories/trust", "/api/repositories/onboard",
+        }:
+            return False
+        session = self._token_sessions.get(request.cookies.get(_TOKEN_COOKIE, ""))
+        token = self.service_token()
+        return bool(session and session[1] > time.time() and valid_service_token(token)
+                    and secrets.compare_digest(session[0], hashlib.sha256(token.encode()).hexdigest()))
+
+    async def token_login(self, request: Request) -> Response:
+        # Native browser forms send Origin. Refuse cross-site login, including
+        # attempts to replace another browser's credentials (login CSRF).
+        security = RequestSecurity(self.public_url or str(request.base_url).rstrip("/"))
+        if self.configured or not security.matches_public_origin(request.headers.get("origin", "")):
+            return JSONResponse({"error": "sign-in is not allowed"}, 403, headers=_HEADERS)
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 4096:
+                return JSONResponse({"error": "token is too long"}, 400, headers=_HEADERS)
+        fields = parse_qs(body.decode(errors="replace"))
+        supplied = fields.get("token", [""])[0]
+        token = self.service_token()
+        if not valid_service_token(token) or not secrets.compare_digest(supplied.encode(), token.encode()):
+            return RedirectResponse("/login?error=token", 303, headers=_HEADERS)
+        now = time.time()
+        self._token_sessions = {key: value for key, value in self._token_sessions.items() if value[1] > now}
+        session = secrets.token_urlsafe(32)
+        self._token_sessions[session] = (hashlib.sha256(token.encode()).hexdigest(), now + _SESSION_TTL)
+        response = RedirectResponse("/", 303, headers=_HEADERS)
+        response.set_cookie(_TOKEN_COOKIE, session, max_age=_SESSION_TTL, path="/",
+                            secure=self._is_secure(), httponly=True, samesite="strict")
+        return response
+
     def _is_secure(self) -> bool:
-        return bool(self.config and self.config.redirect_uri.startswith("https:"))
+        return self.public_url.startswith("https:") or bool(self.config and self.config.redirect_uri.startswith("https:"))
 
     async def login(self, request: Request) -> Response:
         if self.config is None:
@@ -513,10 +559,12 @@ class GitHubLogin:
         if revoked:
             user = None
         body: dict[str, object] = {
-            "authenticated": user is not None,
+            "authenticated": user is not None or self._token_session(request),
             "user": user,
-            "loginRequired": self.config is not None,
+            "loginRequired": self.config is not None or bool(self.public_url or self.service_token()),
         }
+        if self.config is None and (self.public_url or self.service_token()):
+            body["tokenLogin"] = True
         if user is not None:
             # Whoever is signed in may be able to fix the server's connection;
             # anyone it cannot vouch for is refused while this is true.
@@ -528,6 +576,11 @@ class GitHubLogin:
         return response
 
     async def logout(self, request: Request) -> Response:
+        self._token_sessions.pop(request.cookies.get(_TOKEN_COOKIE, ""), None)
+        if not self.configured:
+            response = JSONResponse({"ok": True}, headers=_HEADERS)
+            response.delete_cookie(_TOKEN_COOKIE, path="/", secure=self._is_secure(), httponly=True, samesite="strict")
+            return response
         session = self._session(request)
         if session is None:
             return JSONResponse({"ok": True}, headers=_HEADERS)
@@ -545,15 +598,16 @@ class GitHubLogin:
         service token admits `POST /api/runs`, for the MCP gateway, and the
         `/api/v1/` graph API (except trust writes), for a CLI pointed at this server.
         A distinct onboarding token admits only job creation and polling.
+        Without GitHub login, public and forwarded requests still need a token;
+        deployments without a public URL or service token retain direct access.
         """
-        if not self.configured:
-            return app
         return _SessionAuthMiddleware(app, self)
 
 
 # Paths under /api/ that must remain accessible without a session cookie so
 # the login flow itself can work.
 _AUTH_EXEMPT = frozenset({
+    "/api/auth/token/login",
     "/api/health",  # Public service identity and readiness; no user data.
     f"{_PATH}/login",
     f"{_PATH}/callback",
@@ -578,6 +632,18 @@ class _SessionAuthMiddleware:
             await self.app(scope, receive, send)
             return
         request = Request(scope)
+        if not self.login.configured:
+            # A local reverse proxy can deliver an internet request over loopback.
+            # Neither its peer address nor a rewritten Host makes it local.
+            forwarded = any(name in request.headers for name in (
+                "forwarded", "x-forwarded-for", "x-forwarded-host", "cf-connecting-ip",
+            ))
+            if not forwarded and not self.login.public_url and not self.login.service_token():
+                await self.app(scope, receive, send)
+                return
+        if self.login._token_session(request):
+            await self._serve(request, scope, receive, send, token_session=True)
+            return
         if self.login._has_service_token(request) or self.login._has_onboarding_token(request):
             await self.app(scope, receive, send)
             return
@@ -600,7 +666,9 @@ class _SessionAuthMiddleware:
             )
         await response(scope, receive, send)
 
-    async def _serve(self, request: Request, scope: Scope, receive: Receive, send: Send) -> None:
+    async def _serve(
+        self, request: Request, scope: Scope, receive: Receive, send: Send, *, token_session: bool = False,
+    ) -> None:
         """Run the app, ending its response if access ends while it streams."""
         started = finished = revoked = False
         error: Exception | None = None
@@ -627,10 +695,13 @@ class _SessionAuthMiddleware:
             while True:
                 await anyio.sleep(_STREAM_RECHECK)
                 user = self.login._read_session(request)
+                authenticated = (
+                    self.login._token_session(request) if token_session
+                    else user is not None and await self.login.has_access(user)
+                )
                 still_visible = scope.get(STREAM_ACCESS)
                 if (
-                    user is None
-                    or not await self.login.has_access(user)
+                    not authenticated
                     or (still_visible is not None and not await still_visible())
                 ):
                     revoked = True

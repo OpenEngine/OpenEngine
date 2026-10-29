@@ -91,8 +91,9 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
       await page.locator("#terminal").click()
       await page.keyboard.type(`echo "${ids[0]} ${ids[1]} ${ids[0]} | ${time}"`)
       await page.keyboard.press("Enter")
-      await expect.poll(() => bufferText(page)).toContain(`${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
-      const row = page.locator(".xterm-rows > div").filter({ hasText: "|" }).last()
+      await expect.poll(() => bufferText(page)).toContain(`\n${ids[0]} ${ids[1]} ${ids[0]} | ${time}`)
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^g-[0-9a-f]+ run-/ }).last()
+      await expect(row).toBeVisible()
       const text = (await row.textContent())!.trim()
       await page.close()
       return text
@@ -130,6 +131,28 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(first).toBe(second)
     expect(first).toMatch(/^local http:\/\/127\.0\.0\.1:\d{5} \| mac-mini http:\/\/mac-mini\.local:4364$/)
     expect(first).not.toContain("51234")
+  })
+
+  test("shows a real tunnel's changing address as the guide's address", async ({ browser }) => {
+    const shown = async (cloudflare: string, tailscale: string, guideAddress?: string) => {
+      const page = await browser.newPage()
+      await openTerminal(page, { cols: 120, env: guideAddress ? { E2E_GUIDE_ADDRESS: guideAddress } : {} })
+      await page.locator("#terminal").click()
+      await page.keyboard.type(`echo "tunnel https://${cloudflare} | https://${tailscale}/api/v1"`)
+      await page.keyboard.press("Enter")
+      await expect.poll(() => bufferText(page)).toMatch(new RegExp(`^tunnel https://${cloudflare.replace(/\./g, "\\.")} \\|`, "m"))
+      const row = page.locator(".xterm-rows > div").filter({ hasText: /^tunnel https/ }).last()
+      const text = (await row.textContent())!.trim()
+      await page.close()
+      return text
+    }
+    // A quick tunnel's address is new every time; a tailnet's names a computer and its tailnet.
+    const first = await shown("brave-otter-lamp-sky.trycloudflare.com", "build-box.tail9f3c2a.ts.net", "openengine.example.com")
+    const second = await shown("quiet-river-maps-delight.trycloudflare.com", "studio.tailab12cd.ts.net", "openengine.example.com")
+    const unchanged = await shown("brave-otter-lamp-sky.trycloudflare.com", "build-box.tail9f3c2a.ts.net")
+    expect(unchanged).toBe("tunnel https://brave-otter-lamp-sky.trycloudflare.com | https://build-box.tail9f3c2a.ts.net/api/v1")
+    expect(first).toBe(second)
+    expect(first).toBe("tunnel https://openengine.example.com | https://openengine.example.com/api/v1")
   })
 
   test("says so when the server refuses the session", async ({ page }) => {

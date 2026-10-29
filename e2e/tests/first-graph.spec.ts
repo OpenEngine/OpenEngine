@@ -51,10 +51,10 @@ test.describe(graphsCategory, () => {
         const file = path.join(engine.repository, "describe-project.yaml")
 
         /** Screenshot the screen down to its last row in use, with `highlight` labelled. */
-        const show = async (highlight: Locator, label: string, position?: "right") => {
+        const show = async (filename: string, highlight: Locator, label: string, position?: "right") => {
           await expect(terminal.screen()).not.toContainText(`:${new URL(engine.url).port}`)
           await screenshot(testInfo, highlight, {
-            annotation: { text: label, ...(position ? { position } : {}) },
+            annotation: { filename, text: label, ...(position ? { position } : {}) },
             clip: await terminal.usedArea({ labelBelow: true }),
           })
         }
@@ -65,7 +65,7 @@ test.describe(graphsCategory, () => {
 
 The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. You write it once in a small text file and save it to OpenEngine, so you can find it and use it again whenever you need that piece of work done, instead of explaining it from scratch each time.
 
-This guide shows how to write a graph, save it, find it again, and what happens when you change it. You'll use \`engine\`, the command you type in a terminal to use OpenEngine. Running a graph comes in the next guide.`,
+This guide shows how to write a graph, save it, find it again, and what happens when you change it. You'll use \`oe\`, the command you type in a terminal to use OpenEngine. Running a graph comes in the next guide.`,
         )
 
         await step(
@@ -75,7 +75,7 @@ You'll see a short example graph. It has more in it than a first graph needs: th
           async () => {
             const { output } = await terminal.run("oe graph spec | head -n 30")
             expect(output).toContain("apiVersion: openengine.cc/v1")
-            await show(await terminal.rows(/^apiVersion: openengine\.cc\/v1$/, /^\s+prompt: "Review/), "An example graph")
+            await show("first-graph__terminal--example.png", await terminal.rows(/^apiVersion: openengine\.cc\/v1$/, /^\s+prompt: "Review/), "An example graph")
           },
         )
 
@@ -120,7 +120,7 @@ If you see *cannot reach backend*, the command can't reach OpenEngine's backgrou
           async () => {
             await terminal.run("oe graph add describe-project.yaml")
             expect(await versions(engine, "describe-project")).toEqual([1])
-            await show(await terminal.row(/^registered describe-project v1\s/), "Your graph is saved, as version 1")
+            await show("first-graph__terminal--saved-v1.png", await terminal.row(/^registered describe-project v1\s/), "Your graph is saved, as version 1")
           },
         )
 
@@ -133,7 +133,7 @@ You'll see one row for each graph, with its name and latest version. You can lea
           async () => {
             const { output } = await terminal.run("oe graphs list")
             expect(output).toMatch(/^describe-project\s+1\s/m)
-            await show(await terminal.row(/^describe-project\s+1\s/), "The graph you saved")
+            await show("first-graph__terminal--list.png", await terminal.row(/^describe-project\s+1\s/), "The graph you saved")
           },
         )
 
@@ -147,7 +147,7 @@ You'll see the graph's name and version, the versions OpenEngine has of it, and 
             const { output } = await terminal.run("oe graph get describe-project")
             expect(output).toContain("prompt: Read README.md and reply with one sentence")
             expect(output).not.toMatch(/^\s*[{[]/m)
-            await show(await terminal.rows(/^apiVersion:/, /^\s+prompt:/), "The graph as you saved it")
+            await show("first-graph__terminal--saved-definition.png", await terminal.rows(/^apiVersion:/, /^\s+prompt:/), "The graph as you saved it")
           },
         )
 
@@ -161,7 +161,7 @@ This time the screen says \`v2\`: OpenEngine saved your change as a new version.
             writeFileSync(file, CHANGED)
             await terminal.run("oe graph add describe-project.yaml")
             expect(await versions(engine, "describe-project")).toEqual([1, 2])
-            await show(await terminal.row(/^registered describe-project v2\s/), "Your change is saved as version 2")
+            await show("first-graph__terminal--saved-v2.png", await terminal.row(/^registered describe-project v2\s/), "Your change is saved as version 2")
           },
         )
 
@@ -174,7 +174,7 @@ The line starting *versions* lists both versions, and below it is the file as it
           async () => {
             const { output } = await terminal.run("oe graph get describe-project")
             expect(output).toContain("two sentences")
-            await show(await terminal.row(/^versions: v1 .*, v2 /), "Both versions are kept", "right")
+            await show("first-graph__terminal--versions.png", await terminal.row(/^versions: v1 .*, v2 /), "Both versions are kept", "right")
           },
         )
 
@@ -187,7 +187,7 @@ The screen says *unchanged* and \`v2\`: OpenEngine already has this exact graph,
           async () => {
             await terminal.run("oe graph add describe-project.yaml")
             expect(await versions(engine, "describe-project")).toEqual([1, 2])
-            await show(await terminal.row(/^unchanged describe-project v2\s/), "Nothing changed, so no new version")
+            await show("first-graph__terminal--unchanged.png", await terminal.row(/^unchanged describe-project v2\s/), "Nothing changed, so no new version")
           },
         )
 

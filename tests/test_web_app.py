@@ -1864,10 +1864,10 @@ def test_creating_a_work_order_starts_the_graph(async_client, workflow_app) -> N
     # WorkOrder was created with -- which is everything these graphs need.
     assert snapshot is not None
     assert str(snapshot.graph_id) == "implementation-review-codex"
-    assert snapshot.values == {
-        "task": "Add cancellation handling.",
-        "repository": "acme/api",
-    }
+    # The background run may already have produced output by the time we read
+    # its state. Check the inputs it received independently of that progress.
+    assert snapshot.values["task"] == "Add cancellation handling."
+    assert snapshot.values["repository"] == "acme/api"
     # And a row for it here, under the graph engine's own run id, named after
     # the graph rather than after an id nobody chose.
     assert created.json()["workflowName"] == "Implementation review (codex)"

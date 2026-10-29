@@ -53,7 +53,9 @@ class SqliteGraphs(DatabaseStore):
             # Checked once the lock is held, so waiting for it cannot carry an acceptance past the deadline.
             if deadline is not None and deadline < now:
                 raise DeadlineExceeded(deadline, now)
-            graph = (await transaction.execute(graphs.select().where(graphs.c.name == definition.name))).one_or_none()
+            graph = (await transaction.execute(graphs.select().where(
+                graphs.c.project == command.project, graphs.c.name == definition.name,
+            ))).one_or_none()
             if expected_version is not None and (graph is None or graph.latest_revision != expected_version):
                 raise VersionConflict(expected_version, graph.latest_revision if graph else None)
             latest = graph and await transaction.scalar(
@@ -65,7 +67,7 @@ class SqliteGraphs(DatabaseStore):
             if graph is None:
                 graph_id, revision = _new_id("graph"), 1
                 await transaction.execute(graphs.insert().values(
-                    graph_id=graph_id, name=definition.name, description=definition.description,
+                    graph_id=graph_id, project=command.project, name=definition.name, description=definition.description,
                     latest_revision=revision, created_at=now, updated_at=now,
                 ))
             elif created:
@@ -83,7 +85,7 @@ class SqliteGraphs(DatabaseStore):
             operation_id = _new_id("op")
             # Applying is done once it is recorded, so the operation is recorded as succeeded.
             await transaction.execute(operations.insert().values(
-                operation_id=operation_id, command_id=command.command_id, operation=APPLY, status="succeeded",
+                operation_id=operation_id, project=command.project, command_id=command.command_id, operation=APPLY, status="succeeded",
                 resources={"graph_id": graph_id},
                 result={"graph": {"graph_id": graph_id, "revision": revision}, "created": created},
                 created_at=now, updated_at=now,
@@ -106,8 +108,10 @@ class SqliteGraphs(DatabaseStore):
             row = (await connection.execute(graphs.select().where(graphs.c.graph_id == graph_id))).one_or_none()
         return Graph(**row._mapping) if row else None
 
-    async def graphs(self, limit: int, name_prefix: str | None = None, after: tuple[str, str] | None = None) -> list[Graph]:
-        query = graphs.select().order_by(graphs.c.name, graphs.c.graph_id).limit(limit)
+    async def graphs(
+        self, project: str, limit: int, name_prefix: str | None = None, after: tuple[str, str] | None = None,
+    ) -> list[Graph]:
+        query = graphs.select().where(graphs.c.project == project).order_by(graphs.c.name, graphs.c.graph_id).limit(limit)
         if name_prefix is not None:
             # Not LIKE, which SQLite compares case-insensitively and which would read `_` as a wildcard.
             query = query.where(sa.func.substr(graphs.c.name, 1, len(name_prefix)) == name_prefix)
@@ -134,8 +138,10 @@ class SqliteGraphs(DatabaseStore):
 
 
 async def _receipt(transaction: AsyncConnection, command: Command) -> dict[str, Any] | None:
-    """The response recorded for `command`'s ID, if it has one; CommandIdConflict if it was another command."""
-    query = command_receipts.select().where(command_receipts.c.command_id == command.command_id)
+    """The response recorded for `command`'s ID in its project, if it has one; CommandIdConflict if it was another command."""
+    query = command_receipts.select().where(
+        command_receipts.c.project == command.project, command_receipts.c.command_id == command.command_id,
+    )
     receipt = (await transaction.execute(query)).one_or_none()
     if receipt is None:
         return None
@@ -146,6 +152,6 @@ async def _receipt(transaction: AsyncConnection, command: Command) -> dict[str, 
 
 async def _record(transaction: AsyncConnection, command: Command, response: dict[str, Any], now: datetime) -> None:
     await transaction.execute(command_receipts.insert().values(
-        command_id=command.command_id, subject=command.subject, fingerprint=command.fingerprint,
+        project=command.project, command_id=command.command_id, subject=command.subject, fingerprint=command.fingerprint,
         response=response, created_at=now,
     ))

@@ -87,6 +87,12 @@ def tables(short: str) -> documentation.Tables:
     return history[-1].tables if history else {}
 
 
+def comments(short: str) -> dict[str, str]:
+    """The service's table comments, from its schema module."""
+    persistence = _persistence().get(short)
+    return documentation.comments(persistence) if persistence else {}
+
+
 def _vcp_schema(name: str) -> Any:
     return _load(CONTRACTS / "virtual_control_plane" / "v1" / "schemas" / name)
 
@@ -172,9 +178,11 @@ def diagram() -> str:
                 lines.append(f"        {node}[({_label(f'stream {stream}', *patterns)})]")
                 lines.append(f"        class {node} stream")
         schema = tables(short)
+        table_comments = comments(short)
         lines.append(f'        subgraph {short}_db["database {short}"]')
         for table in sorted(schema) or ["(no tables)"]:
-            lines.append(f"            {short}_t_{re.sub(r'[^a-z0-9_]', '_', table)}[({_label(table)})]")
+            label = _label(table, table_comments[table]) if table_comments.get(table) else _label(table)
+            lines.append(f"            {short}_t_{re.sub(r'[^a-z0-9_]', '_', table)}[({label})]")
             lines.append(f"            class {short}_t_{re.sub(r'[^a-z0-9_]', '_', table)} table")
         for table, definition in sorted(schema.items()):
             for foreign_key in definition["foreign_keys"]:

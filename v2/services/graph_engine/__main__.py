@@ -5,7 +5,8 @@ at `OE_NATS_URL`, serves its query and control subjects, and answers
 `GET /healthz` on 127.0.0.1 with 200 only while it is connected and
 subscribed. Once it is, it writes the health URL to
 `OE_GE_READY_FILE`, if set. On SIGTERM it stops taking requests, answers the
-ones it has, and exits 0.
+ones it can finish within the drain budget, and exits 0 after a successful
+close. A failed final close exits non-zero.
 
 It serves `graphs.apply`, `graphs.list`, `graphs.{graph_id}.get` and the
 operations it records (see registry.py).
@@ -23,7 +24,7 @@ from urllib.parse import urlsplit
 
 import nats
 from alembic.util import CommandError
-from openengine.messaging import Server, listen_address
+from openengine.messaging import LocalOperator, Server, listen_address
 from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
@@ -82,27 +83,42 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     if not is_loopback(urlsplit(listener).hostname):
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
-    registry = Registry(store)
-    server = Server(connection, "ge", listener, queries=registry.queries(), commands=registry.commands())
-    await server.start()
-    health = await asyncio.start_server(
-        lambda reader, writer: _health(
-            lambda: connection.is_connected and not stopping.is_set(), reader, writer
-        ),
-        HEALTH_HOST,
-        health_port,
+    # One authorizer for every request, and again for the project each one reaches.
+    authorizer = LocalOperator()
+    registry = Registry(store, authorizer)
+    server = Server(
+        connection, "ge", listener, queries=registry.queries(), commands=registry.commands(), authorizer=authorizer,
     )
-    url = f"http://{HEALTH_HOST}:{health.sockets[0].getsockname()[1]}/healthz"
-    if ready_file:
-        ready_file.write_text(url)
-    log.info("ready", extra={"url.full": url})
-    await stopping.wait()
-    log.info("draining")
-    await server.drain()
-    await connection.drain()
-    health.close()
-    if ready_file:
-        ready_file.unlink(missing_ok=True)
+    health = None
+    try:
+        await server.start()
+        health = await asyncio.start_server(
+            lambda reader, writer: _health(
+                lambda: connection.is_connected and not stopping.is_set(), reader, writer
+            ),
+            HEALTH_HOST,
+            health_port,
+        )
+        url = f"http://{HEALTH_HOST}:{health.sockets[0].getsockname()[1]}/healthz"
+        if ready_file:
+            ready_file.write_text(url)
+        log.info("ready", extra={"url.full": url})
+        await stopping.wait()
+        log.info("draining")
+    finally:
+        stopping.set()
+        try:
+            # Withdraw startup readiness before waiting for in-flight replies.
+            if ready_file:
+                ready_file.unlink(missing_ok=True)
+        finally:
+            try:
+                await server.close()
+            finally:
+                if health is not None:
+                    # Do not wait on health clients during shutdown; the event
+                    # loop cancels remaining health handlers on exit.
+                    health.close()
     log.info("stopped")
     return EXIT_OK
 
@@ -137,7 +153,8 @@ def main() -> int:
                 PERSISTENCE.store(database),
             )
         )
-    except (OSError, CommandError, SQLAlchemyError):
+    except (OSError, CommandError, SQLAlchemyError, nats.errors.Error):
+        # An outage can close cleanly; a failed final close must remain a failure.
         log.exception("failed")
         return EXIT_FAILED
     finally:

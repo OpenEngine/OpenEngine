@@ -3,10 +3,10 @@
 NATS first, then the services, which are stopped before it. NATS is ready once
 it has recorded the ports it bound in its ports file, so that a stranger's
 nats-server on the same ports cannot answer the health check for it, and its
-health URL answers 200. A service with a readiness check (only ge so far) names
-its health URL in a ready file; the supervisor is READY only once that URL
-answers 200. If it never does, the supervisor writes FAILED with the reason and
-stops everything.
+health URL answers 200. A service with a readiness check (ge and vcp) names its
+health URL in a ready file; the supervisor is READY only once that URL answers
+200. If it never does, the supervisor writes FAILED with the reason and stops
+everything.
 """
 
 from __future__ import annotations
@@ -102,13 +102,18 @@ def run(settings: Settings) -> int:
         )
         nats_url = f"nats://{settings.host}:{settings.nats_port}"
         processes.append(ProcessState("nats", children["nats"].pid, nats_url, Status.READY))
+        started = services.SERVICES
         ready_files: dict[str, Path] = {}
-        for name, module in services.SERVICES:
+        for name, module in started:
             environment = {}
             if variable := services.READY_FILE_VARIABLES.get(name):
                 ready_files[name] = services.ready_file(settings.state_directory, name)
                 ready_files[name].unlink(missing_ok=True)
                 environment[variable] = str(ready_files[name])
+            if variable := services.STATE_DIR_VARIABLES.get(name):
+                state_dir = settings.state_directory / name
+                state_dir.mkdir(parents=True, exist_ok=True)
+                environment[variable] = str(state_dir)
             children[name] = services.start(module, sys.stdout.buffer, nats_url=nats_url, environment=environment)
             processes.append(ProcessState(name, children[name].pid, ""))
         for index, process in enumerate(processes):
@@ -119,7 +124,7 @@ def run(settings: Settings) -> int:
                     processes[index] = replace(process, status=Status.FAILED)
                     raise
         write_state(path, SupervisorState(pid=pid, status=Status.READY, processes=processes))
-        log.info("ready, NATS on %s", nats_url, extra={"services": [name for name, _ in services.SERVICES]})
+        log.info("ready, NATS on %s", nats_url, extra={"services": [name for name, _ in started]})
         _watch(children, shutdown)
     except (nats.NatsError, NotReady, ProcessExited) as error:
         log.exception("failed; stopping")

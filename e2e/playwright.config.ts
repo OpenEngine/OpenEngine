@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { randomBytes } from "node:crypto"
 import { defineConfig, devices } from "@playwright/test"
 import { freePort } from "./support/freePort.ts"
@@ -8,6 +11,7 @@ process.env.E2E_TERMINAL_PORT ??= String(freePort())
 // The terminal server's session token. The server reads it from its inherited
 // environment and the specs pass it to the page, so it never appears in argv.
 process.env.E2E_TERMINAL_TOKEN ??= randomBytes(24).toString("base64url")
+process.env.E2E_TUNNEL_CLEANUP ??= mkdtempSync(path.join(os.tmpdir(), "e2e-tunnel-cleanup-"))
 const terminalUrl = `http://127.0.0.1:${process.env.E2E_TERMINAL_PORT}`
 
 /**
@@ -40,6 +44,7 @@ export const webServerConfig = {
 
 export default defineConfig({
   testDir: "./tests",
+  globalTeardown: "./support/tunnel-cleanup.ts",
   fullyParallel: true,
   // The benchmark spends real money and uses real GitHub: it runs on demand (`npm run oe-benchmark`).
   grepInvert: /@benchmark/,

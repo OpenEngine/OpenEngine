@@ -387,7 +387,7 @@ def test_rebound_host_cannot_reach_daemon(tmp_path, monkeypatch, origin, method,
     ('http://[::1]:4364', ''),
     ('https://engine.example:8443', 'https://engine.example:8443'),
 ])
-def test_trusted_hosts_can_onboard(tmp_path, monkeypatch, base_url, public_url):
+def test_trusted_hosts_allow_local_onboarding_but_public_requires_auth(tmp_path, monkeypatch, base_url, public_url):
     from test_web_app import ConcurrentRunner, _session
     from engine.apps.web.api import create_app
     from engine.runtime import WorkflowCatalog
@@ -401,12 +401,22 @@ def test_trusted_hosts_can_onboard(tmp_path, monkeypatch, base_url, public_url):
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base_url) as client:
+            if public_url:
+                # A trusted public Host is not an authentication credential.
+                assert (await client.get('/api/config')).status_code == 401
+                response = await client.post('/api/repositories/onboard', headers={'Origin': base_url},
+                                             json={'repository': 'owner/repo'})
+                assert response.status_code == 401
+                return
             assert (await client.get('/api/config')).status_code == 200
             response = await client.post('/api/repositories/onboard', headers={'Origin': base_url},
                                          json={'repository': 'owner/repo'})
             assert response.status_code == 202
     asyncio.run(run())
-    start.assert_called_once()
+    if public_url:
+        start.assert_not_called()
+    else:
+        start.assert_called_once()
 
 
 @pytest.mark.parametrize("kind", ["claude", "codex", "opencode"])
@@ -682,7 +692,8 @@ other = true
     assert '# preserve' in config.read_text()
 
 
-def test_onboarding_credential_can_clone_and_trust_but_service_cannot(tmp_path, monkeypatch):
+@pytest.mark.parametrize("github_login", [True, False])
+def test_onboarding_credential_can_clone_and_trust_but_service_cannot(tmp_path, monkeypatch, github_login):
     from test_web_app import ConcurrentRunner, _session
     from engine.apps.web.api import create_app
     from engine.apps.web.github_login import GitHubLoginConfig
@@ -699,7 +710,9 @@ def test_onboarding_credential_can_clone_and_trust_but_service_cannot(tmp_path, 
     runner = ConcurrentRunner()
     app = create_app(_session(runner), {'test': runner}, repos=RepositoryRegistry(projects={}),
                      workflow_catalog=WorkflowCatalog.from_graphs(()), config_path=config,
-                     github_login_config=GitHubLoginConfig('client', 'secret', 'http://localhost/api/auth/github/callback'),
+                     github_login_config=(GitHubLoginConfig('client', 'secret', 'http://localhost/api/auth/github/callback')
+                                          if github_login else None),
+                     public_url='https://engine.example',
                      service_token=lambda: 's' * 40, onboarding_token=lambda: 'o' * 40)
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:

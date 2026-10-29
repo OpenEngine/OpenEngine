@@ -84,7 +84,7 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     while raw.stdout.count('"body": "ready"') < 4 and time.monotonic() < deadline:
         time.sleep(0.2)
         raw = oe("logs", "--json")
-    for service in ("cxn", "tools", "vcp"):
+    for service in ("cxn", "tools"):
         boot = [json.loads(line) for line in raw.stdout.splitlines() if f'"service.name": "openengine-{service}"' in line]
         assert [line["body"] for line in boot][:4] == ["starting", "database configured", "nats configured", "ready"]
         assert len({line["trace_id"] for line in boot[:4]}) == 1
@@ -102,6 +102,35 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
         time.sleep(0.1)
     assert not _listening(port)
     assert oe("status").returncode == 1
+
+
+def test_up_starts_the_virtual_control_plane_by_default(oe, tmp_path: Path) -> None:
+    port, monitor_port = _free_port(), _free_port()
+
+    up = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port))
+    assert up.returncode == 0, up.stderr
+
+    status = oe("status", "--json")
+    state = json.loads(status.stdout)
+    assert state["status"] == "ready"
+    assert [process["name"] for process in state["processes"]] == ["nats", "cxn", "ge", "tools", "vcp"]
+    vcp = next(process for process in state["processes"] if process["name"] == "vcp")
+    assert vcp["status"] == "ready"
+    assert vcp["address"].startswith("http://127.0.0.1:")
+
+    raw = oe("logs", "--json")
+    boot = [json.loads(line) for line in raw.stdout.splitlines() if '"service.name": "openengine-vcp"' in line]
+    bodies = [line["body"] for line in boot]
+    assert bodies[:3] == ["starting", "state directory owned", "database configured"]
+    assert "nats connected" in bodies
+    assert bodies[-1] == "ready"
+    assert (tmp_path / "state" / "openengine" / "vcp").is_dir()
+
+    down = oe("down")
+    assert down.returncode == 0
+    assert "stopped" in down.stdout
+    # Stopping vcp is just stopping its process; it must not touch the workspaces it owns.
+    assert (tmp_path / "state" / "openengine" / "vcp").is_dir()
 
 
 def test_up_reports_a_port_another_process_holds(oe) -> None:

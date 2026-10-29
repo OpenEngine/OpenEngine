@@ -27,8 +27,9 @@ Connect GitHub from the Settings panel, then point a webhook at `<public_url>/ap
 
 Request Engine's account as a reviewer to start the dedicated `review` graph.
 It posts surviving findings as review comments and a summary with the impact
-rating and rationale. Requests on forks or PRs with an active WorkOrder are
-skipped, and the requester must have write access.
+rating and rationale. The requester must have write access; a fork's PR is
+reviewed at its pull request head. Requests on PRs with an active WorkOrder are
+skipped.
 
 ```toml title="engine.toml"
 [github]

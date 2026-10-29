@@ -8,20 +8,20 @@ from openengine.persistence import UtcDateTime
 
 metadata = sa.MetaData()
 
-# One row per graph name. Its ID never changes; applying a changed definition adds a revision.
 graphs = sa.Table(
     "graphs",
     metadata,
     sa.Column("graph_id", sa.String(128), primary_key=True),
+    sa.Column("project", sa.String(64), nullable=False),
     sa.Column("name", sa.String(64), nullable=False),
     sa.Column("description", sa.String(2000)),
     sa.Column("latest_revision", sa.Integer, nullable=False),
     sa.Column("created_at", UtcDateTime(), nullable=False),
     sa.Column("updated_at", UtcDateTime(), nullable=False),
-    sa.UniqueConstraint("name", name="uq_graphs_name"),
+    sa.UniqueConstraint("project", "name", name="uq_graphs_project_name"),
+    comment="One row per graph name in a project. Its ID never changes; applying a changed definition adds a revision.",
 )
 
-# Every revision of every graph, numbered from 1 and never changed once written.
 graph_revisions = sa.Table(
     "graph_revisions",
     metadata,
@@ -31,13 +31,14 @@ graph_revisions = sa.Table(
     sa.Column("source", sa.Text, nullable=False),
     sa.Column("source_sha256", sa.String(64), nullable=False),
     sa.Column("created_at", UtcDateTime(), nullable=False),
+    comment="Every revision of every graph, numbered from 1 and never changed once written.",
 )
 
-# The durable record of each accepted command's progress, which operations.{operation_id}.get reads.
 operations = sa.Table(
     "operations",
     metadata,
     sa.Column("operation_id", sa.String(128), primary_key=True),
+    sa.Column("project", sa.String(64), nullable=False),
     sa.Column("command_id", sa.String(128), nullable=False),
     sa.Column("operation", sa.String(64), nullable=False),
     sa.Column("status", sa.String(16), nullable=False),
@@ -46,16 +47,18 @@ operations = sa.Table(
     sa.Column("error", sa.JSON),
     sa.Column("created_at", UtcDateTime(), nullable=False),
     sa.Column("updated_at", UtcDateTime(), nullable=False),
-    sa.UniqueConstraint("command_id", name="uq_operations_command_id"),
+    sa.UniqueConstraint("project", "command_id", name="uq_operations_project_command_id"),
+    comment="The durable record of each accepted command's progress, which operations.{operation_id}.get reads.",
 )
 
-# The reply to every command GE accepted or rejected for good, so a retry with its command ID gets the same one.
 command_receipts = sa.Table(
     "command_receipts",
     metadata,
+    sa.Column("project", sa.String(64), primary_key=True),
     sa.Column("command_id", sa.String(128), primary_key=True),
     sa.Column("subject", sa.String(255), nullable=False),
     sa.Column("fingerprint", sa.String(64), nullable=False),
     sa.Column("response", sa.JSON, nullable=False),
     sa.Column("created_at", UtcDateTime(), nullable=False),
+    comment="The reply to every command GE accepted or rejected for good, so a retry with its command ID in its project gets the same one.",
 )

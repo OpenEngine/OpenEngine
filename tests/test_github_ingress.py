@@ -873,6 +873,17 @@ def test_review_request_reads_pull_request_and_requester():
         "acme/api", 12, "maintainer", 7)
     assert (requested.branch, requested.head_sha, requested.title) == (
         "feature", "abc123", "Add the feature")
+    assert not requested.fork
+
+
+def test_review_request_on_a_fork_is_read_as_one():
+    from engine.apps.web.github_ingress import review_request_from_payload
+
+    payload = _review_requested()
+    payload["pull_request"]["head"]["repo"] = {"full_name": "fork/api"}
+    requested = review_request_from_payload("pull_request", payload, self_login="OpenEngineBot")
+    assert requested is not None
+    assert (requested.number, requested.branch, requested.fork) == (12, "feature", True)
 
 
 @pytest.mark.parametrize("change", [
@@ -880,10 +891,6 @@ def test_review_request_reads_pull_request_and_requester():
     {"requested_reviewer": {"login": "someone"}}, {"requested_reviewer": None},
     {"sender": {"login": "bot", "type": "Bot"}},
     {"pull_request": {"number": 12, "state": "closed"}},
-    {"pull_request": {
-        "number": 12, "state": "open",
-        "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "fork/api"}},
-    }},
 ])
 def test_other_review_requests_are_ignored(change):
     from engine.apps.web.github_ingress import review_request_from_payload

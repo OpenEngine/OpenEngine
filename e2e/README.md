@@ -82,17 +82,41 @@ npm run oe-benchmark         # the journey; writes its guide to site/docs/benchm
 npm run oe-benchmark:clean   # delete everything the last run left, once you have looked
 ```
 
+It needs Docker. The journey happens on a clean Linux machine, a container built from
+`benchmark/Dockerfile` (the first run builds it, then Docker keeps it): every terminal in the guide
+is a shell inside it, so a screenshot shows nothing of your own setup, and nothing the run installs
+or starts touches your computer. Your GitHub, Claude and Codex logins are mounted into it
+read-only and copied in, so a token the container refreshes never changes yours.
+
 It runs as the account `gh` is logged in as, and the terminal steps must be signed in as the same
-account: if your `gh` picks its account by directory, set `GH_CONFIG_DIR` to the account's config
-directory for the run, and the benchmark stops before creating anything if the two disagree. The
-token needs the `delete_repo` scope
-(`gh auth refresh -s delete_repo`). A setup project runs first: it deletes
-the `oe-bench` repository, its Pages site, the local folder (`OE_BENCH_DIR`, by default
-`<tmp>/oe-bench`) and any process the last run recorded. It never touches a repository whose name
-doesn't start with `oe-bench` or that lacks the `oe-bench` topic. After the run, pass or fail, a
-global teardown stops the tunnel and daemons the run recorded, but deletes nothing, so a failed
-run's repository and folder are left to inspect.
+account: if your `gh` or `claude` picks its account by directory, set `GH_CONFIG_DIR` and
+`CLAUDE_CONFIG_DIR` to the config directories to use for the run, for example
+`GH_CONFIG_DIR=~/.config/gh-work CLAUDE_CONFIG_DIR=~/.claude-work npm run oe-benchmark`. The
+benchmark stops before creating anything if the two GitHub accounts disagree. The token needs the
+`delete_repo` scope (`gh auth refresh -s delete_repo`). A setup project runs first: it deletes the
+`oe-bench` repository, its Pages site and the last run's container, then starts a new container. It
+never touches a repository whose name doesn't start with `oe-bench` or that lacks the `oe-bench`
+topic. After the run, pass or fail, a global teardown removes the container, and with it the tunnel
+and daemon, but deletes no repository, so a failed run's repository is left to inspect.
+
+At the end of a run it prints what the run noted about itself (the OpenEngine commit it tested, how long the
+install took, whether the webhook ping had to be sent twice), and the same notes are in
+`benchmark-results/results.json`, for whatever reads the results next. A test adds a note with
+`testInfo.annotations.push({ type, description })`.
 
 `support/mask.ts` hides a secret in a guide screenshot. Pass `mask(locator)` among the targets
 of `screenshot()`; it draws an opaque box over the element, which the benchmark must do for every
 token or secret on screen.
+
+## Real tunnels (opt in)
+
+The anywhere guide uses local TLS by default and never looks for tunnel tools.
+Run `E2E_TUNNEL=cloudflare npm test -- tests/reach-from-anywhere.spec.ts` for a
+Cloudflare quick tunnel (install `cloudflared`; no account needed), or
+`E2E_TUNNEL=tailscale npm test -- tests/reach-from-anywhere.spec.ts --workers=1`
+on a dedicated machine signed in to Tailscale with HTTPS enabled. Existing
+Tailscale Serve configuration is refused; the test removes only its own setup.
+Missing tools or login fail the run, with no fallback. Agent selection remains
+independent (`E2E_AGENT=stub` or `real`). The test checks the daemon refuses
+unauthenticated API requests before exposing it, and records tunnel resources
+for teardown. Generate committed guides with `E2E_TUNNEL` unset.

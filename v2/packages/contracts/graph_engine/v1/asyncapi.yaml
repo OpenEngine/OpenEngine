@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.5
+  version: 1.0.0-draft.6
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
@@ -41,7 +41,8 @@ info:
     A retry with the same `command_id` and identical subject, payload,
     `expected_version` and `causal_path` returns the original response and
     operation ID. The same `command_id` with anything else is rejected with
-    `COMMAND_ID_CONFLICT`. Command IDs are remembered for at least **7 days**.
+    `COMMAND_ID_CONFLICT`. Command IDs are scoped to the command's project, so
+    two projects may each use one. Command IDs are remembered for at least **7 days**.
     Non-retryable rejections are remembered and replayed; retryable ones
     (`UNAVAILABLE`) are not.
 
@@ -53,6 +54,17 @@ info:
     loopback, so whoever reaches it is the operator on that machine, and every
     request through a loopback listener is allowed. A request through any other
     listener is rejected with `PERMISSION_DENIED`.
+
+    ## Projects
+    Graphs belong to a project. Graph names are unique per project, and
+    `graphs.apply` and `graphs.list` act in the `project` they name, or in
+    `default` when they name none. `default` also holds every graph applied
+    before projects existed, under its original graph ID and revisions. A
+    graph ID names one graph in one project, so `graphs.{graph_id}.get` needs
+    no project and reports the graph's. A project name grants nothing by
+    itself: each request is authorized for the project it reaches from the
+    actor's verified identity. In local-operator mode the operator may use
+    every project.
 
     ## Subject tokens
     Every `{…_id}` parameter is a single subject token of the form its prefix
@@ -437,7 +449,7 @@ operations:
     action: receive
     title: Apply a graph
     summary: "Create or update a graph from a Graph resource, adding an immutable revision when it changed."
-    description: "Accepted once validated and recorded; `resource_id` is the graph ID, which never changes for a name. A Graph resource is kept as its canonical JSON (sorted keys, no spacing), so an apply matching the latest revision's SHA-256 is unchanged: the operation result names the existing revision with `created: false`. A changed one adds the next revision. The revision, operation and receipt are recorded atomically, and the operation has succeeded once accepted. `expected_version` is the graph's latest revision; a mismatch is VERSION_CONFLICT, and naming one for a graph that does not exist is NOT_FOUND. A `python` payload is UNSUPPORTED_CAPABILITY. Any rejection of a command with a well-formed `command_id`, including a malformed envelope or a `deadline_at` passed before acceptance, is kept as its receipt."
+    description: "Acts in `project` (`default` if omitted), where the graph's name is unique. Accepted once validated and recorded; `resource_id` is the graph ID, which never changes for a name in a project; the same name in another project is another graph. A Graph resource is kept as its canonical JSON (sorted keys, no spacing), so an apply matching the latest revision's SHA-256 is unchanged: the operation result names the existing revision with `created: false`. A changed one adds the next revision. The revision, operation and receipt are recorded atomically, and the operation has succeeded once accepted. `expected_version` is the graph's latest revision; a mismatch is VERSION_CONFLICT, and naming one for a graph that does not exist in the project is NOT_FOUND. A `python` payload is UNSUPPORTED_CAPABILITY. Any rejection of a command with a well-formed `command_id`, including a malformed envelope or a `deadline_at` passed before acceptance, is kept as its receipt."
     channel: { $ref: '#/channels/graphsApply' }
     tags: [{ name: control }]
     reply:
@@ -556,8 +568,8 @@ operations:
   listGraphs:
     action: receive
     title: List graphs
-    summary: "Page through registered graphs."
-    description: "Sorted by `name`, then `graph_id`; each graph shows its `latest_revision`. `name_prefix` keeps the graphs whose names start with it, compared exactly (case-sensitive, no wildcards). Pages by key: `next_cursor` is non-null while more graphs follow, and is bound to the `name_prefix` it was issued for, so reusing it with another is INVALID_CURSOR. A page may hold fewer than `limit` graphs, ending early rather than let its reply pass 1 MiB. Graph revisions are not listed; `graphs.{graph_id}.get` reads any one of them."
+    summary: "Page through one project's registered graphs."
+    description: "Lists the graphs of `project` (`default` if omitted), sorted by `name`, then `graph_id`; each graph shows its `latest_revision`. `name_prefix` keeps the graphs whose names start with it, compared exactly (case-sensitive, no wildcards). Pages by key: `next_cursor` is non-null while more graphs follow, and is bound to the `project` and `name_prefix` it was issued for, so reusing it with another of either is INVALID_CURSOR. A page may hold fewer than `limit` graphs, ending early rather than let its reply pass 1 MiB. Graph revisions are not listed; `graphs.{graph_id}.get` reads any one of them."
     channel: { $ref: '#/channels/graphsList' }
     tags: [{ name: query }]
     reply:
@@ -567,7 +579,7 @@ operations:
     action: receive
     title: Get a graph
     summary: "Return a graph and one revision (latest by default), with its verbatim source."
-    description: "`revision` defaults to the graph's `latest_revision`, and `include_source: false` leaves out `source`. Every revision stays readable once applied, across GE restarts. An unknown `graph_id`, or a `revision` the graph does not have, is NOT_FOUND with `resource_type: graph`. A Graph resource's `source` is the canonical JSON GE kept; `inputs` and `nodes` are the inputs and step names it declares."
+    description: "The graph's `project` is reported with it. `revision` defaults to the graph's `latest_revision`, and `include_source: false` leaves out `source`. Every revision stays readable once applied, across GE restarts. An unknown `graph_id`, or a `revision` the graph does not have, is NOT_FOUND with `resource_type: graph`. A Graph resource's `source` is the canonical JSON GE kept; `inputs` and `nodes` are the inputs and step names it declares."
     channel: { $ref: '#/channels/graphGet' }
     tags: [{ name: query }]
     reply:

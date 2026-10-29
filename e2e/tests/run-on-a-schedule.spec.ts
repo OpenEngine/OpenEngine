@@ -78,7 +78,7 @@ function step(text: string, body: () => Promise<void>) {
 }
 
 /** Screenshot the screen down to its last row in use once it has stopped changing, with `highlight` labelled. */
-async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string) {
+async function show(filename: string, terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string) {
   await terminal.waitForQuiet()
   await expect(terminal.screen()).not.toContainText(`:${new URL(engine.url).port}`)
   // The page is the same on every run: no path on this computer may show.
@@ -103,7 +103,7 @@ async function show(terminal: Terminal, engine: Engine, testInfo: TestInfo, high
         text: label, position: "below", showArrow: false,
         highlightStrokeStyle: "transparent", highlightFillStyle: "transparent",
       } } },
-    ], { clip: await terminal.usedArea({ labelBelow: true }) })
+    ], { annotation: { filename }, clip: await terminal.usedArea({ labelBelow: true }) })
   } finally {
     await anchor.evaluate((element) => element.remove())
   }
@@ -148,7 +148,7 @@ test.describe(graphsCategory, () => {
         engine.script(BUSY)
 
         await test.step("Read about scheduled graphs", async () => {
-          await injectMarkdown(testInfo, `The \`engine\` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
+          await injectMarkdown(testInfo, `The \`oe\` command is what you type in a terminal to use OpenEngine. OpenEngine is a tool that has AI coding agents work on your code, step by step, in the way you lay out. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The way you lay out the work is a **graph**: a recipe for a piece of work, saying its steps, which agent does each one, and in what order. Each time a graph is carried out, from its first step to its last, is called a **run**.
 
 Some work is never finished for good: keeping a README up to date, fixing one flaky test at a time, tidying a little more each day. Instead of starting the same graph yourself every few hours, you can set up a **loop**: a graph set to run again and again on a schedule, with limits on how much it may spend. You choose how often it runs, how much money its agents may spend in all, and how many pull requests (proposed changes to your code) it may open. When it reaches a limit, it pauses itself, and you can pause or stop it yourself at any time.`)
           await injectMarkdown(testInfo, `To read everything a loop can do, type \`oe loop spec\` and press Enter.
@@ -162,7 +162,7 @@ You'll see detailed reference material about loops: how to set one up, how often
           expect(output).toMatch(/`oe loop stop NAME_OR_ID`/)
           // Show the beginning of the reference, including the command the reader typed.
           await terminal.page.evaluate(() => window.__term!.scrollToTop())
-          await show(terminal, engine, testInfo, await terminal.row(/oe loop spec/), "The detailed reference for scheduled graphs")
+          await show("run-on-a-schedule__terminal--reference.png", terminal, engine, testInfo, await terminal.row(/oe loop spec/), "The detailed reference for scheduled graphs")
         })
 
         await clear(terminal)
@@ -177,7 +177,7 @@ The \`loop\` part is new. \`every: 1h\` says to run the graph once an hour, and 
           async () => {
             writeFileSync(path.join(engine.repository, "check-readme.yaml"), GRAPH)
             await terminal.run("oe graph add check-readme.yaml")
-            await show(terminal, engine, testInfo, await terminal.row(/^registered check-readme v1\s/), "Your graph is saved")
+            await show("run-on-a-schedule__terminal--graph-saved.png", terminal, engine, testInfo, await terminal.row(/^registered check-readme v1\s/), "Your graph is saved")
           },
         )
 
@@ -196,7 +196,7 @@ OpenEngine shows the loop's name, that it's *active*, how often it runs and when
             expect(added.state).toBe("active")
             expect(added.everySeconds).toBe(3600)
             expect(added.limits).toMatchObject({ maxPrs: 1, maxSpendUsd: 5 })
-            await show(terminal, engine, testInfo, await terminal.row(/^pull requests 0\/1, spend \$0\.00\/\$5\.00/), "No pull requests and no money spent yet, with the limits you set")
+            await show("run-on-a-schedule__terminal--limits.png", terminal, engine, testInfo, await terminal.row(/^pull requests 0\/1, spend \$0\.00\/\$5\.00/), "No pull requests and no money spent yet, with the limits you set")
           },
         )
 
@@ -211,7 +211,7 @@ You'll see one row for each loop, with its graph, its state (*active*, *paused* 
             const row = /^check-readme\s+check-readme v1\s+active\s+1h\s/m
             expect(output).toMatch(row)
             expect((await loops(engine)).map((each) => each.name)).toEqual(["check-readme"])
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Your loop is active and runs every hour")
+            await show("run-on-a-schedule__terminal--active-list.png", terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Your loop is active and runs every hour")
           },
         )
 
@@ -228,7 +228,7 @@ Along with what the list shows, you'll see the run it's doing now, if there is o
             if (engine.agentMode === "real") return // A real agent may already be done.
             expect((await run(engine, runId)).status).toBe("running")
             expect(output).toContain(`active run ${runId}`)
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(`^active run ${runId}$`)), "The loop's first run is going now")
+            await show("run-on-a-schedule__terminal--active-run.png", terminal, engine, testInfo, await terminal.row(new RegExp(`^active run ${runId}$`)), "The loop's first run is going now")
           },
         )
       })
@@ -251,7 +251,7 @@ Type \`oe loop pause check-readme --reason "Reviewing its work"\` and press Ente
             expect(paused.nextRunAt).toBeNull()
             // Pausing leaves the run that's going alone.
             expect((await run(engine, runId)).status).toBe("running")
-            await show(terminal, engine, testInfo, await terminal.row(/^check-readme \(loop-\S+\)\s+paused: Reviewing its work$/), "The loop is paused, and why")
+            await show("run-on-a-schedule__terminal--paused.png", terminal, engine, testInfo, await terminal.row(/^check-readme \(loop-\S+\)\s+paused: Reviewing its work$/), "The loop is paused, and why")
           },
         )
 
@@ -263,7 +263,7 @@ Type \`oe loop pause check-readme --reason "Reviewing its work"\` and press Ente
             const { output } = await terminal.run("oe loops list")
             const row = /^check-readme\s+check-readme v1\s+paused\s+1h\s+-\s.*Reviewing its work\s*$/m
             expect(output).toMatch(row)
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Paused, with the reason you gave")
+            await show("run-on-a-schedule__terminal--paused-list.png", terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Paused, with the reason you gave")
           },
         )
 
@@ -277,7 +277,7 @@ If it paused itself because it reached a limit, it won't start again until you r
             const { output } = await terminal.run("oe loop resume check-readme")
             expect(output).toMatch(/^check-readme \(loop-\S+\)\s+active$/m)
             expect((await loop(engine, "check-readme")).state).toBe("active")
-            await show(terminal, engine, testInfo, await terminal.row(/^check-readme \(loop-\S+\)\s+active$/), "The loop is running on its schedule again")
+            await show("run-on-a-schedule__terminal--resumed.png", terminal, engine, testInfo, await terminal.row(/^check-readme \(loop-\S+\)\s+active$/), "The loop is running on its schedule again")
           },
         )
       })
@@ -300,7 +300,7 @@ Type \`oe loop stop check-readme\` and press Enter. OpenEngine shows the loop as
             expect(stopped.nextRunAt).toBeNull()
             await expect.poll(async () => (await run(engine, runId)).status, { timeout: 30_000 }).toBe("cancelled")
             await expect.poll(async () => (await loop(engine, "check-readme")).activeRunId).toBeNull()
-            await show(terminal, engine, testInfo, await terminal.row(/^check-readme \(loop-\S+\)\s+stopped$/), "The loop is stopped for good")
+            await show("run-on-a-schedule__terminal--stopped.png", terminal, engine, testInfo, await terminal.row(/^check-readme \(loop-\S+\)\s+stopped$/), "The loop is stopped for good")
           },
         )
 
@@ -318,7 +318,7 @@ Next, to learn everything else a graph file can say, such as more steps or one a
             const { output } = await terminal.run("oe loops list")
             const row = /^check-readme\s+check-readme v1\s+stopped\s+1h\s+-\s+-\s/m
             expect(output).toMatch(row)
-            await show(terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Your loop is stopped and will start no more runs")
+            await show("run-on-a-schedule__terminal--stopped-list.png", terminal, engine, testInfo, await terminal.row(new RegExp(row.source)), "Your loop is stopped and will start no more runs")
           },
         )
       })

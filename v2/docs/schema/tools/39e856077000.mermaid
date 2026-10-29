@@ -11,7 +11,7 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    tool_grants["tool_grants (ADDED)"] {
+    tool_grants["tool_grants<br/>Who may call which tool. tool_uid is the tool the grant was bound to when applied; a grant whose tool has since been replaced denies every call. (ADDED)"] {
         VARCHAR(63) uid PK "ADDED; not null"
         VARCHAR(63) namespace UK "ADDED; not null"
         VARCHAR(63) name UK "ADDED; not null"
@@ -28,7 +28,7 @@ erDiagram
         DATETIME updated_at "ADDED; not null"
     }
     class tool_grants added
-    tools["tools (ADDED)"] {
+    tools["tools<br/>An invocable capability bound to one connection, as last applied. (ADDED)"] {
         VARCHAR(63) uid PK "ADDED; not null"
         VARCHAR(63) namespace UK "ADDED; not null"
         VARCHAR(63) name UK "ADDED; not null"

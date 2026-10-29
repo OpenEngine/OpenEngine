@@ -1,5 +1,5 @@
 {
   "message": "ListGraphsQuery",
   "subject": "oe.v1.ge.query.graphs.list",
-  "payload": { "params": { "name_prefix": "re", "limit": 1 } }
+  "payload": { "params": { "project": "acme", "name_prefix": "re", "limit": 1 } }
 }

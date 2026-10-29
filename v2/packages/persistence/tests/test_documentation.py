@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from openengine.persistence import Backend, ServicePersistence
-from openengine.persistence.documentation import diagram, generate, main, write
+from openengine.persistence.documentation import comments, diagram, discover, generate, main, write
 from openengine.persistence.migrations import revision, scaffold
+
+SERVICES = Path(__file__).resolve().parents[3] / "services"
 
 CREATE = """
     op.create_table("jobs", sa.Column("id", sa.Integer, primary_key=True), sa.Column("title", sa.String))
@@ -71,11 +73,34 @@ def test_rewrites_only_what_changed_or_was_never_rendered(tmp_path: Path) -> Non
 
 def test_manifest_lists_changed_paths_and_the_svgs_to_render(tmp_path: Path) -> None:
     output, manifest = tmp_path / "docs", tmp_path / "changes.json"
-    services = Path(__file__).resolve().parents[3] / "services"
 
-    main(["--services", str(services), "--output", str(output), "--manifest", str(manifest)])
+    main(["--services", str(SERVICES), "--output", str(output), "--manifest", str(manifest)])
 
     changed = json.loads(manifest.read_text())
     assert str(output / "latest_cxn.mermaid") in changed
     assert str(output / "latest_cxn.svg") in changed
     assert {path.split("/")[-2] for path in changed if path.endswith(".md")} == {"cxn", "ge", "tools", "vcp"}
+
+
+def test_every_service_table_has_a_comment() -> None:
+    for persistence in discover(SERVICES):
+        for table, comment in comments(persistence).items():
+            assert comment, f"{persistence.name}.{table} has no comment"
+
+
+def test_a_tables_comment_is_drawn_into_its_entity() -> None:
+    tables = {"jobs": {"columns": {"id": {"type": "INTEGER", "nullable": False, "default": None, "keys": ["PK"]}},
+                       "foreign_keys": [], "unique": [], "indexes": [], "checks": []}}
+
+    output = diagram("jobs", tables, {}, {"jobs": "Queued units of work."})
+
+    assert '    jobs["jobs<br/>Queued units of work. (ADDED)"] {' in output
+
+
+def test_a_quote_in_a_tables_comment_does_not_corrupt_its_label() -> None:
+    tables = {"jobs": {"columns": {"id": {"type": "INTEGER", "nullable": False, "default": None, "keys": ["PK"]}},
+                       "foreign_keys": [], "unique": [], "indexes": [], "checks": []}}
+
+    output = diagram("jobs", tables, {}, {"jobs": 'The "queue" of work.'})
+
+    assert '    jobs["jobs<br/>The \'queue\' of work. (ADDED)"] {' in output

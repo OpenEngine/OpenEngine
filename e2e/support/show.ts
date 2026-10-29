@@ -1,12 +1,14 @@
 import { test, type Locator, type TestInfo } from "@playwright/test"
 import { screenshot } from "@test2doc/playwright/screenshots"
 import type { Terminal } from "../fixtures/terminal.ts"
+import { mask } from "./mask.ts"
 
 /**
  * Screenshot a terminal down to its last row in use, once it has stopped changing, with
  * `highlight` labelled. The label goes beneath all the output, whichever rows are highlighted.
+ * Rows in `masked` are covered by a solid box: a secret, or anything that identifies a person.
  */
-export async function show(terminal: Terminal, testInfo: TestInfo, highlight: Locator, label: string) {
+export async function show(filename: string, terminal: Terminal, testInfo: TestInfo, highlight: Locator, label: string, { masked = [] }: { masked?: Locator[] } = {}) {
   await terminal.waitForQuiet()
   const area = await terminal.usedArea()
   const anchor = terminal.page.locator("#guide-label-anchor")
@@ -22,11 +24,12 @@ export async function show(terminal: Terminal, testInfo: TestInfo, highlight: Lo
   try {
     await screenshot(testInfo, [
       { target: highlight },
+      ...masked.map(mask),
       { target: anchor, options: { annotation: {
         text: label, position: "below", showArrow: false,
         highlightStrokeStyle: "transparent", highlightFillStyle: "transparent",
       } } },
-    ], { clip: await terminal.usedArea({ labelBelow: true }) })
+    ], { annotation: { filename }, clip: await terminal.usedArea({ labelBelow: true }) })
   } finally {
     await anchor.evaluate((element) => element.remove())
   }

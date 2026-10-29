@@ -1,5 +1,5 @@
 {
-  "summary": "Apply a Graph resource. Applying it again unchanged returns the existing revision.",
+  "summary": "Apply a Graph resource in the acme project. Applying it again unchanged returns the existing revision.",
   "message": "ApplyGraphCommand",
   "subject": "oe.v1.ge.control.graphs.apply",
   "payload": {
@@ -8,6 +8,7 @@
       "cmd_applygraph_3"
     ],
     "payload": {
+      "project": "acme",
       "graph": {
         "apiVersion": "openengine.cc/v1alpha1",
         "kind": "Graph",
