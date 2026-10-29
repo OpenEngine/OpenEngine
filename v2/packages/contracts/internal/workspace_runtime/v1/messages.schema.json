@@ -629,6 +629,16 @@
         },
         "journal_id": {
           "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "steering_executors": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": "Runners supporting bound active-attempt steering. Missing means none; idle steering is not supported in this revision."
         }
       }
     },
