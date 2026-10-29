@@ -7,8 +7,9 @@ before any handler, the same as every other V2 service -- and answers
 `GET /healthz` on 127.0.0.1 with 200 only while it is connected, holds that
 lock and is subscribed. Once it is, it writes the health URL to
 `OE_VCP_READY_FILE`, if set. On SIGTERM it stops taking requests, answers the
-ones it has, releases the lock and exits 0 -- it never destroys a workspace on
-the way out.
+ones it can finish within the drain budget, and releases the lock after the
+event loop stops. A successful close exits 0; a failed final close exits
+non-zero. Shutdown never destroys a workspace.
 
 Only `capabilities.get` is served, truthfully: no provider adapter is
 registered in this slice (#1054 and #1114 add them), so it always reports
@@ -106,25 +107,36 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
     server = Server(connection, "vcp", listener, queries=QUERIES)
-    await server.start()
-    health = await asyncio.start_server(
-        lambda reader, writer: _health(
-            lambda: connection.is_connected and not stopping.is_set(), reader, writer
-        ),
-        HEALTH_HOST,
-        health_port,
-    )
-    url = f"http://{HEALTH_HOST}:{health.sockets[0].getsockname()[1]}/healthz"
-    if ready_file:
-        ready_file.write_text(url)
-    log.info("ready", extra={"url.full": url})
-    await stopping.wait()
-    log.info("draining")
-    await server.drain()
-    await connection.drain()
-    health.close()
-    if ready_file:
-        ready_file.unlink(missing_ok=True)
+    health = None
+    try:
+        await server.start()
+        health = await asyncio.start_server(
+            lambda reader, writer: _health(
+                lambda: connection.is_connected and not stopping.is_set(), reader, writer
+            ),
+            HEALTH_HOST,
+            health_port,
+        )
+        url = f"http://{HEALTH_HOST}:{health.sockets[0].getsockname()[1]}/healthz"
+        if ready_file:
+            ready_file.write_text(url)
+        log.info("ready", extra={"url.full": url})
+        await stopping.wait()
+        log.info("draining")
+    finally:
+        stopping.set()
+        try:
+            # Withdraw startup readiness before waiting for in-flight replies.
+            if ready_file:
+                ready_file.unlink(missing_ok=True)
+        finally:
+            try:
+                await server.close()
+            finally:
+                if health is not None:
+                    # Do not wait on health clients during shutdown; the event
+                    # loop cancels them before main releases owned resources.
+                    health.close()
     log.info("stopped")
     return EXIT_OK
 
@@ -161,7 +173,8 @@ def main() -> int:
                 Path(ready_file) if ready_file else None,
             )
         )
-    except OSError:
+    except (OSError, nats.errors.Error):
+        # An outage can close cleanly; a failed final close must remain a failure.
         log.exception("failed")
         return EXIT_FAILED
     finally:

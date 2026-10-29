@@ -16,7 +16,7 @@ await client.command("oe.v1.ge.control.graphs.apply", payload, command_id=..., c
 server = Server(nats_connection, "ge", nats_url, queries={"graphs.list": Route(handler, schema_reference)})
 await server.start()
 ...
-await server.drain()   # stop taking requests, answer the ones received
+await server.close()   # drain and close the dedicated connection within a 5-second budget
 ```
 
 | Module | |
@@ -48,3 +48,25 @@ serves a subject or when no reply arrives after the last attempt, and
 `ServiceError` for an error or rejected reply. The server answers every request
 with a typed response, including malformed ones. It never puts an exception's
 text in an `INTERNAL` reply.
+
+With a live connection, authorization reads the current broker listening address
+for each request, including after reconnect. Local-operator mode rejects an
+unknown address or a broker listening beyond loopback. The constructor's
+`listener` argument is only used for transport-free calls (`nats=None`).
+
+`Server.close(timeout=5.0)` shares one budget between draining (at most four
+fifths) and connection close. An outage or expired drain window proceeds to
+close. If final close fails or exceeds the remaining budget, TCP transport is
+aborted and the error propagates; the service exits non-zero. Normal outage
+shutdown exits zero when close succeeds. This does not guarantee completion of
+a handler's side effects or make interrupted operations safe to retry.
+
+Services withdraw their ready file before draining and close their health
+listener in cleanup. Their event loop cancels remaining tasks before VCP
+releases its state-directory lock. Cancellation-resistant or blocking handlers
+still require the supervisor's process-stop deadline; no Python timeout can
+preempt them. Forced transport abort is covered for TCP, not WebSockets.
+
+Local-operator mode assumes a trusted managed broker with no remote ingress.
+Its listener check is not publisher identity; authenticated remote callers and
+broker permissions are tracked in #1051.
