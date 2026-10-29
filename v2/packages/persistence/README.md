@@ -49,8 +49,10 @@ and deliberately not the nil UUID).
   point at another tenant's parent.
 - A table that holds no tenant's data is declared with
   `global_table(..., reason=...)` and listed, by service and table, in
-  [`global_tables.toml`](global_tables.toml), which CODEOWNERS guards. It is the
-  only way to a table without `tenant_id`.
+  [`global_tables.toml`](src/openengine/persistence/tenancy/global_tables.toml),
+  which ships with the package and `.github/CODEOWNERS` guards. It is the only
+  way to a table without `tenant_id`. Declare it before or after the tables that
+  reference it: their foreign keys to it are left unscoped either way.
 - `assert_tenant_scoped(metadata, PERSISTENCE.name)` returns every violation: a
   missing `tenant_id`, `tenant_id` not leading the key, a unique or a foreign
   key, an unregistered global table, or a registration with no global table.

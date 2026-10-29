@@ -99,6 +99,56 @@ def test_a_child_row_cannot_point_at_another_tenants_parent() -> None:
     engine.dispose()
 
 
+def test_unique_indexes_keep_their_expressions_and_predicates() -> None:
+    metadata = sa.MetaData()
+    items = tenant_table(
+        "items", metadata,
+        sa.Column("item_id", sa.String(32), primary_key=True),
+        sa.Column("name", sa.String(32)),
+        sa.Column("active", sa.Boolean),
+        sa.Index("ix_items_lower_name", sa.func.lower(sa.column("name")), unique=True,
+                 sqlite_where=sa.column("active")),
+    )
+    [index] = items.indexes
+
+    assert " ".join(str(CreateIndex(index).compile(dialect=sqlite.dialect())).split()) == (
+        "CREATE UNIQUE INDEX ix_items_lower_name ON items (tenant_id, lower(name)) WHERE active")
+    assert assert_tenant_scoped(metadata, "test") == []
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    mine = new_tenant()
+    with engine.begin() as connection:
+        connection.execute(items.insert().values(tenant_id=mine, item_id="a", name="x", active=False))
+        connection.execute(items.insert().values(tenant_id=mine, item_id="b", name="x", active=True))
+    with pytest.raises(IntegrityError, match="UNIQUE"), engine.begin() as connection:
+        connection.execute(items.insert().values(tenant_id=mine, item_id="c", name="X", active=True))
+    engine.dispose()
+
+
+def test_a_foreign_key_that_already_names_tenant_id_keeps_one() -> None:
+    metadata, _, _ = _schema()
+    pets = tenant_table(
+        "pets", metadata,
+        sa.Column("pet_id", sa.String(32), primary_key=True),
+        sa.Column("parent_id", sa.String(32)),
+        sa.ForeignKeyConstraint(["tenant_id", "parent_id"], ["parents.tenant_id", "parents.parent_id"]),
+    )
+
+    assert "FOREIGN KEY(tenant_id, parent_id) REFERENCES parents (tenant_id, parent_id)" in _ddl(pets)
+    assert assert_tenant_scoped(metadata, "test") == []
+
+
+def test_a_global_table_may_be_declared_after_the_tables_that_reference_it(tmp_path: Path) -> None:
+    metadata = sa.MetaData()
+    events = tenant_table("events", metadata, sa.Column("event_id", sa.String, primary_key=True),
+                          sa.Column("external_id", sa.String, sa.ForeignKey("routes.external_id")))
+    global_table("routes", metadata, sa.Column("external_id", sa.String, primary_key=True), reason="routing")
+
+    assert "FOREIGN KEY(external_id) REFERENCES routes (external_id)" in _ddl(events)
+    assert len(events.foreign_key_constraints) == 1
+    assert assert_tenant_scoped(metadata, "test", _registry(tmp_path, ("test", "routes"))) == []
+
+
 def test_reports_tables_that_are_not_tenant_scoped(tmp_path: Path) -> None:
     metadata = sa.MetaData()
     sa.Table("plain", metadata, sa.Column("id", sa.Integer, primary_key=True))

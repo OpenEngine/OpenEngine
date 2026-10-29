@@ -5,7 +5,7 @@ column and puts it first in the primary key, every unique constraint and every
 foreign key. A foreign key becomes `(tenant_id, ...) -> parent (tenant_id, ...)`,
 so a child row cannot point at another tenant's parent. The few tables that
 hold no tenant's data are declared with `global_table(..., reason=...)` and
-listed in `global_tables.toml`, which CODEOWNERS guards.
+listed in `global_tables.toml` beside this module, which CODEOWNERS guards.
 
 `assert_tenant_scoped(metadata, service)` lists every way a schema falls short,
 and sits beside each service's `drift() == []` test. To see every service's:
@@ -38,7 +38,8 @@ from openengine.persistence.database import Database
 
 TENANT_COLUMN = "tenant_id"
 GLOBAL_INFO = "global_table_reason"
-REGISTRY = Path(__file__).parents[4] / "global_tables.toml"
+UNSCOPED_INFO = "unscoped_foreign_key"
+REGISTRY = Path(__file__).with_name("global_tables.toml")
 
 # The tenant `oe up` runs everything as. Fixed and published so local data
 # keeps its owner across restarts; deliberately not the nil UUID.
@@ -121,28 +122,58 @@ def _scope_uniques(table: sa.Table) -> None:
         table.constraints.discard(constraint)
         for column in constraint.columns:
             column.unique = False
-        table.append_constraint(sa.UniqueConstraint(*_leading([c.name for c in constraint.columns]), name=constraint.name))
+        table.append_constraint(sa.UniqueConstraint(
+            *_leading([c.name for c in constraint.columns]), name=constraint.name, deferrable=constraint.deferrable,
+            initially=constraint.initially, info=constraint.info, **constraint.dialect_kwargs,
+        ))
     for index in [i for i in table.indexes if i.unique]:
         table.indexes.discard(index)
-        sa.Index(index.name, *_leading([c.name for c in index.columns]), unique=True, _table=table)
+        # Expressions and dialect options (a partial index's `*_where`) carry over untouched.
+        expressions = [e for e in index.expressions if not (isinstance(e, sa.Column) and e.name == TENANT_COLUMN)]
+        sa.Index(index.name, _tenant_column(table), *expressions, unique=True, _table=table, info=index.info,
+                 **index.dialect_kwargs)
+
+
+def _parent(constraint: sa.ForeignKeyConstraint) -> str:
+    return constraint.elements[0].target_fullname.rsplit(".", 1)[0]
+
+
+def _replace_foreign_key(
+    table: sa.Table, constraint: sa.ForeignKeyConstraint, local: list[str], remote: list[str], info: dict[str, Any],
+) -> None:
+    table.constraints.discard(constraint)
+    for element in constraint.elements:
+        element.parent.foreign_keys.discard(element)
+        table.foreign_keys.discard(element)
+    table.append_constraint(sa.ForeignKeyConstraint(
+        local, remote, name=constraint.name, onupdate=constraint.onupdate, ondelete=constraint.ondelete,
+        deferrable=constraint.deferrable, initially=constraint.initially, use_alter=constraint.use_alter, info=info,
+    ))
 
 
 def _scope_foreign_keys(table: sa.Table) -> None:
     for constraint in list(table.foreign_key_constraints):
-        parent = constraint.elements[0].target_fullname.rsplit(".", 1)[0]
+        parent = _parent(constraint)
         referenced = table.metadata.tables.get(parent)
         if referenced is not None and GLOBAL_INFO in referenced.info:
             continue  # a global parent has no tenant to match
-        table.constraints.discard(constraint)
-        for element in constraint.elements:
-            element.parent.foreign_keys.discard(element)
-            table.foreign_keys.discard(element)
-        table.append_constraint(sa.ForeignKeyConstraint(
-            _leading(constraint.column_keys),
-            [f"{parent}.{TENANT_COLUMN}", *(e.target_fullname for e in constraint.elements)],
-            name=constraint.name, onupdate=constraint.onupdate, ondelete=constraint.ondelete,
-            deferrable=constraint.deferrable, initially=constraint.initially, use_alter=constraint.use_alter,
-        ))
+        local, remote = constraint.column_keys, [e.target_fullname for e in constraint.elements]
+        # A key that already names tenant_id on both sides keeps one pair of it, at the front.
+        pairs = [(key, target) for key, target in zip(local, remote) if key != TENANT_COLUMN]
+        # Remembered, so a global_table() declared after this one can put the key back.
+        info = {**constraint.info, UNSCOPED_INFO: (list(local), remote)}
+        _replace_foreign_key(table, constraint, [TENANT_COLUMN, *(key for key, _ in pairs)],
+                             [f"{parent}.{TENANT_COLUMN}", *(target for _, target in pairs)], info)
+
+
+def _unscope_foreign_keys_to(global_: sa.Table) -> None:
+    """Foreign keys declared before `global_` was known to be global: back to the columns they named."""
+    for table in list(global_.metadata.tables.values()):
+        for constraint in list(table.foreign_key_constraints):
+            if UNSCOPED_INFO in constraint.info and _parent(constraint) == global_.key:
+                local, remote = constraint.info[UNSCOPED_INFO]
+                info = {k: v for k, v in constraint.info.items() if k != UNSCOPED_INFO}
+                _replace_foreign_key(table, constraint, local, remote, info)
 
 
 def tenant_table(name: str, metadata: sa.MetaData, *args: Any, **kwargs: Any) -> sa.Table:
@@ -160,6 +191,7 @@ def global_table(name: str, metadata: sa.MetaData, *args: Any, reason: str, **kw
         raise MissingReason(name)
     table = sa.Table(name, metadata, *args, **kwargs)
     table.info[GLOBAL_INFO] = reason
+    _unscope_foreign_keys_to(table)
     return table
 
 
@@ -194,7 +226,8 @@ def _table_violations(table: sa.Table) -> list[str]:
         problems.append(f"{TENANT_COLUMN} does not lead the primary key")
     uniques = [c for c in table.constraints if isinstance(c, sa.UniqueConstraint)] + [i for i in table.indexes if i.unique]
     for unique in uniques:
-        if unique.columns[0] is not column:
+        first = unique.expressions[0] if isinstance(unique, sa.Index) else unique.columns[0]
+        if first is not column:
             problems.append(f"{TENANT_COLUMN} does not lead unique ({_names(unique.columns)})")
     for foreign_key in table.foreign_key_constraints:
         if GLOBAL_INFO in foreign_key.referred_table.info:
