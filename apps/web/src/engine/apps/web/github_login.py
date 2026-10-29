@@ -61,6 +61,20 @@ def valid_service_token(token: str) -> bool:
     return len(token) >= 32 and not any(c.isspace() for c in token)
 
 
+def _has_bearer(request: Request, expected: str) -> bool:
+    """Whether `request` carries exactly one `Authorization: Bearer <expected>`.
+
+    False for an `expected` too weak to accept, so a blank or short
+    configuration never admits anyone.
+    """
+    if not valid_service_token(expected):
+        return False
+    headers = request.headers.getlist("authorization")
+    return len(headers) == 1 and secrets.compare_digest(
+        headers[0].encode(), f"Bearer {expected}".encode()
+    )
+
+
 def _return_to(value: str) -> str:
     # Reject browser URL normalization tricks as well as external URLs.
     decoded = unquote(value)
@@ -360,13 +374,7 @@ class GitHubLogin:
             "/api/v1/repositories/trust", "/api/repositories/onboard",
         }:
             return False
-        expected = self.service_token()
-        if not valid_service_token(expected):
-            return False
-        headers = request.headers.getlist("authorization")
-        return len(headers) == 1 and secrets.compare_digest(
-            headers[0].encode(), f"Bearer {expected}".encode()
-        )
+        return _has_bearer(request, self.service_token())
 
     def _has_onboarding_token(self, request: Request) -> bool:
         """A separate operator credential, limited to creating/polling onboarding jobs."""
@@ -378,12 +386,9 @@ class GitHubLogin:
             return False
         expected = self.onboarding_token()
         # Misconfiguration must never promote the general service credential.
-        if not valid_service_token(expected) or expected == self.service_token():
+        if expected == self.service_token():
             return False
-        headers = request.headers.getlist("authorization")
-        return len(headers) == 1 and secrets.compare_digest(
-            headers[0].encode(), f"Bearer {expected}".encode()
-        )
+        return _has_bearer(request, expected)
 
     def _token_session(self, request: Request) -> bool:
         if self.configured:
