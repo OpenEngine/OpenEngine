@@ -50,10 +50,8 @@ sym_cmap = TTFont(SYMBOLS).getBestCmap()
 
 def sf(size, weight):
     f = ImageFont.truetype(SF, size)
-    try:
-        f.set_variation_by_axes([100, min(max(size, 17), 96), 400, weight])
-    except Exception:
-        pass
+    # SF axes: width, optical size, grade, weight
+    f.set_variation_by_axes([100, min(max(size, 17), 96), 400, weight])
     return f
 
 
@@ -100,7 +98,7 @@ class Script:
         self.browsers.append(scene)
 
     def snap(self, cursor=True):
-        self.snaps.append((self.t, [list(l) for l in self.lines], cursor))
+        self.snaps.append((self.t, [list(line) for line in self.lines], cursor))
 
     def wait(self, s):
         self.t += s
@@ -127,8 +125,8 @@ class Script:
         self.snap(False)
 
     def out(self, lines, delay=0.0):
-        for l in lines:
-            self.lines.append(l)
+        for line in lines:
+            self.lines.append(line)
             if delay:
                 self.t += delay
                 self.snap(False)
@@ -136,7 +134,7 @@ class Script:
 
     def region(self, start, lines):
         """Redraw everything from line index `start` (like the live view)."""
-        self.lines = self.lines[:start] + [list(l) for l in lines]
+        self.lines = self.lines[:start] + [list(line) for line in lines]
         self.snap(False)
 
     def clear(self):
@@ -237,10 +235,8 @@ def build():
         "loop:",
         "  every: 8h",
     ]
-    for i, l in enumerate(yaml_src):
-        s.out([yaml_line(l)], delay=0.05)
-        if i == 6:
-            pass
+    for line in yaml_src:
+        s.out([yaml_line(line)], delay=0.05)
     s.wait(1.6)
     s.sub("Each step picks its agent and prompt. Here a different agent checks the fix.")
     s.wait(3.2)
@@ -453,7 +449,10 @@ def logo(size):
         source = LOGO_SVG.read_text()
         path = re.search(r' d="([^"]+)"', source).group(1)
         fill = tuple(int(c, 16) for c in re.findall(r"[0-9a-f]{2}", re.search(r'rect[^>]*fill="#([0-9a-f]{6})"', source).group(1)))
-        point = lambda x, y: ((16 + 0.68 * x) * k, (16 + 0.68 * y) * k)
+
+        def point(x, y):
+            return (16 + 0.68 * x) * k, (16 + 0.68 * y) * k
+
         mask = Image.new("L", (8 * size, 8 * size), 0)
         for sub in re.findall(r"M[^M]+", path):
             shape = Image.new("L", mask.size, 0)
