@@ -57,6 +57,8 @@ chmod 600 ~/.config/openengine/.env
 printf 'ENGINE_SERVICE_TOKEN=%s\\n' "$(openssl rand -hex 32)" >> ~/.config/openengine/.env
 \`\`\`
 
+Once this token is set, adding a repository with \`oe repo add\` or the web setup form is refused, even after signing in with the token. Adding a repository can grant agents permission to work on it, so it needs a separate onboarding token. Repositories already added keep working. The optional steps below show how to add more.
+
 The commands finish without printing the secret. Type \`ls -l ~/.config/openengine/.env\`: the line must start with \`-rw-------\`, meaning only you can read it.`,
   )
   await step(
@@ -171,6 +173,58 @@ If you still see *requires a token*, the token you pasted isn't the Mac mini's: 
       expect(output).toMatch(/^\s+mac-mini\s.*\bup\b/m)
       await show(terminal, testInfo, engine, computer, await terminal.row(/^\s+mac-mini\s.*\bup\b/), "The Mac mini is up, from wherever you are")
     },
+  )
+
+  await step(
+    `**Optional: add more repositories on the Mac mini.** The service token and browser sign-in cannot do this. Keep using the service token for everyday work; make a separate onboarding token only if you need to add repositories.
+
+On the Mac mini, open a new terminal and save a new secret in the same private file:
+
+\`\`\`sh
+printf 'ENGINE_ONBOARDING_TOKEN=%s\\n' "$(openssl rand -hex 32)" >> ~/.config/openengine/.env
+\`\`\`
+
+It finishes without printing the secret. Keep this token private too: it allows repository setup, including decisions about whether agents may work without asking permission. If an onboarding token is already in the file, use that one instead of adding another.`,
+  )
+  await step(
+    `On the Mac mini, load the saved tokens into this terminal:
+
+\`\`\`sh
+set -a
+. ~/.config/openengine/.env
+set +a
+\`\`\`
+
+The commands finish without printing the tokens. Repeat this in each new terminal where you add repositories.`,
+  )
+  await step(
+    `Restart OpenEngine on the Mac mini so it can use the onboarding token:
+
+\`\`\`sh
+oe daemon stop
+oe daemon start
+oe daemon status
+\`\`\`
+
+Look for \`health: ready\` before continuing.`,
+  )
+  await step(
+    `On the Mac mini, save a separate backend for repository setup:
+
+\`\`\`sh
+oe backend add onboarding http://127.0.0.1:4364 --token-env ENGINE_ONBOARDING_TOKEN
+\`\`\`
+
+The saved backend line shows \`onboarding\` and \`http://127.0.0.1:4364\`. This address reaches OpenEngine on the Mac mini itself; run this command there, not on your laptop.`,
+  )
+  await step(
+    `Add your repository through that backend. Replace the example with your repository's address:
+
+\`\`\`sh
+oe repo add --backend onboarding https://github.com/your-name/your-repository
+\`\`\`
+
+Wait for \`Repository onboarded\`, or \`Already onboarded\` if it was added before. Use this command instead of the web setup form when you signed in with a service token. If it still refuses authentication, load the tokens in this terminal again and check that you restarted OpenEngine after saving the onboarding token.`,
   )
 
   await step(
