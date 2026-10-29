@@ -11,7 +11,7 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    command_receipts["command_receipts (ADDED)"] {
+    command_receipts["command_receipts<br/>The reply to every command GE accepted or rejected for good, so a retry with its command ID in its project gets the same one. (ADDED)"] {
         VARCHAR(128) command_id PK "ADDED; not null"
         VARCHAR(255) subject "ADDED; not null"
         VARCHAR(64) fingerprint "ADDED; not null"
@@ -19,7 +19,7 @@ erDiagram
         DATETIME created_at "ADDED; not null"
     }
     class command_receipts added
-    graph_revisions["graph_revisions (ADDED)"] {
+    graph_revisions["graph_revisions<br/>Every revision of every graph, numbered from 1 and never changed once written. (ADDED)"] {
         VARCHAR(128) graph_id PK,FK "ADDED; not null"
         INTEGER revision PK "ADDED; not null"
         VARCHAR(16) format "ADDED; not null"
@@ -29,7 +29,7 @@ erDiagram
     }
     class graph_revisions added
     graphs ||--o{ graph_revisions : "graph_id"
-    graphs["graphs (CHANGED)"] {
+    graphs["graphs<br/>One row per graph name in a project. Its ID never changes; applying a changed definition adds a revision. (CHANGED)"] {
         VARCHAR(128) graph_id PK "ADDED; not null"
         VARCHAR(64) name UK "CHANGED; not null"
         VARCHAR(2000) description "ADDED; nullable"
@@ -41,7 +41,7 @@ erDiagram
         JSON definition "REMOVED; not null"
     }
     class graphs changed
-    operations["operations (ADDED)"] {
+    operations["operations<br/>The durable record of each accepted command's progress, which operations.{operation_id}.get reads. (ADDED)"] {
         VARCHAR(128) operation_id PK "ADDED; not null"
         VARCHAR(128) command_id UK "ADDED; not null"
         VARCHAR(64) operation "ADDED; not null"

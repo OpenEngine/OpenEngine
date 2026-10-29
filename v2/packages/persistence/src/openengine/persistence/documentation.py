@@ -2,9 +2,10 @@
 
 For each revision this writes `<output>/<service>/<revision>.md`, the schema's
 SQL and its diff from the parent revision, and `<revision>.mermaid`, an ERD
-highlighting what the revision added, removed or changed. The head revision's
-ERD is also written to `<output>/latest_<service>.mermaid`. Mermaid CLI renders
-each changed `.mermaid` to the `.svg` beside it.
+highlighting what the revision added, removed or changed, with each table's
+comment from its schema module. The head revision's ERD is also written to
+`<output>/latest_<service>.mermaid`. Mermaid CLI renders each changed
+`.mermaid` to the `.svg` beside it.
 
 Every revision is compared with its parent rather than a branch, so the output
 depends only on the migrations and regenerating it is a no-op.
@@ -18,7 +19,7 @@ import argparse
 import importlib
 import json
 import tempfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import unified_diff
 from pathlib import Path
@@ -110,7 +111,16 @@ def snapshots(persistence: ServicePersistence[Any]) -> list[Snapshot]:
     return result
 
 
-def diagram(title: str, current: Tables, previous: Tables) -> str:
+def comments(persistence: ServicePersistence[Any]) -> dict[str, str]:
+    """Each of the service's tables and its comment, from its schema module; empty for a table that names none."""
+    try:
+        schema = importlib.import_module(f"{persistence.directory.parent.name}.persistence.schema")
+    except ModuleNotFoundError:
+        return {}
+    return {table.name: table.comment or "" for table in schema.metadata.tables.values()}
+
+
+def diagram(title: str, current: Tables, previous: Tables, comments: Mapping[str, str] = {}) -> str:
     """An ERD of `current`, with what changed since `previous` highlighted and removals kept as tombstones."""
     lines = [
         "---",
@@ -130,7 +140,9 @@ def diagram(title: str, current: Tables, previous: Tables) -> str:
     for name in sorted(current.keys() | previous.keys()):
         now, old = current.get(name), previous.get(name)
         status = "added" if old is None else "removed" if now is None else "changed" if now != old else ""
-        lines.append(f'    {name}["{name}{f" ({status.upper()})" if status else ""}"] {{')
+        comment = comments.get(name, "").replace('"', "'")
+        label = f"{name}<br/>{comment}" if comment else name
+        lines.append(f'    {name}["{label}{f" ({status.upper()})" if status else ""}"] {{')
         table = now or old
         assert table is not None
         columns, old_columns = table["columns"], old["columns"] if old else {}
@@ -190,11 +202,12 @@ def generate(persistence: ServicePersistence[Any]) -> dict[str, str]:
     history = snapshots(persistence)
     by_revision = {snapshot.revision: snapshot for snapshot in history}
     service = persistence.name
+    table_comments = comments(persistence)
     files = {}
     for snapshot in history:
         parent = snapshot.parents[0]
         previous = by_revision[parent].tables if parent else {}
-        erd = diagram(f"{service} at {snapshot.revision}", snapshot.tables, previous)
+        erd = diagram(f"{service} at {snapshot.revision}", snapshot.tables, previous, table_comments)
         files[f"{service}/{snapshot.revision}.mermaid"] = erd
         files[f"{service}/{snapshot.revision}.md"] = document(service, snapshot, by_revision)
     if history:

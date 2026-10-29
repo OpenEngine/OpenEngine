@@ -8,7 +8,6 @@ from openengine.persistence import UtcDateTime
 
 metadata = sa.MetaData()
 
-# One per external account OpenEngine hears from: a GitHub App installation, a Slack workspace.
 connections = sa.Table(
     "connections",
     metadata,
@@ -18,4 +17,5 @@ connections = sa.Table(
     sa.Column("name", sa.String(255), nullable=False),
     sa.Column("created_at", UtcDateTime(), nullable=False),
     sa.UniqueConstraint("provider", "external_id", name="uq_connections_provider_external_id"),
+    comment="One per external account OpenEngine hears from: a GitHub App installation, a Slack workspace.",
 )

@@ -8,7 +8,6 @@ from openengine.persistence import UtcDateTime
 
 metadata = sa.MetaData()
 
-# A place an agent does its work, on whichever provider supplied it.
 workspaces = sa.Table(
     "workspaces",
     metadata,
@@ -23,4 +22,5 @@ workspaces = sa.Table(
     sa.Column("created_at", UtcDateTime(), nullable=False),
     sa.Column("updated_at", UtcDateTime(), nullable=False),
     sa.Index("ix_workspaces_status", "status"),
+    comment="A place an agent does its work, on whichever provider supplied it.",
 )
