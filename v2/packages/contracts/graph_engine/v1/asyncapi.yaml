@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.6
+  version: 1.0.0-draft.7
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
@@ -47,17 +47,35 @@ info:
     (`UNAVAILABLE`) are not.
 
     ## Identity
-    The acting identity comes from the authenticated NATS connection (or a
-    verified delegation), never from a payload field.
+    A tenant is a NATS account. A request's tenant is the account the
+    caller's connection belongs to, never a payload field, and the acting
+    identity within it comes from that authenticated connection (or a
+    verified delegation). The tenancy registry maps each account's public
+    key (the shared `account` type) to its `tenant_id`, a UUIDv7.
+    `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
+    (`local_tenant`).
 
-    Under `oe up`, GE runs in **local-operator mode**: NATS listens only on
-    loopback, so whoever reaches it is the operator on that machine, and every
-    request through a loopback listener is allowed. A request through any other
-    listener is rejected with `PERMISSION_DENIED`.
+    Under `oe up`, GE runs in **local-operator mode**: every request is in
+    LOCAL_TENANT, and NATS listens only on loopback, so whoever reaches it is
+    the operator on that machine, and every request through a loopback
+    listener is allowed. A request through any other listener is rejected
+    with `PERMISSION_DENIED`.
+
+    ## Tenant subjects
+    Tenants use the subjects in this document,
+    `oe.v1.ge.{control|query|events}.…`; none carries a tenant or account
+    token. Before GE receives a tenant's request, NATS rewrites its subject
+    into the internal form `oe.v1.{account}.ge.…`, with the caller's account
+    public key as the third token. Only NATS produces that form: the service
+    account exports its subjects with `account_token_position: 3`, and a
+    tenant can import them only with its own key in that position, so a caller
+    cannot forge another tenant's subject.
 
     ## Projects
-    Graphs belong to a project. Graph names are unique per project, and
-    `graphs.apply` and `graphs.list` act in the `project` they name, or in
+    Projects live inside a tenant, so two tenants may each have a project of
+    the same name, `default` included. Graphs belong to a project. Graph
+    names are unique per project, and `graphs.apply` and `graphs.list` act in
+    the `project` they name, or in
     `default` when they name none. `default` also holds every graph applied
     before projects existed, under its original graph ID and revisions. A
     graph ID names one graph in one project, so `graphs.{graph_id}.get` needs

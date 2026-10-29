@@ -14,7 +14,9 @@ prove:
   resource ID (all of it, or its fact), and its `Nats-Msg-Id` header equals
   its `event_id`;
 - a response names a request subject whose operation replies with it;
-- every message has an example, and every example validates.
+- every message has an example, and every example validates;
+- no address carries an `{account}` token: tenants use `oe.v1.{svc}.…`, and
+  only NATS writes the internal form `oe.v1.{account}.{svc}.…`.
 
 Run it with `uv run python -m openengine.contracts.validate` from `v2/`.
 """
@@ -42,6 +44,7 @@ CONTRACTS = _PACKAGE if (_PACKAGE / "common").is_dir() else _PACKAGE.parents[2]
 SERVICES = tuple(sorted(path.parent.parent.name for path in CONTRACTS.glob("*/v1/asyncapi.yaml")))
 TYPES = CONTRACTS / "common" / "v1" / "types.schema.json"
 MAX_CAUSAL_PATH = 32
+ACCOUNT_TOKEN = "{account}"
 
 
 @dataclass(frozen=True)
@@ -280,6 +283,16 @@ def validate_example(contract: Contract, path: Path) -> list[str]:
     )
 
 
+def tenant_address_problems(contract: Contract) -> list[str]:
+    """Addresses that name the caller's account, which only NATS may write into a subject."""
+    return [
+        f"{contract.service}: channel {name} address {channel['address']!r} contains {ACCOUNT_TOKEN}; "
+        "a tenant's account comes from its connection, not its subject"
+        for name, channel in contract.document["channels"].items()
+        if ACCOUNT_TOKEN in (channel["address"] or "").split(".")
+    ]
+
+
 def check(contract: Contract) -> list[str]:
     """All problems with one service's contract and examples."""
     problems: list[str] = []
@@ -298,7 +311,7 @@ def check(contract: Contract) -> list[str]:
             ref = example["payload"]["$ref"].partition("#")[0]
             if not (contract.path.parent / ref).exists():
                 problems.append(f"{contract.service}: message {raw['name']} cites missing example {ref}")
-    return problems
+    return problems + tenant_address_problems(contract)
 
 
 def main() -> int:

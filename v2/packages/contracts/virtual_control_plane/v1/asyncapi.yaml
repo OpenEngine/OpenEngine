@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:virtual-control-plane
 info:
   title: OpenEngine Virtual Control Plane (vcp)
-  version: 1.0.0-draft.2
+  version: 1.0.0-draft.3
   description: |
     The Virtual Control Plane manages workspaces (where agents work), the
     compute runtimes behind them, and the agent sessions and task attempts
@@ -44,8 +44,23 @@ info:
     (`UNAVAILABLE`) are not.
 
     ## Identity
-    The acting identity comes from the authenticated NATS connection (or a
-    verified delegation), never from a payload field.
+    A tenant is a NATS account. A request's tenant is the account the
+    caller's connection belongs to, never a payload field, and the acting
+    identity within it comes from that authenticated connection (or a
+    verified delegation). The tenancy registry maps each account's public
+    key (the shared `account` type) to its `tenant_id`, a UUIDv7.
+    `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
+    (`local_tenant`).
+
+    ## Tenant subjects
+    Tenants use the subjects in this document,
+    `oe.v1.vcp.{control|query|events}.…`; none carries a tenant or account
+    token. Before VCP receives a tenant's request, NATS rewrites its subject
+    into the internal form `oe.v1.{account}.vcp.…`, with the caller's account
+    public key as the third token. Only NATS produces that form: the service
+    account exports its subjects with `account_token_position: 3`, and a
+    tenant can import them only with its own key in that position, so a caller
+    cannot forge another tenant's subject.
 
     ## Identities and states
     - `workspace_id` is stable for the workspace's whole life.

@@ -59,6 +59,21 @@
       "type": "string",
       "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
     },
+    "tenant_id": {
+      "description": "A tenant: a UUIDv7 in lower-case canonical form. A tenant is a NATS account; the tenancy registry maps each account's public key to its tenant_id. It is never a payload field: a service learns it from the account the caller's connection belongs to. The nil UUID is never a tenant. `oe up` runs as the single tenant LOCAL_TENANT (`local_tenant`).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "local_tenant": {
+      "description": "LOCAL_TENANT, the fixed tenant `oe up` uses in single-account mode.",
+      "allOf": [{ "$ref": "#/$defs/tenant_id" }],
+      "const": "00000000-0000-7000-8000-000000000001"
+    },
+    "account": {
+      "description": "A NATS account public key: `A` and 55 base32 characters. It is the subject token NATS writes into the internal form of a tenant's subject, `oe.v1.{account}.{svc}.…`; no tenant-facing subject carries it.",
+      "type": "string",
+      "pattern": "^A[A-Z2-7]{55}$"
+    },
     "operation_id": { "type": "string", "pattern": "^op_[A-Za-z0-9_-]{1,125}$" },
     "connection_id": { "type": "string", "pattern": "^conn_[A-Za-z0-9_-]{1,123}$" },
     "graph_id": { "type": "string", "pattern": "^graph_[A-Za-z0-9_-]{1,122}$" },
