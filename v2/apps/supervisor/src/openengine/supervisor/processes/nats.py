@@ -110,10 +110,12 @@ def nats_config() -> Path:
         return path
 
 
-def server_command(binary: Path, *, host: str, port: int, monitor_port: int, store: Path) -> list[str]:
+def server_command(
+    binary: Path, *, host: str, port: int, monitor_port: int, store: Path, config: Path | None = None
+) -> list[str]:
     return [
         str(binary),
-        "--config", str(nats_config()),
+        "--config", str(config or nats_config()),
         "--addr", host,
         "--port", str(port),
         "--http_port", str(monitor_port),

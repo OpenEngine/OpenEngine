@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from openengine.cli.migrations.streams import streams_directory
+from openengine.messaging.broker import load_trust
 
 pytestmark = pytest.mark.integration
 
@@ -57,9 +59,13 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     up = oe("up", "--nats-port", str(port), "--nats-monitor-port", str(monitor_port))
 
     assert up.returncode == 0, up.stderr
-    assert f"nats://127.0.0.1:{port}" in up.stdout
-    with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
-        assert client.recv(4096).startswith(b"INFO ")
+    assert f"tls://127.0.0.1:{port}" in up.stdout
+    trust = load_trust(tmp_path / "state" / "openengine" / "broker.json")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(cadata=trust.ca_pem)
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+        with context.wrap_socket(raw, server_hostname=trust.server_hostname) as client:
+            assert client.recv(4096).startswith(b"INFO ")
 
     status = oe("status", "--json")
     assert status.returncode == 0
@@ -74,7 +80,7 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
     logs = oe("logs")
     assert "Server is ready" in logs.stdout
     assert str(tmp_path / "state" / "openengine" / "nats") in logs.stdout
-    assert f"[INF] supervisor: ready, NATS on nats://127.0.0.1:{port}" in logs.stdout
+    assert f"[INF] supervisor: ready, NATS on tls://127.0.0.1:{port}" in logs.stdout
     raw = oe("logs", "--json")
     ready = next(json.loads(line) for line in raw.stdout.splitlines() if '"ready, NATS on' in line)
     assert ready["service.name"] == "openengine-supervisor"
@@ -88,11 +94,11 @@ def test_up_runs_nats_in_the_background_until_down(oe, tmp_path: Path) -> None:
         boot = [json.loads(line) for line in raw.stdout.splitlines() if f'"service.name": "openengine-{service}"' in line]
         assert [line["body"] for line in boot][:4] == ["starting", "database configured", "nats configured", "ready"]
         assert len({line["trace_id"] for line in boot[:4]}) == 1
-        assert boot[2]["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
+        assert boot[2]["attributes"]["server.address"] == f"tls://127.0.0.1:{port}"
     # ge connects and serves before it is ready; integration_tests/test_ge.py covers it.
     ge = [json.loads(line) for line in raw.stdout.splitlines() if '"service.name": "openengine-ge"' in line]
     connected = next(line for line in ge if line["body"] == "nats connected")
-    assert connected["attributes"]["server.address"] == f"nats://127.0.0.1:{port}"
+    assert connected["attributes"]["server.address"] == f"tls://127.0.0.1:{port}"
 
     down = oe("down")
     assert down.returncode == 0

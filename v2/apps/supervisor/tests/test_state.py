@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+
+import pytest
 from pathlib import Path
 
 from openengine.supervisor.state import (
@@ -28,6 +30,7 @@ def test_reads_a_missing_or_unreadable_file_as_no_state(tmp_path: Path) -> None:
     path = state_path(tmp_path)
     assert read_state(path) is None
     path.write_text("{")
+    path.chmod(0o600)
     assert read_state(path) is None
 
 
@@ -36,6 +39,7 @@ def test_reads_a_file_written_by_another_version(tmp_path: Path) -> None:
     older = {"name": "nats", "pid": 8, "address": "nats://127.0.0.1:4222"}
     newer = {"name": "ge", "pid": 9, "address": "", "status": "ready", "restarts": 2}
     path.write_text(json.dumps({"pid": 7, "status": "ready", "processes": [older, newer]}))
+    path.chmod(0o600)
 
     assert read_state(path) == SupervisorState(
         pid=7,
@@ -47,3 +51,16 @@ def test_reads_a_file_written_by_another_version(tmp_path: Path) -> None:
 def test_knows_whether_a_pid_is_alive() -> None:
     assert is_alive(os.getpid())
     assert not is_alive(2**22 + 1)
+
+
+def test_rejects_writable_state_and_symlink(tmp_path: Path) -> None:
+    path = state_path(tmp_path)
+    path.write_text('{"pid": 7, "status": "ready", "processes": []}')
+    path.chmod(0o666)
+    with pytest.raises(PermissionError):
+        read_state(path)
+    target = tmp_path / "target"
+    path.rename(target)
+    path.symlink_to(target)
+    with pytest.raises(OSError):
+        read_state(path)

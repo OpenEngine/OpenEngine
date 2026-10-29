@@ -14,7 +14,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
-    return arguments.command(arguments)
+    try:
+        return arguments.command(arguments)
+    except PermissionError as error:
+        print(f"oe: unsafe or inaccessible local state: {error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

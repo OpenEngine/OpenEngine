@@ -3,7 +3,7 @@ name = "openengine-supervisor"
 version = "0.0.0"
 description = "Background process that `oe up` starts to run and watch OpenEngine V2's local processes."
 requires-python = ">=3.11"
-dependencies = ["openengine-telemetry"]
+dependencies = ["openengine-telemetry", "openengine-messaging", "cryptography==46.0.3"]
 
 [project.scripts]
 oe-supervisor = "openengine.supervisor.__main__:main"
@@ -17,3 +17,4 @@ packages = ["src/openengine"]
 
 [tool.uv.sources]
 openengine-telemetry = { workspace = true }
+openengine-messaging = { workspace = true }
