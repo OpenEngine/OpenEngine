@@ -10,7 +10,8 @@
     "oe-benchmark:clean": "node scripts/benchmark-clean.ts",
     "types": "tsc",
     "postinstall": "node scripts/fix-node-pty.mjs",
-    "build:terminal": "esbuild terminal/page/main.ts --bundle --format=esm --target=es2022 --outdir=terminal/dist --loader:.woff2=file --loader:.woff=file --asset-names=assets/[name]-[hash] && cp terminal/page/index.html terminal/dist/"
+    "build:terminal": "esbuild terminal/page/main.ts --bundle --format=esm --target=es2022 --outdir=terminal/dist --loader:.woff2=file --loader:.woff=file --asset-names=assets/[name]-[hash] && cp terminal/page/index.html terminal/dist/",
+    "oe-benchmark:login": "node scripts/benchmark-login.ts"
   },
   "engines": {
     "node": ">=22.18"
