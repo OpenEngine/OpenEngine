@@ -268,7 +268,7 @@ def test_upgrade_preserves_legacy_rows_without_adopting_them(tmp_path: Path) -> 
     engine = database.migration_engine()
     try:
         assert set(inspect(engine).get_table_names()) == {
-            "alembic_version", "workspaces", "workspace_runtimes", "operations", "command_receipts",
+            "alembic_version", "workspaces", "workspace_runtimes", "operations", "command_receipts", "outbox",
         }
     finally:
         engine.dispose()

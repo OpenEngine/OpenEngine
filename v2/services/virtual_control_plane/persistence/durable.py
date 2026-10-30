@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.sqlite import insert
@@ -12,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from openengine.persistence import Backend, BackendNotImplemented, Database
 
-from virtual_control_plane.application.transactions import Collection, CommandIdConflict, Document
-from virtual_control_plane.persistence.schema import documents
+from virtual_control_plane.application.transactions import (
+    Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent,
+)
+from virtual_control_plane.persistence.schema import documents, outbox
 
 
 def _normalize_numbers(value: object) -> object:
@@ -82,6 +85,14 @@ class Transaction:
         ))
         return response
 
+    async def append_event(self, envelope: Document) -> None:
+        if envelope["causal_path"][-1] != envelope["event_id"]:
+            raise InvalidEvent(envelope["event_id"])
+        await self._connection.execute(outbox.insert().values(
+            workspace_id=envelope["resources"]["workspace_id"], event_id=envelope["event_id"],
+            envelope=envelope, created_at=datetime.now(UTC),
+        ))
+
 
 class DurableStore:
     def __init__(self, database: Database) -> None:
@@ -101,6 +112,22 @@ class DurableStore:
             except BaseException:
                 await connection.rollback()
                 raise
+
+    async def pending_events(self, limit: int) -> list[PendingEvent]:
+        query = (
+            sa.select(outbox.c.sequence, outbox.c.workspace_id, outbox.c.event_id, outbox.c.envelope)
+            .where(outbox.c.published_at.is_(None)).order_by(outbox.c.sequence).limit(limit)
+        )
+        async with self.database.connect() as connection:
+            return [PendingEvent(**row) for row in (await connection.execute(query)).mappings()]
+
+    async def mark_published(self, sequence: int) -> None:
+        async with self.database.connect() as connection:
+            await connection.execute(
+                outbox.update().where(outbox.c.sequence == sequence, outbox.c.published_at.is_(None))
+                .values(published_at=datetime.now(UTC))
+            )
+            await connection.commit()
 
     async def close(self) -> None:
         await self.database.close()

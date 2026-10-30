@@ -94,6 +94,8 @@ flowchart LR
             class vcp_t_command_receipts table
             vcp_t_operations[("operations<br/>Accepted commands' progress and terminal state.")]
             class vcp_t_operations table
+            vcp_t_outbox[("outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication.")]
+            class vcp_t_outbox table
             vcp_t_workspace_runtimes[("workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation.")]
             class vcp_t_workspace_runtimes table
             vcp_t_workspaces[("workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records.")]
