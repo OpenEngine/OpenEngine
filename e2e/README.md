@@ -115,6 +115,17 @@ install took, how long GitHub took to list the webhook ping), and the same notes
 `benchmark-results/results.json`, for whatever reads the results next. A test adds a note with
 `testInfo.annotations.push({ type, description })`.
 
+The last test in `tests/benchmark/benchmark.spec.ts`, "Verify the calculator", is the benchmark's only pass or fail for
+the calculator: a fixed check of the deployed site (add, subtract, multiply, divide, divide by zero and clear), written
+by a person and never shown to the agents. Each case is a step, none of them in the guide. It checks that the guide's run
+worked, so `npm run oe-benchmark` runs it as its own step after the journey and only if the journey passed (the `verify`
+project in `playwright-benchmark.config.ts`, without the guide's reporter, which would write a page for it, and without
+setup, which would delete the repository it checks). It waits up to ten minutes for Pages to catch up with the last
+merge, and `benchmark-results/verify.json` says which cases passed. The test's `@verify` tag is what keeps it out of the
+journey's run and selects it for the `verify` project; running the config without `--project` would put it in the guide.
+`support/verifier.ts` finds the keys by their button names and the display by its visible text, so nothing depends on
+ids, classes or test ids.
+
 `support/mask.ts` hides a secret in a guide screenshot. Pass `mask(locator)` among the targets
 of `screenshot()`; it draws an opaque box over the element, which the benchmark must do for every
 token or secret on screen.
