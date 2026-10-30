@@ -6,13 +6,19 @@ Needs macOS (Menlo, SF and Apple Symbols fonts, Google Chrome) and ffmpeg:
 
     uv run --with pillow --with fonttools python scripts/render_walkthrough.py docs/images/oe-graphs-and-loops.mp4
 
+Set ELEVENLABS_API_KEY to narrate each subtitle (OE_WALKTHROUGH_VOICE picks the voice);
+clips are cached in the temp directory, and without either the video renders silent.
 Pass comma-separated times as a second argument to write still PNGs instead of a video.
 """
+import hashlib
+import json
 import math
+import os
 import re
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from pathlib import Path
 
 from fontTools.ttLib import TTFont
@@ -70,6 +76,49 @@ COLS = int((WW - 2 * PAD_X) // CW)
 ROWS = int((WH - BAR - 2 * PAD_Y) // LH)
 
 
+# ---------- voiceover ----------
+# ElevenLabs narration, one clip per subtitle. Without ELEVENLABS_API_KEY (and no cached
+# clips) the video renders silent with the original timing.
+VOICE = os.environ.get("OE_WALKTHROUGH_VOICE", "nPczCjzI2devNBz1zQrb")  # premade "Brian"
+VOICE_MODEL = "eleven_multilingual_v2"
+VOICE_DIR = Path(tempfile.gettempdir()) / "oe-walkthrough-voice"
+VOICE_GAP = 0.35  # silence kept after each line before the next one starts
+# Subtitles that read differently aloud
+SPOKEN = {
+    "It pins the graph version and pauses at the PR or spend limit you set.":
+        "It pins the graph version, and pauses at the pull request or spend limit you set.",
+    "See every loop: its cadence, PRs opened and spend against the cap.":
+        "See every loop: its cadence, pull requests opened, and spend against the cap.",
+    "@-mention it on a PR, and the request goes back to the same run.":
+        "Mention it on a pull request, and the request goes back to the same run.",
+}
+
+
+def clip_duration(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                         check=True, capture_output=True, text=True)
+    return float(out.stdout)
+
+
+def voice_clip(text):
+    """The narration clip for a line and its length, or None when no voice is available."""
+    key = hashlib.sha1(f"{VOICE}|{VOICE_MODEL}|{text}".encode()).hexdigest()[:16]
+    path = VOICE_DIR / f"{key}.mp3"
+    if not path.exists():
+        api_key = os.environ.get("ELEVENLABS_API_KEY")
+        if not api_key:
+            return None
+        VOICE_DIR.mkdir(exist_ok=True)
+        request = urllib.request.Request(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE}?output_format=mp3_44100_128",
+            data=json.dumps({"text": text, "model_id": VOICE_MODEL}).encode(),
+            headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request) as response:
+            path.write_bytes(response.read())
+    return path, clip_duration(path)
+
+
 # ---------- timeline ----------
 class Script:
     def __init__(self):
@@ -80,6 +129,20 @@ class Script:
         self._sub = None
         self.cards = []  # (start, end, kind)
         self.browsers = []  # dicts: t0, t1, name, url, path [(t, y)], hl [(ta, tb, rect)]
+        self.voices = []  # (start, clip path)
+        self._voice_until = 0.0
+
+    def say(self, text):
+        """Start a narration line now; later lines wait for it to finish."""
+        self.await_voice()
+        clip = voice_clip(text)
+        if clip:
+            self.voices.append((self.t, clip[0]))
+            self._voice_until = self.t + clip[1] + VOICE_GAP
+
+    def await_voice(self):
+        """Hold the current frame until the narration line in progress has finished."""
+        self.t = max(self.t, self._voice_until)
 
     def browser(self, name, url, stops, scroll=1.1):
         """Show a captured page, scrolling to each stop: (y, hold, subtitle, highlight rects)."""
@@ -93,6 +156,7 @@ class Script:
             for r in rects:
                 scene["hl"].append((self.t + 0.3, self.t + hold, r))
             self.t += hold
+            self.await_voice()
             scene["path"].append((self.t, y))
         scene["t1"] = self.t
         self.browsers.append(scene)
@@ -104,9 +168,12 @@ class Script:
         self.t += s
 
     def sub(self, text):
+        self.await_voice()
         if self._sub:
             self.subs.append((self._sub[0], self.t, self._sub[1]))
         self._sub = (self.t, text) if text else None
+        if text:
+            self.say(SPOKEN.get(text, text))
 
     def prompt(self):
         self.lines.append([("~/code/openengine ", BLUE, True), ("main ", MAUVE, False), ("❯ ", GREEN, True)])
@@ -207,8 +274,11 @@ def watch_frame(elapsed, tick, review):
 
 def build():
     s = Script()
-    s.cards.append((0.0, 3.6, "title"))
+    s.t = 0.3
+    s.say("OpenEngine. Graphs define the work. Loops keep it going.")
     s.t = 3.2
+    s.await_voice()
+    s.cards.append((0.0, s.t + 0.4, "title"))
 
     # 1. A graph
     s.prompt()
@@ -354,8 +424,12 @@ def build():
     s.wait(3.2)
     s.sub(None)
     end = s.t
-    s.cards.append((end, end + 3.6, "end"))
+    s.t += 0.4
+    s.say("Write a graph, put it on a loop, and get started at openengine dot c c.")
     s.t = end + 3.6
+    s.await_voice()
+    s.t += 0.6
+    s.cards.append((end, s.t, "end"))
     s.finish()
     return s
 
@@ -587,9 +661,17 @@ def main():
     bg = background()
     base = window_base(bg)
     bases = {sc["url"]: browser_base(bg, sc["url"]) for sc in s.browsers}
+    audio = []
+    for _, clip in s.voices:
+        audio += ["-i", str(clip)]
+    if s.voices:
+        delays = "".join(f"[{i + 1}:a]adelay={int(start * 1000)}:all=1[v{i}];" for i, (start, _) in enumerate(s.voices))
+        mix = "".join(f"[v{i}]" for i in range(len(s.voices)))
+        audio += ["-filter_complex", f"{delays}{mix}amix=inputs={len(s.voices)}:normalize=0[vo]",
+                  "-map", "0:v", "-map", "[vo]", "-c:a", "aac", "-b:a", "160k", "-t", f"{total:.2f}"]
     proc = None if STILLS is not None else subprocess.Popen([
         "ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-        "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-r", str(FPS), "-i", "-", *audio, "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", OUT,
     ], stdin=subprocess.PIPE)
     si = 0
