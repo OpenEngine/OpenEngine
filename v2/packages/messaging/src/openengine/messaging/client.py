@@ -23,6 +23,7 @@ from nats.errors import (
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ServiceError, Unavailable
+from openengine.messaging.identity import Principal, caller_subject
 from openengine.telemetry import sending
 
 DEFAULT_TIMEOUT_SECONDS = 2.0
@@ -43,10 +44,12 @@ class Requester(Protocol):
 
 
 class Client:
-    def __init__(self, nats: Requester, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, attempts: int = DEFAULT_ATTEMPTS) -> None:
+    def __init__(self, nats: Requester, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, attempts: int = DEFAULT_ATTEMPTS,
+                 principal: Principal | None = None) -> None:
         self._nats = nats
         self.timeout = timeout
         self.attempts = attempts
+        self.principal = principal
 
     async def query(self, subject: str, params: dict[str, Any] | None = None, *, request_id: str | None = None) -> dict[str, Any]:
         """The whole query-response; raises ServiceError when its status is `error`."""
@@ -66,6 +69,8 @@ class Client:
         return reply
 
     async def _request(self, subject: str, body: bytes) -> dict[str, Any]:
+        if self.principal is not None:
+            subject = caller_subject(self.principal, subject)
         for attempt in range(1, self.attempts + 1):
             try:
                 with sending(subject) as headers:
