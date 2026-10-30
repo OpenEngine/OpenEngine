@@ -70,7 +70,7 @@ def test_provision_writes_the_config_resolving_every_account(tmp_path: Path) -> 
     deployment, written = operator.provision(tmp_path)
 
     config = written.config.read_text()
-    assert f"operator: {tmp_path / 'operator.jwt'}" in config
+    assert f"operator: {json.dumps(str(tmp_path / 'operator.jwt'))}" in config
     assert f"system_account: {deployment.system.public_key}" in config
     assert "resolver: MEMORY" in config
     for account in (deployment.system, deployment.service):
@@ -80,6 +80,27 @@ def test_provision_writes_the_config_resolving_every_account(tmp_path: Path) -> 
         assert path.stat().st_mode & 0o077 == 0, path
         assert "-----BEGIN NATS USER JWT-----" in path.read_text()
     assert (tmp_path / "service.nk").stat().st_mode & 0o077 == 0
+
+
+def test_reprovisioning_narrows_secret_files_left_world_readable(tmp_path: Path) -> None:
+    for name in ("operator.nk", "SYS.nk", "service.nk", "cxn.creds"):
+        (tmp_path / name).write_text("stale")
+        (tmp_path / name).chmod(0o644)
+
+    operator.provision(tmp_path)
+
+    for name in ("operator.nk", "SYS.nk", "service.nk", "cxn.creds"):
+        assert (tmp_path / name).stat().st_mode & 0o077 == 0, name
+        assert (tmp_path / name).read_text() != "stale"
+
+
+def test_the_config_quotes_an_operator_path_containing_spaces(tmp_path: Path) -> None:
+    directory = tmp_path / "with space"
+    directory.mkdir()
+
+    _, written = operator.provision(directory)
+
+    assert f'operator: "{directory / "operator.jwt"}"' in written.config.read_text()
 
 
 def test_the_command_line_reports_what_it_wrote(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
