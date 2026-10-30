@@ -8,7 +8,6 @@
     ],
     "payload": {
       "invocationId": "ti-123",
-      "stepAttemptId": "stepa_88_review_1",
       "arguments": {
         "issueNumber": 42,
         "body": "Review complete."

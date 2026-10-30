@@ -30,7 +30,7 @@ info:
     | `oe.v1.tools.get` | namespace and name | Tool |
     | `oe.v1.tools.list` | namespace, optional label selector | tools the caller may see |
     | `oe.v1.tools.delete` | namespace and name | deletion result |
-    | `oe.v1.tools.invoke.{namespace}.{name}` | invocation ID, step, arguments | invocation accepted |
+    | `oe.v1.tools.invoke.{namespace}.{name}` | invocation ID, arguments | invocation accepted |
     | `oe.v1.tools.grants.apply` | ToolGrant resource | accepted once stored |
     | `oe.v1.tools.grants.get` | namespace and name | ToolGrant |
     | `oe.v1.tools.grants.list` | namespace and filters | grants |
@@ -87,12 +87,34 @@ info:
       authorization too.
 
     ## Invocations
-    The service derives the tool from the subject and the workspace from the
-    caller's verified credentials, then creates the ToolInvocation itself.
-    Clients cannot apply one, so they cannot forge its identity or
-    authorization. The resolved tool definition is stored with it, so
-    changing the Tool cannot change accepted work. Deleting and recreating a
-    Tool or a ToolGrant under the same name gives it a new `uid`; nothing
+    The service derives the tool from the subject, and the workspace and step
+    attempt from the caller's verified NATS credential, then creates the
+    ToolInvocation itself, filling `spec.workspaceRef` and `spec.stepAttemptId`.
+    Neither is in the payload. Clients cannot apply one, so they cannot forge
+    its identity or authorization.
+
+    A workspace calls with the user credential the Virtual Control Plane
+    issues for one task attempt inside the tenant's account. Its claims name
+    the workspace and the `stepAttemptId`. It may publish only to
+    `oe.v1.tools.invoke.>` and its own reply inbox prefix, which is unique to
+    the attempt, and subscribe only to that prefix, so one attempt cannot read
+    or spoof another's replies. It expires at the attempt's deadline. The
+    runtime places it in the workspace, and the Virtual Control Plane revokes
+    it when the attempt ends, when the Graph Engine deletes the attempt's
+    grants.
+
+    Credentials that are not per-attempt, such as an operator's or a user
+    credential for a workspace outside any attempt, carry no `stepAttemptId`.
+    The service rejects their invocations with PERMISSION_DENIED.
+
+    Grants resolve by the credential's `(workspace, stepAttemptId)`. A grant
+    for exactly that pair matches. A grant without `stepAttemptId` matches
+    every attempt in that workspace. A grant for another attempt never
+    matches.
+
+    The service stores the resolved tool definition with the ToolInvocation,
+    so changing the Tool cannot change accepted work. Deleting and recreating
+    a Tool or a ToolGrant under the same name gives it a new `uid`; nothing
     carries over through name reuse.
 
     Events carry references and a status summary. Results are read only

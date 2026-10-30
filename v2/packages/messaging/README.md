@@ -12,11 +12,18 @@ client = Client(nats_connection, timeout=2.0, attempts=3)
 reply = await client.query("oe.v1.ge.query.graphs.list")
 await client.command("oe.v1.ge.control.graphs.apply", payload, command_id=..., caused_by=parent_path)
 
-# A service: subscribes to oe.v1.{service}.query.> and .control.>.
+# A service: subscribes to oe.v1.{service}.query.> and .control.> in queue group "ge",
+# in dedicated mode as LOCAL_TENANT unless `tenancy` says otherwise.
 server = Server(nats_connection, "ge", nats_url, queries={"graphs.list": Route(handler, schema_reference)})
 await server.start()
 ...
 await server.close()   # drain and close the dedicated connection within a 5-second budget
+
+# The same service in the service account, serving every tenant: oe.v1.*.ge.query.> and .control.>.
+server = Server(nats_connection, "ge", nats_url, queries=..., tenancy=Shared(resolver))
+
+# Calling another service for a tenant, from inside the service account.
+client = Client(nats_connection, principal=request.principal, tenancy=Mode.SHARED)
 ```
 
 | Module | |
@@ -25,6 +32,36 @@ await server.close()   # drain and close the dedicated connection within a 5-sec
 | `errors` | `ServiceError` for `error.schema.json`, with `retryable` kept as sent; `Unavailable` |
 | `client` | the bounded, retrying requester |
 | `server` | the subscription adapter, the `Authorizer` port and `LocalOperator` |
+| `tenancy` | `Principal`, the `Dedicated` and `Shared` modes, the `AccountResolver` port and its cache |
+
+### Tenancy
+
+Every handled request carries a verified `Principal` (`tenant_id`, and the
+`account` key where one is known) as `Request.principal`. The server derives
+it from its `tenancy` mode before asking the `Authorizer`, whose
+`authorize(request)` returns the `Principal` to attach:
+
+| Mode | Where the service runs | Subjects | Tenant |
+| -- | -- | -- | -- |
+| `Dedicated(tenant_id)` (default, LOCAL_TENANT) | inside one tenant's account | `oe.v1.{svc}.{query,control}.>` | from configuration |
+| `Shared(resolver)` | the service account | `oe.v1.*.{svc}.{query,control}.>` | the third token, an account key NATS wrote in, resolved through the `AccountResolver` port |
+
+In shared mode the account token is stripped before routing, so route keys and
+`Request.parameters` are the same in both modes. An unknown or malformed
+account is `PERMISSION_DENIED`. `Shared` wraps its resolver in a
+`CachedResolver`, which remembers found tenants and checks every answer
+against `tenant_id`; the nil UUID is refused there and at configuration
+time. `InMemoryAccounts` is a resolver over a fixed mapping; the tenancy
+registry behind the port is a later ticket.
+
+Both modes subscribe in a queue group named after the service, so instances
+share requests instead of each answering every one.
+
+A `Client` given a `Principal` and `tenancy=Mode.SHARED` addresses
+`oe.v1.{account}.{svc}.…` itself; in dedicated mode (the default) it keeps
+the plain subject and the tenant's account import carries it. Span names on
+both sides use the template (`oe.v1.{account}.ge.query.graphs.list`), never
+the key; `messaging.destination.name` keeps the real subject.
 
 A route's key may name subject parameters, such as
 `operations.{operation_id}.get`: the server checks each against
@@ -41,7 +78,8 @@ through `authorize_project(request, project)`, with the project the request
 names or the resource it reached belongs to. A project name in a payload only
 says where to act; it grants nothing by itself, so an authorizer decides from
 the actor's verified identity. `LocalOperator` allows every project to the
-loopback operator.
+loopback operator and returns the tenant the server derived, LOCAL_TENANT in
+the dedicated mode `oe up` runs.
 
 The client raises `Unavailable` (`UNAVAILABLE`, retryable) when nothing
 serves a subject or when no reply arrives after the last attempt, and

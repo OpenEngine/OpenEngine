@@ -20,32 +20,12 @@ from openengine.supervisor.processes.nats import install_nats_server
 from virtual_control_plane.application.lifecycle import Lifecycle, SCHEMAS
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.durable import DurableStore
+from virtual_control_plane.tests.fakes import FakeAllocationProvider as FakeProvider
 
 APPLY = "oe.v1.vcp.control.workspaces.apply"
 QUERY = "oe.v1.vcp.query."
 DOCUMENT = {"apiVersion": "openengine.cc/v1alpha1", "kind": "Workspace", "metadata": {"name": "example"},
             "spec": {"provider": "process"}}
-
-
-class FakeProvider:
-    capabilities = {"provider": "process", "isolation": "process", "checkpoint": False, "suspend": False,
-                    "restore": "none", "approvals_survive_restore": False, "max_resources": {}, "tools": []}
-
-    def __init__(self):
-        self.allocations = {}
-        self.calls = 0
-        self.failure = None
-        self.crash = False
-
-    async def provision(self, runtime_id, workspace):
-        self.calls += 1
-        if self.failure:
-            raise self.failure
-        self.allocations.setdefault(runtime_id, {"fake": runtime_id})
-        if self.crash:
-            self.crash = False
-            raise asyncio.CancelledError()
-        return self.allocations[runtime_id]
 
 
 @pytest.fixture(scope="module")
@@ -135,7 +115,8 @@ def test_nats_retry_concurrency_restart_and_typed_queries(binary, tmp_path, monk
                 assert operation["status"] == "succeeded"
                 for subject, code in [(QUERY + "workspaces.bad.get", "INVALID_ARGUMENT"),
                                       (QUERY + "workspaces.ws_missing.get", "NOT_FOUND"),
-                                      ("oe.v1.vcp.control.workspaces.ws_missing.ensure", "UNSUPPORTED_CAPABILITY")]:
+                                      ("oe.v1.vcp.control.workspaces.ws_missing.ensure", "NOT_FOUND"),
+                                      ("oe.v1.vcp.control.workspaces.ws_missing.destroy", "UNSUPPORTED_CAPABILITY")]:
                     reply = json.loads((await connection.request(subject, envelopes.encode({"params": {}} if ".query." in subject else envelopes.command({})))).data)
                     assert reply["error"]["code"] == code
                 lost = DropReply(connection)
@@ -220,7 +201,9 @@ def test_loopback_dial_to_public_broker_is_denied(binary, tmp_path):
     asyncio.run(scenario())
 
 
-def test_crash_after_allocation_recovers_same_runtime_and_failed_allocation_retains_ownership(tmp_path):
+def test_crash_after_allocation_recovers_same_runtime_and_failed_allocation_retains_ownership(tmp_path, monkeypatch):
+    from virtual_control_plane.application import lifecycle as module
+
     async def scenario():
         store, provider = storage(tmp_path), FakeProvider()
         lifecycle = Lifecycle(store, {"process": provider})
@@ -243,12 +226,26 @@ def test_crash_after_allocation_recovers_same_runtime_and_failed_allocation_reta
         provider.failure = ServiceError("UNAVAILABLE", "temporary")
         await lifecycle.reconcile()
         async with store.transaction() as tx:
-            assert (await tx.get("operations", response["operation_id"]))["snapshot"]["status"] == "pending"
+            record = await tx.get("operations", response["operation_id"])
+            # Claimed and in backoff: still unfinished, so a restart resumes it.
+            assert record["snapshot"]["status"] == "running"
+            assert record["attempts"] == 1 and record["not_before"] > module.now()
+        calls = provider.calls
+        await lifecycle.reconcile()  # Not due yet: the provider is left alone.
+        assert provider.calls == calls
+        monkeypatch.setattr(module, "RETRY_BASE_SECONDS", 0)
+        async with store.transaction() as tx:
+            record["not_before"] = module.now()
+            await tx.put("operations", response["operation_id"], record)
         provider.failure = ServiceError("PROVIDER_ERROR", "allocation failed")
         await lifecycle.reconcile()
         async with store.transaction() as tx:
-            assert (await tx.get("operations", response["operation_id"]))["snapshot"]["status"] == "failed"
+            record = await tx.get("operations", response["operation_id"])
+            assert record["snapshot"]["status"] == "failed"
+            assert record["snapshot"]["error"]["code"] == "PROVIDER_ERROR"
+            assert "attempts" not in record and "not_before" not in record
             assert await tx.get("workspace_runtimes", response["resource_id"])
+            assert "active_operation_id" not in await tx.get("workspaces", response["resource_id"])
         await store.close()
     asyncio.run(scenario())
 
@@ -343,10 +340,10 @@ def test_allocation_pages_are_indexed_bounded_concurrent_and_claimed(tmp_path):
                 await tx.put("operations", f"history_{i}", {"snapshot": {"status": "succeeded"}})
             plan = await tx._connection.exec_driver_sql(
                 "EXPLAIN QUERY PLAN SELECT body FROM operations "
-                "WHERE json_extract(body, '$.snapshot.status') = 'pending' "
+                "WHERE json_extract(body, '$.snapshot.status') IN ('pending', 'running') "
                 "AND key > '' ORDER BY key LIMIT 8"
             )
-            assert "ix_operations_pending" in str(plan.all())
+            assert "ix_operations_active" in str(plan.all())
         original = Transaction.all
 
         async def no_scan(self, collection):
@@ -406,7 +403,9 @@ def test_stalled_allocation_refills_slots_and_times_out_pending(tmp_path, monkey
         assert not task.done()  # Ninth fast allocation ran while the first was stalled.
         await asyncio.wait_for(task, 3)
         async with store.transaction() as tx:
-            assert (await tx.get("operations", "op_000"))["snapshot"]["status"] == "pending"
+            stalled = await tx.get("operations", "op_000")
+            # Timed out: still claimed and unfinished, retried with backoff rather than failed.
+            assert stalled["snapshot"]["status"] == "running" and stalled["attempts"] == 1
         await store.close()
 
     asyncio.run(scenario())
@@ -458,7 +457,8 @@ def test_provider_cancellation_keeps_background_worker_alive(tmp_path):
             async with asyncio.timeout(5):
                 while not provider.calls:
                     await asyncio.sleep(0.01)
-            assert (await store.read("operations", first["operation_id"]))["snapshot"]["status"] == "pending"
+            # Claimed before the provider was interrupted; the next pass resumes it.
+            assert (await store.read("operations", first["operation_id"]))["snapshot"]["status"] == "running"
             document = deepcopy(DOCUMENT)
             document["metadata"]["name"] = "later"
             second = await lifecycle.apply(Request(APPLY, "control", "workspaces.apply",
@@ -491,6 +491,220 @@ def test_status_queries_do_not_reserve_writer(tmp_path):
                 assert snapshot
             with pytest.raises(ServiceError, match="NOT_FOUND"):
                 await asyncio.wait_for(lifecycle._read("workspaces", "ws_missing"), 1)
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+def _request(subject: str, body, workspace_id: str | None = None):
+    from openengine.messaging import Request
+    operation = subject.removeprefix("oe.v1.vcp.control.")
+    parameters = {"workspace_id": workspace_id} if workspace_id else {}
+    return Request(subject, "control", operation, body, "nats://127.0.0.1:4222", parameters)
+
+
+def _ensure(workspace_id: str, payload=None, **extra):
+    return _request(f"oe.v1.vcp.control.workspaces.{workspace_id}.ensure",
+                    envelopes.command(payload or {}, **extra), workspace_id)
+
+
+async def _snapshot(store, collection, key):
+    return (await store.read(collection, key))["snapshot"]
+
+
+def test_ensure_is_idempotent_and_recovers_pending_and_running_operations(tmp_path):
+    async def scenario():
+        store, provider = storage(tmp_path), FakeProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        created = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
+        workspace_id = created["resource_id"]
+        await lifecycle.reconcile()
+        ready = await _snapshot(store, "workspaces", workspace_id)
+        assert ready["state"] == "ready" and ready["version"] == 2
+        events = len(await store.pending_events(100))
+
+        missing = await lifecycle.ensure(_ensure("ws_missing", command_id="cmd_missing"))
+        assert missing["error"]["code"] == "NOT_FOUND"
+        assert await lifecycle.ensure(_ensure("ws_missing", command_id="cmd_missing")) == missing
+        stale = await lifecycle.ensure(_ensure(workspace_id, expected_version=1))
+        assert stale["error"]["code"] == "VERSION_CONFLICT"
+        for response in (missing, stale):
+            envelopes.check(envelopes.COMMAND_RESPONSE, response)
+
+        accepted = await lifecycle.ensure(_ensure(workspace_id, {"restore": "allow"}, command_id="cmd_ensure"))
+        assert accepted["status"] == "accepted" and accepted["resource_id"] == workspace_id
+        busy = await lifecycle.ensure(_ensure(workspace_id, command_id="cmd_busy"))
+        assert busy["error"]["code"] == "UNAVAILABLE" and busy["error"]["retryable"]
+        async with store.transaction() as tx:
+            assert await tx.replay(f"oe.v1.vcp.control.workspaces.{workspace_id}.ensure", busy) is None
+            assert (await tx.get("workspaces", workspace_id))["active_operation_id"] == accepted["operation_id"]
+        await lifecycle.reconcile()
+        operation = await _snapshot(store, "operations", accepted["operation_id"])
+        envelopes.check(f"{SCHEMAS}/operations.schema.json#/$defs/operation", operation)
+        assert operation["status"] == "succeeded"
+        assert operation["result"] == {"runtime_id": ready["runtime"]["runtime_id"], "runtime_generation": 1, "restored": False}
+        # A no-op ensure: same version, same timestamps, no second ready event, lock released.
+        assert await _snapshot(store, "workspaces", workspace_id) == ready
+        assert len(await store.pending_events(100)) == events
+        assert "active_operation_id" not in await store.read("workspaces", workspace_id)
+        assert provider.ensures == 1 and provider.calls == 1
+        assert await lifecycle.ensure(_ensure(workspace_id, {"restore": "allow"}, command_id="cmd_ensure")) == accepted
+        # The lock is free again, so a retried busy command is accepted now.
+        assert (await lifecycle.ensure(_ensure(workspace_id, command_id="cmd_busy")))["status"] == "accepted"
+        await lifecycle.reconcile()
+
+        # Concurrent state written by another producer while the provider runs survives.
+        class Interleaving(FakeProvider):
+            async def ensure(self, ownership, locator, specification):
+                async with store.transaction() as tx:
+                    document = await tx.get("workspaces", workspace_id)
+                    document["snapshot"]["active_attempt_ids"] = ["attempt_live"]
+                    await tx.put("workspaces", workspace_id, document)
+                return await super().ensure(ownership, locator, specification)
+
+        interleaving = Interleaving(allocations=provider.allocations)
+        lifecycle = Lifecycle(store, {"process": interleaving})
+        await lifecycle.ensure(_ensure(workspace_id, command_id="cmd_interleaved"))
+        await lifecycle.reconcile()
+        assert (await _snapshot(store, "workspaces", workspace_id))["active_attempt_ids"] == ["attempt_live"]
+
+        # Pending and running ensures survive a restart with the same ownership.
+        pending = await lifecycle.ensure(_ensure(workspace_id, command_id="cmd_pending"))
+        await store.close()
+        store = storage(tmp_path)
+        lifecycle = Lifecycle(store, {"process": FakeProvider(allocations=provider.allocations)})
+        await lifecycle.reconcile()
+        assert (await _snapshot(store, "operations", pending["operation_id"]))["status"] == "succeeded"
+        running = await lifecycle.ensure(_ensure(workspace_id, command_id="cmd_running"))
+        async with store.transaction() as tx:
+            record = await tx.get("operations", running["operation_id"])
+            record["snapshot"]["status"] = "running"  # claimed, then the process died
+            await tx.put("operations", running["operation_id"], record)
+        await store.close()
+        store = storage(tmp_path)
+        lifecycle = Lifecycle(store, {"process": FakeProvider(allocations=provider.allocations)})
+        await lifecycle.reconcile()
+        assert (await _snapshot(store, "operations", running["operation_id"]))["status"] == "succeeded"
+        assert (await _snapshot(store, "workspaces", workspace_id))["version"] == 2
+
+        # A failed ensure fails its operation only: the workspace and ownership stay.
+        failing = FakeProvider(allocations=provider.allocations)
+        failing.failure = ServiceError("PROVIDER_ERROR", "guest is unreachable")
+        lifecycle = Lifecycle(store, {"process": failing})
+        failed = await lifecycle.ensure(_ensure(workspace_id, command_id="cmd_failing"))
+        await lifecycle.reconcile()
+        operation = await _snapshot(store, "operations", failed["operation_id"])
+        assert operation["status"] == "failed" and operation["error"]["code"] == "PROVIDER_ERROR"
+        after = await _snapshot(store, "workspaces", workspace_id)
+        assert after["state"] == "ready" and after["version"] == 2 and "failure" not in after
+        assert len(await store.pending_events(100)) == events
+        assert await store.read("workspace_runtimes", workspace_id)
+
+        # Only a ready workspace can be ensured.
+        broken = deepcopy(DOCUMENT)
+        broken["metadata"]["name"] = "broken"
+        failing.failure = ServiceError("PROVIDER_ERROR", "no image")
+        accepted = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": broken})))
+        await lifecycle.reconcile()
+        rejected = await lifecycle.ensure(_ensure(accepted["resource_id"]))
+        assert rejected["error"]["code"] == "INVALID_STATE"
+        assert rejected["error"]["details"]["current_state"] == "failed"
+        envelopes.check(envelopes.COMMAND_RESPONSE, rejected)
+        unconfigured = await Lifecycle(store, {}).ensure(_ensure(workspace_id))
+        assert unconfigured["error"]["code"] == "UNSUPPORTED_CAPABILITY"
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", ["pending", "running"])
+@pytest.mark.parametrize("operation", ["workspaces.apply", "workspaces.ensure"])
+def test_missing_provider_fails_operations_explicitly_without_stalling_other_work(tmp_path, operation, status):
+    async def scenario():
+        store = storage(tmp_path)
+        process, other = FakeProvider(), FakeProvider("other")
+        lifecycle = Lifecycle(store, {"process": process, "other": other})
+        created = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
+        workspace_id, response = created["resource_id"], created
+        if operation == "workspaces.ensure":
+            await lifecycle.reconcile()
+            response = await lifecycle.ensure(_ensure(workspace_id))
+        async with store.transaction() as tx:
+            record = await tx.get("operations", response["operation_id"])
+            record["snapshot"]["status"] = status
+            await tx.put("operations", response["operation_id"], record)
+            ownership = await tx.get("workspace_runtimes", workspace_id)
+        before = await _snapshot(store, "workspaces", workspace_id)
+        events = len(await store.pending_events(100))
+        unrelated_document = deepcopy(DOCUMENT)
+        unrelated_document["metadata"]["name"] = "unrelated"
+        unrelated_document["spec"]["provider"] = "other"
+        unrelated = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": unrelated_document})))
+        await store.close()
+
+        # Restart with only the unrelated provider configured.
+        store = storage(tmp_path)
+        lifecycle = Lifecycle(store, {"other": other})
+        await lifecycle.reconcile()
+        failed = await _snapshot(store, "operations", response["operation_id"])
+        envelopes.check(f"{SCHEMAS}/operations.schema.json#/$defs/operation", failed)
+        assert failed["status"] == "failed"
+        assert failed["error"] == {"code": "PROVIDER_ERROR", "retryable": False, "details": {"provider": "process"},
+                                   "message": "provider process is not configured on this host"}
+        workspace = await store.read("workspaces", workspace_id)
+        assert "active_operation_id" not in workspace  # the lock is released
+        if operation == "workspaces.apply":
+            assert workspace["snapshot"]["state"] == "failed" and workspace["snapshot"]["version"] == before["version"] + 1
+            # The unrelated workspace's provisioning and ready events, plus this failure.
+            assert len(await store.pending_events(100)) == events + 3
+        else:
+            assert workspace["snapshot"] == before
+            assert len(await store.pending_events(100)) == events + 2  # the unrelated workspace's events only
+        assert await store.read("workspace_runtimes", workspace_id) == ownership  # retained for cleanup
+        assert (await _snapshot(store, "operations", unrelated["operation_id"]))["status"] == "succeeded"
+        assert process.calls + process.ensures == (1 if operation == "workspaces.ensure" else 0)
+
+        # Once the provider is back, a ready workspace can be ensured with a new command.
+        if operation == "workspaces.ensure":
+            lifecycle = Lifecycle(store, {"process": process, "other": other})
+            recovered = await lifecycle.ensure(_ensure(workspace_id))
+            assert recovered["status"] == "accepted"
+            await lifecycle.reconcile()
+            assert (await _snapshot(store, "operations", recovered["operation_id"]))["status"] == "succeeded"
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_transient_failures_back_off_with_a_cap_and_eventually_fail(tmp_path, monkeypatch):
+    from virtual_control_plane.application import lifecycle as module
+
+    assert [module.retry_delay(n) for n in range(1, 9)] == [1, 2, 4, 8, 16, 32, 60, 60]
+    monkeypatch.setattr(module, "RETRY_BASE_SECONDS", 0.0)
+    monkeypatch.setattr(module, "MAX_ATTEMPTS", 3)
+
+    async def scenario():
+        store, provider = storage(tmp_path), FakeProvider()
+        provider.failure = ServiceError("UNAVAILABLE", "host is busy")
+        lifecycle = Lifecycle(store, {"process": provider})
+        created = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
+        for attempt in (1, 2):
+            await lifecycle.reconcile()
+            record = await store.read("operations", created["operation_id"])
+            assert record["snapshot"]["status"] == "running" and record["attempts"] == attempt
+            assert record["not_before"] <= module.now()
+        await lifecycle.reconcile()
+        record = await store.read("operations", created["operation_id"])
+        assert record["snapshot"]["status"] == "failed" and "attempts" not in record
+        error = record["snapshot"]["error"]
+        assert error["code"] == "PROVIDER_ERROR" and not error["retryable"]
+        assert error["details"] == {"attempts": 3, "last_error": provider.failure.to_dict()}
+        envelopes.check(f"{SCHEMAS}/operations.schema.json#/$defs/operation", record["snapshot"])
+        workspace = await _snapshot(store, "workspaces", created["resource_id"])
+        assert workspace["state"] == "failed" and workspace["failure"] == error
+        assert [event.envelope["event_type"] for event in await store.pending_events(100)] == \
+            ["workspace.provisioning", "workspace.failed"]
+        assert provider.calls == 3
         await store.close()
 
     asyncio.run(scenario())

@@ -15,8 +15,9 @@ import sqlalchemy as sa
 import yaml
 
 from openengine.contracts.validate import load_contract, validate_message
-from openengine.messaging import ErrorCode, LocalOperator, Request, Server, ServiceError
-from openengine.persistence import LOCAL_TENANT, DatabaseConfig
+from openengine.messaging import LOCAL_TENANT, ErrorCode, LocalOperator, Principal, Request, Server, ServiceError
+from openengine.persistence import LOCAL_TENANT as LOCAL_TENANT_ID
+from openengine.persistence import DatabaseConfig
 
 from graph_engine.persistence import PERSISTENCE, sqlite
 from graph_engine.registry import Registry, canonical
@@ -32,6 +33,11 @@ class ProjectsOnly(LocalOperator):
 
     def __init__(self, *allowed: str) -> None:
         self.allowed = allowed
+        self.principals: list[Principal | None] = []
+
+    def authorize(self, request: Request) -> Principal:
+        self.principals.append(request.principal)
+        return super().authorize(request)
 
     def authorize_project(self, request: Request, project: str) -> None:
         if project not in self.allowed:
@@ -47,7 +53,7 @@ def authorizer() -> LocalOperator:
 def send(tmp_path: Path, authorizer: LocalOperator):
     config = DatabaseConfig(sqlite_directory=tmp_path)
     PERSISTENCE.upgrade(config)
-    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT_ID)
     registry = Registry(store, authorizer)
     server = Server(
         None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands(), authorizer=authorizer,
@@ -383,9 +389,11 @@ def test_a_list_cursor_is_bound_to_its_project(send) -> None:
 
 
 @pytest.mark.parametrize("authorizer", [ProjectsOnly("alpha")])
-def test_every_project_scoped_request_is_authorized_for_its_project(send) -> None:
+def test_every_project_scoped_request_is_authorized_for_its_project(send, authorizer: ProjectsOnly) -> None:
     allowed = send(APPLY, _apply("cmd_1", {"project": "alpha", "graph": GRAPH}))
     assert allowed["status"] == "accepted"
+    # The server derived the tenant before asking: `oe up`'s dedicated mode is LOCAL_TENANT.
+    assert authorizer.principals == [Principal(LOCAL_TENANT)]
 
     denied = send(APPLY, _apply("cmd_1", {"project": "beta", "graph": GRAPH}))
     assert denied["error"]["code"] == "PERMISSION_DENIED"
@@ -426,7 +434,7 @@ def test_a_receipt_kept_before_projects_still_replays(tmp_path: Path) -> None:
         ), {"subject": APPLY, "fingerprint": fingerprint, "response": json.dumps(response)})
     PERSISTENCE.upgrade(config)
 
-    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT_ID)
     registry = Registry(store)
     server = Server(None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands())
     loop = asyncio.new_event_loop()

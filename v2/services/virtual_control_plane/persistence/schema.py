@@ -50,9 +50,11 @@ outbox = sa.Table(
     sqlite_autoincrement=True,
 )
 
+# Unfinished lifecycle operations: accepted (`pending`) or claimed by the worker
+# (`running`) when it last ran. Restart resumes both with the same ownership.
 sa.Index(
-    "ix_operations_pending", documents["operations"].c.key,
-    sqlite_where=sa.text("json_extract(body, '$.snapshot.status') = 'pending'"),
+    "ix_operations_active", documents["operations"].c.key,
+    sqlite_where=sa.text("json_extract(body, '$.snapshot.status') IN ('pending', 'running')"),
 )
 
 sa.Index("ix_workspaces_name", sa.literal_column("json_extract(body, '$.snapshot.name')"), _table=documents["workspaces"])

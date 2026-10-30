@@ -52,6 +52,15 @@ info:
     `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
     (`local_tenant`).
 
+    When VCP starts a task attempt it issues a NATS user credential for that
+    attempt inside the tenant's account. Its claims name the workspace and the
+    attempt's `stepAttemptId`. It may publish only to `oe.v1.tools.invoke.>`
+    and a reply inbox prefix unique to the attempt, may subscribe only to that
+    prefix, and expires at the attempt's deadline. The runtime places it in
+    the workspace. VCP revokes it when the attempt ends, at the same point the
+    Graph Engine deletes the attempt's tool grants. The tool service reads the
+    workspace and step attempt from it; see the tool service contract.
+
     ## Tenant subjects
     Tenants use the subjects in this document,
     `oe.v1.vcp.{control|query|events}.…`; none carries a tenant or account
