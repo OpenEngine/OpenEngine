@@ -135,3 +135,35 @@ def test_sqlite_connections_enforce_foreign_keys_and_use_wal(tmp_path: Path) -> 
 
     assert asyncio.run(pragmas()) == (1, "wal")
     assert (tmp_path / "cxn.sqlite3").exists()
+
+
+def test_cold_connection_waits_for_journal_mode_lock_without_blocking_the_loop(tmp_path: Path) -> None:
+    import sqlite3
+
+    database = open_database("cold", DatabaseConfig(sqlite_directory=tmp_path))
+    # A rollback-journal reader prevents the initial transition to WAL. This is
+    # connection setup contention, not application BEGIN IMMEDIATE contention.
+    blocker = sqlite3.connect(tmp_path / "cold.sqlite3")
+    blocker.execute("CREATE TABLE existing (id INTEGER)")
+    blocker.execute("BEGIN")
+    blocker.execute("SELECT * FROM existing").fetchall()
+
+    async def scenario() -> None:
+        async def release() -> None:
+            await asyncio.sleep(0.05)
+            blocker.rollback()
+
+        release_task = asyncio.create_task(release())
+        try:
+            async with database.connect() as connection:
+                assert (await connection.execute(text("PRAGMA journal_mode"))).scalar_one() == "wal"
+                assert (await connection.execute(text("PRAGMA busy_timeout"))).scalar_one() == 5000
+            await release_task
+        finally:
+            await release_task
+            await database.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        blocker.close()

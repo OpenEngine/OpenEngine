@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import shutil
 import subprocess
@@ -362,3 +363,71 @@ def test_bundled_documents_resolve_every_file_reference() -> None:
 )
 def test_a_graph_snapshot_without_a_project_is_valid(name: str, graph: tuple[Any, ...]) -> None:
     assert errors_for("graph_engine", mutated(example("graph_engine", name), drop(*graph))) == []
+
+
+# Tenancy: a tenant is a NATS account, named by the connection and never by a subject or payload.
+
+
+def test_rejects_an_account_token_in_a_tenant_facing_address() -> None:
+    contract = load_contract("connection_bus")
+    document = copy.deepcopy(contract.document)
+    document["channels"]["connectionsApply"]["address"] = "oe.v1.{account}.cxn.control.connections.apply"
+    problems = validate.check(dataclasses.replace(contract, document=document))
+    assert [problem for problem in problems if "{account}" in problem] == [
+        "connection_bus: channel connectionsApply address 'oe.v1.{account}.cxn.control.connections.apply' "
+        "contains {account}; a tenant's account comes from its connection, not its subject"
+    ]
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_no_tenant_facing_address_names_an_account(service: str) -> None:
+    assert validate.tenant_address_problems(load_contract(service)) == []
+
+
+def type_accepts(name: str, value: Any) -> bool:
+    return validate._validator(f"{validate.TYPES.as_uri()}#/$defs/{name}").is_valid(value)
+
+
+def test_tenant_id_accepts_a_v7_uuid() -> None:
+    assert type_accepts("tenant_id", "0192f1c4-7a3e-7c2d-9b1f-3e4a5b6c7d8e")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "00000000-0000-0000-0000-000000000000",
+        "0192F1C4-7A3E-7C2D-9B1F-3E4A5B6C7D8E",
+        "not-a-uuid",
+        "0192f1c47a3e7c2d9b1f3e4a5b6c7d8e",
+        "0192f1c4-7a3e-4c2d-9b1f-3e4a5b6c7d8e",
+        "0192f1c4-7a3e-7c2d-9b1f-3e4a5b6c7d8e\n",
+        "",
+        42,
+    ],
+    ids=["nil", "upper-case", "non-uuid", "unhyphenated", "v4", "trailing-newline", "empty", "integer"],
+)
+def test_tenant_id_rejects(value: Any) -> None:
+    assert not type_accepts("tenant_id", value)
+
+
+def test_local_tenant_is_a_fixed_non_nil_tenant_id() -> None:
+    types = json.loads(validate.TYPES.read_text())["$defs"]
+    local = types["local_tenant"]["const"]
+    assert type_accepts("tenant_id", local) and type_accepts("local_tenant", local)
+    assert not type_accepts("local_tenant", "0192f1c4-7a3e-7c2d-9b1f-3e4a5b6c7d8e")
+
+
+ACCOUNT_KEY = "ABJHLOVMPA4CI6R5KLNGOB4GSLNIY7IOUPAJC4YFNDLQVIOBYQGUWVLA"
+
+
+def test_account_accepts_an_account_public_key() -> None:
+    assert len(ACCOUNT_KEY) == 56 and type_accepts("account", ACCOUNT_KEY)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["U" + ACCOUNT_KEY[1:], ACCOUNT_KEY.lower(), ACCOUNT_KEY[:-1], ACCOUNT_KEY + "A", ACCOUNT_KEY[:-1] + "1", ACCOUNT_KEY + "\n", ""],
+    ids=["user-key", "lower-case", "short", "long", "not-base32", "trailing-newline", "empty"],
+)
+def test_account_rejects(value: str) -> None:
+    assert not type_accepts("account", value)

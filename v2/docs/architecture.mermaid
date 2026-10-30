@@ -90,7 +90,15 @@ flowchart LR
         vcp_events["NATS events → stream vcp-events<br/><b>oe.v1.vcp.events.workspaces.{workspace_id}.</b><br/>workspace.provisioning<br/>workspace.ready<br/>workspace.restored<br/>workspace.checkpointed<br/>workspace.suspended<br/>workspace.destroyed<br/>workspace.failed<br/>task.started<br/>task.completed<br/>task.failed<br/>task.cancelled<br/>approval.requested<br/>approval.resolved<br/>approval.expired<br/>steering.applied<br/>steering.failed<br/>conversation.message<br/>usage.reported<br/>artifact.created"]
         class vcp_events subjects
         subgraph vcp_db["database vcp"]
-            vcp_t_workspaces[("workspaces<br/>A place an agent does its work, on whichever provider supplied it.")]
+            vcp_t_command_receipts[("command_receipts<br/>Immutable command identity and original response for idempotent replay.")]
+            class vcp_t_command_receipts table
+            vcp_t_operations[("operations<br/>Accepted commands' progress and terminal state.")]
+            class vcp_t_operations table
+            vcp_t_outbox[("outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication.")]
+            class vcp_t_outbox table
+            vcp_t_workspace_runtimes[("workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation.")]
+            class vcp_t_workspace_runtimes table
+            vcp_t_workspaces[("workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records.")]
             class vcp_t_workspaces table
         end
     end

@@ -118,6 +118,76 @@ def test_a_local_token_protected_browser_is_offered_sign_in(tunnelled) -> None:
     asyncio.run(scenario())
 
 
+BROWSER_APIS = ("/api/runs", "/graph/api/graphs", "/api/v1/graphs")
+
+
+def _local(app, scenario):
+    """Run `scenario(client)` against `app` as a browser or CLI on the daemon's own computer."""
+
+    async def run():
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+        ) as client:
+            await scenario(client)
+
+    asyncio.run(run())
+
+
+def test_a_local_token_puts_the_login_wall_on_every_api(tunnelled) -> None:
+    async def scenario(client):
+        for path in BROWSER_APIS:
+            assert (await client.get(path)).status_code == 401, path
+        assert (await client.get("/api/health")).status_code == 200
+        # The browser UI itself still loads, so it can show the token sign-in form.
+        assert (await client.get("/")).status_code != 401
+
+    _local(tunnelled(public_url=False), scenario)
+
+
+def test_a_local_token_session_reaches_the_browser_apis(tunnelled) -> None:
+    async def scenario(client):
+        signed_in = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                      headers={"Origin": "http://127.0.0.1"})
+        assert signed_in.status_code == 303
+        assert client.cookies.get("engine_token_session")
+        for path in BROWSER_APIS:
+            assert (await client.get(path)).status_code == 200, path
+        assert (await client.get("/")).status_code != 401
+
+    _local(tunnelled(public_url=False), scenario)
+
+
+def test_a_local_token_bearer_reaches_the_cli_api(tunnelled) -> None:
+    async def scenario(client):
+        bearer = {"Authorization": f"Bearer {TOKEN}"}
+        assert (await client.get("/api/v1/graphs", headers=bearer)).status_code == 200
+        assert (await client.get("/", headers=bearer)).status_code != 401
+
+    _local(tunnelled(public_url=False), scenario)
+
+
+def test_with_a_public_address_token_sign_in_only_works_from_that_address(tunnelled) -> None:
+    """A browser on the daemon's own computer must use the public address, as the guide says."""
+
+    async def scenario(client):
+        local = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                  headers={"Origin": "http://127.0.0.1:4364"})
+        assert local.status_code == 403
+        public = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                   headers={"Origin": f"https://{PUBLIC_HOST}"})
+        assert public.status_code == 303
+
+    _local(tunnelled(), scenario)
+
+
+def test_a_plain_local_run_without_a_token_stays_open(tunnelled) -> None:
+    async def scenario(client):
+        for path in BROWSER_APIS:
+            assert (await client.get(path)).status_code == 200, path
+
+    _local(tunnelled(public_url=False, token=None), scenario)
+
+
 def test_forwarding_cannot_bypass_auth_by_omitting_public_url(tunnelled) -> None:
     assert ask(tunnelled(public_url=False), host="127.0.0.1", headers={"X-Forwarded-For": "203.0.113.7"}) == 401
 

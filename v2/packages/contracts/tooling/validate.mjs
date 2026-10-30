@@ -1,6 +1,8 @@
 // Parses every service's AsyncAPI document with the pinned AsyncAPI parser:
 // the document, every $ref it reaches (schemas and examples), and each
-// payload schema must resolve and validate. Warnings fail too.
+// payload schema must resolve and validate. Warnings fail too. No address in
+// a tenant-facing contract may carry an `{account}` token: only NATS writes
+// the caller's account into a subject (oe.v1.{account}.{svc}.…).
 //
 //   node validate.mjs                  every service
 //   node validate.mjs graph_engine     one service
@@ -25,6 +27,14 @@ for (const service of services) {
   const problems = diagnostics.filter((diagnostic) => diagnostic.severity <= 1);
   for (const diagnostic of diagnostics) {
     console.log(`${service}: ${severity[diagnostic.severity]} ${diagnostic.code}: ${diagnostic.message} at ${diagnostic.path.join(".")}`);
+  }
+  if (document && !service.startsWith("internal/")) {
+    for (const channel of document.channels()) {
+      if ((channel.address() ?? "").split(".").includes("{account}")) {
+        console.log(`${service}: error account-token: channel ${channel.id()} address ${channel.address()} contains {account}`);
+        problems.push(channel);
+      }
+    }
   }
   if (!document || problems.length) failed = true;
   console.log(`${service}: ${!document || problems.length ? "invalid" : "valid"}`);

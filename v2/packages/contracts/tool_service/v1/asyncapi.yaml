@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:tool-service
 info:
   title: OpenEngine Tool Service (tools)
-  version: 1.0.0-draft.2
+  version: 1.0.0-draft.3
   description: |
     The Tool Service keeps the tools agents may call, who may call them, and a
     durable record of every call. This document describes the NATS interface
@@ -53,7 +53,9 @@ info:
     A namespace and a resource name each occupy one subject token:
     lower-case letters, digits and `-`, with no `.` or wildcards, such as
     `oe.v1.tools.invoke.default.github-issue-comment`. A namespace groups
-    resources; naming alone does not isolate tenants.
+    resources and lives inside a tenant, so two tenants may each have a
+    `default` namespace. Naming alone does not isolate tenants; the caller's
+    account does (see Identity).
 
     ## Tools
     Each Tool is a capability bound to one Connection, so an agent never
@@ -97,8 +99,23 @@ info:
     through `oe.v1.tools.invocations.get`, which checks the reader may see them.
 
     ## Identity
-    The acting identity comes from the authenticated NATS connection (or a
-    verified delegation), never from a payload field.
+    A tenant is a NATS account. A request's tenant is the account the
+    caller's connection belongs to, never a payload field, and the acting
+    identity within it comes from that authenticated connection (or a
+    verified delegation). The tenancy registry maps each account's public
+    key (the shared `account` type) to its `tenant_id`, a UUIDv7.
+    `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
+    (`local_tenant`).
+
+    ## Tenant subjects
+    Tenants use the subjects in this document, `oe.v1.tools.…`; none carries a
+    tenant or account token. Before the tool service receives a tenant's
+    request, NATS rewrites its subject into the internal form
+    `oe.v1.{account}.tools.…`, with the caller's account public key as the
+    third token. Only NATS produces that form: the service account exports its
+    subjects with `account_token_position: 3`, and a tenant can import them
+    only with its own key in that position, so a caller cannot forge another
+    tenant's subject.
   license:
     name: Apache-2.0
 defaultContentType: application/json

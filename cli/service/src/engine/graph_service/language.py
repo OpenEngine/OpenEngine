@@ -34,8 +34,7 @@ from engine.runtime.terminal_mcp import REPOSITORY_TOOL_NAMES
 
 from engine.graph_service.expressions import Expression, ExpressionError, Template, parse, template
 from engine.graph_service.schema import (
-    API_VERSION, FIELDS, FIELD_RULES, KIND, MIN_INTERVAL_SECONDS, OUTPUT_TYPES,
-    SECTIONS, _UNITS,
+    API_VERSION, FIELDS, FIELD_RULES, MIN_INTERVAL_SECONDS, SECTIONS, _UNITS,
 )
 
 WORKSPACE_NODE = "workspace"

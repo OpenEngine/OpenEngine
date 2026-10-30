@@ -317,16 +317,22 @@ def test_spend_today_counts_only_todays_workorders(tmp_path) -> None:
     assert runner.capped(loop)
 
 
+@pytest.mark.parametrize("service_token", ["", "s" * 40])
 def test_the_new_loop_form_creates_a_loop_that_says_when_it_runs(
-    tmp_path, *, client, sqlite_store, web_app
+    tmp_path, service_token, *, client, sqlite_store, web_app
 ) -> None:
     settings = LoopSettingsStore(tmp_path / "settings.json")
     settings.set(LoopSettings(active_hours_start="08:00", active_hours_end="18:00",
                               max_prs=4, max_daily_spend=7.5))
     app = web_app(runners={"codex": object()}, state_store=sqlite_store(),
                    loop_settings=settings, loop_store=LoopStore(tmp_path / "loops.json"),
-                   loop_provider=ScriptedProvider([]))
+                   loop_provider=ScriptedProvider([]), service_token=lambda: service_token)
     with client(app) as browser:
+        if service_token:
+            for supplied in ("", "wrong"):
+                assert browser.post("/api/loops", json=FORM, headers={
+                    "Authorization": f"Bearer {supplied}"}).status_code == 401
+            browser.headers["Authorization"] = f"Bearer {service_token}"
         defaults = browser.get("/api/loops/defaults").json()
         created = browser.post("/api/loops", json=FORM)
         listed = browser.get("/api/loops").json()["loops"]

@@ -279,6 +279,22 @@ def test_registering_discovering_and_running_a_graph(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_work_order_workflows_from_two_repositories_name_their_project(tmp_path: Path) -> None:
+    """Onboarding a second repository must not offer a second identical ``review v1``."""
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            for project in ("acme/api", "other/repo"):
+                await service.add_graph(project, source=starters.source("review"), format="python")
+            offered = service.workflows()
+            assert [workflow.name for workflow in offered] == [
+                "acme/api · review v1",
+                "other/repo · review v1",
+            ]
+            assert len({workflow.graph_id for workflow in offered}) == 2
+
+    asyncio.run(scenario())
+
+
 def test_default_python_graph_uses_module_metadata(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:

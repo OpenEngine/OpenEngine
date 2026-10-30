@@ -485,7 +485,7 @@ def test_service_token_admits_run_creation():
 
 @pytest.mark.parametrize("method, path", [
     ("POST", "/api/v1/repositories/trust"),
-    ("GET", "/api/runs"), ("POST", "/api/runs/run-1"), ("POST", "/api/data"), ("GET", "/api/data"),
+    ("POST", "/api/repositories/onboard"), ("POST", "/api/data"), ("GET", "/api/data"),
 ])
 def test_service_token_admits_nothing_else(method, path):
     client = _service_app()
@@ -1191,3 +1191,44 @@ def test_separate_onboarding_token_scope(method, path, allowed):
         assert client.request(method, path, headers={'Authorization': f'Bearer {SERVICE_TOKEN}'}).status_code == 401
     token = SERVICE_TOKEN
     assert client.request(method, path, headers={'Authorization': f'Bearer {token}'}).status_code == (200 if path in ['/api/runs', '/api/v1/graphs'] else 401)
+
+
+@pytest.mark.parametrize("method,path", [
+    *((method, f"/api/{provider}/{action}")
+      for provider in ("github", "gitlab", "slack")
+      for method, action in (("GET", "status"), ("POST", "connect"),
+                             ("POST", "connect/poll"), ("POST", "disconnect"))),
+    ("GET", "/api/source-control/status"), ("POST", "/api/source-control/provider"),
+    ("POST", "/api/runs"), ("GET", "/api/runs/run-1"),
+    ("GET", "/api/runs/run-1/graph-events"),
+    ("GET", "/graph/api/runs/run-1"), ("GET", "/graph/api/graphs/graph-1"),
+    ("POST", "/graph/api/runs/run-1/steering"),
+    ("POST", "/graph/api/runs/run-1/transitions"),
+    ("POST", "/graph/api/targets/resolve"),
+    ("GET", "/api/loops/defaults"), ("POST", "/api/loops"), ("GET", "/api/loops/loop-1"),
+])
+@pytest.mark.parametrize("configured_login", [False, True])
+def test_service_token_admits_cli_and_mcp_routes(method, path, configured_login):
+    from starlette.responses import JSONResponse
+
+    config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback") if configured_login else None
+    login = GitHubLogin(config, service_token=lambda: SERVICE_TOKEN)
+    app = Starlette(routes=[Route(path, lambda _r: JSONResponse({"ok": True}), methods=[method])])
+    with TestClient(login.middleware(app)) as client:
+        for token in (None, "wrong-" + SERVICE_TOKEN, SERVICE_TOKEN):
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            assert client.request(method, path, headers=headers).status_code == (200 if token == SERVICE_TOKEN else 401)
+
+
+@pytest.mark.parametrize("path", [
+    "/api/v1/repositories/trust", "/api/v1/repositories/trust/",
+    "/api/repositories/onboard", "/api/repositories/onboard/",
+    "/api/runs-other", "/api/loops-other", "/graph/api/targets/other",
+    "/api/github/other", "/api/source-control/other",
+])
+@pytest.mark.parametrize("configured_login", [False, True])
+def test_service_token_keeps_operator_writes_and_unrelated_routes_blocked(path, configured_login):
+    config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback") if configured_login else None
+    login = GitHubLogin(config, service_token=lambda: SERVICE_TOKEN)
+    with TestClient(login.middleware(Starlette())) as client:
+        assert client.post(path, headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}).status_code == 401

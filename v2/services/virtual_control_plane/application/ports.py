@@ -5,9 +5,8 @@ Git worktree/host-process-shaped double, once by a smolvm-shaped double -- so
 `tests/test_provider_conformance.py` can run the same lifecycle assertions
 against both without the application layer branching on which one it holds.
 Real adapters land in #1054 (worktree) and #1114 (smolvm); #1055/#1118 add the
-runtime-supervision side. Transactional receipts and an event outbox are
-#1111/#1112 -- `UnitOfWork` and `EventPublisher` exist now only so that later
-slice does not have to widen `WorkspaceService`'s interface to its callers.
+runtime-supervision side. Transactional persistence is defined in `application/transactions.py`;
+`application/outbox.py` publishes the events those transactions append.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from virtual_control_plane.application.transactions import UnitOfWork as UnitOfWork
 from virtual_control_plane.persistence.store import Locator, WorkspaceProvider
 
 
@@ -92,24 +92,24 @@ class RuntimeSupervisorPort(Protocol):
     async def stop(self, context: ExecutionContext) -> None: ...
 
 
-class UnitOfWork(Protocol):
-    """Groups a workspace mutation with the receipts/events it produces.
-
-    This slice has no command-receipt or outbox table yet (#1111, #1112);
-    nothing in the application layer currently requires an implementation.
-    """
-
-    async def __aenter__(self) -> "UnitOfWork": ...
-
-    async def __aexit__(self, *exc_info: object) -> bool | None: ...
-
-
 class EventPublisher(Protocol):
-    """Publishes one workspace lifecycle event.
+    """Publishes one public event envelope, returning only once the broker acknowledges it.
 
-    #1112 gives this a transactional outbox so delivery survives a crash
-    between commit and publish; the shared messaging `Client` provides no
-    durable deduplication of its own, so until then this is best-effort only.
+    Raise if the acknowledgement does not arrive. `OutboxPublisher` calls this
+    with committed events and retries the identical envelope, so an
+    implementation must use `event_id` as the broker's deduplication ID.
     """
 
     async def publish(self, event: dict[str, Any]) -> None: ...
+
+
+class AllocationProvider(Protocol):
+    """Managed allocation boundary; implementations must honor the identity after restart.
+
+    provision receives the full Workspace resource. Repeated calls with the same
+    runtime ID must recover the same allocation, including after an interrupted
+    call. Returned locators remain opaque to VCP. No executor is implied.
+    """
+    capabilities: dict[str, Any]
+
+    async def provision(self, runtime_id: str, workspace: dict[str, Any]) -> dict[str, Any]: ...

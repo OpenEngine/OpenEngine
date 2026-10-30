@@ -11,11 +11,14 @@ ones it can finish within the drain budget, and releases the lock after the
 event loop stops. A successful close exits 0; a failed final close exits
 non-zero. Shutdown never destroys a workspace.
 
-Only `capabilities.get` is served, truthfully: no provider adapter is
-registered in this slice (#1054 and #1114 add them), so it always reports
-none. Workspace commands are out of this ticket's scope; see
-`services/virtual_control_plane/README.md` for how the application ports this
-module composes map onto the provider tickets that will add them.
+It migrates its database at startup and, while running, publishes committed
+outbox events to the `vcp-events` JetStream stream (`application/outbox.py`);
+shutdown stops that worker before closing the connection, leaving unpublished
+events for the next start.
+
+Workspace creation and lifecycle queries use durable receipts and a restartable
+allocation worker. No production provider is registered yet: readiness promises
+request handling, not compute or an executor. See the service README.
 """
 
 from __future__ import annotations
@@ -26,18 +29,23 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlsplit
 
 import nats
-from openengine.messaging import Request, Route, Server, listen_address
+from alembic.util import CommandError
+from openengine.messaging import Server, listen_address
 from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
+from sqlalchemy.exc import SQLAlchemyError
 
-from virtual_control_plane.application.workspaces import ProviderRegistry
+from virtual_control_plane.application.lifecycle import Lifecycle
+from virtual_control_plane.application.ports import AllocationProvider
+from virtual_control_plane.application.outbox import OutboxPublisher
 from virtual_control_plane.exclusion import AlreadyRunning, StateDirectory
+from virtual_control_plane.jetstream import JetStreamEvents
 from virtual_control_plane.persistence import PERSISTENCE
+from virtual_control_plane.persistence.durable import DurableStore
 
 NATS_URL_VARIABLE = "OE_NATS_URL"
 HEALTH_PORT_VARIABLE = "OE_VCP_HEALTH_PORT"
@@ -45,6 +53,7 @@ READY_FILE_VARIABLE = "OE_VCP_READY_FILE"
 STATE_DIR_VARIABLE = "OE_VCP_STATE_DIR"
 HEALTH_HOST = "127.0.0.1"
 CONNECT_TIMEOUT_SECONDS = 5.0
+OUTBOX_CLOSE_SECONDS = 5.0
 EXIT_OK = 0
 EXIT_FAILED = 1
 
@@ -53,19 +62,7 @@ log = logging.getLogger("virtual_control_plane")
 # No provider adapter is wired up yet: #1054 (worktree) and #1114 (smolvm) each
 # register themselves here once they exist. Until then capabilities.get is
 # honest about serving none, rather than advertising unimplemented isolation.
-PROVIDERS: ProviderRegistry = {}
-
-
-async def get_capabilities(request: Request) -> dict[str, Any]:
-    """No provider adapter is registered in `PROVIDERS` yet, so this always reports none."""
-    return {"providers": []}
-
-
-QUERIES = {
-    "capabilities.get": Route(
-        get_capabilities, "virtual_control_plane/v1/schemas/queries.schema.json#/$defs/get_capabilities_query"
-    ),
-}
+PROVIDERS: dict[str, AllocationProvider] = {}
 
 
 async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -81,7 +78,7 @@ async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamW
         writer.close()
 
 
-async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int:
+async def serve(nats_url: str, health_port: int, ready_file: Path | None, store: DurableStore) -> int:
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, stopping.set)
@@ -106,10 +103,14 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int
     if not is_loopback(urlsplit(listener).hostname):
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
-    server = Server(connection, "vcp", listener, queries=QUERIES)
+    lifecycle = Lifecycle(store, PROVIDERS)
+    server = Server(connection, "vcp", listener, queries=lifecycle.queries(), commands=lifecycle.commands())
+    publisher = OutboxPublisher(store, JetStreamEvents(connection.jetstream()))
     health = None
     try:
         await server.start()
+        publisher.start()
+        lifecycle.start()
         health = await asyncio.start_server(
             lambda reader, writer: _health(
                 lambda: connection.is_connected and not stopping.is_set(), reader, writer
@@ -131,6 +132,9 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int
                 ready_file.unlink(missing_ok=True)
         finally:
             try:
+                # Broker I/O must stop before the connection closes; pending events survive.
+                await lifecycle.close()
+                await publisher.close(OUTBOX_CLOSE_SECONDS)
                 await server.close()
             finally:
                 if health is not None:
@@ -139,6 +143,13 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None) -> int
                     health.close()
     log.info("stopped")
     return EXIT_OK
+
+
+async def _serve_store(nats_url: str, health_port: int, ready_file: Path | None, store: DurableStore) -> int:
+    try:
+        return await serve(nats_url, health_port, ready_file, store)
+    finally:
+        await store.close()
 
 
 def _state_directory() -> Path:
@@ -160,20 +171,23 @@ def main() -> int:
             log.info("state directory owned", extra={"vcp.state_directory": str(state.directory)})
             config = DatabaseConfig.from_environment()
             database = PERSISTENCE.database(config)
+            upgrade = PERSISTENCE.upgrade(config)
             log.info(
-                "database configured",
+                "database migrated",
                 extra={"db.system.name": config.backend.value, "db.namespace": PERSISTENCE.name,
-                       "db.url": database.url(asynchronous=False).render_as_string(hide_password=True)},
+                       "db.url": database.url(asynchronous=False).render_as_string(hide_password=True),
+                       "db.revision": upgrade.after},
             )
         ready_file = os.environ.get(READY_FILE_VARIABLE)
         return asyncio.run(
-            serve(
+            _serve_store(
                 os.environ.get(NATS_URL_VARIABLE, "nats://127.0.0.1:4222"),
                 int(os.environ.get(HEALTH_PORT_VARIABLE, "0")),
                 Path(ready_file) if ready_file else None,
+                DurableStore(database),
             )
         )
-    except (OSError, nats.errors.Error):
+    except (OSError, CommandError, SQLAlchemyError, nats.errors.Error):
         # An outage can close cleanly; a failed final close must remain a failure.
         log.exception("failed")
         return EXIT_FAILED

@@ -21,7 +21,7 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 | Defined here | Implemented |
 | -- | -- |
 | Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.control.graphs.apply`, `oe.v1.ge.query.graphs.list`, `oe.v1.ge.query.graphs.{graph_id}.get` and `oe.v1.ge.query.operations.{operation_id}.get`, and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
-| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes committed events from its transactional outbox to `vcp-events`, but no lifecycle handler produces any yet; nothing publishes to the others. |
 | Operation, job, execution, workspace, session and approval models | GE records `graphs.apply` operations, graph revisions and command receipts, each scoped to a project (`default` unless a request names one; a project name grants no authorization by itself). Nothing else implements them. |
 | Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
@@ -127,7 +127,7 @@ change together:
 | Subject namespace | `v1` in `oe.v1.…` | The wire API generation | a breaking change; `oe.v2` is served alongside `oe.v1` until callers move |
 | Contract directory | `{service}/v1/`, `common/v1/` | The files that define that generation | with the subject namespace: `oe.v2` lives in `{service}/v2/` |
 | Resource apiVersion | `apiVersion: openengine.cc/v1alpha1` on every kind | One API group, `openengine.cc`, for every service's resources, at the subject namespace's version plus a stability suffix | the `v1` part with the subject namespace; the suffix as `v1` matures: `v1alpha1`, `v1alpha2`, …, `v1beta1`, then `v1` once stable |
-| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.2`, GE's `1.0.0-draft.6`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
+| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.3`, GE's `1.0.0-draft.7`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
 | AsyncAPI format | `asyncapi: 3.1.0` in each document | The specification the documents are written in | the documents move to a newer AsyncAPI specification |
 
 The resource apiVersion is defined once, as `api_version` in
@@ -170,6 +170,30 @@ in both the subject and the body, they must agree. An event's `event_type`
 ends with the tokens its subject has after the last ID: the whole name
 (`….{job_id}.job.created`) or its fact (`….{invocation_id}.blocked-auth`).
 
+### Tenants
+
+A tenant is a NATS account. Its `tenant_id` is a lower-case UUIDv7, never
+the nil UUID; its `account` is the account's public key (`A` and 55 base32
+characters), both in [`types.schema.json`](common/v1/types.schema.json). The
+tenancy registry maps an account key to its `tenant_id`. Projects (GE) and
+namespaces (tools) live inside a tenant. `oe up` runs a single account,
+whose tenant is the fixed LOCAL_TENANT, `00000000-0000-7000-8000-000000000001`
+(`local_tenant`).
+
+A request's tenant is the account the caller's connection belongs to. No
+payload carries it, and the subjects tenants use carry no tenant or account
+token: they stay `oe.v1.{svc}.{control|query|events}.…` (and
+`oe.v1.tools.…`). Before a shared service receives a tenant's request, NATS
+rewrites the subject into the internal form `oe.v1.{account}.{svc}.…`, with
+the caller's account key as the third token. Only NATS produces that form:
+the service account exports its subjects with `account_token_position: 3`,
+and a tenant can import them only with its own key in that position, so a
+caller cannot forge another tenant's. Provider webhook subjects
+(`cxn.ingress.>`, `cxn.egress.>`) stay inside the service account and are
+never exported. `validate.py` and `validate.mjs` reject an `{account}` token
+in any address of the four service contracts; the internal workspace runtime
+contract is not tenant-facing.
+
 ## Messages
 
 ### Commands
@@ -196,9 +220,11 @@ and the operation's typed `payload`.
   by then is rejected with `DEADLINE_EXCEEDED`; accepted work is never
   cancelled by its deadline. A retry of a command that was already accepted
   returns the acceptance even after its deadline.
-- **Identity.** The acting identity is taken from the verified NATS
+- **Identity.** The tenant is the NATS account the caller's connection
+  belongs to, and the acting identity is taken from that verified NATS
   authentication or a verified delegation, never from a payload field.
-  Envelopes are closed, so an `actor` field is rejected.
+  Envelopes are closed, so an `actor` or tenant field is rejected. See
+  [Tenants](#tenants).
 
 ### Causal paths
 
@@ -393,14 +419,15 @@ loads the renderer from jsDelivr.
 
 - **`validate.mjs`** runs the AsyncAPI parser, which checks each document
   against the AsyncAPI 3.1 specification and resolves every schema and example
-  reference.
+  reference, and rejects an `{account}` token in a tenant-facing address.
 - **`validate.py`** (`openengine.contracts.validate`) covers what the parser and JSON Schema cannot: every
   example validates against its message's schema, subject templates and token
   types, subject/body ID agreement, causal paths ending in the message's own
   ID, event subjects matching `event_type`, `Nats-Msg-Id` equal to
-  `event_id`, replies matching their request's operation, and an example for
-  every message. Services can call `validate.validate_message` on live
-  traffic in their own tests.
+  `event_id`, replies matching their request's operation, an example for
+  every message, and no `{account}` token in a tenant-facing address.
+  Services can call `validate.validate_message` on live traffic in their own
+  tests.
 - **`reference.py`** (`openengine.contracts.reference`) resolves every file reference into one self-contained
   document (written by `--bundle`) and embeds it in each service's
   `reference.html`, rendered in the browser by the AsyncAPI React component.

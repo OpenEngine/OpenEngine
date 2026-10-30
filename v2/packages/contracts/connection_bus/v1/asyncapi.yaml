@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:connection-bus
 info:
   title: OpenEngine Connection Bus (cxn)
-  version: 1.0.0-draft.2
+  version: 1.0.0-draft.3
   description: |
     The Connection Bus links OpenEngine to external providers. This document
     describes the NATS interface **CXN serves**: the commands and queries it
@@ -42,8 +42,26 @@ info:
     (`UNAVAILABLE`) are not.
 
     ## Identity
-    The acting identity comes from the authenticated NATS connection (or a
-    verified delegation), never from a payload field.
+    A tenant is a NATS account. A request's tenant is the account the
+    caller's connection belongs to, never a payload field, and the acting
+    identity within it comes from that authenticated connection (or a
+    verified delegation). The tenancy registry maps each account's public
+    key (the shared `account` type) to its `tenant_id`, a UUIDv7.
+    `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
+    (`local_tenant`).
+
+    ## Tenant subjects
+    Tenants use the subjects in this document,
+    `oe.v1.cxn.{control|query|events}.…`; none carries a tenant or account
+    token. Before CXN receives a tenant's request, NATS rewrites its subject
+    into the internal form `oe.v1.{account}.cxn.…`, with the caller's account
+    public key as the third token. Only NATS produces that form: the service
+    account exports its subjects with `account_token_position: 3`, and a
+    tenant can import them only with its own key in that position, so a caller
+    cannot forge another tenant's subject.
+
+    Provider webhook subjects (`cxn.ingress.>`, `cxn.egress.>`) stay inside
+    the service account and are never exported.
 
     ## Subject tokens
     Every `{…_id}` parameter is a single subject token of the form its
