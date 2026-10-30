@@ -120,3 +120,40 @@ def command(
         body["deadline_at"] = deadline_at
     check(COMMAND, body)
     return body
+
+
+@cache
+def _response_validator(reference: str) -> Draft7Validator:
+    """Validate known fields while accepting additive response evolution."""
+    def retrieve(uri: str) -> Resource:
+        resource = _retrieve(uri)
+        body = resource.contents
+
+        def tolerant(value: Any) -> None:
+            if isinstance(value, dict):
+                value.pop("additionalProperties", None)
+                # The response's retryable flag is authoritative, even when
+                # a known code has a different default in our schema release.
+                if isinstance(properties := value.get("properties"), dict):
+                    if isinstance(retryable := properties.get("retryable"), dict):
+                        retryable.pop("const", None)
+                for child in value.values():
+                    tolerant(child)
+            elif isinstance(value, list):
+                for child in value:
+                    tolerant(child)
+
+        tolerant(body)
+        if uri.endswith("/error.schema.json"):
+            body["$defs"]["code"].pop("enum", None)
+        return Resource.from_contents(body, default_specification=DRAFT7)
+
+    uri = (CONTRACTS / reference).resolve().as_uri()
+    return Draft7Validator({"$ref": uri}, registry=Registry(retrieve=retrieve), format_checker=FormatChecker())
+
+
+def check_response(reference: str, body: Any) -> None:
+    if errors := list(_response_validator(reference).iter_errors(body)):
+        raise ServiceError("INTERNAL", "invalid response envelope: " + "; ".join(
+            "/" + "/".join(map(str, error.absolute_path)) + ": " + error.message for error in errors
+        ))

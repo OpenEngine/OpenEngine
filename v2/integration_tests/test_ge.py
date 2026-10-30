@@ -6,6 +6,8 @@ import asyncio
 import json
 import os
 import socket
+import signal
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -158,9 +160,11 @@ class DropFirstReply:
     def __init__(self, connection) -> None:
         self.connection = connection
         self.requests = 0
+        self.payloads = []
 
     async def request(self, subject: str, payload: bytes = b"", timeout: float = 0.5, old_style: bool = False, headers=None):
         self.requests += 1
+        self.payloads.append(payload)
         reply = await self.connection.request(subject, payload, timeout=timeout, headers=headers)
         if self.requests == 1:
             raise NatsTimeoutError
@@ -189,6 +193,7 @@ def test_apply_retries_a_lost_reply_without_adding_a_revision(ge_url: str) -> No
         dropping = DropFirstReply(connection)
         reply = await Client(dropping, timeout=5).command(APPLY, {"graph": _graph("lost-reply")}, command_id="cmd_lost_reply")
         assert dropping.requests == 2
+        assert dropping.payloads[0] == dropping.payloads[1]
         assert validate_message(load_contract("graph_engine"), "ApplyGraphResponse", reply, in_reply_to=APPLY) == []
 
         client = Client(connection, timeout=5)
@@ -399,3 +404,27 @@ def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
     rows = [row.split() for row in oe("graph", "list").stdout.splitlines()[1:]]
     assert [(row[0], row[1], row[3]) for row in rows] == [("default", "implement-review", "2"), ("default", "restarted", "1")]
     assert rows[0][2] == graph_id
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGSTOP"), reason="requires POSIX process suspension")
+def test_status_observes_live_unready_ge_and_recovers(oe) -> None:
+    assert _up(oe, _free_port()).returncode == 0
+    state = json.loads(oe("status", "--json").stdout)
+    ge = next(p for p in state["processes"] if p["name"] == "ge")
+    os.kill(ge["pid"], signal.SIGSTOP)
+    try:
+        started = time.monotonic()
+        result = oe("status", "--json")
+        assert time.monotonic() - started < 5
+        assert result.returncode == 1
+        unready = json.loads(result.stdout)
+        assert unready["status"] == "unready"
+        current = next(p for p in unready["processes"] if p["name"] == "ge")
+        assert current["status"] == "unready"
+        assert current["address"] == ge["address"]
+    finally:
+        os.kill(ge["pid"], signal.SIGCONT)
+    assert oe("status").returncode == 0
+    listed = oe("graph", "list", "--json")
+    assert listed.returncode == 0
+    assert json.loads(listed.stdout)["status"] == "ok"

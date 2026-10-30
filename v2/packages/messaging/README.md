@@ -70,3 +70,19 @@ preempt them. Forced transport abort is covered for TCP, not WebSockets.
 Local-operator mode assumes a trusted managed broker with no remote ingress.
 Its listener check is not publisher identity; authenticated remote callers and
 broker permissions are tracked in #1051.
+
+Client settings reject booleans, nonnumeric or nonfinite timeouts, timeouts
+outside `(0, 60]` seconds, and attempt counts outside the integer range
+`1..10`. Defaults remain 2 seconds and 3 attempts. Only timeouts cause an
+automatic retry; a service rejection or malformed reply is returned at once.
+The encoded body is built once before attempting delivery, including generated
+command ID, causal path, expected version and deadline.
+
+Replies are checked against the common response envelope before callers use
+them. Query replies must echo the generated or supplied request ID; command
+replies must echo the command ID, including rejections. Missing or mismatched
+identity, invalid JSON, invalid known field types, missing results or operation
+IDs, and contradictory success/error fields raise nonretryable `ServiceError`
+with code `INTERNAL`, the subject and `oe logs` guidance. Additive response
+fields and unknown string error codes remain compatible. This checks the
+common envelope; service-specific result validation belongs to the caller.

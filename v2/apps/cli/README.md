@@ -79,3 +79,16 @@ its log, NATS's JetStream data, and the services' SQLite databases
 (`databases/`). `OE_DATABASE_BACKEND` switches every service's database; see
 packages/persistence. The jobs, loops, workspaces and connections commands,
 and the rest of the graph commands, arrive with the services behind them.
+
+`oe status` probes each recorded HTTP readiness address with a 0.5-second
+per-service timeout. It prints the health URL and current state; if GE cannot
+answer, both GE and the aggregate status become `unready` and the command
+exits 1 (including `--json`). The next invocation probes again, so a recovered
+GE reports `ready` and exits 0 without restarting the supervisor. This is an
+observation; it does not stop or restart an unhealthy service. A missing,
+starting or failed supervisor also returns nonzero.
+
+Malformed service response envelopes and mismatched request/command IDs fail
+CLI commands with a typed `INTERNAL` error and `oe logs` guidance. An
+unavailable local service reports how to start it with `oe up` and inspect its
+logs. These failures exit 1.

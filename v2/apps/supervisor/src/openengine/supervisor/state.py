@@ -21,6 +21,7 @@ class Status(StrEnum):
     """Passed its readiness check."""
     RUNNING = "running"
     """Started; it has no readiness check yet."""
+    UNREADY = "unready"
     FAILED = "failed"
 
 

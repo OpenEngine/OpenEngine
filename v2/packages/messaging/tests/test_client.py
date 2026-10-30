@@ -75,10 +75,10 @@ def test_no_responders_is_reported_at_once() -> None:
 
 def test_an_error_reply_raises_its_code_and_keeps_its_retryable_flag() -> None:
     error = {"code": "NOT_FOUND", "message": "no graph review", "retryable": True}
-    nats = ScriptedNats([{"status": "error", "error": error}])
+    nats = ScriptedNats([{"request_id": "req_error", "status": "error", "error": error}])
 
     with pytest.raises(ServiceError) as raised:
-        asyncio.run(Client(nats).query("oe.v1.ge.query.graphs.graph_review.get"))
+        asyncio.run(Client(nats).query("oe.v1.ge.query.graphs.graph_review.get", request_id="req_error"))
 
     assert raised.value.code == ErrorCode.NOT_FOUND
     assert raised.value.retryable is True
@@ -112,3 +112,75 @@ def test_a_connection_lost_while_waiting_reports_unavailable() -> None:
 
     assert raised.value.code is ErrorCode.UNAVAILABLE
     assert len(nats.sent) == 2
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), True, "2", 61])
+def test_invalid_timeout_is_refused(timeout) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        Client(ScriptedNats([]), timeout=timeout)
+
+
+@pytest.mark.parametrize("attempts", [0, -1, 1.5, True, "3", 11])
+def test_invalid_attempts_are_refused(attempts) -> None:
+    with pytest.raises(ValueError, match="attempts"):
+        Client(ScriptedNats([]), attempts=attempts)
+
+
+@pytest.mark.parametrize("reply", [
+    None, [], "text", {},
+    {"request_id": "req_1", "status": "ok"},
+    {"request_id": "req_other", "status": "ok", "result": {}},
+    {"status": "ok", "result": {}},
+    {"request_id": "req_1", "status": "ok", "result": []},
+    {"request_id": "req_1", "status": "ok", "result": {}, "error": {}},
+    {"request_id": "req_1", "status": "error", "error": {"code": [], "message": "bad", "retryable": False}},
+    {"request_id": "req_1", "status": "error", "error": {"code": "NEW", "message": "bad", "retryable": "false"}},
+])
+def test_malformed_query_response_is_actionable_internal_error(reply) -> None:
+    nats = ScriptedNats([reply])
+    with pytest.raises(ServiceError, match="oe logs") as raised:
+        asyncio.run(Client(nats).query("oe.v1.ge.query.graphs.list", request_id="req_1"))
+    assert raised.value.code == ErrorCode.INTERNAL
+    assert not raised.value.retryable
+    assert len(nats.sent) == 1
+
+
+@pytest.mark.parametrize("reply", [
+    {"command_id": "cmd_other", "status": "accepted", "operation_id": "op_1"},
+    {"command_id": "cmd_1", "status": "accepted"},
+    {"command_id": "cmd_1", "status": "accepted", "operation_id": "invalid"},
+    {"command_id": "cmd_1", "status": "rejected", "error": {}},
+])
+def test_malformed_command_response_is_internal_error(reply) -> None:
+    with pytest.raises(ServiceError, match="invalid service response"):
+        asyncio.run(Client(ScriptedNats([reply])).command(SUBJECT, {}, command_id="cmd_1"))
+
+
+def test_additive_reply_fields_and_unknown_error_codes_are_tolerated() -> None:
+    reply = {"request_id": "req_1", "status": "error", "future": True,
+             "error": {"code": "NEW", "message": "new failure", "retryable": True, "future": []}}
+    with pytest.raises(ServiceError) as raised:
+        asyncio.run(Client(ScriptedNats([reply])).query("query", request_id="req_1"))
+    assert raised.value.code == "NEW"
+    assert raised.value.retryable is True
+
+
+@pytest.mark.parametrize("data", [b"not json", b"\xff"])
+def test_invalid_json_response_is_internal_error(data) -> None:
+    class RawNats:
+        async def request(self, *args, **kwargs):
+            return Reply(data)
+
+    with pytest.raises(ServiceError, match="oe logs") as raised:
+        asyncio.run(Client(RawNats()).query("query"))
+    assert raised.value.code == ErrorCode.INTERNAL
+
+
+
+def test_known_error_retryable_flag_is_authoritative() -> None:
+    reply = {"command_id": "cmd_1", "status": "rejected",
+             "error": {"code": "PERMISSION_DENIED", "message": "retry later", "retryable": True}}
+    with pytest.raises(ServiceError) as raised:
+        asyncio.run(Client(ScriptedNats([reply])).command(SUBJECT, {}, command_id="cmd_1"))
+    assert raised.value.code == "PERMISSION_DENIED"
+    assert raised.value.retryable is True

@@ -17,3 +17,9 @@ release for this platform, checks it against the checksum in
 `processes/nats.py`, and caches it under `$XDG_CACHE_HOME/openengine`. To bump
 NATS, change `NATS_VERSION` and replace `ARCHIVE_SHA256` with the matching lines
 from that release's `SHA256SUMS`.
+
+The persisted `ready` state records successful startup, rather than a continuing
+health guarantee. `oe status` observes current health separately with bounded
+HTTP probes and reports `unready`/exit 1 while an HTTP service is unreachable.
+A later successful probe restores the displayed ready state. Status observations
+do not rewrite the supervisor's file or interfere with graceful shutdown.

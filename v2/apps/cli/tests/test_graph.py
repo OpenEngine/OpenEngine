@@ -275,3 +275,30 @@ def test_project_selects_the_graph_applied_listed_and_read(serving) -> None:
     missing = _graph_list(home, "get", "implement-review", "--project", "cli-gamma")
     assert missing.returncode == 1
     assert missing.stderr == "oe graph get: NOT_FOUND: no graph named implement-review in project cli-gamma\n"
+
+
+@pytest.mark.parametrize("raw", [b"not-json", b"[]", b'{"status":"ok"}',
+                                  b'{"request_id":"req_wrong","status":"ok","result":{}}'])
+def test_malformed_service_reply_is_actionable_nonzero(monkeypatch, capsys, raw) -> None:
+    from openengine.cli.commands import graph
+    from openengine.messaging import Client
+
+    class BrokenService:
+        async def request(self, *args, **kwargs):
+            class Reply:
+                data = raw
+            return Reply()
+
+    async def pages(*args, **kwargs):
+        return [await Client(BrokenService()).query("oe.v1.ge.query.graphs.list")]
+
+    monkeypatch.setattr(graph, "_nats_url", lambda: "nats://127.0.0.1:4222")
+    monkeypatch.setattr(graph, "_pages", pages)
+    result = graph.run_list(argparse.Namespace(project=None, cursor=None, json=True))
+    output = capsys.readouterr()
+    assert result == 1
+    assert output.out == ""
+    assert "INTERNAL" in output.err
+    assert "invalid service response" in output.err
+    assert "oe logs" in output.err
+    assert "Traceback" not in output.err

@@ -11,6 +11,7 @@ as Unavailable, as retrying cannot help.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Protocol
 
 from nats.errors import (
@@ -44,13 +45,18 @@ class Requester(Protocol):
 
 class Client:
     def __init__(self, nats: Requester, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, attempts: int = DEFAULT_ATTEMPTS) -> None:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 0 < timeout <= 60:
+            raise ValueError("timeout must be finite and greater than 0, at most 60 seconds")
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or not 1 <= attempts <= 10:
+            raise ValueError("attempts must be an integer between 1 and 10")
         self._nats = nats
         self.timeout = timeout
         self.attempts = attempts
 
     async def query(self, subject: str, params: dict[str, Any] | None = None, *, request_id: str | None = None) -> dict[str, Any]:
         """The whole query-response; raises ServiceError when its status is `error`."""
-        reply = await self._request(subject, envelopes.encode(envelopes.query(params, request_id=request_id)))
+        body = envelopes.query(params, request_id=request_id)
+        reply = await self._request(subject, body, envelopes.QUERY_RESPONSE, "request_id")
         if reply.get("status") != "ok":
             raise _error(subject, reply)
         return reply
@@ -60,12 +66,14 @@ class Client:
 
         `identity` is `command_id`, `caused_by`, `expected_version` and `deadline_at`, as `envelopes.command` takes.
         """
-        reply = await self._request(subject, envelopes.encode(envelopes.command(payload, **identity)))
+        body = envelopes.command(payload, **identity)
+        reply = await self._request(subject, body, envelopes.COMMAND_RESPONSE, "command_id")
         if reply.get("status") != "accepted":
             raise _error(subject, reply)
         return reply
 
-    async def _request(self, subject: str, body: bytes) -> dict[str, Any]:
+    async def _request(self, subject: str, request: dict[str, Any], schema: str, identity: str) -> dict[str, Any]:
+        body = envelopes.encode(request)
         for attempt in range(1, self.attempts + 1):
             try:
                 with sending(subject) as headers:
@@ -77,9 +85,13 @@ class Client:
             except NatsTimeoutError:
                 log.warning("no reply in time", extra={"messaging.destination.name": subject, "attempt": attempt})
                 continue
-            reply = envelopes.decode(message.data)
-            if not isinstance(reply, dict):
-                raise ServiceError("INTERNAL", f"{subject} replied with {type(reply).__name__}, not an object")
+            try:
+                reply = envelopes.decode(message.data)
+                envelopes.check_response(schema, reply)
+                if reply.get(identity) != request[identity]:
+                    raise ServiceError("INTERNAL", f"{identity} does not match the request")
+            except (ServiceError, UnicodeError) as error:
+                raise ServiceError("INTERNAL", f"{subject}: invalid service response ({error}). Check `oe logs` and service versions.") from None
             return reply
         raise Unavailable(subject, f"no reply after {self.attempts} attempts of {self.timeout:g}s")
 
