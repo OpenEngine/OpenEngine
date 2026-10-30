@@ -166,6 +166,20 @@ def test_a_local_token_bearer_reaches_the_cli_api(tunnelled) -> None:
     _local(tunnelled(public_url=False), scenario)
 
 
+def test_with_a_public_address_token_sign_in_only_works_from_that_address(tunnelled) -> None:
+    """A browser on the daemon's own computer must use the public address, as the guide says."""
+
+    async def scenario(client):
+        local = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                  headers={"Origin": "http://127.0.0.1:4364"})
+        assert local.status_code == 403
+        public = await client.post("/api/auth/token/login", data={"token": TOKEN},
+                                   headers={"Origin": f"https://{PUBLIC_HOST}"})
+        assert public.status_code == 303
+
+    _local(tunnelled(), scenario)
+
+
 def test_a_plain_local_run_without_a_token_stays_open(tunnelled) -> None:
     async def scenario(client):
         for path in BROWSER_APIS:

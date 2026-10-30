@@ -74,7 +74,7 @@ This stores the token in that terminal for OpenEngine to read when it starts. It
           await expect.poll(async () => { try { return await status() } catch { return 0 } }).toBe(401)
           expect(await status(TOKEN)).toBe(200)
         })
-        await step(`To use OpenEngine in a browser now, open its address, \`https://${MAC_MINI}\`. On the other computer itself, open \`http://127.0.0.1:4364\`. Instead of your work, you see a sign-in form. Paste the token you set and choose sign in.
+        await step(`To use OpenEngine in a browser now, open its address, \`https://${MAC_MINI}\`. Use that address on the other computer too: if you gave OpenEngine a public address in [Reach Your OpenEngine From Anywhere](./test2doc-reach-your-openengine-from-anywhere.mdx), it refuses sign-in from \`http://127.0.0.1:4364\`. Only without a public address can you sign in at \`http://127.0.0.1:4364\` on the other computer itself. Instead of your work, you see a sign-in form. Paste the token you set and choose sign in.
 
 The browser remembers that you signed in, even after you close it. Choose Sign out when you finish on a computer other people use. If you change the token later, every browser has to sign in again.`, async () => {
           // What the browser does: refused until it signs in, then let in by its session cookie.
