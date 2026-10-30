@@ -39,9 +39,11 @@ slice registers none. Workspace commands (`workspaces.apply`, `.execute`,
   from provisioning so a worktree never needs a VM to exist. #1055 (host
   fencing) and #1118 (durable fake workspace daemon delivery) implement it.
 - `UnitOfWork` / `Transaction` (`application/transactions.py`) -- the
-  transactional document and command-receipt port implemented by
-  `persistence/durable.py` for SQLite. `ports.py` re-exports `UnitOfWork`.
-  `EventPublisher` remains a delivery port for #1112.
+  transactional document, command-receipt and event-outbox port implemented
+  by `persistence/durable.py` for SQLite. `ports.py` re-exports `UnitOfWork`.
+- `EventPublisher` -- publishes one event and returns only after the broker
+  acknowledges it; `jetstream.py` implements it for the `vcp-events` stream.
+  See "Event outbox" below.
 
 Prototype provider selection is sticky and persisted: `workspaces.body.legacy.locator`
 preserves the opaque ownership/placement metadata the original provider needs to
@@ -112,9 +114,9 @@ There is no automatic pruning. Receipts (including original responses),
 workspace documents, runtime ownership and operations survive reopening and are
 retained indefinitely, satisfying the public contract's minimum seven-day
 command-ID retention. Disk usage therefore grows; future bounded retention
-must preserve the retry window and unreconciled ownership. Event delivery,
-lifecycle command handlers, provider effects, sessions and attempts remain
-in their follow-up tickets. These tests prove persistence with deterministic
+must preserve the retry window and unreconciled ownership. Lifecycle
+command handlers, provider effects, sessions and attempts remain in their
+follow-up tickets. These tests prove persistence with deterministic
 JSON records; they do not execute an agent or allocate compute.
 
 ### Follow-up issue wording
@@ -126,3 +128,54 @@ stateless tokens; JetStream durable consumers own their reading positions.
 #1112 should explicitly own creation of its outbox schema together with its
 publisher, including insertion ordering, workspace identity and indexed pending
 publication state; it must not assume #1111 supplies a generic event table.
+(#1112 now does; see below.)
+
+## Event outbox
+
+Revision `09a0811b905f` adds the `outbox` table on top of the lifecycle
+schema, leaving existing records untouched. Each row has an `AUTOINCREMENT`
+`sequence` (publication order), `workspace_id` (the partition), a unique
+`event_id`, the immutable `envelope`, `created_at` and a nullable
+`published_at`; `ix_outbox_pending` indexes unpublished rows by sequence.
+Event IDs never determine order. Revision `c36db826eebb` adds the partial
+`ix_outbox_workspace_pending` index on `(workspace_id, sequence)`. When some
+workspaces are in backoff, the publisher seeks their neighbours in that index
+and merges eligible workspace heads in sequence order, stopping at the batch
+limit. Query work grows with the number of pending workspaces and the batch
+size, rather than the number of events in blocked backlogs. Without exclusions,
+the publisher uses the original sequence index directly.
+
+Producers call `tx.append_event(envelope)` inside the same
+`store.transaction()` as the workspace, operation, runtime and receipt
+changes that caused the event, so a failure or cancellation rolls them all
+back together. The envelope's `causal_path` must end with its `event_id`, and
+a reused event ID fails the transaction. A command that `tx.replay` answers
+must return the stored response without appending again.
+
+`OutboxPublisher` (`application/outbox.py`) runs for the service's lifetime,
+outside any lifecycle transaction. It reads pending rows in sequence order,
+publishes each envelope unchanged to
+`oe.v1.vcp.events.workspaces.{workspace_id}.{event_type}` on the existing
+`vcp-events` stream with `Nats-Msg-Id` set to the event ID, and sets
+`published_at` only after JetStream acknowledges it. If an event is not
+acknowledged, later events of that workspace wait; other workspaces continue.
+Publication failures (broker outage or missing stream) back off per workspace
+exponentially from 0.1 s to 10 s and never discard a record. A successful
+publication resets that workspace's backoff. Healthy workspaces keep draining;
+`notify()` and idle polling can publish their new events without retrying a
+blocked workspace early. The next retry deadline also wakes the worker, even
+if the idle poll is longer. Database errors retain a shared bounded backoff.
+It polls every second when idle; `notify()` wakes it sooner. On shutdown it stops between
+events, cancels an in-flight publish after 5 s and closes before the NATS
+connection; anything unacknowledged is published after the next start.
+
+**Delivery is at least once.** A lost acknowledgement, or a crash after
+acknowledgement but before `published_at` is written, republishes the same
+event ID and envelope. JetStream drops repeats only within the stream's
+2-minute duplicate window, so consumers must deduplicate on `event_id`.
+
+The worker knows nothing about event types, so later task and conversation
+producers append through the same port. No lifecycle handler appends events
+yet; the tests use a minimal producer. This keeps the single-host,
+single-writer constraint: there is no distributed publisher coordination, and
+published rows are retained indefinitely (no retention/GC).

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.sqlite import insert
@@ -12,8 +13,48 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from openengine.persistence import Backend, BackendNotImplemented, Database
 
-from virtual_control_plane.application.transactions import Collection, CommandIdConflict, Document
-from virtual_control_plane.persistence.schema import documents
+from virtual_control_plane.application.transactions import (
+    Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent,
+)
+from virtual_control_plane.jetstream import event_errors
+from virtual_control_plane.persistence.schema import documents, outbox
+
+
+# Enumerate workspace IDs by index seeks, rather than DISTINCT/GROUP BY scans.
+# The second recursive CTE is a priority queue: SQLite's recursive ORDER BY
+# expands the smallest sequence first and LIMIT bounds the whole result. Each
+# expansion seeks the next event of just that workspace, so excluded backlogs
+# are never walked. Work is proportional to pending workspaces plus batch size.
+_PENDING_EXCLUDING = sa.text("""
+WITH RECURSIVE workspaces(workspace_id) AS (
+    SELECT min(workspace_id) FROM outbox WHERE published_at IS NULL
+    UNION ALL
+    SELECT (SELECT min(workspace_id) FROM outbox
+            WHERE published_at IS NULL AND workspace_id > workspaces.workspace_id)
+    FROM workspaces WHERE workspace_id IS NOT NULL
+),
+pending(sequence, workspace_id) AS (
+    SELECT event.sequence, event.workspace_id
+    FROM workspaces JOIN outbox AS event ON event.sequence = (
+        SELECT min(sequence) FROM outbox
+        WHERE published_at IS NULL AND workspace_id = workspaces.workspace_id
+    )
+    WHERE workspaces.workspace_id NOT IN :exclude
+    UNION ALL
+    SELECT event.sequence, event.workspace_id
+    FROM pending JOIN outbox AS event ON event.sequence = (
+        SELECT min(sequence) FROM outbox
+        WHERE published_at IS NULL AND workspace_id = pending.workspace_id
+          AND sequence > pending.sequence
+    )
+    ORDER BY 1 LIMIT :limit
+)
+SELECT event.sequence, event.workspace_id, event.event_id, event.envelope
+FROM pending JOIN outbox AS event ON event.sequence = pending.sequence
+ORDER BY event.sequence
+""").bindparams(sa.bindparam("exclude", expanding=True)).columns(
+    sequence=sa.Integer, workspace_id=sa.String, event_id=sa.String, envelope=sa.JSON,
+)
 
 
 def _normalize_numbers(value: object) -> object:
@@ -82,6 +123,15 @@ class Transaction:
         ))
         return response
 
+    async def append_event(self, envelope: Document) -> None:
+        # Reject what could never be published before it can hold back its workspace.
+        if errors := event_errors(envelope):
+            raise InvalidEvent(errors)
+        await self._connection.execute(outbox.insert().values(
+            workspace_id=envelope["resources"]["workspace_id"], event_id=envelope["event_id"],
+            envelope=envelope, created_at=datetime.now(UTC),
+        ))
+
 
 class DurableStore:
     def __init__(self, database: Database) -> None:
@@ -101,6 +151,27 @@ class DurableStore:
             except BaseException:
                 await connection.rollback()
                 raise
+
+    async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
+        if excluded := list(exclude):
+            query = _PENDING_EXCLUDING.bindparams(exclude=excluded, limit=limit)
+        else:
+            # With no blocked workspace the sequence-only index already gives a bounded scan.
+            query = (
+                sa.select(outbox.c.sequence, outbox.c.workspace_id, outbox.c.event_id, outbox.c.envelope)
+                .where(outbox.c.published_at.is_(None))
+                .order_by(outbox.c.sequence).limit(limit)
+            )
+        async with self.database.connect() as connection:
+            return [PendingEvent(**row) for row in (await connection.execute(query)).mappings()]
+
+    async def mark_published(self, sequence: int) -> None:
+        async with self.database.connect() as connection:
+            await connection.execute(
+                outbox.update().where(outbox.c.sequence == sequence, outbox.c.published_at.is_(None))
+                .values(published_at=datetime.now(UTC))
+            )
+            await connection.commit()
 
     async def close(self) -> None:
         await self.database.close()

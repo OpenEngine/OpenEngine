@@ -1,5 +1,5 @@
 ---
-title: vcp at ebfe415656b6 (green added, red removed, amber changed)
+title: vcp at c36db826eebb (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -11,29 +11,28 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    command_receipts["command_receipts<br/>Immutable command identity and original response for idempotent replay. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    command_receipts["command_receipts<br/>Immutable command identity and original response for idempotent replay."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class command_receipts added
-    operations["operations<br/>Accepted commands' progress and terminal state. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    operations["operations<br/>Accepted commands' progress and terminal state."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class operations added
-    workspace_runtimes["workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    outbox["outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication. (CHANGED)"] {
+        INTEGER sequence PK "not null"
+        VARCHAR(128) workspace_id "not null"
+        VARCHAR(128) event_id "not null"
+        JSON envelope "not null"
+        DATETIME created_at "not null"
+        DATETIME published_at "nullable"
     }
-    class workspace_runtimes added
-    workspaces["workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records. (CHANGED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
-        VARCHAR(36) id PK "REMOVED; not null"
-        VARCHAR(32) provider "REMOVED; not null"
-        VARCHAR(32) status "REMOVED; not null"
-        DATETIME created_at "REMOVED; not null"
-        DATETIME updated_at "REMOVED; not null"
-        JSON locator "REMOVED; nullable"
+    class outbox changed
+    workspace_runtimes["workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class workspaces changed
+    workspaces["workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }

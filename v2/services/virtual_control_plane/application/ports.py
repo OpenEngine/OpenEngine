@@ -6,7 +6,7 @@ Git worktree/host-process-shaped double, once by a smolvm-shaped double -- so
 against both without the application layer branching on which one it holds.
 Real adapters land in #1054 (worktree) and #1114 (smolvm); #1055/#1118 add the
 runtime-supervision side. Transactional persistence is defined in `application/transactions.py`;
-event delivery is implemented separately in #1112.
+`application/outbox.py` publishes the events those transactions append.
 """
 
 from __future__ import annotations
@@ -93,11 +93,11 @@ class RuntimeSupervisorPort(Protocol):
 
 
 class EventPublisher(Protocol):
-    """Publishes one workspace lifecycle event.
+    """Publishes one public event envelope, returning only once the broker acknowledges it.
 
-    #1112 gives this a transactional outbox so delivery survives a crash
-    between commit and publish; the shared messaging `Client` provides no
-    durable deduplication of its own, so until then this is best-effort only.
+    Raise if the acknowledgement does not arrive. `OutboxPublisher` calls this
+    with committed events and retries the identical envelope, so an
+    implementation must use `event_id` as the broker's deduplication ID.
     """
 
     async def publish(self, event: dict[str, Any]) -> None: ...
