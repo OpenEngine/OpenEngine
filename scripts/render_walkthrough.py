@@ -478,23 +478,22 @@ def draw_card(img, kind, alpha):
     layer = Image.new("RGBA", (W, H), (17, 17, 32, int(255 * alpha)))
     d = ImageDraw.Draw(layer)
     a = int(255 * alpha)
+    # Both cards share the logo, title and site line; the middle differs.
+    mark = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    mark.paste(logo(150), (W // 2 - 75, H // 2 - 335))
+    mark.putalpha(ImageChops.multiply(mark.getchannel("A"), Image.new("L", layer.size, a)))
+    layer.alpha_composite(mark)
+    d.text((W / 2, H / 2 - 100), "OpenEngine", font=TITLE_FONT, fill=(*FG, a), anchor="mm")
+    d.text((W / 2, H / 2 + 220), "openengine.cc", font=TAG_FONT, fill=(*ORANGE, a), anchor="mm")
     if kind == "title":
-        d.text((W / 2, H / 2 - 60), "OpenEngine", font=TITLE_FONT, fill=(*FG, a), anchor="mm")
-        d.text((W / 2, H / 2 + 40), "Graphs define the work. Loops keep it going.", font=TAG_FONT, fill=(*MAUVE, a), anchor="mm")
+        d.text((W / 2, H / 2 + 55), "Graphs define the work. Loops keep it going.", font=TAG_FONT, fill=(*FG, a), anchor="mm")
     else:
-        mark = logo(150)
-        markl = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-        markl.paste(mark, (W // 2 - 75, H // 2 - 335))
-        markl.putalpha(ImageChops.multiply(markl.getchannel("A"), Image.new("L", layer.size, a)))
-        layer.alpha_composite(markl)
-        d.text((W / 2, H / 2 - 100), "OpenEngine", font=TITLE_FONT, fill=(*FG, a), anchor="mm")
         cmd1 = "oe graph add my-graph.yaml"
         cmd2 = "oe loop add my-graph --every 1d --max-spend 20"
         f = ImageFont.truetype(MENLO, 36)
         for i, (c, col) in enumerate([(cmd1, GREEN), (cmd2, CYAN)]):
             y = H / 2 + 20 + i * 70
             d.text((W / 2, y), c, font=f, fill=(*col, a), anchor="mm")
-        d.text((W / 2, H / 2 + 220), "openengine.cc", font=TAG_FONT, fill=(*ORANGE, a), anchor="mm")
     img.paste(layer, (0, 0), layer)
 
 
