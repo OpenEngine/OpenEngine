@@ -19,12 +19,13 @@ truthful-readiness contract `ge` uses. Authorization runs through the shared
 (loopback only, judged by where the broker listens -- not the URL VCP
 dialed).
 
-The service serves `workspaces.apply`, `capabilities.get`, `workspaces.list`,
-`workspaces.{workspace_id}.get` and `operations.{operation_id}.get` through the
-shared messaging routes. Production registers no managed provider yet, so
-capabilities remain empty and creation returns `UNSUPPORTED_CAPABILITY` until
-an adapter is registered. Readiness promises request handling, not a VM or
-executor. Later commands return the shared explicit unsupported response.
+The service serves `workspaces.apply`, `workspaces.{workspace_id}.ensure`,
+`capabilities.get`, `workspaces.list`, `workspaces.{workspace_id}.get` and
+`operations.{operation_id}.get` through the shared messaging routes. The smolvm
+adapter (below) is registered only when `OE_VCP_SMOLVM_IMAGE` is set; without
+it capabilities remain empty and creation returns `UNSUPPORTED_CAPABILITY`.
+Readiness promises request handling, not a VM or executor. Later commands
+return the shared explicit unsupported response.
 
 ### Managed workspace creation
 
@@ -44,23 +45,64 @@ apply under another command ID returns the original operation without another
 allocation; immutable specification changes are invalid, and other updates
 remain explicitly unsupported in this creation slice.
 
-`AllocationProvider` in `application/ports.py` is the managed allocation port,
-separate from the prototype's unkeyed `WorkspaceProviderPort.create`.
-`provision(runtime_id, workspace)` must be idempotent across process restarts,
-returning/recovering the same allocation for the persisted runtime ID, even
-when an earlier call was interrupted after allocation. A provider that cannot
-honor this must not be registered. Capabilities come from the configured
-adapter, never from an assumed isolation level. No real provider or executor
-is added here; tests use deterministic fake compute.
+`AllocationProvider` in `application/ports.py` is the managed provider port,
+separate from the prototype's unkeyed `WorkspaceProviderPort.create`. Every
+call receives the persisted `Ownership` (workspace ID, runtime ID, generation),
+written at acceptance before any provider call. `validate` applies
+provider-specific admission rules inside acceptance (pure, no I/O);
+`provision` creates or finishes creating the owned compute and prepares it;
+`ensure` reasserts ownership of existing compute and makes it running and
+prepared without ever reprovisioning compute that is gone or adopting foreign
+compute; `context` describes where work happens (root, working directory,
+instruction files) so command acceptance and delivery never hard-code guest
+paths. `provision` and `ensure` must be idempotent across process restarts,
+converging on the same compute even when an earlier call was interrupted after
+allocation. A provider that cannot honor this must not be registered.
+Capabilities come from the configured adapter, never from an assumed
+isolation level. Provider identity and the opaque locator are persisted per
+workspace; reconciliation always uses the original provider.
 
-One worker, under the service's exclusive state-directory lock, resumes pending
-operations on startup and polls every second. Allocation runs outside the
-transaction. Retryable provider errors leave the operation pending; terminal
-errors atomically mark the workspace and operation failed and append a failure
-event. Ownership is retained for cleanup. Success stores the opaque locator,
-marks the runtime ready and operation succeeded, and appends `workspace.ready`.
-An interrupted call repeats the same runtime ID. Shutdown cancels allocation
-before closing persistence; it never destroys compute.
+One worker, under the service's exclusive state-directory lock, resumes
+unfinished operations on startup and polls every second. It claims an
+operation as `running` in its own transaction, then runs the provider outside
+any transaction (bounded by `ALLOCATION_TIMEOUT_SECONDS`, 10 minutes, since a
+first boot may pull an image and clone repositories). A restart finds both
+`pending` and `running` operations through the `ix_operations_active` partial
+index and repeats them with the same ownership. Retryable provider errors
+(`UNAVAILABLE`) and timeouts leave the operation `running` and schedule a
+retry after 1, 2, 4, ... seconds, capped at 60 (`retry_delay`), recorded on
+the operation record; the worker skips operations that are not yet due. After
+`MAX_ATTEMPTS` (8) failed attempts the operation fails with `PROVIDER_ERROR`
+carrying the last error. Terminal errors atomically mark the operation failed
+and, for creation, the workspace failed with a `workspace.failed` event.
+Ownership is retained for cleanup in every failure. Success stores the opaque
+locator, marks the runtime ready and operation succeeded, and appends
+`workspace.ready`. Terminal transactions re-read the workspace document and
+change only the fields the operation owns, so state another producer wrote
+while the provider ran survives. Shutdown cancels the provider call before
+closing persistence; it never destroys compute.
+
+`workspaces.{workspace_id}.ensure` accepts for a `ready` workspace whose
+provider is configured: it records a pending `workspaces.ensure` operation and
+takes the workspace's operation lock (`active_operation_id`, private to the
+document). A second lifecycle command while one is in progress is rejected
+`UNAVAILABLE` (retryable, so the same command ID is accepted once the lock is
+free); a workspace in any other state is `INVALID_STATE`; a missing one is
+`NOT_FOUND`; restoring a suspended workspace is `UNSUPPORTED_CAPABILITY`. The
+worker runs the provider's `ensure`. Success records
+`{runtime_id, runtime_generation, restored: false}` and releases the lock
+without changing the workspace's state, version or timestamps and without a
+second `workspace.ready` event. A failed ensure fails only the operation: the
+workspace stays `ready` and keeps its ownership.
+
+If a workspace's provider is not configured when its accepted operation runs
+(for example after a restart with a changed configuration), the operation
+fails explicitly with `PROVIDER_ERROR` ("provider X is not configured on this
+host") and releases the operation lock, so unrelated queued work proceeds.
+Creation marks the workspace failed; an ensure leaves it as it was. Runtime
+ownership is retained: once the provider is configured again a new command
+can ensure or clean up the compute. VCP never reinterprets the workspace for
+another provider or falls back to host execution.
 
 Workspace list uses descending `(created_at, workspace_id)` keyset pagination.
 Versioned base64url JSON cursors contain that key and normalized filters;
@@ -77,20 +119,72 @@ Receipts, operations and ownership use the existing durable tables.
 `tests/test_lifecycle.py` exercises real NATS with the shared Client/Server,
 including authorization, a public broker reached via loopback, lost-reply
 retries and restart, concurrent retries, typed queries and schema errors.
-It also covers interrupted allocation, terminal failure, retryable provider
-errors, cursor restart/filter binding, durable rejections and acceptance rollback.
+It also covers interrupted allocation, terminal failure, retry backoff and its
+cap, idempotent ensure, pending and running create/ensure recovery across
+restarts, explicit failure of operations whose provider disappeared, cursor
+restart/filter binding, durable rejections and acceptance rollback.
+
+### smolvm adapter
+
+`providers/smolvm/provider.py` implements `AllocationProvider` with the
+released `smolvm machine` CLI (`create`, `start`, `status`, `ls`, `exec`,
+`cp`); the application layer never imports it (`tests/test_boundaries.py`).
+A workspace's machine is named `oe-vcp-{runtime_id}` and labelled
+`oe.workspace`, `oe.runtime` and `oe.generation`. Provisioning lists machines
+first: its own half-made machine is reused after a crash, and a machine under
+that name with different labels raises `OwnershipMismatch` -- it is never
+started, prepared or deleted. The machine runs the configured image with
+`sleep infinity` as its workload, outbound network, whole vCPUs (`cpuMillis`
+must be a multiple of 1000, else `INVALID_ARGUMENT` at acceptance), `--mem`
+and `--storage` from the spec. Preparation runs in the guest as idempotent
+steps beneath `/workspace`: required tools are checked with `command -v`
+(`terminal` means `sh`; `tar` always; `git` when repositories are requested),
+repositories are cloned to `repositories/{index}` and checked out at `ref` if
+given, context files and `instructions` (as `AGENTS.md`) arrive as one tar
+archive through `machine cp`, and `/oe-vcp/ready` finally names the runtime.
+An interrupted preparation resumes from the first unfinished step; a repeated
+call reads the marker and stops. `ensure` refuses a vanished machine
+(`PROVIDER_ERROR`, terminal) and restarts a stopped one. Context file paths
+must be relative and stay beneath the root. No host directory or credential
+is mounted or forwarded, and CLI diagnostics (which can carry repository
+credentials) stay out of public errors.
+
+Capabilities are honest: `microvm` isolation, the tools the host was
+configured with, and no checkpoint, suspend or restore. CLI exits and
+timeouts are retryable `UNAVAILABLE` errors for the lifecycle's capped
+backoff; a missing tool, a vanished machine, an ownership mismatch and a
+missing CLI binary are terminal. Registration is opt-in:
+`OE_VCP_SMOLVM_IMAGE` names the guest image, `OE_VCP_SMOLVM_TOOLS`
+(default `git,terminal`) the tools to advertise and `OE_VCP_SMOLVM_EXECUTABLE`
+the CLI. Destruction, daemon installation, guest credentials and agent
+execution are later tickets.
+
+`tests/smolvm_fake.py` is a deterministic CLI stand-in (machines as JSON
+records, a guest directory per machine, real `sh`/`git`/`tar` behind
+`machine exec`, injectable faults) so routine CI needs no virtualization.
+`tests/test_smolvm_provider.py` covers the adapter against it;
+`tests/test_provider_conformance.py` runs the managed lifecycle cases --
+create, idempotent ensure, ownership mismatch, failed preparation, restart
+reconciliation and capability reporting -- against both the host-shaped double
+and the smolvm adapter. `tests/test_smolvm_smoke.py` is the opt-in real
+smoke test (create, restart, ensure, delete):
+
+```sh
+OE_VCP_SMOLVM_IMAGE=alpine:3.20 uv run --project v2 --frozen pytest \
+  v2/services/virtual_control_plane/tests/test_smolvm_smoke.py -s
+```
 
 ### Where the ports go
 
 `application/ports.py` defines the seams later tickets implement against:
 
 - `WorkspaceProviderPort` (create / recover / destroy an opaque-locator
-  workspace) -- implemented by #1054's Git worktree/host-process adapter and
-  #1114's smolvm adapter. `application/workspaces.py`'s `WorkspaceService`
-  drives both through this one port, and
-  `tests/test_provider_conformance.py` runs the same lifecycle assertions
-  against a worktree-shaped and a VM-shaped double, so neither real adapter
-  needs its own copy of this test.
+  workspace) -- the prototype port `application/workspaces.py`'s
+  `WorkspaceService` drives; `tests/test_provider_conformance.py` runs the
+  same lifecycle assertions against a worktree-shaped and a VM-shaped double.
+- `AllocationProvider` -- the managed port above, implemented by
+  `providers/smolvm` and, in #1054, the Git worktree adapter; the same module's
+  managed conformance cases run against both the host-shaped double and smolvm.
 - `RuntimeSupervisorPort` and `ExecutionContext` -- starting and fencing the
   agent process/session inside an already-provisioned workspace, kept apart
   from provisioning so a worktree never needs a VM to exist. #1055 (host
@@ -111,9 +205,9 @@ reprovisioning with a different one or a lower-isolation fallback --
 
 ### Out of scope here
 
-Real worktree/smolvm adapters, VM allocation, agent execution, later workspace
-commands, and authenticated public (non-loopback) callers (#1051, which plugs
-into the same `Authorizer` boundary once it exists).
+The worktree adapter (#1054), workspace destruction, guest daemon and agent
+execution, checkpoint/suspend/restore, and authenticated public (non-loopback)
+callers (#1051, which plugs into the same `Authorizer` boundary once it exists).
 
 ## Durable lifecycle persistence
 
@@ -132,8 +226,8 @@ The transaction port stores JSON snapshots in separate collections:
 
 | Collection | Contents owned by the lifecycle application |
 | --- | --- |
-| `workspaces` | Workspace document, resource version, lifecycle state |
-| `operations` | Operation identity and progress/terminal state |
+| `workspaces` | Workspace document, resource version, lifecycle state, private operation lock |
+| `operations` | Operation identity and progress/terminal state, private retry schedule |
 | `workspace_runtimes` | Provider, opaque locator, logical runtime ID and generation |
 | `command_receipts` | Immutable identity and original response (private receipt API) |
 

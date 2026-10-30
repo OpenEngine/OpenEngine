@@ -108,7 +108,7 @@ class Transaction:
     async def pending_allocations(self, limit: int, after: str = "") -> list[Document]:
         table = documents["operations"]
         query = (sa.select(table.c.body)
-                 .where(sa.text("json_extract(body, '$.snapshot.status') = 'pending'"), table.c.key > after)
+                 .where(sa.text("json_extract(body, '$.snapshot.status') IN ('pending', 'running')"), table.c.key > after)
                  .order_by(table.c.key).limit(limit))
         return list((await self._connection.execute(query)).scalars())
 

@@ -80,3 +80,19 @@ def test_main_fails_startup_rather_than_racing_a_running_vcp_for_the_state_direc
         assert vcp.main() == vcp.EXIT_FAILED
     finally:
         holder.release()
+
+
+def test_providers_are_configured_from_the_environment_and_default_to_none() -> None:
+    from virtual_control_plane.providers.smolvm import Smolvm
+
+    assert vcp.providers({}) == {}
+
+    configured = vcp.providers({vcp.SMOLVM_IMAGE_VARIABLE: "example.test/image:1",
+                                vcp.SMOLVM_TOOLS_VARIABLE: "git,terminal,browser,",
+                                vcp.SMOLVM_EXECUTABLE_VARIABLE: "/opt/smolvm/bin/smolvm"})
+
+    [(name, adapter)] = configured.items()
+    assert name == "smolvm" and isinstance(adapter, Smolvm)
+    assert (adapter.image, adapter.executable) == ("example.test/image:1", "/opt/smolvm/bin/smolvm")
+    assert adapter.capabilities["tools"] == ["git", "terminal", "browser"]
+    assert vcp.providers({vcp.SMOLVM_IMAGE_VARIABLE: "img"})["smolvm"].capabilities["tools"] == ["git", "terminal"]

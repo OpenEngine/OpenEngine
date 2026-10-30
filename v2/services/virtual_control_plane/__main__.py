@@ -16,9 +16,12 @@ outbox events to the `vcp-events` JetStream stream (`application/outbox.py`);
 shutdown stops that worker before closing the connection, leaving unpublished
 events for the next start.
 
-Workspace creation and lifecycle queries use durable receipts and a restartable
-allocation worker. No production provider is registered yet: readiness promises
-request handling, not compute or an executor. See the service README.
+Workspace creation, `ensure` and lifecycle queries use durable receipts and a
+restartable operation worker. The smolvm adapter is registered only when
+`OE_VCP_SMOLVM_IMAGE` names a guest image (`OE_VCP_SMOLVM_TOOLS` and
+`OE_VCP_SMOLVM_EXECUTABLE` refine it); otherwise no provider is configured and
+readiness promises request handling, not compute or an executor. See the
+service README.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ import logging
 import os
 import signal
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -46,6 +50,7 @@ from virtual_control_plane.exclusion import AlreadyRunning, StateDirectory
 from virtual_control_plane.jetstream import JetStreamEvents
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.durable import DurableStore
+from virtual_control_plane.providers.smolvm import DEFAULT_TOOLS, Smolvm
 
 NATS_URL_VARIABLE = "OE_NATS_URL"
 HEALTH_PORT_VARIABLE = "OE_VCP_HEALTH_PORT"
@@ -59,10 +64,23 @@ EXIT_FAILED = 1
 
 log = logging.getLogger("virtual_control_plane")
 
-# No provider adapter is wired up yet: #1054 (worktree) and #1114 (smolvm) each
-# register themselves here once they exist. Until then capabilities.get is
-# honest about serving none, rather than advertising unimplemented isolation.
-PROVIDERS: dict[str, AllocationProvider] = {}
+SMOLVM_IMAGE_VARIABLE = "OE_VCP_SMOLVM_IMAGE"
+SMOLVM_TOOLS_VARIABLE = "OE_VCP_SMOLVM_TOOLS"
+SMOLVM_EXECUTABLE_VARIABLE = "OE_VCP_SMOLVM_EXECUTABLE"
+
+
+def providers(environment: Mapping[str, str] = os.environ) -> dict[str, AllocationProvider]:
+    """The managed adapters this host is configured for.
+
+    smolvm is opt-in through its image; #1054's worktree adapter registers here
+    too once it exists. Without configuration capabilities.get is honest about
+    serving none, rather than advertising unimplemented isolation.
+    """
+    configured: dict[str, AllocationProvider] = {}
+    if image := environment.get(SMOLVM_IMAGE_VARIABLE):
+        tools = [tool for tool in environment.get(SMOLVM_TOOLS_VARIABLE, ",".join(DEFAULT_TOOLS)).split(",") if tool]
+        configured["smolvm"] = Smolvm(image, tools=tools, executable=environment.get(SMOLVM_EXECUTABLE_VARIABLE, "smolvm"))
+    return configured
 
 
 async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -103,7 +121,8 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     if not is_loopback(urlsplit(listener).hostname):
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
-    lifecycle = Lifecycle(store, PROVIDERS)
+    lifecycle = Lifecycle(store, providers())
+    log.info("providers configured", extra={"vcp.providers": sorted(lifecycle.providers)})
     server = Server(connection, "vcp", listener, queries=lifecycle.queries(), commands=lifecycle.commands())
     publisher = OutboxPublisher(store, JetStreamEvents(connection.jetstream()))
     health = None
