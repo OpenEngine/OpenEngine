@@ -23,14 +23,18 @@ def test_migrations_match_the_schema(config: DatabaseConfig) -> None:
     assert PERSISTENCE.drift(metadata, config) == []
 
 
-def test_migrations_create_the_tables_in_two_revisions(config: DatabaseConfig) -> None:
+def test_migrations_create_the_tables_in_three_revisions(config: DatabaseConfig) -> None:
     database = PERSISTENCE.database(config)
     engine = database.migration_engine()
     assert set(inspect(engine).get_table_names()) == {
+        "alembic_version", "tools", "tool_grants", "tool_invocations", "tool_invocation_attempts", "policies",
+    }
+    grant_columns = {c["name"] for c in inspect(engine).get_columns("tool_grants")}
+    assert "when" in grant_columns and "constraints" not in grant_columns
+    downgrade(PERSISTENCE.migrations, database, "-1")
+    assert set(inspect(engine).get_table_names()) == {
         "alembic_version", "tools", "tool_grants", "tool_invocations", "tool_invocation_attempts",
     }
-    downgrade(PERSISTENCE.migrations, database, "-1")
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", "tools", "tool_grants"}
 
 
 def test_migrations_roll_back(config: DatabaseConfig) -> None:
@@ -42,7 +46,7 @@ def test_migrations_roll_back(config: DatabaseConfig) -> None:
 
 def test_resources_are_unique_by_namespace_and_name(config: DatabaseConfig) -> None:
     inspector = inspect(PERSISTENCE.database(config).migration_engine())
-    for table in ("tools", "tool_grants", "tool_invocations"):
+    for table in ("tools", "tool_grants", "tool_invocations", "policies"):
         assert [c["column_names"] for c in inspector.get_unique_constraints(table)] == [["namespace", "name"]], table
         assert inspector.get_pk_constraint(table)["constrained_columns"] == ["uid"], table
 

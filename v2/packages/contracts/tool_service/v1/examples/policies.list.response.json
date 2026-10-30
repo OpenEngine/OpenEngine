@@ -1,0 +1,29 @@
+{
+  "message": "ListPoliciesResponse",
+  "in_reply_to": "oe.v1.tools.policies.list",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "items": [
+        {
+          "apiVersion": "openengine.cc/v1alpha1",
+          "kind": "Policy",
+          "metadata": {
+            "name": "no-issue-43-comments",
+            "namespace": "default",
+            "uid": "policy-uid-123",
+            "generation": 1,
+            "creationTimestamp": "2026-10-21T15:00:00Z"
+          },
+          "spec": {
+            "policy": "forbid(principal, action == Action::\"invoke\", resource == Tool::\"tool-uid-123\") when { context.arguments.issueNumber == 43 };"
+          },
+          "status": {
+            "phase": "Active"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

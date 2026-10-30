@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:tool-service
 info:
   title: OpenEngine Tool Service (tools)
-  version: 1.0.0-draft.3
+  version: 1.0.0-draft.4
   description: |
     The Tool Service keeps the tools agents may call, who may call them, and a
     durable record of every call. This document describes the NATS interface
@@ -35,6 +35,9 @@ info:
     | `oe.v1.tools.grants.get` | namespace and name | ToolGrant |
     | `oe.v1.tools.grants.list` | namespace and filters | grants |
     | `oe.v1.tools.grants.delete` | namespace and name | revocation result |
+    | `oe.v1.tools.policies.apply` | Policy resource | accepted once stored |
+    | `oe.v1.tools.policies.list` | namespace and filters | policies |
+    | `oe.v1.tools.policies.delete` | namespace and name | deletion result |
     | `oe.v1.tools.invocations.get` | namespace and invocation ID | invocation, with its result |
     | `oe.v1.tools.invocations.list` | namespace, workspace and step filters | invocations |
     | `oe.v1.tools.invocations.cancel` | namespace and invocation ID | cancellation accepted |
@@ -73,6 +76,19 @@ info:
     - Grants and invocations name the workspace by its Workspace name
       (`workspaceRef`) and the step attempt by the Graph Engine's ID
       (`stepAttemptId`, `stepa_…`).
+    - `spec.when` is a Cedar condition on the call's `context` (its
+      `arguments` and its `now` in epoch milliseconds) and `resource` (the
+      tool). The service checks it parses and type-checks against the tool's
+      `inputSchema` when the grant is applied; a call is allowed only while
+      `when` holds and the grant has not expired.
+
+    ## Policies
+    - A Policy is a Cedar `forbid`, a ceiling that no grant may exceed: a
+      call is allowed only if some grant permits it and no policy forbids it,
+      so a policy always wins over grants.
+    - A policy names the connection, tool or argument pattern no grant may
+      allow, for example by principal, `resource` or `context`.
+    - Only trusted control-plane callers may apply or delete policies.
 
     ## Availability
     The Graph Engine applies grants before every step that lists tools, and
@@ -80,9 +96,9 @@ info:
     critical path of graph execution and must be highly available.
     - A grant without `stepAttemptId` covers the whole workspace; a step's
       grant never exceeds the workspace's control-plane permission ceiling.
-    - `constraints` are typed and validated by the tool's adapter.
-    - A missing, expired or deleted grant denies a call. Grants are checked
-      when a call is accepted and again just before every dispatch.
+    - A missing, expired or deleted grant denies a call, as does a policy
+      that forbids it. Grants and policies are checked when a call is
+      accepted and again just before every dispatch.
     - Discovery (`get`, `list`) and invocation results enforce the caller's
       authorization too.
 
@@ -180,6 +196,21 @@ channels:
     title: List tool grants
     messages:
       ListToolGrantsQuery: { $ref: '#/components/messages/ListToolGrantsQuery' }
+  toolPoliciesApply:
+    address: oe.v1.tools.policies.apply
+    title: Apply a policy
+    messages:
+      ApplyPolicyCommand: { $ref: '#/components/messages/ApplyPolicyCommand' }
+  toolPoliciesList:
+    address: oe.v1.tools.policies.list
+    title: List policies
+    messages:
+      ListPoliciesQuery: { $ref: '#/components/messages/ListPoliciesQuery' }
+  toolPoliciesDelete:
+    address: oe.v1.tools.policies.delete
+    title: Delete a policy
+    messages:
+      DeletePolicyCommand: { $ref: '#/components/messages/DeletePolicyCommand' }
   toolInvocationsGet:
     address: oe.v1.tools.invocations.get
     title: Get a tool invocation
@@ -205,6 +236,9 @@ channels:
       ListToolsResponse: { $ref: '#/components/messages/ListToolsResponse' }
       GetToolGrantResponse: { $ref: '#/components/messages/GetToolGrantResponse' }
       ListToolGrantsResponse: { $ref: '#/components/messages/ListToolGrantsResponse' }
+      ApplyPolicyResponse: { $ref: '#/components/messages/ApplyPolicyResponse' }
+      ListPoliciesResponse: { $ref: '#/components/messages/ListPoliciesResponse' }
+      DeletePolicyResponse: { $ref: '#/components/messages/DeletePolicyResponse' }
       GetToolInvocationResponse: { $ref: '#/components/messages/GetToolInvocationResponse' }
       ListToolInvocationsResponse: { $ref: '#/components/messages/ListToolInvocationsResponse' }
   invocationAcceptedEvents:
@@ -319,6 +353,36 @@ operations:
     reply:
       channel: { $ref: '#/channels/replyInbox' }
       messages: [{ $ref: '#/channels/replyInbox/messages/DeleteToolGrantResponse' }]
+  applyPolicy:
+    action: receive
+    title: Apply a policy
+    summary: "Create or update a Policy, a Cedar `forbid` ceiling. Trusted control-plane callers only."
+    description: "Accepted once the statement parses and type-checks and it is stored; `resource_id` is the policy's `uid`. It is checked with the grants on every call."
+    channel: { $ref: '#/channels/toolPoliciesApply' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ApplyPolicyResponse' }]
+  listPolicies:
+    action: receive
+    title: List policies
+    summary: "List the policies the caller may see."
+    description: "Policies are visible to trusted control-plane callers; other callers get an empty page."
+    channel: { $ref: '#/channels/toolPoliciesList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListPoliciesResponse' }]
+  deletePolicy:
+    action: receive
+    title: Delete a policy
+    summary: "Delete a Policy by namespace and name. Trusted control-plane callers only."
+    description: "Accepted once the policy is deleted; `resource_id` is its `uid`. Calls it forbids are allowed again if a grant still covers them."
+    channel: { $ref: '#/channels/toolPoliciesDelete' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/DeletePolicyResponse' }]
   cancelToolInvocation:
     action: receive
     title: Cancel a tool invocation
@@ -539,6 +603,44 @@ components:
       examples:
         - name: accepted
           payload: { $ref: './examples/toolgrants.delete.response.json#/payload' }
+    ApplyPolicyCommand:
+      name: ApplyPolicyCommand
+      title: Apply a policy command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/apply_policy_command' }
+      examples:
+        - name: policies.apply.command
+          payload: { $ref: './examples/policies.apply.command.json#/payload' }
+    ApplyPolicyResponse:
+      name: ApplyPolicyResponse
+      title: Apply a policy response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/policies.apply.response.json#/payload' }
+    DeletePolicyCommand:
+      name: DeletePolicyCommand
+      title: Delete a policy command
+      traits: [{ $ref: '#/components/messageTraits/commandHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/delete_policy_command' }
+      examples:
+        - name: policies.delete.command
+          payload: { $ref: './examples/policies.delete.command.json#/payload' }
+    DeletePolicyResponse:
+      name: DeletePolicyResponse
+      title: Delete a policy response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/commands.schema.json#/$defs/tool_command_response' }
+      examples:
+        - name: accepted
+          payload: { $ref: './examples/policies.delete.response.json#/payload' }
     CancelToolInvocationCommand:
       name: CancelToolInvocationCommand
       title: Cancel a tool invocation command
@@ -634,6 +736,25 @@ components:
       examples:
         - name: ok
           payload: { $ref: './examples/toolgrants.list.response.json#/payload' }
+    ListPoliciesQuery:
+      name: ListPoliciesQuery
+      title: List policies query
+      traits: [{ $ref: '#/components/messageTraits/queryHeaders' }]
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_policies_query' }
+      examples:
+        - name: policies.list.query
+          payload: { $ref: './examples/policies.list.query.json#/payload' }
+    ListPoliciesResponse:
+      name: ListPoliciesResponse
+      title: List policies response
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/queries.schema.json#/$defs/list_policies_response' }
+      examples:
+        - name: ok
+          payload: { $ref: './examples/policies.list.response.json#/payload' }
     GetToolInvocationQuery:
       name: GetToolInvocationQuery
       title: Get a tool invocation query

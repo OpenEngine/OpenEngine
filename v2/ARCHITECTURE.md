@@ -30,15 +30,16 @@ The documents people write are Kubernetes-style resources (`apiVersion`, `kind`,
 | Kind | apiVersion | What it is | Applied with |
 | -- | -- | -- | -- |
 | [Tool](https://openengine.cc/contracts/tool_service/v1/resources/#tool) | `openengine.cc/v1alpha1` | An invocable capability bound to one Connection, with its adapter, input and output schemas and recovery behaviour. | `oe.v1.tools.apply` |
-| [ToolGrant](https://openengine.cc/contracts/tool_service/v1/resources/#toolgrant) | `openengine.cc/v1alpha1` | Lets a workspace, or one step attempt in it, call one tool, within constraints and until it expires. Graphs declare them inline: a step's `agent.tools: [namespace.name, …]` are its grants. | `oe.v1.tools.grants.apply`, by GE once a step attempt has its workspace and before it runs; deleted when the attempt ends |
-| [ToolInvocation](https://openengine.cc/contracts/tool_service/v1/resources/#toolinvocation) | `openengine.cc/v1alpha1` | The durable record of one call, with the tool definition it resolved. Created by the service, never applied. | created by `oe.v1.tools.invoke.{namespace}.{name}` |
+ | [ToolGrant](https://openengine.cc/contracts/tool_service/v1/resources/#toolgrant) | `openengine.cc/v1alpha1` | Lets a workspace, or one step attempt in it, call one tool, under a Cedar `when` condition and until it expires. Graphs declare them inline: a step's `agent.tools` entries, each a `namespace.name` or `{tool, when}`, are its grants. | `oe.v1.tools.grants.apply`, by GE once a step attempt has its workspace and before it runs; deleted when the attempt ends |
+ | [Policy](https://openengine.cc/contracts/tool_service/v1/resources/#policy) | `openengine.cc/v1alpha1` | A Cedar `forbid` an operator applies as a ceiling over grants: a call is allowed only if a grant permits it and no policy forbids it. Trusted callers only. | `oe.v1.tools.policies.apply` |
+ | [ToolInvocation](https://openengine.cc/contracts/tool_service/v1/resources/#toolinvocation) | `openengine.cc/v1alpha1` | The durable record of one call, with the tool definition it resolved. Created by the service, never applied. | created by `oe.v1.tools.invoke.{namespace}.{name}` |
 
 ### Virtual Control Plane (vcp) · [reference](https://openengine.cc/contracts/virtual_control_plane/v1/resources/)
 | Kind | apiVersion | What it is | Applied with |
 | -- | -- | -- | -- |
 | [Workspace](https://openengine.cc/contracts/virtual_control_plane/v1/resources/#workspace) | `openengine.cc/v1alpha1` | A stable place where agents work, on a provider. GE names it before it runs anything, so tool grants can refer to it. | `oe.v1.vcp.control.workspaces.apply`, by GE |
 
-Because GE applies a step's tool grants before each step that lists tools, the tool service is on the critical path of graph execution and must be highly available.
+Because GE applies a step's tool grants before each step that lists tools, and a call is authorized in Cedar (a grant's `permit` plus the operator's `forbid` policies) when it is accepted and again before every dispatch, the tool service is on the critical path of graph execution and must be highly available.
 
 ## Architecture diagram
 Each service with its NATS subjects (control, query and events) and its tables, the apps and integrations that connect to them, and how VCP runs workspaces. It is drawn from the contracts, the migrations and `infra/nats/streams` by [`architecture.py`](packages/contracts/tooling/architecture.py).

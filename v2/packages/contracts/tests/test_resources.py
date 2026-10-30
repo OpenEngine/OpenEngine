@@ -91,7 +91,7 @@ def _problems(document: dict[str, Any]) -> list[str]:
 
 def test_unknown_kind_and_version_are_refused() -> None:
     assert _problems({**_example("Graph"), "kind": "Widget"}) == [
-        "kind: must be one of Connection, Graph, Loop, Tool, ToolGrant, ToolInvocation, Workspace"
+        "kind: must be one of Connection, Graph, Loop, Policy, Tool, ToolGrant, ToolInvocation, Workspace"
     ]
     for version in ("openengine.cc/v2alpha1", "tools.openengine.cc/v1alpha1"):
         assert _problems({**_example("Tool"), "apiVersion": version}) == ["apiVersion: must be openengine.cc/v1alpha1"]

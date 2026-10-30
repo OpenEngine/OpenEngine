@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Tool Service commands",
-  "description": "Requests and responses of the tool service's control subjects: `oe.v1.tools.apply`, `oe.v1.tools.delete`, `oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.tools.grants.apply`, `oe.v1.tools.grants.delete` and `oe.v1.tools.invocations.cancel`. Payload fields are camelCase, like the resources they carry.",
+  "description": "Requests and responses of the tool service's control subjects: `oe.v1.tools.apply`, `oe.v1.tools.delete`, `oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.tools.grants.apply`, `oe.v1.tools.grants.delete`, `oe.v1.tools.policies.apply`, `oe.v1.tools.policies.delete` and `oe.v1.tools.invocations.cancel`. Payload fields are camelCase, like the resources they carry.",
   "$defs": {
     "resource_key": {
       "description": "A namespaced resource, by namespace and name.",
@@ -43,7 +43,7 @@
       ]
     },
     "invoke_tool_payload": {
-      "description": "Call the Tool the subject names. The workspace comes from the caller's verified credentials, never from the payload. Rejected with NOT_FOUND for an unknown tool, INVALID_STATE when it is not Ready, PERMISSION_DENIED without an active grant for the workspace or step, and INVALID_ARGUMENT when `arguments` fail the tool's `inputSchema` or the grant's constraints. Accepted means a ToolInvocation named `invocationId` was recorded.",
+      "description": "Call the Tool the subject names. The workspace comes from the caller's verified credentials, never from the payload. Rejected with NOT_FOUND for an unknown tool, INVALID_STATE when it is not Ready, PERMISSION_DENIED without an active grant for the workspace or step that its `when` allows, or while a policy forbids it, and INVALID_ARGUMENT when `arguments` fail the tool's `inputSchema`. Accepted means a ToolInvocation named `invocationId` was recorded.",
       "type": "object",
       "required": ["invocationId", "stepAttemptId", "arguments"],
       "additionalProperties": false,
@@ -63,7 +63,7 @@
       ]
     },
     "apply_tool_grant_payload": {
-      "description": "Create or update a ToolGrant. Only trusted control-plane callers may, usually the Graph Engine applying a Graph step's `agent.tools`; anyone else is rejected with PERMISSION_DENIED. Rejected with NOT_FOUND when the tool does not exist, INVALID_ARGUMENT when the adapter rejects `constraints`, and PERMISSION_DENIED when a step's grant would exceed what the control plane allows its workspace. The grant is bound to the tool's current `uid`.",
+      "description": "Create or update a ToolGrant. Only trusted control-plane callers may, usually the Graph Engine applying a Graph step's `agent.tools`; anyone else is rejected with PERMISSION_DENIED. Rejected with NOT_FOUND when the tool does not exist, INVALID_ARGUMENT when the grant's `when` does not parse or does not type-check against the tool's `inputSchema`, and PERMISSION_DENIED when a step's grant would exceed what the control plane allows its workspace. The grant is bound to the tool's current `uid`.",
       "type": "object",
       "required": ["grant"],
       "additionalProperties": false,
@@ -79,6 +79,29 @@
       "description": "Revoke a ToolGrant. Only trusted control-plane callers may. Invocations it allowed that have not been dispatched are refused when they are rechecked.",
       "$ref": "#/$defs/resource_key"
     },
+    "apply_policy_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/apply_policy_payload" } } }
+      ]
+    },
+    "apply_policy_payload": {
+      "description": "Create or update a Policy, a Cedar `forbid` ceiling. Only trusted control-plane callers may. Rejected with INVALID_ARGUMENT when the statement does not parse or does not type-check. A policy is checked with the grants on every call and always wins over them.",
+      "type": "object",
+      "required": ["policy"],
+      "additionalProperties": false,
+      "properties": { "policy": { "$ref": "../resources/policy.schema.yaml" } }
+    },
+    "delete_policy_command": {
+      "allOf": [
+        { "$ref": "../../../common/v1/command.schema.json" },
+        { "properties": { "payload": { "$ref": "#/$defs/delete_policy_payload" } } }
+      ]
+    },
+    "delete_policy_payload": {
+      "description": "Delete a Policy. Only trusted control-plane callers may. Calls it forbids are allowed again if a grant still covers them.",
+      "$ref": "#/$defs/resource_key"
+    },
     "cancel_tool_invocation_command": {
       "allOf": [
         { "$ref": "../../../common/v1/command.schema.json" },
@@ -90,7 +113,7 @@
       "$ref": "#/$defs/resource_key"
     },
     "tool_command_response": {
-      "description": "Reply to every tool service command. `resource_id` is the `uid` of the resource the command created or affects: the Tool, the ToolGrant or the ToolInvocation.",
+      "description": "Reply to every tool service command. `resource_id` is the `uid` of the resource the command created or affects: the Tool, the ToolGrant, the Policy or the ToolInvocation.",
       "allOf": [
         { "$ref": "../../../common/v1/command-response.schema.json" },
         {

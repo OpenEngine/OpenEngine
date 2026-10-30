@@ -50,7 +50,8 @@ tool_grants = sa.Table(
     sa.Column("workspace_name", sa.String(NAME), nullable=False),
     # The Graph Engine's step attempt ID (`stepa_…`); null grants the whole workspace.
     sa.Column("step_attempt_id", sa.String(128), nullable=True),
-    sa.Column("constraints", sa.JSON(), nullable=False),
+    # In Cedar, the extra conditions a call must satisfy; null allows every call.
+    sa.Column("when", sa.Text(), nullable=True),
     sa.Column("expires_at", UtcDateTime(), nullable=True),
     sa.Column("created_at", UtcDateTime(), nullable=False),
     sa.Column("updated_at", UtcDateTime(), nullable=False),
@@ -107,4 +108,21 @@ tool_invocation_attempts = sa.Table(
     sa.Column("finished_at", UtcDateTime(), nullable=True),
     comment="Each try at an invocation. idempotency_key is what a provider-idempotent tool repeats on every "
     "attempt; outcome stays null while an attempt runs or when an interrupted one could not be reconciled.",
+)
+
+policies = sa.Table(
+    "policies",
+    metadata,
+    sa.Column("uid", sa.String(NAME), primary_key=True),
+    sa.Column("namespace", sa.String(NAME), nullable=False),
+    sa.Column("name", sa.String(NAME), nullable=False),
+    sa.Column("generation", sa.Integer(), nullable=False),
+    sa.Column("labels", sa.JSON(), nullable=False),
+    sa.Column("annotations", sa.JSON(), nullable=False),
+    sa.Column("policy", sa.Text(), nullable=False),
+    sa.Column("created_at", UtcDateTime(), nullable=False),
+    sa.Column("updated_at", UtcDateTime(), nullable=False),
+    sa.UniqueConstraint("namespace", "name", name="uq_policies_namespace_name"),
+    comment="A ceiling on tool access, written by an operator in Cedar. It is a forbid that a grant may "
+    "never exceed, and it is checked with the grants on every call.",
 )

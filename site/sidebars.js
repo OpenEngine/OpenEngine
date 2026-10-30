@@ -25,6 +25,7 @@ const sidebars = {
         {type: 'link', label: 'Loop', href: 'pathname:///contracts/graph_engine/v1/resources/#loop'},
         {type: 'link', label: 'Tool', href: 'pathname:///contracts/tool_service/v1/resources/#tool'},
         {type: 'link', label: 'ToolGrant', href: 'pathname:///contracts/tool_service/v1/resources/#toolgrant'},
+        {type: 'link', label: 'Policy', href: 'pathname:///contracts/tool_service/v1/resources/#policy'},
         {type: 'link', label: 'ToolInvocation', href: 'pathname:///contracts/tool_service/v1/resources/#toolinvocation'},
         {type: 'link', label: 'Workspace', href: 'pathname:///contracts/virtual_control_plane/v1/resources/#workspace'},
       ]},

@@ -1,0 +1,9 @@
+{
+  "message": "ListPoliciesQuery",
+  "subject": "oe.v1.tools.policies.list",
+  "payload": {
+    "params": {
+      "namespace": "default"
+    }
+  }
+}

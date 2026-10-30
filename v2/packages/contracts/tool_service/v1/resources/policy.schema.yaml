@@ -1,0 +1,53 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: Policy
+description: >-
+  A ceiling on tool access, written by an operator in Cedar. It is a `forbid`
+  that a grant may never exceed: a call is allowed only if some grant permits
+  it and no policy forbids it, so a policy always wins. Where a ToolGrant says
+  who may call a tool and under what condition, a Policy says what no grant may
+  allow, such as a connection, a tool or an argument pattern. Only trusted
+  control-plane callers may apply or delete policies.
+type: object
+required: [apiVersion, kind, metadata, spec]
+additionalProperties: false
+properties:
+  apiVersion:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/api_version
+  kind:
+    type: string
+    const: Policy
+  metadata:
+    $ref: ../../../common/v1/meta.schema.yaml#/$defs/namespaced_object_meta
+  spec:
+    $ref: '#/$defs/policy_spec'
+  status:
+    $ref: '#/$defs/policy_status'
+$defs:
+  policy_spec:
+    title: PolicySpec
+    description: One Cedar statement, the ceiling it holds.
+    type: object
+    required: [policy]
+    additionalProperties: false
+    properties:
+      policy:
+        description: >-
+          One Cedar statement, a `forbid`. Unlike a grant's `when`, it may
+           reference the principal and the action as well as `context` (the
+           call's `arguments` and its `now` in epoch milliseconds) and
+           `resource` (the tool). The service checks it parses and is a `forbid`
+           before it is stored; a statement it cannot check is rejected.
+        type: string
+        minLength: 1
+        maxLength: 4096
+  policy_status:
+    title: PolicyStatus
+    description: Set by the service; ignored on apply.
+    type: object
+    required: [phase]
+    additionalProperties: false
+    properties:
+      phase:
+        description: '`Active`: it is in force and checked with the grants on every call.'
+        type: string
+        enum: [Active]
