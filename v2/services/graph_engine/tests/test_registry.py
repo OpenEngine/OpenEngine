@@ -15,7 +15,7 @@ import sqlalchemy as sa
 import yaml
 
 from openengine.contracts.validate import load_contract, validate_message
-from openengine.messaging import ErrorCode, LocalOperator, Request, Server, ServiceError
+from openengine.messaging import LOCAL_TENANT, ErrorCode, LocalOperator, Principal, Request, Server, ServiceError
 from openengine.persistence import DatabaseConfig
 
 from graph_engine.persistence import PERSISTENCE, sqlite
@@ -32,6 +32,11 @@ class ProjectsOnly(LocalOperator):
 
     def __init__(self, *allowed: str) -> None:
         self.allowed = allowed
+        self.principals: list[Principal | None] = []
+
+    def authorize(self, request: Request) -> Principal:
+        self.principals.append(request.principal)
+        return super().authorize(request)
 
     def authorize_project(self, request: Request, project: str) -> None:
         if project not in self.allowed:
@@ -383,9 +388,11 @@ def test_a_list_cursor_is_bound_to_its_project(send) -> None:
 
 
 @pytest.mark.parametrize("authorizer", [ProjectsOnly("alpha")])
-def test_every_project_scoped_request_is_authorized_for_its_project(send) -> None:
+def test_every_project_scoped_request_is_authorized_for_its_project(send, authorizer: ProjectsOnly) -> None:
     allowed = send(APPLY, _apply("cmd_1", {"project": "alpha", "graph": GRAPH}))
     assert allowed["status"] == "accepted"
+    # The server derived the tenant before asking: `oe up`'s dedicated mode is LOCAL_TENANT.
+    assert authorizer.principals == [Principal(LOCAL_TENANT)]
 
     denied = send(APPLY, _apply("cmd_1", {"project": "beta", "graph": GRAPH}))
     assert denied["error"]["code"] == "PERMISSION_DENIED"
