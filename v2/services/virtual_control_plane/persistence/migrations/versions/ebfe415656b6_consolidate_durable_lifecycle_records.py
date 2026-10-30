@@ -46,6 +46,11 @@ def upgrade() -> None:
             sa.Column("key", sa.String(128), primary_key=True),
             sa.Column("body", sa.JSON(), nullable=False),
         )
+    op.create_index(
+        "ix_workspaces_legacy_status", "workspaces",
+        [sa.text("json_extract(body, '$.legacy.status')")],
+        sqlite_where=sa.text("json_type(body, '$.legacy') = 'object'"),
+    )
     # Preserve opaque locators and timestamps, but create no lifecycle projection
     # or runtime ownership. Only the prototype adapter interprets legacy bodies.
     for row in connection.execute(sa.select(_prototype("_prototype_workspaces"))).mappings():

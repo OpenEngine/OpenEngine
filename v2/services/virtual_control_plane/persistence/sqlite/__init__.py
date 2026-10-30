@@ -64,10 +64,15 @@ class SqliteWorkspaces(DatabaseStore):
         return await self._update(id, locator=locator)
 
     async def list(self, status: WorkspaceStatus | None = None) -> list[Workspace]:
+        table = documents["workspaces"]
+        # Literal JSON paths must match the migration's expression index.
+        query = sa.select(table.c.body).where(sa.text("json_type(body, '$.legacy') = 'object'"))
+        if status is not None:
+            query = query.where(sa.literal_column("json_extract(body, '$.legacy.status')") == status.value)
         async with self.database.connect() as connection:
-            rows = (await connection.execute(sa.select(documents["workspaces"].c.body))).scalars()
+            rows = (await connection.execute(query)).scalars()
         workspaces = [workspace for body in rows if (workspace := _workspace(body)) is not None]
         return sorted(
-            (workspace for workspace in workspaces if status is None or workspace.status == status),
+            workspaces,
             key=lambda workspace: (workspace.created_at, workspace.id),
         )

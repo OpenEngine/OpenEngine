@@ -24,3 +24,9 @@ documents = {
     )
     for name, comment in DOCUMENT_COMMENTS.items()
 }
+
+sa.Index(
+    "ix_workspaces_legacy_status",
+    sa.func.json_extract(documents["workspaces"].c.body, sa.literal_column("'$.legacy.status'")),
+    sqlite_where=sa.text("json_type(body, '$.legacy') = 'object'"),
+)
