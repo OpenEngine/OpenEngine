@@ -264,8 +264,9 @@ def test_credentials_are_restored_when_secret_write_fails() -> None:
     assert values == {"slack-client-id": "old-id", "slack-client-secret": "old-secret"}
 
 
+@pytest.mark.parametrize("service_token", ["", "s" * 40])
 def test_slack_oauth_endpoints_complete_connection(
-    *, sqlite_store, web_app, client
+    service_token, *, sqlite_store, web_app, client
 ) -> None:
     slack_store = MagicMock(spec=SlackCredentialStore)
     slack_store.credentials.return_value = SlackCredentials("client", "secret")
@@ -276,17 +277,28 @@ def test_slack_oauth_endpoints_complete_connection(
         runners={"default": object()},
         workflow_catalog=MagicMock(),
         slack_credential_store=slack_store,
+        service_token=lambda: service_token,
     )
 
     with (
         patch("engine.apps.web.api.uuid4", return_value=MagicMock(hex="nonce")),
-        patch("engine.apps.web.api.exchange_slack_code", new=AsyncMock(return_value="xoxb-token")),
+        patch("engine.apps.web.api.exchange_slack_code", new=AsyncMock(return_value="xoxb-token")) as exchange,
         client(app) as browser,
     ):
-        before = browser.get("/api/slack/status")
-        connect = browser.post("/api/slack/connect")
+        headers = {"Authorization": f"Bearer {service_token}"} if service_token else {}
+        if service_token:
+            assert browser.post("/api/slack/connect").status_code == 401
+            assert browser.post("/api/slack/connect", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        before = browser.get("/api/slack/status", headers=headers)
+        assert browser.get("/api/slack/callback?code=code&state=nonce").status_code == 400
+        connect = browser.post("/api/slack/connect", headers=headers)
+        assert browser.get("/api/slack/callback?code=code").status_code == 400
+        assert browser.get("/api/slack/callback?code=code&state=wrong").status_code == 400
+        exchange.assert_not_awaited()
         callback = browser.get("/api/slack/callback?code=code&state=nonce")
-        after = browser.get("/api/slack/status")
+        assert browser.get("/api/slack/callback?code=code&state=nonce").status_code == 400
+        exchange.assert_awaited_once()
+        after = browser.get("/api/slack/status", headers=headers)
 
     assert before.json() == {
         "configured": True,

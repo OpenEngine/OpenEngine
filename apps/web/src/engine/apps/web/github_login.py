@@ -41,12 +41,21 @@ _SESSION_TTL = 86400  # 24 hours
 # signed-in request asks again, so revoked access ends within this, not a day.
 _ACCESS_TTL = 300
 _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
-# The one route a service credential may reach: the MCP gateway creating work
-# orders. Everything else still requires a browser session.
-_SERVICE_ROUTE = ("POST", "/api/runs")
-#: The graph API `oe graph|loop|node` speak, which a remote CLI reaches with
-#: the same service credential. Operator-level, like the credential itself.
-_SERVICE_PREFIX = "/api/v1/"
+# Service credentials are operator-level: connection management may change the
+# shared provider identity; the MCP gateway may operate runs and loops. Other
+# web APIs still need a session, and trust/onboarding writes remain excluded.
+_SERVICE_ROUTES = frozenset({
+    ("POST", "/graph/api/targets/resolve"),
+    ("GET", "/api/source-control/status"),
+    ("POST", "/api/source-control/provider"),
+    *((method, f"/api/{provider}/{action}")
+      for provider in ("github", "gitlab", "slack")
+      for method, action in (("GET", "status"), ("POST", "connect"),
+                             ("POST", "connect/poll"), ("POST", "disconnect"))),
+})
+_SERVICE_PREFIXES = ("/api/v1/", "/api/runs/", "/api/loops/",
+                     "/graph/api/runs/", "/graph/api/graphs/")
+_SERVICE_COLLECTIONS = frozenset({"/api/runs", "/api/loops"})
 # How often a response still streaming asks whether its user may keep it, so an
 # open event stream ends about when a new request would be refused.
 _STREAM_RECHECK = 30
@@ -352,8 +361,9 @@ class GitHubLogin:
     def _has_service_token(self, request: Request) -> bool:
         """Whether the request carries the configured service bearer token."""
         if (
-            (request.method, request.url.path) != _SERVICE_ROUTE
-            and not request.url.path.startswith(_SERVICE_PREFIX)
+            (request.method, request.url.path) not in _SERVICE_ROUTES
+            and request.url.path not in _SERVICE_COLLECTIONS
+            and not request.url.path.startswith(_SERVICE_PREFIXES)
         ):
             return False
         if request.method == "POST" and request.url.path.rstrip("/") in {
@@ -595,8 +605,8 @@ class GitHubLogin:
 
         Unauthenticated requests to protected API endpoints receive a 401.
         Auth-related endpoints, static assets, and SPA pages are exempt. The
-        service token admits `POST /api/runs`, for the MCP gateway, and the
-        `/api/v1/` graph API (except trust writes), for a CLI pointed at this server.
+        service token admits CLI connection management, MCP run/loop operations,
+        and the `/api/v1/` graph API (except trust writes).
         A distinct onboarding token admits only job creation and polling.
         Without GitHub login, public and forwarded requests still need a token;
         deployments without a public URL or service token retain direct access.
@@ -613,6 +623,7 @@ _AUTH_EXEMPT = frozenset({
     f"{_PATH}/callback",
     f"{_PATH}/status",
     f"{_PATH}/logout",
+    "/api/slack/callback",  # Authenticated by pending OAuth state in its handler.
     "/api/slack/events",  # Authenticated by the Slack signature in its handler.
     "/api/github/events",  # Authenticated by the GitHub signature in its handler.
 })
