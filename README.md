@@ -16,7 +16,7 @@ Coding agents are fast. The hard part is making their output trustworthy when no
 - **Your hardware, your agents.** Every machine running `oe daemon` is a backend, and one `oe` CLI switches between them, so tens or hundreds of loops can run across a Mac mini under the desk, a Linux box in the rack, or a cloud VM. Agents are the coding CLIs you already have: Claude Code, Codex, OpenCode, or local models through Ollama.
 - **Work continues while your laptop is closed.** Loops run on the daemon's machine, not yours. Assign an issue to OpenEngine to start a run, @-mention it on a pull request to steer one, and come back to pull requests with adversarial findings and an impact rating already posted.
 
-https://github.com/user-attachments/assets/f76429d7-86b4-4a37-af2d-52124af453c0
+https://github.com/user-attachments/assets/03cf2b5d-1c63-4487-85bd-f3943c98ac2c
 
 ## Try it in two minutes
 

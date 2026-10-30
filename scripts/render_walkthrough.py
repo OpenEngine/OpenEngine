@@ -280,7 +280,7 @@ def build():
     s = Script()
     s.t = 0.3
     s.say("OpenEngine. Graphs define the work. Loops keep it going.")
-    s.t = 5.2
+    s.t = 6.6
     s.await_voice()
     s.cards.append((0.0, s.t + 0.4, "title"))
 
@@ -457,7 +457,7 @@ def build():
     end = s.t
     s.t += 0.4
     s.say("Graphs define the work. Loops keep it going. More at openengine dot c c.")
-    s.t = end + 5.0
+    s.t = end + 6.2
     s.await_voice()
     s.t += 0.6
     s.cards.append((end, s.t, "end"))
@@ -695,7 +695,119 @@ def lifecycle_graph(d, a, cy=570):
             node(d, cx, cy, w, 60, label, a)
 
 
-def draw_card(img, kind, alpha):
+# Title animation: the full graph holds, shrinks, then an orange loop runs around it.
+SHRINK_AT, SHRINK_FOR, SMALL = 1.6, 1.0, 0.42
+ORBIT = (960, 600, 430, 165)  # centre and radii of the loop around the shrunken graph
+
+
+def mix(c0, c1, u):
+    return tuple(int(x + (y - x) * u) for x, y in zip(c0, c1))
+
+
+def orbit(d, color, phase, center=ORBIT[:2], radii=ORBIT[2:]):
+    """A dashed ellipse with two arrowheads, all moving clockwise as phase grows."""
+    (cx, cy), (rx, ry) = center, radii
+    pts = [(cx + rx * math.cos(i / 180 * math.pi), cy + ry * math.sin(i / 180 * math.pi)) for i in range(361)]
+    dist = [0.0]
+    for p, q in zip(pts, pts[1:]):
+        dist.append(dist[-1] + math.hypot(q[0] - p[0], q[1] - p[1]))
+    dash, gap = 14, 10
+    for i, (p, q) in enumerate(zip(pts, pts[1:])):
+        if (dist[i] - phase) % (dash + gap) < dash:
+            d.line([p, q], fill=color, width=3)
+    for k in range(2):
+        target = (phase + k * dist[-1] / 2) % dist[-1]
+        i = min(range(360), key=lambda j: abs(dist[j] - target))
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        length = math.hypot(x1 - x0, y1 - y0)
+        arrow_head(d, pts[i], ((x1 - x0) / length, (y1 - y0) / length), color, size=15)
+
+
+def animated_graph(layer, d, a, elapsed):
+    g = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    lifecycle_graph(ImageDraw.Draw(g), a)
+    u = ease(min(max((elapsed - SHRINK_AT) / SHRINK_FOR, 0), 1))
+    if u == 0:
+        layer.alpha_composite(g)
+    else:
+        box = g.getbbox()
+        scale = 1 - (1 - SMALL) * u
+        crop = g.crop(box)
+        small = crop.resize((int(crop.width * scale), int(crop.height * scale)), Image.LANCZOS)
+        gx, gy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        tx, ty = gx + (ORBIT[0] - gx) * u, gy + (ORBIT[1] - gy) * u
+        layer.alpha_composite(small, (int(tx - small.width / 2), int(ty - small.height / 2)))
+    ring = min(max((elapsed - SHRINK_AT - SHRINK_FOR + 0.3) / 0.5, 0), 1)
+    if ring > 0:
+        # Fade by mixing towards the card background, so the layer's alpha stays uniform.
+        orbit(d, (*mix(NIGHT, BRAND, ring), a), (elapsed - SHRINK_AT) * 110)
+        d.text((80, 228), "Put on a loop.", font=HEAD_FONT, fill=(*mix(NIGHT, BRAND, ring), a), anchor="la")
+
+
+# Closing animation: one looped graph pulls back into a grid of them.
+GRID_ZOOM_AT, GRID_ZOOM_FOR, GRID_SMALL = 1.2, 2.6, 0.15
+UNIT = (880, 350)  # one graph inside its loop, before scaling
+_graph_small = None
+
+
+def graph_small():
+    global _graph_small
+    if _graph_small is None:
+        g = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        lifecycle_graph(ImageDraw.Draw(g), 255)
+        crop = g.crop(g.getbbox())
+        _graph_small = crop.resize((int(crop.width * SMALL), int(crop.height * SMALL)), Image.LANCZOS)
+    return _graph_small
+
+
+def looped_unit(phase):
+    unit = Image.new("RGBA", UNIT, (0, 0, 0, 0))
+    g = graph_small()
+    unit.alpha_composite(g, (UNIT[0] // 2 - g.width // 2, UNIT[1] // 2 - g.height // 2))
+    orbit(ImageDraw.Draw(unit), (*BRAND, 255), phase, (UNIT[0] / 2, UNIT[1] / 2), ORBIT[2:])
+    return unit
+
+
+def place(layer, tile, x, y):
+    """alpha_composite with the tile clipped at the top and left edges."""
+    if x < 0 or y < 0:
+        tile = tile.crop((max(-x, 0), max(-y, 0), tile.width, tile.height))
+        x, y = max(x, 0), max(y, 0)
+    layer.alpha_composite(tile, (x, y))
+
+
+def loop_grid(layer, a, elapsed):
+    u = ease(min(max((elapsed - GRID_ZOOM_AT) / GRID_ZOOM_FOR, 0), 1))
+    scale = 1 - (1 - GRID_SMALL) * u
+    size = (int(UNIT[0] * scale), int(UNIT[1] * scale))
+    # Four ring phases, so neighbouring loops are not in lockstep.
+    variants = []
+    for k in range(4):
+        unit = looped_unit(elapsed * 110 + k * 150).resize(size, Image.LANCZOS)
+        unit.putalpha(ImageChops.multiply(unit.getchannel("A"), Image.new("L", size, a)))
+        variants.append(unit)
+    neighbours = min(max((elapsed - GRID_ZOOM_AT) / 0.6, 0), 1)
+    faded = variants
+    if neighbours < 1:
+        faded = [v.copy() for v in variants]
+        for v in faded:
+            v.putalpha(ImageChops.multiply(v.getchannel("A"), Image.new("L", size, int(255 * neighbours))))
+    px, py = (UNIT[0] + 40) * scale, (UNIT[1] + 30) * scale
+    cx, cy = 960, 645
+    cols, rows = int(W / px) + 1, int(700 / py) + 1
+    for j in range(-rows, rows + 1):
+        y = cy + j * py
+        if y - size[1] / 2 < 300 or y + size[1] / 2 > 985:
+            continue
+        for i in range(-cols, cols + 1):
+            x = cx + i * px
+            if x + size[0] / 2 < 0 or x - size[0] / 2 > W:
+                continue
+            tiles = variants if (i, j) == (0, 0) else faded
+            place(layer, tiles[(i + j) % 4], int(x - size[0] / 2), int(y - size[1] / 2))
+
+
+def draw_card(img, kind, alpha, elapsed=0.0):
     """An opening or closing card in the style of the landing-page lifecycle image."""
     a = int(255 * alpha)
     layer = Image.new("RGBA", (W, H), (*NIGHT, a))
@@ -707,7 +819,10 @@ def draw_card(img, kind, alpha):
     layer.alpha_composite(mark)
     d.text((162, 80), "OpenEngine", font=WORD_FONT, fill=(*INK, a), anchor="lm")
     d.text((80, 160), card["headline"], font=HEAD_FONT, fill=(*INK, a), anchor="la")
-    lifecycle_graph(d, a)
+    if kind == "title":
+        animated_graph(layer, d, a, elapsed)
+    else:
+        loop_grid(layer, a, elapsed)
     d.text((80, 1010), "openengine.cc", font=FOOT_FONT, fill=(*ORANGE, a), anchor="lm")
     if card["commands"]:
         d.text((W - 80, 1010), "    ".join(card["commands"]), font=PILL_FONT, fill=(*MUTED, a), anchor="rm")
@@ -812,9 +927,10 @@ def main():
         mix = "".join(f"[v{i}]" for i in range(len(s.voices)))
         audio += ["-filter_complex", f"{delays}{mix}amix=inputs={len(s.voices)}:normalize=0[vo]",
                   "-map", "0:v", "-map", "[vo]", "-c:a", "aac", "-b:a", "160k", "-t", f"{total:.2f}"]
+    # CRF 26 keeps the closing grid of loops under GitHub's 10 MB limit for uploaded videos.
     proc = None if STILLS is not None else subprocess.Popen([
         "ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-        "-r", str(FPS), "-i", "-", *audio, "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-r", str(FPS), "-i", "-", *audio, "-c:v", "libx264", "-preset", "slow", "-crf", "26", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", OUT,
     ], stdin=subprocess.PIPE)
     si = 0
@@ -839,7 +955,7 @@ def main():
             if a <= t < b:
                 fade = 0.6
                 alpha = min(1, (t - a) / fade if kind == "end" else 1, (b - t) / fade if kind == "title" else 1)
-                draw_card(img, kind, max(0, alpha))
+                draw_card(img, kind, max(0, alpha), t - a)
         if STILLS is not None:
             if any(abs(t - x) < 0.5 / FPS for x in STILLS):
                 img.save(f"still_{t:05.1f}.png")
