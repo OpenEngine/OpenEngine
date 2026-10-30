@@ -1,10 +1,13 @@
-"""Render the graphs-and-loops walkthrough video (docs/images/oe-graphs-and-loops.mp4).
+"""Render the graphs-and-loops walkthrough video embedded in the README.
 
 The terminal scenes are scripted to match the CLI's output formats; the GitHub
 scenes scroll through headless-Chrome captures of real issues and pull requests.
 Needs macOS (Menlo, SF and Apple Symbols fonts, Google Chrome) and ffmpeg:
 
-    uv run --with pillow --with fonttools python scripts/render_walkthrough.py docs/images/oe-graphs-and-loops.mp4
+    uv run --with pillow --with fonttools python scripts/render_walkthrough.py walkthrough.mp4
+
+To update the README, drag the result into a GitHub comment and replace the README's
+user-attachments URL with the one GitHub returns.
 
 Set ELEVENLABS_API_KEY to narrate each subtitle (OE_WALKTHROUGH_VOICE picks the voice);
 clips are cached in the temp directory, and without either the video renders silent.
@@ -205,6 +208,7 @@ class Script:
         self.snap(False)
 
     def clear(self):
+        self.await_voice()
         self.lines = []
         self.snap()
 
@@ -276,7 +280,7 @@ def build():
     s = Script()
     s.t = 0.3
     s.say("OpenEngine. Graphs define the work. Loops keep it going.")
-    s.t = 3.2
+    s.t = 6.6
     s.await_voice()
     s.cards.append((0.0, s.t + 0.4, "title"))
 
@@ -314,7 +318,7 @@ def build():
     # 2. Register
     s.clear()
     s.prompt()
-    s.sub("Register it. Every edit becomes a new version.")
+    s.sub("Register it, and every edit becomes a new version.")
     s.type("oe graph add graphs/dependabot-ci-fix.yaml")
     s.enter()
     s.out([[seg("registered ", GREEN, True), seg("dependabot-ci-fix v2 "), seg("(g-f577c59e40ad, version gv-3e8b0d71a2c4) in project default", DIM)]])
@@ -360,7 +364,34 @@ def build():
     ], [23, 9, 7, 19, 7, 14], [FG, GREEN, FG, CYAN, FG, PEACH])
     s.wait(3.6)
 
-    # 4. Watch a loop's run
+    # 4. Backends
+    s.clear()
+    s.prompt()
+    s.sub("Every machine running oe daemon is a backend: a laptop, a Mac mini, a box in the rack.")
+    s.type("oe backends")
+    s.enter()
+    rows = [
+        ("", "NAME", "URL", "PROJECT", "TOKEN"),
+        ("*", "local", "http://127.0.0.1:4364", "default", "-"),
+        ("", "mini", "http://mac-mini.local:4364", "default", "MINI_ENGINE_TOKEN"),
+        ("", "rack", "http://rack-01.lan:4364", "default", "RACK_ENGINE_TOKEN"),
+    ]
+    for i, (cur, name, url, project, token) in enumerate(rows):
+        h = i == 0
+        s.out([[seg(f"{cur:<3}", GREEN, True), seg(f"{name:<7}", DIM if h else FG, h), seg(f"{url:<29}", DIM if h else BLUE, h),
+                seg(f"{project:<9}", DIM, h), seg(token, DIM, h)]], delay=0.08)
+    s.wait(2.4)
+    s.out([[]])
+    s.prompt()
+    s.sub("Switch between them with one CLI.")
+    s.type("oe backend use mini")
+    s.enter()
+    s.out([[seg("* ", GREEN, True), seg("mini  ", FG, True), seg("http://mac-mini.local:4364  ", BLUE), seg("project default", DIM)]])
+    s.wait(0.8)
+    s.sub("Loops run on that machine, so work continues while your laptop is closed.")
+    s.wait(3.0)
+
+    # 5. Watch a loop's run
     s.clear()
     s.prompt()
     s.sub("Watch any run live, including one a loop started.")
@@ -378,7 +409,7 @@ def build():
             elapsed += 1
     s.wait(1.4)
 
-    # 5. What a loop decided, and control
+    # 6. What a loop decided, and control
     s.clear()
     s.prompt()
     s.sub("Each run reports what it did.")
@@ -398,7 +429,7 @@ def build():
     s.sub("Labels come with the evidence behind them.")
     s.wait(2.6)
 
-    # 6. On GitHub
+    # 7. On GitHub
     s.clear()
     s.browser("issue1046", "github.com/OpenEngine/OpenEngine/issues/1046", [
         (0, 2.6, "On GitHub, assign an issue to OpenEngine to start work.", [(1270, 450, 1490, 500), (1275, 545, 1495, 592)]),
@@ -425,8 +456,8 @@ def build():
     s.sub(None)
     end = s.t
     s.t += 0.4
-    s.say("Write a graph, put it on a loop, and get started at openengine dot c c.")
-    s.t = end + 3.6
+    s.say("Graphs define the work. Loops keep it going. More at openengine dot c c.")
+    s.t = end + 6.2
     s.await_voice()
     s.t += 0.6
     s.cards.append((end, s.t, "end"))
@@ -505,10 +536,20 @@ def draw_sub(img, text, alpha):
         return
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    tw = SUB_FONT.getlength(text)
+    lines = [text]
+    if SUB_FONT.getlength(text) > W - 160:
+        # Break into the two most even lines.
+        words = text.split()
+        splits = [[" ".join(words[:i]), " ".join(words[i:])] for i in range(1, len(words))]
+        lines = min(splits, key=lambda pair: max(SUB_FONT.getlength(part) for part in pair))
+    tw = max(SUB_FONT.getlength(line) for line in lines)
+    lh = 50
     cx, cy = W / 2, WY + WH + (H - WY - WH) / 2 + 2
-    d.rounded_rectangle((cx - tw / 2 - 30, cy - 38, cx + tw / 2 + 30, cy + 38), 16, fill=(10, 10, 20, int(190 * alpha)))
-    d.text((cx, cy), text, font=SUB_FONT, fill=(255, 255, 255, int(255 * alpha)), anchor="mm")
+    half = lh * len(lines) / 2 + 13
+    d.rounded_rectangle((cx - tw / 2 - 30, cy - half, cx + tw / 2 + 30, cy + half), 16, fill=(10, 10, 20, int(190 * alpha)))
+    for i, line in enumerate(lines):
+        y = cy - (len(lines) - 1) * lh / 2 + i * lh
+        d.text((cx, y), line, font=SUB_FONT, fill=(255, 255, 255, int(255 * alpha)), anchor="mm")
     img.paste(layer, (0, 0), layer)
 
 
@@ -548,26 +589,243 @@ def logo(size):
     return _logo[size]
 
 
-def draw_card(img, kind, alpha):
-    layer = Image.new("RGBA", (W, H), (17, 17, 32, int(255 * alpha)))
-    d = ImageDraw.Draw(layer)
+# Landing-page palette (site/src/css/custom.css)
+NIGHT = (11, 11, 11)
+INK = (244, 243, 241)
+MUTED = (163, 163, 156)
+FAINT = (141, 141, 134)
+FILL = (28, 28, 27)
+RULE = (58, 58, 56)
+WIRE = (96, 96, 93)
+BRAND = (232, 69, 43)
+
+HEAD_FONT = sf(52, 700)
+WORD_FONT = sf(36, 700)
+NODE_FONT = sf(22, 560)
+NODE_BOLD = sf(22, 700)
+LABEL_FONT = sf(15, 560)
+FOOT_FONT = sf(20, 430)
+PILL_FONT = ImageFont.truetype(MENLO, 19)
+
+CARDS = {
+    "title": {"headline": "Your software lifecycle, defined as a graph.", "commands": []},
+    "end": {"headline": "Graphs define the work. Loops keep it going.",
+            "commands": ["oe graph add my-graph.yaml", "oe loop add my-graph --every 1d --max-spend 20"]},
+}
+
+
+def dashed(d, points, color, width=2, dash=10, gap=8):
+    """A dashed polyline."""
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        length = math.hypot(x1 - x0, y1 - y0)
+        n = 0.0
+        while n < length:
+            m = min(n + dash, length)
+            d.line([(x0 + (x1 - x0) * n / length, y0 + (y1 - y0) * n / length),
+                    (x0 + (x1 - x0) * m / length, y0 + (y1 - y0) * m / length)], fill=color, width=width)
+            n += dash + gap
+
+
+def arrow_head(d, tip, direction, color, size=11):
+    dx, dy = direction
+    px, py = -dy, dx
+    d.polygon([tip, (tip[0] - dx * size + px * size * 0.55, tip[1] - dy * size + py * size * 0.55),
+               (tip[0] - dx * size - px * size * 0.55, tip[1] - dy * size - py * size * 0.55)], fill=color)
+
+
+def bezier(p0, p1, p2, p3, steps=28):
+    points = []
+    for i in range(steps + 1):
+        u = i / steps
+        v = 1 - u
+        points.append((v ** 3 * p0[0] + 3 * v * v * u * p1[0] + 3 * v * u * u * p2[0] + u ** 3 * p3[0],
+                       v ** 3 * p0[1] + 3 * v * v * u * p1[1] + 3 * v * u * u * p2[1] + u ** 3 * p3[1]))
+    return points
+
+
+def node(d, cx, cy, w, h, text, a, fill=FILL, outline=RULE, color=INK, font=NODE_FONT, dash=False):
+    rect = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+    if dash:
+        x0, y0, x1, y1 = rect
+        dashed(d, [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], (*outline, a), dash=8, gap=6)
+    else:
+        d.rounded_rectangle(rect, 12, fill=(*fill, a), outline=(*outline, a), width=2)
+    d.text((cx, cy), text, font=font, fill=(*color, a), anchor="mm")
+
+
+def lifecycle_graph(d, a, cy=570):
+    """The implement → CI → parallel review → rerank → pull request diagram from the landing page."""
+    wire = (*WIRE, a)
+    # Main row: (center x, width, label, style)
+    row = [(185, 190, "your instruction", "instruction"), (440, 180, "implement", None), (650, 120, "CI", None),
+           (1225, 150, "rerank", None), (1440, 170, "pull request", "brand"), (1680, 200, "you review", "dashed")]
+    for (x0, w0, _, _), (x1, w1, _, _) in zip(row, row[1:]):
+        if x1 - x0 > 400:  # the review fan sits between CI and rerank
+            continue
+        d.line([(x0 + w0 / 2, cy), (x1 - w1 / 2 - 2, cy)], fill=wire, width=2)
+        arrow_head(d, (x1 - w1 / 2, cy), (1, 0), wire)
+    reviewers = ["security", "bugs", "performance", "conciseness", "dryness"]
+    ys = [cy + (i - 2) * 66 for i in range(len(reviewers))]
+    for ry in ys:
+        d.line(bezier((710, cy), (765, cy), (765, ry), (818, ry)), fill=wire, width=2)
+        arrow_head(d, (820, ry), (1, 0), wire)
+        d.line(bezier((1050, ry), (1100, ry), (1100, cy), (1148, cy)), fill=wire, width=2)
+    arrow_head(d, (1150, cy), (1, 0), wire)
+    # Feedback loop
+    dashed(d, [(1225, cy + 32), (1225, cy + 240), (440, cy + 240), (440, cy + 46)], (*BRAND, a))
+    arrow_head(d, (440, cy + 34), (0, -1), (*BRAND, a))
+    d.text((832, cy + 256), "findings go back for one fix-and-review round", font=LABEL_FONT, fill=(*BRAND, a), anchor="ma")
+    # Parallel review box
+    box = (790, ys[0] - 68, 1080, ys[-1] + 48)
+    dashed(d, [(box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3]), (box[0], box[1])], (*RULE, a))
+    x = 935 - sum(LABEL_FONT.getlength(ch) + 3 for ch in "PARALLEL REVIEW") / 2
+    for ch in "PARALLEL REVIEW":
+        d.text((x, box[1] + 22), ch, font=LABEL_FONT, fill=(*MUTED, a), anchor="lm")
+        x += LABEL_FONT.getlength(ch) + 3
+    for ry, label in zip(ys, reviewers):
+        node(d, 935, ry, 230, 52, label, a)
+    for cx, w, label, style in row:
+        if style == "instruction":
+            node(d, cx, cy, w, 60, label, a, fill=(42, 22, 16), outline=BRAND)
+        elif style == "brand":
+            node(d, cx, cy, w, 60, label, a, fill=BRAND, outline=BRAND, font=NODE_BOLD)
+        elif style == "dashed":
+            node(d, cx, cy, w, 60, label, a, dash=True, outline=(120, 120, 117), font=NODE_BOLD)
+        else:
+            node(d, cx, cy, w, 60, label, a)
+
+
+# Title animation: the full graph holds, shrinks, then an orange loop runs around it.
+SHRINK_AT, SHRINK_FOR, SMALL = 1.6, 1.0, 0.42
+ORBIT = (960, 600, 430, 165)  # centre and radii of the loop around the shrunken graph
+
+
+def mix(c0, c1, u):
+    return tuple(int(x + (y - x) * u) for x, y in zip(c0, c1))
+
+
+def orbit(d, color, phase, center=ORBIT[:2], radii=ORBIT[2:]):
+    """A dashed ellipse with two arrowheads, all moving clockwise as phase grows."""
+    (cx, cy), (rx, ry) = center, radii
+    pts = [(cx + rx * math.cos(i / 180 * math.pi), cy + ry * math.sin(i / 180 * math.pi)) for i in range(361)]
+    dist = [0.0]
+    for p, q in zip(pts, pts[1:]):
+        dist.append(dist[-1] + math.hypot(q[0] - p[0], q[1] - p[1]))
+    dash, gap = 14, 10
+    for i, (p, q) in enumerate(zip(pts, pts[1:])):
+        if (dist[i] - phase) % (dash + gap) < dash:
+            d.line([p, q], fill=color, width=3)
+    for k in range(2):
+        target = (phase + k * dist[-1] / 2) % dist[-1]
+        i = min(range(360), key=lambda j: abs(dist[j] - target))
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        length = math.hypot(x1 - x0, y1 - y0)
+        arrow_head(d, pts[i], ((x1 - x0) / length, (y1 - y0) / length), color, size=15)
+
+
+def animated_graph(layer, d, a, elapsed):
+    g = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    lifecycle_graph(ImageDraw.Draw(g), a)
+    u = ease(min(max((elapsed - SHRINK_AT) / SHRINK_FOR, 0), 1))
+    if u == 0:
+        layer.alpha_composite(g)
+    else:
+        box = g.getbbox()
+        scale = 1 - (1 - SMALL) * u
+        crop = g.crop(box)
+        small = crop.resize((int(crop.width * scale), int(crop.height * scale)), Image.LANCZOS)
+        gx, gy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        tx, ty = gx + (ORBIT[0] - gx) * u, gy + (ORBIT[1] - gy) * u
+        layer.alpha_composite(small, (int(tx - small.width / 2), int(ty - small.height / 2)))
+    ring = min(max((elapsed - SHRINK_AT - SHRINK_FOR + 0.3) / 0.5, 0), 1)
+    if ring > 0:
+        # Fade by mixing towards the card background, so the layer's alpha stays uniform.
+        orbit(d, (*mix(NIGHT, BRAND, ring), a), (elapsed - SHRINK_AT) * 110)
+        d.text((80, 228), "Put on a loop.", font=HEAD_FONT, fill=(*mix(NIGHT, BRAND, ring), a), anchor="la")
+
+
+# Closing animation: one looped graph pulls back into a grid of them.
+GRID_ZOOM_AT, GRID_ZOOM_FOR, GRID_SMALL = 1.2, 2.6, 0.15
+UNIT = (880, 350)  # one graph inside its loop, before scaling
+_graph_small = None
+
+
+def graph_small():
+    global _graph_small
+    if _graph_small is None:
+        g = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        lifecycle_graph(ImageDraw.Draw(g), 255)
+        crop = g.crop(g.getbbox())
+        _graph_small = crop.resize((int(crop.width * SMALL), int(crop.height * SMALL)), Image.LANCZOS)
+    return _graph_small
+
+
+def looped_unit(phase):
+    unit = Image.new("RGBA", UNIT, (0, 0, 0, 0))
+    g = graph_small()
+    unit.alpha_composite(g, (UNIT[0] // 2 - g.width // 2, UNIT[1] // 2 - g.height // 2))
+    orbit(ImageDraw.Draw(unit), (*BRAND, 255), phase, (UNIT[0] / 2, UNIT[1] / 2), ORBIT[2:])
+    return unit
+
+
+def place(layer, tile, x, y):
+    """alpha_composite with the tile clipped at the top and left edges."""
+    if x < 0 or y < 0:
+        tile = tile.crop((max(-x, 0), max(-y, 0), tile.width, tile.height))
+        x, y = max(x, 0), max(y, 0)
+    layer.alpha_composite(tile, (x, y))
+
+
+def loop_grid(layer, a, elapsed):
+    u = ease(min(max((elapsed - GRID_ZOOM_AT) / GRID_ZOOM_FOR, 0), 1))
+    scale = 1 - (1 - GRID_SMALL) * u
+    size = (int(UNIT[0] * scale), int(UNIT[1] * scale))
+    # Four ring phases, so neighbouring loops are not in lockstep.
+    variants = []
+    for k in range(4):
+        unit = looped_unit(elapsed * 110 + k * 150).resize(size, Image.LANCZOS)
+        unit.putalpha(ImageChops.multiply(unit.getchannel("A"), Image.new("L", size, a)))
+        variants.append(unit)
+    neighbours = min(max((elapsed - GRID_ZOOM_AT) / 0.6, 0), 1)
+    faded = variants
+    if neighbours < 1:
+        faded = [v.copy() for v in variants]
+        for v in faded:
+            v.putalpha(ImageChops.multiply(v.getchannel("A"), Image.new("L", size, int(255 * neighbours))))
+    px, py = (UNIT[0] + 40) * scale, (UNIT[1] + 30) * scale
+    cx, cy = 960, 645
+    cols, rows = int(W / px) + 1, int(700 / py) + 1
+    for j in range(-rows, rows + 1):
+        y = cy + j * py
+        if y - size[1] / 2 < 300 or y + size[1] / 2 > 985:
+            continue
+        for i in range(-cols, cols + 1):
+            x = cx + i * px
+            if x + size[0] / 2 < 0 or x - size[0] / 2 > W:
+                continue
+            tiles = variants if (i, j) == (0, 0) else faded
+            place(layer, tiles[(i + j) % 4], int(x - size[0] / 2), int(y - size[1] / 2))
+
+
+def draw_card(img, kind, alpha, elapsed=0.0):
+    """An opening or closing card in the style of the landing-page lifecycle image."""
     a = int(255 * alpha)
-    # Both cards share the logo, title and site line; the middle differs.
+    layer = Image.new("RGBA", (W, H), (*NIGHT, a))
+    d = ImageDraw.Draw(layer)
+    card = CARDS[kind]
     mark = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-    mark.paste(logo(150), (W // 2 - 75, H // 2 - 335))
+    mark.paste(logo(64), (80, 48))
     mark.putalpha(ImageChops.multiply(mark.getchannel("A"), Image.new("L", layer.size, a)))
     layer.alpha_composite(mark)
-    d.text((W / 2, H / 2 - 100), "OpenEngine", font=TITLE_FONT, fill=(*FG, a), anchor="mm")
-    d.text((W / 2, H / 2 + 220), "openengine.cc", font=TAG_FONT, fill=(*ORANGE, a), anchor="mm")
+    d.text((162, 80), "OpenEngine", font=WORD_FONT, fill=(*INK, a), anchor="lm")
+    d.text((80, 160), card["headline"], font=HEAD_FONT, fill=(*INK, a), anchor="la")
     if kind == "title":
-        d.text((W / 2, H / 2 + 55), "Graphs define the work. Loops keep it going.", font=TAG_FONT, fill=(*FG, a), anchor="mm")
+        animated_graph(layer, d, a, elapsed)
     else:
-        cmd1 = "oe graph add my-graph.yaml"
-        cmd2 = "oe loop add my-graph --every 1d --max-spend 20"
-        f = ImageFont.truetype(MENLO, 36)
-        for i, (c, col) in enumerate([(cmd1, GREEN), (cmd2, CYAN)]):
-            y = H / 2 + 20 + i * 70
-            d.text((W / 2, y), c, font=f, fill=(*col, a), anchor="mm")
+        loop_grid(layer, a, elapsed)
+    d.text((80, 1010), "openengine.cc", font=FOOT_FONT, fill=(*ORANGE, a), anchor="lm")
+    if card["commands"]:
+        d.text((W - 80, 1010), "    ".join(card["commands"]), font=PILL_FONT, fill=(*MUTED, a), anchor="rm")
     img.paste(layer, (0, 0), layer)
 
 
@@ -669,9 +927,10 @@ def main():
         mix = "".join(f"[v{i}]" for i in range(len(s.voices)))
         audio += ["-filter_complex", f"{delays}{mix}amix=inputs={len(s.voices)}:normalize=0[vo]",
                   "-map", "0:v", "-map", "[vo]", "-c:a", "aac", "-b:a", "160k", "-t", f"{total:.2f}"]
+    # CRF 26 keeps the closing grid of loops under GitHub's 10 MB limit for uploaded videos.
     proc = None if STILLS is not None else subprocess.Popen([
         "ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-        "-r", str(FPS), "-i", "-", *audio, "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-r", str(FPS), "-i", "-", *audio, "-c:v", "libx264", "-preset", "slow", "-crf", "26", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", OUT,
     ], stdin=subprocess.PIPE)
     si = 0
@@ -696,7 +955,7 @@ def main():
             if a <= t < b:
                 fade = 0.6
                 alpha = min(1, (t - a) / fade if kind == "end" else 1, (b - t) / fade if kind == "title" else 1)
-                draw_card(img, kind, max(0, alpha))
+                draw_card(img, kind, max(0, alpha), t - a)
         if STILLS is not None:
             if any(abs(t - x) < 0.5 / FPS for x in STILLS):
                 img.save(f"still_{t:05.1f}.png")
