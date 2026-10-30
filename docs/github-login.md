@@ -153,8 +153,13 @@ abandoned logins reserve no server slots. Replay protection relies on GitHub
 consuming authorization codes once and binding them to the PKCE verifier.
 The cookie signing key lives in one process, so a restart requires a new
 login and multiple workers require sticky routing or a shared signing key.
-Without login configuration the app remains accessible and the status endpoint
-reports `loginRequired: false`; starting the OAuth flow returns 503.
+Without login configuration, a plain local run (no `public_url`, no proxy
+headers and no `ENGINE_SERVICE_TOKEN`) remains accessible and the status
+endpoint reports `loginRequired: false`; starting the OAuth flow returns 503.
+Once `ENGINE_SERVICE_TOKEN` is set, every protected API needs it, on localhost
+too: the browser shows a token sign-in form that posts to
+`/api/auth/token/login` and holds an `engine_token_session` cookie, and the CLI
+sends `Authorization: Bearer <token>` to `/api/v1`.
 
 ## Agent GitHub identity
 

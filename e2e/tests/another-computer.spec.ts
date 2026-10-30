@@ -90,7 +90,7 @@ OpenEngine saves the Mac mini under the name \`mac-mini\` and shows what it save
 
 You'll see every computer OpenEngine knows about, with *up* beside each one it could reach, followed by the agents it can use there. An agent is an AI coding assistant, such as Claude Code, that reads and changes code for you. The star marks the computer your commands go to: still \`local\`. You can leave the other columns alone for now.
 
-If you see *down* beside the Mac mini instead, check that it's switched on, that OpenEngine is running on it, that the private network or tunnel to it is working, and that you typed its address correctly. If it says the Mac mini *requires a token*, it was given a token of its own: see [\`oe backend add\`](../../cli-reference.md#engine-backend-add) for how to send it.`,
+If you see *down* beside the Mac mini instead, check that it's switched on, that OpenEngine is running on it, that the private network or tunnel to it is working, and that you typed its address correctly. To protect the Mac mini with a secret token, follow [Protect Your OpenEngine with a Token](./test2doc-protect-your-openengine-with-a-token.mdx). That guide also helps if the Mac mini says it *requires a token*.`,
           async () => {
             const { output } = await terminal.run("oe backends list --check")
             expect(output).toMatch(/^\*\s+local\s.*\bup\b/m)
