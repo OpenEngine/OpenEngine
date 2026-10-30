@@ -133,6 +133,18 @@ test.describe("terminal page", { tag: ["@skip-docs"] }, () => {
     expect(first).not.toContain("51234")
   })
 
+  test("shows the guide's daemon at OpenEngine's usual port", async ({ browser }) => {
+    const page = await browser.newPage()
+    await openTerminal(page, { cols: 120, env: { ENGINE_PORT: "51234", E2E_GUIDE_PORT: "4364" } })
+    await page.locator("#terminal").click()
+    await page.keyboard.type('echo "daemon http://127.0.0.1:51234 | other http://127.0.0.1:60789"')
+    await page.keyboard.press("Enter")
+    const row = page.locator(".xterm-rows > div").filter({ hasText: /^daemon http/ }).last()
+    await expect(row).toHaveText(/^daemon http:\/\/127\.0\.0\.1:4364 \| other http:\/\/127\.0\.0\.1:\d{5}\s*$/)
+    await expect(row).not.toContainText("60789")
+    await page.close()
+  })
+
   test("shows a real tunnel's changing address as the guide's address", async ({ browser }) => {
     const shown = async (cloudflare: string, tailscale: string, guideAddress?: string) => {
       const page = await browser.newPage()

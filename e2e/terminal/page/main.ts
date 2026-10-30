@@ -58,7 +58,10 @@ terminal.open(document.getElementById("terminal")!)
 // Draw IDs, timestamps and loopback ports as stand-ins (see stand-ins.ts) by rewriting the
 // rows xterm renders; the buffer underneath keeps the real values.
 const sessionEnv = JSON.parse(params.get("env") ?? "{}") as Record<string, string>
-const standIns = new StandIns(sessionEnv.E2E_GUIDE_ADDRESS)
+const standIns = new StandIns(sessionEnv.E2E_GUIDE_ADDRESS,
+  sessionEnv.ENGINE_PORT && sessionEnv.E2E_GUIDE_PORT
+    ? { port: sessionEnv.ENGINE_PORT, shown: sessionEnv.E2E_GUIDE_PORT }
+    : undefined)
 const rowsElement = document.querySelector("#terminal .xterm-rows")!
 const drawStandIns = new MutationObserver(() => {
   drawStandIns.disconnect()

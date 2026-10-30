@@ -38,7 +38,14 @@ export class StandIns {
   private readonly ports = new Map<string, string>()
   private readonly tunnelAddress?: string
 
-  constructor(tunnelAddress?: string) { this.tunnelAddress = tunnelAddress }
+  /**
+   * `daemonPort`, when given, is the port this session's daemon listens on and
+   * the port a reader's would use, so the guide shows the one the reader sees.
+   */
+  constructor(tunnelAddress?: string, daemonPort?: { port: string, shown: string }) {
+    this.tunnelAddress = tunnelAddress
+    if (daemonPort) this.ports.set(daemonPort.port, daemonPort.shown)
+  }
 
   private seed = 0x2f6e2b1
 
