@@ -101,3 +101,15 @@ class EventPublisher(Protocol):
     """
 
     async def publish(self, event: dict[str, Any]) -> None: ...
+
+
+class AllocationProvider(Protocol):
+    """Managed allocation boundary; implementations must honor the identity after restart.
+
+    provision receives the full Workspace resource. Repeated calls with the same
+    runtime ID must recover the same allocation, including after an interrupted
+    call. Returned locators remain opaque to VCP. No executor is implied.
+    """
+    capabilities: dict[str, Any]
+
+    async def provision(self, runtime_id: str, workspace: dict[str, Any]) -> dict[str, Any]: ...

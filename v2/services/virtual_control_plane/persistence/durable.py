@@ -72,7 +72,7 @@ def _normalize_numbers(value: object) -> object:
 def _identity(subject: str, command: Document) -> str:
     # Snapshot only immutable public identity. A retry's deadline is irrelevant.
     return json.dumps(
-        _normalize_numbers([subject, command["payload"], command.get("expected_version"), command["causal_path"]]),
+        _normalize_numbers([subject, command.get("payload"), command.get("expected_version"), command.get("causal_path")]),
         sort_keys=True, separators=(",", ":"), allow_nan=False,
     )
 

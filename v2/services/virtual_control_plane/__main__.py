@@ -16,11 +16,9 @@ outbox events to the `vcp-events` JetStream stream (`application/outbox.py`);
 shutdown stops that worker before closing the connection, leaving unpublished
 events for the next start.
 
-Only `capabilities.get` is served, truthfully: no provider adapter is
-registered in this slice (#1054 and #1114 add them), so it always reports
-none. Workspace commands are out of this ticket's scope; see
-`services/virtual_control_plane/README.md` for how the application ports this
-module composes map onto the provider tickets that will add them.
+Workspace creation and lifecycle queries use durable receipts and a restartable
+allocation worker. No production provider is registered yet: readiness promises
+request handling, not compute or an executor. See the service README.
 """
 
 from __future__ import annotations
@@ -31,19 +29,19 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlsplit
 
 import nats
 from alembic.util import CommandError
-from openengine.messaging import Request, Route, Server, listen_address
+from openengine.messaging import Server, listen_address
 from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
 from sqlalchemy.exc import SQLAlchemyError
 
+from virtual_control_plane.application.lifecycle import Lifecycle
+from virtual_control_plane.application.ports import AllocationProvider
 from virtual_control_plane.application.outbox import OutboxPublisher
-from virtual_control_plane.application.workspaces import ProviderRegistry
 from virtual_control_plane.exclusion import AlreadyRunning, StateDirectory
 from virtual_control_plane.jetstream import JetStreamEvents
 from virtual_control_plane.persistence import PERSISTENCE
@@ -64,19 +62,7 @@ log = logging.getLogger("virtual_control_plane")
 # No provider adapter is wired up yet: #1054 (worktree) and #1114 (smolvm) each
 # register themselves here once they exist. Until then capabilities.get is
 # honest about serving none, rather than advertising unimplemented isolation.
-PROVIDERS: ProviderRegistry = {}
-
-
-async def get_capabilities(request: Request) -> dict[str, Any]:
-    """No provider adapter is registered in `PROVIDERS` yet, so this always reports none."""
-    return {"providers": []}
-
-
-QUERIES = {
-    "capabilities.get": Route(
-        get_capabilities, "virtual_control_plane/v1/schemas/queries.schema.json#/$defs/get_capabilities_query"
-    ),
-}
+PROVIDERS: dict[str, AllocationProvider] = {}
 
 
 async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -117,12 +103,14 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     if not is_loopback(urlsplit(listener).hostname):
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
-    server = Server(connection, "vcp", listener, queries=QUERIES)
+    lifecycle = Lifecycle(store, PROVIDERS)
+    server = Server(connection, "vcp", listener, queries=lifecycle.queries(), commands=lifecycle.commands())
     publisher = OutboxPublisher(store, JetStreamEvents(connection.jetstream()))
     health = None
     try:
         await server.start()
         publisher.start()
+        lifecycle.start()
         health = await asyncio.start_server(
             lambda reader, writer: _health(
                 lambda: connection.is_connected and not stopping.is_set(), reader, writer
@@ -145,6 +133,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
         finally:
             try:
                 # Broker I/O must stop before the connection closes; pending events survive.
+                await lifecycle.close()
                 await publisher.close(OUTBOX_CLOSE_SECONDS)
                 await server.close()
             finally:
