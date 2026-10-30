@@ -1,0 +1,10 @@
+{
+  "message": "ApplyPolicyResponse",
+  "in_reply_to": "oe.v1.tools.policies.apply",
+  "payload": {
+    "command_id": "cmd_policies_apply_1",
+    "status": "accepted",
+    "operation_id": "op_policies_apply_1",
+    "resource_id": "policy-uid-123"
+  }
+}

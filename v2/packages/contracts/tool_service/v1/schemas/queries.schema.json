@@ -132,6 +132,46 @@
         }
       ]
     },
+    "list_policies_query": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query.schema.json" },
+        { "properties": { "params": { "$ref": "#/$defs/list_policies_params" } } }
+      ]
+    },
+    "list_policies_params": {
+      "type": "object",
+      "required": ["namespace"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": { "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name" },
+        "labelSelector": {
+          "description": "A Kubernetes equality-based label selector, such as `scope=workspace,team!=web`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "limit": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/limit" },
+        "cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/cursor" }
+      }
+    },
+    "list_policies_response": {
+      "allOf": [
+        { "$ref": "../../../common/v1/query-response.schema.json" },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "required": ["items", "next_cursor"],
+              "additionalProperties": false,
+              "properties": {
+                "items": { "type": "array", "items": { "$ref": "../resources/policy.schema.yaml" } },
+                "next_cursor": { "$ref": "../../../common/v1/pagination.schema.json#/$defs/next_cursor" }
+              }
+            }
+          }
+        }
+      ]
+    },
     "get_tool_invocation_query": {
       "allOf": [
         { "$ref": "../../../common/v1/query.schema.json" },

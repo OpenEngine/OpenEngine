@@ -170,15 +170,19 @@ $defs:
           - minLength: 1
       tools:
         description: >-
-          The tools the agent may call, each as `namespace.name`. Listing a
+          The tools the agent may call. Each is a tool as `namespace.name`, or
+          an object adding a Cedar `when` condition the grant carries. Listing a
           tool is the grant: once a step attempt has its workspace, and before
           the attempt is sent to run there, the Graph Engine applies a
-          `ToolGrant` for each tool to that attempt in that workspace. It
-          deletes them when the attempt ends. The step can call nothing else.
+          `ToolGrant` for each tool to that attempt in that workspace, copying
+          any `when` into it. It deletes them when the attempt ends. The step
+          can call nothing else.
         type: array
         uniqueItems: true
         items:
-          $ref: ../../../common/v1/meta.schema.yaml#/$defs/tool_ref
+          oneOf:
+            - $ref: ../../../common/v1/meta.schema.yaml#/$defs/tool_ref
+            - $ref: '#/$defs/agent_tool'
       outputs:
         description: The structured result the agent must report. Names are unique.
         type: array
@@ -367,3 +371,25 @@ $defs:
       to:
         description: The step to go to, or `end`.
         $ref: ../../../common/v1/meta.schema.yaml#/$defs/identifier
+  agent_tool:
+    title: AgentTool
+    description: >-
+      A tool the agent may call, with an optional Cedar `when` condition. The
+      Graph Engine copies `when` into the `ToolGrant` it applies for the step,
+      so the grant allows the call only while the condition holds.
+    type: object
+    required: [tool]
+    additionalProperties: false
+    properties:
+      tool:
+        description: The Tool as `namespace.name`.
+        $ref: ../../../common/v1/meta.schema.yaml#/$defs/tool_ref
+      when:
+        description: >-
+          A Cedar condition over the call's `context` (its `arguments` and its
+          `now` in epoch milliseconds) and `resource` (the tool), such as
+          `context.arguments.issueNumber == 42`. Omitted means the tool may be
+          called with any arguments.
+        type: string
+        minLength: 1
+        maxLength: 4096
