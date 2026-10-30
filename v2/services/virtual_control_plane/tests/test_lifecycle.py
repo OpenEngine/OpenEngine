@@ -229,8 +229,7 @@ def test_crash_after_allocation_recovers_same_runtime_and_failed_allocation_reta
         request = Request(APPLY, "control", "workspaces.apply", body, "nats://127.0.0.1:4222")
         response = await lifecycle.apply(request)
         provider.crash = True
-        with pytest.raises(asyncio.CancelledError):
-            await lifecycle.reconcile()
+        await lifecycle.reconcile()
         await store.close()
         store = storage(tmp_path)
         lifecycle = Lifecycle(store, {"process": provider})
@@ -440,6 +439,58 @@ def test_workspace_queries_use_indexes_and_do_not_reserve_writer(tmp_path):
         page = await store.workspace_page({"state": ["ready"], "provider": "process", "job_id": "job_test"},
                                         [page[-1]["created_at"], page[-1]["workspace_id"]], 2)
         assert [w["workspace_id"] for w in page] == ["ws_0297", "ws_0296"]
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_provider_cancellation_keeps_background_worker_alive(tmp_path):
+    from openengine.messaging import Request
+
+    async def scenario():
+        store, provider = storage(tmp_path), FakeProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        provider.crash = True
+        first = await lifecycle.apply(Request(APPLY, "control", "workspaces.apply",
+            envelopes.command({"workspace": DOCUMENT}), "nats://127.0.0.1:4222"))
+        lifecycle.start()
+        try:
+            async with asyncio.timeout(5):
+                while not provider.calls:
+                    await asyncio.sleep(0.01)
+            assert (await store.read("operations", first["operation_id"]))["snapshot"]["status"] == "pending"
+            document = deepcopy(DOCUMENT)
+            document["metadata"]["name"] = "later"
+            second = await lifecycle.apply(Request(APPLY, "control", "workspaces.apply",
+                envelopes.command({"workspace": document}), "nats://127.0.0.1:4222"))
+            async with asyncio.timeout(5):
+                while (await store.read("operations", second["operation_id"]))["snapshot"]["status"] != "succeeded":
+                    await asyncio.sleep(0.01)
+            assert not lifecycle._worker.done()
+            assert len(provider.allocations) == 2
+        finally:
+            await asyncio.wait_for(lifecycle.close(), 1)
+            assert lifecycle._worker.cancelled()
+            await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_status_queries_do_not_reserve_writer(tmp_path):
+    from openengine.messaging import Request
+
+    async def scenario():
+        store = storage(tmp_path)
+        lifecycle = Lifecycle(store, {"process": FakeProvider()})
+        response = await lifecycle.apply(Request(APPLY, "control", "workspaces.apply",
+            envelopes.command({"workspace": DOCUMENT}), "nats://127.0.0.1:4222"))
+        async with store.transaction():
+            for collection, key in (("workspaces", response["resource_id"]),
+                                    ("operations", response["operation_id"])):
+                snapshot = await asyncio.wait_for(lifecycle._read(collection, key), 1)
+                assert snapshot
+            with pytest.raises(ServiceError, match="NOT_FOUND"):
+                await asyncio.wait_for(lifecycle._read("workspaces", "ws_missing"), 1)
         await store.close()
 
     asyncio.run(scenario())

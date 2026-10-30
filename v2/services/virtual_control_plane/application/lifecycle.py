@@ -162,8 +162,7 @@ class Lifecycle:
         })
 
     async def _read(self, collection, key):
-        async with self.store.transaction() as tx:
-            value = await tx.get(collection, key)
+        value = await self.store.read(collection, key)
         if value is None or "snapshot" not in value:
             raise ServiceError(ErrorCode.NOT_FOUND, "resource does not exist",
                                details={"resource_type": collection, "resource_id": key})
@@ -225,7 +224,10 @@ class Lifecycle:
                 if tasks:
                     done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
-                        task.result()
+                        # Child cancellation is a provider failure, not shutdown.
+                        # Parent cancellation still propagates from asyncio.wait.
+                        if not task.cancelled():
+                            task.result()
         finally:
             for task in tasks:
                 task.cancel()

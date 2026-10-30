@@ -163,6 +163,10 @@ class DurableStore:
                 await connection.rollback()
                 raise
 
+    async def read(self, collection: Collection, key: str) -> Document | None:
+        async with self.database.connect() as connection:
+            return await Transaction(connection).get(collection, key)
+
     async def workspace_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]:
         # Read-only connection: listing never reserves the SQLite writer lock.
         fields = {"name": "name", "provider": "provider", "job_id": "labels.job_id"}

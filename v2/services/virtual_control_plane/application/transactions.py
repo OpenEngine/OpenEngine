@@ -70,6 +70,8 @@ class Transaction(Protocol):
 
 
 class UnitOfWork(Protocol):
+    async def read(self, collection: Collection, key: str) -> Document | None: ...
+
     async def workspace_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]: ...
 
     def transaction(self) -> AbstractAsyncContextManager[Transaction]:
