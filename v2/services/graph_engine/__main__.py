@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 import nats
 from alembic.util import CommandError
 from openengine.messaging import LocalOperator, Server, listen_address
+from openengine.messaging.broker import connect, load_trust
 from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
@@ -35,6 +36,7 @@ from graph_engine.persistence.store import Graphs
 from graph_engine.registry import Registry
 
 NATS_URL_VARIABLE = "OE_NATS_URL"
+NATS_TRUST_VARIABLE = "OE_NATS_TRUST_FILE"
 HEALTH_PORT_VARIABLE = "OE_GE_HEALTH_PORT"
 READY_FILE_VARIABLE = "OE_GE_READY_FILE"
 HEALTH_HOST = "127.0.0.1"
@@ -62,8 +64,11 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, stopping.set)
+    # Snapshot trust once: reconnects cannot adopt a replacement launch manifest.
+    trust_path = os.environ.get(NATS_TRUST_VARIABLE)
+    trust = load_trust(Path(trust_path)) if trust_path is not None else None
     connecting = asyncio.ensure_future(
-        nats.connect(nats_url, name="ge", connect_timeout=CONNECT_TIMEOUT_SECONDS, max_reconnect_attempts=-1)
+        connect(nats_url, trust=trust, name="ge", connect_timeout=CONNECT_TIMEOUT_SECONDS, max_reconnect_attempts=-1)
     )
     # nats-py retries a first connection forever, so a SIGTERM must be able to end the wait.
     stopped = asyncio.ensure_future(stopping.wait())
@@ -75,7 +80,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
         return EXIT_OK
     try:
         connection = connecting.result()
-    except (OSError, nats.errors.Error):
+    except (OSError, ValueError, nats.errors.Error):
         log.exception("could not connect to NATS", extra={"server.address": nats_url})
         return EXIT_FAILED
     listener = listen_address(connection)
@@ -153,7 +158,7 @@ def main() -> int:
                 PERSISTENCE.store(database),
             )
         )
-    except (OSError, CommandError, SQLAlchemyError, nats.errors.Error):
+    except (OSError, ValueError, CommandError, SQLAlchemyError, nats.errors.Error):
         # An outage can close cleanly; a failed final close must remain a failure.
         log.exception("failed")
         return EXIT_FAILED

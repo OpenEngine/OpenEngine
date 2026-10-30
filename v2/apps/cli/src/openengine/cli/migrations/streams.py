@@ -16,9 +16,9 @@ from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any
 
-import nats
 from nats.aio.client import Client
 from nats.errors import Error as ClientError
+from openengine.messaging.broker import BrokerTrust, connect
 
 from openengine.cli.migrations import MigrationError
 
@@ -109,7 +109,9 @@ async def _migrate(client: Client, config: dict[str, Any]) -> StreamResult:
     return StreamResult(name, Outcome.UPDATED)
 
 
-async def migrate_streams(url: str, configs: list[dict[str, Any]]) -> list[StreamResult]:
+async def migrate_streams(
+    url: str, configs: list[dict[str, Any]], *, trust: BrokerTrust | None = None,
+) -> list[StreamResult]:
     errors: list[Exception] = []
 
     async def record(error: Exception) -> None:
@@ -119,15 +121,16 @@ async def migrate_streams(url: str, configs: list[dict[str, Any]]) -> list[Strea
     try:
         # nats-py retries the first connect forever at max_reconnect_attempts=0,
         # so allow one quick retry and then give up.
-        client = await nats.connect(
+        client = await connect(
             url,
+            trust=trust,
             connect_timeout=CONNECT_TIMEOUT_SECONDS,
             allow_reconnect=False,
             max_reconnect_attempts=1,
             reconnect_time_wait=0,
             error_cb=record,
         )
-    except (OSError, ClientError, asyncio.TimeoutError) as error:
+    except (OSError, ValueError, ClientError, asyncio.TimeoutError) as error:
         raise ConnectFailed(url, errors[-1] if errors else error) from error
     try:
         return [await _migrate(client, config) for config in configs]

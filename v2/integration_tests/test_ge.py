@@ -11,12 +11,12 @@ import sys
 from pathlib import Path
 from urllib.request import urlopen
 
-import nats
 import pytest
 import yaml
 from nats.errors import TimeoutError as NatsTimeoutError
 from openengine.contracts.validate import load_contract, validate_message
 from openengine.messaging import Client, ServiceError
+from openengine.messaging.broker import BrokerTrust, connect, load_trust
 
 pytestmark = pytest.mark.integration
 
@@ -43,6 +43,7 @@ def _oe(state: Path):
             timeout=240,
         )
 
+    run.trust_file = state / "openengine" / "broker.json"
     return run
 
 
@@ -57,8 +58,8 @@ def _up(oe, port: int, **env: str) -> subprocess.CompletedProcess[str]:
     return oe("up", "--nats-port", str(port), "--nats-monitor-port", str(_free_port()), env=env)
 
 
-async def _request(url: str, subject: str, body: dict) -> dict:
-    connection = await nats.connect(url)
+async def _request(trust: BrokerTrust, subject: str, body: dict) -> dict:
+    connection = await connect(trust.url, trust=trust, allow_reconnect=False, connect_timeout=2)
     try:
         return json.loads((await connection.request(subject, json.dumps(body).encode(), timeout=5)).data)
     finally:
@@ -83,15 +84,19 @@ def test_ge_serves_graphs_list_once_ready_and_drains_on_stop(oe) -> None:
         assert health.status == 200
 
     subject = "oe.v1.ge.query.graphs.list"
-    reply = asyncio.run(_request(f"nats://127.0.0.1:{port}", subject, {"request_id": "req_it", "params": {}}))
+    reply = asyncio.run(_request(load_trust(oe.trust_file), subject, {"request_id": "req_it", "params": {}}))
     assert reply == {"request_id": "req_it", "status": "ok", "result": {"items": [], "next_cursor": None}}
     assert validate_message(load_contract("graph_engine"), "ListGraphsResponse", reply, in_reply_to=subject) == []
 
-    bad = asyncio.run(_request(f"nats://127.0.0.1:{port}", subject, {"params": {"unknown": 1}}))
+    bad = asyncio.run(_request(load_trust(oe.trust_file), subject, {"params": {"unknown": 1}}))
     assert bad["error"]["code"] == "INVALID_ARGUMENT"
 
     assert oe("down").returncode == 0
-    bodies = [line["body"] for line in _ge_lines(oe)]
+    # nats-py 2.16 emits this asyncio notice when its TLS stream closes.
+    # Preserve every other log entry in the lifecycle ordering assertion.
+    tls_notice = "returning true from eof_received() has no effect when using ssl"
+    bodies = [line["body"] for line in _ge_lines(oe)
+              if not (line["scope"] == "asyncio" and line["body"] == tls_notice)]
     served = bodies[bodies.index("nats connected"):]
     assert served[:4] == ["nats connected", "serving oe.v1.ge.query.>", "serving oe.v1.ge.control.>", "ready"]
     # The unknown param passes the envelope check, so it is logged as a request before graphs.list's schema rejects it.
@@ -136,12 +141,12 @@ def test_ge_stops_on_sigterm_while_nats_is_unreachable(tmp_path: Path) -> None:
 
 
 @pytest.fixture(scope="module")
-def ge_url(tmp_path_factory: pytest.TempPathFactory):
+def ge_trust(tmp_path_factory: pytest.TempPathFactory):
     """One running OpenEngine for the apply tests, each of which applies graphs of its own names."""
     run, port = _oe(tmp_path_factory.mktemp("apply") / "state"), _free_port()
     up = _up(run, port)
     assert up.returncode == 0, up.stderr
-    yield f"nats://127.0.0.1:{port}"
+    yield load_trust(run.trust_file)
     run("down")
 
 
@@ -167,8 +172,8 @@ class DropFirstReply:
         return reply
 
 
-async def _session(url: str, scenario):
-    connection = await nats.connect(url)
+async def _session(trust: BrokerTrust, scenario):
+    connection = await connect(trust.url, trust=trust, allow_reconnect=False, connect_timeout=2)
     try:
         return await scenario(connection)
     finally:
@@ -184,7 +189,7 @@ async def _result(client: Client, reply: dict) -> dict:
     return operation["result"]
 
 
-def test_apply_retries_a_lost_reply_without_adding_a_revision(ge_url: str) -> None:
+def test_apply_retries_a_lost_reply_without_adding_a_revision(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         dropping = DropFirstReply(connection)
         reply = await Client(dropping, timeout=5).command(APPLY, {"graph": _graph("lost-reply")}, command_id="cmd_lost_reply")
@@ -196,10 +201,10 @@ def test_apply_retries_a_lost_reply_without_adding_a_revision(ge_url: str) -> No
         again = await client.command(APPLY, {"graph": _graph("lost-reply")})
         assert await _result(client, again) == {"graph": {"graph_id": reply["resource_id"], "revision": 1}, "created": False}
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_concurrent_apply_neither_duplicates_nor_overwrites_revisions(ge_url: str) -> None:
+def test_concurrent_apply_neither_duplicates_nor_overwrites_revisions(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=10)
         same = await asyncio.gather(*(client.command(APPLY, {"graph": _graph("concurrent")}) for _ in range(6)))
@@ -217,10 +222,10 @@ def test_concurrent_apply_neither_duplicates_nor_overwrites_revisions(ge_url: st
         assert (await _result(client, retried[0]))["graph"]["revision"] == 2
         assert sorted([(await _result(client, reply))["graph"]["revision"] for reply in changed]) == list(range(3, 9))
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_apply_rejects_conflicting_command_reuse(ge_url: str) -> None:
+def test_apply_rejects_conflicting_command_reuse(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=5)
         first = await client.command(APPLY, {"graph": _graph("reused")}, command_id="cmd_reused")
@@ -236,10 +241,10 @@ def test_apply_rejects_conflicting_command_reuse(ge_url: str) -> None:
             await client.command(APPLY, {"python": {"name": "reused", "source": "workflow = None"}})
         assert python.value.code == "UNSUPPORTED_CAPABILITY"
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_apply_rejects_an_expected_version_mismatch(ge_url: str) -> None:
+def test_apply_rejects_an_expected_version_mismatch(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=5)
         await client.command(APPLY, {"graph": _graph("versioned")})
@@ -252,10 +257,10 @@ def test_apply_rejects_an_expected_version_mismatch(ge_url: str) -> None:
             assert stale.value.code == "VERSION_CONFLICT"
             assert stale.value.details == {"expected_version": 1, "actual_version": 2}
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_list_pages_through_every_graph_until_next_cursor_is_null(ge_url: str) -> None:
+def test_list_pages_through_every_graph_until_next_cursor_is_null(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=5)
         applied = {}
@@ -281,10 +286,10 @@ def test_list_pages_through_every_graph_until_next_cursor_is_null(ge_url: str) -
             await client.query(LIST, {"name_prefix": "page-a", "cursor": issued})
         assert changed.value.code == "INVALID_CURSOR"
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_project_scopes_names_so_the_same_name_is_two_graphs(ge_url: str) -> None:
+def test_project_scopes_names_so_the_same_name_is_two_graphs(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=5)
         alpha = await client.command(APPLY, {"project": "alpha", "graph": _graph("project-same")})
@@ -302,10 +307,10 @@ def test_project_scopes_names_so_the_same_name_is_two_graphs(ge_url: str) -> Non
             assert got["result"]["graph"]["project"] == project
             assert json.loads(got["result"]["revision"]["source"]) == _graph("project-same", description)
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_project_scopes_command_id_dedup(ge_url: str) -> None:
+def test_project_scopes_command_id_dedup(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=5)
         alpha = await client.command(APPLY, {"project": "alpha", "graph": _graph("project-dedup")}, command_id="cmd_project_dedup")
@@ -319,10 +324,10 @@ def test_project_scopes_command_id_dedup(ge_url: str) -> None:
         assert conflict.value.code == "COMMAND_ID_CONFLICT"
         assert conflict.value.details["original_operation_id"] == beta["operation_id"]
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_project_binds_the_list_cursor(ge_url: str) -> None:
+def test_project_binds_the_list_cursor(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=5)
         for name in ("project-page-a", "project-page-b"):
@@ -334,10 +339,10 @@ def test_project_binds_the_list_cursor(ge_url: str) -> None:
             await client.query(LIST, {"project": "beta", "name_prefix": "project-page", "cursor": issued})
         assert (changed.value.code, changed.value.details) == ("INVALID_CURSOR", {"reason": "filters_changed"})
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-def test_project_omitted_is_the_default_project(ge_url: str) -> None:
+def test_project_omitted_is_the_default_project(ge_trust: BrokerTrust) -> None:
     async def scenario(connection) -> None:
         client = Client(connection, timeout=5)
         unscoped = await client.command(APPLY, {"graph": _graph("project-default")})
@@ -351,10 +356,10 @@ def test_project_omitted_is_the_default_project(ge_url: str) -> None:
             ]
         assert (await client.query(LIST, {"project": "alpha", "name_prefix": "project-default"}))["result"]["items"] == []
 
-    asyncio.run(_session(ge_url, scenario))
+    asyncio.run(_session(ge_trust, scenario))
 
 
-async def _revisions(url: str, graph_id: str) -> list[dict]:
+async def _revisions(trust: BrokerTrust, graph_id: str) -> list[dict]:
     """graphs.{graph_id}.get of revision 1 and of the latest, each checked against the contract."""
     async def scenario(connection) -> list[dict]:
         client, subject = Client(connection, timeout=5), f"oe.v1.ge.query.graphs.{graph_id}.get"
@@ -363,7 +368,7 @@ async def _revisions(url: str, graph_id: str) -> list[dict]:
             assert validate_message(load_contract("graph_engine"), "GetGraphResponse", reply, in_reply_to=subject) == []
         return [reply["result"] for reply in replies]
 
-    return await _session(url, scenario)
+    return await _session(trust, scenario)
 
 
 def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
@@ -377,9 +382,9 @@ def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
     assert created.stdout == f"created implement-review revision 1 in project default (graph {graph_id})\n", created.stderr
     assert oe("graph", "apply", str(EXAMPLE)).stdout == f"unchanged implement-review revision 1 in project default (graph {graph_id})\n"
     assert oe("graph", "apply", str(changed)).stdout == f"updated implement-review revision 2 in project default (graph {graph_id})\n"
-    retried = asyncio.run(_session(f"nats://127.0.0.1:{port}", lambda connection: Client(connection).command(
+    retried = asyncio.run(_session(load_trust(oe.trust_file), lambda connection: Client(connection).command(
         APPLY, {"graph": _graph("restarted")}, command_id="cmd_before_restart")))
-    before = asyncio.run(_revisions(f"nats://127.0.0.1:{port}", graph_id))
+    before = asyncio.run(_revisions(load_trust(oe.trust_file), graph_id))
 
     assert oe("down").returncode == 0
     port = _free_port()
@@ -388,10 +393,10 @@ def test_apply_from_the_cli_survives_a_ge_restart(oe, tmp_path: Path) -> None:
     applied = json.loads(oe("graph", "apply", str(changed), "--json").stdout)
     assert applied["response"]["resource_id"] == graph_id
     assert applied["operation"]["result"] == {"graph": {"graph_id": graph_id, "revision": 2}, "created": False}
-    assert asyncio.run(_session(f"nats://127.0.0.1:{port}", lambda connection: Client(connection).command(
+    assert asyncio.run(_session(load_trust(oe.trust_file), lambda connection: Client(connection).command(
         APPLY, {"graph": _graph("restarted")}, command_id="cmd_before_restart"))) == retried
 
-    first, latest = asyncio.run(_revisions(f"nats://127.0.0.1:{port}", graph_id))
+    first, latest = asyncio.run(_revisions(load_trust(oe.trust_file), graph_id))
     assert [first, latest] == before
     assert (first["revision"]["revision"], latest["revision"]["revision"]) == (1, 2)
     assert json.loads(first["revision"]["source"]) == _graph("implement-review")

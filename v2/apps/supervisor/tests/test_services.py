@@ -18,6 +18,7 @@ def test_default_startup_always_runs_vcp_and_stops_it_first(monkeypatch, tmp_pat
         started.append((module, process, nats_url))
         if module == "virtual_control_plane":
             assert environment == {
+                "OE_NATS_TRUST_FILE": str(tmp_path / "state" / "broker.json"),
                 "OE_VCP_READY_FILE": str(tmp_path / "state" / "vcp.ready"),
                 "OE_VCP_STATE_DIR": str(tmp_path / "state" / "vcp"),
             }
@@ -25,7 +26,7 @@ def test_default_startup_always_runs_vcp_and_stops_it_first(monkeypatch, tmp_pat
 
     monkeypatch.setattr(supervisor, "ShutdownRequest", Mock())
     monkeypatch.setattr(supervisor.nats, "start", Mock(return_value=broker))
-    monkeypatch.setattr(supervisor, "wait_until_healthy", Mock())
+    monkeypatch.setattr(supervisor, "wait_for_broker", Mock())
     monkeypatch.setattr(supervisor.services, "start", start)
     readiness = Mock(
         side_effect=lambda name, process, *_: ProcessState(name, process.pid, "http://localhost/healthz", Status.READY)
@@ -33,7 +34,7 @@ def test_default_startup_always_runs_vcp_and_stops_it_first(monkeypatch, tmp_pat
     monkeypatch.setattr(supervisor, "_wait_until_ready", readiness)
     monkeypatch.setattr(supervisor, "_watch", Mock())
     # Exercise the real reverse-order shutdown without spawning child processes.
-    monkeypatch.setattr("openengine.supervisor.shutdown.processes.stop", stopped.append)
+    monkeypatch.setattr("openengine.supervisor.shutdown.processes.stop", lambda process, **_: stopped.append(process))
     settings = supervisor.Settings(
         state_directory=tmp_path / "state",
         cache_directory=tmp_path / "cache",
@@ -48,7 +49,7 @@ def test_default_startup_always_runs_vcp_and_stops_it_first(monkeypatch, tmp_pat
     assert [module for module, _, _ in started] == [
         "connection_bus", "graph_engine", "tool_service", "virtual_control_plane",
     ]
-    assert started[-1][2] == "nats://127.0.0.1:4222"
+    assert started[-1][2] == "tls://127.0.0.1:4222"
     assert stopped == [process for _, process, _ in reversed(started)] + [broker]
     assert [call.args[0] for call in readiness.call_args_list] == ["ge", "vcp"]
 

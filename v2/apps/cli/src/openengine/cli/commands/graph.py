@@ -33,10 +33,12 @@ import nats
 import yaml
 
 from openengine.cli.commands.status import running_state
+from openengine.cli.config.local import state_directory
 from openengine.cli.output.render import as_json, table
 from openengine.contracts import expressions
 from openengine.contracts.resources import load_documents, markdown, validate_text
 from openengine.messaging import Client, ErrorCode, ServiceError, Unavailable
+from openengine.messaging.broker import connect, load_trust
 
 KIND = "Graph"
 STDIN = "-"
@@ -93,6 +95,11 @@ class NotServing(Exception):
     """OpenEngine cannot answer: the reason, for the user."""
 
 
+class BrokerTrustUnavailable(NotServing):
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(f"cannot load managed broker trust: {cause}")
+
+
 class NatsUnreachable(NotServing):
     def __init__(self, nats_url: str) -> None:
         super().__init__(f"cannot reach NATS at {nats_url}")
@@ -111,12 +118,17 @@ async def _ask(nats_url: str, ask: Callable[[Client], Awaitable[T]]) -> T:
         pass
 
     try:
-        # nats-py retries a refused first connection forever unless it may make at least one reconnect attempt.
-        connection = await nats.connect(
-            nats_url, name="oe", connect_timeout=CONNECT_TIMEOUT_SECONDS, allow_reconnect=False,
+        # Local commands never infer broker trust from the status URL alone.
+        trust = load_trust(state_directory() / "broker.json")
+    except (OSError, ValueError) as error:
+        raise BrokerTrustUnavailable(error) from error
+    try:
+        # Local CLI failures must return promptly instead of retrying forever.
+        connection = await connect(
+            nats_url, trust=trust, name="oe", connect_timeout=CONNECT_TIMEOUT_SECONDS, allow_reconnect=False,
             max_reconnect_attempts=1, reconnect_time_wait=0.1, error_cb=ignore,
         )
-    except (OSError, nats.errors.Error):
+    except (OSError, ValueError, nats.errors.Error):
         raise NatsUnreachable(nats_url) from None
     try:
         return await ask(Client(connection))

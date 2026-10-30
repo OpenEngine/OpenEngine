@@ -15,7 +15,9 @@ import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from openengine.supervisor.broker_launch import Launch
 from openengine.supervisor.processes import nats, services
+from openengine.supervisor.readiness.broker import wait_for_broker
 from openengine.supervisor.readiness.http import NotReady, wait_for_ready_file, wait_until_healthy
 from openengine.supervisor.shutdown.processes import stop_all
 from openengine.supervisor.shutdown.signals import ShutdownRequest
@@ -61,6 +63,16 @@ def _wait_until_ready(
 
 
 def run(settings: Settings) -> int:
+    try:
+        with Launch(settings.state_directory, settings.host, settings.nats_port) as launch:
+            return _run(settings, launch)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        # A lock/path rejection must not overwrite another supervisor's state.
+        log.exception("cannot establish managed broker identity")
+        return EXIT_FAILED
+
+
+def _run(settings: Settings, launch: Launch) -> int:
     shutdown = ShutdownRequest()
     shutdown.install()
     path = state_path(settings.state_directory)
@@ -78,21 +90,18 @@ def run(settings: Settings) -> int:
             port=settings.nats_port,
             monitor_port=settings.nats_monitor_port,
             store=store,
+            config=launch.config,
         )
         children["nats"] = nats.start(command, sys.stdout.buffer)
-        wait_until_healthy(
-            "nats-server",
-            children["nats"],
-            f"http://{settings.host}:{settings.nats_monitor_port}/healthz",
-            timeout=READY_TIMEOUT_SECONDS,
-            cancelled=shutdown.requested,
+        wait_for_broker(
+            children["nats"], launch.trust, timeout=READY_TIMEOUT_SECONDS, cancelled=shutdown.requested,
         )
-        nats_url = f"nats://{settings.host}:{settings.nats_port}"
+        nats_url = launch.trust.url
         processes.append(ProcessState("nats", children["nats"].pid, nats_url, Status.READY))
         started = services.SERVICES
         ready_files: dict[str, Path] = {}
         for name, module in started:
-            environment = {}
+            environment = {"OE_NATS_TRUST_FILE": str(launch.manifest)}
             if variable := services.READY_FILE_VARIABLES.get(name):
                 ready_files[name] = services.ready_file(settings.state_directory, name)
                 ready_files[name].unlink(missing_ok=True)
@@ -113,12 +122,18 @@ def run(settings: Settings) -> int:
         write_state(path, SupervisorState(pid=pid, status=Status.READY, processes=processes))
         log.info("ready, NATS on %s", nats_url, extra={"services": [name for name, _ in started]})
         _watch(children, shutdown)
-    except (nats.NatsError, NotReady, ProcessExited) as error:
+    except (nats.NatsError, NotReady, ProcessExited, OSError, ValueError) as error:
         log.exception("failed; stopping")
         write_state(path, SupervisorState(pid=pid, status=Status.FAILED, processes=processes, error=str(error)))
         return EXIT_FAILED
     finally:
-        stop_all(list(children.values()))
+        try:
+            stop_all(list(children.values()))
+        except subprocess.TimeoutExpired:
+            # An unreaped child may still need its key. Keep this private,
+            # abandoned generation; later launches never adopt its trust.
+            launch.keep_material = True
+            raise
     path.unlink(missing_ok=True)
     log.info("stopped")
     return EXIT_OK

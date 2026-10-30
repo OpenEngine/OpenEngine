@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
+
+from openengine.messaging.broker import open_private_directory, reject_extended_acl
 
 
 class Status(StrEnum):
@@ -46,23 +49,53 @@ def state_path(state_directory: Path) -> Path:
 
 def write_state(path: Path, state: SupervisorState) -> None:
     """Replace the file whole, so a reader never sees half of it."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    directory = open_private_directory(path.parent, create=True)
+    os.close(directory)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as partial:
+        reject_extended_acl(partial.fileno())
         json.dump(asdict(state), partial)
     os.replace(partial.name, path)
 
 
+class UnsafeState(PermissionError):
+    def __init__(self) -> None:
+        super().__init__("supervisor state must be a private regular file owned by this user")
+
+
+def _state_bytes(path: Path) -> bytes:
+    directory = open_private_directory(path.parent)
+    try:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        try:
+            reject_extended_acl(fd)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise UnsafeState
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                return stream.read(65537)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory)
+
+
 def read_state(path: Path) -> SupervisorState | None:
     try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
+        raw = _state_bytes(path)
+    except FileNotFoundError:
         return None
-    return SupervisorState(
-        pid=data["pid"],
-        status=Status(data["status"]),
-        processes=[_process(process) for process in data["processes"]],
-        error=data.get("error"),
-    )
+    if len(raw) > 65536:
+        return None
+    try:
+        data = json.loads(raw)
+        return SupervisorState(
+            pid=data["pid"],
+            status=Status(data["status"]),
+            processes=[_process(process) for process in data["processes"]],
+            error=data.get("error"),
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _process(data: dict[str, object]) -> ProcessState:
