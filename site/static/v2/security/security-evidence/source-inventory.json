@@ -1,0 +1,5020 @@
+[
+  {
+    "path": "v2/.gitignore",
+    "kind": "source/config",
+    "bytes": 153,
+    "sha256": "fcad48994f093a26e7d51b441f5cfcaff4ee5cf55101c27e4d6affc9f88d6aba",
+    "lines": 6,
+    "tests": []
+  },
+  {
+    "path": "v2/ARCHITECTURE.md",
+    "kind": "documentation",
+    "bytes": 5599,
+    "sha256": "50fb9a3510ae0de51a0f7867a36d1325c6d501a78139abaf770b4af402e98ae5",
+    "lines": 57,
+    "tests": []
+  },
+  {
+    "path": "v2/CODEOWNERS",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/README.md",
+    "kind": "documentation",
+    "bytes": 4472,
+    "sha256": "69a0c9e14688b48cc62e898ae908f9cb1d777b2edfbb7c4a67d25bebffffe7a8",
+    "lines": 92,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/README.md",
+    "kind": "documentation",
+    "bytes": 4680,
+    "sha256": "58639a7f9e43aec0ef6b579dd51dd96bc18165764754949adefdabb1a5b2a080",
+    "lines": 81,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 1210,
+    "sha256": "cb95f7cba61604ec6d4a9d0603adb31bb00349e99661d5809127842cc6dbbb0c",
+    "lines": 40,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/__init__.py",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/__main__.py",
+    "kind": "source/config",
+    "bytes": 517,
+    "sha256": "134e3fdc54b92aa9f0534ec7fbf3aa9f041b7587d83550b391f27fe52074b565",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/commands/__init__.py",
+    "kind": "source/config",
+    "bytes": 312,
+    "sha256": "a5744d9f32e3642e21ee86cda4c4e81ebcf1c88c734da296abcb30c88aa8ebee",
+    "lines": 12,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/commands/down.py",
+    "kind": "source/config",
+    "bytes": 1171,
+    "sha256": "02bf9a7e6fb98a0c931147fee9eb8af74485ffc3f9fdd35023c32f7a583fae4e",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/commands/graph.py",
+    "kind": "source/config",
+    "bytes": 13204,
+    "sha256": "e2ab31b170dd34b1e533f862d198c325f2cabab74f43ba16bdc76c0f58d73a2b",
+    "lines": 316,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/commands/logs.py",
+    "kind": "source/config",
+    "bytes": 1679,
+    "sha256": "0bbd8043963f3dd46a34228a5a24a67ed0dc93262d03eb4edde89cb8ca8e6b3f",
+    "lines": 47,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/commands/migrate.py",
+    "kind": "source/config",
+    "bytes": 2152,
+    "sha256": "ed10fa00f728a2fe8712e2bb8b41363204b0f50d8f053f0ed2f1e60bc2726758",
+    "lines": 53,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/commands/status.py",
+    "kind": "source/config",
+    "bytes": 1524,
+    "sha256": "60e68cdc5c1013ebfca99cee8a1a05d606825fe0a42c1b6cd17913625a77c63d",
+    "lines": 40,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/commands/up.py",
+    "kind": "source/config",
+    "bytes": 3526,
+    "sha256": "e4d224582966bbe85fa60fb139a89044e8cba491f0997adcf4c7ea2a4e5a00f0",
+    "lines": 95,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/config/__init__.py",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/config/local.py",
+    "kind": "source/config",
+    "bytes": 672,
+    "sha256": "6882d07ba89e3fe6ffad83bc79034eb1c1b3614b0e8c3a80b37b8dca93d409e7",
+    "lines": 27,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/migrations/__init__.py",
+    "kind": "source/config",
+    "bytes": 162,
+    "sha256": "90389445a3e22c835f2ad6a4c12d7ebcfafc4cf10090efd5e16d85443b015414",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/migrations/databases.py",
+    "kind": "source/config",
+    "bytes": 2248,
+    "sha256": "2b7d94a2d6ca60e2fa8af7f79a296af3e860e01179571c8a7a4a301e0dd0fc29",
+    "lines": 63,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/migrations/streams.py",
+    "kind": "source/config",
+    "bytes": 4915,
+    "sha256": "2f15b8532d7156b01440de29e7c99c8d2c8f437683d506b5ca95fdec96a74a10",
+    "lines": 138,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/output/__init__.py",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/output/banner.py",
+    "kind": "source/config",
+    "bytes": 429,
+    "sha256": "8b4de77b389687deeb98b3981d208df4879b8ece320260d38285e2ee84340239",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/src/openengine/cli/output/render.py",
+    "kind": "source/config",
+    "bytes": 555,
+    "sha256": "2d38d46b4dd6719088358e39e77432b5a718628c82a0a988622eea5bbf32837e",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/tests/bad.graph.yaml",
+    "kind": "test",
+    "bytes": 190,
+    "sha256": "9dc293502b846cdf63626ec425b547d13e72157f8e0077d6113d920a311554f3",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/cli/tests/test_databases.py",
+    "kind": "test",
+    "bytes": 1775,
+    "sha256": "3066ed579483ef861bacc242a5eb370af6a12b0ae47ceb6b82f66b086872ad83",
+    "lines": 51,
+    "tests": [
+      {
+        "name": "test_creates_each_services_database_then_leaves_it_at_head",
+        "line": 18
+      },
+      {
+        "name": "test_names_an_upgrade_from_an_earlier_revision",
+        "line": 36
+      },
+      {
+        "name": "test_reports_the_postgres_stub_instead_of_a_traceback",
+        "line": 40
+      },
+      {
+        "name": "test_reports_an_unknown_backend",
+        "line": 45
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/cli/tests/test_graph.py",
+    "kind": "test",
+    "bytes": 12139,
+    "sha256": "f77a6008d5d5c9b35a4ba421dd2e5b1d047794cf21af79b839e07f854b2a1348",
+    "lines": 277,
+    "tests": [
+      {
+        "name": "test_without_a_supervisor",
+        "line": 51
+      },
+      {
+        "name": "test_apply_without_a_supervisor",
+        "line": 59
+      },
+      {
+        "name": "test_apply_checks_the_file_before_sending_it",
+        "line": 66
+      },
+      {
+        "name": "test_when_nats_cannot_be_reached",
+        "line": 77
+      },
+      {
+        "name": "test_when_nats_runs_but_ge_does_not",
+        "line": 90
+      },
+      {
+        "name": "test_get_without_a_supervisor",
+        "line": 108
+      },
+      {
+        "name": "test_a_reference_is_a_name_and_an_optional_revision",
+        "line": 115
+      },
+      {
+        "name": "test_list_and_revision_render_for_people",
+        "line": 127
+      },
+      {
+        "name": "test_a_graph_without_a_project_renders_in_the_default_project",
+        "line": 152
+      },
+      {
+        "name": "test_the_project_is_the_flag_then_oe_project_then_default",
+        "line": 162
+      },
+      {
+        "name": "test_list_shows_each_graph_and_its_latest_revision",
+        "line": 209
+      },
+      {
+        "name": "test_get_shows_the_latest_or_a_named_revision",
+        "line": 227
+      },
+      {
+        "name": "test_get_of_an_unknown_name_or_revision_is_not_found",
+        "line": 248
+      },
+      {
+        "name": "test_project_selects_the_graph_applied_listed_and_read",
+        "line": 259
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/cli/tests/test_graph_validate.py",
+    "kind": "test",
+    "bytes": 16834,
+    "sha256": "6b0fb33031a7cada792cf04c79c7cddf73f5be81b4e3eec7b196a9cc4730a521",
+    "lines": 313,
+    "tests": [
+      {
+        "name": "test_a_valid_graph_is_named",
+        "line": 22
+      },
+      {
+        "name": "test_the_examples_are_valid_offline",
+        "line": 29
+      },
+      {
+        "name": "test_every_independent_problem_is_reported_with_its_path",
+        "line": 32
+      },
+      {
+        "name": "test_standard_input_is_read_for_a_dash",
+        "line": 42
+      },
+      {
+        "name": "test_every_graph_in_a_file_is_named",
+        "line": 50
+      },
+      {
+        "name": "test_anything_but_a_graph_is_refused",
+        "line": 74
+      },
+      {
+        "name": "test_a_missing_file_is_a_problem",
+        "line": 80
+      },
+      {
+        "name": "test_spec_prints_the_graph_reference_as_markdown",
+        "line": 85
+      },
+      {
+        "name": "test_bad_version_keeps_independent_schema_errors",
+        "line": 99
+      },
+      {
+        "name": "test_spec_prints_the_expression_syntax",
+        "line": 123
+      },
+      {
+        "name": "test_independent_graph_errors_are_all_reported",
+        "line": 148
+      },
+      {
+        "name": "test_schema_and_graph_errors_are_reported_together",
+        "line": 159
+      },
+      {
+        "name": "test_structure_problems",
+        "line": 235
+      },
+      {
+        "name": "test_expression_problems",
+        "line": 291
+      },
+      {
+        "name": "test_valid_graphs_pass",
+        "line": 310
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/cli/tests/test_lifecycle.py",
+    "kind": "test",
+    "bytes": 7526,
+    "sha256": "09fcb7bc4ce9e9817614d5476238dfc45df4e5fec1284881d7ae3c56e3b6545b",
+    "lines": 191,
+    "tests": [
+      {
+        "name": "test_up_runs_nats_in_the_background_until_down",
+        "line": 52
+      },
+      {
+        "name": "test_up_starts_the_virtual_control_plane_by_default",
+        "line": 105
+      },
+      {
+        "name": "test_up_reports_why_nats_could_not_start",
+        "line": 134
+      },
+      {
+        "name": "test_migrate_creates_the_databases_and_streams_once_and_updates_drifted_ones",
+        "line": 147
+      },
+      {
+        "name": "test_migrate_reports_a_backend_it_cannot_use",
+        "line": 175
+      },
+      {
+        "name": "test_migrate_needs_a_running_openengine",
+        "line": 185
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/cli/tests/test_render.py",
+    "kind": "test",
+    "bytes": 286,
+    "sha256": "1fff41393cf115eac76ea0299341bb42b769fe7cd36438ffe84a26044a847064",
+    "lines": 9,
+    "tests": [
+      {
+        "name": "test_aligns_columns_to_the_widest_cell",
+        "line": 4
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/cli/tests/test_streams.py",
+    "kind": "test",
+    "bytes": 1523,
+    "sha256": "9b0f2fb83b46d4434db02503ee8a880d84f1b4446f03c28d01e87efc198bac16",
+    "lines": 46,
+    "tests": [
+      {
+        "name": "test_packages_the_infra_stream_configs",
+        "line": 18
+      },
+      {
+        "name": "test_refuses_a_config_named_differently_from_its_file",
+        "line": 24
+      },
+      {
+        "name": "test_ignores_fields_the_config_leaves_to_the_server_defaults",
+        "line": 31
+      },
+      {
+        "name": "test_reports_an_unreachable_server_instead_of_retrying_forever",
+        "line": 38
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/supervisor/README.md",
+    "kind": "documentation",
+    "bytes": 853,
+    "sha256": "9c2d8360597cbf5c9cf45b640f9a619db5e0eb10cc26be8481c8bbf747fe0e6a",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 506,
+    "sha256": "2f99e5eab642404ff87650e09ee376b464022cee8f83c0524c48b0d869132501",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/__init__.py",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/__main__.py",
+    "kind": "source/config",
+    "bytes": 1517,
+    "sha256": "d44a5487d5cf9e7f2f99a31377b96bd50edb6643f2e30105b73ee987de0ca9aa",
+    "lines": 41,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/processes/__init__.py",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/processes/nats.py",
+    "kind": "source/config",
+    "bytes": 4567,
+    "sha256": "56ed661334ec5af8b5b171ca362b21df84ae21179d0fb5c3ce61d36fd0e4040f",
+    "lines": 125,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/processes/services.py",
+    "kind": "source/config",
+    "bytes": 1505,
+    "sha256": "dd9daf8163d1e86d32aaa016dcfbc3a3ad3d2ef9a33c2baf73d699346177da2d",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/readiness/__init__.py",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/readiness/http.py",
+    "kind": "source/config",
+    "bytes": 2302,
+    "sha256": "d2a26c50471dd536b9b6660a8b51b2d4345789d4a98bd1219f1402219ecbeb27",
+    "lines": 77,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/shutdown/__init__.py",
+    "kind": "source/config",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/shutdown/processes.py",
+    "kind": "source/config",
+    "bytes": 691,
+    "sha256": "536ee039deddd088a76c3937c75a19a0842d9c06188e667e7eb75ca4e43cb443",
+    "lines": 24,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/shutdown/signals.py",
+    "kind": "source/config",
+    "bytes": 730,
+    "sha256": "88d85b279122249b7261a8fad711d10cf30d97bd00745ffd26a5c9808a1c7bea",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/state.py",
+    "kind": "source/config",
+    "bytes": 2494,
+    "sha256": "9c4386f407a123de70dd39370ca8b0d9805c323ef6a14ac856a1ae3c8b899a3c",
+    "lines": 88,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/src/openengine/supervisor/supervisor.py",
+    "kind": "source/config",
+    "bytes": 5207,
+    "sha256": "042d633a717ce98f16dca71ed579cf0c4ceaae1c7fd09f15cee926eade121d53",
+    "lines": 124,
+    "tests": []
+  },
+  {
+    "path": "v2/apps/supervisor/tests/test_nats.py",
+    "kind": "test",
+    "bytes": 2727,
+    "sha256": "8fd0d74d65734366c888b952898d466cb40c2ba178a7799b7f0d94ad89539d84",
+    "lines": 76,
+    "tests": [
+      {
+        "name": "test_installs_the_verified_binary_as_an_executable",
+        "line": 26
+      },
+      {
+        "name": "test_refuses_an_archive_whose_checksum_does_not_match",
+        "line": 39
+      },
+      {
+        "name": "test_uses_the_cached_binary_without_downloading",
+        "line": 51
+      },
+      {
+        "name": "test_refuses_a_platform_without_a_pinned_build",
+        "line": 63
+      },
+      {
+        "name": "test_pins_every_supported_platform",
+        "line": 68
+      },
+      {
+        "name": "test_packages_the_infra_nats_configuration",
+        "line": 72
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/supervisor/tests/test_services.py",
+    "kind": "test",
+    "bytes": 2411,
+    "sha256": "87da79905e6801cc9dccaeb325a72a8125521267c3f03dbe16782615c630e0f5",
+    "lines": 58,
+    "tests": [
+      {
+        "name": "test_default_startup_always_runs_vcp_and_stops_it_first",
+        "line": 9
+      },
+      {
+        "name": "test_vcp_has_a_ready_file_and_a_state_directory_variable",
+        "line": 54
+      }
+    ]
+  },
+  {
+    "path": "v2/apps/supervisor/tests/test_state.py",
+    "kind": "test",
+    "bytes": 1451,
+    "sha256": "d812a6b837a10fac2395a323cf13ef79ed1c4a8b660d6bbf1844baa0989a724a",
+    "lines": 49,
+    "tests": [
+      {
+        "name": "test_round_trips_the_state_file",
+        "line": 16
+      },
+      {
+        "name": "test_reads_a_missing_or_unreadable_file_as_no_state",
+        "line": 25
+      },
+      {
+        "name": "test_reads_a_file_written_by_another_version",
+        "line": 32
+      },
+      {
+        "name": "test_knows_whether_a_pid_is_alive",
+        "line": 45
+      }
+    ]
+  },
+  {
+    "path": "v2/docs/architecture.mermaid",
+    "kind": "documentation",
+    "bytes": 9380,
+    "sha256": "f7bb6e0d69644f1bc9d06e85f45828bc6b9bea5d87b14d091ba8cc1f56d658ad",
+    "lines": 129,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/architecture.svg",
+    "kind": "documentation",
+    "bytes": 84759,
+    "sha256": "63ae4df9707d8585d966d5eba905f7d69e4c72e98a699da154ae685514a42b94",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/cxn/0a34e647834f.md",
+    "kind": "documentation",
+    "bytes": 790,
+    "sha256": "4a5aed1f272324a87b0782b3c87e4e4af03742522c63cf0b35a37ac593886161",
+    "lines": 36,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/cxn/0a34e647834f.mermaid",
+    "kind": "documentation",
+    "bytes": 945,
+    "sha256": "9668417cfda9ee666167cd48b401199b76cc484ab902960ea27b95a50d4275ee",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/cxn/0a34e647834f.svg",
+    "kind": "documentation",
+    "bytes": 28056,
+    "sha256": "d1919720c2bede15cfca94643a67f7157660522e49a8f64acf80817861154fad",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/4925ef9f3b79.md",
+    "kind": "documentation",
+    "bytes": 2978,
+    "sha256": "33e501959a3852b4dbc79d1c2ff9b74ff724375749b92ceb9a3e0ab8ed6440a7",
+    "lines": 112,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/4925ef9f3b79.mermaid",
+    "kind": "documentation",
+    "bytes": 2668,
+    "sha256": "61f9447cff80c396957501663cfda89f1a31073d673f71b498f8059ffbe8517a",
+    "lines": 55,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/4925ef9f3b79.svg",
+    "kind": "documentation",
+    "bytes": 118816,
+    "sha256": "df352d6f8092278a9869363fa958fa34ff2bf4bd623a1935a62285e0e4cf001d",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/b552e26457cd.md",
+    "kind": "documentation",
+    "bytes": 703,
+    "sha256": "38ceac17c1eacf3d527132b98650b8ca478a91ca012587297adc696d4742fc0f",
+    "lines": 36,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/b552e26457cd.mermaid",
+    "kind": "documentation",
+    "bytes": 927,
+    "sha256": "45a5f4b8c3bb255a2154ae9b873a266d1cb3f7025d0c345fbb5cf8833e0a1764",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/b552e26457cd.svg",
+    "kind": "documentation",
+    "bytes": 26390,
+    "sha256": "08c9a2c8e145ed79706462ee8027d61f6a5f0ca822af97f263392e877ea78111",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/d75ffe6cc5ed.md",
+    "kind": "documentation",
+    "bytes": 3004,
+    "sha256": "31216f1946cf78ce22f946711da607ed62ee5f83a66ce6e2091f8a7f79e74548",
+    "lines": 110,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/d75ffe6cc5ed.mermaid",
+    "kind": "documentation",
+    "bytes": 2469,
+    "sha256": "c96f8d496e0d9bdd90b5174747166c064444441f596d6b857a08eab308d9a7bf",
+    "lines": 54,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/d75ffe6cc5ed.svg",
+    "kind": "documentation",
+    "bytes": 116236,
+    "sha256": "a8c3f8203bff984fd57bff1cf4f8e89ff1377a85ef50fe80ef55b9addd9fda3a",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_cxn.mermaid",
+    "kind": "documentation",
+    "bytes": 945,
+    "sha256": "9668417cfda9ee666167cd48b401199b76cc484ab902960ea27b95a50d4275ee",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_cxn.svg",
+    "kind": "documentation",
+    "bytes": 28059,
+    "sha256": "4fd700022346ecaa7174b5f3b4ec24eebd65015751ebb4c6e68c8f50e3c3b689",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_ge.mermaid",
+    "kind": "documentation",
+    "bytes": 2469,
+    "sha256": "c96f8d496e0d9bdd90b5174747166c064444441f596d6b857a08eab308d9a7bf",
+    "lines": 54,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_ge.svg",
+    "kind": "documentation",
+    "bytes": 116270,
+    "sha256": "81e62b4528c84a927d527ca354a45461b9de688f9e00486178d0ecaf1c3f8f43",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_tools.mermaid",
+    "kind": "documentation",
+    "bytes": 3703,
+    "sha256": "edb31672d7671a44bf8d5c616ae65cf95ca26006c545441a81d18aa99c154400",
+    "lines": 75,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_tools.svg",
+    "kind": "documentation",
+    "bytes": 166700,
+    "sha256": "78ef007475c4453da0e0db4bd658acb726a05eeb475ed364f2bc64370e6811c9",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_vcp.mermaid",
+    "kind": "documentation",
+    "bytes": 913,
+    "sha256": "54df46dce19cc0e080c8b043ee53dd382bdb7edb4f3341a0bf075c81a0af2603",
+    "lines": 22,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/latest_vcp.svg",
+    "kind": "documentation",
+    "bytes": 31716,
+    "sha256": "6d34dbce2d6577a0d772379f54f482a97af4d0babe22bf375fa7e8e9210d397c",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/01c7cfcaaab7.md",
+    "kind": "documentation",
+    "bytes": 4404,
+    "sha256": "e11ed78a03ee7483bc30e16b3c1e56b32560a6803a2fe5358674b1ed396a475a",
+    "lines": 147,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/01c7cfcaaab7.mermaid",
+    "kind": "documentation",
+    "bytes": 3703,
+    "sha256": "edb31672d7671a44bf8d5c616ae65cf95ca26006c545441a81d18aa99c154400",
+    "lines": 75,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/01c7cfcaaab7.svg",
+    "kind": "documentation",
+    "bytes": 166730,
+    "sha256": "abc831852312c924adbe9fa15846bd7daae16d893564ba13ab818785ae95dbe6",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/39e856077000.md",
+    "kind": "documentation",
+    "bytes": 2614,
+    "sha256": "d4fff734236ec65f7ddfd333e3492763715f39ebab66205163b9001627d7c9d6",
+    "lines": 94,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/39e856077000.mermaid",
+    "kind": "documentation",
+    "bytes": 2033,
+    "sha256": "97a58cfa8dfa0765d2815f70628d76512602dd2538ae8e96af1f9eb3244d9e92",
+    "lines": 44,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/39e856077000.svg",
+    "kind": "documentation",
+    "bytes": 94466,
+    "sha256": "c1e12fcd1afd30af0662353886b0659fdbd98d964987a1f56e5830215376a384",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/720d08e24193.md",
+    "kind": "documentation",
+    "bytes": 734,
+    "sha256": "22ad8c73435561f15d2ae37bcae7fc40e7b68eac0a6d5d7da5a7dca7e24f87ac",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/720d08e24193.mermaid",
+    "kind": "documentation",
+    "bytes": 905,
+    "sha256": "7dc142a23acfbb05cdbd0483fd1d6e15b4584c7dd08d1ce5cc0936035faa37ed",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/720d08e24193.svg",
+    "kind": "documentation",
+    "bytes": 28397,
+    "sha256": "51ee15c206a718cb6bccfe9f345ce40dfbfdf1b552446b60f656d863ab414197",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/d8f92154b5f7.md",
+    "kind": "documentation",
+    "bytes": 698,
+    "sha256": "2e75047d6e40e6aa36a4c15aa77b5752080d9df3b7b907bc3dba560293429fe4",
+    "lines": 35,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/d8f92154b5f7.mermaid",
+    "kind": "documentation",
+    "bytes": 913,
+    "sha256": "54df46dce19cc0e080c8b043ee53dd382bdb7edb4f3341a0bf075c81a0af2603",
+    "lines": 22,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/d8f92154b5f7.svg",
+    "kind": "documentation",
+    "bytes": 31696,
+    "sha256": "d771715cb4479ff7bb1d731ee4a268a2c43a656d592c31ce2bed56ca27a530fb",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/README.md",
+    "kind": "documentation",
+    "bytes": 1264,
+    "sha256": "e6bee9c78cd8a12f227d91661866847a1dd204bf01d12830160a47f760b0f8a3",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/consumers/README.md",
+    "kind": "documentation",
+    "bytes": 57,
+    "sha256": "2728451191715b2ebfb441d1ec5bdd13def94bcf9c4309394ff5f4258e67bafb",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/nats-server.conf",
+    "kind": "source/config",
+    "bytes": 281,
+    "sha256": "05d7761a5b79063b8a5ca7973737e5f3142afeb43c0d8c06849eaa7a341c1a0f",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/streams/cxn-egress.json",
+    "kind": "source/config",
+    "bytes": 354,
+    "sha256": "319c203a39be0b3ddcedca28f8f0d675a5636128ba8bccea8c64466a94b0fa17",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/streams/cxn-events.json",
+    "kind": "source/config",
+    "bytes": 334,
+    "sha256": "fd8869f740909934d5575aa24e146168af61a22e573cde9331789d24e422bd49",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/streams/cxn-ingress.json",
+    "kind": "source/config",
+    "bytes": 357,
+    "sha256": "432d1cc1dffb471c32bb6adb917a384d2104d0e93b75624872f18296b966f50f",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/streams/ge-events.json",
+    "kind": "source/config",
+    "bytes": 330,
+    "sha256": "529aee5219ae58a12c078e81910ac30263bca188cc23ee9bcb84c94c8bf9ad29",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/streams/tools-events.json",
+    "kind": "source/config",
+    "bytes": 362,
+    "sha256": "8d82bba7a42b8af2eb7cae4b7bcce77322335bec7cc0a4f134d49f3708212e79",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/infra/nats/streams/vcp-events.json",
+    "kind": "source/config",
+    "bytes": 341,
+    "sha256": "a9dbff7aaec55a046ca9aed97913cbe5ab123be299241265b9a9750f28512c45",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/integration_tests/README.md",
+    "kind": "test",
+    "bytes": 232,
+    "sha256": "8afc338b313cac0006df95a5fa4d3eb253d36cd8a12a39acce4362b4c2fec035",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/integration_tests/fixtures/shutdown_service.py",
+    "kind": "test",
+    "bytes": 1503,
+    "sha256": "ffbaaca56169f90850d10a248af2f25b780d7b1eae4f0c33e5b33cabf3cd6d81",
+    "lines": 54,
+    "tests": []
+  },
+  {
+    "path": "v2/integration_tests/test_ge.py",
+    "kind": "test",
+    "bytes": 19926,
+    "sha256": "2abb69ce06ffb0a5d3761c7aa676a2b13cfedd1fe214ed0f27254a11d822ce7b",
+    "lines": 401,
+    "tests": [
+      {
+        "name": "test_ge_serves_graphs_list_once_ready_and_drains_on_stop",
+        "line": 71
+      },
+      {
+        "name": "test_supervisor_fails_when_ge_cannot_become_ready",
+        "line": 101
+      },
+      {
+        "name": "test_ge_stops_on_sigterm_while_nats_is_unreachable",
+        "line": 118
+      },
+      {
+        "name": "test_apply_retries_a_lost_reply_without_adding_a_revision",
+        "line": 185
+      },
+      {
+        "name": "test_concurrent_apply_neither_duplicates_nor_overwrites_revisions",
+        "line": 200
+      },
+      {
+        "name": "test_apply_rejects_conflicting_command_reuse",
+        "line": 221
+      },
+      {
+        "name": "test_apply_rejects_an_expected_version_mismatch",
+        "line": 240
+      },
+      {
+        "name": "test_list_pages_through_every_graph_until_next_cursor_is_null",
+        "line": 256
+      },
+      {
+        "name": "test_project_scopes_names_so_the_same_name_is_two_graphs",
+        "line": 285
+      },
+      {
+        "name": "test_project_scopes_command_id_dedup",
+        "line": 306
+      },
+      {
+        "name": "test_project_binds_the_list_cursor",
+        "line": 323
+      },
+      {
+        "name": "test_project_omitted_is_the_default_project",
+        "line": 338
+      },
+      {
+        "name": "test_apply_from_the_cli_survives_a_ge_restart",
+        "line": 367
+      }
+    ]
+  },
+  {
+    "path": "v2/integration_tests/test_service_recovery.py",
+    "kind": "test",
+    "bytes": 11567,
+    "sha256": "345fe4c02e7185869525c7b3cfc322f6efe64ddf483ea05bd15a95f7f4096217",
+    "lines": 305,
+    "tests": [
+      {
+        "name": "test_reconnect_rechecks_current_broker_permissions",
+        "line": 130
+      },
+      {
+        "name": "test_sigterm_during_broker_outage_cleans_up",
+        "line": 147
+      },
+      {
+        "name": "test_shared_shutdown_drains_or_times_out",
+        "line": 163
+      },
+      {
+        "name": "test_close_deadline_aborts_stalled_transport",
+        "line": 219
+      },
+      {
+        "name": "test_sigterm_during_active_request",
+        "line": 262
+      },
+      {
+        "name": "test_failed_close_exits_nonzero_and_releases_resources",
+        "line": 295
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/README.md",
+    "kind": "documentation",
+    "bytes": 334,
+    "sha256": "f433b4385e2d702ced959f70734ee141f1e2d9e475631f4204630fee1f99e015",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/.gitattributes",
+    "kind": "contract",
+    "bytes": 166,
+    "sha256": "5ac9d78d7b8387abd6d03c19147c1f7126b100006633921fc267548f1f7d7d00",
+    "lines": 3,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/.gitignore",
+    "kind": "contract",
+    "bytes": 6,
+    "sha256": "ed19d3c9c8a5e34d0179e0b1a9c2907d2e657738733e4a432a8cf81c76ce56f1",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/README.md",
+    "kind": "contract",
+    "bytes": 24563,
+    "sha256": "3c116fb71feb55347bfd95696df7e719649354100c524a5f27e0904408e1da27",
+    "lines": 417,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/command-response.schema.json",
+    "kind": "contract",
+    "bytes": 1306,
+    "sha256": "b4339f46140069fa9eba92a419e695af73937cc50ba48e75afe158a80b5f6e15",
+    "lines": 28,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/command.schema.json",
+    "kind": "contract",
+    "bytes": 1476,
+    "sha256": "41f4db241d7ce34c2115c85158af49da14ea7f737cb9b7e2d54fe4d29db34da6",
+    "lines": 27,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/error.schema.json",
+    "kind": "contract",
+    "bytes": 10051,
+    "sha256": "876a80e21a74004596071c2334d19fc29bc745278de636c09a74812debcaf9d2",
+    "lines": 277,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/event.schema.json",
+    "kind": "contract",
+    "bytes": 2731,
+    "sha256": "e95448a1c67fae2a84180de6bcb03980e547c0180965adcba0bdf7252687967b",
+    "lines": 57,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/meta.schema.yaml",
+    "kind": "contract",
+    "bytes": 5373,
+    "sha256": "3b734a0ae49b46a2cd46b87a3c225d08fe269d0d72f01e89b8d3ad905605fb6e",
+    "lines": 144,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/operation.schema.json",
+    "kind": "contract",
+    "bytes": 2072,
+    "sha256": "f9d5f5de71f66a5c8542509bad8b997e2ce3aa311571520de3c54b948fce7724",
+    "lines": 49,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/pagination.schema.json",
+    "kind": "contract",
+    "bytes": 1258,
+    "sha256": "f625cfd8097ea4fd90980d3f8ce4cd76846a9cd45bbceb91aebfab769b62a685",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/query-response.schema.json",
+    "kind": "contract",
+    "bytes": 861,
+    "sha256": "17db3bd54ac63701db76666389109eecb3e31e3df6dca3faf7758889c0c677e2",
+    "lines": 24,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/query.schema.json",
+    "kind": "contract",
+    "bytes": 798,
+    "sha256": "2ba8e81be68f32d23d78d94f0f5b78776569a6adee787828481479c4ff7a5b70",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/common/v1/types.schema.json",
+    "kind": "contract",
+    "bytes": 7107,
+    "sha256": "70e7408208df2401edc5b1fd3f4cf7328530e7ca6c26bce197e810bcd85b5daa",
+    "lines": 148,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/asyncapi.yaml",
+    "kind": "contract",
+    "bytes": 19200,
+    "sha256": "e0bf13a4b7a9fbafa399457fe97b9620744e05fb54a10dfeb8543acfce966316",
+    "lines": 433,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connection.applied.event.json",
+    "kind": "contract",
+    "bytes": 1616,
+    "sha256": "50a82254abeb2b935d0d50c493e6db68f3686160e3388efc574aa5f920b525d4",
+    "lines": 63,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connection.applied.event.re-enabled.json",
+    "kind": "contract",
+    "bytes": 1675,
+    "sha256": "5a9cfd8a8f1f814e909126074b0dabe6bd78fecd6b5f05ae5c3bb6af6aa0935d",
+    "lines": 67,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connection.degraded.event.json",
+    "kind": "contract",
+    "bytes": 731,
+    "sha256": "1089b3c20f8d42e431e08236b9732eaf3551dca9ac0fe1d3122d96393b99cf84",
+    "lines": 22,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connection.deleted.event.json",
+    "kind": "contract",
+    "bytes": 658,
+    "sha256": "268d241384bb8f955a2ec71fdeb54ba33ef5d7163f5e70a263fc472c9fca10a2",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connection.disabled.event.json",
+    "kind": "contract",
+    "bytes": 673,
+    "sha256": "bbe0c9d043b0ec76e393ff0e19106685fe60c3f5eccde232b45412677f2bce39",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connection.recovered.event.json",
+    "kind": "contract",
+    "bytes": 544,
+    "sha256": "c3d8dce7925af16eefb101413c06ce070b3555a879d254a3331705880fd94fc0",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.apply.command.json",
+    "kind": "contract",
+    "bytes": 1170,
+    "sha256": "b25b4549fa477ec85583ad246d778ce63e097e38a60dd34f1bd1677d560f6624",
+    "lines": 44,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.apply.command.re-enable.json",
+    "kind": "contract",
+    "bytes": 1176,
+    "sha256": "993a0c18365d87412252a11021c9bccd69277c15e5c087ddbdcf3bc1ec3673fb",
+    "lines": 46,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.apply.command.retry.json",
+    "kind": "contract",
+    "bytes": 1279,
+    "sha256": "9d5609c2db57778ac07ab08a6c5158e1cc44fa4da7df778a8d2c305aec57bf6d",
+    "lines": 44,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.apply.response.accepted.json",
+    "kind": "contract",
+    "bytes": 357,
+    "sha256": "afcf8b2bf4745b302f9973abe3548132cb0a070246d6ccc3762668ba006734b4",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.apply.response.command-id-conflict.json",
+    "kind": "contract",
+    "bytes": 554,
+    "sha256": "61620fd526b2d0626d34a6a6043bc926f0575b71a0c214760636e2baa7ba4fa7",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.apply.response.version-conflict.json",
+    "kind": "contract",
+    "bytes": 477,
+    "sha256": "7b3a7d56eb88ccc09ba18250dee78cab6307695cabc45c591cee71a0c2808a45",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.delete.command.json",
+    "kind": "contract",
+    "bytes": 206,
+    "sha256": "2136831b3d9225cd7b2a077200769b9fd1e38c8a29417c1877109e652061999f",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.delete.response.invalid-state.json",
+    "kind": "contract",
+    "bytes": 642,
+    "sha256": "d0f2a1ee40678695eb0093c625a59507761ce30c395660d46cf8f08a0ecca612",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.disable.command.json",
+    "kind": "contract",
+    "bytes": 479,
+    "sha256": "ac27473122cee03be347a0f1e76e08fa1d2b9c3e2507e15c40b4eb1a1fe4ae60",
+    "lines": 13,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.disable.response.json",
+    "kind": "contract",
+    "bytes": 267,
+    "sha256": "24756bfc98c8b07903a1690168c6a610507d33880d93d0d1e1b4410f40f216f6",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.get.query.json",
+    "kind": "contract",
+    "bytes": 130,
+    "sha256": "dedbbbfebc71c4f86ac8066b48af57130d95244d192404dfdbe040e174fb5aff",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.get.response.json",
+    "kind": "contract",
+    "bytes": 1019,
+    "sha256": "a1022a674b0aa394b94960a71add2359e26c910ce19f705f7bbbc13393cedb8b",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.get.response.not-found.json",
+    "kind": "contract",
+    "bytes": 353,
+    "sha256": "876a8d9f7e2e240fe0bb323581f17abdcc943d3993a0be19441d4c5dc79bb87b",
+    "lines": 13,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.list.query.json",
+    "kind": "contract",
+    "bytes": 448,
+    "sha256": "9f1422b970c93bc06f21fe5ac7cf73b848b684ded051129fadf5efd89e5306b1",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/examples/connections.list.response.json",
+    "kind": "contract",
+    "bytes": 1073,
+    "sha256": "b6ca72507baa2ebfdd40faa6836fe733a2983191ef6da0da2fd2710f0113da53",
+    "lines": 41,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/reference.html",
+    "kind": "contract",
+    "bytes": 69923,
+    "sha256": "696ff8e67dfe7da4d1b156c6e59f4212963a01480cc0a3dff5e5ca011a0dc60a",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/resources/connection.schema.yaml",
+    "kind": "contract",
+    "bytes": 4424,
+    "sha256": "f90dff9a0acffc8d7898b7c74b1a3baeb8027d360d96be24e907b27362980b5c",
+    "lines": 128,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/resources/examples/github-openengine.connection.yaml",
+    "kind": "contract",
+    "bytes": 442,
+    "sha256": "1e6b94bc55e749ae0c8a26e49631fd084f2ec55490aae8e9f4caf93649b6f11c",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/resources/reference.html",
+    "kind": "contract",
+    "bytes": 13704,
+    "sha256": "c3ffde3ef54f6993c19898aa150eed598785f139b147b5280f774328617ae9aa",
+    "lines": 86,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/schemas/commands.schema.json",
+    "kind": "contract",
+    "bytes": 2888,
+    "sha256": "591954930d3cd44892c8bc6122fcc54dd6fce5851a36caa53de7ca957cda5e82",
+    "lines": 63,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/schemas/connection.schema.json",
+    "kind": "contract",
+    "bytes": 6877,
+    "sha256": "4aa9c6716215e91eff0c083a9183137c6229f491a3e67e316a811cf5551f2ead",
+    "lines": 150,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/schemas/events.schema.json",
+    "kind": "contract",
+    "bytes": 6264,
+    "sha256": "d682c4d1b28b5d4150448867c00057afc5ee8ca2a700d6ae09ef15ae957c197d",
+    "lines": 160,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/connection_bus/v1/schemas/queries.schema.json",
+    "kind": "contract",
+    "bytes": 2918,
+    "sha256": "f0921f60b2309a7ac27ad44aee5b13fae39e802c24f37a8dfefb2df12e0b6414",
+    "lines": 80,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/asyncapi.yaml",
+    "kind": "contract",
+    "bytes": 67737,
+    "sha256": "e408a7d5ccdb4d12de05fd18b0692703a230dcfe3185afa97bff0d5bbb88962d",
+    "lines": 1479,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/approval.requested.event.json",
+    "kind": "contract",
+    "bytes": 1142,
+    "sha256": "c16f876f6162338d5fc747714515832a4c3aaf87fea39adb22da7c18bad8c658",
+    "lines": 41,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/approval.resolved.event.json",
+    "kind": "contract",
+    "bytes": 1181,
+    "sha256": "64033cd9bd15a5a42800e7b8f877f689d4010baa4679a8176987731543caff39",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/approvals.decide.command.json",
+    "kind": "contract",
+    "bytes": 355,
+    "sha256": "261ee3215453e4b9961376470477fb9fac4dd368b0d908ffbb518de68df2a40c",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/approvals.decide.response.json",
+    "kind": "contract",
+    "bytes": 266,
+    "sha256": "84c7619fdada5b9d4e8212b01d054ef1ebc705bc49757699f255d2991c705881",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/approvals.decide.response.stale.json",
+    "kind": "contract",
+    "bytes": 562,
+    "sha256": "ab5c5ba662559075845e7e02652a26078c2d92c3ab6a9f097932a8c52748e642",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.awaiting_approval.event.json",
+    "kind": "contract",
+    "bytes": 1168,
+    "sha256": "a04d4ab713a84a450327cb2e46b6b57f62f07204bc48ffcc00c6265fbc6d1b4d",
+    "lines": 41,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.cancelled.event.json",
+    "kind": "contract",
+    "bytes": 1284,
+    "sha256": "4761b0bb1d18a8c522e01d180fe525ab73604455cd71997180217a16efb02d78",
+    "lines": 32,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.completed.event.json",
+    "kind": "contract",
+    "bytes": 1035,
+    "sha256": "6684d00ba043d18e4953fe526905a2de1b589ce3b81913e2b80fc1d100277d8d",
+    "lines": 29,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.failed.event.json",
+    "kind": "contract",
+    "bytes": 1533,
+    "sha256": "8a32eab225180a676230012e220295c4957da7d50800b2378feb266b5e1b7e97",
+    "lines": 46,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.paused.event.json",
+    "kind": "contract",
+    "bytes": 749,
+    "sha256": "f5d71b6e935292b4cfe1ab0431da59a58799223103d9ea5e32bf3ab94eabcd70",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.progressed.event.attempt.json",
+    "kind": "contract",
+    "bytes": 1520,
+    "sha256": "9078bcc52e12051633d834297354bef9a1ff12cc63886f8fc7f54d14afca3674",
+    "lines": 50,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.progressed.event.branch-bugs.json",
+    "kind": "contract",
+    "bytes": 841,
+    "sha256": "44b4fcd0c4ad25d78b521439dfc7ab8da249ecd93e495fffa54d72f69bd35b1a",
+    "lines": 30,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.progressed.event.branch-security.json",
+    "kind": "contract",
+    "bytes": 920,
+    "sha256": "5a6f44406f16603c107a0e17ee6813f1bf44de661ffa5314d4c695d96dfb6c87",
+    "lines": 30,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.progressed.event.fan-in.json",
+    "kind": "contract",
+    "bytes": 1102,
+    "sha256": "df2203b6c37913bcf3d45a6b9e23bbd499d9030575f6d10d48fa10c97757422d",
+    "lines": 32,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.resumed.event.json",
+    "kind": "contract",
+    "bytes": 604,
+    "sha256": "a2729e904e0af802118841021232e87b746f36e331cfa1fe0f6385b30f77d81d",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/execution.started.event.json",
+    "kind": "contract",
+    "bytes": 1054,
+    "sha256": "1888bf2905227cfb7de52b8765f2100e4f09bbf7988f9f9cd740d8858e1c9cd8",
+    "lines": 28,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/executions.get.query.json",
+    "kind": "contract",
+    "bytes": 123,
+    "sha256": "8b5ea456323160643991bbb751a666a527767a3fe29280d5cf1031184d36f2cd",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/executions.get.response.json",
+    "kind": "contract",
+    "bytes": 638,
+    "sha256": "31862c268dc915a0114ad80f3c516f920d22183b4b1e5e7e0cc6ec9623e9d78e",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/executions.steps.list.query.json",
+    "kind": "contract",
+    "bytes": 169,
+    "sha256": "f6c0bcdbe655cc5989212427db975f54d73513cd7e4cab1df37fb02941e1fcfb",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/executions.steps.list.response.json",
+    "kind": "contract",
+    "bytes": 2069,
+    "sha256": "62c81b6f79d8c7c00d72dc2f72165d0400cb342de94d7ffda26cbba020ca7f68",
+    "lines": 61,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.apply.command.json",
+    "kind": "contract",
+    "bytes": 2340,
+    "sha256": "168734005c252e953a98e9761c57bc6dbb6816fa44ca92a59f24cbc9ef0e4e95",
+    "lines": 88,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.apply.response.json",
+    "kind": "contract",
+    "bytes": 245,
+    "sha256": "93f9dc005a0c2b03c9a840351da33bbadbef318cd44411c25ca3121a115b64f7",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.get.query.json",
+    "kind": "contract",
+    "bytes": 134,
+    "sha256": "e5c14ceb69aa7023b753ff3c1be01678e74acb63a643169e8ee9d53f0a413ade",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.get.response.json",
+    "kind": "contract",
+    "bytes": 1960,
+    "sha256": "3336cdf511e31eaa8b5c3bcc67bdcae1e0d12f9c1b87247c41f751927a59fa61",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.list.query.json",
+    "kind": "contract",
+    "bytes": 161,
+    "sha256": "ba9f9e50fd22b9a3640f299f50f1f3d65ced1e7a8abbf6a7120923dc3a366474",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.list.response.json",
+    "kind": "contract",
+    "bytes": 618,
+    "sha256": "c5f03bf53d83a8fe034940434cfa70112486316dca6762e479d4376093c41d05",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.run.command.json",
+    "kind": "contract",
+    "bytes": 403,
+    "sha256": "36b002f61bb5b269953caeb45817d7f42bc318c80fedf64f3f7052fbc84cda70",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/graphs.run.response.invalid-state.json",
+    "kind": "contract",
+    "bytes": 520,
+    "sha256": "763571c41931801c32fb6d12c1fdaef7d4ca625ca08d093b777fd6f7b20c7710",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/job.cancelled.event.json",
+    "kind": "contract",
+    "bytes": 1059,
+    "sha256": "88fbd3eb55d8831b83f715c373da38993557c4594cd636147344bdac0a404a42",
+    "lines": 31,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/job.completed.event.json",
+    "kind": "contract",
+    "bytes": 1023,
+    "sha256": "c8a7766542fc3d6a0b9b38e3659cc46d97de058d6249a6a5ed9644c39c7ff442",
+    "lines": 34,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/job.created.event.json",
+    "kind": "contract",
+    "bytes": 975,
+    "sha256": "99de6bf965246a7f8209bf6d27aed764b053e714f555159197ace3c9127c62dd",
+    "lines": 29,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/job.failed.event.json",
+    "kind": "contract",
+    "bytes": 1239,
+    "sha256": "7be78f536d15a52fc20e2ceaf2dbd907d37d6febc6fd4728e751798b62b101fe",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.approvals.list.query.json",
+    "kind": "contract",
+    "bytes": 154,
+    "sha256": "974dc9ff1e124ac106a8d3f5b3e1fe350017ba16ff0f4ba7b3d90d81ea9855c9",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.approvals.list.response.json",
+    "kind": "contract",
+    "bytes": 596,
+    "sha256": "4fe6873cc66be6485f84e630c409422451177451bef6c75ebe11f0bdfd271d46",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.cancel.command.json",
+    "kind": "contract",
+    "bytes": 330,
+    "sha256": "48f23fef58c8ea481c2d9da0cba0eb528074543eadd14797a006ed02833b4548",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.cancel.response.json",
+    "kind": "contract",
+    "bytes": 238,
+    "sha256": "cb56e7156d09268b7ecd6194276350f7913c8157ae790f704030897b1b1415bf",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.executions.list.query.json",
+    "kind": "contract",
+    "bytes": 224,
+    "sha256": "d07c4d42d3033c2e59550a695f5701cc8bdd6f58c330adea12bb6e0f130a166e",
+    "lines": 6,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.executions.list.response.json",
+    "kind": "contract",
+    "bytes": 1167,
+    "sha256": "1569e62ac9867c2276660f085eb86f11c7dc2965f6fdef2a7162efdf8b65f344",
+    "lines": 35,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.get.query.json",
+    "kind": "contract",
+    "bytes": 109,
+    "sha256": "b3320e06ef56a10968ae8512bf28f7225feac758e412105d38dbaa727f866abd",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.get.response.json",
+    "kind": "contract",
+    "bytes": 570,
+    "sha256": "84bcc3d169d55e63235e4791e369888f8c4559397f0e6d815ac31945eb845408",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.list.query.json",
+    "kind": "contract",
+    "bytes": 450,
+    "sha256": "1e7f6b914bc7fd2ffcf9227f00bb84790c32cecae9a5093dbdf8ef1559970469",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.list.response.json",
+    "kind": "contract",
+    "bytes": 834,
+    "sha256": "a6b29aec44d855d797f0486aa64915463a9f41dede3700d8775f76906ecd5a28",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.pause.command.json",
+    "kind": "contract",
+    "bytes": 327,
+    "sha256": "7054e5c5ed4f55446dae1fac2d412e63e2c0c5c82c877f63d3db9afb0865262f",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.pause.response.json",
+    "kind": "contract",
+    "bytes": 234,
+    "sha256": "3c94ea47c2920a46ec3af06454f7306ebd1dd39fe4f48fc0e5b6e29647499bb1",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.resume.command.json",
+    "kind": "contract",
+    "bytes": 185,
+    "sha256": "17ba2e76b089618f4ed9668556401337acccd38291834e4468a69cd396d78575",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.resume.response.cancelled.json",
+    "kind": "contract",
+    "bytes": 529,
+    "sha256": "6538d7bfdba25575d311195e98a469484dfc8397a86126605d24469688aacb88",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.steer.command.follow-up.json",
+    "kind": "contract",
+    "bytes": 535,
+    "sha256": "1b0a48255b1d08e2f9c4bd77949e59b37d3501098d2c0229232c8d183caa3a40",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.steer.response.json",
+    "kind": "contract",
+    "bytes": 234,
+    "sha256": "9952674eb3a6836e634732f9c5522730c1e9c7ea701551268040b003607e280a",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.submit.command.json",
+    "kind": "contract",
+    "bytes": 749,
+    "sha256": "b273d29950a617f4e4c71a376452ca514758d5b6281333e934bc42fa3718a0c3",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.submit.command.retry.json",
+    "kind": "contract",
+    "bytes": 722,
+    "sha256": "ba8fc49096f39ef2a900f540b3941e3d3a7ec9cecdd598bf0c77782f5df1e00f",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.submit.response.json",
+    "kind": "contract",
+    "bytes": 345,
+    "sha256": "d77d8a17a32613f55ea99de89ffd5a4758bb261f80557c84d8ac21bfd73526dc",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.workspaces.list.query.json",
+    "kind": "contract",
+    "bytes": 160,
+    "sha256": "ac45acb3b17ad620f0b44726910fac446a127015292fe01da6dd1d3945aebb60",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/jobs.workspaces.list.response.json",
+    "kind": "contract",
+    "bytes": 672,
+    "sha256": "0e8801069cefc25e8ba39cc7cb3e297184488730bac085e9ecc9b219c34a0d06",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loop.applied.event.json",
+    "kind": "contract",
+    "bytes": 1440,
+    "sha256": "ff17d85cdd94762caf0e2eca926e113077f4da8d7b65cab0d98a9507bec3b914",
+    "lines": 57,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loop.paused.event.json",
+    "kind": "contract",
+    "bytes": 1222,
+    "sha256": "e5b817b845226fbf32e9af035c9e5253e644ec6fdda622d447b27c5e6ab998d6",
+    "lines": 34,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loop.removed.event.json",
+    "kind": "contract",
+    "bytes": 1334,
+    "sha256": "92576cae23ec112d34b9394255d7ba3c655b7a734e5888bb80def62f935b77c2",
+    "lines": 36,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loop.resumed.event.json",
+    "kind": "contract",
+    "bytes": 1249,
+    "sha256": "acf42e29cff40579edcbe8534204a911f73eb93539498f17d061f83a7a5794ef",
+    "lines": 34,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.apply.command.json",
+    "kind": "contract",
+    "bytes": 870,
+    "sha256": "dda0495dbc7f8f1463a8e687da38941b7d1afd9a7e24193e4b5bdb0bcaf45524",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.apply.response.json",
+    "kind": "contract",
+    "bytes": 237,
+    "sha256": "577a90b87e46da6cbee37d1a6b7fe927dc41b73903d0864fc299ec616bb26476",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.apply.response.version-conflict.json",
+    "kind": "contract",
+    "bytes": 458,
+    "sha256": "ec915ad9957c4fa2c5c7e36ca72c5b357668c6d0dd47c64721b53da846dc87ba",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.get.query.json",
+    "kind": "contract",
+    "bytes": 117,
+    "sha256": "af344ffed9830705224b37c52b5ac8f37691e7a0e77d83608b7ee43773b5bbbe",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.get.response.json",
+    "kind": "contract",
+    "bytes": 856,
+    "sha256": "c2b6423d91adfc72a2e78c2d34bb9bbe706a5908caf59d26cda0800142ad3035",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.list.query.json",
+    "kind": "contract",
+    "bytes": 107,
+    "sha256": "992421498d9b3602a655fcef8c31bb27cb722070272ca788890be1e7b9fca9b1",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.list.response.json",
+    "kind": "contract",
+    "bytes": 924,
+    "sha256": "5db6c9f2b0e0eb9d0dda72bea2a9280c170597d3f20262096a2c31e0f5fdad45",
+    "lines": 29,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.pause.command.json",
+    "kind": "contract",
+    "bytes": 229,
+    "sha256": "dc3b058002f5fb0d5df1293567fbf5e407b17df570fd60bed3be888d11957aa1",
+    "lines": 9,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.pause.response.json",
+    "kind": "contract",
+    "bytes": 250,
+    "sha256": "80bb7d79b562b77f1fed2a05365fbafadd5678dd3de4910ca9da5ddb2a513909",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.remove.command.json",
+    "kind": "contract",
+    "bytes": 233,
+    "sha256": "87ec246e1519a27d15d1489f1db3e39fba3ff77aa2009a07a7a14c50fcb48d89",
+    "lines": 9,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.remove.response.json",
+    "kind": "contract",
+    "bytes": 254,
+    "sha256": "a71e23c1935348dad47202a4400983e07d01de185768a49c7fb89ae07b37fafb",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.resume.command.json",
+    "kind": "contract",
+    "bytes": 195,
+    "sha256": "fb6d774a3b5c9cf623d25ce34ee1fe569851129da26b602c53038d4f500ce453",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/loops.resume.response.json",
+    "kind": "contract",
+    "bytes": 254,
+    "sha256": "a742d6693fb36e3cc3b12f2d27ae708fc45dd01e984f32a7ea65a4f03a71b1b8",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/operations.get.query.json",
+    "kind": "contract",
+    "bytes": 126,
+    "sha256": "8a467d2c0c2ba26aa51d909f82ca81c33bcf698dbe9e778406748192d2556b04",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/examples/operations.get.response.json",
+    "kind": "contract",
+    "bytes": 707,
+    "sha256": "6405845d96a7862b7ec38657f9c0fad4cb4f7abc09cfa719cd48aed1c5702e4c",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/reference.html",
+    "kind": "contract",
+    "bytes": 194241,
+    "sha256": "b62a8d0bd1cdb2b55be9a5e5c9c88c4197d171c90fb910e1b68d82a867982468",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/resources/examples/implement-review.graph.yaml",
+    "kind": "contract",
+    "bytes": 2847,
+    "sha256": "717cb26dc448b40045151f72bccab593eca96d91f81f7b530140e88013d33348",
+    "lines": 81,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/resources/examples/weekday-issues.loop.yaml",
+    "kind": "contract",
+    "bytes": 515,
+    "sha256": "7e63b1511a6cc5791bd3a0e5dc4f547834ed2bcb85af2c165fbf144a1b64ad4b",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/resources/graph.schema.yaml",
+    "kind": "contract",
+    "bytes": 13187,
+    "sha256": "9b65d9685b009ef8e4b5734a9591dd67907b4cab4e52783dcf30ba61278ca8e2",
+    "lines": 369,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/resources/loop.schema.yaml",
+    "kind": "contract",
+    "bytes": 4048,
+    "sha256": "953d97647123e306a0dcf13a420fe98b9ca64f909640bea6e3639493eb77551a",
+    "lines": 121,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/resources/reference.html",
+    "kind": "contract",
+    "bytes": 35533,
+    "sha256": "faf87e9d92edc2a4c79f8c1e534f42ad18dac54b4044ea51618ef27aeccdc934",
+    "lines": 167,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/approval.schema.json",
+    "kind": "contract",
+    "bytes": 2724,
+    "sha256": "c74880b0ca5345266872df9f5646e269cb66cb0365ed0dbe9d1be9bb0e51d5fa",
+    "lines": 65,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/commands.schema.json",
+    "kind": "contract",
+    "bytes": 15005,
+    "sha256": "1540a0515ba70cce8245060c8eb8da480ae03e03150dfd8e02ce761135a6f946",
+    "lines": 353,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/events.schema.json",
+    "kind": "contract",
+    "bytes": 25457,
+    "sha256": "96c00af3efd5b506d08a7041ff83b44a0d1b727d73b964e61173792a4b05356b",
+    "lines": 660,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/execution.schema.json",
+    "kind": "contract",
+    "bytes": 9090,
+    "sha256": "6055a23862b00bc9821f9af45c4eff6bdd49623ea128e8d270547e151c0f54a1",
+    "lines": 227,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/graph.schema.json",
+    "kind": "contract",
+    "bytes": 5100,
+    "sha256": "9289c3e15b6d4b0287bc088d6259d2bc0a70d4887971053436a84363ddfe4c58",
+    "lines": 109,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/job.schema.json",
+    "kind": "contract",
+    "bytes": 3177,
+    "sha256": "9c028929e543fd769852850f14ee1a8f2babee3001502a9812620d87fa447693",
+    "lines": 71,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/loop.schema.json",
+    "kind": "contract",
+    "bytes": 5049,
+    "sha256": "03ad67c4fe651d6086a50ec83bb0bbd20e79560843f2b7a4ec973bea6b378eb8",
+    "lines": 136,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/operations.schema.json",
+    "kind": "contract",
+    "bytes": 8363,
+    "sha256": "333633149bbd6f487bfa45e83f81c4d1d0273250e5e667182656ce386a8c0202",
+    "lines": 212,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/graph_engine/v1/schemas/queries.schema.json",
+    "kind": "contract",
+    "bytes": 13915,
+    "sha256": "8eeec4098bda7aa32051f7f90e2d5b95ffde8896ea8cc958a27e32e8f02d527a",
+    "lines": 373,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/README.md",
+    "kind": "contract",
+    "bytes": 20214,
+    "sha256": "13fceefc8ef4537e41c0bc790490482d11dbe3eec8d0b0bfc3c8d559268c5321",
+    "lines": 337,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/asyncapi.yaml",
+    "kind": "contract",
+    "bytes": 4191,
+    "sha256": "7e0a1255f4869be6f90177f93a60eddf6bbea22ae8c610b267477851ac21adf9",
+    "lines": 146,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/accepted.json",
+    "kind": "contract",
+    "bytes": 369,
+    "sha256": "1a9fb4b1c2da78aa502b3d1576e6e8a6a14adf85fc2b0928c4d2bb33848250f1",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/artifact.json",
+    "kind": "contract",
+    "bytes": 1252,
+    "sha256": "880b7894f7ae605243b3ae61ce422045e0cb6f54cdaa7af6ae7e9a704719ae71",
+    "lines": 46,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/cancel-accepted.json",
+    "kind": "contract",
+    "bytes": 367,
+    "sha256": "92cd19972da331bddb014a88a124637a861b2bef07e6826fa7a9cb8e4d6c3771",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/cancel.json",
+    "kind": "contract",
+    "bytes": 844,
+    "sha256": "f5dcd7589e338d49dd6392d5fe84770f7fa815fd41d23b79cdd314f4ff3421f0",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/cancelled-before-execute.json",
+    "kind": "contract",
+    "bytes": 1058,
+    "sha256": "9ad2d5d17cb5ddb97aa735f63a494e50898e37c7b90cd103a7aca8b63566b7ba",
+    "lines": 45,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/cancelled.json",
+    "kind": "contract",
+    "bytes": 1038,
+    "sha256": "2dd91ff7000f37ade267baebfbce26d0fc4877e2f918506424379fad12dd51db",
+    "lines": 45,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/completed.json",
+    "kind": "contract",
+    "bytes": 853,
+    "sha256": "9ee5bd7a3e46ee235009d25bc8218aa416c359407b7fcdeddd9eb89d4c45cfbb",
+    "lines": 37,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/event-gap.json",
+    "kind": "contract",
+    "bytes": 456,
+    "sha256": "4e65bf0f16e926910b8f8cf0b5476783dd4529a4eabc8123c9f8bcae7fa23bd4",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/execute-retry.json",
+    "kind": "contract",
+    "bytes": 960,
+    "sha256": "301593bb5743ff593dde0a04aa321baa3c1a76419e9905f902b2e1e9d13e634a",
+    "lines": 43,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/execute.json",
+    "kind": "contract",
+    "bytes": 960,
+    "sha256": "301593bb5743ff593dde0a04aa321baa3c1a76419e9905f902b2e1e9d13e634a",
+    "lines": 43,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/executor-lost.json",
+    "kind": "contract",
+    "bytes": 982,
+    "sha256": "0d761a0a4bd836f6753e8d9a575345fa18d9de676066e254e87c7d0f16ee7827",
+    "lines": 40,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/failed.json",
+    "kind": "contract",
+    "bytes": 952,
+    "sha256": "125039aa4f3931843f38e4117994899737817b0c165a3fddc0f7c7c3f4d1516e",
+    "lines": 40,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/inspect-response.json",
+    "kind": "contract",
+    "bytes": 1135,
+    "sha256": "e830e8ef1be60de42c200bc755f7c8d60b0f1f647f6b06f1a5bb2f2be7e0b71e",
+    "lines": 45,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/inspect.json",
+    "kind": "contract",
+    "bytes": 310,
+    "sha256": "03f395965ccfb54bf0c5c386d25e3d0ef25c625d438b3f98205e19963379a74b",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/progress.json",
+    "kind": "contract",
+    "bytes": 875,
+    "sha256": "d43a654ca5222e09c94d233a1dd3a44af74514e09fd30cf888304cef89d1a52e",
+    "lines": 37,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/ready-restarted.json",
+    "kind": "contract",
+    "bytes": 569,
+    "sha256": "39e0352de388363bf8c561231226db0285e590802a88a88e038457b728bbd03c",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/ready.json",
+    "kind": "contract",
+    "bytes": 565,
+    "sha256": "c1344e9373504f02bbd9d8ff8b16f596107209863d20b98480c43c7578d6b181",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/stale-runtime.json",
+    "kind": "contract",
+    "bytes": 507,
+    "sha256": "4a2eb8d1203795d44c5237def318646dac700fdec3cffa5235313d4dd57fad5a",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/stale-update.json",
+    "kind": "contract",
+    "bytes": 443,
+    "sha256": "5cf61f6ae25f2eec1d7bbffbc7fcf3c0461452ec54f91b012c1b3f6bcdc0f212",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/started.json",
+    "kind": "contract",
+    "bytes": 750,
+    "sha256": "f848db7558c6f82b995fe119926d87a7c52f0af45a1e37eaac105b7141e2bff9",
+    "lines": 32,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/update-ack.json",
+    "kind": "contract",
+    "bytes": 310,
+    "sha256": "04f6cb3738f077b750fc7cd8f94e52fdc30ef6048dee90cf93fce83379e14040",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/usage.json",
+    "kind": "contract",
+    "bytes": 950,
+    "sha256": "f6ed7c28ef3b77f78feb80ebcf2df1c1024244140652c88288a703c21d454a63",
+    "lines": 40,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/messages.schema.json",
+    "kind": "contract",
+    "bytes": 26856,
+    "sha256": "52067e363433a3415c22c65dab6850ba4e517b1b829cb894c82aef394834a121",
+    "lines": 1134,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/reference.html",
+    "kind": "contract",
+    "bytes": 45270,
+    "sha256": "797532c9d3a5f636f5d32764c8c31911a8a1480b16ffbfabde038d13afb376c3",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/pyproject.toml",
+    "kind": "contract",
+    "bytes": 903,
+    "sha256": "4634880b8e85238bcf645ccd77c7f79f9284e1e2ed6580c2e734e7bc57b26f12",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/src/openengine/contracts/__init__.py",
+    "kind": "source/config",
+    "bytes": 108,
+    "sha256": "bed0443881b4334e6953d11936d52e294c650c19122b58d07146828f56d69e9a",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/src/openengine/contracts/expressions.py",
+    "kind": "source/config",
+    "bytes": 8008,
+    "sha256": "d7b7ee7217867ff5e5f44e28bd048c5a4f6fa65da745b410bada355ae26d6a0f",
+    "lines": 195,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/src/openengine/contracts/graphs.py",
+    "kind": "source/config",
+    "bytes": 12926,
+    "sha256": "13aebfa014559d2099f0249fb5fe98ee847e0a955cd389d28fbb3da3acde0e28",
+    "lines": 308,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/src/openengine/contracts/reference.py",
+    "kind": "source/config",
+    "bytes": 5881,
+    "sha256": "29c0b05230036657a2e92247d08f59b02c7a1367557a67684c96b2f2c1e84ff7",
+    "lines": 142,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/src/openengine/contracts/resources.py",
+    "kind": "source/config",
+    "bytes": 24298,
+    "sha256": "46cabadb69df077e6f3ee403f1f348d1e27416c9a21f8cd3aebb6ba04f6ae2d5",
+    "lines": 542,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/src/openengine/contracts/runtime.py",
+    "kind": "contract",
+    "bytes": 8424,
+    "sha256": "4b74c342c5cd95959a5902630d96ab1cb9976dee8eb317551ff25cbc623e9fcb",
+    "lines": 231,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/src/openengine/contracts/validate.py",
+    "kind": "source/config",
+    "bytes": 13010,
+    "sha256": "d03ed28bc39ba251580faac63f56506452497172c97a2223d09c040d6992b669",
+    "lines": 316,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tests/test_architecture.py",
+    "kind": "test",
+    "bytes": 3778,
+    "sha256": "4072effab47243f1bce53245727899a2485587fb4500bad72221a9e965ca255d",
+    "lines": 85,
+    "tests": [
+      {
+        "name": "test_every_subject_is_drawn_with_its_service",
+        "line": 23
+      },
+      {
+        "name": "test_every_table_is_drawn_under_its_service",
+        "line": 36
+      },
+      {
+        "name": "test_every_stream_is_drawn",
+        "line": 45
+      },
+      {
+        "name": "test_apps_and_integrations_connect_where_they_should",
+        "line": 50
+      },
+      {
+        "name": "test_virtualization_uses_the_contract_isolation_levels",
+        "line": 63
+      },
+      {
+        "name": "test_write_adds_changed_paths_to_the_manifest",
+        "line": 69
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/contracts/tests/test_contracts.py",
+    "kind": "test",
+    "bytes": 15888,
+    "sha256": "11c294ef0af4ccd8f5438a0ac98d0fb81ef791f9e7d1391610dc374934775fab",
+    "lines": 364,
+    "tests": [
+      {
+        "name": "test_every_message_has_valid_examples",
+        "line": 126
+      },
+      {
+        "name": "test_finds_every_service_contract",
+        "line": 128
+      },
+      {
+        "name": "test_defines_exactly_the_listed_request_subjects",
+        "line": 136
+      },
+      {
+        "name": "test_every_request_operation_replies_with_its_own_response",
+        "line": 141
+      },
+      {
+        "name": "test_every_subject_is_in_its_service_namespace",
+        "line": 149
+      },
+      {
+        "name": "test_every_event_stream_captures_only_its_service_namespace",
+        "line": 155
+      },
+      {
+        "name": "test_events_land_in_their_stream_and_requests_in_none",
+        "line": 161
+      },
+      {
+        "name": "test_no_streams_or_consumers_are_added",
+        "line": 170
+      },
+      {
+        "name": "test_checked_in_reference_is_current",
+        "line": 181
+      },
+      {
+        "name": "test_pages_builds_on_contract_changes",
+        "line": 186
+      },
+      {
+        "name": "test_published_contract_links",
+        "line": 198
+      },
+      {
+        "name": "test_rejects_malformed_variants",
+        "line": 318
+      },
+      {
+        "name": "test_the_unmutated_bases_are_valid",
+        "line": 321
+      },
+      {
+        "name": "test_a_causal_path_of_exactly_32_elements_is_allowed",
+        "line": 326
+      },
+      {
+        "name": "test_resolves_schemas_under_a_path_with_spaces",
+        "line": 331
+      },
+      {
+        "name": "test_asyncapi_parser_accepts_every_document",
+        "line": 342
+      },
+      {
+        "name": "test_bundled_documents_resolve_every_file_reference",
+        "line": 348
+      },
+      {
+        "name": "test_a_graph_snapshot_without_a_project_is_valid",
+        "line": 363
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/contracts/tests/test_resources.py",
+    "kind": "test",
+    "bytes": 11550,
+    "sha256": "a5c25a0ec40ce6b2d9da101d79a7cd62f5af56f75a07b704538b64e33ac54f83",
+    "lines": 259,
+    "tests": [
+      {
+        "name": "test_examples_validate",
+        "line": 26
+      },
+      {
+        "name": "test_every_kind_has_an_example",
+        "line": 31
+      },
+      {
+        "name": "test_checked_in_reference_is_current",
+        "line": 36
+      },
+      {
+        "name": "test_reference_documents_every_kind_and_example",
+        "line": 44
+      },
+      {
+        "name": "test_every_service_contract_has_its_resources",
+        "line": 50
+      },
+      {
+        "name": "test_every_resource_uses_the_one_api_version",
+        "line": 56
+      },
+      {
+        "name": "test_no_contract_file_names_another_api_version",
+        "line": 71
+      },
+      {
+        "name": "test_unknown_kind_and_version_are_refused",
+        "line": 90
+      },
+      {
+        "name": "test_a_resource_of_another_kind_is_refused_when_one_kind_is_expected",
+        "line": 101
+      },
+      {
+        "name": "test_markdown_reference_has_a_table_for_every_type_on_the_page",
+        "line": 115
+      },
+      {
+        "name": "test_resources_are_closed",
+        "line": 122
+      },
+      {
+        "name": "test_a_step_sets_exactly_one_kind",
+        "line": 128
+      },
+      {
+        "name": "test_runner_choices_only_with_different_from",
+        "line": 138
+      },
+      {
+        "name": "test_step_names_must_work_in_expressions",
+        "line": 144
+      },
+      {
+        "name": "test_loop_interval_bounds",
+        "line": 159
+      },
+      {
+        "name": "test_time_zone_needs_cron",
+        "line": 163
+      },
+      {
+        "name": "test_unquoted_timestamps_stay_text",
+        "line": 169
+      },
+      {
+        "name": "test_tool_schemas_are_objects_and_recovery_is_known",
+        "line": 174
+      },
+      {
+        "name": "test_tool_names_are_subject_tokens",
+        "line": 184
+      },
+      {
+        "name": "test_a_grant_names_a_workspace",
+        "line": 194
+      },
+      {
+        "name": "test_an_invocation_pins_its_tool",
+        "line": 200
+      },
+      {
+        "name": "test_connection_scope_lists_resources_only_when_selected",
+        "line": 210
+      },
+      {
+        "name": "test_problems_in_a_multi_document_file_name_the_document",
+        "line": 220
+      },
+      {
+        "name": "test_pages_regenerates_and_publishes_the_resource_reference",
+        "line": 229
+      },
+      {
+        "name": "test_site_reference_links_every_contract_and_kind",
+        "line": 236
+      },
+      {
+        "name": "test_docs_name_only_the_one_api_version",
+        "line": 251
+      },
+      {
+        "name": "test_the_wheel_carries_every_contract_directory",
+        "line": 254
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/contracts/tests/test_runtime_contract.py",
+    "kind": "test",
+    "bytes": 15779,
+    "sha256": "8fc25acba4fad8194c8f94fc1e2fbf358ca02487c3643e4f4424efccef540342",
+    "lines": 440,
+    "tests": [
+      {
+        "name": "test_examples_and_all_message_schemas",
+        "line": 19
+      },
+      {
+        "name": "test_execute_retry_preserves_complete_identity",
+        "line": 47
+      },
+      {
+        "name": "test_rejects_invalid_wire_variants",
+        "line": 81
+      },
+      {
+        "name": "test_required_safety_fields",
+        "line": 99
+      },
+      {
+        "name": "test_subject_and_provisioned_binding_checks",
+        "line": 103
+      },
+      {
+        "name": "test_inspect_response_must_bind_snapshot_to_runtime",
+        "line": 123
+      },
+      {
+        "name": "test_progress_usage_and_artifact_bindings",
+        "line": 129
+      },
+      {
+        "name": "test_internal_subjects_are_outside_public_streams",
+        "line": 154
+      },
+      {
+        "name": "test_wire_limit_accepts_unicode_without_ascii_reserialization",
+        "line": 166
+      },
+      {
+        "name": "test_wire_limit_counts_whitespace_and_accepts_exact_boundary",
+        "line": 175
+      },
+      {
+        "name": "test_oversized_wire_is_rejected_before_decode_or_parse",
+        "line": 186
+      },
+      {
+        "name": "test_wire_requires_utf8_json",
+        "line": 196
+      },
+      {
+        "name": "test_missing_attempt_identity",
+        "line": 206
+      },
+      {
+        "name": "test_wrong_subject_kind_or_namespace",
+        "line": 221
+      },
+      {
+        "name": "test_invalid_attempt_sequence",
+        "line": 228
+      },
+      {
+        "name": "test_invalid_inspect_state",
+        "line": 235
+      },
+      {
+        "name": "test_reply_must_match_request",
+        "line": 250
+      },
+      {
+        "name": "test_inspect_cannot_omit_requested_attempt",
+        "line": 262
+      },
+      {
+        "name": "test_reserved_steering_is_not_an_accepted_update",
+        "line": 270
+      },
+      {
+        "name": "test_internal_reference_stays_current",
+        "line": 276
+      },
+      {
+        "name": "test_restart_preserves_journal_and_advances_runtime_sequence",
+        "line": 283
+      },
+      {
+        "name": "test_cancel_before_execute_confirms_no_launch",
+        "line": 296
+      },
+      {
+        "name": "test_context_cannot_select_host_paths",
+        "line": 312
+      },
+      {
+        "name": "test_gap_must_request_an_earlier_sequence",
+        "line": 316
+      },
+      {
+        "name": "test_ack_echoes_identity_and_sequence",
+        "line": 327
+      },
+      {
+        "name": "test_wire_rejects_non_json_numbers_in_free_form_inputs",
+        "line": 339
+      },
+      {
+        "name": "test_wire_rejects_excessive_json_nesting",
+        "line": 346
+      },
+      {
+        "name": "test_wire_rejects_numeric_overflow",
+        "line": 358
+      },
+      {
+        "name": "test_wire_accepts_large_finite_number",
+        "line": 368
+      },
+      {
+        "name": "test_usage_period_preserves_nanosecond_precision",
+        "line": 390
+      },
+      {
+        "name": "test_nested_invalid_instruction_files_return_errors",
+        "line": 396
+      },
+      {
+        "name": "test_schema_recursion_returns_validation_error",
+        "line": 408
+      },
+      {
+        "name": "test_oversized_references_skip_uniqueness_checks",
+        "line": 422
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/asyncapi.yaml",
+    "kind": "contract",
+    "bytes": 32731,
+    "sha256": "be04dcb224400b8849da234b0fd8c3d37bdd175456bf2764e0d60ec2932a4fd6",
+    "lines": 727,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.apply.command.json",
+    "kind": "contract",
+    "bytes": 863,
+    "sha256": "cba9d32329ad6125e1222983de0f28c0a285c960ffc57612fd98903942528e3c",
+    "lines": 37,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.apply.response.json",
+    "kind": "contract",
+    "bytes": 257,
+    "sha256": "8c91ed349e7ccc1c74178fa196a380ac05b31746d0f8609673632d941e68d273",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.delete.command.json",
+    "kind": "contract",
+    "bytes": 302,
+    "sha256": "b2e74783e373e686a71f8c0ed5dbda8b47bb9ec84d6efaccf1e5e59cfa502738",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.delete.response.json",
+    "kind": "contract",
+    "bytes": 261,
+    "sha256": "a644598a7836ebd9d7eebef57d284bbaaa1f57255e24aa46c571ee89358b47ca",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.get.query.json",
+    "kind": "contract",
+    "bytes": 188,
+    "sha256": "34a92f4ffd9ed1decc9035fb10047c91fa580f2f0f6d23a1ebcd84cc1efeda5b",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.get.response.json",
+    "kind": "contract",
+    "bytes": 992,
+    "sha256": "e16c981580929b4e1c92f9d19c8ffc6d351a65370e69ca4ad5ae46e3cf76b2e1",
+    "lines": 41,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.list.query.json",
+    "kind": "contract",
+    "bytes": 190,
+    "sha256": "42ab825cd092c51e59a5f424534a9c3acf14aec4aacb3e4a4120dcf434f5c11d",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.list.response.json",
+    "kind": "contract",
+    "bytes": 1102,
+    "sha256": "5f422a749d712c7187b72b329e19bc83696e04bf4437c23c639db32cae357d7e",
+    "lines": 44,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocation.accepted.event.json",
+    "kind": "contract",
+    "bytes": 1032,
+    "sha256": "fa485264aa102dbf47acae35d257859635dc2aa372e9da43751e57f10e9e3997",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocation.blocked-auth.event.json",
+    "kind": "contract",
+    "bytes": 1078,
+    "sha256": "64528292f0121548e23c9764ddf2cc41f5d13e768e74821d4b3689d2df0150fa",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocation.cancelled.event.json",
+    "kind": "contract",
+    "bytes": 1069,
+    "sha256": "d63df29f450342dd2a8950a984d6caa2ccba681916a051fef4005c1f000bc061",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocation.failed.event.json",
+    "kind": "contract",
+    "bytes": 1018,
+    "sha256": "0d8cf618d79c034a8c51e9a0d2e293bc545e927884a9c0c1a029a9677a0db7ad",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocation.outcome-unknown.event.json",
+    "kind": "contract",
+    "bytes": 1118,
+    "sha256": "5e5547d03db3e36eb3580a68fdf5d9377dd2cfb3c98f38736abdbc93bfce1d4c",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocation.running.event.json",
+    "kind": "contract",
+    "bytes": 907,
+    "sha256": "8bee7e536841dac40950dee398ba4d9148684cba6a5248b622833628a7a880a3",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocation.succeeded.event.json",
+    "kind": "contract",
+    "bytes": 921,
+    "sha256": "4d4121b03cde56713ddfc40de3a5a5a188f62213f908c9cc4c4d992a67006700",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocations.cancel.command.json",
+    "kind": "contract",
+    "bytes": 305,
+    "sha256": "9172ab022e43bc104a562d0008ee4339934e86cab301aca36e5e9e7ca4d3cdb4",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocations.cancel.response.json",
+    "kind": "contract",
+    "bytes": 286,
+    "sha256": "a68f4e07e160c2346cc190ecaa09e5c97460ad0c0f1f1d78b58b6907940d674c",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocations.get.query.json",
+    "kind": "contract",
+    "bytes": 181,
+    "sha256": "f9ac3936a89c5c2b63950a812ec85ac1be76d553a1bde2622c41589c692f46ae",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocations.get.response.json",
+    "kind": "contract",
+    "bytes": 1477,
+    "sha256": "7dd3ff4eea3a859cce67fbc2b071e2498748b289b67feb4b780496c0f27af5ba",
+    "lines": 54,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocations.list.query.json",
+    "kind": "contract",
+    "bytes": 244,
+    "sha256": "638399e35f2f93ee07004e8d5066b1ad4c778059fa21a0e924b0d0945eeabe9a",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/toolinvocations.list.response.json",
+    "kind": "contract",
+    "bytes": 1436,
+    "sha256": "8b823b702a911abc4550f96c2bd2f213d7ae0b025e664ea033e75223a524130e",
+    "lines": 53,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.apply.command.json",
+    "kind": "contract",
+    "bytes": 1833,
+    "sha256": "61d5dbe5896a00f554bdf777a64b168edeeb6f5704e44c48824eb3583e39ed90",
+    "lines": 74,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.apply.response.invalid-argument.json",
+    "kind": "contract",
+    "bytes": 629,
+    "sha256": "116fd2463861954f96c065bcc38605b42451e4fd2aba15dbf5672c7915fbc8c3",
+    "lines": 22,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.apply.response.json",
+    "kind": "contract",
+    "bytes": 234,
+    "sha256": "b2426f13125a96073aad421b1710c4c20b15c7a1cca3d425a1d456f8038e98bb",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.delete.command.json",
+    "kind": "contract",
+    "bytes": 277,
+    "sha256": "c44c3bf2ee48087bddabff2b3fbda181dc484ee5163c209af39fb799e32a62c0",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.delete.response.json",
+    "kind": "contract",
+    "bytes": 238,
+    "sha256": "107c9b91af04275af69d01a3d11b4dd7e68c6ef1d50a545e3b530ca3525bdb1e",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.get.query.json",
+    "kind": "contract",
+    "bytes": 173,
+    "sha256": "eba3db9797876be67e21ff3f98ef54fefe2b0f275a3fcd0247ed73b59f5d86f1",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.get.response.json",
+    "kind": "contract",
+    "bytes": 1968,
+    "sha256": "da988b4884505347a3c9b51c0034a326f226b58a720ffe3e8f0e7f007ad3d916",
+    "lines": 78,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.invoke.command.json",
+    "kind": "contract",
+    "bytes": 406,
+    "sha256": "5ad40157072af404d8cd36ed27cd8c7229b7fd60aa1e15ad0036e589f8682725",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.invoke.response.json",
+    "kind": "contract",
+    "bytes": 273,
+    "sha256": "f755b3adf279e164660fa57785560cddf2b8467fdf9c4c2fe188cde81ac9e1c8",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.invoke.response.permission-denied.json",
+    "kind": "contract",
+    "bytes": 559,
+    "sha256": "e6840d5d70acee259116533294e499655403925e0a0d76e54a1ceaee34bf23d1",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.list.query.json",
+    "kind": "contract",
+    "bytes": 199,
+    "sha256": "abc6dc596a91b1be2007b701c0b110ba3c8c1af4456ae9f907dc9348078607c0",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/tools.list.response.json",
+    "kind": "contract",
+    "bytes": 2153,
+    "sha256": "834a3e399d9e67eb851dea73359f37ac7616bba5c03bbf57e5ed697f1ddf95ad",
+    "lines": 81,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/reference.html",
+    "kind": "contract",
+    "bytes": 96459,
+    "sha256": "665ace38a1f1763bf29ed126f178f43506ef85688c0dfa13e43dd672ac707f5b",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/resources/examples/github-issue-comment.yaml",
+    "kind": "contract",
+    "bytes": 1802,
+    "sha256": "16043f548a297854577ced2edf8ec6e02b8657f3eaa2826f508fe8392a1baa3a",
+    "lines": 88,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/resources/reference.html",
+    "kind": "contract",
+    "bytes": 33171,
+    "sha256": "d970285be1eb2e3cdbdcba9853aa553c0cd8325b4c2d8bf212117e4c3d0e6c47",
+    "lines": 151,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/resources/tool.schema.yaml",
+    "kind": "contract",
+    "bytes": 5109,
+    "sha256": "56814d7a5e45476b435f648aed4b1a252b50a0053b5a378663fe29fbcf5070ad",
+    "lines": 144,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/resources/toolgrant.schema.yaml",
+    "kind": "contract",
+    "bytes": 3564,
+    "sha256": "2c17c3f44bc25049dc545cd0b4fb050d24716704d4e9636f40d84d57c99e0abb",
+    "lines": 92,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/resources/toolinvocation.schema.yaml",
+    "kind": "contract",
+    "bytes": 4702,
+    "sha256": "a224502b8a06f0fd613e7e8d25fad00271db389bf45debe1c7a7155151116a52",
+    "lines": 129,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/schemas/commands.schema.json",
+    "kind": "contract",
+    "bytes": 6022,
+    "sha256": "25b48bb176840d2c36ea31fd1c4291a59cb5686f318ef83ef45091ac572ae1ab",
+    "lines": 104,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/schemas/events.schema.json",
+    "kind": "contract",
+    "bytes": 9261,
+    "sha256": "11386be36da91c7ed92472a15d0b8643bf4b713b26c25cc2676f790b9cc992a3",
+    "lines": 325,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/schemas/queries.schema.json",
+    "kind": "contract",
+    "bytes": 8100,
+    "sha256": "2b42ae2856dc0b575d0d144b274ff102217fc5b77e1f7909fa8c5c2e6ff78223",
+    "lines": 210,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tooling/.gitignore",
+    "kind": "contract",
+    "bytes": 14,
+    "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tooling/architecture.py",
+    "kind": "contract",
+    "bytes": 11208,
+    "sha256": "f0943f6040d17b03b9a34267f87dd21cbab1d15d600bcb4f17a9819e0de5ede7",
+    "lines": 262,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tooling/package-lock.json",
+    "kind": "contract",
+    "bytes": 88718,
+    "sha256": "83e904cf42b846a60f121d9919b414d109e5dbe3aa91d6fc8d779100dc15428b",
+    "lines": 2515,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tooling/package.json",
+    "kind": "contract",
+    "bytes": 296,
+    "sha256": "ad25ab0ada009c13dd5ae2cd6ced6ca7011cdad89a9f9b92762b2d05bc90b6bb",
+    "lines": 12,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tooling/resources.py",
+    "kind": "contract",
+    "bytes": 396,
+    "sha256": "032dc6e6388d949fc0fade0231ccbe51e12def2804fa049c1be2f044fa253f26",
+    "lines": 12,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tooling/validate.mjs",
+    "kind": "contract",
+    "bytes": 1552,
+    "sha256": "7178b970e585900a55040430ec447e210d8e1ba0210a2af35f204fc9539df26e",
+    "lines": 32,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/asyncapi.yaml",
+    "kind": "contract",
+    "bytes": 59277,
+    "sha256": "8d03e73f2fa449a19d5a433bc076316fe7b2ac5ce2b2be34b3b3e16e717cfa02",
+    "lines": 1406,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/approval.expired.event.json",
+    "kind": "contract",
+    "bytes": 792,
+    "sha256": "80585bfa7697d8f5f1bb67fb74125a5ccd98894a0572004b9100d5e86673e891",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/approval.requested.event.json",
+    "kind": "contract",
+    "bytes": 1224,
+    "sha256": "89333d7994a7c91f1bc116f360475ae03655ce1da2c39c4f94c816ff4f8c34be",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/approval.resolved.event.json",
+    "kind": "contract",
+    "bytes": 744,
+    "sha256": "20889928ac6c1886b188b832744dc60efb4ea0dd24de73fa0ff9624245a26d0f",
+    "lines": 24,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/approvals.decide.command.json",
+    "kind": "contract",
+    "bytes": 532,
+    "sha256": "2a006346c0691aecd30b781a80519a5b664efafc8462e751cedbb9e8e7bb4c56",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/approvals.decide.command.stale.json",
+    "kind": "contract",
+    "bytes": 523,
+    "sha256": "a293b4b7be86b92aa3395b4cff2a73b2c21c4226815ebf8e2641a6c679598a66",
+    "lines": 16,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/approvals.decide.response.accepted.json",
+    "kind": "contract",
+    "bytes": 255,
+    "sha256": "3a479a5ef378f6207f6b3a2c450b3c5819caf0e5a6590967fc86df2eaa05ef8b",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/approvals.decide.response.stale.json",
+    "kind": "contract",
+    "bytes": 620,
+    "sha256": "4f03f37b1e8409b727b42fbc12916e5b2e5afbd0c8694b89457223ee0702dad5",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/artifact.created.event.json",
+    "kind": "contract",
+    "bytes": 1013,
+    "sha256": "dfd3ec2e2aa377e832d4a456e79671d3dc85b326ea03fb9fc00ec24c63f80657",
+    "lines": 31,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/capabilities.get.query.json",
+    "kind": "contract",
+    "bytes": 120,
+    "sha256": "b2a832acc700dca8a574ebe00601e815c2cd34394556ea43b3fefcd38f5a9d7d",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/capabilities.get.response.json",
+    "kind": "contract",
+    "bytes": 897,
+    "sha256": "10c05ffddbd79593edcd196199fec5e493c0e445167a29a26c6bdbae1bbbf7b0",
+    "lines": 31,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/conversation.message.event.json",
+    "kind": "contract",
+    "bytes": 703,
+    "sha256": "cdda667ecb242fd6917a2979e368fd931e03d460495a90cb826234d07a8d2947",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/operations.get.query.json",
+    "kind": "contract",
+    "bytes": 125,
+    "sha256": "c944cc86a77bf8a51ed79d0afd7d90a41470704cb13c3516c0cd6b0abefda6cb",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/operations.get.response.failed.json",
+    "kind": "contract",
+    "bytes": 752,
+    "sha256": "86a276e59f2e3ce8a63120b7f81829ee182596bbcca674fd067e701b4cd8c4a5",
+    "lines": 24,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/operations.get.response.json",
+    "kind": "contract",
+    "bytes": 874,
+    "sha256": "b85e464906adffaf41adf68e60c62725bedaca4741a14a3533502b8ccddfc11a",
+    "lines": 29,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/sessions.events.list.query.json",
+    "kind": "contract",
+    "bytes": 149,
+    "sha256": "09cbd727395104f48ab2062efc693a7d00b9300d01e6e83bd9184e9e4c56c164",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/sessions.events.list.response.json",
+    "kind": "contract",
+    "bytes": 1090,
+    "sha256": "323454087ceb0987818adbe6bb1571d576aabedc777b84254bc01ae72555f709",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/sessions.get.query.json",
+    "kind": "contract",
+    "bytes": 122,
+    "sha256": "87f605cb1b9578ed0605a0098ad694a70b3cc52ada0eff7fb9778df1c343396e",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/sessions.get.response.json",
+    "kind": "contract",
+    "bytes": 1460,
+    "sha256": "083c705acdda90bf3814870da6da3828c6ebf6da3b408fc0f74303969979bccf",
+    "lines": 44,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/steering.applied.event.json",
+    "kind": "contract",
+    "bytes": 662,
+    "sha256": "d7ea4c71001d66f39e8f67e56d67ef6bc4da2c0f0f39c8659bb5969ec62a2c31",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/steering.failed.event.json",
+    "kind": "contract",
+    "bytes": 895,
+    "sha256": "475d6293f62d11507946c121753dbf431d833712f7e909c179c3d1b687569983",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/task.cancelled.event.json",
+    "kind": "contract",
+    "bytes": 857,
+    "sha256": "a1289341a3b0ee148671d4aaa42202979ec727588b612b0abe28beec5848b47b",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/task.completed.event.json",
+    "kind": "contract",
+    "bytes": 834,
+    "sha256": "c4350fc61b645d698289a50c293d068dc2a2f6695f8b78ed0bcf797875740467",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/task.failed.event.json",
+    "kind": "contract",
+    "bytes": 816,
+    "sha256": "c30a528d3b57c1102bbb50557b73c1f050db6dccba3bde1078bfa801ed776700",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/task.started.event.branch-b.json",
+    "kind": "contract",
+    "bytes": 763,
+    "sha256": "b3d36274a30b283117cbc1eb3034d37e0c5bc63939c62df8eedaaca9ed0610cc",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/task.started.event.json",
+    "kind": "contract",
+    "bytes": 759,
+    "sha256": "b082dbd87eca9119f0fb7b02b0257710d8e347db93c082eeb0f3e012c7897025",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/usage.reported.event.json",
+    "kind": "contract",
+    "bytes": 714,
+    "sha256": "67b7edd12d212dda25dee94965df75fd2164d11f600037abf7314b3f91e89a19",
+    "lines": 22,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspace.checkpointed.event.json",
+    "kind": "contract",
+    "bytes": 770,
+    "sha256": "2502d2b808e2264d0bf088b0284f48413d131e84bf85986637eb281f01d85d6c",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspace.destroyed.event.json",
+    "kind": "contract",
+    "bytes": 717,
+    "sha256": "d4d191f19b4407c2fc50173771b56439555d75c16949b8abc425576043f62e5a",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspace.failed.event.json",
+    "kind": "contract",
+    "bytes": 691,
+    "sha256": "3794b0ba48bda5b9b78edde2bc081693ae2559f9e66ce400a942720bcb0056fc",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspace.provisioning.event.json",
+    "kind": "contract",
+    "bytes": 621,
+    "sha256": "2c4a9bec29ecd843bd917882d226419f6e97f36953938d7eacb025329949a824",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspace.ready.event.json",
+    "kind": "contract",
+    "bytes": 679,
+    "sha256": "8616e36598a4181e0bd33e40fa5b804659dab730e9b52946f293e25d5169b7f3",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspace.restored.event.json",
+    "kind": "contract",
+    "bytes": 737,
+    "sha256": "f4bf3f4454a907a371c074ba2205be7279f31455c5a1de500806c57f1da0753b",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspace.suspended.event.json",
+    "kind": "contract",
+    "bytes": 680,
+    "sha256": "90697abd1a4b743de6242d291b59405e6aad0455a004605e11709c1f1fde5664",
+    "lines": 19,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.apply.command.json",
+    "kind": "contract",
+    "bytes": 1388,
+    "sha256": "082d613ad8859d464112f817fe62b9009d374317334d6b2e0807780fe6c5abe7",
+    "lines": 53,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.apply.response.accepted.json",
+    "kind": "contract",
+    "bytes": 313,
+    "sha256": "c09375eb850a0007c0887db401b87dd2d03777f4e4ff9fd0adf08142c5aa9e12",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.apply.response.unsupported.json",
+    "kind": "contract",
+    "bytes": 491,
+    "sha256": "2b41d7756683e1418a6934204f5a466fc7c57a8f17360122a0e6b63c5a1da887",
+    "lines": 18,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.approvals.list.query.json",
+    "kind": "contract",
+    "bytes": 161,
+    "sha256": "9dbb4830bd94ba15e558b0c17ba04ea6cccd96101608336cfe3f1c226f30719b",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.approvals.list.response.json",
+    "kind": "contract",
+    "bytes": 1527,
+    "sha256": "68d768eb2d66bcdd8638ede2edf0b6c3af0bc20965ca80ad50a8918de4978c3a",
+    "lines": 45,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.artifacts.list.query.json",
+    "kind": "contract",
+    "bytes": 180,
+    "sha256": "f67ecf94b62e17d08725de21de4df8437fd40474ee29bd6fe3ad644fc67c2dc2",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.artifacts.list.response.json",
+    "kind": "contract",
+    "bytes": 699,
+    "sha256": "1998d71a37f27b69cd2bfcc2ec7d6cac365510cd5cca809b51ebc4c297e9983a",
+    "lines": 24,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.cancel.command.json",
+    "kind": "contract",
+    "bytes": 367,
+    "sha256": "8dc82c6fb8e8d6b3da9d71333b9b9ab6546cabcc89b0f33046bcee55fcf41a25",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.cancel.response.json",
+    "kind": "contract",
+    "bytes": 245,
+    "sha256": "e921343e3eb57aa7e64d967671ab6da9dddc9f177d0578304ec1e6bed6031118",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.checkpoint.command.json",
+    "kind": "contract",
+    "bytes": 275,
+    "sha256": "9de303320bd910ffa068aff0c250e0adfcf0af27c14e5e57c7b1f705a309c23b",
+    "lines": 9,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.checkpoint.response.json",
+    "kind": "contract",
+    "bytes": 242,
+    "sha256": "747e9acc0695deac2d2dc670157b68c9c01ac3f3097d3e980be4e94dfe7e3dc5",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.destroy.command.active.json",
+    "kind": "contract",
+    "bytes": 404,
+    "sha256": "800f8f2bf919986f0f13ae2a18997de32fe399d391485388052853c039181809",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.destroy.command.json",
+    "kind": "contract",
+    "bytes": 475,
+    "sha256": "a0ef59c02747027b43ccfde9fc8d2cbf9b9718b52899f231b7e7ab998c20ceda",
+    "lines": 13,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.destroy.response.accepted.json",
+    "kind": "contract",
+    "bytes": 244,
+    "sha256": "347d0173ffdaef3236c54e41958caabbc101bd429dfa9c86be80c72eebcbd15c",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.destroy.response.invalid-state.json",
+    "kind": "contract",
+    "bytes": 634,
+    "sha256": "dd70ad20ee8c5290409779065e9edb64d992142673ba6cf0947e6835de6ea9ff",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.ensure.command.json",
+    "kind": "contract",
+    "bytes": 272,
+    "sha256": "d5c746b97fd796445f2a6ca9eb530261e1b69459a40116b2b62471601f9ea10f",
+    "lines": 9,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.ensure.response.json",
+    "kind": "contract",
+    "bytes": 247,
+    "sha256": "9cbdb4e46cd9a8dae382f9ae7185d273b16a487e5aa7cdfe88ad704077b1df66",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.execute.command.branch-b.json",
+    "kind": "contract",
+    "bytes": 454,
+    "sha256": "1dd393813f026a68408b49cd196f15eac27530c8a04852f854ec16abe0588b8b",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.execute.command.json",
+    "kind": "contract",
+    "bytes": 597,
+    "sha256": "3621f54fa69ebcf23c5bf98f706b0031c8fef51bfa89db3fbb2316fd21854c32",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.execute.command.retry.json",
+    "kind": "contract",
+    "bytes": 619,
+    "sha256": "14d0c0253ab754a627c2b530423e13c1e21b004b59437c7905f7f36c50a2803d",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.execute.response.accepted.json",
+    "kind": "contract",
+    "bytes": 356,
+    "sha256": "2f8b12b39a9c61f81e20946c2f56bfcaf388524c4ddd739693c5c0bae8fc26f0",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.get.query.json",
+    "kind": "contract",
+    "bytes": 121,
+    "sha256": "f573a1b97a1d1be953d2e8d19d0feed916b2488b970d0b8022d566437d9645f8",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.get.response.json",
+    "kind": "contract",
+    "bytes": 1295,
+    "sha256": "552ea1e334db17693ad2c1c289b3b5101f13a3e79005981ce079df271cf67bcb",
+    "lines": 51,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.get.response.not-found.json",
+    "kind": "contract",
+    "bytes": 328,
+    "sha256": "c69c9a2dbf9869c263e9cd9a42b828d547c0218537995dfeb2d5c8d849047150",
+    "lines": 13,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.list.query.json",
+    "kind": "contract",
+    "bytes": 437,
+    "sha256": "b41291de70998d42a4e6e18a130f50cb64d1d6dedb252e50767b230cff0513bd",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.list.response.json",
+    "kind": "contract",
+    "bytes": 1307,
+    "sha256": "e61e9940db43415a288d6c530f7c2b3350db8b1f8a049fe1b67aca72b6feb11a",
+    "lines": 48,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.sessions.list.query.json",
+    "kind": "contract",
+    "bytes": 160,
+    "sha256": "868db3d24777ce203fd41f8a32ecb0d9886f1a210740ffe4386b3260b012d986",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.sessions.list.response.json",
+    "kind": "contract",
+    "bytes": 1580,
+    "sha256": "c8ea51d2c7c8fd59f3c8b233cfe79236908811455060947c9612a89e70e5db21",
+    "lines": 47,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.steer.command.json",
+    "kind": "contract",
+    "bytes": 448,
+    "sha256": "7f5aa46aa397b88e8ff4c117205e10c6280a0bf60928d2ff58256bd8db206ff6",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.steer.response.json",
+    "kind": "contract",
+    "bytes": 239,
+    "sha256": "813c88f69ce5cc497f3f3a8fc32bfdc951694274867640e8776ccb7bf4d692c3",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.suspend.command.json",
+    "kind": "contract",
+    "bytes": 290,
+    "sha256": "2ad41facad030406f00d543cd1f1a5acdce76f0bf4269b93439a780df34852f4",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/examples/workspaces.suspend.response.unsupported.json",
+    "kind": "contract",
+    "bytes": 464,
+    "sha256": "ff19b679f173b237f11863e9353409b64e41cf5c6934d6c304e4cb7eb991823d",
+    "lines": 15,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/reference.html",
+    "kind": "contract",
+    "bytes": 160936,
+    "sha256": "f8a452fe9f91c7ef96ee35c490dc7577d04d9876fd8c8aa2c9ad910bf5f0c4e8",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/resources/examples/review-job-88.workspace.yaml",
+    "kind": "contract",
+    "bytes": 493,
+    "sha256": "1eba693d9d3169c0e726d154bc2152ee6a4d9f9fa19d89e77ba866109d772e7b",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/resources/reference.html",
+    "kind": "contract",
+    "bytes": 14465,
+    "sha256": "643f5c789996f61b58bfe5e8138ed83e9298f723effcadd4dfc2732a6b376d67",
+    "lines": 86,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/resources/workspace.schema.yaml",
+    "kind": "contract",
+    "bytes": 4478,
+    "sha256": "8fee262ec5caa8b06795f4cead4c77b776e021539ef5a490afa8c45821e5ec80",
+    "lines": 139,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/approval.schema.json",
+    "kind": "contract",
+    "bytes": 3457,
+    "sha256": "15cba67a0861f0ada5400c14b306ecb76dc6b5a904ae181cff42d29d108efe2d",
+    "lines": 75,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/artifact.schema.json",
+    "kind": "contract",
+    "bytes": 1475,
+    "sha256": "4201c2b5d1f94034431e16d64df6607a40bc4dfab8f1c1c685eb57c2e068c150",
+    "lines": 41,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/capabilities.schema.json",
+    "kind": "contract",
+    "bytes": 1810,
+    "sha256": "7c9df1f981d60fe6e4b63f2de57f2e30f54fdd7febad7d75884dc3755036b510",
+    "lines": 52,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/commands.schema.json",
+    "kind": "contract",
+    "bytes": 8439,
+    "sha256": "725af4d45864f783cf4d206173d43cca49507304da9c4ca69cd71d48d30b6a73",
+    "lines": 198,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/events.schema.json",
+    "kind": "contract",
+    "bytes": 21084,
+    "sha256": "ae14fb42668671994105c80d68ba5a84b95cce56c92f1ab955db057b95a9ceb3",
+    "lines": 579,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/operations.schema.json",
+    "kind": "contract",
+    "bytes": 7500,
+    "sha256": "e6d0d46bbc9367c15b861563d57d370505995e34d235df38d27b134c95e41658",
+    "lines": 175,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/queries.schema.json",
+    "kind": "contract",
+    "bytes": 11677,
+    "sha256": "72b9dbf6ef27856a7fbe3ba25d23b804ea253d9e40b52d37963fa955b4c39d4c",
+    "lines": 318,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/session.schema.json",
+    "kind": "contract",
+    "bytes": 8882,
+    "sha256": "6636f915935b0a9ec9db39f9126b681b49de403c57801734856429bcace8e568",
+    "lines": 208,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/workspace.schema.json",
+    "kind": "contract",
+    "bytes": 9521,
+    "sha256": "304d7968eb5e1997032c2f2e87c3893a150d0f36c7bca21ab8d6cd63bf73411b",
+    "lines": 228,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/README.md",
+    "kind": "documentation",
+    "bytes": 3893,
+    "sha256": "52eaea27c5b584a189a16ea9c6d076b56b57b49ec14698059891239450b70d96",
+    "lines": 72,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 533,
+    "sha256": "fe548caac243242cb2e4cb1f17ae4504438af01163f21e3396204a3fc583bc1b",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/src/openengine/messaging/__init__.py",
+    "kind": "source/config",
+    "bytes": 443,
+    "sha256": "39d1d42f9d685d4a036b5a9e16ef81dfd82ba4231ce819dcdf253a06f6362f84",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/src/openengine/messaging/client.py",
+    "kind": "source/config",
+    "bytes": 3970,
+    "sha256": "ed5760124703d55dce35c13c86812d65870497fba7a331cbfff6a7322a4feef4",
+    "lines": 90,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/src/openengine/messaging/envelopes.py",
+    "kind": "source/config",
+    "bytes": 4558,
+    "sha256": "73b8291d38649f9ecaf0e64169c4113303e103fc391b8d1617a65806c1c0365e",
+    "lines": 122,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/src/openengine/messaging/errors.py",
+    "kind": "source/config",
+    "bytes": 2778,
+    "sha256": "eab53548d794c86efda822e04e408e4168ea4959876c507bd8c36dd441185524",
+    "lines": 74,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/src/openengine/messaging/server.py",
+    "kind": "source/config",
+    "bytes": 13451,
+    "sha256": "e6e7aa2c43907b784d2f721730b9820fd4a719c9b0625a20b6daffc34e4c8740",
+    "lines": 301,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/tests/test_client.py",
+    "kind": "test",
+    "bytes": 4163,
+    "sha256": "61fcf35bb7ebeb4b3da7297daab4a6c69ca9f4ac97f6aebe651919d5f8756440",
+    "lines": 114,
+    "tests": [
+      {
+        "name": "test_a_command_whose_reply_was_lost_is_resent_with_the_same_command_id",
+        "line": 38
+      },
+      {
+        "name": "test_each_attempt_waits_the_bounded_timeout_then_reports_unavailable",
+        "line": 52
+      },
+      {
+        "name": "test_no_responders_is_reported_at_once",
+        "line": 64
+      },
+      {
+        "name": "test_an_error_reply_raises_its_code_and_keeps_its_retryable_flag",
+        "line": 74
+      },
+      {
+        "name": "test_an_unknown_error_code_is_kept_as_sent",
+        "line": 86
+      },
+      {
+        "name": "test_a_query_is_sent_as_a_valid_envelope",
+        "line": 97
+      },
+      {
+        "name": "test_a_connection_lost_while_waiting_reports_unavailable",
+        "line": 105
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/messaging/tests/test_server.py",
+    "kind": "test",
+    "bytes": 7350,
+    "sha256": "196267907705eeb7846a3e9e60ec473eab9da06218a891e3f857bd5127eb9047",
+    "lines": 179,
+    "tests": [
+      {
+        "name": "test_a_valid_query_gets_its_result_with_its_request_id",
+        "line": 36
+      },
+      {
+        "name": "test_a_malformed_query_is_invalid_argument",
+        "line": 54
+      },
+      {
+        "name": "test_a_command_whose_causal_path_does_not_end_with_its_id_is_invalid_argument",
+        "line": 62
+      },
+      {
+        "name": "test_a_valid_command_gets_its_handlers_response",
+        "line": 71
+      },
+      {
+        "name": "test_a_request_through_a_non_loopback_listener_is_permission_denied",
+        "line": 77
+      },
+      {
+        "name": "test_local_operator_mode_allows_loopback_listeners",
+        "line": 87
+      },
+      {
+        "name": "test_local_operator_mode_allows_every_project_on_loopback_only",
+        "line": 89
+      },
+      {
+        "name": "test_an_unserved_subject_is_unsupported_capability",
+        "line": 100
+      },
+      {
+        "name": "test_a_handler_fault_is_internal_without_its_detail",
+        "line": 106
+      },
+      {
+        "name": "test_a_causal_path_past_its_limit_is_refused_before_sending",
+        "line": 119
+      },
+      {
+        "name": "test_local_operator_mode_judges_the_address_nats_listens_on",
+        "line": 136
+      },
+      {
+        "name": "test_a_route_key_names_subject_parameters_and_checks_their_type",
+        "line": 142
+      },
+      {
+        "name": "test_live_connection_cannot_reuse_a_trusted_startup_listener",
+        "line": 166
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/persistence/README.md",
+    "kind": "documentation",
+    "bytes": 3258,
+    "sha256": "6360b4e75775547fc0d4d5bfd4932f3169111454a2626286f0cb898ada54c3b7",
+    "lines": 64,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 427,
+    "sha256": "4ede11c7285715e240111a79b8499d8a1771efdcf28d4eba46fa9d7a972219d8",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/__init__.py",
+    "kind": "source/config",
+    "bytes": 621,
+    "sha256": "9b584e42bd47b3854927c94a5ac8dd961b7e1c089e161868cc9edfab8e277e15",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/config.py",
+    "kind": "source/config",
+    "bytes": 1975,
+    "sha256": "ad5757ad941be464f4f257e89f35e71e341a174d893ec941ccfd009137060a91",
+    "lines": 60,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/database.py",
+    "kind": "source/config",
+    "bytes": 2984,
+    "sha256": "c02c844fa673c9c5514b36f1dc39cb8180fa8ee66db2d3fbe764e893b0d2ac35",
+    "lines": 81,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/documentation.py",
+    "kind": "source/config",
+    "bytes": 11370,
+    "sha256": "c92bdcd92d8b01b85fdd6897814418de99ed6258366c7652acf548e6cf104ce5",
+    "lines": 257,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/migrations.py",
+    "kind": "source/config",
+    "bytes": 5312,
+    "sha256": "684781ee87bf23abac1bfd384e1d8ad362653af7571fa726262879072d300bd5",
+    "lines": 136,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/postgres.py",
+    "kind": "source/config",
+    "bytes": 954,
+    "sha256": "5f2402f7a7459270727777058527e52fca035f95c76e1241010f227d62451371",
+    "lines": 28,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/service.py",
+    "kind": "source/config",
+    "bytes": 2185,
+    "sha256": "387ae06e51bd21ee020d7f6407bceb446d1ce8a0165d7518a4b2fc1e25f20dad",
+    "lines": 58,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/sqlite.py",
+    "kind": "source/config",
+    "bytes": 1435,
+    "sha256": "06d64889f1b968febd67f0479381d5f0498fa94c34f433b29232f8861698ee37",
+    "lines": 49,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/store.py",
+    "kind": "source/config",
+    "bytes": 516,
+    "sha256": "716ec76c668c8a5e6c80d04615a5769e5232fb683dee1e9bf46901cd318b1153",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/template/env.py",
+    "kind": "source/config",
+    "bytes": 173,
+    "sha256": "479136261da137296f4ddd9d8b454f058c1b7ba135948db425ed3eff8fdd27bf",
+    "lines": 5,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/template/script.py.mako",
+    "kind": "source/config",
+    "bytes": 609,
+    "sha256": "14835395d45370c6d7d45f9a41a864c4a09a48ddc7271961494a613d9d340110",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/types.py",
+    "kind": "source/config",
+    "bytes": 1054,
+    "sha256": "d61c628548cbd3b3034ddd2ef4953e4c786f045153b7664a3a1cdd7a8563e5bc",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/tests/test_documentation.py",
+    "kind": "test",
+    "bytes": 4581,
+    "sha256": "ef57d2b74361f37551ed2e885f40ec6700470f57a66a82f854724625b1f84a66",
+    "lines": 106,
+    "tests": [
+      {
+        "name": "test_each_revisions_erd_highlights_what_it_changed",
+        "line": 34
+      },
+      {
+        "name": "test_an_unchanged_schema_has_no_highlights",
+        "line": 53
+      },
+      {
+        "name": "test_rewrites_only_what_changed_or_was_never_rendered",
+        "line": 63
+      },
+      {
+        "name": "test_manifest_lists_changed_paths_and_the_svgs_to_render",
+        "line": 72
+      },
+      {
+        "name": "test_every_service_table_has_a_comment",
+        "line": 83
+      },
+      {
+        "name": "test_a_tables_comment_is_drawn_into_its_entity",
+        "line": 89
+      },
+      {
+        "name": "test_a_quote_in_a_tables_comment_does_not_corrupt_its_label",
+        "line": 98
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/persistence/tests/test_persistence.py",
+    "kind": "test",
+    "bytes": 4979,
+    "sha256": "0b4389c168877a366663865435089e3586887d00af8574e1e94348a8e4defe1b",
+    "lines": 136,
+    "tests": [
+      {
+        "name": "test_defaults_to_sqlite_under_the_state_directory",
+        "line": 57
+      },
+      {
+        "name": "test_one_variable_switches_every_service_to_postgres",
+        "line": 66
+      },
+      {
+        "name": "test_refuses_an_unknown_backend",
+        "line": 73
+      },
+      {
+        "name": "test_postgres_is_a_stub_that_fails_on_use",
+        "line": 78
+      },
+      {
+        "name": "test_reports_a_service_without_a_store_for_the_backend",
+        "line": 85
+      },
+      {
+        "name": "test_scaffold_keeps_a_service_edited_env",
+        "line": 92
+      },
+      {
+        "name": "test_migrates_and_serves_a_service_on_sqlite",
+        "line": 102
+      },
+      {
+        "name": "test_sqlite_connections_enforce_foreign_keys_and_use_wal",
+        "line": 123
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/telemetry/README.md",
+    "kind": "documentation",
+    "bytes": 5595,
+    "sha256": "6c55d744402cb02c3acfa16c63a281ca8685cd6f7407aecb3257a9b214e9257c",
+    "lines": 125,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/telemetry/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 477,
+    "sha256": "1504c70ac3b6cb8140f9e382e92b7df84aeccfa4384949ed45d06c9d3a249bd7",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/telemetry/src/openengine/telemetry/__init__.py",
+    "kind": "source/config",
+    "bytes": 555,
+    "sha256": "e08fdf92e4d5505beacbcb6fc012ded3eedcc77524ed59eada1058e4eac9f63d",
+    "lines": 20,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/telemetry/src/openengine/telemetry/config.py",
+    "kind": "source/config",
+    "bytes": 3202,
+    "sha256": "9ffb0fc9f71d791155d9aab7662b4dd1e9a4b5831f173164f0dbc24036d3e0cd",
+    "lines": 86,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/telemetry/src/openengine/telemetry/propagation.py",
+    "kind": "source/config",
+    "bytes": 2886,
+    "sha256": "f00c0699bcc7e5fd8741f3909c53e5806d8cfe58d6679f1845557c04c10082e7",
+    "lines": 69,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/telemetry/src/openengine/telemetry/records.py",
+    "kind": "source/config",
+    "bytes": 7721,
+    "sha256": "df7412dd5c5323ccbe448246a94a7f59eab615c2a2aba87164059b7b14999b74",
+    "lines": 188,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/telemetry/src/openengine/telemetry/setup.py",
+    "kind": "source/config",
+    "bytes": 4956,
+    "sha256": "1db4a7cfea846b3ad988852589fb5e1d20d869bbf1c3429c54e6719c712643bf",
+    "lines": 127,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/telemetry/tests/test_telemetry.py",
+    "kind": "test",
+    "bytes": 11366,
+    "sha256": "67ec287bcf669890d434e4f074f37bbc7c4dc579d42319eb0929d9bec331c70c",
+    "lines": 263,
+    "tests": [
+      {
+        "name": "test_reads_otlp_export_from_the_standard_variables",
+        "line": 51
+      },
+      {
+        "name": "test_reads_local_format_and_level",
+        "line": 67
+      },
+      {
+        "name": "test_json_lines_carry_the_open_telemetry_fields_and_the_current_trace",
+        "line": 77
+      },
+      {
+        "name": "test_exceptions_are_semantic_convention_attributes",
+        "line": 109
+      },
+      {
+        "name": "test_render_turns_json_lines_into_console_lines_and_passes_other_text_through",
+        "line": 124
+      },
+      {
+        "name": "test_reconfiguring_replaces_its_own_handlers_only",
+        "line": 139
+      },
+      {
+        "name": "test_extra_exporters_receive_logs_and_spans_with_the_service_resource",
+        "line": 154
+      },
+      {
+        "name": "test_trace_context_survives_a_nats_round_trip",
+        "line": 179
+      },
+      {
+        "name": "test_receiving_without_headers_starts_a_new_trace",
+        "line": 202
+      },
+      {
+        "name": "test_inject_and_extract_speak_w3c_trace_context",
+        "line": 209
+      },
+      {
+        "name": "test_one_endpoint_receives_logs_and_traces_over_otlp",
+        "line": 240
+      }
+    ]
+  },
+  {
+    "path": "v2/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 1759,
+    "sha256": "61fdf43db70d9636f2d345232955615fd3ea7356f042a3017fc968530b5434f6",
+    "lines": 50,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/README.md",
+    "kind": "documentation",
+    "bytes": 101,
+    "sha256": "add931bc03191fcd5b412eeafd909433b8dafff8d4777215e578a7100bb9b672",
+    "lines": 3,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/__main__.py",
+    "kind": "source/config",
+    "bytes": 1346,
+    "sha256": "158c83b4801bcb8abd6fc5b469104d9217f363896ea242f902b3677d576e7760",
+    "lines": 46,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/__init__.py",
+    "kind": "source/config",
+    "bytes": 543,
+    "sha256": "3095f46f9ecac53709c2c5cc33c53f9322533eb4db2f10de12f0b87587fc7768",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/migrations/env.py",
+    "kind": "source/config",
+    "bytes": 243,
+    "sha256": "885e8865746d361b22d9e7685d45cc028e05a457a4901e6d3b488328786bb6f4",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/migrations/script.py.mako",
+    "kind": "source/config",
+    "bytes": 609,
+    "sha256": "14835395d45370c6d7d45f9a41a864c4a09a48ddc7271961494a613d9d340110",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/migrations/versions/0a34e647834f_create_connections.py",
+    "kind": "source/config",
+    "bytes": 1165,
+    "sha256": "8a804f815cc05b8797e54bc0794cc5cd5935702cd88ea196347e86146bf7cec5",
+    "lines": 37,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/postgres/__init__.py",
+    "kind": "source/config",
+    "bytes": 353,
+    "sha256": "f9bca0573cf85ba4adbaa68c04bfff4320bec381f4bc72d74e1bcd646dbe8285",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/schema.py",
+    "kind": "source/config",
+    "bytes": 778,
+    "sha256": "a3b731a555239fe6f765feb70ed4870debd4cc99bcc349fd47a6b0e8583c50d3",
+    "lines": 21,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/sqlite/__init__.py",
+    "kind": "source/config",
+    "bytes": 1697,
+    "sha256": "7187bc9903fa47b7d9edcab3b127624019c12c7a70a811d42e34925d23ad048e",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/persistence/store.py",
+    "kind": "source/config",
+    "bytes": 800,
+    "sha256": "189a70128186e9bd9ae5bbf737fad8b5ab7d451991da043000f83ce24b4c490c",
+    "lines": 30,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 674,
+    "sha256": "ec0b83a2fe8f79f164beaf1ac472d510edaa2de6b24c7bbde99c74e8bc66e6e0",
+    "lines": 22,
+    "tests": []
+  },
+  {
+    "path": "v2/services/connection_bus/tests/test_persistence.py",
+    "kind": "test",
+    "bytes": 1977,
+    "sha256": "ed77635661ac6d01c97f848d5df2aa30ae6bb769165955dc6578fa06b3dd4490",
+    "lines": 56,
+    "tests": [
+      {
+        "name": "test_migrations_match_the_schema",
+        "line": 22
+      },
+      {
+        "name": "test_migrations_roll_back",
+        "line": 26
+      },
+      {
+        "name": "test_finds_the_connection_a_webhook_belongs_to",
+        "line": 33
+      },
+      {
+        "name": "test_postgres_store_is_a_stub",
+        "line": 52
+      }
+    ]
+  },
+  {
+    "path": "v2/services/graph_engine/README.md",
+    "kind": "documentation",
+    "bytes": 5744,
+    "sha256": "b8ba4a42806e4b3204bc5a97c069d1947bccea854dc610af5c1acb688da2be67",
+    "lines": 98,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/__main__.py",
+    "kind": "source/config",
+    "bytes": 6484,
+    "sha256": "c98074ec1fa6a3774575f78d31b4f70da53c5bb7c3b52a59c20d42d2ccd3a825",
+    "lines": 165,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/__init__.py",
+    "kind": "source/config",
+    "bytes": 504,
+    "sha256": "2cf58bc308e5c0e2bf3d533561d75d7a5b747b294daa194762bf943c0356f9f9",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/migrations/env.py",
+    "kind": "source/config",
+    "bytes": 239,
+    "sha256": "74d338f7ead221cdaff0ea10277d86d91fca8f824c953652d74be9c55a0e08c5",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/migrations/script.py.mako",
+    "kind": "source/config",
+    "bytes": 609,
+    "sha256": "14835395d45370c6d7d45f9a41a864c4a09a48ddc7271961494a613d9d340110",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/migrations/versions/4925ef9f3b79_add_graph_revisions_operations_and_.py",
+    "kind": "source/config",
+    "bytes": 3486,
+    "sha256": "7fd0e7abfde5740f58eebaf6f8053b1ab2dee7615a06c68a37fabf10b2d031e5",
+    "lines": 81,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/migrations/versions/b552e26457cd_create_graphs.py",
+    "kind": "source/config",
+    "bytes": 1107,
+    "sha256": "4e4f4c5df8f42cd46fd23626c4106650734613e7c859ac5593e457f9bbdf2ef5",
+    "lines": 37,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/migrations/versions/d75ffe6cc5ed_scope_graphs_and_command_receipts_to_.py",
+    "kind": "source/config",
+    "bytes": 4293,
+    "sha256": "91a78e97107eb39a3d5bf9e69e1f63de2706c95dea3dc1670bf02540ce053aee",
+    "lines": 95,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/postgres/__init__.py",
+    "kind": "source/config",
+    "bytes": 344,
+    "sha256": "1a39dcc4c0d0dafb3bedb56c19b90b811b2c92eaa8f068d0b5a3fcdb0470ae5b",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/schema.py",
+    "kind": "source/config",
+    "bytes": 2777,
+    "sha256": "e0f68858950ab396ca21212d56eddf62d1ec1f8c189f066a7a2fecdc98bb1a06",
+    "lines": 64,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/sqlite/__init__.py",
+    "kind": "source/config",
+    "bytes": 7677,
+    "sha256": "c9d3f364dd71beef43efd06dd7640423af99db3a954fa560b8cb9c64e9af00a7",
+    "lines": 157,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/persistence/store.py",
+    "kind": "source/config",
+    "bytes": 4629,
+    "sha256": "3d04a2a2d43fa17fdc36c2dd1cf35f96f39b6135e4865f044984c4eaa84ce290",
+    "lines": 137,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 901,
+    "sha256": "4cb04d7797e784e5fc788251c084687bc415a66aea91aea7352e281bd16def9c",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/registry.py",
+    "kind": "source/config",
+    "bytes": 14744,
+    "sha256": "1e910a02760820fa1e6306e08d3f95540674d14ee417358235ddb5d058deaa93",
+    "lines": 297,
+    "tests": []
+  },
+  {
+    "path": "v2/services/graph_engine/tests/test_persistence.py",
+    "kind": "test",
+    "bytes": 14418,
+    "sha256": "02fd1b2eef9cc83530820e262ae2a8a0742a48ffe53a054293d33649336119f0",
+    "lines": 287,
+    "tests": [
+      {
+        "name": "test_migrations_match_the_schema",
+        "line": 30
+      },
+      {
+        "name": "test_migrations_roll_back",
+        "line": 34
+      },
+      {
+        "name": "test_an_unchanged_apply_keeps_the_revision_and_a_changed_one_adds_the_next",
+        "line": 49
+      },
+      {
+        "name": "test_a_command_id_returns_its_receipt_or_conflicts",
+        "line": 75
+      },
+      {
+        "name": "test_expected_version_must_be_the_latest_revision",
+        "line": 96
+      },
+      {
+        "name": "test_the_deadline_is_checked_once_the_apply_holds_the_lock",
+        "line": 115
+      },
+      {
+        "name": "test_concurrent_applies_neither_duplicate_nor_skip_revisions",
+        "line": 138
+      },
+      {
+        "name": "test_graphs_are_listed_by_name_and_paged_after_a_key",
+        "line": 160
+      },
+      {
+        "name": "test_names_command_ids_and_listings_are_per_project",
+        "line": 186
+      },
+      {
+        "name": "test_the_project_migration_keeps_existing_graphs_under_default",
+        "line": 218
+      },
+      {
+        "name": "test_any_revision_of_a_graph_is_read_back",
+        "line": 261
+      },
+      {
+        "name": "test_postgres_store_is_a_stub",
+        "line": 283
+      }
+    ]
+  },
+  {
+    "path": "v2/services/graph_engine/tests/test_registry.py",
+    "kind": "test",
+    "bytes": 21700,
+    "sha256": "02487e7d2fbc5bc765f121a5d9cce91a582ac43afad202bb9da0432a8cdbc1fa",
+    "lines": 438,
+    "tests": [
+      {
+        "name": "test_apply_creates_then_keeps_or_adds_revisions_under_one_graph_id",
+        "line": 80
+      },
+      {
+        "name": "test_a_retried_command_gets_its_original_reply_and_a_reused_id_conflicts",
+        "line": 102
+      },
+      {
+        "name": "test_expected_version_mismatch_is_rejected_and_replayed",
+        "line": 117
+      },
+      {
+        "name": "test_python_graphs_are_unsupported",
+        "line": 132
+      },
+      {
+        "name": "test_a_graph_breaking_its_rules_is_invalid_argument",
+        "line": 142
+      },
+      {
+        "name": "test_operation_queries_name_a_known_well_formed_id",
+        "line": 152
+      },
+      {
+        "name": "test_a_command_breaking_its_schema_is_rejected_durably",
+        "line": 162
+      },
+      {
+        "name": "test_a_command_breaking_its_envelope_is_rejected_durably",
+        "line": 177
+      },
+      {
+        "name": "test_a_passed_deadline_refuses_acceptance_but_not_a_replay",
+        "line": 187
+      },
+      {
+        "name": "test_an_accepted_command_is_replayed_after_its_deadline",
+        "line": 200
+      },
+      {
+        "name": "test_graphs_list_pages_by_name_with_a_cursor_bound_to_its_prefix",
+        "line": 227
+      },
+      {
+        "name": "test_graphs_get_returns_the_latest_or_a_named_revision",
+        "line": 262
+      },
+      {
+        "name": "test_graphs_get_of_an_unknown_graph_or_revision_is_not_found",
+        "line": 282
+      },
+      {
+        "name": "test_a_graph_too_large_to_read_back_is_invalid_argument",
+        "line": 299
+      },
+      {
+        "name": "test_the_largest_graph_apply_accepts_is_read_back_within_1_mib",
+        "line": 309
+      },
+      {
+        "name": "test_graphs_list_ends_a_page_early_to_keep_its_reply_within_1_mib",
+        "line": 320
+      },
+      {
+        "name": "test_a_whole_number_limit_given_as_a_float_pages_like_an_integer",
+        "line": 337
+      },
+      {
+        "name": "test_the_same_name_in_two_projects_is_two_graphs_listed_and_read_apart",
+        "line": 347
+      },
+      {
+        "name": "test_a_list_cursor_is_bound_to_its_project",
+        "line": 369
+      },
+      {
+        "name": "test_every_project_scoped_request_is_authorized_for_its_project",
+        "line": 386
+      },
+      {
+        "name": "test_a_refused_command_neither_reads_nor_keeps_a_receipt",
+        "line": 399
+      },
+      {
+        "name": "test_a_receipt_kept_before_projects_still_replays",
+        "line": 412
+      }
+    ]
+  },
+  {
+    "path": "v2/services/tool_service/README.md",
+    "kind": "documentation",
+    "bytes": 713,
+    "sha256": "707b0216c3b3c34721af8523dc0a50790d242bb88c8a879f8a5470f17ed1cc82",
+    "lines": 11,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/__main__.py",
+    "kind": "source/config",
+    "bytes": 1346,
+    "sha256": "a622075ec26bc9ebcc78a2a13be19aa490dfe33bc94cff15b33da6afd49600f2",
+    "lines": 46,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/persistence/__init__.py",
+    "kind": "source/config",
+    "bytes": 417,
+    "sha256": "f545a8433e65b5cacbe3bd678d76dff924eeba943848b537aba2e9019a3d2b7f",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/persistence/migrations/env.py",
+    "kind": "source/config",
+    "bytes": 239,
+    "sha256": "dfb1922d99858ce58010f7fb0e6c2cfeeef36f27399ca9cf2915dc968f4524f4",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/persistence/migrations/script.py.mako",
+    "kind": "source/config",
+    "bytes": 609,
+    "sha256": "14835395d45370c6d7d45f9a41a864c4a09a48ddc7271961494a613d9d340110",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/persistence/migrations/versions/01c7cfcaaab7_create_tool_invocations.py",
+    "kind": "source/config",
+    "bytes": 3284,
+    "sha256": "f5751f85650f37bc3237d0b788cce6194c49cb3da3fa0c15731357bfa94ac80f",
+    "lines": 71,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/persistence/migrations/versions/39e856077000_create_tools_and_tool_grants.py",
+    "kind": "source/config",
+    "bytes": 3195,
+    "sha256": "dfd193c5a70090aa7bf4dd951fd8ee66d4d1764bcfed4a2635595d0b508c71df",
+    "lines": 74,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/persistence/schema.py",
+    "kind": "source/config",
+    "bytes": 5310,
+    "sha256": "b0cfc029a45440cc52e3be0cf703db3e25d5adbb71c8e418d4bafc6819be6bca",
+    "lines": 110,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 696,
+    "sha256": "c46e7f0c101421f109c45a51fd35228e8269f91f46b81d452626ec355a5ee03f",
+    "lines": 22,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/tests/test_persistence.py",
+    "kind": "test",
+    "bytes": 2051,
+    "sha256": "bce2daa77c5729662e7f4a2da38d6a2d50c15daf6c54d9960d4fde7ca0f56a92",
+    "lines": 53,
+    "tests": [
+      {
+        "name": "test_migrations_match_the_schema",
+        "line": 20
+      },
+      {
+        "name": "test_migrations_create_the_tables_in_two_revisions",
+        "line": 24
+      },
+      {
+        "name": "test_migrations_roll_back",
+        "line": 34
+      },
+      {
+        "name": "test_resources_are_unique_by_namespace_and_name",
+        "line": 41
+      },
+      {
+        "name": "test_there_is_no_store_yet",
+        "line": 48
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/README.md",
+    "kind": "documentation",
+    "bytes": 2918,
+    "sha256": "57b4b093dee89c83857bbfa1a3583c22a2f476ef4f9f1fb82cbf021b2a896e45",
+    "lines": 57,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/__main__.py",
+    "kind": "source/config",
+    "bytes": 7677,
+    "sha256": "965ff3b1889d4007395cfbb3aba2e04c04d29162fe28cfbad4bef620554776b7",
+    "lines": 188,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/application/__init__.py",
+    "kind": "source/config",
+    "bytes": 405,
+    "sha256": "9a6a4f4134ec8c9b54473666c84d9fd101461c4f7c355e4572526b38ec89fe99",
+    "lines": 9,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/application/ports.py",
+    "kind": "source/config",
+    "bytes": 4038,
+    "sha256": "6398e68d420e743cfeb6fc3f33d05190d7a05ae6fc2a280673b7a0e551e88503",
+    "lines": 115,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/application/workspaces.py",
+    "kind": "source/config",
+    "bytes": 3421,
+    "sha256": "dbf08c80bc80eb1ee5d1ac111d4657064cf7c57d93e2d06cade3db6403c1f523",
+    "lines": 74,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/exclusion.py",
+    "kind": "source/config",
+    "bytes": 1806,
+    "sha256": "8593d76b4c66c8d5ce0cf1407cc76c080527bc0830dbf193af40b066491bf291",
+    "lines": 57,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/__init__.py",
+    "kind": "source/config",
+    "bytes": 565,
+    "sha256": "3a05f0aba834919f2afea2a356d1049961ab16ada93a9e49923ff15e03dca87c",
+    "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/env.py",
+    "kind": "source/config",
+    "bytes": 257,
+    "sha256": "065e01195d674eacc0f79b2e1caf639e617aa96f134acd80c39d139dd724281f",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/script.py.mako",
+    "kind": "source/config",
+    "bytes": 609,
+    "sha256": "14835395d45370c6d7d45f9a41a864c4a09a48ddc7271961494a613d9d340110",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/720d08e24193_create_workspaces.py",
+    "kind": "source/config",
+    "bytes": 1345,
+    "sha256": "ea9f205c235dd13929e256f9f698f2d48698af4a721e03f7aa55622817cca828",
+    "lines": 42,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/d8f92154b5f7_add_workspace_locator.py",
+    "kind": "source/config",
+    "bytes": 916,
+    "sha256": "2229ed6da82153d501b5c9f4b39bf233cfb4ea1a44e68de7ca7e8e2cf341d52a",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/postgres/__init__.py",
+    "kind": "source/config",
+    "bytes": 366,
+    "sha256": "6468d428ae1063232875506cdbf4df7eefa01794ed591993a20e8151d3de311a",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/schema.py",
+    "kind": "source/config",
+    "bytes": 1082,
+    "sha256": "0ac9793536045068ba7cfb5c3120e2aa850f9cb4dee8a08e1924104f23ea08d4",
+    "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/sqlite/__init__.py",
+    "kind": "source/config",
+    "bytes": 2813,
+    "sha256": "bee1806b324222b5ad10ca5e8eb3da49f0aa644692bdd92fb803b7e29ae0a1a2",
+    "lines": 68,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/store.py",
+    "kind": "source/config",
+    "bytes": 1456,
+    "sha256": "dbfcf8f3969eab25c1c579c431436d1b5ba5bd49546842f0c767b0f7c212bea8",
+    "lines": 52,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 974,
+    "sha256": "3ed8c6b9b0fe8e23345d534cfe37b9e74c6a2396ba3fc6bbef8dc1ee79355e09",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/fakes.py",
+    "kind": "test",
+    "bytes": 2159,
+    "sha256": "2dbba69793d133bb8081e746665c5656d51927a6f429ce94c85f86a13c07cf95",
+    "lines": 60,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_boundaries.py",
+    "kind": "test",
+    "bytes": 1194,
+    "sha256": "55fd437d5c63dd9aa264c7825bb07c3d9d1ba7bf07a56e9248d12e39c3621a60",
+    "lines": 36,
+    "tests": [
+      {
+        "name": "test_the_application_layer_imports_no_transport_or_storage_library",
+        "line": 27
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_exclusion.py",
+    "kind": "test",
+    "bytes": 957,
+    "sha256": "cbdcb896e443207298f2fc449ed6a57ebd596ae9275405e50fc441523b82a0a2",
+    "lines": 37,
+    "tests": [
+      {
+        "name": "test_a_second_process_cannot_take_an_already_held_lock",
+        "line": 8
+      },
+      {
+        "name": "test_releasing_lets_another_process_take_it",
+        "line": 18
+      },
+      {
+        "name": "test_the_context_manager_releases_on_exit",
+        "line": 28
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_main.py",
+    "kind": "test",
+    "bytes": 2823,
+    "sha256": "c3d0ba25558a2110ba11137bf615b9ab58a73f98e3cc85bae23c374b9d0c4bf6",
+    "lines": 79,
+    "tests": [
+      {
+        "name": "test_capabilities_get_truthfully_reports_no_providers",
+        "line": 34
+      },
+      {
+        "name": "test_a_rejecting_authorizer_prevents_the_handler_from_running",
+        "line": 41
+      },
+      {
+        "name": "test_local_operator_refuses_a_broker_listening_beyond_loopback",
+        "line": 58
+      },
+      {
+        "name": "test_local_operator_allows_a_loopback_broker",
+        "line": 64
+      },
+      {
+        "name": "test_main_fails_startup_rather_than_racing_a_running_vcp_for_the_state_directory",
+        "line": 68
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_persistence.py",
+    "kind": "test",
+    "bytes": 3088,
+    "sha256": "c2d811f63dae9240c647246c562d226991bcee2a5d8747b188214e9bc9f7fbb1",
+    "lines": 78,
+    "tests": [
+      {
+        "name": "test_migrations_match_the_schema",
+        "line": 23
+      },
+      {
+        "name": "test_migrations_roll_back",
+        "line": 27
+      },
+      {
+        "name": "test_tracks_a_workspace_through_its_lifecycle",
+        "line": 34
+      },
+      {
+        "name": "test_recovering_ownership_updates_the_locator",
+        "line": 57
+      },
+      {
+        "name": "test_postgres_store_is_a_stub",
+        "line": 74
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_provider_conformance.py",
+    "kind": "test",
+    "bytes": 3854,
+    "sha256": "3364fbcb85f87e8a5eae44e03fa525dff6fac03c050fd8b0e71941f730958e2e",
+    "lines": 100,
+    "tests": [
+      {
+        "name": "test_create_persists_the_providers_locator_and_becomes_ready",
+        "line": 35
+      },
+      {
+        "name": "test_ownership_survives_a_restart",
+        "line": 54
+      },
+      {
+        "name": "test_destroy_releases_the_workspace_through_its_own_provider",
+        "line": 84
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_workspaces_service.py",
+    "kind": "test",
+    "bytes": 3820,
+    "sha256": "8136431e0ce8899d8f9255784f886b31d7e9a5638fb90f9852f09d5a4917e67e",
+    "lines": 102,
+    "tests": [
+      {
+        "name": "test_creating_an_unregistered_provider_fails_explicitly",
+        "line": 25
+      },
+      {
+        "name": "test_recovering_with_only_a_different_provider_registered_fails_rather_than_switching",
+        "line": 40
+      },
+      {
+        "name": "test_recovering_an_unavailable_provider_fails_rather_than_reducing_isolation",
+        "line": 65
+      },
+      {
+        "name": "test_destroying_an_unregistered_provider_fails_explicitly",
+        "line": 88
+      }
+    ]
+  },
+  {
+    "path": "v2/services/workspace_daemon/README.md",
+    "kind": "documentation",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lines": 0,
+    "tests": []
+  },
+  {
+    "path": "v2/uv.lock",
+    "kind": "source/config",
+    "bytes": 221970,
+    "sha256": "183359774560eac2ecde81a6d567cb9b4b37cd01ba5712bb25ec8ca88862a9eb",
+    "lines": 1191,
+    "tests": []
+  }
+]

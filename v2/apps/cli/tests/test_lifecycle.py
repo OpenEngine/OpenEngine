@@ -121,7 +121,9 @@ def test_up_starts_the_virtual_control_plane_by_default(oe, tmp_path: Path) -> N
     raw = oe("logs", "--json")
     boot = [json.loads(line) for line in raw.stdout.splitlines() if '"service.name": "openengine-vcp"' in line]
     bodies = [line["body"] for line in boot]
-    assert bodies[:3] == ["starting", "state directory owned", "database configured"]
+    assert bodies[:2] == ["starting", "state directory owned"]
+    # Like ge, vcp brings its database to head before connecting; Alembic logs in between.
+    assert bodies.index("database migrated") < bodies.index("nats connected")
     assert "nats connected" in bodies
     assert bodies[-1] == "ready"
     assert (tmp_path / "state" / "openengine" / "vcp").is_dir()
@@ -153,9 +155,10 @@ def test_migrate_creates_the_databases_and_streams_once_and_updates_drifted_ones
     first = oe("migrate")
     assert first.returncode == 0, first.stderr
     databases, streams = first.stdout.split("\n\n")
-    # GE brings its own database to head as it starts, so only the others are new.
-    assert databases.count("created") == 3
-    assert next(line for line in databases.splitlines() if line.startswith("ge ")).endswith("unchanged")
+    # GE and VCP bring their own databases to head as they start, so only the others are new.
+    assert databases.count("created") == 2
+    for service in ("ge", "vcp"):
+        assert next(line for line in databases.splitlines() if line.startswith(f"{service} ")).endswith("unchanged")
     assert streams.count("created") == 6
     assert "cxn-ingress" in streams
     for service in ("cxn", "ge", "tools", "vcp"):

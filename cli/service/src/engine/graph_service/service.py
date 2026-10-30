@@ -612,9 +612,15 @@ class GraphService:
         return False
 
     def workflows(self) -> tuple[GraphWorkflow, ...]:
-        """The latest usable graph definitions, for the WorkOrder form."""
+        """The latest usable graph definitions, for the WorkOrder form.
+
+        The label names the project. Starters are registered as ``review v1``
+        in every repository, and this list is every project's graphs at once,
+        so the project is what tells two of them apart.
+        """
         return tuple(
-            loaded.workflow for graph in self.store.graphs(None)
+            replace(loaded.workflow, name=f"{graph.project} · {loaded.workflow.name}")
+            for graph in self.store.graphs(None)
             if (loaded := self._loaded.get(graph.latest_version_id)) is not None
         )
 

@@ -30,3 +30,35 @@ sa.Index(
     sa.func.json_extract(documents["workspaces"].c.body, sa.literal_column("'$.legacy.status'")),
     sqlite_where=sa.text("json_type(body, '$.legacy') = 'object'"),
 )
+
+# Public events committed with the lifecycle records that caused them. `sequence`
+# orders publication; event IDs are opaque and do not. `published_at` stays NULL
+# until JetStream acknowledges the event.
+outbox = sa.Table(
+    "outbox",
+    metadata,
+    sa.Column("sequence", sa.Integer(), primary_key=True),
+    sa.Column("workspace_id", sa.String(128), nullable=False),
+    sa.Column("event_id", sa.String(128), nullable=False),
+    sa.Column("envelope", sa.JSON(), nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Index("ix_outbox_event_id", "event_id", unique=True),
+    sa.Index("ix_outbox_pending", "sequence", sqlite_where=sa.text("published_at IS NULL")),
+    sa.Index("ix_outbox_workspace_pending", "workspace_id", "sequence", sqlite_where=sa.text("published_at IS NULL")),
+    comment="Immutable public event envelopes awaiting or recording JetStream publication.",
+    sqlite_autoincrement=True,
+)
+
+# Unfinished lifecycle operations: accepted (`pending`) or claimed by the worker
+# (`running`) when it last ran. Restart resumes both with the same ownership.
+sa.Index(
+    "ix_operations_active", documents["operations"].c.key,
+    sqlite_where=sa.text("json_extract(body, '$.snapshot.status') IN ('pending', 'running')"),
+)
+
+sa.Index("ix_workspaces_name", sa.literal_column("json_extract(body, '$.snapshot.name')"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_page", sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_provider_page", sa.literal_column("json_extract(body, '$.snapshot.provider')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_state_page", sa.literal_column("json_extract(body, '$.snapshot.state')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_job_page", sa.literal_column("json_extract(body, '$.snapshot.labels.job_id')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])

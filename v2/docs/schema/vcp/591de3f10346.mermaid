@@ -1,0 +1,39 @@
+---
+title: vcp at 591de3f10346 (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% REMOVED tables/columns are tombstones, absent from this revision's schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    command_receipts["command_receipts<br/>Immutable command identity and original response for idempotent replay."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    operations["operations<br/>Accepted commands' progress and terminal state. (CHANGED)"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    class operations changed
+    outbox["outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication. (CHANGED)"] {
+        INTEGER sequence PK "not null"
+        VARCHAR(128) workspace_id "not null"
+        VARCHAR(128) event_id "not null"
+        JSON envelope "not null"
+        DATETIME created_at "not null"
+        DATETIME published_at "nullable"
+    }
+    class outbox changed
+    workspace_runtimes["workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    workspaces["workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }

@@ -1,6 +1,6 @@
 # OpenEngine
 
-**Define your software development lifecycle as a graph. Run every change through it on the Claude Code and Codex subscriptions you already have. Get back a reviewed pull request.**
+**Define your development workflows as graphs. Run them on loops, across your own machines, on the Claude Code and Codex subscriptions you already have.**
 
 [![GitHub stars](https://img.shields.io/github/stars/OpenEngine/OpenEngine?style=flat&logo=github&label=stars)](https://github.com/OpenEngine/OpenEngine/stargazers)
 [![npm](https://img.shields.io/npm/v/%40openengine.cc%2Fengine?logo=npm&label=npm)](https://www.npmjs.com/package/@openengine.cc/engine)
@@ -9,11 +9,14 @@
 [![Docs](https://img.shields.io/badge/docs-openengine.cc-blue)](https://openengine.cc/docs/)
 [![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
 
-Coding agents are fast. The hard part is making their output trustworthy every time, not just when you are watching. OpenEngine is an open-source software factory: you write your lifecycle once as a graph (implement, wait for CI, fan out adversarial reviewers, rerank the findings, fix, open the PR), and OpenEngine runs every change through it, on demand or on a schedule. Add a security reviewer to the graph once and it checks every change from then on.
+Coding agents are fast. The hard part is making their output trustworthy when nobody is watching. OpenEngine is an open-source software factory built around graphs and loops:
 
-![OpenEngine lifecycle graph: implement, run CI, review in parallel, rerank, and open a pull request](docs/images/oe_land.png)
+https://github.com/user-attachments/assets/03cf2b5d-1c63-4487-85bd-f3943c98ac2c
 
-▶ [Watch the walkthrough](docs/images/oe-graphs-and-loops.mp4): graphs, loops, and what OpenEngine does on GitHub, in 90 seconds.
+- **Graphs for the work you repeat.** A graph is a YAML or Python file: the steps, their prompts, and which agent runs each one. Implement-and-review, fixing Dependabot PRs whose CI failed, grooming issues, a nightly security review. Review steps can require a different agent than the one that wrote the code, which makes the review adversarial by construction. Graphs are versioned, so a change to the process is reviewed like a change to the code.
+- **Loops that keep it going.** A loop runs a graph on a schedule, inside limits on spend and open pull requests, and pauses with a reason when it hits one. Each run reports what it did or why it skipped.
+- **Your hardware, your agents.** Every machine running `oe daemon` is a backend, and one `oe` CLI switches between them, so tens or hundreds of loops can run across a Mac mini under the desk, a Linux box in the rack, or a cloud VM. Agents are the coding CLIs you already have: Claude Code, Codex, OpenCode, or local models through Ollama.
+- **Work continues while your laptop is closed.** Loops run on the daemon's machine, not yours. Assign an issue to OpenEngine to start a run, @-mention it on a pull request to steer one, and come back to pull requests with adversarial findings and an impact rating already posted.
 
 ## Try it in two minutes
 

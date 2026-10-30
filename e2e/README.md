@@ -85,22 +85,33 @@ npm run oe-benchmark:clean   # delete everything the last run left, once you hav
 It needs Docker. The journey happens on a clean Linux machine, a container built from
 `benchmark/Dockerfile` (the first run builds it, then Docker keeps it): every terminal in the guide
 is a shell inside it, so a screenshot shows nothing of your own setup, and nothing the run installs
-or starts touches your computer. Your GitHub, Claude and Codex logins are mounted into it
-read-only and copied in, so a token the container refreshes never changes yours.
+or starts touches your computer. Your GitHub login is mounted into it read-only and copied in, so a
+token the container refreshes never changes yours.
+
+Sign in once with `npm run oe-benchmark:login`. It skips whatever is already signed in. For GitHub it checks
+`gh` (in `GH_CONFIG_DIR`, if set) and, if needed, signs in with the token kept in a file rather than the system
+keyring, which the container can't read. Claude and Codex are signed in inside Docker, by running
+`claude auth login` and `codex login --device-auth` in the image. Each prints a link to open in a browser
+and asks for the code it gives back. The logins are kept in two Docker volumes (`oe-bench-claude` and
+`oe-bench-codex`) that every run mounts, so you sign in once, and they never touch your own Claude or Codex
+login: on a Mac yours is in the keychain, which couldn't be copied anyway. A run stops at its start, not
+minutes in, if either is missing. `npm run oe-benchmark:clean -- --logins` forgets them. This is for running on your own machine: the sign-in is interactive and a subscription's token expires, so a CI job would need
+API keys for the runners instead, which the benchmark does not support yet.
 
 It runs as the account `gh` is logged in as, and the terminal steps must be signed in as the same
-account: if your `gh` or `claude` picks its account by directory, set `GH_CONFIG_DIR` and
-`CLAUDE_CONFIG_DIR` to the config directories to use for the run, for example
-`GH_CONFIG_DIR=~/.config/gh-work CLAUDE_CONFIG_DIR=~/.claude-work npm run oe-benchmark`. The
-benchmark stops before creating anything if the two GitHub accounts disagree. The token needs the
-`delete_repo` scope (`gh auth refresh -s delete_repo`). A setup project runs first: it deletes the
+account: if your `gh` picks its account by directory, set `GH_CONFIG_DIR` to the config directory to use
+for the run, for example `GH_CONFIG_DIR=~/.config/gh-work npm run oe-benchmark`. The
+benchmark stops before creating anything if the two GitHub accounts disagree. The token needs the `repo`, `workflow` and
+`delete_repo` scopes (`gh auth refresh -h github.com -s workflow,delete_repo`), and the run checks them
+before it creates anything. `workflow` is there because the issues add workflow files, and GitHub refuses a push
+of one without it. A setup project runs first: it deletes the
 `oe-bench` repository, its Pages site and the last run's container, then starts a new container. It
 never touches a repository whose name doesn't start with `oe-bench` or that lacks the `oe-bench`
 topic. After the run, pass or fail, a global teardown removes the container, and with it the tunnel
 and daemon, but deletes no repository, so a failed run's repository is left to inspect.
 
 At the end of a run it prints what the run noted about itself (the OpenEngine commit it tested, how long the
-install took, whether the webhook ping had to be sent twice), and the same notes are in
+install took, how long GitHub took to list the webhook ping), and the same notes are in
 `benchmark-results/results.json`, for whatever reads the results next. A test adds a note with
 `testInfo.annotations.push({ type, description })`.
 

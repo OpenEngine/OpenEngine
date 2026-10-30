@@ -53,9 +53,11 @@ front and collected as the run goes, not a step of its own.
 6. **Run `tdd-guide`** on the milestone until it is done, through both CLI entry
    points:
    1. **One run.** Work the first issue with `oe graph run tdd-guide --repo
-      PATH -i milestone=NAME --trust`, so a single run is covered end to end.
-      `--repo` takes the local clone (or a configured name), not `OWNER/REPO`,
-      and `--trust` lets agents run commands without asking.
+      PATH -i milestone=NAME`, so a single run is covered end to end.
+      `--repo` takes the local clone (or a configured name), not `OWNER/REPO`.
+      Trust is granted when the repository is added, with `oe repo add
+      --backend onboarding --trust`: a daemon behind a service token refuses a
+      trust write made with that token (#1223), so `graph run` takes no `--trust`.
    2. **A loop.** Then `oe loop add tdd-guide` with `--every` short enough to
       keep the run moving (the graph's default is 1h), and `--max-spend` and
       `--max-prs` as the budget cap. The loop works the rest of the milestone.
@@ -197,13 +199,16 @@ inspects the run, cost and per-node tokens.
   `workflow_dispatch` workflow or locally.
 - Each run has a **budget cap** (dollars and wall-clock). Hitting a cap kills the
   run and records a failure, so a stuck run cannot burn money without limit.
-- Runners are fixed for now, set through `tdd-guide`'s inputs: Claude for
-  planning and review (`runner`, which picks the issue and writes the tests, and
-  `reviewer`), Codex for implementation and reranking (`implementer` and
-  `reranker`). Comparing other runners comes later.
+- Runners are fixed for now, set through the graph's inputs: Claude picks the
+  issue, writes the tests and implements (`runner` and `implementer`), and Codex
+  reviews and consolidates (`reviewer` and `reranker`), so neither model reviews
+  its own work and neither subscription takes all of the load. Comparing other
+  runners comes later.
 - Results are noisy, so run several trials and compare medians.
-- Credentials: the GitHub account `gh` is logged in as, with `repo` and
-  `delete_repo` scopes, and model credentials for the runners under test.
+- Credentials: the GitHub account `gh` is logged in as, with `repo`,
+  `workflow` and `delete_repo` scopes, and model credentials for the runners under test.
+  The runners sign in with subscriptions, once, by hand (`npm run oe-benchmark:login`), so the benchmark runs on a
+  machine that stays signed in and not yet in CI: a CI job would need API keys, and the benchmark does not support them.
 
 ### Release gate
 
@@ -396,11 +401,19 @@ container, which also stops the tunnel.
   host's are macOS programs a Linux container cannot run. It holds nothing of
   OpenEngine, which the journey clones and installs from `main`, timed apart
   from the run and recorded with its SHA.
-- Logins are mounted read-only and copied to where a person's own would be: the
-  `gh` config directory, Claude's `.credentials.json` and `.claude.json`, and
-  Codex's `auth.json`. A token the container refreshes never changes the
-  host's. `[claude] config_dir` and `[github] gh_config_dir` exist, but the
-  defaults suffice once the logins are where a new user's would be.
+- GitHub's login is mounted read-only and copied to where a person's own would be
+  (the `gh` config directory holds its token on disk). Claude's and Codex's
+  cannot be copied: a subscription login on a Mac is in the keychain, and the
+  `.credentials.json` left beside it goes stale (its refresh token dies), so a
+  copy fails at the first agent step with "OAuth session expired" even though
+  `oe doctor` finds a login file. They are made once inside Docker
+  (`npm run oe-benchmark:login`) and kept in two volumes that every run mounts,
+  so the tokens and their refreshes stay out of the host. A run stops at its
+  start if either is missing. API keys would sign in with no person at all, but
+  `oe daemon start` gives the daemon a fixed environment, so a key would have
+  to go through Claude's `apiKeyHelper` setting and `codex login --with-api-key`,
+  and runs would bill the API, not the subscription. `[claude] config_dir` and
+  `[github] gh_config_dir` exist, but the defaults suffice.
 - `oe agents` lists runners but not whether they are signed in, and `oe agent
   signin` waits for a person. `oe doctor` runs `claude auth status` and reports
   it without prompting; it does not check Codex, so the journey runs `codex
@@ -435,6 +448,26 @@ container, which also stops the tunnel.
   releases issues rely on would sometimes not hold.
 - The repository webhook, not a GitHub App, connects the repository, as the
   #1137 findings decided; its steps are unchanged.
+
+### Driver and cost findings (#1145)
+
+- **The full `tdd-guide` is too expensive to run over a whole milestone, even on the cheapest models.** Each issue
+  takes about 15 agent sessions before a person approves it (seven reviewers, reproduction, consolidation, impact
+  analysis) and up to three more rounds of the review on top. A run of fifteen issues used up a Claude session
+  limit after four merged issues on `haiku`. The daemon's dollar estimate for a subscription run is a few cents, so
+  the spend caps do not trip; the per-run minute cap is the one that works.
+- **The guide makes its own graph.** It copies `tdd-guide` and edits the copy in vim: it renames it, drops the Guides
+  and Docs build reviewers, merges the other angles into one `quality` reviewer beside `security` (which stays
+  separate because "Reproduce security findings" reads only the `security` facet). That is about 10 sessions an issue,
+  and it shows readers how to make a graph that fits them. The rework caps stay as shipped: with the review rework
+  cut to one round, a run that spent its visit on a wrong CI fix reached human review with red CI and the reviewers'
+  finding (GitHub's merge commit failing a commit-message test) unaddressed. The benchmark clones `main`, so it tests the shipped graph through those edits.
+- **No starter repository.** The calculator is built from nothing, in whatever stack the agents choose. A scaffold or a
+  fixed stack (React, Playwright, test2doc, Docusaurus) would cut the run, but it is a repository to maintain and it
+  hides what OpenEngine picks on its own. Revisit after there is a baseline.
+- **The driver** (`support/driver.ts`) approves each run's human review once the pull request's checks are green,
+  merges it, merges release pull requests, closes issues a merged pull request left open, and records provider usage
+  limits as `rate-limited` rather than failures. GitHub's issue listing lags, so it stops only after three empty readings in a row.
 
 ### Decision: the real run feeds the committed guide
 

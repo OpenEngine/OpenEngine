@@ -21,7 +21,7 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 | Defined here | Implemented |
 | -- | -- |
 | Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.control.graphs.apply`, `oe.v1.ge.query.graphs.list`, `oe.v1.ge.query.graphs.{graph_id}.get` and `oe.v1.ge.query.operations.{operation_id}.get`, and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
-| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. Nothing publishes to them yet. |
+| Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes committed events from its transactional outbox to `vcp-events`, but no lifecycle handler produces any yet; nothing publishes to the others. |
 | Operation, job, execution, workspace, session and approval models | GE records `graphs.apply` operations, graph revisions and command receipts, each scoped to a project (`default` unless a request names one; a project name grants no authorization by itself). Nothing else implements them. |
 | Tool, grant, policy and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
 | Tool authorization in Cedar (a grant's `when` and the operator's `forbid` policies) | `authorization.py` in the tool service: the Cedar schema, the condition and ceiling checks, and the decision. No service code calls it yet. |
@@ -226,6 +226,10 @@ and the operation's typed `payload`.
   authentication or a verified delegation, never from a payload field.
   Envelopes are closed, so an `actor` or tenant field is rejected. See
   [Tenants](#tenants).
+  Inside a tenant, a workspace's identity is the NATS user credential VCP
+  issues for one task attempt. It carries the workspace and `stepAttemptId`
+  as claims, so tool invocations name neither. See the tool service and VCP
+  contracts.
 
 ### Causal paths
 

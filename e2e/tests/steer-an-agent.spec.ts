@@ -4,7 +4,7 @@ import type { Locator, TestInfo } from "@playwright/test"
 import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { screenshot } from "@test2doc/playwright/screenshots"
 import { test, expect, type Engine } from "../fixtures/engine.ts"
-import type { Terminal } from "../fixtures/terminal.ts"
+import { LABEL_ROOM, type Terminal } from "../fixtures/terminal.ts"
 import { graphsCategory } from "./docCategories"
 
 test.use({ terminalSession: { cols: 200, rows: 40 } })
@@ -69,17 +69,23 @@ function step(text: string, body: () => Promise<void> = async () => {}) {
   return test.step(`\n${text}\n`, body)
 }
 
-/** Screenshot the screen down to its last row in use once it has stopped changing, with `highlight` labelled. */
-async function show(filename: string, terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string) {
+/**
+ * Screenshot the screen down to its last row in use once it has stopped changing, with `highlight` labelled.
+ * With `through`, stop at that row instead: what follows it differs from one computer to the next.
+ */
+async function show(filename: string, terminal: Terminal, engine: Engine, testInfo: TestInfo, highlight: Locator, label: string,
+  { through }: { through?: Locator } = {}) {
   await terminal.waitForQuiet()
   await expect(terminal.screen()).not.toContainText(`:${new URL(engine.url).port}`)
   // The page is the same on every run: no path on this computer may show.
   await expect(terminal.screen()).not.toContainText(path.basename(engine.root))
   await expect(terminal.screen()).not.toContainText("/engine-workspaces/")
-  const area = await terminal.usedArea()
+  const used = await terminal.usedArea()
+  const last = through && (await through.boundingBox())!
+  const area = last ? { ...used, height: last.y + last.height - used.y } : used
   // Anchor the label beneath all output, independently of the highlighted rows.
   const anchor = terminal.page.locator("#guide-label-anchor")
-  await terminal.page.evaluate(({ x, y, width, height }) => {
+  await terminal.page.evaluate(({ x, y, width, height, room, cover }) => {
     const element = document.createElement("div")
     element.id = "guide-label-anchor"
     Object.assign(element.style, {
@@ -87,7 +93,16 @@ async function show(filename: string, terminal: Terminal, engine: Engine, testIn
       width: `${width}px`, height: "1px", pointerEvents: "none",
     })
     document.body.append(element)
-  }, area)
+    if (!cover) return
+    // Blank out the rows below `through`, where the label goes.
+    const blank = document.createElement("div")
+    blank.id = "guide-label-room"
+    Object.assign(blank.style, {
+      position: "fixed", left: `${x}px`, top: `${y + height}px`, width: `${width}px`, height: `${room}px`,
+      background: getComputedStyle(document.body).backgroundColor, pointerEvents: "none",
+    })
+    document.body.append(blank)
+  }, { ...area, room: LABEL_ROOM, cover: Boolean(through) })
   try {
     await screenshot(testInfo, [
       { target: highlight },
@@ -95,9 +110,11 @@ async function show(filename: string, terminal: Terminal, engine: Engine, testIn
         text: label, position: "below", showArrow: false,
         highlightStrokeStyle: "transparent", highlightFillStyle: "transparent",
       } } },
-    ], { annotation: { filename }, clip: await terminal.usedArea({ labelBelow: true }) })
+    ], { annotation: { filename }, clip: { ...area, height: area.height + LABEL_ROOM } })
   } finally {
-    await anchor.evaluate((element) => element.remove())
+    await terminal.page.evaluate(() => {
+      for (const id of ["guide-label-anchor", "guide-label-room"]) document.getElementById(id)?.remove()
+    })
   }
 }
 
@@ -331,8 +348,9 @@ You'll see one row for each agent. **NAME** is what a graph calls it, and **KIND
             for (const name of ["claude", "codex", "opencode"]) {
               expect(output).toMatch(new RegExp(`^${name}\\s+${name}\\s.*built in$`, "m"))
             }
-            await show("steer-an-agent__terminal--agents.png", terminal, engine, testInfo, await terminal.rows(/^NAME\s+KIND\s/, /^opencode\s+opencode\s/),
-              "The agents your graphs can use")
+            // The details below the table name where each assistant is installed on this computer.
+            const table = await terminal.rows(/^NAME\s+KIND\s/, /^opencode\s+opencode\s/)
+            await show("steer-an-agent__terminal--agents.png", terminal, engine, testInfo, table, "The agents your graphs can use", { through: table })
           },
         )
 

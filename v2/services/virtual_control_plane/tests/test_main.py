@@ -1,6 +1,6 @@
 """`virtual_control_plane.__main__`'s wiring: authorization runs before any handler,
-a non-loopback broker is refused even though VCP dialed it over loopback, the one
-query it serves is answered truthfully, and the state directory lock turns a second
+a non-loopback broker is refused even though VCP dialed it over loopback, the
+capabilities query is answered truthfully, and the state directory lock turns a second
 process into a reported startup failure rather than a silent race."""
 
 from __future__ import annotations
@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from openengine.messaging import LocalOperator, Request, Server, ServiceError, envelopes
+from openengine.messaging import LOCAL_TENANT, LocalOperator, Principal, Request, Server, ServiceError, envelopes
 
 from virtual_control_plane import __main__ as vcp
+from virtual_control_plane.application.lifecycle import Lifecycle
 from virtual_control_plane.exclusion import StateDirectory
 
 LOOPBACK = "nats://127.0.0.1:4222"
@@ -21,7 +22,7 @@ LOOPBACK = "nats://127.0.0.1:4222"
 
 def _send(subject: str, body: Any, *, authorizer=None, listener: str = LOOPBACK) -> dict[str, Any]:
     server = Server(
-        None, "vcp", listener, queries=vcp.QUERIES,
+        None, "vcp", listener, queries=Lifecycle(None, {}).queries(),
         **({"authorizer": authorizer} if authorizer is not None else {}),
     )
     data = json.dumps(body).encode()
@@ -29,7 +30,7 @@ def _send(subject: str, body: Any, *, authorizer=None, listener: str = LOOPBACK)
 
 
 class _Rejecting:
-    def authorize(self, request: Request) -> None:
+    def authorize(self, request: Request) -> Principal:
         raise ServiceError("PERMISSION_DENIED", "no")
 
 
@@ -48,7 +49,7 @@ def test_a_rejecting_authorizer_prevents_the_handler_from_running(monkeypatch: p
         called = True
         return {"providers": []}
 
-    monkeypatch.setitem(vcp.QUERIES, "capabilities.get", vcp.Route(spy, vcp.QUERIES["capabilities.get"].schema))
+    monkeypatch.setattr(Lifecycle, "capabilities", staticmethod(spy))
 
     reply = _send("oe.v1.vcp.query.capabilities.get", {"params": {}}, authorizer=_Rejecting())
 
@@ -63,8 +64,10 @@ def test_local_operator_refuses_a_broker_listening_beyond_loopback() -> None:
     assert reply["error"]["code"] == "PERMISSION_DENIED"
 
 
-def test_local_operator_allows_a_loopback_broker() -> None:
-    LocalOperator().authorize(Request("oe.v1.vcp.query.capabilities.get", "query", "capabilities.get", {}, LOOPBACK))
+def test_local_operator_allows_a_loopback_broker_as_the_local_tenant() -> None:
+    principal = LocalOperator().authorize(Request("oe.v1.vcp.query.capabilities.get", "query", "capabilities.get", {}, LOOPBACK))
+
+    assert principal == Principal(LOCAL_TENANT)
 
 
 def test_main_fails_startup_rather_than_racing_a_running_vcp_for_the_state_directory(
@@ -77,3 +80,19 @@ def test_main_fails_startup_rather_than_racing_a_running_vcp_for_the_state_direc
         assert vcp.main() == vcp.EXIT_FAILED
     finally:
         holder.release()
+
+
+def test_providers_are_configured_from_the_environment_and_default_to_none() -> None:
+    from virtual_control_plane.providers.smolvm import Smolvm
+
+    assert vcp.providers({}) == {}
+
+    configured = vcp.providers({vcp.SMOLVM_IMAGE_VARIABLE: "example.test/image:1",
+                                vcp.SMOLVM_TOOLS_VARIABLE: "git,terminal,browser,",
+                                vcp.SMOLVM_EXECUTABLE_VARIABLE: "/opt/smolvm/bin/smolvm"})
+
+    [(name, adapter)] = configured.items()
+    assert name == "smolvm" and isinstance(adapter, Smolvm)
+    assert (adapter.image, adapter.executable) == ("example.test/image:1", "/opt/smolvm/bin/smolvm")
+    assert adapter.capabilities["tools"] == ["git", "terminal", "browser"]
+    assert vcp.providers({vcp.SMOLVM_IMAGE_VARIABLE: "img"})["smolvm"].capabilities["tools"] == ["git", "terminal"]

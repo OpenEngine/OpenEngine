@@ -1,56 +1,24 @@
 /**
- * The calculator's issues, in the order they are worked: each one depends on the one before it.
+ * The calculator's issues, in the order they are worked: each one depends on the one before it. The first sets up the project, so the rest are worked inside it.
  * `description` is the paragraphs above the acceptance criteria, and `criteria` the checklist.
  */
 export const issues: { title: string; description: string[]; criteria: string[] }[] = [
   {
-    title: "Check commit messages and pull request titles",
+    title: "Set up the project",
     description: [
-      "The project's changelog and version numbers will be built from its commit messages, so they must follow the [Conventional Commits](https://www.conventionalcommits.org/) format, like `feat: add a square root key` or `fix: show Error on divide by zero`. Every pull request from now on, including this one, needs a title in that format.",
-      "When a pull request is squash-merged, GitHub uses the pull request's title as the commit message, so the title matters most. Add a GitHub Actions workflow of its own, in `.github/workflows/`, that fails when a pull request's title, or any of its commits, does not follow the format. There is no code to test yet, so this workflow only checks the messages.",
+      "Set up the calculator project so that everything after it has a place to go: a first page, tests, checks that run on GitHub, and publishing. The calculator itself comes in the next issues.",
+      "Create a very small web page that works with no server, so it can be published as plain files. Choose any simple way of building it. The page only needs a heading that reads `Calculator`; nothing else yet.",
+      "The project's changelog and version numbers will be built from its commit messages, so they must follow the [Conventional Commits](https://www.conventionalcommits.org/) format, like `feat: add a square root key` or `fix: show Error on divide by zero`. When a pull request is squash-merged, GitHub uses the pull request's title as the commit message, so the title matters most. Add a GitHub Actions workflow of its own that fails when a pull request's title, or any of its commits, does not follow the format. GitHub checks a pull request out as a merge commit it makes itself, called `Merge <sha> into <base>`; that commit is not the author's, so the check must ignore it.",
+      "Add a GitHub Actions workflow that runs the project's tests on every pull request and on every push to the default branch. GitHub's runners do not have the same software as the machine you build on. Run the tests there with the same version of the language runtime that you run them with locally (check its `--version`), so a test that passes here passes in CI.",
+      "GitHub Pages is already turned on for this repository, with GitHub Actions as its source. Do not change the repository's settings. Add a workflow that publishes the page whenever the default branch changes.",
     ],
     criteria: [
-      "The check runs on every pull request.",
-      "A title such as `Add a square root key` fails the check, and `feat: add a square root key` passes.",
-      "The pull request that adds the check has a valid title and passes.",
-    ],
-  },
-  {
-    title: "Scaffold the calculator page",
-    description: [
-      "Create the calculator as a small web page that works with no server, so it can be published as plain files. Choose any simple way of building it.",
-      "This issue is only the look of the page; none of the keys do anything yet.",
-      "The page shows a display and these keys, each labelled exactly as written: `0` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `±` `+` `-` `×` `÷` `=` `C`. The display is visible text.",
-    ],
-    criteria: [
-      "The page opens in a browser with the display and every key above on screen.",
-      "The display shows `0` when the page first opens.",
-      "There is an automated test that checks the display and every key are on the page, and one command runs the project's tests.",
-    ],
-  },
-  {
-    title: "Run the tests in CI",
-    description: [
-      "Run the calculator's automated tests on GitHub, so a broken change is caught before it is merged.",
-      "Add a GitHub Actions workflow that runs the project's tests on every pull request and on every push to the default branch.",
-    ],
-    criteria: [
-      "A workflow in `.github/workflows/` runs the tests on pull requests and on pushes to the default branch.",
-      "The workflow fails when a test fails, and passes when they all pass.",
-      "The pull request that adds it shows the workflow passing.",
-    ],
-  },
-  {
-    title: "Publish the calculator to GitHub Pages",
-    description: [
-      "Publish the calculator so anyone can use it at a web address.",
-      "GitHub Pages is already turned on for this repository, with GitHub Actions as its source. Do not change the repository's settings. Add a workflow that publishes the calculator whenever the default branch changes.",
-    ],
-    criteria: [
-      "A workflow in `.github/workflows/` builds the calculator and publishes it to GitHub Pages on every push to the default branch.",
-      "After the pull request that adds it is merged, the calculator opens at the repository's GitHub Pages address (`https://<owner>.github.io/<repository>/`), with the display and every key on screen.",
-      "The page there matches the one in the repository: the display shows `0`.",
-      "Every later merge to the default branch publishes the new version.",
+      "The page opens in a browser and shows the heading `Calculator`.",
+      "There is an automated test that checks the page has that heading, and one command runs the project's tests.",
+      "A workflow in `.github/workflows/` runs the tests on pull requests and on pushes to the default branch. It fails when a test fails, passes when they all pass, and uses the same runtime version as the one the tests run with locally.",
+      "A workflow checks commit messages and pull request titles on every pull request: a title such as `Add a square root key` fails it, `feat: add a square root key` passes, and GitHub's own merge commit is ignored.",
+      "A workflow in `.github/workflows/` publishes the page to GitHub Pages on every push to the default branch. Once the pull request is merged, the page opens at the repository's GitHub Pages address (`https://<owner>.github.io/<repository>/`) with the `Calculator` heading.",
+      "The pull request that sets this up has a title in the commit message format and shows every workflow passing.",
     ],
   },
   {
@@ -80,14 +48,18 @@ export const issues: { title: string; description: string[]; criteria: string[] 
     ],
   },
   {
-    title: "Type numbers with the digit keys",
+    title: "Type numbers",
     description: [
-      "Make the digit keys `0` to `9` work, so a number can be typed into the display. The other keys come in the next issues.",
-      "Each example starts from a freshly loaded page, since the `C` key comes in a later issue.",
+      "Add the keys for typing a number into the display: `0` `1` `2` `3` `4` `5` `6` `7` `8` `9` and `.`. Add them to the page as buttons labelled exactly as written, with a display above them that is visible text. The other keys come in the next issues.",
+      "Numbers on the display show at most four decimal places, and no trailing zeros. Each example starts from a freshly loaded page, since the `C` key comes in a later issue.",
     ],
     criteria: [
+      "The display shows `0` when the page first opens.",
       "Pressing `7` shows `7`, and then pressing `2` shows `72`.",
       "A number does not start with a leading zero: `0` then `7` shows `7`, and `0` then `0` shows `0`.",
+      "`0` `.` `5` shows `0.5`, and `3` `.` `1` `4` shows `3.14`.",
+      "Pressing `.` first shows `0.`, and typing `5` after it shows `0.5`.",
+      "A number only takes one point: `1` `.` `.` `5` shows `1.5`, and `1` `.` `5` `.` `2` shows `1.52`.",
       "The display shows what was typed and nothing else: no extra text or spaces.",
       "Automated tests cover each example, reloading the page before each one.",
     ],
@@ -100,51 +72,23 @@ export const issues: { title: string; description: string[]; criteria: string[] 
     criteria: [
       "After typing `7` `2`, pressing `C` shows `0`.",
       "After pressing `C`, typing `5` shows `5`, with no leftover digits.",
-      "Pressing `C` on a display that already shows `0` leaves it at `0`.",
-      "The digit keys still work as before.",
-      "Automated tests cover each example.",
-    ],
-  },
-  {
-    title: "Type decimal numbers",
-    description: [
-      "Add a `.` key, so numbers with a fraction can be typed. The other operations come in the next issues.",
-      "Numbers on the display show at most four decimal places, and no trailing zeros.",
-    ],
-    criteria: [
-      "`0` `.` `5` shows `0.5`.",
-      "`3` `.` `1` `4` shows `3.14`.",
-      "Pressing `.` first shows `0.`, and typing `5` after it shows `0.5`.",
-      "A number only takes one point: `1` `.` `.` `5` shows `1.5`, and `1` `.` `5` `.` `2` shows `1.52`.",
       "`C` clears a number with a point, and the next number starts without one: `1` `.` `5` `C` `2` shows `2`.",
+      "Pressing `C` on a display that already shows `0` leaves it at `0`.",
+      "The keys for typing numbers still work as before.",
       "Automated tests cover each example.",
     ],
   },
   {
-    title: "Add numbers",
+    title: "Add and subtract numbers",
     description: [
-      "Make the `+` and `=` keys work.",
+      "Make the `+`, `-` and `=` keys work, adding them to the page as buttons labelled exactly as written.",
     ],
     criteria: [
-      "`1` `+` `1` `=` shows `2`.",
-      "`12` `+` `30` `=` shows `42`.",
+      "`1` `+` `1` `=` shows `2`, and `12` `+` `30` `=` shows `42`.",
       "`0.1` `+` `0.2` `=` shows `0.3`, and `1.5` `+` `1.25` `=` shows `2.75`.",
-      "Pressing `+` after a result continues from that result: `1` `+` `1` `=` `+` `5` `=` shows `7`.",
-      "`C` forgets a half-finished sum: `5` `+` `C` `3` `=` shows `3`.",
-      "After a result, `C` shows `0`.",
-      "Automated tests cover each example.",
-    ],
-  },
-  {
-    title: "Subtract numbers",
-    description: [
-      "Make the `-` key work with `=`.",
-    ],
-    criteria: [
-      "`5` `-` `3` `=` shows `2`.",
-      "`3` `-` `5` `=` shows `-2`.",
-      "Pressing `-` after a result continues from that result: `1` `+` `1` `=` `-` `5` `=` shows `-3`.",
-      "Adding still works: the examples from the add issue pass.",
+      "`5` `-` `3` `=` shows `2`, and `3` `-` `5` `=` shows `-2`.",
+      "Pressing `+` or `-` after a result continues from that result: `1` `+` `1` `=` `+` `5` `=` shows `7`, and `1` `+` `1` `=` `-` `5` `=` shows `-3`.",
+      "`C` forgets a half-finished sum: `5` `+` `C` `3` `=` shows `3`. After a result, `C` shows `0`.",
       "Automated tests cover each example.",
     ],
   },
@@ -157,6 +101,7 @@ export const issues: { title: string; description: string[]; criteria: string[] 
       "`5` `±` shows `-5`, and pressing `±` again shows `5`.",
       "Typing continues after a flip: `5` `±` `3` shows `-53`.",
       "`1` `.` `5` `±` shows `-1.5`.",
+      "The `±` key is added to the page as a button labelled exactly as written.",
       "`±` on `0` leaves `0`, never `-0`.",
       "`±` works on either side of a sum: `5` `+` `3` `±` `=` shows `2`, and `5` `±` `+` `3` `=` shows `-2`.",
       "`±` on a result flips it: `1` `+` `1` `=` `±` shows `-2`.",
@@ -165,40 +110,17 @@ export const issues: { title: string; description: string[]; criteria: string[] 
     ],
   },
   {
-    title: "Multiply numbers",
+    title: "Multiply and divide numbers",
     description: [
-      "Make the `×` key work with `=`.",
-    ],
-    criteria: [
-      "`3` `×` `4` `=` shows `12`.",
-      "`7` `×` `0` `=` shows `0`.",
-      "Adding and subtracting still work.",
-      "Automated tests cover each example.",
-    ],
-  },
-  {
-    title: "Divide numbers",
-    description: [
-      "Make the `÷` key work with `=`. Dividing may give a fraction; show at most four decimal places, and no trailing zeros.",
-    ],
-    criteria: [
-      "`10` `÷` `2` `=` shows `5`.",
-      "`1` `÷` `4` `=` shows `0.25`.",
-      "`1` `÷` `3` `=` shows `0.3333`.",
-      "Adding, subtracting and multiplying still work.",
-      "Automated tests cover each example.",
-    ],
-  },
-  {
-    title: "Handle dividing by zero",
-    description: [
+      "Make the `×` and `÷` keys work with `=`, adding them to the page as buttons labelled exactly as written. Dividing may give a fraction; show at most four decimal places, and no trailing zeros.",
       "Dividing by zero has no answer. The calculator must say so, and carry on working afterwards.",
     ],
     criteria: [
+      "`3` `×` `4` `=` shows `12`, and `7` `×` `0` `=` shows `0`.",
+      "`10` `÷` `2` `=` shows `5`, `1` `÷` `4` `=` shows `0.25`, and `1` `÷` `3` `=` shows `0.3333`.",
       "`10` `÷` `0` `=` shows `Error`.",
-      "After `Error`, pressing a digit starts a new number: `5` shows `5`.",
-      "After `Error`, pressing `C` shows `0`.",
-      "Dividing by other numbers still works.",
+      "After `Error`, pressing a digit starts a new number: `5` shows `5`. After `Error`, pressing `C` shows `0`.",
+      "Adding and subtracting still work.",
       "Automated tests cover each example.",
     ],
   },

@@ -5,6 +5,7 @@ import { Terminal, test } from "../../fixtures/terminal.ts"
 import { BENCH_REPO, BENCH_TOPIC, containerSession, getRepo, gh, whoami } from "../../support/benchmark.ts"
 import { issues } from "../../fixtures/calculator/issues.ts"
 import { milestone } from "../../fixtures/calculator/milestone.ts"
+import { driveMilestone, type Budget } from "../../support/driver.ts"
 import { show, step } from "../../support/show.ts"
 import { launchQuickTunnel } from "../../support/quick-tunnel.ts"
 import { benchmarkCategory } from "../docCategories"
@@ -13,6 +14,37 @@ import { benchmarkCategory } from "../docCategories"
 // never `npm test` or `npm run doc`, because of its tag. The "setup" project in
 // playwright-benchmark.config.ts has already cleared the last run's leftovers by the time it starts.
 // Each issue adds its steps to the journey below, in order.
+
+/** The graph the journey makes from `tdd-guide` and then runs. */
+const GRAPH = "calculator"
+
+/**
+ * What a run, and the whole benchmark, may spend or take. A run over its cap is cancelled and recorded as a failure.
+ * Set from the baseline run, which cost about $1.57 as the daemon counts it, at most $0.26 for a run: about ten times
+ * that, enough to stop a run that has gone wrong. The daemon's figure is an estimate on a subscription, so the minutes
+ * are the cap that matters most.
+ */
+const BUDGET: Budget = { perRunUsd: 5, totalUsd: 25, perRunMinutes: 60 }
+
+/**
+ * The runners, fixed so runs compare: Claude picks the issue, writes the tests and writes the code, and Codex reviews the
+ * change and consolidates the reviews, so neither model reviews its own work. Passed as inputs to the graph and to the
+ * loop, which use Claude for all four otherwise. Splitting the work also keeps one subscription from taking all of it.
+ */
+const RUNNERS = ["runner=claude", "reviewer=codex", "implementer=claude", "reranker=codex"]
+const runnerInputs = RUNNERS.map((input) => `--input ${input}`).join(" ")
+
+/**
+ * A model for every step of each runner, from `OE_BENCH_CLAUDE_MODEL` and `OE_BENCH_CODEX_MODEL`, for runs that are about
+ * whether the benchmark works and not about how good OpenEngine is on its own models, and that must not use up a
+ * subscription: `haiku` and `gpt-6-luna` are the cheapest (Claude's adapter takes the aliases `haiku`, `sonnet` and
+ * `opus`, not full model IDs; `codex debug models` lists Codex's). Unset, a runner's steps use OpenEngine's own tiers
+ * (cheapest, default and elevated), which is what a baseline measures.
+ */
+const MODELS = { claude: process.env.OE_BENCH_CLAUDE_MODEL, codex: process.env.OE_BENCH_CODEX_MODEL }
+
+/** How many of the calculator's issues to seed: all of them, or the first few with `OE_BENCH_ISSUES`, for a cheap trial. */
+const SEEDED = Number(process.env.OE_BENCH_ISSUES ?? issues.length)
 
 /** The webhook's shared secret: new each run, handed to OpenEngine and the terminal as an environment variable. */
 const WEBHOOK_SECRET = randomBytes(24).toString("hex")
@@ -31,13 +63,13 @@ test.use({
 
 test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
   test.describe(
-    withDocMeta("Build a Calculator With OpenEngine", {
-      description: "How to have OpenEngine build a whole project from a list of GitHub issues, step by step.",
+    withDocMeta("Build Software With OpenEngine", {
+      description: "A step-by-step guide to building software with OpenEngine: install it, give it a list of GitHub issues, and watch it build the project, using a small calculator as the example.",
       sidebar_position: 1,
-      slug: "/start-to-finish/build-a-calculator",
+      slug: "/start-to-finish/build-software",
     }),
     () => {
-      test("The journey", async ({ terminal, context }, testInfo) => {
+      test("Step by step", async ({ terminal, context }, testInfo) => {
         const owner = await whoami()
         // The calculator repository, as `gh` names it, and as GitHub's API addresses it.
         const repo = `${owner}/${BENCH_REPO}`
@@ -73,7 +105,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
         )
 
         await step(
-          "Install it. The installer builds OpenEngine and puts the `oe` command in your home folder. It takes a few minutes the first time. `--no-start` leaves OpenEngine stopped until you start it below.\n\n```sh\nscripts/install-local.sh --no-start\noe --version\n```",
+          "Install it. The installer builds OpenEngine and puts the `oe` command in your home folder. It takes under a minute. `--no-start` leaves OpenEngine stopped until you start it below.\n\n```sh\nscripts/install-local.sh --no-start\noe --version\n```",
           async () => {
             const started = Date.now()
             await terminal.run("scripts/install-local.sh --no-start", { timeout: 900_000 })
@@ -160,6 +192,17 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           },
         )
 
+        await step("[nodoc] Each runner's steps use the model this run was asked to use", async () => {
+          for (const [runner, model] of Object.entries(MODELS)) {
+            testInfo.annotations.push({ type: `${runner}-model`, description: model ?? "OpenEngine's own tiers" })
+            if (!model) continue
+            // Each tier of the runner's steps becomes the one model. Steps read the tiers when they start.
+            const tiers = ["cheapest", "default", "elevated"].map((tier) => `${tier} = "${model}"`).join(", ")
+            await terminal.run(`printf '\\n[runners.${runner}]\\nmodels = { ${tiers} }\\n' >> ~/.config/openengine/engine.toml`)
+          }
+          await terminal.run("clear")
+        })
+
         try {
           await step(
             "Start OpenEngine. It keeps running in the background.\n\n```sh\noe daemon start\noe daemon status\n```",
@@ -171,7 +214,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Connect OpenEngine to GitHub. It uses the `gh` command you are already signed in with, so there is nothing to paste.\n\n```sh\noe connect gh\n```",
+            "Connect OpenEngine to GitHub. It uses `gh`, GitHub's own tool for the terminal, so there is nothing to paste. If you don't have it yet, [install it](https://github.com/cli/cli#installation) and [sign in](https://cli.github.com/manual/gh_auth_login) first.\n\n```sh\noe connect gh\n```",
             async () => {
               await terminal.run("oe connect gh")
               await show("benchmark__terminal--github-login.png", terminal, testInfo, await terminal.row(/GitHub CLI selected/), "OpenEngine will use your GitHub login")
@@ -194,7 +237,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "`tdd-guide` has a second coding agent, Codex, write the code, so check that it is signed in as well.\n\n```sh\ncodex login status\n```",
+            "The graph you make next uses a second coding agent, Codex, to review the change and consolidate the reviews, so check that it is signed in as well.\n\n```sh\ncodex login status\n```",
             async () => {
               // Found here, like Claude's sign-in: a run that starts without it fails at the step that implements.
               await terminal.run("codex login status").catch(() => {
@@ -205,16 +248,53 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "OpenEngine works through graphs, the steps it follows for a job. Register `tdd-guide`, the one that works an issue test first, and list what is registered.\n\n```sh\noe graph add docs/examples/graphs/tdd-guide.yaml\noe graphs\n```",
+            "OpenEngine works through graphs, the steps it follows for a job. It comes with `tdd-guide`, which works an issue test first, and you can copy a graph and change it to fit your project. A graph is a file, so copy this one.\n\n```sh\ncp docs/examples/graphs/tdd-guide.yaml ~/" + GRAPH + ".yaml\n```",
             async () => {
-              await terminal.run("oe graph add docs/examples/graphs/tdd-guide.yaml")
-              await terminal.run("oe graphs")
-              await show("benchmark__terminal--graph-registered.png", terminal, testInfo, await terminal.row(/^tdd-guide\s/), "tdd-guide is registered")
+              await terminal.run(`cp docs/examples/graphs/tdd-guide.yaml ~/${GRAPH}.yaml`)
             },
           )
 
           await step(
-            "Your project lives in a GitHub repository. Create one with the `gh` command, GitHub's own tool for the terminal. It is created under the account `gh` is signed in as.\n\n" +
+            "Open the copy in the text editor. The graph is named at the top, so give it a name of its own. Every pull request is reviewed from several angles, each a line in the review step, and a small project doesn't need seven. Keep security as it is, and combine the rest into one reviewer, Quality, that looks for bugs, slow code, needless code and repeated patterns.\n\n" +
+              "```sh\nvim ~/" + GRAPH + ".yaml\n```\n\nThen type these, each followed by Enter, and save with `:wq`:\n\n" +
+              "```vim\n:%s/^name: tdd-guide$/name: " + GRAPH + "/\n:/id: guide/-1;/^    prompt: |/-1d\n:g/^      - {facet: \\(performance\\|conciseness\\|dryness\\)}$/d\n:%s/^      - {facet: bugs}$/      - {facet: {id: quality, name: Quality, focus: \"Bugs, whether the change does what the issue asks, slow code and needless code. Also repetition: read the whole file the change lands in, and when it adds another copy of a pattern the file already repeats, count the copies and name the shared form (a helper, a lookup table or an id).\"}}/\n```",
+            async () => {
+              await terminal.type(`vim ~/${GRAPH}.yaml`)
+              await terminal.press("Enter")
+              await terminal.waitForText(new RegExp(`${GRAPH}\\.yaml"`))
+              await terminal.type(`:%s/^name: tdd-guide$/name: ${GRAPH}/`)
+              await terminal.press("Enter")
+              await terminal.type("/facet: security")
+              await terminal.press("Enter")
+              await show("benchmark__terminal--review-angles.png", terminal, testInfo, await terminal.row(/facet: dryness/), "The review step lists its angles, one per line")
+              // The guides and docs angles span several lines: from the line before their id to the line before the prompt.
+              await terminal.type(":/id: guide/-1;/^    prompt: |/-1d")
+              await terminal.press("Enter")
+              await terminal.type(":g/^      - {facet: \\(performance\\|conciseness\\|dryness\\)}$/d")
+              await terminal.press("Enter")
+              await terminal.type(':%s/^      - {facet: bugs}$/      - {facet: {id: quality, name: Quality, focus: \"Bugs, whether the change does what the issue asks, slow code and needless code. Also repetition: read the whole file the change lands in, and when it adds another copy of a pattern the file already repeats, count the copies and name the shared form (a helper, a lookup table or an id).\"}}/')
+              await terminal.press("Enter")
+              await terminal.type("/facet: security")
+              await terminal.press("Enter")
+              await show("benchmark__terminal--review-angles-kept.png", terminal, testInfo, await terminal.row(/id: quality/), "Security, and one reviewer for everything else, are left")
+              await terminal.type(":wq")
+              await terminal.press("Enter")
+              await terminal.waitForPrompt()
+              await terminal.run("clear")
+            },
+          )
+
+          await step(
+            "Register your graph, then list what is registered.\n\n```sh\noe graph add ~/" + GRAPH + ".yaml\noe graphs\n```",
+            async () => {
+              await terminal.run(`oe graph add ~/${GRAPH}.yaml`)
+              await terminal.run("oe graphs")
+              await show("benchmark__terminal--graph-registered.png", terminal, testInfo, await terminal.row(new RegExp(`^${GRAPH}\\s`)), `${GRAPH} is registered`)
+            },
+          )
+
+          await step(
+            "Your project lives in a GitHub repository. Create one with the `gh` command from the last step. It is created under the account `gh` is signed in as.\n\n" +
               "```sh\ngh repo create " + BENCH_REPO + " --public --add-readme --description \"A calculator, built by OpenEngine.\"\n```",
             async () => {
               await terminal.run(`gh repo create ${BENCH_REPO} --public --add-readme --description "A calculator, built by OpenEngine."`)
@@ -245,11 +325,11 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Tell OpenEngine about the repository. `oe repo add` downloads it onto your computer and remembers where it is, so OpenEngine knows which folder to work in. It takes effect straight away.\n\n" +
-              "```sh\noe repo add --backend onboarding https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + "\n```",
+            "Tell OpenEngine about the repository. `oe repo add` downloads it onto your computer and remembers where it is, so OpenEngine knows which folder to work in. `--trust` lets its agents run commands in this repository without asking each time. Only the onboarding token can grant that, which is why this command uses the onboarding backend. It takes effect straight away.\n\n" +
+              "```sh\noe repo add --backend onboarding https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + " --trust\n```",
             async () => {
               await terminal.run("clear")
-              await terminal.run(`oe repo add --backend onboarding https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
+              await terminal.run(`oe repo add --backend onboarding https://github.com/${repo} --path ~/${BENCH_REPO} --trust`, { timeout: 180_000 })
               await terminal.run(`ls ~/${BENCH_REPO}`)
               await show("benchmark__terminal--repository-cloned.png", terminal, testInfo, await terminal.row(/^README\.md$/), "The repository is on your computer")
             },
@@ -261,7 +341,8 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             async () => {
               await terminal.run("clear")
               await terminal.run(`gh api -X POST ${api}/pages -f build_type=workflow --jq .build_type`)
-              expect(await gh("api", `${api}/pages`, "--jq", ".build_type"), "Pages publishes from GitHub Actions").toBe("workflow\n")
+              // A setting just changed can read back as it was for a moment, so each check waits for GitHub to catch up.
+              await expect.poll(() => gh("api", `${api}/pages`, "--jq", ".build_type"), { timeout: 30_000, message: "Pages publishes from GitHub Actions" }).toBe("workflow\n")
               await show("benchmark__terminal--pages-workflow.png", terminal, testInfo, await terminal.row(/^workflow$/), "Pages publishes from GitHub Actions")
             },
           )
@@ -273,8 +354,9 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run("clear")
               await terminal.run(`gh api -X PUT ${api}/actions/permissions/workflow -f default_workflow_permissions=write -F can_approve_pull_request_reviews=true`)
               await terminal.run(`gh api ${api}/actions/permissions/workflow`)
-              const permissions = JSON.parse(await gh("api", `${api}/actions/permissions/workflow`)) as { default_workflow_permissions: string; can_approve_pull_request_reviews: boolean }
-              expect(permissions, "workflows can write, and can approve pull requests").toEqual({ default_workflow_permissions: "write", can_approve_pull_request_reviews: true })
+              await expect
+                .poll(async () => JSON.parse(await gh("api", `${api}/actions/permissions/workflow`)), { timeout: 30_000, message: "workflows can write, and can approve pull requests" })
+                .toEqual({ default_workflow_permissions: "write", can_approve_pull_request_reviews: true })
               await show("benchmark__terminal--workflow-permissions.png", terminal, testInfo, await terminal.row(/default_workflow_permissions/), "Workflows can write and open pull requests")
             },
           )
@@ -287,8 +369,9 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run(
                 `gh api -X PATCH ${api} -F allow_squash_merge=true -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY --jq '{allow_squash_merge, squash_merge_commit_title}'`,
               )
-              const settings = JSON.parse(await gh("api", api)) as { allow_squash_merge: boolean; squash_merge_commit_title: string }
-              expect(settings, "squash merging is allowed, titled by the pull request").toMatchObject({ allow_squash_merge: true, squash_merge_commit_title: "PR_TITLE" })
+              await expect
+                .poll(async () => JSON.parse(await gh("api", api)), { timeout: 30_000, message: "squash merging is allowed, titled by the pull request" })
+                .toMatchObject({ allow_squash_merge: true, squash_merge_commit_title: "PR_TITLE" })
               await show("benchmark__terminal--squash-merge.png", terminal, testInfo, await terminal.row(/allow_squash_merge/), "Squash merging is on")
             },
           )
@@ -301,7 +384,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               // Created in order, each depending on the one before it, so the previous issue is already known.
               const numbers: string[] = []
               let previousId = ""
-              for (const issue of issues) {
+              for (const issue of issues.slice(0, SEEDED)) {
                 const body = [
                   ...issue.description,
                   "## Acceptance criteria",
@@ -314,15 +397,23 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
                 numbers.push(String(created.number))
                 previousId = String(created.id)
               }
+              // `gh issue list --milestone` reads GitHub's search index, which trails the issues just created.
+              await expect
+                .poll(async () => (JSON.parse(await gh("issue", "list", "--repo", repo, "--milestone", milestone.title, "--state", "open", "--json", "number")) as unknown[]).length, {
+                  timeout: 90_000,
+                  message: "waiting for GitHub's search to list the issues",
+                })
+                .toBe(SEEDED)
               await terminal.run(`gh issue list --repo ${repo} --milestone ${milestone.title} --state open --limit 30`)
-              await show("benchmark__terminal--issues.png", terminal, testInfo, await terminal.row(/Scaffold the calculator page/), "The calculator's issues")
+              await show("benchmark__terminal--issues.png", terminal, testInfo, await terminal.row(/Set up the project/), "The calculator's issues")
               // GitHub's listing can trail the issues just created, so wait for it to show them all.
               const listIssues = async () => JSON.parse(await gh("api", `${api}/issues?milestone=${number}&state=open&per_page=100`)) as { number: number; body: string }[]
-              await expect.poll(async () => (await listIssues()).length, { timeout: 30_000, message: "every issue is in the milestone" }).toBe(issues.length)
-              expect(await gh("api", `${api}/issues/${numbers.at(-1)}/dependencies/blocked_by`, "--jq", "[.[].number]"), "GitHub shows the last issue as blocked by the one before it").toContain(`${numbers.at(-2)}`)
-              expect((await listIssues()).find((issue) => issue.number === Number(numbers.at(-1)))?.body, "the last issue links to the one before it").toContain(
-                `Depends on #${numbers.at(-2)}`,
-              )
+              await expect.poll(async () => (await listIssues()).length, { timeout: 30_000, message: "every issue is in the milestone" }).toBe(SEEDED)
+              // Each issue after the first depends on the one before it.
+              if (numbers.length > 1) {
+                expect(await gh("api", `${api}/issues/${numbers.at(-1)}/dependencies/blocked_by`, "--jq", "[.[].number]"), "GitHub shows the last issue as blocked by the one before it").toContain(`${numbers.at(-2)}`)
+                expect((await listIssues()).find((issue) => issue.number === Number(numbers.at(-1)))?.body, "the last issue links to the one before it").toContain(`Depends on #${numbers.at(-2)}`)
+              }
             },
           )
 
@@ -355,21 +446,14 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await terminal.run(`gh api -X POST ${hookPath}/pings`)
               // GitHub's own log of what OpenEngine answered: 200 means it passed the signature check.
               const deliveries = async () => JSON.parse(await gh("api", `${hookPath}/deliveries`)) as { status_code: number }[]
-              // GitHub now and then records nothing for a ping, not even a failure, so ask once more if it is still silent
-              // after half a minute. An answer other than 200 still fails below.
-              let retried = false
+              // GitHub delivers the ping at once, but its list of deliveries can take minutes to show it, so wait for the
+              // list rather than send the ping again. An answer other than 200 still fails.
+              const asked = Date.now()
               await expect
-                .poll(async () => (await deliveries()).length, { timeout: 30_000 })
-                .toBeGreaterThan(0)
-                .catch(() => {
-                  retried = true
-                  return gh("api", "-X", "POST", `${hookPath}/pings`)
-                })
-              // How often GitHub needs asking twice is a fact about the run, shown in its summary.
-              testInfo.annotations.push({ type: "ping-retried", description: retried ? "yes" : "no" })
-              await expect
-                .poll(async () => (await deliveries()).map((d) => d.status_code), { timeout: 90_000, message: "waiting for GitHub to record OpenEngine's answer" })
+                .poll(async () => (await deliveries()).map((d) => d.status_code), { timeout: 300_000, intervals: [5_000], message: "waiting for GitHub to list OpenEngine's answer" })
                 .toContain(200)
+              // How long the list took is a fact about the run, shown in its summary.
+              testInfo.annotations.push({ type: "delivery-log-seconds", description: String(Math.round((Date.now() - asked) / 1000)) })
               await terminal.run(`gh api ${hookPath}/deliveries --jq '.[] | "\\(.event) \\(.status_code)"'`)
               await show("benchmark__terminal--webhook-accepted.png", terminal, testInfo, await terminal.row(/ping 200/), "OpenEngine accepted the message")
             },
@@ -384,6 +468,83 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               await show("benchmark__terminal--webhook-rejected.png", terminal, testInfo, await terminal.row(/^401$/), "OpenEngine refuses it")
             },
           )
+
+          await step(
+            "Now give OpenEngine its first issue. `oe graph run` starts a graph on a repository. `" + GRAPH + "` works one issue test first: with a milestone to pick from, it takes the next issue that nothing is waiting on.\n\n" +
+              "```sh\noe graph run " + GRAPH + " --repo ~/" + BENCH_REPO + " --input milestone=Calculator \\\n  " + runnerInputs + " --no-watch\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(`oe graph run ${GRAPH} --repo ~/${BENCH_REPO} --input milestone=${milestone.title} ${runnerInputs} --no-watch`, { timeout: 120_000 })
+              await show("benchmark__terminal--first-issue-started.png", terminal, testInfo, await terminal.row(/run-[0-9a-f]+/i), "OpenEngine has started on the first issue")
+            },
+          )
+
+          const first = await step("[nodoc] The first run is worked to the end: its review approved and its pull request merged", async () => {
+            // The people's part of the work, done by the harness: a run waits for a person to approve it.
+            return driveMilestone({ repo, milestone: milestone.title, graph: GRAPH, budget: BUDGET, until: "first-run-done", onProgress: (line) => console.log(`[first run] ${line}`) })
+          })
+
+          // Nothing after this works if the first run didn't: stop, with what went wrong, rather than hand it to a loop.
+          expect(first.failures, "the first run failed").toEqual([])
+
+          await step(
+            "OpenEngine can keep going on its own. A loop starts a run on a schedule, so each issue is picked up once the one before it is done. Set a limit on what it may spend and on how many pull requests it may open.\n\n" +
+              "```sh\noe loop add " + GRAPH + " --repo ~/" + BENCH_REPO + " --input milestone=Calculator \\\n  " + runnerInputs + " \\\n  --every 1m --max-spend 25 --max-prs 25 --no-run-now\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(
+                `oe loop add ${GRAPH} --repo ~/${BENCH_REPO} --input milestone=${milestone.title} ${runnerInputs} --every 1m --max-spend ${BUDGET.totalUsd} --max-prs 25 --no-run-now`,
+                { timeout: 120_000 },
+              )
+              await terminal.run("oe loops")
+              await show("benchmark__terminal--loop-running.png", terminal, testInfo, await terminal.row(new RegExp(`^${GRAPH}\\s`)), "The loop is running")
+            },
+          )
+
+          const rest = await step("[nodoc] The loop's runs are worked to the end, until no issue in the milestone is open", async () => {
+            return driveMilestone({ repo, milestone: milestone.title, graph: GRAPH, budget: BUDGET, until: "milestone-done", onProgress: (line) => console.log(`[loop] ${line}`) })
+          })
+
+          await step(
+            "When every issue is done, pause the loop so it stops looking for work.\n\n" +
+              "```sh\noe loop pause " + GRAPH + "\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(`oe loop pause ${GRAPH}`)
+              await show("benchmark__terminal--loop-paused.png", terminal, testInfo, await terminal.row(/paused/i), "The loop is paused")
+            },
+          )
+
+          await step(
+            "That is the calculator built. Every issue in the milestone is closed, and every pull request that closed one is merged.\n\n" +
+              "```sh\ngh issue list --repo <your-account>/" + BENCH_REPO + " --milestone " + milestone.title + " --state all \\\n  --json number,state,title --jq '.[] | \"#\\(.number) \\(.state) \\(.title)\"'\ngh pr list --repo <your-account>/" + BENCH_REPO + " --state merged \\\n  --json number,title --jq '.[] | \"#\\(.number) \\(.title)\"'\n```",
+            async () => {
+              await terminal.run("clear")
+              await terminal.run(
+                `gh issue list --repo ${repo} --milestone ${milestone.title} --state all --limit 30 --json number,state,title --jq '.[] | "#\\(.number) \\(.state) \\(.title)"'`,
+              )
+              await terminal.run(`gh pr list --repo ${repo} --state merged --limit 30 --json number,title --jq '.[] | "#\\(.number) \\(.title)"'`)
+              await expect
+                .poll(async () => (JSON.parse(await gh("issue", "list", "--repo", repo, "--milestone", milestone.title, "--state", "open", "--json", "number")) as unknown[]).length, {
+                  message: "no issue in the milestone is still open",
+                  timeout: 60_000,
+                })
+                .toBe(0)
+              await show("benchmark__terminal--issues-closed.png", terminal, testInfo, await terminal.row(/CLOSED/), "Every issue is closed")
+            },
+          )
+
+          // What the work cost and how it went, for the report.
+          // The second phase sees the first run again, so a run counts once, as the later phase last saw it.
+          const runs = [...new Map([...first.runs, ...rest.runs].map((run) => [run.runId, run])).values()]
+          testInfo.annotations.push(
+            { type: "runs", description: String(runs.length) },
+            { type: "rate-limited-runs", description: String(runs.filter((run) => run.status === "rate-limited").length) },
+            { type: "failed-runs", description: String(runs.filter((run) => run.status !== "completed" && run.status !== "rate-limited").length) },
+            { type: "total-cost-usd", description: runs.reduce((sum, run) => sum + run.costUsd, 0).toFixed(2) },
+          )
+          await testInfo.attach("runs.json", { body: JSON.stringify(runs, null, 2), contentType: "application/json" })
+          expect([...first.failures, ...rest.failures], "no run failed or went over budget").toEqual([])
         } finally {
           // Stopped here as well as by teardown, so a run that passes leaves nothing running.
           await terminal.run("oe daemon stop", { timeout: 120_000 }).catch(() => {})
