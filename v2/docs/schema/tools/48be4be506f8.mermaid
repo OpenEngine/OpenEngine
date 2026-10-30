@@ -1,0 +1,87 @@
+---
+title: tools at 48be4be506f8 (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% REMOVED tables/columns are tombstones, absent from this revision's schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    policies["policies<br/>A ceiling on tool access, written by an operator in Cedar. It is a forbid that a grant may never exceed, and it is checked with the grants on every call. (ADDED)"] {
+        VARCHAR(63) uid PK "ADDED; not null"
+        VARCHAR(63) namespace UK "ADDED; not null"
+        VARCHAR(63) name UK "ADDED; not null"
+        INTEGER generation "ADDED; not null"
+        JSON labels "ADDED; not null"
+        JSON annotations "ADDED; not null"
+        TEXT policy "ADDED; not null"
+        DATETIME created_at "ADDED; not null"
+        DATETIME updated_at "ADDED; not null"
+    }
+    class policies added
+    tool_grants["tool_grants<br/>Who may call which tool. tool_uid is the tool the grant was bound to when applied; a grant whose tool has since been replaced denies every call. (CHANGED)"] {
+        VARCHAR(63) uid PK "not null"
+        VARCHAR(63) namespace UK "not null"
+        VARCHAR(63) name UK "not null"
+        INTEGER generation "not null"
+        JSON labels "not null"
+        JSON annotations "not null"
+        VARCHAR(63) tool_name "not null"
+        VARCHAR(63) tool_uid "not null"
+        VARCHAR(63) workspace_name "not null"
+        VARCHAR(128) step_attempt_id "nullable"
+        DATETIME expires_at "nullable"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+        TEXT when "ADDED; nullable"
+        JSON constraints "REMOVED; not null"
+    }
+    class tool_grants changed
+    tool_invocation_attempts["tool_invocation_attempts<br/>Each try at an invocation. idempotency_key is what a provider-idempotent tool repeats on every attempt; outcome stays null while an attempt runs or when an interrupted one could not be reconciled."] {
+        VARCHAR(63) invocation_uid PK,FK "not null"
+        INTEGER number PK "not null"
+        VARCHAR(128) idempotency_key "not null"
+        VARCHAR(16) outcome "nullable"
+        DATETIME started_at "not null"
+        DATETIME finished_at "nullable"
+    }
+    tool_invocations ||--o{ tool_invocation_attempts : "invocation_uid"
+    tool_invocations["tool_invocations<br/>One accepted call. The resolved tool definition is copied in, so changing or deleting the Tool cannot change accepted work; grant_refs names the grants that allowed it, checked again before every dispatch."] {
+        VARCHAR(63) uid PK "not null"
+        VARCHAR(63) namespace UK "not null"
+        VARCHAR(63) name UK "not null"
+        VARCHAR(63) tool_name "not null"
+        VARCHAR(63) tool_uid "not null"
+        INTEGER tool_generation "not null"
+        JSON tool_spec "not null"
+        VARCHAR(63) workspace_name "not null"
+        INTEGER workspace_generation "not null"
+        VARCHAR(128) step_attempt_id "not null"
+        JSON arguments "not null"
+        JSON grant_refs "not null"
+        VARCHAR(16) phase "not null"
+        INTEGER attempt_count "not null"
+        JSON result "nullable"
+        JSON error "nullable"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+        DATETIME started_at "nullable"
+        DATETIME completed_at "nullable"
+    }
+    tools["tools<br/>An invocable capability bound to one connection, as last applied."] {
+        VARCHAR(63) uid PK "not null"
+        VARCHAR(63) namespace UK "not null"
+        VARCHAR(63) name UK "not null"
+        INTEGER generation "not null"
+        JSON labels "not null"
+        JSON annotations "not null"
+        JSON spec "not null"
+        VARCHAR(64) connection_name "not null"
+        VARCHAR(16) phase "not null"
+        DATETIME created_at "not null"
+        DATETIME updated_at "not null"
+    }
