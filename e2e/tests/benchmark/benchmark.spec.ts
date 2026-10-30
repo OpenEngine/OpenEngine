@@ -325,11 +325,11 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Tell OpenEngine about the repository. `oe repo add` downloads it onto your computer and remembers where it is, so OpenEngine knows which folder to work in. It takes effect straight away.\n\n" +
-              "```sh\noe repo add --backend onboarding https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + "\n```",
+            "Tell OpenEngine about the repository. `oe repo add` downloads it onto your computer and remembers where it is, so OpenEngine knows which folder to work in. `--trust` lets its agents run commands in this repository without asking each time. Only the onboarding token can grant that, which is why this command uses the onboarding backend. It takes effect straight away.\n\n" +
+              "```sh\noe repo add --backend onboarding https://github.com/<your-account>/" + BENCH_REPO + " --path ~/" + BENCH_REPO + " --trust\n```",
             async () => {
               await terminal.run("clear")
-              await terminal.run(`oe repo add --backend onboarding https://github.com/${repo} --path ~/${BENCH_REPO}`, { timeout: 180_000 })
+              await terminal.run(`oe repo add --backend onboarding https://github.com/${repo} --path ~/${BENCH_REPO} --trust`, { timeout: 180_000 })
               await terminal.run(`ls ~/${BENCH_REPO}`)
               await show("benchmark__terminal--repository-cloned.png", terminal, testInfo, await terminal.row(/^README\.md$/), "The repository is on your computer")
             },
@@ -470,11 +470,11 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Now give OpenEngine its first issue. `oe graph run` starts a graph on a repository. `" + GRAPH + "` works one issue test first: with a milestone to pick from, it takes the next issue that nothing is waiting on. `--trust` lets its agents run commands in this repository without asking each time.\n\n" +
-              "```sh\noe graph run " + GRAPH + " --repo ~/" + BENCH_REPO + " --input milestone=Calculator \\\n  " + runnerInputs + " --trust --no-watch\n```",
+            "Now give OpenEngine its first issue. `oe graph run` starts a graph on a repository. `" + GRAPH + "` works one issue test first: with a milestone to pick from, it takes the next issue that nothing is waiting on.\n\n" +
+              "```sh\noe graph run " + GRAPH + " --repo ~/" + BENCH_REPO + " --input milestone=Calculator \\\n  " + runnerInputs + " --no-watch\n```",
             async () => {
               await terminal.run("clear")
-              await terminal.run(`oe graph run ${GRAPH} --repo ~/${BENCH_REPO} --input milestone=${milestone.title} ${runnerInputs} --trust --no-watch`, { timeout: 120_000 })
+              await terminal.run(`oe graph run ${GRAPH} --repo ~/${BENCH_REPO} --input milestone=${milestone.title} ${runnerInputs} --no-watch`, { timeout: 120_000 })
               await show("benchmark__terminal--first-issue-started.png", terminal, testInfo, await terminal.row(/run-[0-9a-f]+/i), "OpenEngine has started on the first issue")
             },
           )
@@ -489,11 +489,11 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
 
           await step(
             "OpenEngine can keep going on its own. A loop starts a run on a schedule, so each issue is picked up once the one before it is done. Set a limit on what it may spend and on how many pull requests it may open.\n\n" +
-              "```sh\noe loop add " + GRAPH + " --repo ~/" + BENCH_REPO + " --input milestone=Calculator \\\n  " + runnerInputs + " --trust \\\n  --every 1m --max-spend 25 --max-prs 25 --no-run-now\n```",
+              "```sh\noe loop add " + GRAPH + " --repo ~/" + BENCH_REPO + " --input milestone=Calculator \\\n  " + runnerInputs + " \\\n  --every 1m --max-spend 25 --max-prs 25 --no-run-now\n```",
             async () => {
               await terminal.run("clear")
               await terminal.run(
-                `oe loop add ${GRAPH} --repo ~/${BENCH_REPO} --input milestone=${milestone.title} ${runnerInputs} --trust --every 1m --max-spend ${BUDGET.totalUsd} --max-prs 25 --no-run-now`,
+                `oe loop add ${GRAPH} --repo ~/${BENCH_REPO} --input milestone=${milestone.title} ${runnerInputs} --every 1m --max-spend ${BUDGET.totalUsd} --max-prs 25 --no-run-now`,
                 { timeout: 120_000 },
               )
               await terminal.run("oe loops")

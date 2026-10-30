@@ -1,4 +1,4 @@
-import { gh, inContainer } from "./benchmark.ts"
+import { gh, GhError, inContainer } from "./benchmark.ts"
 
 /** The most a run, and the whole benchmark, may spend or take. A run over its cap is cancelled and recorded as a failure. */
 export type Budget = { perRunUsd: number; totalUsd: number; perRunMinutes: number }
@@ -47,10 +47,26 @@ const cancel = (runId: string) => daemon(`/runs/${runId}/cancel`, {})
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/**
+ * `gh` for reading. GitHub answers a busy moment with a 5xx (a 504 stopped a half-hour run), so wait and ask again. Writes
+ * don't use this: after a 504 a merge may have happened, and doing it twice is not the same as doing it once.
+ */
+async function ghRead(...args: string[]): Promise<string> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await gh(...args)
+    } catch (error) {
+      const transient = error instanceof GhError && (error.status === undefined || error.status >= 500)
+      if (!transient || attempt === 5) throw error
+      await sleep(attempt * 10_000)
+    }
+  }
+}
+
 type PullRequest = { number: number; title: string; state: string; mergeStateStatus: string; statusCheckRollup: { name?: string; conclusion: string | null; status: string }[] }
 
 async function pullRequest(repo: string, number: number): Promise<PullRequest> {
-  return JSON.parse(await gh("pr", "view", String(number), "--repo", repo, "--json", "number,title,state,mergeStateStatus,statusCheckRollup")) as PullRequest
+  return JSON.parse(await ghRead("pr", "view", String(number), "--repo", repo, "--json", "number,title,state,mergeStateStatus,statusCheckRollup")) as PullRequest
 }
 
 /** Checks all finished and none failed. A pull request with no checks counts as green. */
@@ -158,7 +174,7 @@ export async function driveMilestone({ repo, milestone, graph, budget, until, on
     }
 
     // A release pull request is not a run's: merge it once its checks pass.
-    const open = JSON.parse(await gh("pr", "list", "--repo", repo, "--state", "open", "--json", "number,title")) as { number: number; title: string }[]
+    const open = JSON.parse(await ghRead("pr", "list", "--repo", repo, "--state", "open", "--json", "number,title")) as { number: number; title: string }[]
     for (const { number, title } of open) {
       if (merged.has(number) || !/^chore(\(.+\))?: release/i.test(title)) continue
       if (green(await pullRequest(repo, number))) {
@@ -169,7 +185,7 @@ export async function driveMilestone({ repo, milestone, graph, budget, until, on
     }
 
     // The issue a merged pull request was for stays open if its text didn't say it closes it.
-    const issues = JSON.parse(await gh("issue", "list", "--repo", repo, "--milestone", milestone, "--state", "open", "--json", "number,title", "--limit", "100")) as { number: number; title: string }[]
+    const issues = JSON.parse(await ghRead("issue", "list", "--repo", repo, "--milestone", milestone, "--state", "open", "--json", "number,title", "--limit", "100")) as { number: number; title: string }[]
     const idle = runs.every((listed) => records.has(listed.runId))
     if (until === "first-run-done" && runs.length > 0 && idle) break
     emptyReadings = issues.length === 0 ? emptyReadings + 1 : 0
@@ -178,7 +194,7 @@ export async function driveMilestone({ repo, milestone, graph, budget, until, on
       for (const run of runs) {
         const record = records.get(run.runId)
         if (record?.status === "completed" && record.pullRequest !== undefined && merged.has(record.pullRequest)) {
-          const view = JSON.parse(await gh("pr", "view", String(record.pullRequest), "--repo", repo, "--json", "closingIssuesReferences")) as { closingIssuesReferences: { number: number }[] }
+          const view = JSON.parse(await ghRead("pr", "view", String(record.pullRequest), "--repo", repo, "--json", "closingIssuesReferences")) as { closingIssuesReferences: { number: number }[] }
           for (const { number } of view.closingIssuesReferences) {
             if (issues.some((issue) => issue.number === number)) {
               await gh("issue", "close", String(number), "--repo", repo, "--comment", "Closed by the benchmark: the pull request merged but did not close this issue.")

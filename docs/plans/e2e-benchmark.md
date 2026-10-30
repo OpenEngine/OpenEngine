@@ -53,9 +53,11 @@ front and collected as the run goes, not a step of its own.
 6. **Run `tdd-guide`** on the milestone until it is done, through both CLI entry
    points:
    1. **One run.** Work the first issue with `oe graph run tdd-guide --repo
-      PATH -i milestone=NAME --trust`, so a single run is covered end to end.
-      `--repo` takes the local clone (or a configured name), not `OWNER/REPO`,
-      and `--trust` lets agents run commands without asking.
+      PATH -i milestone=NAME`, so a single run is covered end to end.
+      `--repo` takes the local clone (or a configured name), not `OWNER/REPO`.
+      Trust is granted when the repository is added, with `oe repo add
+      --backend onboarding --trust`: a daemon behind a service token refuses a
+      trust write made with that token (#1223), so `graph run` takes no `--trust`.
    2. **A loop.** Then `oe loop add tdd-guide` with `--every` short enough to
       keep the run moving (the graph's default is 1h), and `--max-spend` and
       `--max-prs` as the budget cap. The loop works the rest of the milestone.

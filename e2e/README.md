@@ -88,7 +88,9 @@ is a shell inside it, so a screenshot shows nothing of your own setup, and nothi
 or starts touches your computer. Your GitHub login is mounted into it read-only and copied in, so a
 token the container refreshes never changes yours.
 
-Claude and Codex are signed in once, inside Docker: run `npm run oe-benchmark:login`, which runs
+Sign in once with `npm run oe-benchmark:login`. It skips whatever is already signed in. For GitHub it checks
+`gh` (in `GH_CONFIG_DIR`, if set) and, if needed, signs in with the token kept in a file rather than the system
+keyring, which the container can't read. Claude and Codex are signed in inside Docker, by running
 `claude auth login` and `codex login --device-auth` in the image. Each prints a link to open in a browser
 and asks for the code it gives back. The logins are kept in two Docker volumes (`oe-bench-claude` and
 `oe-bench-codex`) that every run mounts, so you sign in once, and they never touch your own Claude or Codex
